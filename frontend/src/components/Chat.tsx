@@ -775,7 +775,6 @@ function Chat({
 
       // RUN_STARTED
       if (parsed.type === 'RUN_STARTED') {
-        window.dispatchEvent(new CustomEvent('pdf-overlay-clear'))
         updateProgressMessage('Starting...')
         // Capture trace_id early so it's available for STOP_CONFIRMED
         if (parsed.trace_id && !sessionTraceIds.current.includes(parsed.trace_id)) {
@@ -858,62 +857,11 @@ function Chat({
 
       // CHUNK_PROVENANCE
       if (parsed.type === 'CHUNK_PROVENANCE') {
-        debug.log('🎯 [HIGHLIGHT DEBUG] ============================================')
-        debug.log('🎯 [HIGHLIGHT DEBUG] CHUNK_PROVENANCE EVENT RECEIVED IN CHAT.TSX')
-        debug.log('🎯 [HIGHLIGHT DEBUG] ============================================')
-        debug.log('🎯 [HIGHLIGHT DEBUG] Full parsed event:', JSON.stringify(parsed, null, 2))
-        debug.log('🎯 [HIGHLIGHT DEBUG] chunk_id:', parsed.chunk_id)
-        debug.log('🎯 [HIGHLIGHT DEBUG] doc_items:', parsed.doc_items)
-        debug.log('🎯 [HIGHLIGHT DEBUG] doc_items type:', typeof parsed.doc_items)
-        debug.log('🎯 [HIGHLIGHT DEBUG] doc_items is array:', Array.isArray(parsed.doc_items))
-        debug.log('🎯 [HIGHLIGHT DEBUG] doc_items length:', parsed.doc_items?.length)
-        if (parsed.doc_items && parsed.doc_items.length > 0) {
-          debug.log('🎯 [HIGHLIGHT DEBUG] First doc_item:', JSON.stringify(parsed.doc_items[0], null, 2))
-          debug.log('🎯 [HIGHLIGHT DEBUG] First doc_item has page:', 'page' in (parsed.doc_items[0] || {}))
-          debug.log('🎯 [HIGHLIGHT DEBUG] First doc_item has bbox:', 'bbox' in (parsed.doc_items[0] || {}))
-        }
-        debug.log('🔍 [CHAT DEBUG] Received CHUNK_PROVENANCE event:', {
+        debug.log('🔍 [CHAT DEBUG] Ignoring legacy CHUNK_PROVENANCE overlay event', {
           chunk_id: parsed.chunk_id,
           document_id: parsed.document_id,
           active_document_id: activeDocument?.id,
-          doc_items_count: parsed.doc_items?.length || 0,
-          doc_items: parsed.doc_items
         })
-
-        if (parsed.document_id && activeDocument?.id && parsed.document_id !== activeDocument.id) {
-          debug.log('🔍 [CHAT DEBUG] Skipping provenance - document ID mismatch:', {
-            received: parsed.document_id,
-            active: activeDocument.id
-          })
-          return
-        }
-
-        const docItems = Array.isArray(parsed.doc_items) ? parsed.doc_items : []
-        debug.log('🔍 [CHAT DEBUG] Processing doc_items:', {
-          count: docItems.length,
-          items: docItems.slice(0, 3)
-        })
-
-        if (docItems.length > 0 && typeof parsed.chunk_id === 'string' && parsed.chunk_id.trim().length > 0) {
-          const overlayDetail = {
-            chunkId: parsed.chunk_id,
-            documentId: parsed.document_id ?? activeDocument?.id ?? null,
-            docItems,
-          }
-          debug.log('🔍 [CHAT DEBUG] Dispatching pdf-overlay-update event:', overlayDetail)
-
-          window.dispatchEvent(
-            new CustomEvent('pdf-overlay-update', {
-              detail: overlayDetail
-            })
-          )
-        } else {
-          debug.log('🔍 [CHAT DEBUG] Skipping overlay dispatch:', {
-            hasDocItems: docItems.length > 0,
-            hasChunkId: typeof parsed.chunk_id === 'string' && parsed.chunk_id.trim().length > 0,
-            chunk_id: parsed.chunk_id
-          })
-        }
         return
       }
 

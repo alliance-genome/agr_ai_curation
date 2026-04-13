@@ -105,26 +105,6 @@ interface ViewerTelemetry {
   slowHighlight: boolean
 }
 
-export interface OverlayDocItem {
-  page?: number
-  page_no?: number
-  bbox?: {
-    left: number
-    top: number
-    right: number
-    bottom: number
-    coord_origin?: string
-  }
-  doc_item_label?: string
-  element_id?: string
-}
-
-export interface OverlayPayload {
-  chunkId: string
-  documentId?: string | null
-  docItems: OverlayDocItem[]
-}
-
 type PdfEvidenceSpikeCandidateReason =
   | 'sanitized-quote'
   | 'exact-quote'
@@ -186,22 +166,6 @@ interface PdfEvidenceDebugEntry {
   detail?: unknown
 }
 
-export type OverlayDocItemDropReason = 'missing-page' | 'missing-bbox' | 'invalid-bbox'
-
-export interface OverlayDocItemDropDiagnostic {
-  index: number
-  reason: OverlayDocItemDropReason
-  page?: number
-  page_no?: number
-  bbox?: OverlayDocItem['bbox']
-  invalidFields?: string[]
-}
-
-export interface OverlayDocItemInspection {
-  normalizedDocItems: OverlayDocItem[]
-  droppedItems: OverlayDocItemDropDiagnostic[]
-}
-
 interface UploadDialogState {
   open: boolean
   dismissedToBackground: boolean
@@ -237,10 +201,16 @@ export interface PdfViewerProps {
 }
 
 const DEFAULT_SETTINGS: HighlightSettings = {
-  highlightColor: '#1565c0',
-  highlightOpacity: 0.65,
+  highlightColor: '#2e7d32',
+  highlightOpacity: 0.35,
   clearOnNewQuery: true,
 }
+
+const EVIDENCE_HIGHLIGHT_HOVER_BACKGROUND = 'rgba(46, 125, 50, 0.16)'
+const EVIDENCE_HIGHLIGHT_HOVER_BORDER = 'rgba(46, 125, 50, 0.7)'
+const EVIDENCE_HIGHLIGHT_HOVER_SHADOW = 'rgba(46, 125, 50, 0.15)'
+const EVIDENCE_HIGHLIGHT_ACTIVE_BACKGROUND = 'rgba(46, 125, 50, 0.28)'
+const EVIDENCE_HIGHLIGHT_ACTIVE_BORDER = 'rgba(46, 125, 50, 0.92)'
 
 const pdfEvidenceDebugEntries: PdfEvidenceDebugEntry[] = []
 let lastPdfEvidenceNavigationResult: PdfViewerNavigationResult | null = null
@@ -2659,13 +2629,13 @@ const getEvidenceHighlightRectStyles = (highlight: EvidenceTextLayerHighlight): 
 
   return highlight.mode === 'hover'
     ? {
-        background: 'rgba(21, 101, 192, 0.16)',
-        border: '1px dashed rgba(21, 101, 192, 0.7)',
-        boxShadow: '0 0 0 1px rgba(21, 101, 192, 0.15)',
+        background: EVIDENCE_HIGHLIGHT_HOVER_BACKGROUND,
+        border: `1px dashed ${EVIDENCE_HIGHLIGHT_HOVER_BORDER}`,
+        boxShadow: `0 0 0 1px ${EVIDENCE_HIGHLIGHT_HOVER_SHADOW}`,
       }
     : {
-        background: 'rgba(21, 101, 192, 0.28)',
-        border: '2px solid rgba(21, 101, 192, 0.92)',
+        background: EVIDENCE_HIGHLIGHT_ACTIVE_BACKGROUND,
+        border: `2px solid ${EVIDENCE_HIGHLIGHT_ACTIVE_BORDER}`,
         boxShadow: '0 0 0 1px rgba(255, 255, 255, 0.22)',
       }
 }
@@ -2966,120 +2936,6 @@ const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLEl
   return Array.from(iframeDoc.querySelectorAll<HTMLElement>('.textLayer'))
 }
 
-const getInvalidBboxFields = (bbox: NonNullable<OverlayDocItem['bbox']>): string[] => {
-  const invalidFields: string[] = []
-  const left = Number(bbox.left)
-  const top = Number(bbox.top)
-  const right = Number(bbox.right)
-  const bottom = Number(bbox.bottom)
-
-  if (!Number.isFinite(left)) invalidFields.push('left')
-  if (!Number.isFinite(top)) invalidFields.push('top')
-  if (!Number.isFinite(right)) invalidFields.push('right')
-  if (!Number.isFinite(bottom)) invalidFields.push('bottom')
-
-  if (Number.isFinite(left) && Number.isFinite(right) && left === right) {
-    invalidFields.push('zero-width')
-  }
-  if (Number.isFinite(top) && Number.isFinite(bottom) && top === bottom) {
-    invalidFields.push('zero-height')
-  }
-
-  return invalidFields
-}
-
-export const inspectOverlayDocItems = (docItems: OverlayDocItem[] | undefined): OverlayDocItemInspection => {
-  if (!Array.isArray(docItems)) {
-    return {
-      normalizedDocItems: [],
-      droppedItems: [],
-    }
-  }
-
-  return docItems.reduce<OverlayDocItemInspection>(
-    (acc, item, index) => {
-      const pageValue = typeof item.page === 'number' ? item.page : typeof item.page_no === 'number' ? item.page_no : undefined
-      // PDF.js pages are 1-indexed, so page 0 is treated as invalid input.
-      if (pageValue === undefined || !Number.isFinite(pageValue) || pageValue <= 0) {
-        acc.droppedItems.push({
-          index,
-          reason: 'missing-page',
-          page: item.page,
-          page_no: item.page_no,
-          bbox: item.bbox,
-        })
-        return acc
-      }
-
-      if (!item.bbox) {
-        acc.droppedItems.push({
-          index,
-          reason: 'missing-bbox',
-          page: item.page,
-          page_no: item.page_no,
-        })
-        return acc
-      }
-
-      const invalidFields = getInvalidBboxFields(item.bbox)
-      if (invalidFields.length > 0) {
-        acc.droppedItems.push({
-          index,
-          reason: 'invalid-bbox',
-          page: item.page,
-          page_no: item.page_no,
-          bbox: item.bbox,
-          invalidFields,
-        })
-        return acc
-      }
-
-      acc.normalizedDocItems.push({
-        ...item,
-        page: pageValue,
-      })
-      return acc
-    },
-    {
-      normalizedDocItems: [],
-      droppedItems: [],
-    },
-  )
-}
-
-export const normalizeOverlayDocItems = (docItems: OverlayDocItem[] | undefined): OverlayDocItem[] => {
-  return inspectOverlayDocItems(docItems).normalizedDocItems
-}
-
-export const reduceOverlayUpdate = (
-  detail: OverlayPayload | null | undefined,
-  activeDocumentId?: string | null,
-  normalizedDocItemsInput?: OverlayDocItem[],
-): OverlayPayload[] | null => {
-  if (!detail) {
-    return null
-  }
-
-  if (typeof detail.chunkId !== 'string' || detail.chunkId.trim().length === 0) {
-    return null
-  }
-
-  const normalizedDocItems = normalizedDocItemsInput ?? normalizeOverlayDocItems(detail.docItems)
-  if (normalizedDocItems.length === 0) {
-    return []
-  }
-
-  // The viewer should track the most recently selected chunk only.
-  // Retaining prior overlays is what made highlights appear stuck on older pages.
-  return [
-    {
-      chunkId: detail.chunkId,
-      documentId: detail.documentId ?? activeDocumentId ?? null,
-      docItems: normalizedDocItems,
-    },
-  ]
-}
-
 export function PdfViewer({
   pendingNavigation = null,
   onNavigationComplete,
@@ -3124,7 +2980,6 @@ export function PdfViewer({
     progress: 0,
     message: '',
   })
-  const [overlays, setOverlays] = useState<OverlayPayload[]>([])
   const [overlayRenderKey, setOverlayRenderKey] = useState(0)
   const [navigationResult, setNavigationResult] = useState<PdfViewerNavigationResult | null>(null)
   const [evidenceHighlight, setEvidenceHighlight] = useState<EvidenceTextLayerHighlight | null>(null)
@@ -3143,31 +2998,6 @@ export function PdfViewer({
     setNavigationResult(result)
     onNavigationStateChange?.(result)
   }, [onNavigationStateChange])
-
-  const logOverlayNormalizationDiagnostics = useCallback(
-    (detail: OverlayPayload, inspection: OverlayDocItemInspection) => {
-      if (inspection.droppedItems.length === 0) {
-        return
-      }
-
-      const reasonCounts = inspection.droppedItems.reduce<Record<string, number>>((acc, item) => {
-        acc[item.reason] = (acc[item.reason] ?? 0) + 1
-        return acc
-      }, {})
-
-      console.warn('[PDF OVERLAY DIAGNOSTICS] Dropped highlight doc_items during normalization', {
-        chunkId: detail.chunkId,
-        documentId: detail.documentId ?? activeDocument?.documentId ?? null,
-        activeDocumentId: activeDocument?.documentId ?? null,
-        receivedDocItems: detail.docItems?.length ?? 0,
-        normalizedDocItems: inspection.normalizedDocItems.length,
-        droppedDocItems: inspection.droppedItems.length,
-        reasonCounts,
-        samples: inspection.droppedItems.slice(0, 3),
-      })
-    },
-    [activeDocument?.documentId],
-  )
 
   /**
    * Signal that document loading is complete (whether success or failure).
@@ -3467,98 +3297,6 @@ export function PdfViewer({
     const files = Array.from(event.dataTransfer.files ?? [])
     void handleDroppedFiles(files)
   }, [activeDocument, handleDroppedFiles, suppressDragEvent, uploadInFlight])
-
-  useEffect(() => {
-    const handleOverlayUpdate = (event: Event) => {
-      const detail = (event as CustomEvent<OverlayPayload>).detail
-      debug.log('🔍 [PDF VIEWER DEBUG] Received pdf-overlay-update event:', {
-        hasDetail: !!detail,
-        chunkId: detail?.chunkId,
-        documentId: detail?.documentId,
-        docItemsCount: detail?.docItems?.length || 0,
-        activeDocumentId: activeDocument?.documentId,
-        detail: detail
-      })
-
-      if (!detail) {
-        debug.log('🔍 [PDF VIEWER DEBUG] No detail in event, skipping')
-        return
-      }
-
-      if (detail.documentId && activeDocument?.documentId && detail.documentId !== activeDocument.documentId) {
-        console.error('❌ [PDF VIEWER DEBUG] Document ID mismatch - OVERLAYS BLOCKED!', {
-          receivedId: detail.documentId,
-          activeId: activeDocument.documentId,
-          match: detail.documentId === activeDocument.documentId,
-          receivedType: typeof detail.documentId,
-          activeType: typeof activeDocument.documentId
-        })
-        return
-      }
-
-      // Log successful pass-through
-      debug.log('✅ [PDF VIEWER DEBUG] Document ID check passed, processing overlays', {
-        receivedId: detail.documentId,
-        activeId: activeDocument?.documentId
-      })
-
-      debug.log('🔍 [PDF VIEWER DEBUG] Processing doc items for normalization:', {
-        rawCount: detail.docItems?.length || 0,
-        firstThreeItems: detail.docItems?.slice(0, 3)
-      })
-
-      const inspection = inspectOverlayDocItems(detail.docItems)
-      const normalizedDocItems = inspection.normalizedDocItems
-
-      logOverlayNormalizationDiagnostics(detail, inspection)
-
-      normalizedDocItems.forEach((item, idx) => {
-        debug.log(`🔍 [PDF VIEWER DEBUG] Normalized item ${idx}:`, {
-          page: item.page,
-          bbox: item.bbox,
-          label: item.doc_item_label
-        })
-      })
-
-      debug.log('🔍 [PDF VIEWER DEBUG] Normalization complete:', {
-        inputCount: detail.docItems?.length || 0,
-        outputCount: normalizedDocItems.length,
-        normalizedItems: normalizedDocItems.slice(0, 3) // First 3 for brevity
-      })
-
-      setOverlays((prev) => {
-        const nextOverlays = reduceOverlayUpdate(detail, activeDocument?.documentId, normalizedDocItems)
-        if (nextOverlays === null) {
-          debug.log('🔍 [PDF VIEWER DEBUG] Invalid overlay payload, skipping:', detail)
-          return prev
-        }
-
-        debug.log('🔍 [PDF VIEWER DEBUG] Updated overlays state:', {
-          previousCount: prev.length,
-          newCount: nextOverlays.length,
-          chunkIds: nextOverlays.map(o => o.chunkId),
-          totalDocItems: nextOverlays.reduce((sum, o) => sum + o.docItems.length, 0)
-        })
-
-        return nextOverlays
-      })
-      setOverlayRenderKey((prev) => prev + 1)
-    }
-
-    const handleOverlayClear = () => {
-      debug.log('🔍 [PDF VIEWER DEBUG] Clearing all overlays (pdf-overlay-clear event)')
-      setOverlays([])
-      setOverlayRenderKey((prev) => prev + 1)
-    }
-
-    window.addEventListener('pdf-overlay-update', handleOverlayUpdate)
-    window.addEventListener('pdf-overlay-clear', handleOverlayClear)
-
-    return () => {
-      window.removeEventListener('pdf-overlay-update', handleOverlayUpdate)
-      window.removeEventListener('pdf-overlay-clear', handleOverlayClear)
-    }
-  }, [activeDocument?.documentId, logOverlayNormalizationDiagnostics])
 
   const viewerSrc = useMemo(() => {
     if (!activeDocument) return 'about:blank'
@@ -4275,7 +4013,6 @@ export function PdfViewer({
       slowHighlight: false,
     }))
     setActiveDocument(document)
-    setOverlays([])
     setEvidenceHighlight(null)
     commitNavigationResult(null)
     setOverlayRenderKey((prev) => prev + 1)
@@ -4366,7 +4103,6 @@ export function PdfViewer({
         setError(null)
         highlightTermsRef.current = []
         setHighlightTerms([])
-        setOverlays([])
         setEvidenceHighlight(null)
         commitNavigationResult(null)
         localStorage.removeItem(SESSION_STORAGE_KEY)
@@ -4643,170 +4379,6 @@ export function PdfViewer({
       window.removeEventListener(EVIDENCE_SPIKE_EVENT_NAME, handleEvidenceSpike)
     }
   }, [executeEvidenceSpike])
-
-  useEffect(() => {
-    const iframeDoc = iframeRef.current?.contentWindow?.document
-    const pdfApp = pdfAppRef.current
-
-    debug.log('🔍 [PDF OVERLAY RENDER] Starting overlay render effect:', {
-      hasIframeDoc: !!iframeDoc,
-      hasPdfApp: !!pdfApp,
-      hasPdfViewer: !!pdfApp?.pdfViewer,
-      status,
-      overlaysCount: overlays.length,
-      overlayRenderKey
-    })
-
-    if (!iframeDoc || !pdfApp?.pdfViewer) {
-      debug.log('🔍 [PDF OVERLAY RENDER] Missing iframe doc or PDF app, skipping')
-      return
-    }
-
-    // Remove existing overlays
-    const existingOverlays = iframeDoc.querySelectorAll('.chunk-overlay-layer')
-    debug.log('🔍 [PDF OVERLAY RENDER] Removing existing overlay layers:', existingOverlays.length)
-    existingOverlays.forEach((node) => node.remove())
-
-    if (status !== 'ready' || overlays.length === 0) {
-      debug.log('🔍 [PDF OVERLAY RENDER] Not ready or no overlays to render:', {
-        status,
-        overlaysCount: overlays.length
-      })
-      return
-    }
-
-    debug.log('🔍 [PDF OVERLAY RENDER] Processing overlays for rendering:', {
-      totalOverlays: overlays.length,
-      totalDocItems: overlays.reduce((sum, o) => sum + o.docItems.length, 0),
-      overlays: overlays.map(o => ({
-        chunkId: o.chunkId,
-        docItemsCount: o.docItems.length
-      }))
-    })
-
-    const layersByPage = new Map<number, HTMLElement>()
-    let renderedRectCount = 0
-    let skippedItemCount = 0
-
-    overlays.forEach((overlay, overlayIdx) => {
-      debug.log(`🔍 [PDF OVERLAY RENDER] Processing overlay ${overlayIdx}:`, {
-        chunkId: overlay.chunkId,
-        docItemsCount: overlay.docItems.length
-      })
-
-      overlay.docItems.forEach((item, itemIdx) => {
-        const pageNumber = typeof item.page === 'number' ? item.page : typeof item.page_no === 'number' ? item.page_no : undefined
-        const bbox = item.bbox
-
-        if (!pageNumber || !bbox) {
-          console.warn('[PDF OVERLAY DIAGNOSTICS] Skipping overlay render for incomplete doc_item', {
-            chunkId: overlay.chunkId,
-            documentId: overlay.documentId ?? activeDocument?.documentId ?? null,
-            itemIndex: itemIdx,
-            hasPageNumber: !!pageNumber,
-            hasBbox: !!bbox,
-            item,
-          })
-          skippedItemCount++
-          return
-        }
-
-        const left = Number(bbox.left)
-        const top = Number(bbox.top)
-        const right = Number(bbox.right)
-        const bottom = Number(bbox.bottom)
-
-        if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(right) || !Number.isFinite(bottom)) {
-          console.warn('[PDF OVERLAY DIAGNOSTICS] Skipping overlay render for invalid bbox coordinates', {
-            chunkId: overlay.chunkId,
-            documentId: overlay.documentId ?? activeDocument?.documentId ?? null,
-            itemIndex: itemIdx,
-            pageNumber,
-            left,
-            top,
-            right,
-            bottom,
-          })
-          skippedItemCount++
-          return
-        }
-
-        const pageView = pdfApp.pdfViewer.getPageView(pageNumber - 1)
-        const pageDiv = pageView?.div
-        const viewport = pageView?.viewport
-
-        if (!pageDiv || !viewport) {
-          debug.log(`🔍 [PDF OVERLAY RENDER] Skipping item ${itemIdx} - page not ready:`, {
-            pageNumber,
-            hasPageView: !!pageView,
-            hasPageDiv: !!pageDiv,
-            hasViewport: !!viewport
-          })
-          skippedItemCount++
-          return
-        }
-
-        let layer = layersByPage.get(pageNumber)
-        if (!layer) {
-          layer = iframeDoc.createElement('div')
-          layer.className = 'chunk-overlay-layer'
-          layer.style.position = 'absolute'
-          layer.style.inset = '0'
-          layer.style.pointerEvents = 'none'
-          layer.style.zIndex = '5'
-          pageDiv.appendChild(layer)
-          layersByPage.set(pageNumber, layer)
-          debug.log(`🔍 [PDF OVERLAY RENDER] Created overlay layer for page ${pageNumber}`)
-        }
-
-        const rect = viewport.convertToViewportRectangle([left, top, right, bottom])
-        const [x1, y1, x2, y2] = rect
-
-        const overlayRect = iframeDoc.createElement('div')
-        overlayRect.className = 'chunk-overlay-rect'
-        overlayRect.style.position = 'absolute'
-        overlayRect.style.left = `${Math.min(x1, x2)}px`
-        overlayRect.style.top = `${Math.min(y1, y2)}px`
-        overlayRect.style.width = `${Math.abs(x2 - x1)}px`
-        overlayRect.style.height = `${Math.abs(y2 - y1)}px`
-        overlayRect.style.background = 'rgba(21, 101, 192, 0.25)'
-        overlayRect.style.border = '2px solid rgba(21, 101, 192, 0.85)'
-        overlayRect.style.borderRadius = '2px'
-        overlayRect.style.pointerEvents = 'none'
-        layer.appendChild(overlayRect)
-        renderedRectCount++
-
-        debug.log(`🔍 [PDF OVERLAY RENDER] Rendered rect ${itemIdx} on page ${pageNumber}:`, {
-          originalBbox: bbox,
-          convertedRect: { x1, y1, x2, y2 },
-          finalPosition: {
-            left: Math.min(x1, x2),
-            top: Math.min(y1, y2),
-            width: Math.abs(x2 - x1),
-            height: Math.abs(y2 - y1)
-          }
-        })
-      })
-    })
-
-    debug.log('🔍 [PDF OVERLAY RENDER] Rendering complete:', {
-      totalOverlays: overlays.length,
-      totalDocItems: overlays.reduce((sum, o) => sum + o.docItems.length, 0),
-      renderedRects: renderedRectCount,
-      skippedItems: skippedItemCount,
-      pagesWithOverlays: Array.from(layersByPage.keys()).sort()
-    })
-
-    return () => {
-      const docCleanup = iframeRef.current?.contentWindow?.document
-      if (!docCleanup) return
-      const toRemove = docCleanup.querySelectorAll('.chunk-overlay-layer')
-      debug.log('🔍 [PDF OVERLAY RENDER] Cleanup - removing overlay layers:', toRemove.length)
-      toRemove.forEach((node) => node.remove())
-    }
-  // Re-render overlays when the active document changes so stale rectangles from
-  // the previous PDF are cleared even if the overlay payload did not change.
-  }, [activeDocument?.documentId, overlays, status, overlayRenderKey])
 
   useEffect(() => {
     const iframeDoc = iframeRef.current?.contentWindow?.document

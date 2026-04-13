@@ -17,7 +17,6 @@ function PdfHighlightTester() {
 
   const handleClear = () => {
     dispatchClearHighlights('user-action')
-    window.dispatchEvent(new CustomEvent('pdf-overlay-clear'))
   }
 
   return (

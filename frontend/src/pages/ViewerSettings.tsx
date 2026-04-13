@@ -24,7 +24,7 @@ interface ViewerSettingsState {
 const STORAGE_KEY = 'pdf-viewer-settings'
 
 const DEFAULT_SETTINGS: ViewerSettingsState = {
-  highlightColor: '#ffeb3b',
+  highlightColor: '#2e7d32',
   highlightOpacity: 0.35,
   clearOnNewQuery: true,
 }

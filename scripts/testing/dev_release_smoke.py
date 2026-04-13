@@ -924,6 +924,7 @@ def load_document_into_chat(
     document_id: str,
     headers: Dict[str, str],
     checks: list[Dict[str, Any]],
+    step_name: str = "chat_document_load",
 ) -> Dict[str, Any]:
     response = http_request(
         "POST",
@@ -939,7 +940,7 @@ def load_document_into_chat(
     require(response.json_body.get("active") is True, f"Document not active after load: {response.text}")
     append_check(
         checks,
-        step="chat_document_load",
+        step=step_name,
         ok=True,
         status_code=response.status_code,
         payload=response.json_body,
@@ -2051,6 +2052,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 document_id=primary_document_id,
                 headers=headers,
                 checks=checks,
+                step_name="chat_document_load",
             )
             loaded_document = True
 
@@ -2081,6 +2083,15 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             print_step("Creating a dedicated streaming chat session")
             stream_chat_session_id = create_chat_session(base_url=base_url, headers=headers, checks=checks)
             evidence["resources"]["stream_chat_session_id"] = stream_chat_session_id
+
+            print_step("Refreshing the loaded document before dedicated streaming chat")
+            load_document_into_chat(
+                base_url=base_url,
+                document_id=primary_document_id,
+                headers=headers,
+                checks=checks,
+                step_name="chat_document_load_streaming_refresh",
+            )
 
             print_step("Running the real streaming chat path on runtime defaults")
             chat_stream_summary = ask_streaming_chat_question(
