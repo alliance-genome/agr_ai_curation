@@ -71,6 +71,12 @@ def _default_candidate_normalizers() -> Mapping[str, CurationCandidateNormalizer
     return load_curation_adapter_registry().candidate_normalizers()
 
 
+def _default_evidence_resolver() -> "EvidenceAnchorResolver":
+    """Resolve prep evidence against PDFX chunks during initial workspace bootstrap."""
+
+    return DeterministicEvidenceAnchorResolver(resolve_against_document=True)
+
+
 class PipelineExecutionMode(str, Enum):
     """Dispatch mode for the deterministic post-agent pipeline."""
 
@@ -153,6 +159,7 @@ class EvidenceResolutionContext:
     adapter_key: str
     prep_extraction_result_id: str
     candidate_index: int
+    current_user_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -356,7 +363,7 @@ class PostCurationPipelineDependencies:
         default_factory=_default_candidate_normalizers
     )
     evidence_resolver: EvidenceAnchorResolver = field(
-        default_factory=DeterministicEvidenceAnchorResolver
+        default_factory=_default_evidence_resolver
     )
     validation_service: BatchValidationService = field(
         default_factory=DeterministicStructuralValidationService
@@ -479,6 +486,7 @@ def _execute_pipeline_steps(
                 adapter_key=adapter_key,
                 prep_extraction_result_id=str(prep_extraction_result.id),
                 candidate_index=candidate_index,
+                current_user_id=request.user_id,
             ),
         )
         evidence_records_by_candidate.append(

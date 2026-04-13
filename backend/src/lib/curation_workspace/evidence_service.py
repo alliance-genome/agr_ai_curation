@@ -560,6 +560,7 @@ def _resolve_anchor_against_document(
             adapter_key=adapter_key,
             prep_extraction_result_id=prep_extraction_result_id,
             candidate_index=0,
+            current_user_id=current_user_id,
         ),
     )
     if not resolved_records:

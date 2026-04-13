@@ -38,6 +38,7 @@ from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepCandi
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
+    CurationEvidenceSource,
     CurationExtractionSourceKind,
     CurationActionType,
     CurationSessionStatus,
@@ -350,6 +351,64 @@ def _passthrough_dependencies() -> module.PostCurationPipelineDependencies:
     return module.PostCurationPipelineDependencies(
         evidence_resolver=module.PassthroughEvidenceAnchorResolver(),
     )
+
+
+def test_default_evidence_resolver_resolves_against_document():
+    resolver = module._default_evidence_resolver()
+
+    assert isinstance(resolver, module.DeterministicEvidenceAnchorResolver)
+    assert resolver._resolve_against_document is True
+
+
+def test_default_pipeline_dependencies_enable_document_backed_evidence_resolution():
+    dependencies = module.PostCurationPipelineDependencies()
+
+    assert isinstance(dependencies.evidence_resolver, module.DeterministicEvidenceAnchorResolver)
+    assert dependencies.evidence_resolver._resolve_against_document is True
+
+
+def test_execute_post_curation_pipeline_default_dependencies_use_document_resolver_with_current_user(
+    db_session,
+    monkeypatch,
+):
+    document = _create_document(db_session)
+    prep_output = _make_prep_output()
+    _persist_matching_prep_result(
+        db_session,
+        document_id=str(document.id),
+        prep_output=prep_output,
+    )
+
+    observed: dict[str, object] = {}
+
+    class _SpyResolver:
+        def __init__(self, *args, **kwargs):
+            observed["kwargs"] = kwargs
+
+        def resolve(self, candidate, *, normalized_candidate, context):
+            observed["current_user_id"] = context.current_user_id
+            source_record = candidate.evidence_records[0]
+            return [
+                module.PreparedEvidenceRecordInput(
+                    source=CurationEvidenceSource.EXTRACTED,
+                    field_keys=list(source_record.field_paths),
+                    field_group_keys=[],
+                    is_primary=True,
+                    anchor=source_record.anchor.model_dump(mode="json"),
+                    warnings=[],
+                )
+            ]
+
+    monkeypatch.setattr(module, "DeterministicEvidenceAnchorResolver", _SpyResolver)
+
+    result = module.execute_post_curation_pipeline(
+        _make_request(prep_output, document_id=str(document.id)),
+        db=db_session,
+    )
+
+    assert result.status is module.PipelineRunStatus.COMPLETED
+    assert observed["kwargs"] == {"resolve_against_document": True}
+    assert observed["current_user_id"] == "user-1"
 
 
 def test_structured_payload_candidate_normalizer_builds_payload_and_draft_fields():

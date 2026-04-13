@@ -179,6 +179,7 @@ class DeterministicEvidenceAnchorResolver:
         self._user_id_resolver = user_id_resolver or self._resolve_user_id
         self._chunk_loader = chunk_loader or _default_chunk_loader
         self._resolve_against_document = resolve_against_document
+        self._document_cache: dict[tuple[str, str | None], tuple[_PreparedDocument, str | None]] = {}
 
     def resolve(
         self,
@@ -198,8 +199,16 @@ class DeterministicEvidenceAnchorResolver:
         document = _PreparedDocument.from_chunks(())
         load_warning: str | None = None
         if self._resolve_against_document:
-            user_id = self._safe_resolve_user_id(context.prep_extraction_result_id)
-            document, load_warning = self._prepare_document(context.document_id, user_id)
+            user_id = (
+                self._safe_resolve_user_id(context.prep_extraction_result_id)
+                or context.current_user_id
+            )
+            cache_key = (context.document_id, user_id)
+            cached_document = self._document_cache.get(cache_key)
+            if cached_document is None:
+                cached_document = self._prepare_document(context.document_id, user_id)
+                self._document_cache[cache_key] = cached_document
+            document, load_warning = cached_document
 
         for evidence_record in candidate.evidence_records:
             field_keys = list(evidence_record.field_paths)
