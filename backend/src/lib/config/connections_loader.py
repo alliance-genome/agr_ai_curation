@@ -74,6 +74,40 @@ def _substitute_env_vars(value: str) -> str:
     return re.sub(pattern, replacer, value)
 
 
+def _parse_boolean_value(value: Any, field_name: str) -> bool:
+    """Parse a YAML boolean field, allowing env-substituted string values."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = _substitute_env_vars(value).strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"", "0", "false", "no", "off"}:
+            return False
+    raise ValueError(f"{field_name} must be a boolean value")
+
+
+def _resolve_required_flag(data: Dict[str, Any]) -> bool:
+    """Resolve whether a connection is required for startup."""
+    required = _parse_boolean_value(data.get("required", False), "required")
+    required_when = data.get("required_when")
+    if required_when is None:
+        return required
+
+    if not isinstance(required_when, dict):
+        raise ValueError("required_when must be a mapping")
+
+    env_name = str(required_when.get("env", "")).strip()
+    if not env_name:
+        raise ValueError("required_when.env must not be empty")
+
+    expected_value = str(_substitute_env_vars(required_when.get("equals", ""))).strip().lower()
+    default_value = str(_substitute_env_vars(required_when.get("default", ""))).strip()
+    actual_value = os.getenv(env_name, default_value).strip().lower()
+
+    return required or actual_value == expected_value
+
+
 # Default path for connections configuration
 DEFAULT_CONNECTIONS_PATH = _get_default_connections_path()
 
@@ -281,7 +315,7 @@ class ConnectionDefinition:
             description=data.get("description", "").strip(),
             url=url,
             health_check=HealthCheck.from_yaml(data.get("health_check")),
-            required=data.get("required", False),
+            required=_resolve_required_flag(data),
             timeout_seconds=data.get("timeout_seconds", 10),
             credentials=CredentialsConfig.from_yaml(data.get("credentials")),
         )

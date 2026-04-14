@@ -183,7 +183,7 @@ test_core_config_generates_env_and_backups() {
   local expected_image_tag
   expected_image_tag="$(resolve_checkout_image_tag "$repo_root")"
 
-  run_core_config "$temp_home" $'sk-openai-first\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-first\n\n\n\n\n\n'
 
   [[ -f "$env_file" ]] || {
     echo "Expected env file not found: $env_file" >&2
@@ -194,6 +194,9 @@ test_core_config_generates_env_and_backups() {
   assert_contains '^GROQ_API_KEY=$' "$env_file"
   assert_contains '^ANTHROPIC_API_KEY=$' "$env_file"
   assert_contains '^GEMINI_API_KEY=$' "$env_file"
+  assert_contains '^RERANK_PROVIDER=bedrock_cohere$' "$env_file"
+  assert_contains '^BEDROCK_RERANK_MODEL_ARN=arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0$' "$env_file"
+  assert_contains '^RERANKER_URL=http://reranker-transformers:8080$' "$env_file"
   assert_regex '^NEXTAUTH_SECRET=[0-9a-f]{64}$' "$env_file"
   assert_regex '^SALT=[0-9a-f]{64}$' "$env_file"
   assert_regex '^ENCRYPTION_KEY=[0-9a-f]{64}$' "$env_file"
@@ -294,10 +297,30 @@ test_core_config_generates_env_and_backups() {
     exit 1
   fi
 
-  run_core_config "$temp_home" $'sk-openai-second\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-second\n\n\n\n\n\n'
 
   assert_contains '^OPENAI_API_KEY=sk-openai-second$' "$env_file"
   assert_glob_exists "${env_file}.bak.*"
+}
+
+test_core_config_honors_local_transformers_override() {
+  local temp_home
+  local output_path
+  temp_home="$(mktemp -d)"
+  output_path="$(mktemp)"
+  trap 'rm -rf "$temp_home" "$output_path"' RETURN
+
+  printf '\nsk-openai-local\n\n\n\n' | \
+    HOME="$temp_home" \
+    RERANK_PROVIDER="local_transformers" \
+    RERANKER_URL="http://custom-reranker:9090" \
+    bash "$core_config_script" >"$output_path" 2>&1
+
+  local env_file="${temp_home}/.agr_ai_curation/.env"
+  assert_contains '^RERANK_PROVIDER=local_transformers$' "$env_file"
+  assert_contains '^RERANKER_URL=http://custom-reranker:9090$' "$env_file"
+  assert_contains '^BEDROCK_RERANK_MODEL_ARN=arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0$' "$env_file"
+  assert_contains 'memory-intensive local model' "$output_path"
 }
 
 test_core_config_seeds_alliance_profile_when_selected() {
@@ -308,7 +331,7 @@ test_core_config_seeds_alliance_profile_when_selected() {
   local runtime_packages_dir="${temp_home}/.agr_ai_curation/runtime/packages"
   local package_profile_state="${temp_home}/.agr_ai_curation/.install_package_profile.env"
 
-  run_core_config_with_profile_choice "$temp_home" "2" $'sk-openai-alliance\n\n\n\n'
+  run_core_config_with_profile_choice "$temp_home" "2" $'sk-openai-alliance\n\n\n\n\n\n'
 
   [[ -f "${runtime_packages_dir}/core/package.yaml" ]] || {
     echo "Expected core package manifest for core + alliance profile" >&2
@@ -329,7 +352,7 @@ test_auth_setup_dev_and_oidc() {
   temp_home_dev="$(mktemp -d)"
   trap 'rm -rf "$temp_home_dev" "$temp_home_oidc"' RETURN
 
-  run_core_config "$temp_home_dev" $'sk-openai\n\n\n\n'
+  run_core_config "$temp_home_dev" $'sk-openai\n\n\n\n\n\n'
   run_auth_setup "$temp_home_dev" $'1\n'
 
   local env_dev="${temp_home_dev}/.agr_ai_curation/.env"
@@ -343,7 +366,7 @@ test_auth_setup_dev_and_oidc() {
 
   temp_home_oidc="$(mktemp -d)"
 
-  run_core_config "$temp_home_oidc" $'sk-openai\n\n\n\n'
+  run_core_config "$temp_home_oidc" $'sk-openai\n\n\n\n\n\n'
   run_auth_setup "$temp_home_oidc" $'2\nhttps://issuer.example.org/realms/alliance\nalliance-web\nsecret-value\nhttps://app.example.org/auth/callback\nrealm_access.roles\n'
 
   local env_oidc="${temp_home_oidc}/.agr_ai_curation/.env"
@@ -367,7 +390,7 @@ test_group_setup_defaults_to_runtime_config_path() {
 
   local default_groups_path="${temp_home}/.agr_ai_curation/runtime/config/groups.yaml"
 
-  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'1\n'
   HOME="$temp_home" bash "$group_setup_script" <<< $'2\nFB\n'
 
@@ -389,7 +412,7 @@ test_group_setup_modes_and_backup() {
 
   local groups_output_path="${temp_home}/generated-groups.yaml"
 
-  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'1\n'
   run_group_setup "$temp_home" "$groups_output_path" $'1\n'
 
@@ -425,7 +448,7 @@ test_group_setup_mode_one_handles_slash_group_claim() {
 
   local groups_output_path="${temp_home}/groups-with-slash-claim.yaml"
 
-  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org\nclient-id\nclient-secret\nhttps://app.example.org/auth/callback\nrealm_access/roles\n'
   run_group_setup "$temp_home" "$groups_output_path" $'1\n'
 
@@ -440,7 +463,7 @@ test_group_setup_rejects_invalid_custom_group_id() {
   local groups_output_path="${temp_home}/groups-invalid-custom-id.yaml"
   local output_path="${temp_home}/group-setup-invalid.log"
 
-  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'1\n'
   run_group_setup_expect_fail "$temp_home" "$groups_output_path" $'3\nMY:ORG\nName\nDescription\nHomo sapiens\nNCBITaxon:9606\ngroup-one\n' "$output_path"
 
@@ -454,7 +477,7 @@ test_group_setup_escapes_yaml_double_quotes() {
 
   local groups_output_path="${temp_home}/groups-escaped-values.yaml"
 
-  run_core_config "$temp_home" $'sk-openai\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org\nclient-id\nclient-secret\nhttps://app.example.org/auth/callback\nrealm_access.roles\n'
   run_group_setup "$temp_home" "$groups_output_path" $'3\nMYORG\nMy "Org"\nDesc with "quotes"\nHomo "sapiens"\nNCBITaxon:9606\ngroup "one",group-two\n'
 
@@ -490,7 +513,7 @@ test_orchestrator_skip_flags() {
     --image-tag release-20260313 \
     --skip-preflight \
     --skip-group-setup \
-    --skip-pdfx-setup >"$output_path" <<< $'\nsk-orchestrator\n\n\n\n1\n'
+    --skip-pdfx-setup >"$output_path" <<< $'\nsk-orchestrator\n\n\n\n\n\n1\n'
 
   local env_file="${temp_home}/.agr_ai_curation/.env"
   [[ -f "$env_file" ]] || {
@@ -530,7 +553,7 @@ test_orchestrator_can_add_alliance_later_with_package_profile_flag() {
   local runtime_packages_dir="${temp_home}/.agr_ai_curation/runtime/packages"
   local package_profile_state="${temp_home}/.agr_ai_curation/.install_package_profile.env"
 
-  run_core_config "$temp_home" $'sk-openai-initial\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-initial\n\n\n\n\n\n'
   assert_not_exists "${runtime_packages_dir}/alliance"
 
   HOME="$temp_home" \
@@ -540,7 +563,7 @@ test_orchestrator_can_add_alliance_later_with_package_profile_flag() {
     --skip-auth-setup \
     --skip-group-setup \
     --skip-pdfx-setup \
-    --skip-start-verify >"$output_path" <<< $'sk-openai-updated\n\n\n\n'
+    --skip-start-verify >"$output_path" <<< $'sk-openai-updated\n\n\n\n\n\n'
 
   [[ -f "${runtime_packages_dir}/alliance/package.yaml" ]] || {
     echo "Expected rerun installer path to add the alliance package" >&2
@@ -555,6 +578,7 @@ test_orchestrator_can_add_alliance_later_with_package_profile_flag() {
 }
 
 test_core_config_generates_env_and_backups
+test_core_config_honors_local_transformers_override
 test_core_config_seeds_alliance_profile_when_selected
 test_auth_setup_dev_and_oidc
 test_group_setup_defaults_to_runtime_config_path

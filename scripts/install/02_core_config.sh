@@ -14,6 +14,9 @@ image_tag_override="${INSTALL_IMAGE_TAG:-}"
 package_profile_override="${INSTALL_PACKAGE_PROFILE:-}"
 resolved_image_tag=""
 image_tag_note=""
+DEFAULT_RERANK_PROVIDER="bedrock_cohere"
+DEFAULT_BEDROCK_RERANK_MODEL_ARN="arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
+DEFAULT_RERANKER_URL="http://reranker-transformers:8080"
 
 mapfile -t deployment_config_filenames < <(install_deployment_config_filenames)
 
@@ -22,6 +25,142 @@ prompt_optional_value() {
   local response=""
   read -r -p "${prompt_text} (press Enter to skip): " response
   printf '%s\n' "$response"
+}
+
+prompt_value_with_default() {
+  local prompt_text="$1"
+  local default_value="$2"
+  local response=""
+  read -r -p "${prompt_text} (default ${default_value}): " response
+  printf '%s\n' "${response:-$default_value}"
+}
+
+read_existing_env_value() {
+  local key="$1"
+  if [[ ! -f "$env_output_path" ]]; then
+    return 1
+  fi
+
+  awk -F= -v key="$key" '
+    $1 == key {
+      sub(/^[^=]*=/, "", $0)
+      print $0
+      exit
+    }
+  ' "$env_output_path"
+}
+
+current_or_existing_value() {
+  local key="$1"
+  local default_value="$2"
+  local current_value="${!key:-}"
+  local existing_value=""
+
+  if [[ -n "$current_value" ]]; then
+    printf '%s\n' "$current_value"
+    return 0
+  fi
+
+  existing_value="$(read_existing_env_value "$key" || true)"
+  if [[ -n "$existing_value" ]]; then
+    printf '%s\n' "$existing_value"
+    return 0
+  fi
+
+  printf '%s\n' "$default_value"
+}
+
+normalize_rerank_provider() {
+  local provider="${1:-}"
+  provider="${provider,,}"
+  case "$provider" in
+    bedrock_cohere|local_transformers|none)
+      printf '%s\n' "$provider"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+prompt_rerank_provider() {
+  local default_provider="$1"
+  local default_choice="1"
+  local response=""
+
+  case "$default_provider" in
+    local_transformers)
+      default_choice="2"
+      ;;
+    none)
+      default_choice="3"
+      ;;
+  esac
+
+  while true; do
+    read -r -p "Rerank provider [1 = bedrock_cohere, 2 = local_transformers, 3 = none] (default ${default_choice}): " response
+    response="${response:-$default_choice}"
+
+    case "$response" in
+      1|bedrock_cohere)
+        printf 'bedrock_cohere\n'
+        return 0
+        ;;
+      2|local_transformers)
+        printf 'local_transformers\n'
+        return 0
+        ;;
+      3|none)
+        printf 'none\n'
+        return 0
+        ;;
+      *)
+        log_warn "Please choose bedrock_cohere, local_transformers, or none." >&2
+        ;;
+    esac
+  done
+}
+
+resolve_rerank_provider() {
+  local default_provider="$1"
+  local override_provider="${RERANK_PROVIDER:-}"
+  local normalized=""
+
+  if [[ -n "$override_provider" ]]; then
+    normalized="$(normalize_rerank_provider "$override_provider" || true)"
+    if [[ -z "$normalized" ]]; then
+      log_error "Unsupported RERANK_PROVIDER override: ${override_provider}"
+      return 1
+    fi
+    printf '%s\n' "$normalized"
+    return 0
+  fi
+
+  prompt_rerank_provider "$default_provider"
+}
+
+resolve_bedrock_rerank_model_arn() {
+  local default_model_arn="$1"
+  local override_model_arn="${BEDROCK_RERANK_MODEL_ARN:-}"
+
+  if [[ -n "$override_model_arn" ]]; then
+    printf '%s\n' "$override_model_arn"
+    return 0
+  fi
+
+  prompt_value_with_default "Bedrock rerank model ARN" "$default_model_arn"
+}
+
+resolve_reranker_url() {
+  local default_url="$1"
+  local override_url="${RERANKER_URL:-}"
+
+  if [[ -n "$override_url" ]]; then
+    printf '%s\n' "$override_url"
+    return 0
+  fi
+
+  prompt_value_with_default "Local reranker service URL" "$default_url"
 }
 
 generate_hex_secret() {
@@ -214,6 +353,8 @@ print_stage_intro() {
   echo "    3. Groq API key        (optional - adds Groq as an LLM provider)"
   echo "    4. Anthropic API key   (recommended - powers the in-app Claude help agent)"
   echo "    5. Gemini API key      (optional - adds Google Gemini models)"
+  echo "    6. Rerank provider     (bedrock_cohere, local_transformers, or none)"
+  echo "    7. Provider companion  (Bedrock model ARN or local reranker URL when needed)"
   echo
   echo "  Everything else (database passwords, encryption keys, Langfuse tokens)"
   echo "  is generated automatically. You don't need to prepare anything for those."
@@ -271,6 +412,12 @@ main() {
   local core_package_source_dir
   local alliance_package_source_dir
   local config_source_dir
+  local default_rerank_provider
+  local default_bedrock_rerank_model_arn
+  local default_reranker_url
+  local rerank_provider
+  local bedrock_rerank_model_arn
+  local reranker_url
 
   runtime_root_dir="$(install_runtime_root_dir "$install_home_dir")"
   runtime_config_dir="$(install_runtime_config_dir "$install_home_dir")"
@@ -305,6 +452,14 @@ main() {
     "$alliance_package_source_dir" \
     "$package_profile"
 
+  default_rerank_provider="$(current_or_existing_value "RERANK_PROVIDER" "$DEFAULT_RERANK_PROVIDER")"
+  default_bedrock_rerank_model_arn="$(
+    current_or_existing_value \
+      "BEDROCK_RERANK_MODEL_ARN" \
+      "$DEFAULT_BEDROCK_RERANK_MODEL_ARN"
+  )"
+  default_reranker_url="$(current_or_existing_value "RERANKER_URL" "$DEFAULT_RERANKER_URL")"
+
   if [[ -f "$env_output_path" ]]; then
     backup_file_with_timestamp "$env_output_path"
   fi
@@ -321,6 +476,21 @@ main() {
   groq_api_key="$(prompt_optional_value "Groq API key")"
   anthropic_api_key="$(prompt_optional_value "Anthropic API key")"
   gemini_api_key="$(prompt_optional_value "Gemini API key")"
+  rerank_provider="$(resolve_rerank_provider "$default_rerank_provider")"
+  bedrock_rerank_model_arn="$default_bedrock_rerank_model_arn"
+  reranker_url="$default_reranker_url"
+
+  case "$rerank_provider" in
+    bedrock_cohere)
+      bedrock_rerank_model_arn="$(resolve_bedrock_rerank_model_arn "$default_bedrock_rerank_model_arn")"
+      ;;
+    local_transformers)
+      log_warn "local_transformers reranking uses a memory-intensive local model; plan for at least 8 GiB RAM and run the reranker container." >&2
+      reranker_url="$(resolve_reranker_url "$default_reranker_url")"
+      ;;
+    none)
+      ;;
+  esac
 
   local postgres_password
   local redis_auth
@@ -377,6 +547,9 @@ main() {
   upsert_env_var "$env_output_path" "LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY" '${MINIO_ROOT_PASSWORD}'
   upsert_env_var "$env_output_path" "LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY" '${MINIO_ROOT_PASSWORD}'
   upsert_env_var "$env_output_path" "LLM_PROVIDER_STRICT_MODE" "false"
+  upsert_env_var "$env_output_path" "RERANK_PROVIDER" "$rerank_provider"
+  upsert_env_var "$env_output_path" "BEDROCK_RERANK_MODEL_ARN" "$bedrock_rerank_model_arn"
+  upsert_env_var "$env_output_path" "RERANKER_URL" "$reranker_url"
 
   # Ensure compose interpolation keeps working if .env values are consumed directly.
   upsert_env_var "$env_output_path" "DATABASE_URL" 'postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/ai_curation'
@@ -401,6 +574,7 @@ main() {
   log_success "Generated core config at ${env_output_path}"
   log_success "Seeded runtime config into ${runtime_config_dir}"
   log_success "Selected package profile: ${package_profile_label}"
+  log_success "Selected rerank provider: ${rerank_provider}"
   log_success "Package profile state saved to ${package_profile_state_path}"
   log_success "Seeded bundled core package into ${runtime_packages_dir}/core"
   if install_package_profile_includes_alliance "$package_profile"; then

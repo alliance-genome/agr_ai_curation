@@ -16,6 +16,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local needle="$1"
+  local file_path="$2"
+  if grep -q "$needle" "$file_path"; then
+    echo "Did not expect to find '$needle' in output" >&2
+    cat "$file_path" >&2
+    exit 1
+  fi
+}
+
 run_and_capture() {
   local output_file="$1"
   shift
@@ -205,8 +215,91 @@ EOF
     exit 1
   fi
 
-  assert_contains "reranker model is memory-intensive" "$output_file"
+  assert_contains "Available memory is 4.0 GiB (< 8.0 GiB)." "$output_file"
+  assert_not_contains "reranker model is memory-intensive" "$output_file"
   assert_contains "for Docker images" "$output_file"
+  assert_contains "PREFLIGHT_RESULT exit_code=0" "$output_file"
+}
+
+test_local_transformers_override_mentions_reranker_memory_warning() {
+  local stub_dir
+  local output_file
+  stub_dir="$(mktemp -d)"
+  output_file="$(mktemp)"
+  trap 'rm -rf "$stub_dir" "$output_file"' RETURN
+
+  make_common_stubs "$stub_dir"
+  cat >"${stub_dir}/lsof" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${stub_dir}/lsof"
+
+  local rc
+  rc="$(
+    run_and_capture "$output_file" env \
+      PATH="${stub_dir}:${PATH}" \
+      PREFLIGHT_DOCKER_CMD="docker" \
+      PREFLIGHT_GIT_CMD="git" \
+      PREFLIGHT_LSOF_CMD="lsof" \
+      PREFLIGHT_MEMORY_BYTES_OVERRIDE="$((4 * 1024 * 1024 * 1024))" \
+      PREFLIGHT_DISK_BYTES_OVERRIDE="$((20 * 1024 * 1024 * 1024))" \
+      RERANK_PROVIDER="local_transformers" \
+      bash "$preflight_script"
+  )"
+
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Expected local_transformers warnings to be non-blocking, got $rc" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "The local reranker model is memory-intensive." "$output_file"
+  assert_contains "PREFLIGHT_RESULT exit_code=0" "$output_file"
+}
+
+test_existing_env_keeps_bedrock_warning_provider_neutral() {
+  local stub_dir
+  local output_file
+  local temp_home
+  stub_dir="$(mktemp -d)"
+  output_file="$(mktemp)"
+  temp_home="$(mktemp -d)"
+  trap 'rm -rf "$stub_dir" "$output_file" "$temp_home"' RETURN
+
+  mkdir -p "${temp_home}/.agr_ai_curation"
+  cat >"${temp_home}/.agr_ai_curation/.env" <<'EOF'
+RERANK_PROVIDER=bedrock_cohere
+EOF
+
+  make_common_stubs "$stub_dir"
+  cat >"${stub_dir}/lsof" <<'EOF'
+#!/usr/bin/env bash
+exit 1
+EOF
+  chmod +x "${stub_dir}/lsof"
+
+  local rc
+  rc="$(
+    run_and_capture "$output_file" env \
+      HOME="${temp_home}" \
+      PATH="${stub_dir}:${PATH}" \
+      PREFLIGHT_DOCKER_CMD="docker" \
+      PREFLIGHT_GIT_CMD="git" \
+      PREFLIGHT_LSOF_CMD="lsof" \
+      PREFLIGHT_MEMORY_BYTES_OVERRIDE="$((4 * 1024 * 1024 * 1024))" \
+      PREFLIGHT_DISK_BYTES_OVERRIDE="$((20 * 1024 * 1024 * 1024))" \
+      bash "$preflight_script"
+  )"
+
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Expected bedrock warnings to be non-blocking, got $rc" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "Available memory is 4.0 GiB (< 8.0 GiB)." "$output_file"
+  assert_not_contains "reranker model is memory-intensive" "$output_file"
   assert_contains "PREFLIGHT_RESULT exit_code=0" "$output_file"
 }
 
@@ -214,5 +307,7 @@ test_detects_missing_docker
 test_detects_port_conflict
 test_passes_on_clean_system
 test_warnings_do_not_block_installation
+test_local_transformers_override_mentions_reranker_memory_warning
+test_existing_env_keeps_bedrock_warning_provider_neutral
 
 echo "preflight.sh checks passed"

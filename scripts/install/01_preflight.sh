@@ -18,6 +18,8 @@ DOCKER_CMD="${PREFLIGHT_DOCKER_CMD:-docker}"
 GIT_CMD="${PREFLIGHT_GIT_CMD:-git}"
 LSOF_CMD="${PREFLIGHT_LSOF_CMD:-lsof}"
 SS_CMD="${PREFLIGHT_SS_CMD:-ss}"
+install_home_dir="${INSTALL_HOME_DIR:-${HOME}/.agr_ai_curation}"
+install_env_path="${INSTALL_ENV_PATH:-${install_home_dir}/.env}"
 
 declare -i prereq_failures=0
 declare -i port_conflicts=0
@@ -49,6 +51,68 @@ record_warning() {
 command_exists() {
   local command_name="$1"
   command -v "$command_name" >/dev/null 2>&1
+}
+
+read_existing_env_value() {
+  local key="$1"
+  if [[ ! -f "$install_env_path" ]]; then
+    return 1
+  fi
+
+  awk -F= -v key="$key" '
+    $1 == key {
+      sub(/^[^=]*=/, "", $0)
+      print $0
+      exit
+    }
+  ' "$install_env_path"
+}
+
+normalize_rerank_provider() {
+  local provider="${1:-}"
+  provider="${provider,,}"
+  case "$provider" in
+    bedrock_cohere|local_transformers|none)
+      printf '%s\n' "$provider"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+resolve_rerank_provider_hint() {
+  local provider="${RERANK_PROVIDER:-}"
+  local normalized=""
+
+  if [[ -n "$provider" ]]; then
+    normalized="$(normalize_rerank_provider "$provider" || true)"
+    if [[ -n "$normalized" ]]; then
+      printf '%s\n' "$normalized"
+      return 0
+    fi
+  fi
+
+  provider="$(read_existing_env_value "RERANK_PROVIDER" || true)"
+  if [[ -n "$provider" ]]; then
+    normalized="$(normalize_rerank_provider "$provider" || true)"
+    if [[ -n "$normalized" ]]; then
+      printf '%s\n' "$normalized"
+      return 0
+    fi
+  fi
+
+  printf 'unknown\n'
+}
+
+memory_warning_suffix() {
+  local rerank_provider="$1"
+  if [[ "$rerank_provider" == "local_transformers" ]]; then
+    printf ' The local reranker model is memory-intensive.'
+    return 0
+  fi
+
+  printf '%s' ""
 }
 
 resolve_memory_bytes() {
@@ -165,15 +229,16 @@ check_required_tools() {
 }
 
 check_memory_warning() {
+  local rerank_provider="$1"
   local memory_bytes
   memory_bytes="$(resolve_memory_bytes || true)"
   if [[ -z "$memory_bytes" || ! "$memory_bytes" =~ ^[0-9]+$ ]]; then
-    record_warning "Unable to determine available system memory. Recommended: 8.0 GiB+ (reranker model is memory-intensive)."
+    record_warning "Unable to determine available system memory. Recommended: 8.0 GiB+.$(memory_warning_suffix "$rerank_provider")"
     return 0
   fi
 
   if (( memory_bytes < MIN_MEMORY_BYTES )); then
-    record_warning "Available memory is $(bytes_to_gib "$memory_bytes") GiB (< 8.0 GiB). reranker model is memory-intensive."
+    record_warning "Available memory is $(bytes_to_gib "$memory_bytes") GiB (< 8.0 GiB).$(memory_warning_suffix "$rerank_provider")"
   else
     log_success "Memory check passed: $(bytes_to_gib "$memory_bytes") GiB available."
   fi
@@ -272,7 +337,7 @@ print_stage_intro() {
   echo
   echo "    - Docker & Docker Compose v2+ (required to run all services)"
   echo "    - Git (required to clone the PDF extraction service, if enabled)"
-  echo "    - At least 8 GiB RAM (the reranker model is memory-intensive)"
+  echo "    - At least 8 GiB RAM recommended"
   echo "    - At least 10 GiB free disk (Docker images are large on first pull)"
   echo "    - 13 TCP ports are free (frontend, backend, databases, etc.)"
   echo
@@ -281,10 +346,12 @@ print_stage_intro() {
 }
 
 main() {
+  local rerank_provider_hint
+  rerank_provider_hint="$(resolve_rerank_provider_hint)"
   print_stage_intro
   log_info "Running install preflight checks"
   check_required_tools
-  check_memory_warning
+  check_memory_warning "$rerank_provider_hint"
   check_disk_warning
   check_required_ports
   emit_summary_and_exit

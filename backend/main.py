@@ -375,8 +375,19 @@ async def lifespan(app: FastAPI):
             # Check health of required services
             required_services = get_required_connections()
             optional_services = get_optional_connections()
+            rerank_provider = os.environ.get("RERANK_PROVIDER", "bedrock_cohere").strip().lower()
             logger.info("Required services: %s", [s.service_id for s in required_services])
             logger.info("Optional services: %s", [s.service_id for s in optional_services])
+            if any(service.service_id == "reranker" for service in required_services):
+                logger.info(
+                    "Reranker startup health check is enforced for provider=%s",
+                    rerank_provider,
+                )
+            else:
+                logger.info(
+                    "Reranker startup health check is advisory for provider=%s",
+                    rerank_provider,
+                )
 
             if strict_mode and required_services:
                 logger.info("Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")

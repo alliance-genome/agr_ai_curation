@@ -180,7 +180,7 @@ test_start_verify_with_pdfx_enabled() {
   output_path="$(mktemp)"
   trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
 
-  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org/realms/alliance\nalliance-web\nsecret-value\nhttps://app.example.org/auth/callback\nrealm_access.roles\n'
   make_stub_tools "$stub_dir"
 
@@ -246,7 +246,7 @@ test_start_verify_marks_pdfx_skipped_when_not_configured() {
   output_path="$(mktemp)"
   trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
 
-  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'1\n'
   make_stub_tools "$stub_dir"
 
@@ -282,7 +282,7 @@ test_start_verify_fails_with_clear_pdfx_state_guidance() {
   output_path="$(mktemp)"
   trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
 
-  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'2\nhttps://issuer.example.org/realms/alliance\nalliance-web\nsecret-value\nhttps://app.example.org/auth/callback\nrealm_access.roles\n'
   make_stub_tools "$stub_dir"
 
@@ -309,7 +309,7 @@ test_start_verify_fails_with_runtime_layout_guidance() {
   output_path="$(mktemp)"
   trap 'rm -rf "$temp_home" "$stub_dir" "$state_dir" "$output_path"' RETURN
 
-  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n\n\n'
   run_auth_setup "$temp_home" $'1\n'
   make_stub_tools "$stub_dir"
 
