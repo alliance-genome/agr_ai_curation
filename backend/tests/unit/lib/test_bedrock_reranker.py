@@ -116,6 +116,7 @@ def test_rerank_chunks_preserves_original_order_when_bedrock_errors(monkeypatch)
 
 def test_rerank_chunks_preserves_original_order_when_bedrock_returns_no_results(
     monkeypatch,
+    caplog,
 ):
     class _Client:
         def rerank(self, **kwargs):
@@ -136,7 +137,10 @@ def test_rerank_chunks_preserves_original_order_when_bedrock_returns_no_results(
         {"id": "chunk-2", "score": 0.3},
     ]
 
-    assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with caplog.at_level(logging.WARNING, logger=bedrock_reranker.logger.name):
+        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+
+    assert "rerank no results provider=bedrock_cohere" not in caplog.text
 
 
 def test_log_rerank_no_results_prefers_bedrock_message(caplog):
