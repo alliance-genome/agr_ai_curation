@@ -3291,7 +3291,6 @@ def delete_candidate(
         action_log_entry
         for action_log_entry in session.action_log_entries
         if action_log_entry.candidate_id != candidate.id
-        and action_log_entry.draft_id != candidate.draft.id
     ]
     session.current_candidate_id = next_candidate_uuid
     session.last_worked_at = now
@@ -3323,11 +3322,6 @@ def delete_candidate(
     db.commit()
 
     action_log_entry = build_action_log_entry(action_log_row)
-    if action_log_entry is None:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Delete action log entry could not be serialized",
-        )
     db.expire_all()
 
     return CurationCandidateDeleteResponse(
