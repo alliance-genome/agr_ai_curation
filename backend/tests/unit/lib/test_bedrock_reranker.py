@@ -10,8 +10,9 @@ import pytest
 import src.lib.bedrock_reranker as bedrock_reranker
 
 
-def test_rerank_chunks_returns_input_when_provider_disabled(monkeypatch):
-    monkeypatch.setenv("RERANK_PROVIDER", "none")
+@pytest.mark.parametrize("provider", ["", "none"])
+def test_rerank_chunks_returns_input_when_provider_disabled(monkeypatch, provider):
+    monkeypatch.setenv("RERANK_PROVIDER", provider)
 
     chunks = [{"id": "chunk-1", "score": 0.2}]
 
