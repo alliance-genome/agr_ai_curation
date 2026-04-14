@@ -26,6 +26,7 @@ import { SubmissionPreviewDialog } from '@/features/curation/submission'
 import {
   autosaveCurationCandidateDraft,
   createManualCurationCandidate,
+  deleteCurationCandidate,
   fetchCurationWorkspace,
   submitCurationCandidateDecision,
   validateCurationCandidate,
@@ -206,6 +207,34 @@ function CurationWorkspacePageContent({
       throw error
     }
   }, [activeCandidateId, autosave, refreshWorkspace, workspace.session.session_id])
+
+  const handleDeleteTag = useCallback(async (tagId: string) => {
+    setTableError(null)
+
+    const candidate = candidates.find((currentCandidate) => currentCandidate.candidate_id === tagId)
+    if (!candidate) {
+      const missingCandidateError = new Error(`Unable to find candidate ${tagId} in the workspace.`)
+      setTableError(missingCandidateError.message)
+      throw missingCandidateError
+    }
+
+    try {
+      const draftSaved = await autosave.flush()
+      if (!draftSaved) {
+        throw new Error('Unable to save the current draft before deleting this entity.')
+      }
+
+      const response = await deleteCurationCandidate({
+        session_id: workspace.session.session_id,
+        candidate_id: candidate.candidate_id,
+      })
+      await refreshWorkspace(response.session.current_candidate_id ?? null)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to delete this entity.'
+      setTableError(message)
+      throw error
+    }
+  }, [autosave, candidates, refreshWorkspace, workspace.session.session_id])
 
   const handleAcceptAllValidated = useCallback(async (tagIds: string[]) => {
     setTableError(null)
@@ -388,6 +417,7 @@ function CurationWorkspacePageContent({
             onSelectTag={handleSelectTag}
             onAcceptTag={handleAcceptTag}
             onRejectTag={handleRejectTag}
+            onDeleteTag={handleDeleteTag}
             onAcceptAllValidated={handleAcceptAllValidated}
             onSaveTag={handleSaveTag}
             onCreateManualTag={handleCreateManualTag}

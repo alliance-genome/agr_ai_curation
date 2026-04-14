@@ -57,6 +57,7 @@ from src.schemas.curation_workspace import (
     CurationAdapterRef,
     CurationCandidate as CurationCandidatePayload,
     CurationCandidateAction,
+    CurationCandidateDeleteResponse,
     CurationCandidateDecisionRequest,
     CurationCandidateDecisionResponse,
     CurationCandidateSubmissionReadiness,
@@ -3226,6 +3227,116 @@ def validate_session(
     )
 
 
+def delete_candidate(
+    db: Session,
+    session_id: str | UUID,
+    candidate_id: str | UUID,
+    *,
+    actor_claims: dict[str, Any],
+) -> CurationCandidateDeleteResponse:
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    normalized_candidate_id = _normalize_uuid(candidate_id, field_name="candidate_id")
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation review session {normalized_session_id} not found",
+        )
+
+    session = sessions[0]
+    candidate = next(
+        (
+            session_candidate
+            for session_candidate in session.candidates
+            if session_candidate.id == normalized_candidate_id
+        ),
+        None,
+    )
+    if candidate is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Curation candidate {normalized_candidate_id} not found in session "
+                f"{normalized_session_id}"
+            ),
+        )
+    if candidate.draft is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Curation candidate {normalized_candidate_id} is missing its draft payload",
+        )
+
+    now = datetime.now(timezone.utc)
+    remaining_candidates = [
+        session_candidate
+        for session_candidate in session.candidates
+        if session_candidate.id != normalized_candidate_id
+    ]
+    next_candidate_uuid = _current_candidate_id_after_delete(
+        session=session,
+        deleted_candidate=candidate,
+        remaining_candidates=remaining_candidates,
+    )
+
+    _delete_session_validation_snapshots(db, session_id=session.id)
+    _delete_candidate_children(
+        db,
+        session_id=session.id,
+        candidate_ids=[candidate.id],
+    )
+
+    session.candidates = list(remaining_candidates)
+    session.validation_snapshots = []
+    session.action_log_entries = [
+        action_log_entry
+        for action_log_entry in session.action_log_entries
+        if action_log_entry.candidate_id != candidate.id
+        and action_log_entry.draft_id != candidate.draft.id
+    ]
+    session.current_candidate_id = next_candidate_uuid
+    session.last_worked_at = now
+    session.updated_at = now
+    session.session_version += 1
+    _apply_candidate_progress_counts(session, remaining_candidates)
+
+    action_log_row = SessionActionLogModel(
+        session_id=session.id,
+        action_type=CurationActionType.CANDIDATE_DELETED,
+        actor_type=CurationActorType.USER,
+        actor=_actor_claims_payload(actor_claims),
+        occurred_at=now,
+        previous_candidate_status=candidate.status,
+        message="Candidate deleted from session",
+        evidence_anchor_ids=[str(evidence_row.id) for evidence_row in candidate.evidence_anchors],
+        action_metadata={
+            "deleted_candidate_id": str(candidate.id),
+            "deleted_draft_id": str(candidate.draft.id),
+            "deleted_display_label": candidate.display_label,
+            "deleted_evidence_anchor_count": len(candidate.evidence_anchors),
+            "deleted_validation_snapshot_count": len(candidate.validation_snapshots),
+            "next_candidate_id": str(next_candidate_uuid) if next_candidate_uuid else None,
+            "session_validation_cleared": True,
+        },
+    )
+
+    db.add(action_log_row)
+    db.commit()
+
+    action_log_entry = build_action_log_entry(action_log_row)
+    if action_log_entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Delete action log entry could not be serialized",
+        )
+    db.expire_all()
+
+    return CurationCandidateDeleteResponse(
+        deleted_candidate_id=str(candidate.id),
+        session=get_session_detail(db, session.id),
+        action_log_entry=action_log_entry,
+    )
+
+
 def submission_preview(
     db: Session,
     session_id: str | UUID,
@@ -3697,6 +3808,41 @@ def _normalize_optional_reason(reason: str | None) -> str | None:
     return normalized or None
 
 
+def _current_candidate_id_after_delete(
+    *,
+    session: ReviewSessionModel,
+    deleted_candidate: CurationCandidate,
+    remaining_candidates: Sequence[CurationCandidate],
+) -> UUID | None:
+    if not remaining_candidates:
+        return None
+
+    if (
+        session.current_candidate_id is not None
+        and session.current_candidate_id != deleted_candidate.id
+        and any(candidate.id == session.current_candidate_id for candidate in remaining_candidates)
+    ):
+        return session.current_candidate_id
+
+    following_candidates = [
+        candidate
+        for candidate in remaining_candidates
+        if candidate.order > deleted_candidate.order
+    ]
+    if following_candidates:
+        return min(following_candidates, key=lambda candidate: candidate.order).id
+
+    preceding_candidates = [
+        candidate
+        for candidate in remaining_candidates
+        if candidate.order < deleted_candidate.order
+    ]
+    if preceding_candidates:
+        return max(preceding_candidates, key=lambda candidate: candidate.order).id
+
+    return remaining_candidates[0].id
+
+
 def _reset_candidate_state(
     candidate: CurationCandidate,
     db: Session,
@@ -4112,34 +4258,58 @@ def _apply_prepared_session_metadata(
 def _clear_prepared_session_children(db: Session, session_row: ReviewSessionModel) -> None:
     candidate_ids = [candidate.id for candidate in session_row.candidates]
 
-    db.execute(
-        delete(ValidationSnapshotModel).where(
-            ValidationSnapshotModel.session_id == session_row.id
-        )
-    )
+    _delete_session_validation_snapshots(db, session_id=session_row.id)
 
     if candidate_ids:
-        db.execute(
-            delete(SessionActionLogModel).where(
-                SessionActionLogModel.session_id == session_row.id,
-                SessionActionLogModel.candidate_id.in_(candidate_ids),
-            )
-        )
-        db.execute(
-            delete(EvidenceRecordModel).where(
-                EvidenceRecordModel.candidate_id.in_(candidate_ids)
-            )
-        )
-        db.execute(
-            delete(DraftModel).where(DraftModel.candidate_id.in_(candidate_ids))
-        )
-        db.execute(
-            delete(CurationCandidate).where(CurationCandidate.id.in_(candidate_ids))
+        _delete_candidate_children(
+            db,
+            session_id=session_row.id,
+            candidate_ids=candidate_ids,
         )
 
     session_row.candidates = []
     session_row.validation_snapshots = []
     session_row.current_candidate_id = None
+
+
+def _delete_session_validation_snapshots(
+    db: Session,
+    *,
+    session_id: UUID,
+) -> None:
+    db.execute(
+        delete(ValidationSnapshotModel).where(
+            ValidationSnapshotModel.session_id == session_id
+        )
+    )
+
+
+def _delete_candidate_children(
+    db: Session,
+    *,
+    session_id: UUID,
+    candidate_ids: Sequence[UUID],
+) -> None:
+    if not candidate_ids:
+        return
+
+    db.execute(
+        delete(SessionActionLogModel).where(
+            SessionActionLogModel.session_id == session_id,
+            SessionActionLogModel.candidate_id.in_(candidate_ids),
+        )
+    )
+    db.execute(
+        delete(EvidenceRecordModel).where(
+            EvidenceRecordModel.candidate_id.in_(candidate_ids)
+        )
+    )
+    db.execute(
+        delete(DraftModel).where(DraftModel.candidate_id.in_(candidate_ids))
+    )
+    db.execute(
+        delete(CurationCandidate).where(CurationCandidate.id.in_(candidate_ids))
+    )
 
 
 def _persist_prepared_candidates(
@@ -4373,6 +4543,7 @@ __all__ = [
     "build_actor_claims_payload",
     "build_evidence_record",
     "create_manual_candidate",
+    "delete_candidate",
     "execute_submission",
     "get_next_session",
     "get_candidate_detail",

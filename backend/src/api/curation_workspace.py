@@ -32,6 +32,7 @@ from src.lib.curation_workspace.saved_view_service import (
 )
 from src.lib.curation_workspace.session_service import (
     create_manual_candidate,
+    delete_candidate,
     decide_candidate,
     execute_submission,
     get_submission,
@@ -58,6 +59,7 @@ from src.schemas.curation_prep import (
 from src.schemas.curation_workspace import (
     CurationCandidateDecisionRequest,
     CurationCandidateDecisionResponse,
+    CurationCandidateDeleteResponse,
     CurationCandidateDraftUpdateRequest,
     CurationCandidateDraftUpdateResponse,
     CurationCandidateValidationRequest,
@@ -536,6 +538,26 @@ async def patch_review_candidate_draft(
         candidate_id,
         request,
         user,
+    )
+
+
+@router.delete(
+    "/sessions/{session_id}/candidates/{candidate_id}",
+    response_model=CurationCandidateDeleteResponse,
+)
+async def delete_review_candidate(
+    session_id: UUID,
+    candidate_id: UUID,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationCandidateDeleteResponse:
+    set_global_user_from_cognito(db, user)
+    _require_current_user_id(user)
+    return delete_candidate(
+        db,
+        session_id,
+        candidate_id,
+        actor_claims=user,
     )
 
 

@@ -27,6 +27,7 @@ const defaultProps = {
   onAccept: vi.fn(),
   onReject: vi.fn(),
   onEdit: vi.fn(),
+  onDelete: vi.fn(),
 }
 
 describe('EntityTagRow', () => {
@@ -76,8 +77,15 @@ describe('EntityTagRow', () => {
   it('shows edit icon that calls onEdit', () => {
     const onEdit = vi.fn()
     render(<EntityTagRow {...defaultProps} onEdit={onEdit} />, { wrapper })
-    fireEvent.click(screen.getByLabelText('Edit'))
+    fireEvent.click(screen.getByLabelText('Edit daf-2'))
     expect(onEdit).toHaveBeenCalledWith('tag-1')
+  })
+
+  it('shows delete icon that calls onDelete', () => {
+    const onDelete = vi.fn()
+    render(<EntityTagRow {...defaultProps} onDelete={onDelete} />, { wrapper })
+    fireEvent.click(screen.getByLabelText('Delete daf-2'))
+    expect(onDelete).toHaveBeenCalledWith('tag-1')
   })
 
   it('shows source label', () => {
