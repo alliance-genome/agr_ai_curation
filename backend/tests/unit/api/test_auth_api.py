@@ -8,18 +8,21 @@ import pytest
 from fastapi import HTTPException
 from fastapi.security import SecurityScopes
 
-sys.modules.setdefault(
-    "rapidfuzz",
-    SimpleNamespace(
-        fuzz=SimpleNamespace(
-            partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
-                dest_start=0,
-                dest_end=0,
-                score=0.0,
+try:
+    import rapidfuzz  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules.setdefault(
+        "rapidfuzz",
+        SimpleNamespace(
+            fuzz=SimpleNamespace(
+                partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
+                    dest_start=0,
+                    dest_end=0,
+                    score=0.0,
+                )
             )
-        )
-    ),
-)
+        ),
+    )
 
 auth_api = importlib.import_module("src.api.auth")
 

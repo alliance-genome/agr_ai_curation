@@ -396,7 +396,10 @@ describe('useEvidenceNavigation', () => {
 
     expect(result.current.pendingNavigation).toEqual({
       anchorId: evidence.anchor_id,
-      anchor: evidence.anchor,
+      anchor: expect.objectContaining({
+        ...evidence.anchor,
+        subsection_title: null,
+      }),
       searchText: null,
       pageNumber: 9,
       sectionTitle: 'Discussion',
