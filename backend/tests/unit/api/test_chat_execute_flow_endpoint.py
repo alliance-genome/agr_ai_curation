@@ -3,26 +3,12 @@
 import asyncio
 import importlib
 import json
-import sys
 from types import SimpleNamespace
 from unittest.mock import ANY
 from uuid import uuid4
 
 from fastapi.responses import StreamingResponse
 import pytest
-
-sys.modules.setdefault(
-    "rapidfuzz",
-    SimpleNamespace(
-        fuzz=SimpleNamespace(
-            partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
-                dest_start=0,
-                dest_end=0,
-                score=0.0,
-            )
-        )
-    ),
-)
 
 chat = importlib.import_module("src.api.chat")
 
