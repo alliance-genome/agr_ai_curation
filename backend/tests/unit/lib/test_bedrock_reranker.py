@@ -114,7 +114,9 @@ def test_rerank_chunks_preserves_original_order_when_bedrock_errors(monkeypatch)
     assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
 
 
-def test_rerank_chunks_preserves_original_order_when_bedrock_returns_no_results(monkeypatch):
+def test_rerank_chunks_preserves_original_order_when_bedrock_returns_no_results(
+    monkeypatch,
+):
     class _Client:
         def rerank(self, **kwargs):
             return {"results": []}
@@ -135,6 +137,17 @@ def test_rerank_chunks_preserves_original_order_when_bedrock_returns_no_results(
     ]
 
     assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+
+
+def test_log_rerank_no_results_prefers_bedrock_message(caplog):
+    with caplog.at_level(logging.WARNING):
+        bedrock_reranker._log_rerank_no_results("bedrock_cohere", "query")
+
+    assert (
+        "Bedrock reranking returned no results; preserving original retrieval order for "
+        "query='query'" in caplog.text
+    )
+    assert "rerank no results provider=bedrock_cohere" not in caplog.text
 
 
 def test_rerank_chunks_logs_request_and_completion_details(monkeypatch, caplog):

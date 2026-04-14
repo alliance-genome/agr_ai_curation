@@ -79,6 +79,7 @@ def _log_rerank_no_results(provider: str, query: str) -> None:
             "Bedrock reranking returned no results; preserving original retrieval order for query=%r",
             query[:200],
         )
+        return
     logger.warning(
         "rerank no results provider=%s preserving original retrieval order for query=%r",
         provider,
