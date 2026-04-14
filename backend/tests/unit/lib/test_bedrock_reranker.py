@@ -261,7 +261,10 @@ def test_rerank_chunks_calls_local_transformers_and_preserves_top_n(monkeypatch)
     assert observed["payload"]["documents"][1] == "Results section text"
 
 
-def test_rerank_chunks_returns_original_chunks_on_local_transformers_empty_result(monkeypatch):
+def test_rerank_chunks_returns_original_chunks_on_local_transformers_empty_result(
+    monkeypatch,
+    caplog,
+):
     class _FakeResponse:
         def __init__(self, body: str):
             self._body = body.encode("utf-8")
@@ -283,7 +286,10 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_empty_resul
     monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
     monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
 
-    assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with caplog.at_level(logging.WARNING, logger=bedrock_reranker.logger.name):
+        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+
+    assert "rerank no results provider=local_transformers" in caplog.text
 
 
 @pytest.mark.parametrize(

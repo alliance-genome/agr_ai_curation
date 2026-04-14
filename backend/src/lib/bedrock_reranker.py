@@ -73,6 +73,19 @@ def _log_rerank_complete(
     )
 
 
+def _log_rerank_no_results(provider: str, query: str) -> None:
+    if provider == "bedrock_cohere":
+        logger.warning(
+            "Bedrock reranking returned no results; preserving original retrieval order for query=%r",
+            query[:200],
+        )
+    logger.warning(
+        "rerank no results provider=%s preserving original retrieval order for query=%r",
+        provider,
+        query[:200],
+    )
+
+
 def rerank_chunks(
     query: str,
     chunks: Sequence[Dict[str, Any]],
@@ -108,16 +121,7 @@ def rerank_chunks(
         raise RuntimeError(f"Unsupported RERANK_PROVIDER={provider}")
 
     if not ranked_chunks:
-        if provider == "bedrock_cohere":
-            logger.warning(
-                "Bedrock reranking returned no results; preserving original retrieval order for query=%r",
-                query[:200],
-            )
-        else:
-            logger.warning(
-                "Local transformers reranking returned no results; preserving original retrieval order for query=%r",
-                query[:200],
-            )
+        _log_rerank_no_results(provider, query)
         return list(chunks)
 
     return ranked_chunks
