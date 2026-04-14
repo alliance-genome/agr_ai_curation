@@ -156,36 +156,43 @@ def _rerank_chunks_with_local_transformers(
         requested_results,
         query,
     )
-    logger.info(
-        "Local transformers rerank request: candidates=%s requested_results=%s query_preview=%r",
-        len(candidate_chunks),
-        requested_results,
-        query[:120],
-    )
     try:
         with request.urlopen(
             rerank_request,
             timeout=LOCAL_TRANSFORMERS_TIMEOUT_SECONDS,
         ) as resp:
             raw_payload = resp.read().decode("utf-8")
-    except error.URLError as exc:
+    except (error.URLError, TimeoutError) as exc:
         raise RuntimeError("Local transformers request failed") from exc
 
-    payload_dict = json.loads(raw_payload)
+    try:
+        payload_dict = json.loads(raw_payload)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Local transformers response invalid JSON") from exc
+
     scores = payload_dict.get("scores") if isinstance(payload_dict, dict) else None
-    if not isinstance(scores, list) or not scores:
+    if not isinstance(scores, list):
+        raise RuntimeError("Local transformers response missing scores")
+
+    if not scores:
         return []
 
     ranked_chunks: List[Dict[str, Any]] = []
     seen_indexes: set[int] = set()
     rerank_scores: list[tuple[int, float]] = []
-    for source_index, item in enumerate(scores):
-        if source_index >= len(candidate_chunks):
-            continue
+    for result_index, item in enumerate(scores):
         if not isinstance(item, dict):
             continue
         score_value = item.get("score")
         if score_value is None:
+            continue
+
+        source_index = item.get("index")
+        if not isinstance(source_index, int):
+            source_index = result_index
+        if source_index >= len(candidate_chunks):
+            continue
+        if source_index < 0:
             continue
         rerank_scores.append((source_index, float(score_value)))
 
@@ -223,15 +230,6 @@ def _rerank_chunks_with_local_transformers(
         top_rerank_score,
         duration_ms,
     )
-    logger.info(
-        "Local transformers rerank complete: candidates=%s requested_results=%s results=%s top_rerank_score=%s duration_ms=%.1f",
-        len(candidate_chunks),
-        requested_results,
-        len(rerank_scores),
-        top_rerank_score,
-        duration_ms,
-    )
-
     return ranked_chunks
 
 

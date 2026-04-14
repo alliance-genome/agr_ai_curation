@@ -353,5 +353,28 @@ def test_rerank_chunks_logs_provider_neutral_local_transformers_lines(
 
     assert "rerank request provider=local_transformers" in caplog.text
     assert "rerank complete provider=local_transformers" in caplog.text
-    assert "Local transformers rerank request:" in caplog.text
-    assert "Local transformers rerank complete:" in caplog.text
+
+
+def test_rerank_chunks_returns_original_chunks_on_local_transformers_missing_scores(monkeypatch):
+    class _FakeResponse:
+        def __init__(self, body: str):
+            self._body = body.encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return self._body
+
+    def _urlopen(req: Any, timeout: int):
+        return _FakeResponse(json.dumps({"query": "query"}))
+
+    chunks = [{"id": "chunk-1", "score": 0.8}, {"id": "chunk-2", "score": 0.3}]
+
+    monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
+    monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
+
+    assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
