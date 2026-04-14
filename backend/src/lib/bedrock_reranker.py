@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import logging
 import json
+import logging
 import os
 import time
 from urllib import error, request
@@ -192,9 +192,13 @@ def _rerank_chunks_with_local_transformers(
         if score_value is None:
             continue
 
-        source_index = item.get("index")
+        # The local reranker sidecar returns scores in request order and omits an
+        # explicit index, but we still reject malformed explicit indexes.
+        source_index = item.get("index", result_index)
         if not isinstance(source_index, int):
-            source_index = result_index
+            raise RuntimeError(
+                "Local transformers response index must be an integer when provided"
+            )
         if source_index >= len(candidate_chunks):
             continue
         if source_index < 0:

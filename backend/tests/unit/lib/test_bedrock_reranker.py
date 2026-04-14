@@ -319,6 +319,7 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_empty_resul
 def test_rerank_chunks_returns_original_chunks_on_local_transformers_errors(
     monkeypatch,
     error_factory,
+    caplog,
 ):
     def _urlopen(request: Any, timeout: int):
         raise error_factory()
@@ -328,7 +329,10 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_errors(
     monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
     monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
 
-    assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with caplog.at_level(logging.ERROR, logger=bedrock_reranker.logger.name):
+        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+
+    assert "Local transformers reranking failed" in caplog.text
 
 
 def test_rerank_chunks_logs_provider_neutral_local_transformers_lines(
@@ -378,7 +382,10 @@ def test_rerank_chunks_logs_provider_neutral_local_transformers_lines(
     assert "rerank complete provider=local_transformers" in caplog.text
 
 
-def test_rerank_chunks_returns_original_chunks_on_local_transformers_missing_scores(monkeypatch):
+def test_rerank_chunks_returns_original_chunks_on_local_transformers_missing_scores(
+    monkeypatch,
+    caplog,
+):
     class _FakeResponse:
         def __init__(self, body: str):
             self._body = body.encode("utf-8")
@@ -400,4 +407,47 @@ def test_rerank_chunks_returns_original_chunks_on_local_transformers_missing_sco
     monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
     monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
 
-    assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+    with caplog.at_level(logging.ERROR, logger=bedrock_reranker.logger.name):
+        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+
+    assert "Local transformers reranking failed" in caplog.text
+
+
+def test_rerank_chunks_returns_original_chunks_on_local_transformers_invalid_index(
+    monkeypatch,
+    caplog,
+):
+    class _FakeResponse:
+        def __init__(self, body: str):
+            self._body = body.encode("utf-8")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return self._body
+
+    def _urlopen(req: Any, timeout: int):
+        return _FakeResponse(
+            json.dumps(
+                {
+                    "query": "query",
+                    "scores": [
+                        {"document": "Chunk A", "score": 0.91, "index": "0"},
+                    ],
+                }
+            )
+        )
+
+    chunks = [{"id": "chunk-1", "score": 0.8}, {"id": "chunk-2", "score": 0.3}]
+
+    monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
+    monkeypatch.setattr(bedrock_reranker.request, "urlopen", _urlopen)
+
+    with caplog.at_level(logging.ERROR, logger=bedrock_reranker.logger.name):
+        assert bedrock_reranker.rerank_chunks("query", chunks, top_n=2) == chunks
+
+    assert "Local transformers response index must be an integer when provided" in caplog.text
