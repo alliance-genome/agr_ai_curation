@@ -40,8 +40,10 @@ scripts/
     ├── symphony_ensure_git_safety_tools.sh # Ensure Gitleaks + TruffleHog are installed in the Symphony VM user environment
     ├── symphony_git_safety_tool_versions.sh # Shared pinned versions/checksums for VM git safety scanners
     ├── symphony_install_vm_shell_shortcuts.sh # Install/update the managed ~/.bash_aliases block for Symphony VM Codex shortcuts
+    ├── symphony_materialize_linear_auth.sh # Materialize low-risk Linear helper files inside the Symphony VM user home
     ├── symphony_print_incus_vm_cloud_init.sh # Print tracked cloud-init for rebuilding the Symphony Incus VM
     ├── symphony_rebuild_incus_vm.sh    # Rebuild the Symphony Incus VM shell from the tracked cloud-init source
+    ├── symphony_ruff_tool_version.sh   # Shared pinned version/checksums for the VM-baked ruff install
     ├── symphony_sync_codex_auth_to_vm.sh # Sync host ~/.codex/auth.json into the Symphony Incus VM when it changes
     ├── symphony_vm_shell_shortcuts.sh  # Sourceable Codex helper functions (`co`, `comain`, `cor`) for Symphony VM shells
     ├── validate_unused_files.py        # Multi-tool unused file detection
@@ -315,6 +317,21 @@ tracked Symphony VM Codex shortcuts. This is the durable way to keep `co`,
 ./scripts/utilities/symphony_install_vm_shell_shortcuts.sh
 ```
 
+### utilities/symphony_materialize_linear_auth.sh
+
+Materializes the low-risk Linear helper files under `~/.linear/` inside the
+Symphony VM user environment. This is useful when shell helpers need the
+traditional `~/.linear/api_key.txt` path even though Symphony itself already
+loaded `LINEAR_API_KEY` from the vault at startup.
+
+`.symphony/run.sh` now calls this automatically on startup, but you can also
+run it manually to repair a live VM without restarting Symphony.
+
+```bash
+# Recreate ~/.linear/api_key.txt and project_slug.txt from the current env/vault
+./scripts/utilities/symphony_materialize_linear_auth.sh
+```
+
 ### utilities/symphony_ensure_git_safety_tools.sh
 
 Ensures `gitleaks` and `trufflehog` are available in the Symphony VM user
@@ -336,7 +353,7 @@ shared pins live in `utilities/symphony_git_safety_tool_versions.sh`.
 
 Prints the tracked `cloud-init.user-data` payload for a fresh `symphony-main`
 VM build. The generated payload creates the VM user and installs pinned
-`gitleaks` and `trufflehog` into `/usr/local/bin`.
+`gitleaks`, `trufflehog`, and `ruff` into `/usr/local/bin`.
 
 ```bash
 ./scripts/utilities/symphony_print_incus_vm_cloud_init.sh \
