@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 import importlib
+import sys
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -10,6 +11,23 @@ from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
 from src.schemas.flows import CreateFlowRequest, UpdateFlowRequest
+
+
+try:
+    import rapidfuzz  # noqa: F401
+except ModuleNotFoundError:
+    sys.modules.setdefault(
+        "rapidfuzz",
+        SimpleNamespace(
+            fuzz=SimpleNamespace(
+                partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
+                    dest_start=0,
+                    dest_end=0,
+                    score=0.0,
+                )
+            )
+        ),
+    )
 
 flows = importlib.import_module("src.api.flows")
 

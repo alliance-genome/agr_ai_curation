@@ -26,6 +26,7 @@ scripts/
 │   └── docker-test-compose.sh # Rootless-by-default wrapper for docker-compose.test.yml
 │   └── run-tests.sh             # Docker Compose test runner
 │   └── llm_provider_smoke_local.sh  # Local LLM provider smoke checks (health/contracts)
+│   └── file_output_storage_preflight.sh # Deployment-stage probe for export temp/output writeability
 │   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, cleanup
 │
 └── utilities/
@@ -437,6 +438,28 @@ make smoke-llm-local
 
 Outputs:
 - `file_outputs/temp/llm_provider_smoke_local_<timestamp>.json`
+
+### testing/file_output_storage_preflight.sh
+
+Runs a deployment-safe export-storage probe against the live backend container.
+This is meant for release cutovers and hotfix verification when generated CSV/TSV/JSON
+downloads must be proven writable before traffic is restored.
+
+What it checks:
+- direct write access to `outputs`, `temp/processing`, and `temp/failed`
+- a real `FileOutputStorageService.save_output()` CSV round-trip
+- JSON evidence written outside the app mount, under `/tmp` by default
+
+```bash
+./scripts/testing/file_output_storage_preflight.sh
+```
+
+Optional flags:
+- `--service <name>` to target a different compose service name
+- `EXPORT_STORAGE_PREFLIGHT_OUT_DIR=/tmp/custom-dir` to override the evidence directory
+
+Evidence:
+- `/tmp/agr_ai_curation_export_storage_preflight/file_output_storage_preflight_<timestamp>.json`
 
 ### testing/dev_release_smoke.py
 

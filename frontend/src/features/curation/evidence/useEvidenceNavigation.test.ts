@@ -32,6 +32,7 @@ function createEvidenceRecord(
       viewer_search_text: `Search text for ${anchorId}`,
       page_number: 3,
       section_title: 'Results',
+      subsection_title: null,
       chunk_ids: [`chunk-${anchorId}`],
       ...anchorOverrides,
     },
