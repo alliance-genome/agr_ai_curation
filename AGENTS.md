@@ -128,6 +128,11 @@ incus --project "${SYMPHONY_INCUS_PROJECT:-default}" exec symphony-main -- sudo 
   'cd /home/ctabone/programming/claude_code/analysis/alliance/ai_curation_new/agr_ai_curation && pkill -f "./bin/symphony" || true; sleep 2; nohup ./.symphony/run.sh --port 4000 > .symphony/log/manual-restart.out 2>&1 < /dev/null & disown'
 ```
 
+**Important launcher rule**:
+- `./.symphony/run.sh` is now a singleton per repo and port. A second `./.symphony/run.sh --port 4000` exits cleanly instead of starting another orchestrator.
+- Keep one launcher authority. Do not run the manual `nohup` path at the same time as a VM `systemd` `symphony.service` for the same repo and port.
+- If port `4000` is already in use, the wrapper now refuses to launch and prints the existing listener so duplicate restarts fail safe instead of dispatching another token-burning run.
+
 **Important restart ownership quirk**:
 - The running `./bin/symphony` process in the VM is sometimes owned by a different user/session than the `ctabone` login shell used above.
 - Symptom: `pkill -f "./bin/symphony"` from `sudo --login --user ctabone` fails with `Operation not permitted`, or the command returns no useful output and the old process keeps holding port `4000`.

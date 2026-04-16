@@ -5,6 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/symphony_git_safety_tool_versions.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/symphony_ruff_tool_version.sh"
 
 VM_USER="ctabone"
 VM_GECOS="Christopher Tabone"
@@ -166,6 +168,60 @@ write_files:
         "trufflehog" \
         "\${tmp_dir}/trufflehog.tar.gz" \
         "\${tmp_dir}"
+  - path: /usr/local/sbin/symphony-install-ruff.sh
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      install_archive() {
+        local url="\$1"
+        local expected_sha="\$2"
+        local binary_name="\$3"
+        local archive_path="\$4"
+        local tmp_dir="\$5"
+        local extracted_path=""
+
+        curl -fsSL -o "\${archive_path}" "\${url}"
+        printf '%s  %s\n' "\${expected_sha}" "\${archive_path}" | sha256sum -c -
+        tar -xzf "\${archive_path}" -C "\${tmp_dir}"
+
+        extracted_path="\$(find "\${tmp_dir}" -type f -name "\${binary_name}" | head -n 1 || true)"
+        if [[ -z "\${extracted_path}" ]]; then
+          echo "Could not locate \${binary_name} after extracting \${url}" >&2
+          return 1
+        fi
+
+        install -m 0755 "\${extracted_path}" "/usr/local/bin/\${binary_name}"
+      }
+
+      arch="\$(uname -m)"
+      case "\${arch}" in
+        x86_64|amd64)
+          ruff_archive="ruff-x86_64-unknown-linux-gnu.tar.gz"
+          ruff_sha="${SYMPHONY_RUFF_SHA256_LINUX_AMD64}"
+          ;;
+        aarch64|arm64)
+          ruff_archive="ruff-aarch64-unknown-linux-gnu.tar.gz"
+          ruff_sha="${SYMPHONY_RUFF_SHA256_LINUX_ARM64}"
+          ;;
+        *)
+          echo "Unsupported architecture for ruff: \${arch}" >&2
+          exit 1
+          ;;
+      esac
+
+      tmp_dir="\$(mktemp -d)"
+      trap 'rm -rf "\${tmp_dir}"' EXIT
+
+      install_archive \
+        "https://github.com/astral-sh/ruff/releases/download/${SYMPHONY_RUFF_VERSION}/\${ruff_archive}" \
+        "\${ruff_sha}" \
+        "ruff" \
+        "\${tmp_dir}/ruff.tar.gz" \
+        "\${tmp_dir}"
 runcmd:
   - [/usr/local/sbin/symphony-install-git-safety-tools.sh]
+  - [/usr/local/sbin/symphony-install-ruff.sh]
 EOF

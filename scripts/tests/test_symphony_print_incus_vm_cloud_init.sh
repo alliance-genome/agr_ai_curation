@@ -40,6 +40,11 @@ EOF
   assert_contains "https://github.com/trufflesecurity/trufflehog/releases/download/v3.94.3/" "${output}"
   assert_contains "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" "${output}"
   assert_contains "7cc45010bfac7258a23731bc3ab4371abdbf20ffc705075066971e5aa8ebda7f" "${output}"
+  assert_contains "path: /usr/local/sbin/symphony-install-ruff.sh" "${output}"
+  assert_contains "https://github.com/astral-sh/ruff/releases/download/0.15.10/" "${output}"
+  assert_contains "e3e9e5c791542f00d95edc74a506e1ac24efc0af9574de01ab338187bf1ff9f6" "${output}"
+  assert_contains "b775a5a09484549ac3fd377b5ce34955cf633165169671d1c4a215c113ce15df" "${output}"
+  assert_contains "[/usr/local/sbin/symphony-install-ruff.sh]" "${output}"
 }
 
 test_cloud_init_contains_user_and_pinned_scanners
