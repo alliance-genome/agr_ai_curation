@@ -14,9 +14,6 @@ image_tag_override="${INSTALL_IMAGE_TAG:-}"
 package_profile_override="${INSTALL_PACKAGE_PROFILE:-}"
 resolved_image_tag=""
 image_tag_note=""
-DEFAULT_RERANK_PROVIDER="bedrock_cohere"
-DEFAULT_BEDROCK_RERANK_MODEL_ARN="arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0"
-DEFAULT_RERANKER_URL="http://reranker-transformers:8080"
 
 mapfile -t deployment_config_filenames < <(install_deployment_config_filenames)
 
@@ -35,21 +32,6 @@ prompt_value_with_default() {
   printf '%s\n' "${response:-$default_value}"
 }
 
-read_existing_env_value() {
-  local key="$1"
-  if [[ ! -f "$env_output_path" ]]; then
-    return 1
-  fi
-
-  awk -F= -v key="$key" '
-    $1 == key {
-      sub(/^[^=]*=/, "", $0)
-      print $0
-      exit
-    }
-  ' "$env_output_path"
-}
-
 current_or_existing_value() {
   local key="$1"
   local default_value="$2"
@@ -61,26 +43,13 @@ current_or_existing_value() {
     return 0
   fi
 
-  existing_value="$(read_existing_env_value "$key" || true)"
+  existing_value="$(install_read_env_value "$env_output_path" "$key" || true)"
   if [[ -n "$existing_value" ]]; then
     printf '%s\n' "$existing_value"
     return 0
   fi
 
   printf '%s\n' "$default_value"
-}
-
-normalize_rerank_provider() {
-  local provider="${1:-}"
-  provider="${provider,,}"
-  case "$provider" in
-    bedrock_cohere|local_transformers|none)
-      printf '%s\n' "$provider"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
 }
 
 prompt_rerank_provider() {
@@ -127,7 +96,7 @@ resolve_rerank_provider() {
   local normalized=""
 
   if [[ -n "$override_provider" ]]; then
-    normalized="$(normalize_rerank_provider "$override_provider" || true)"
+    normalized="$(install_normalize_rerank_provider "$override_provider" || true)"
     if [[ -z "$normalized" ]]; then
       log_error "Unsupported RERANK_PROVIDER override: ${override_provider}"
       return 1
@@ -415,6 +384,9 @@ main() {
   local default_rerank_provider
   local default_bedrock_rerank_model_arn
   local default_reranker_url
+  local template_rerank_provider
+  local template_bedrock_rerank_model_arn
+  local template_reranker_url
   local rerank_provider
   local bedrock_rerank_model_arn
   local reranker_url
@@ -438,6 +410,11 @@ main() {
   default_package_profile="$(load_existing_package_profile)"
   package_profile="$(resolve_package_profile "$default_package_profile")"
   package_profile_label="$(install_package_profile_label "$package_profile")"
+  template_rerank_provider="$(install_read_env_value "$env_template_path" "RERANK_PROVIDER")"
+  template_bedrock_rerank_model_arn="$(
+    install_read_env_value "$env_template_path" "BEDROCK_RERANK_MODEL_ARN"
+  )"
+  template_reranker_url="$(install_read_env_value "$env_template_path" "RERANKER_URL")"
   seed_runtime_layout \
     "$runtime_config_dir" \
     "$runtime_packages_dir" \
@@ -452,13 +429,13 @@ main() {
     "$alliance_package_source_dir" \
     "$package_profile"
 
-  default_rerank_provider="$(current_or_existing_value "RERANK_PROVIDER" "$DEFAULT_RERANK_PROVIDER")"
+  default_rerank_provider="$(current_or_existing_value "RERANK_PROVIDER" "$template_rerank_provider")"
   default_bedrock_rerank_model_arn="$(
     current_or_existing_value \
       "BEDROCK_RERANK_MODEL_ARN" \
-      "$DEFAULT_BEDROCK_RERANK_MODEL_ARN"
+      "$template_bedrock_rerank_model_arn"
   )"
-  default_reranker_url="$(current_or_existing_value "RERANKER_URL" "$DEFAULT_RERANKER_URL")"
+  default_reranker_url="$(current_or_existing_value "RERANKER_URL" "$template_reranker_url")"
 
   if [[ -f "$env_output_path" ]]; then
     backup_file_with_timestamp "$env_output_path"

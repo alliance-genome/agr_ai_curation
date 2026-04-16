@@ -53,49 +53,21 @@ command_exists() {
   command -v "$command_name" >/dev/null 2>&1
 }
 
-read_existing_env_value() {
-  local key="$1"
-  if [[ ! -f "$install_env_path" ]]; then
-    return 1
-  fi
-
-  awk -F= -v key="$key" '
-    $1 == key {
-      sub(/^[^=]*=/, "", $0)
-      print $0
-      exit
-    }
-  ' "$install_env_path"
-}
-
-normalize_rerank_provider() {
-  local provider="${1:-}"
-  provider="${provider,,}"
-  case "$provider" in
-    bedrock_cohere|local_transformers|none)
-      printf '%s\n' "$provider"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 resolve_rerank_provider_hint() {
   local provider="${RERANK_PROVIDER:-}"
   local normalized=""
 
   if [[ -n "$provider" ]]; then
-    normalized="$(normalize_rerank_provider "$provider" || true)"
+    normalized="$(install_normalize_rerank_provider "$provider" || true)"
     if [[ -n "$normalized" ]]; then
       printf '%s\n' "$normalized"
       return 0
     fi
   fi
 
-  provider="$(read_existing_env_value "RERANK_PROVIDER" || true)"
+  provider="$(install_read_env_value "$install_env_path" "RERANK_PROVIDER" || true)"
   if [[ -n "$provider" ]]; then
-    normalized="$(normalize_rerank_provider "$provider" || true)"
+    normalized="$(install_normalize_rerank_provider "$provider" || true)"
     if [[ -n "$normalized" ]]; then
       printf '%s\n' "$normalized"
       return 0

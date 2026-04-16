@@ -5,7 +5,6 @@ import csv
 import importlib
 import io
 import json
-import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -18,23 +17,6 @@ from src.schemas.curation_workspace import (
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
 )
-
-
-try:
-    import rapidfuzz  # noqa: F401
-except ModuleNotFoundError:
-    sys.modules.setdefault(
-        "rapidfuzz",
-        SimpleNamespace(
-            fuzz=SimpleNamespace(
-                partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
-                    dest_start=0,
-                    dest_end=0,
-                    score=0.0,
-                )
-            )
-        ),
-    )
 
 flows = importlib.import_module("src.api.flows")
 
