@@ -11,6 +11,7 @@ import CurationWorkspacePage from './CurationWorkspacePage'
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
   createManualCurationCandidate: vi.fn(),
+  deleteCurationCandidate: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
   fetchSubmissionPreview: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
@@ -23,6 +24,7 @@ const serviceMocks = vi.hoisted(() => ({
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
   createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
+  deleteCurationCandidate: serviceMocks.deleteCurationCandidate,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
   fetchSubmissionPreview: serviceMocks.fetchSubmissionPreview,
   submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
@@ -360,6 +362,7 @@ describe('CurationWorkspacePage', () => {
   beforeEach(() => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.createManualCurationCandidate.mockReset()
+    serviceMocks.deleteCurationCandidate.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.fetchSubmissionPreview.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
@@ -522,6 +525,85 @@ describe('CurationWorkspacePage', () => {
         advance_queue: false,
       })
       expect(screen.getAllByText('Accepted').length).toBeGreaterThan(0)
+    })
+  })
+
+  it('confirms and deletes a curation row through the workspace delete service', async () => {
+    const workspace = buildWorkspace()
+    const refreshedWorkspace: CurationWorkspace = {
+      ...workspace,
+      entity_tags: workspace.entity_tags.filter((tag) => tag.tag_id !== 'candidate-pending'),
+      candidates: workspace.candidates.filter((candidate) => candidate.candidate_id !== 'candidate-pending'),
+      active_candidate_id: 'candidate-accepted',
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-accepted',
+        progress: {
+          total_candidates: 1,
+          reviewed_candidates: 1,
+          pending_candidates: 0,
+          accepted_candidates: 1,
+          rejected_candidates: 0,
+          manual_candidates: 0,
+        },
+      },
+    }
+    serviceMocks.fetchCurationWorkspace
+      .mockResolvedValueOnce(workspace)
+      .mockResolvedValueOnce(refreshedWorkspace)
+    serviceMocks.updateCurationSession.mockResolvedValue({
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-pending',
+      },
+      action_log_entry: null,
+    })
+    serviceMocks.deleteCurationCandidate.mockResolvedValue({
+      deleted_candidate_id: 'candidate-pending',
+      session: refreshedWorkspace.session,
+      action_log_entry: {
+        action_id: 'action-delete-1',
+        session_id: workspace.session.session_id,
+        action_type: 'candidate_deleted',
+        actor_type: 'user',
+        occurred_at: '2026-03-30T12:10:00Z',
+        changed_field_keys: [],
+        evidence_anchor_ids: ['anchor-1', 'anchor-2'],
+        metadata: {
+          deleted_candidate_id: 'candidate-pending',
+        },
+      },
+    })
+
+    renderPage('/curation/session-1/candidate-pending')
+
+    await waitFor(() => {
+      expect(screen.getByText('APOE')).toBeInTheDocument()
+    })
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Delete APOE')).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByLabelText('Delete APOE'))
+
+    expect(screen.getByText('Delete curation row?')).toBeInTheDocument()
+    expect(serviceMocks.deleteCurationCandidate).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete row' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.deleteCurationCandidate).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        candidate_id: 'candidate-pending',
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('APOE')).not.toBeInTheDocument()
+      expect(screen.getByTestId('location')).toHaveTextContent(
+        '/curation/session-1/candidate-accepted',
+      )
     })
   })
 

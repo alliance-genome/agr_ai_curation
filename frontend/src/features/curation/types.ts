@@ -88,6 +88,7 @@ export const CURATION_ACTION_TYPES = [
   'session_status_updated',
   'session_assigned',
   'candidate_created',
+  'candidate_deleted',
   'candidate_updated',
   'candidate_accepted',
   'candidate_rejected',
@@ -679,6 +680,17 @@ export interface CurationCandidateDecisionResponse {
   candidate: CurationCandidate
   session: CurationReviewSession
   next_candidate_id?: string | null
+  action_log_entry: CurationActionLogEntry
+}
+
+export interface CurationCandidateDeleteRequest {
+  session_id: string
+  candidate_id: string
+}
+
+export interface CurationCandidateDeleteResponse {
+  deleted_candidate_id: string
+  session: CurationReviewSession
   action_log_entry: CurationActionLogEntry
 }
 

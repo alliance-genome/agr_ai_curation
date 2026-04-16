@@ -1,4 +1,5 @@
 import { Button, Chip, IconButton, TableCell, TableRow, Typography } from '@mui/material'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import EditIcon from '@mui/icons-material/Edit'
 import { alpha, useTheme } from '@mui/material/styles'
 import type { EntityTag } from './types'
@@ -14,6 +15,7 @@ interface EntityTagRowProps {
   onAccept: (tagId: string) => void
   onReject: (tagId: string) => void
   onEdit: (tagId: string) => void
+  onDelete: (tagId: string) => void
 }
 
 const DB_STATUS_COLOR: Record<DbValidationStatus, 'success' | 'warning' | 'error'> = {
@@ -35,6 +37,7 @@ export default function EntityTagRow({
   onAccept,
   onReject,
   onEdit,
+  onDelete,
 }: EntityTagRowProps) {
   const theme = useTheme()
 
@@ -110,10 +113,19 @@ export default function EntityTagRow({
         <IconButton
           size="small"
           onClick={() => onEdit(tag.tag_id)}
-          aria-label="Edit"
+          aria-label={`Edit ${tag.entity_name}`}
           sx={{ ml: 0.5, p: 0.25 }}
         >
           <EditIcon sx={{ fontSize: 14 }} />
+        </IconButton>
+        <IconButton
+          size="small"
+          color="error"
+          onClick={() => onDelete(tag.tag_id)}
+          aria-label={`Delete ${tag.entity_name}`}
+          sx={{ ml: 0.25, p: 0.25 }}
+        >
+          <DeleteOutlineIcon sx={{ fontSize: 14 }} />
         </IconButton>
       </TableCell>
     </TableRow>
