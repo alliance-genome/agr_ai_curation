@@ -29,7 +29,7 @@ Options:
   --state VALUE               Required target state name.
   --from-state VALUE          Expected current state name before transition.
   --allow-any-from-state      Skip `--from-state` enforcement.
-  --linear-api-key VALUE      Linear API key. Default: ~/.linear/api_key.txt.
+  --linear-api-key VALUE      Linear API key. Default: LINEAR_API_KEY or ~/.linear/api_key.txt.
   --context-json-file PATH    Testing/debug override: use a normalized context JSON file.
   --linear-json-file PATH     Testing/debug override forwarded to the context helper.
   --json-output-file PATH     Write a JSON summary of the operation to this path.
@@ -251,7 +251,7 @@ resolve_context_json_file() {
 if ! linear_api_key="$(symphony_linear_read_api_key "${linear_api_key}")"; then
   payload="$(jq -cn \
     --arg status "error" \
-    --arg error "No Linear API key found. Set --linear-api-key or create ~/.linear/api_key.txt" '
+    --arg error "No Linear API key found. Set --linear-api-key, export LINEAR_API_KEY, or run bash scripts/utilities/symphony_materialize_linear_auth.sh." '
     {
       linear_state_status: $status,
       linear_state_error: $error

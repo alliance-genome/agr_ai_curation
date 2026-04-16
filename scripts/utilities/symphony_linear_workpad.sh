@@ -37,7 +37,7 @@ Options:
   --section-title VALUE       Section title for `append-section`.
   --section-file PATH         File containing the section body for `append-section`.
   --comments-first N          Number of comments to inspect. Default: 50.
-  --linear-api-key VALUE      Linear API key. Default: ~/.linear/api_key.txt.
+  --linear-api-key VALUE      Linear API key. Default: LINEAR_API_KEY or ~/.linear/api_key.txt.
   --context-json-file PATH    Testing/debug override: use a normalized context JSON file.
   --linear-json-file PATH     Testing/debug override forwarded to the context helper.
   --output-file PATH          Materialize the selected comment body to this path.
@@ -530,7 +530,7 @@ case "${subcommand}" in
     if ! linear_api_key="$(symphony_linear_read_api_key "${linear_api_key}")"; then
       payload="$(jq -cn \
         --arg status "error" \
-        --arg error "No Linear API key found. Set --linear-api-key or create ~/.linear/api_key.txt" '
+        --arg error "No Linear API key found. Set --linear-api-key, export LINEAR_API_KEY, or run bash scripts/utilities/symphony_materialize_linear_auth.sh." '
         {workpad_status: $status, workpad_error: $error}')"
       emit_result "${payload}"
       exit 3

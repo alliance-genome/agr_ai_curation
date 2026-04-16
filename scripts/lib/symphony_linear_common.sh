@@ -35,13 +35,20 @@ symphony_linear_emit_env() {
 symphony_linear_read_api_key() {
   local explicit_key="${1-}"
   if [[ -n "${explicit_key}" ]]; then
-    printf '%s' "${explicit_key}"
+    symphony_linear_trim "${explicit_key}"
+    return 0
+  fi
+
+  local env_key="${LINEAR_API_KEY:-}"
+  env_key="$(symphony_linear_trim "${env_key}")"
+  if [[ -n "${env_key}" ]]; then
+    printf '%s' "${env_key}"
     return 0
   fi
 
   local key_file
   key_file="$(symphony_linear_default_api_key_file)"
-  if [[ -f "${key_file}" ]]; then
+  if [[ -r "${key_file}" ]]; then
     tr -d '[:space:]' < "${key_file}"
     return 0
   fi

@@ -30,7 +30,7 @@ Options:
   --history-first N           Number of history events to fetch. Default: 50.
   --include-history           Include issue history in the response and JSON artifact.
   --include-team-states       Include the issue team and available workflow states.
-  --linear-api-key VALUE      Linear API key. Default: ~/.linear/api_key.txt.
+  --linear-api-key VALUE      Linear API key. Default: LINEAR_API_KEY or ~/.linear/api_key.txt.
   --output-file PATH          Write the selected stdout format to this file too.
   --json-output-file PATH     Write the normalized context JSON to this path.
   --format VALUE              One of: env, json, pretty. Default: env.
@@ -211,7 +211,7 @@ if [[ -z "${linear_json_file}" ]]; then
   if ! linear_api_key="$(symphony_linear_read_api_key "${linear_api_key}")"; then
     symphony_linear_emit_env "LINEAR_CONTEXT_STATUS" "error"
     symphony_linear_emit_env "LINEAR_CONTEXT_ERROR" \
-      "No Linear API key found. Set --linear-api-key or create ~/.linear/api_key.txt"
+      "No Linear API key found. Set --linear-api-key, export LINEAR_API_KEY, or run bash scripts/utilities/symphony_materialize_linear_auth.sh."
     exit 3
   fi
 fi

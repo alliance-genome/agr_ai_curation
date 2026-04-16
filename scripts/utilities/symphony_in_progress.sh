@@ -32,7 +32,7 @@ Options:
   --branch VALUE             Branch to check for open PRs (default: current git branch)
   --repo VALUE               GitHub repo in owner/name form (for PR lookup)
   --review-author VALUE      GitHub login for PR review comments (default: claude)
-  --linear-api-key VALUE     Linear API key (default: from ~/.linear/api_key.txt)
+  --linear-api-key VALUE     Linear API key (default: from LINEAR_API_KEY or ~/.linear/api_key.txt)
   --output-file PATH         Write the brief to this file (default: temp file)
   --context-json-file PATH   Test/debug override for normalized issue context JSON
   --linear-json-file PATH    Test fixture override for Linear issue JSON
