@@ -90,10 +90,10 @@ print_summary() {
 run_runtime_sync() {
   local helper=""
 
-  if [[ -n "${source_root}" && -f "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
-    helper="${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
-  elif [[ -f "${workspace_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
+  if [[ -f "${workspace_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
     helper="${workspace_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
+  elif [[ -n "${source_root}" && -f "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
+    helper="${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
   fi
 
   if [[ -z "${helper}" ]]; then

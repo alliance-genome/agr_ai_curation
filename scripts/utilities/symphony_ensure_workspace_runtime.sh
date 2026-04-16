@@ -8,9 +8,12 @@ Usage:
 
 Behavior:
   - Ensures required Symphony runtime helper files exist in a workspace.
-  - Default mode is conservative: only copies when destination is missing.
-  - `--refresh-managed` overwrites existing managed runtime files from the
-    local source root so stale workspace helpers/compose files are updated.
+  - Default mode is conservative: only copies runtime overlay files when the
+    workspace copy is missing, and verifies required Git-owned repo files are
+    present in the workspace checkout.
+  - `--refresh-managed` overwrites only managed runtime overlay files from the
+    local source root so stale workspace workflow/PAT helpers are updated.
+  - Tracked repo files are never overwritten from the local source root.
   - Emits machine-parsable summary lines:
       SYNC_ENV_STATUS=ready|missing_required
       SYNC_ENV_COPIED=<n>
@@ -156,46 +159,62 @@ ensure_one() {
   copied=$((copied + 1))
 }
 
-# Required files for core Symphony runtime lanes in this repo.
+verify_one() {
+  local dest_rel="$1"
+  local required="$2"
+
+  local dest="${workspace_dir}/${dest_rel}"
+  if [[ -f "${dest}" ]]; then
+    return 0
+  fi
+
+  if [[ "${required}" == "required" ]]; then
+    missing_required+=("${dest_rel}")
+  else
+    missing_optional+=("${dest_rel}")
+  fi
+}
+
+# Runtime overlay files come from the local Symphony runtime source.
 ensure_one "${hooks_source}/pre-commit" "${workspace_hooks_dir}/pre-commit" "0755" "required"
 ensure_one "${hooks_source}/pre-push" "${workspace_hooks_dir}/pre-push" "0755" "required"
 ensure_one "${local_source_root}/.symphony/WORKFLOW.md" ".symphony/WORKFLOW.md" "0644" "required"
-ensure_one "${local_source_root}/scripts/requirements/python-tools.txt" "scripts/requirements/python-tools.txt" "0644" "required"
-ensure_one "${local_source_root}/scripts/utilities/ensure_python_tools_venv.sh" "scripts/utilities/ensure_python_tools_venv.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_pre_merge_cleanup.sh" "scripts/utilities/symphony_pre_merge_cleanup.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_prepare_docker_config.sh" "scripts/utilities/symphony_prepare_docker_config.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_guard_workspace_repo.sh" "scripts/utilities/symphony_guard_workspace_repo.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_human_review_prep.sh" "scripts/utilities/symphony_human_review_prep.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_main_sandbox.sh" "scripts/utilities/symphony_main_sandbox.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_ready_for_pr.sh" "scripts/utilities/symphony_ready_for_pr.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_claude_review_loop.sh" "scripts/utilities/symphony_claude_review_loop.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_in_review.sh" "scripts/utilities/symphony_in_review.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_in_progress.sh" "scripts/utilities/symphony_in_progress.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_issue_branch.sh" "scripts/utilities/symphony_issue_branch.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_linear_issue_context.sh" "scripts/utilities/symphony_linear_issue_context.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_linear_workpad.sh" "scripts/utilities/symphony_linear_workpad.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_linear_issue_state.sh" "scripts/utilities/symphony_linear_issue_state.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_finalize_issue.sh" "scripts/utilities/symphony_finalize_issue.sh" "0755" "required"
-# Legacy scripts kept for backward compatibility until all workspaces update
-ensure_one "${local_source_root}/scripts/utilities/symphony_request_claude_rereview.sh" "scripts/utilities/symphony_request_claude_rereview.sh" "0755" "optional"
-ensure_one "${local_source_root}/scripts/utilities/symphony_wait_for_claude_review.sh" "scripts/utilities/symphony_wait_for_claude_review.sh" "0755" "optional"
-ensure_one "${local_source_root}/scripts/utilities/symphony_claude_review_rounds.sh" "scripts/utilities/symphony_claude_review_rounds.sh" "0755" "optional"
-ensure_one "${local_source_root}/scripts/utilities/symphony_local_db_tunnel_start.sh" "scripts/utilities/symphony_local_db_tunnel_start.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_local_db_tunnel_status.sh" "scripts/utilities/symphony_local_db_tunnel_status.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_local_db_tunnel_stop.sh" "scripts/utilities/symphony_local_db_tunnel_stop.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/utilities/symphony_microvm_worker_run.sh" "scripts/utilities/symphony_microvm_worker_run.sh" "0755" "required"
-ensure_one "${local_source_root}/scripts/lib/local_db_tunnel_common.sh" "scripts/lib/local_db_tunnel_common.sh" "0644" "required"
-ensure_one "${local_source_root}/scripts/lib/symphony_linear_common.sh" "scripts/lib/symphony_linear_common.sh" "0644" "required"
-
-# Helpful but not strictly required for every lane.
-ensure_one "${local_source_root}/docker-compose.yml" "docker-compose.yml" "0644" "optional"
 ensure_one "${local_source_root}/.symphony/with_github_pat.sh" ".symphony/with_github_pat.sh" "0755" "optional"
 ensure_one "${local_source_root}/.symphony/github_pat_env.sh" ".symphony/github_pat_env.sh" "0644" "optional"
 ensure_one "${local_source_root}/.symphony/configure_github_pat_git.sh" ".symphony/configure_github_pat_git.sh" "0755" "optional"
-ensure_one "${local_source_root}/scripts/utilities/check_services.sh" "scripts/utilities/check_services.sh" "0755" "optional"
-ensure_one "${local_source_root}/scripts/utilities/ensure_postgres_db_exists.sh" "scripts/utilities/ensure_postgres_db_exists.sh" "0755" "optional"
-ensure_one "${local_source_root}/docs/plans/screenshots/curation-workspace-mockup.png" "docs/plans/screenshots/curation-workspace-mockup.png" "0644" "optional"
-ensure_one "${local_source_root}/docs/plans/screenshots/curation-inventory-mockup.png" "docs/plans/screenshots/curation-inventory-mockup.png" "0644" "optional"
+
+# Git-owned repo files must already exist in the workspace checkout.
+verify_one "scripts/requirements/python-tools.txt" "required"
+verify_one "scripts/utilities/ensure_python_tools_venv.sh" "required"
+verify_one "scripts/utilities/symphony_pre_merge_cleanup.sh" "required"
+verify_one "scripts/utilities/symphony_prepare_docker_config.sh" "required"
+verify_one "scripts/utilities/symphony_guard_workspace_repo.sh" "required"
+verify_one "scripts/utilities/symphony_human_review_prep.sh" "required"
+verify_one "scripts/utilities/symphony_main_sandbox.sh" "required"
+verify_one "scripts/utilities/symphony_ready_for_pr.sh" "required"
+verify_one "scripts/utilities/symphony_claude_review_loop.sh" "required"
+verify_one "scripts/utilities/symphony_in_review.sh" "required"
+verify_one "scripts/utilities/symphony_in_progress.sh" "required"
+verify_one "scripts/utilities/symphony_issue_branch.sh" "required"
+verify_one "scripts/utilities/symphony_linear_issue_context.sh" "required"
+verify_one "scripts/utilities/symphony_linear_workpad.sh" "required"
+verify_one "scripts/utilities/symphony_linear_issue_state.sh" "required"
+verify_one "scripts/utilities/symphony_finalize_issue.sh" "required"
+# Legacy scripts kept for backward compatibility until all workspaces update.
+verify_one "scripts/utilities/symphony_request_claude_rereview.sh" "optional"
+verify_one "scripts/utilities/symphony_wait_for_claude_review.sh" "optional"
+verify_one "scripts/utilities/symphony_claude_review_rounds.sh" "optional"
+verify_one "scripts/utilities/symphony_local_db_tunnel_start.sh" "required"
+verify_one "scripts/utilities/symphony_local_db_tunnel_status.sh" "required"
+verify_one "scripts/utilities/symphony_local_db_tunnel_stop.sh" "required"
+verify_one "scripts/utilities/symphony_microvm_worker_run.sh" "required"
+verify_one "scripts/lib/local_db_tunnel_common.sh" "required"
+verify_one "scripts/lib/symphony_linear_common.sh" "required"
+
+# Helpful but not strictly required for every lane.
+verify_one "docker-compose.yml" "optional"
+verify_one "scripts/utilities/check_services.sh" "optional"
+verify_one "scripts/utilities/ensure_postgres_db_exists.sh" "optional"
 
 missing_required_joined="none"
 if [[ ${#missing_required[@]} -gt 0 ]]; then

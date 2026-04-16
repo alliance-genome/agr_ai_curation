@@ -97,9 +97,9 @@ Symphony runs inside an Incus VM (`symphony-main`) in the Incus project named by
 
 1. **Git-tracked scripts** (`scripts/utilities/symphony_*.sh`):
    - Committed to the repo and pushed to `origin/main`.
-   - Synced into per-issue workspaces by `scripts/utilities/symphony_ensure_workspace_runtime.sh`.
-   - **CRITICAL**: New scripts MUST be added to the `ensure_one` manifest in `symphony_ensure_workspace_runtime.sh` or workspaces will not have them. Existing workspaces get updated on the next `before_run` hook.
-   - **CRITICAL**: After pushing to `origin/main`, you MUST also sync the VM's local source checkout. Symphony uses `SYMPHONY_LOCAL_SOURCE_ROOT` (set in `.symphony/run.sh`) which points to the VM's local checkout — NOT directly to GitHub. If the VM checkout is stale, `ensure_workspace_runtime.sh` will fail to find newly-added required scripts.
+   - Workspaces should get them from Git in the workspace checkout. `scripts/utilities/symphony_ensure_workspace_runtime.sh` now verifies tracked repo files are present in the workspace instead of refreshing them from `SYMPHONY_LOCAL_SOURCE_ROOT`.
+   - **CRITICAL**: If you add a new tracked helper that existing issue workspaces do not have yet, update those workspaces from Git (for example by recreating or rebasing them). Do not rely on runtime overlay refresh to push tracked files into workspace repo paths.
+   - Syncing the VM's local source checkout is still useful for VM-local maintenance and debugging, but it is no longer the source of truth for tracked workspace files.
 
 2. **Gitignored orchestration/runtime files** (`.symphony/WORKFLOW.md`, `.symphony/*.sh`, `.symphony/elixir/**`):
    - `.symphony/` is in `.gitignore` — these files are NOT committed to the repo.
@@ -109,7 +109,7 @@ Symphony runs inside an Incus VM (`symphony-main`) in the Incus project named by
      `incus --project "${SYMPHONY_INCUS_PROJECT:-default}" file push .symphony/WORKFLOW.md symphony-main/<repo-path>/.symphony/WORKFLOW.md`
    - Example for runtime code:
      `incus --project "${SYMPHONY_INCUS_PROJECT:-default}" file push .symphony/elixir/lib/symphony_elixir/config.ex symphony-main/<repo-path>/.symphony/elixir/lib/symphony_elixir/config.ex`
-   - The `ensure_workspace_runtime.sh` hook then copies workflow/helper files from the local source root into per-issue workspaces; Elixir runtime changes are picked up after rebuild/restart in the VM source tree.
+   - The `ensure_workspace_runtime.sh` hook now copies only runtime overlay files (workflow, PAT helpers, Git hooks) from the local source root into per-issue workspaces. Tracked repo files must come from Git in the workspace checkout. Elixir runtime changes are picked up after rebuild/restart in the VM source tree.
 
 ### Local sandbox sync rule
 
@@ -151,13 +151,11 @@ curl -i -sS -m 5 http://127.0.0.1:4000/ | head -n 5
 
 **When adding a new Symphony lane helper**:
 1. Create the script in `scripts/utilities/symphony_<name>.sh` (git-tracked).
-2. Add an `ensure_one` line for it in `scripts/utilities/symphony_ensure_workspace_runtime.sh`.
-3. Commit and push both files.
-4. **Sync the VM checkout**: `git pull origin main` inside the VM (see command above).
-5. **Restart Symphony** inside the VM so the running process uses the updated source root.
-6. If the script is referenced in `WORKFLOW.md`, update `.symphony/WORKFLOW.md` and push it to the VM via `incus file push`.
-7. If the change also touched local Symphony runtime code under `.symphony/elixir/`, push those changed files into the VM source tree too, then rebuild/restart Symphony there.
-8. Existing workspaces pick up the new script on their next `before_run` hook execution.
+2. Commit and push it to `origin/main`.
+3. Make sure any existing issue workspaces that need the new tracked helper are updated from Git (for example by recreating or rebasing them).
+4. If the script is referenced in `WORKFLOW.md`, update `.symphony/WORKFLOW.md` and push it to the VM via `incus file push`.
+5. If the change also touched local Symphony runtime code under `.symphony/elixir/`, push those changed files into the VM source tree too, then rebuild/restart Symphony there.
+6. Existing workspaces will pick up runtime overlay changes on the next `before_run` hook execution, but tracked helpers only arrive through Git.
 
 ## 6) Expected Change Workflow
 

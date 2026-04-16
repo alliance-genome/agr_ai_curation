@@ -21,7 +21,6 @@ make_source_root() {
   git init -q "${source_root}" >/dev/null 2>&1
   mkdir -p \
     "${source_root}/.symphony" \
-    "${source_root}/docs/plans/screenshots" \
     "${source_root}/scripts/lib" \
     "${source_root}/scripts/requirements" \
     "${source_root}/scripts/utilities"
@@ -104,21 +103,32 @@ services:
       - ./packages:/runtime/packages:ro
       - ./config:/runtime/config:ro
 EOF
-
-  printf 'workspace-mockup-v1\n' > "${source_root}/docs/plans/screenshots/curation-workspace-mockup.png"
-  printf 'inventory-mockup-v1\n' > "${source_root}/docs/plans/screenshots/curation-inventory-mockup.png"
 }
 
-test_default_mode_preserves_existing_files() {
+seed_workspace_repo() {
+  local source_root="$1"
+  local workspace="$2"
+
+  mkdir -p "${workspace}/scripts"
+  cp -R "${source_root}/scripts/." "${workspace}/scripts/"
+  cp "${source_root}/docker-compose.yml" "${workspace}/docker-compose.yml"
+}
+
+test_default_mode_preserves_existing_overlay_and_tracked_files() {
   local temp_root workspace source_root output
   temp_root="$(mktemp -d)"
   workspace="${temp_root}/workspace"
   source_root="${temp_root}/source"
   mkdir -p "${workspace}"
   make_source_root "${source_root}"
+  seed_workspace_repo "${source_root}" "${workspace}"
 
+  mkdir -p "${workspace}/.symphony"
   cat > "${workspace}/docker-compose.yml" <<'EOF'
 stale-compose
+EOF
+  cat > "${workspace}/.symphony/WORKFLOW.md" <<'EOF'
+stale-workflow
 EOF
 
   output="$(
@@ -127,42 +137,44 @@ EOF
     bash "${SCRIPT_PATH}" --workspace-dir "${workspace}"
   )"
 
-  assert_contains "SYNC_ENV_COPIED=33" "${output}"
+  assert_contains "SYNC_ENV_STATUS=ready" "${output}"
+  assert_contains "SYNC_ENV_COPIED=5" "${output}"
   assert_contains "SYNC_ENV_REFRESHED=0" "${output}"
   assert_contains "SYNC_ENV_SKIPPED_EXISTING=1" "${output}"
   [[ "$(cat "${workspace}/docker-compose.yml")" == "stale-compose" ]] || {
-    echo "Expected default mode to preserve existing docker-compose.yml" >&2
+    echo "Expected default mode to preserve tracked docker-compose.yml" >&2
     exit 1
   }
-  [[ "$(cat "${workspace}/.symphony/WORKFLOW.md")" == "workflow-v1" ]] || {
-    echo "Expected default mode to seed .symphony/WORKFLOW.md" >&2
+  [[ "$(cat "${workspace}/.symphony/WORKFLOW.md")" == "stale-workflow" ]] || {
+    echo "Expected default mode to preserve an existing runtime overlay file" >&2
     exit 1
   }
   [[ "$(bash "${workspace}/.symphony/with_github_pat.sh")" == "with-github-pat-v1" ]] || {
     echo "Expected default mode to seed .symphony/with_github_pat.sh" >&2
     exit 1
   }
-  [[ "$(cat "${workspace}/docs/plans/screenshots/curation-workspace-mockup.png")" == "workspace-mockup-v1" ]] || {
-    echo "Expected default mode to seed the workspace mockup screenshot" >&2
+  [[ -x "${workspace}/.git/hooks/pre-commit" ]] || {
+    echo "Expected default mode to seed the pre-commit hook" >&2
     exit 1
   }
   [[ -x "${workspace}/scripts/utilities/ensure_python_tools_venv.sh" ]] || {
-    echo "Expected default mode to seed the Python tools venv helper" >&2
+    echo "Expected default mode to preserve Git-owned helpers from the workspace checkout" >&2
     exit 1
   }
   [[ "$(cat "${workspace}/scripts/requirements/python-tools.txt")" == $'ruff\npyyaml' ]] || {
-    echo "Expected default mode to seed the Python tools requirements file" >&2
+    echo "Expected default mode to preserve the Python tools requirements file" >&2
     exit 1
   }
 }
 
-test_refresh_managed_overwrites_existing_files() {
+test_refresh_managed_only_overwrites_overlay_files() {
   local temp_root workspace source_root output
   temp_root="$(mktemp -d)"
   workspace="${temp_root}/workspace"
   source_root="${temp_root}/source"
   mkdir -p "${workspace}/scripts/utilities" "${workspace}/.symphony"
   make_source_root "${source_root}"
+  seed_workspace_repo "${source_root}" "${workspace}"
 
   cat > "${workspace}/docker-compose.yml" <<'EOF'
 stale-compose
@@ -183,22 +195,22 @@ EOF
   )"
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
-  assert_contains "SYNC_ENV_REFRESHED=3" "${output}"
-  assert_contains "SYNC_ENV_COPIED=31" "${output}"
-  [[ "$(cat "${workspace}/docker-compose.yml")" == *"/runtime/packages"* ]] || {
-    echo "Expected refresh mode to overwrite docker-compose.yml" >&2
+  assert_contains "SYNC_ENV_REFRESHED=1" "${output}"
+  assert_contains "SYNC_ENV_COPIED=5" "${output}"
+  [[ "$(cat "${workspace}/docker-compose.yml")" == "stale-compose" ]] || {
+    echo "Expected refresh mode to leave tracked docker-compose.yml alone" >&2
     exit 1
   }
-  [[ "$(bash "${workspace}/scripts/utilities/symphony_wait_for_claude_review.sh")" == "symphony_wait_for_claude_review.sh" ]] || {
-    echo "Expected refresh mode to overwrite managed helper content" >&2
+  [[ "$(bash "${workspace}/scripts/utilities/symphony_wait_for_claude_review.sh")" == "stale-helper" ]] || {
+    echo "Expected refresh mode to leave tracked helper content alone" >&2
     exit 1
   }
   [[ "$(cat "${workspace}/.symphony/WORKFLOW.md")" == "workflow-v1" ]] || {
     echo "Expected refresh mode to overwrite .symphony/WORKFLOW.md" >&2
     exit 1
   }
-  [[ "$(cat "${workspace}/docs/plans/screenshots/curation-inventory-mockup.png")" == "inventory-mockup-v1" ]] || {
-    echo "Expected refresh mode to seed the inventory mockup screenshot" >&2
+  [[ "$(bash "${workspace}/.symphony/with_github_pat.sh")" == "with-github-pat-v1" ]] || {
+    echo "Expected refresh mode to seed optional runtime overlay helpers" >&2
     exit 1
   }
 }
@@ -210,6 +222,7 @@ test_invalid_hooks_source_falls_back_to_local_source_git_dir() {
   source_root="${temp_root}/source"
   mkdir -p "${workspace}"
   make_source_root "${source_root}"
+  seed_workspace_repo "${source_root}" "${workspace}"
 
   output="$(
     SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" \
@@ -228,8 +241,37 @@ test_invalid_hooks_source_falls_back_to_local_source_git_dir() {
   }
 }
 
-test_default_mode_preserves_existing_files
-test_refresh_managed_overwrites_existing_files
+test_missing_required_git_owned_files_are_reported() {
+  local temp_root workspace source_root output status
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/workspace"
+  source_root="${temp_root}/source"
+  mkdir -p "${workspace}"
+  make_source_root "${source_root}"
+  seed_workspace_repo "${source_root}" "${workspace}"
+  rm -f "${workspace}/scripts/utilities/symphony_human_review_prep.sh" "${workspace}/docker-compose.yml"
+
+  set +e
+  output="$(
+    SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" \
+    SYMPHONY_HOOKS_SOURCE="${source_root}/.git/hooks" \
+    bash "${SCRIPT_PATH}" --workspace-dir "${workspace}" 2>&1
+  )"
+  status=$?
+  set -e
+
+  [[ "${status}" -eq 3 ]] || {
+    echo "Expected missing required Git-owned files to fail closed" >&2
+    exit 1
+  }
+  assert_contains "SYNC_ENV_STATUS=missing_required" "${output}"
+  assert_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_human_review_prep.sh" "${output}"
+  assert_contains "SYNC_ENV_MISSING_OPTIONAL=docker-compose.yml" "${output}"
+}
+
+test_default_mode_preserves_existing_overlay_and_tracked_files
+test_refresh_managed_only_overwrites_overlay_files
 test_invalid_hooks_source_falls_back_to_local_source_git_dir
+test_missing_required_git_owned_files_are_reported
 
 echo "symphony_ensure_workspace_runtime tests passed"
