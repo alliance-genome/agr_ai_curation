@@ -547,6 +547,42 @@ async def test_post_candidate_decision_delegates_to_service(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_delete_review_candidate_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _delete_candidate(db, session_id, candidate_id, *, actor_claims):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["candidate_id"] = candidate_id
+        captured["actor_claims"] = actor_claims
+        return expected
+
+    monkeypatch.setattr(module, "delete_candidate", _delete_candidate)
+
+    session_id = uuid4()
+    candidate_id = uuid4()
+    db = object()
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+
+    response = await module.delete_review_candidate(
+        session_id,
+        candidate_id,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "candidate_id": candidate_id,
+        "actor_claims": user,
+    }
+
+
+@pytest.mark.asyncio
 async def test_patch_review_candidate_draft_delegates_to_service(monkeypatch):
     monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
     expected = object()

@@ -1007,6 +1007,127 @@ def test_post_candidate_decision_updates_status_and_writes_action_log(
     assert action_logs[0].action_type.value == "candidate_accepted"
 
 
+def test_delete_review_candidate_removes_candidate_children_and_invalidates_session_validation(
+    client: TestClient,
+    seeded_review_sessions,
+    test_db,
+):
+    from src.lib.curation_workspace.models import (
+        CurationActionLogEntry as SessionActionLogModel,
+        CurationCandidate,
+        CurationDraft,
+        CurationEvidenceRecord,
+        CurationReviewSession,
+        CurationValidationSnapshot,
+    )
+    from src.schemas.curation_workspace import (
+        CurationActionType,
+        CurationActorType,
+        CurationValidationScope,
+        CurationValidationSnapshotState,
+    )
+
+    candidate_alpha_uuid = UUID(seeded_review_sessions["candidate_alpha_id"])
+    session_alpha_uuid = UUID(seeded_review_sessions["session_alpha_id"])
+    draft_alpha_uuid = UUID(seeded_review_sessions["draft_alpha_id"])
+    now = datetime(2026, 3, 1, 11, 30, tzinfo=timezone.utc)
+
+    test_db.add_all([
+        CurationValidationSnapshot(
+            scope=CurationValidationScope.CANDIDATE,
+            session_id=session_alpha_uuid,
+            candidate_id=candidate_alpha_uuid,
+            adapter_key="disease",
+            state=CurationValidationSnapshotState.COMPLETED,
+            field_results={},
+            summary={
+                "state": "completed",
+                "counts": {
+                    "validated": 1,
+                    "ambiguous": 0,
+                    "not_found": 0,
+                    "invalid_format": 0,
+                    "conflict": 0,
+                    "skipped": 0,
+                    "overridden": 0,
+                },
+                "warnings": [],
+                "stale_field_keys": [],
+            },
+            warnings=[],
+            requested_at=now,
+            completed_at=now,
+        ),
+        SessionActionLogModel(
+            session_id=session_alpha_uuid,
+            candidate_id=candidate_alpha_uuid,
+            draft_id=draft_alpha_uuid,
+            action_type=CurationActionType.CANDIDATE_UPDATED,
+            actor_type=CurationActorType.USER,
+            actor={"actor_id": client.current_user_auth_sub, "display_name": "Curator One"},
+            occurred_at=now,
+            changed_field_keys=["disease_term"],
+            message="Fixture candidate update",
+        ),
+    ])
+    test_db.commit()
+
+    response = client.delete(
+        f"/api/curation-workspace/sessions/{seeded_review_sessions['session_alpha_id']}/candidates/{seeded_review_sessions['candidate_alpha_id']}",
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["deleted_candidate_id"] == seeded_review_sessions["candidate_alpha_id"]
+    assert payload["session"]["current_candidate_id"] is None
+    assert payload["session"]["progress"] == {
+        "total_candidates": 0,
+        "reviewed_candidates": 0,
+        "pending_candidates": 0,
+        "accepted_candidates": 0,
+        "rejected_candidates": 0,
+        "manual_candidates": 0,
+    }
+    assert payload["session"]["validation"] is None
+    assert payload["action_log_entry"]["action_type"] == "candidate_deleted"
+    assert payload["action_log_entry"]["candidate_id"] is None
+    assert payload["action_log_entry"]["metadata"]["deleted_candidate_id"] == (
+        seeded_review_sessions["candidate_alpha_id"]
+    )
+
+    assert test_db.get(CurationCandidate, candidate_alpha_uuid) is None
+    assert test_db.get(CurationDraft, draft_alpha_uuid) is None
+
+    evidence_rows = (
+        test_db.query(CurationEvidenceRecord)
+        .filter(CurationEvidenceRecord.candidate_id == candidate_alpha_uuid)
+        .all()
+    )
+    assert evidence_rows == []
+
+    validation_rows = (
+        test_db.query(CurationValidationSnapshot)
+        .filter(CurationValidationSnapshot.session_id == session_alpha_uuid)
+        .all()
+    )
+    assert validation_rows == []
+
+    action_logs = (
+        test_db.query(SessionActionLogModel)
+        .filter(SessionActionLogModel.session_id == session_alpha_uuid)
+        .order_by(SessionActionLogModel.occurred_at.asc())
+        .all()
+    )
+    assert len(action_logs) == 1
+    assert action_logs[0].action_type.value == "candidate_deleted"
+
+    refreshed_session = test_db.get(CurationReviewSession, session_alpha_uuid)
+    assert refreshed_session is not None
+    assert refreshed_session.current_candidate_id is None
+    assert refreshed_session.total_candidates == 0
+
+
 def test_get_review_session_stats_returns_aggregate_counts(
     client: TestClient,
     seeded_review_sessions,

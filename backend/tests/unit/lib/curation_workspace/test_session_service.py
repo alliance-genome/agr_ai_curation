@@ -52,6 +52,8 @@ from src.schemas.curation_workspace import (
     CurationSubmissionPreviewRequest,
     CurationSubmissionRetryRequest,
     CurationSubmissionStatus,
+    CurationValidationScope,
+    CurationValidationSnapshotState,
     FieldValidationResult,
     FieldValidationStatus,
     SubmissionMode,
@@ -1192,6 +1194,119 @@ def test_decide_candidate_accepts_and_advances_to_next_pending(db_session):
     assert response.action_log_entry.action_type == CurationActionType.CANDIDATE_ACCEPTED
     assert response.action_log_entry.previous_candidate_status == CurationCandidateStatus.PENDING
     assert response.action_log_entry.new_candidate_status == CurationCandidateStatus.ACCEPTED
+
+
+def test_delete_candidate_removes_candidate_children_and_updates_session(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        with_manual_evidence=True,
+        with_existing_action_log=True,
+    )
+    now = _now()
+
+    db_session.add_all([
+        ValidationSnapshotModel(
+            id=uuid4(),
+            scope=CurationValidationScope.SESSION,
+            session_id=UUID(seeded["session_id"]),
+            candidate_id=None,
+            adapter_key="reference_adapter",
+            state=CurationValidationSnapshotState.COMPLETED,
+            field_results={},
+            summary={
+                "state": "completed",
+                "counts": {
+                    "validated": 1,
+                    "ambiguous": 0,
+                    "not_found": 0,
+                    "invalid_format": 0,
+                    "conflict": 0,
+                    "skipped": 0,
+                    "overridden": 0,
+                },
+                "warnings": [],
+                "stale_field_keys": [],
+            },
+            warnings=[],
+            requested_at=now,
+            completed_at=now,
+        ),
+        ValidationSnapshotModel(
+            id=uuid4(),
+            scope=CurationValidationScope.CANDIDATE,
+            session_id=UUID(seeded["session_id"]),
+            candidate_id=UUID(seeded["first_candidate_id"]),
+            adapter_key="reference_adapter",
+            state=CurationValidationSnapshotState.COMPLETED,
+            field_results={},
+            summary={
+                "state": "completed",
+                "counts": {
+                    "validated": 1,
+                    "ambiguous": 0,
+                    "not_found": 0,
+                    "invalid_format": 0,
+                    "conflict": 0,
+                    "skipped": 0,
+                    "overridden": 0,
+                },
+                "warnings": [],
+                "stale_field_keys": [],
+            },
+            warnings=[],
+            requested_at=now,
+            completed_at=now,
+        ),
+    ])
+    db_session.commit()
+
+    response = module.delete_candidate(
+        db_session,
+        seeded["session_id"],
+        seeded["first_candidate_id"],
+        actor_claims={
+            "sub": "user-1",
+            "email": "user-1@example.org",
+            "name": "Curator One",
+        },
+    )
+
+    assert response.deleted_candidate_id == seeded["first_candidate_id"]
+    assert response.session.current_candidate_id == seeded["second_candidate_id"]
+    assert response.session.progress.model_dump() == {
+        "total_candidates": 1,
+        "reviewed_candidates": 0,
+        "pending_candidates": 1,
+        "accepted_candidates": 0,
+        "rejected_candidates": 0,
+        "manual_candidates": 0,
+    }
+    assert response.action_log_entry.action_type == CurationActionType.CANDIDATE_DELETED
+    assert response.action_log_entry.previous_candidate_status == CurationCandidateStatus.PENDING
+    assert response.action_log_entry.candidate_id is None
+    assert response.action_log_entry.draft_id is None
+    assert response.action_log_entry.metadata["deleted_candidate_id"] == seeded["first_candidate_id"]
+    assert response.action_log_entry.metadata["next_candidate_id"] == seeded["second_candidate_id"]
+
+    assert db_session.get(CurationCandidate, UUID(seeded["first_candidate_id"])) is None
+    assert db_session.get(DraftModel, UUID(seeded["first_draft_id"])) is None
+
+    remaining_evidence = db_session.scalars(select(EvidenceRecordModel)).all()
+    assert remaining_evidence == []
+
+    remaining_snapshots = db_session.scalars(select(ValidationSnapshotModel)).all()
+    assert remaining_snapshots == []
+
+    action_logs = (
+        db_session.query(SessionActionLogModel)
+        .filter(SessionActionLogModel.session_id == UUID(seeded["session_id"]))
+        .order_by(SessionActionLogModel.occurred_at.asc(), SessionActionLogModel.id.asc())
+        .all()
+    )
+
+    assert len(action_logs) == 1
+    assert action_logs[0].action_type == CurationActionType.CANDIDATE_DELETED
+    assert action_logs[0].candidate_id is None
 
 
 def test_decide_candidate_reset_reverts_draft_and_keeps_existing_audit_entries(db_session):

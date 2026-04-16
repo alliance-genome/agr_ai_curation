@@ -1,5 +1,19 @@
-import { useCallback } from 'react'
-import { Box, Table, TableBody, TableCell, TableContainer, TableHead, TableRow } from '@mui/material'
+import { useCallback, useState } from 'react'
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from '@mui/material'
 import type { CurationEvidenceRecord } from '@/features/curation/types'
 import { useEntityTagState } from './useEntityTagState'
 import EntityTagToolbar from './EntityTagToolbar'
@@ -15,6 +29,7 @@ interface EntityTagTableProps {
   onSelectTag: (tagId: string) => void
   onAcceptTag: (tagId: string) => Promise<void> | void
   onRejectTag: (tagId: string) => Promise<void> | void
+  onDeleteTag: (tagId: string) => Promise<void> | void
   onAcceptAllValidated: (tagIds: string[]) => Promise<void> | void
   onSaveTag: (tagId: string, updates: Partial<EntityTag>) => Promise<void> | void
   onCreateManualTag: (tag: EntityTag) => Promise<string> | string
@@ -29,11 +44,14 @@ export default function EntityTagTable({
   onSelectTag,
   onAcceptTag,
   onRejectTag,
+  onDeleteTag,
   onAcceptAllValidated,
   onSaveTag,
   onCreateManualTag,
 }: EntityTagTableProps) {
   const state = useEntityTagState(tags, selectedTagId)
+  const [deleteTargetTag, setDeleteTargetTag] = useState<EntityTag | null>(null)
+  const [deletePending, setDeletePending] = useState(false)
 
   const handleSelect = useCallback((tagId: string) => {
     state.selectTag()
@@ -57,6 +75,36 @@ export default function EntityTagTable({
       // Keep the current row state in place when the workspace mutation fails.
     }
   }, [onRejectTag])
+
+  const handleRequestDelete = useCallback((tagId: string) => {
+    const targetTag = state.tags.find((tag) => tag.tag_id === tagId) ?? null
+    setDeleteTargetTag(targetTag)
+  }, [state.tags])
+
+  const handleCloseDeleteDialog = useCallback(() => {
+    if (deletePending) {
+      return
+    }
+
+    setDeleteTargetTag(null)
+  }, [deletePending])
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleteTargetTag) {
+      return
+    }
+
+    setDeletePending(true)
+    try {
+      await onDeleteTag(deleteTargetTag.tag_id)
+    } catch (error) {
+      console.error(`Failed to delete entity tag ${deleteTargetTag.tag_id}.`, error)
+      // Keep the current row state intact and let the page surface the delete error.
+    } finally {
+      setDeletePending(false)
+      setDeleteTargetTag(null)
+    }
+  }, [deleteTargetTag, onDeleteTag])
 
   const handleAcceptAllValidated = useCallback(async () => {
     const validatedPendingTagIds = state.tags
@@ -133,6 +181,7 @@ export default function EntityTagTable({
                   onAccept={(tagId) => void handleAccept(tagId)}
                   onReject={(tagId) => void handleReject(tagId)}
                   onEdit={state.startEditing}
+                  onDelete={handleRequestDelete}
                 />
               ),
             )}
@@ -150,6 +199,39 @@ export default function EntityTagTable({
           }
         />
       </Box>
+
+      <Dialog
+        open={deleteTargetTag !== null}
+        onClose={deletePending ? undefined : handleCloseDeleteDialog}
+        fullWidth
+        maxWidth="xs"
+      >
+        <DialogTitle>Delete curation row?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mt: 0.5 }}>
+            {deleteTargetTag
+              ? `Delete "${deleteTargetTag.entity_name}" from this curation session?`
+              : 'Delete this curation row from the current session?'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5 }}>
+            This permanently removes the candidate, draft, evidence anchors, and validation state
+            for this row.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleCloseDeleteDialog} disabled={deletePending}>
+            Cancel
+          </Button>
+          <Button
+            color="error"
+            variant="contained"
+            onClick={() => void handleConfirmDelete()}
+            disabled={deletePending}
+          >
+            Delete row
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   )
 }

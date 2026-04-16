@@ -323,6 +323,7 @@ class CurationActionType(str, Enum):
     SESSION_STATUS_UPDATED = "session_status_updated"
     SESSION_ASSIGNED = "session_assigned"
     CANDIDATE_CREATED = "candidate_created"
+    CANDIDATE_DELETED = "candidate_deleted"
     CANDIDATE_UPDATED = "candidate_updated"
     CANDIDATE_ACCEPTED = "candidate_accepted"
     CANDIDATE_REJECTED = "candidate_rejected"
@@ -1640,6 +1641,16 @@ class CurationCandidateDecisionResponse(CurationWorkspaceBaseModel):
     )
 
 
+class CurationCandidateDeleteResponse(CurationWorkspaceBaseModel):
+    """Response contract for candidate deletion mutations."""
+
+    deleted_candidate_id: str = Field(description="Deleted candidate identifier")
+    session: CurationReviewSession = Field(description="Updated session payload")
+    action_log_entry: CurationActionLogEntry = Field(
+        description="Action-log entry emitted by the delete mutation",
+    )
+
+
 class CurationManualCandidateCreateRequest(CurationWorkspaceBaseModel):
     """Request contract for creating manual candidates inside a session."""
 
@@ -1943,6 +1954,7 @@ __all__ = [
     "CurationAdapterRef",
     "CurationCandidate",
     "CurationCandidateAction",
+    "CurationCandidateDeleteResponse",
     "CurationCandidateDecisionRequest",
     "CurationCandidateDecisionResponse",
     "CurationCandidateDraftUpdateRequest",

@@ -129,12 +129,14 @@ const makeEvidenceRecordsByTagId = (): Record<string, CurationEvidenceRecord[]> 
 function ControlledTable({
   onAcceptTag = vi.fn(),
   onRejectTag = vi.fn(),
+  onDeleteTag = vi.fn(),
   onSaveTag = vi.fn(),
   onCreateManualTag = vi.fn(async () => 'manual-1'),
   candidateEvidenceByTagId = makeEvidenceRecordsByTagId(),
 }: {
   onAcceptTag?: (tagId: string) => Promise<void> | void
   onRejectTag?: (tagId: string) => Promise<void> | void
+  onDeleteTag?: (tagId: string) => Promise<void> | void
   onSaveTag?: (tagId: string, updates: Partial<EntityTag>) => Promise<void> | void
   onCreateManualTag?: (tag: EntityTag) => Promise<string> | string
   candidateEvidenceByTagId?: Record<string, CurationEvidenceRecord[]>
@@ -162,6 +164,13 @@ function ControlledTable({
           currentTags.map((tag) => (
             tag.tag_id === tagId ? { ...tag, decision: 'rejected' } : tag
           )),
+        )
+      }}
+      onDeleteTag={async (tagId) => {
+        await onDeleteTag(tagId)
+        setTags((currentTags) => currentTags.filter((tag) => tag.tag_id !== tagId))
+        setSelectedTagId((currentSelectedTagId) =>
+          currentSelectedTagId === tagId ? null : currentSelectedTagId,
         )
       }}
       onAcceptAllValidated={async (tagIds) => {
@@ -265,6 +274,7 @@ describe('EntityTagTable', () => {
         onSelectTag={vi.fn()}
         onAcceptTag={vi.fn()}
         onRejectTag={vi.fn()}
+        onDeleteTag={vi.fn()}
         onAcceptAllValidated={vi.fn()}
         onSaveTag={vi.fn()}
         onCreateManualTag={vi.fn(async () => 'manual-1')}
@@ -304,6 +314,7 @@ describe('EntityTagTable', () => {
         onSelectTag={vi.fn()}
         onAcceptTag={vi.fn()}
         onRejectTag={vi.fn()}
+        onDeleteTag={vi.fn()}
         onAcceptAllValidated={vi.fn()}
         onSaveTag={vi.fn()}
         onCreateManualTag={vi.fn(async () => 'manual-1')}
@@ -341,6 +352,7 @@ describe('EntityTagTable', () => {
         onSelectTag={vi.fn()}
         onAcceptTag={vi.fn()}
         onRejectTag={vi.fn()}
+        onDeleteTag={vi.fn()}
         onAcceptAllValidated={vi.fn()}
         onSaveTag={vi.fn()}
         onCreateManualTag={vi.fn(async () => 'manual-1')}
@@ -378,6 +390,38 @@ describe('EntityTagTable', () => {
       expect(onAcceptTag).toHaveBeenCalledWith('tag-1')
       expect(screen.getByText('Accepted')).toBeInTheDocument()
     })
+  })
+
+  it('requires delete confirmation before removing a row', async () => {
+    const onDeleteTag = vi.fn()
+    render(<ControlledTable onDeleteTag={onDeleteTag} />, { wrapper })
+
+    fireEvent.click(screen.getByLabelText('Delete daf-2'))
+
+    expect(screen.getByText('Delete curation row?')).toBeInTheDocument()
+    expect(onDeleteTag).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete row' }))
+
+    await waitFor(() => {
+      expect(onDeleteTag).toHaveBeenCalledWith('tag-1')
+    })
+
+    expect(screen.queryByText('daf-2')).not.toBeInTheDocument()
+  })
+
+  it('does not delete a row when the confirmation dialog is cancelled', async () => {
+    const onDeleteTag = vi.fn()
+    render(<ControlledTable onDeleteTag={onDeleteTag} />, { wrapper })
+
+    fireEvent.click(screen.getByLabelText('Delete daf-2'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+
+    expect(onDeleteTag).not.toHaveBeenCalled()
+    await waitFor(() => {
+      expect(screen.queryByText('Delete curation row?')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('daf-2')).toBeInTheDocument()
   })
 
   it('opens a blank manual row when Add Entity is clicked', () => {
