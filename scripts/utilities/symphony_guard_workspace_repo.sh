@@ -55,6 +55,16 @@ done
 
 status="error"
 reason="unknown"
+temp_files=()
+
+cleanup_temp_files() {
+  local temp_file=""
+  for temp_file in "${temp_files[@]}"; do
+    [[ -n "${temp_file}" ]] && rm -f "${temp_file}" >/dev/null 2>&1 || true
+  done
+}
+
+trap cleanup_temp_files EXIT
 
 normalize_repo() {
   local raw="$1"
@@ -87,10 +97,43 @@ print_summary() {
   echo "GUARD_REPO_ACTUAL=${actual_norm:-none}"
 }
 
-run_runtime_sync() {
-  local helper=""
+materialize_helper_from_origin_ref() {
+  local repo_path="$1"
+  local ref_name="$2"
+  local file_path="$3"
+  local helper_tmp=""
+  local origin_object="refs/remotes/origin/${ref_name}:${file_path}"
 
-  if [[ -f "${workspace_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
+  if ! git -C "${repo_path}" cat-file -e "${origin_object}" 2>/dev/null; then
+    return 1
+  fi
+
+  helper_tmp="$(mktemp "${TMPDIR:-/tmp}/symphony-origin-helper.XXXXXX")"
+  if ! git -C "${repo_path}" show "${origin_object}" > "${helper_tmp}" 2>/dev/null; then
+    rm -f "${helper_tmp}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  chmod +x "${helper_tmp}" >/dev/null 2>&1 || true
+  temp_files+=("${helper_tmp}")
+  printf '%s\n' "${helper_tmp}"
+}
+
+run_runtime_sync() {
+  local sync_mode="${1:-ensure}"
+  local helper=""
+  local helper_args=("--workspace-dir" "${workspace_dir}")
+
+  if [[ "${sync_mode}" == "refresh" ]]; then
+    helper_args+=("--refresh-managed")
+  fi
+
+  if helper="$(materialize_helper_from_origin_ref \
+    "${workspace_dir}" \
+    "${expected_ref}" \
+    "scripts/utilities/symphony_ensure_workspace_runtime.sh" 2>/dev/null)"; then
+    :
+  elif [[ -f "${workspace_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
     helper="${workspace_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
   elif [[ -n "${source_root}" && -f "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh" ]]; then
     helper="${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
@@ -106,7 +149,7 @@ run_runtime_sync() {
 
   local output rc
   set +e
-  output="$(bash "${helper}" --workspace-dir "${workspace_dir}" 2>&1)"
+  output="$(bash "${helper}" "${helper_args[@]}" 2>&1)"
   rc=$?
   set -e
 
@@ -179,7 +222,7 @@ if [[ -n "${current_repo_norm}" && "${current_repo_norm}" == "${expected_repo_no
   git -C "${workspace_dir}" fetch --quiet origin \
     "${expected_ref}:refs/remotes/origin/${expected_ref}" >/dev/null 2>&1 || true
 
-  if ! run_runtime_sync; then
+  if ! run_runtime_sync refresh; then
     print_summary "${expected_repo_norm}" "${current_repo_norm}"
     exit 5
   fi
@@ -227,7 +270,7 @@ clone_output="$(git clone --depth 1 --branch "${expected_ref}" "${expected_repo}
   exit 4
 }
 
-if ! run_runtime_sync; then
+if ! run_runtime_sync refresh; then
   print_summary "${expected_repo_norm}" "${current_repo_norm}"
   exit 5
 fi

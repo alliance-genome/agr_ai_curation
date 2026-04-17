@@ -27,6 +27,45 @@ make_repo() {
   git -C "${repo_dir}" commit -m "initial" >/dev/null
 }
 
+make_repo_with_runtime_helper_history() {
+  local repo_dir="$1"
+  mkdir -p "${repo_dir}/scripts/utilities"
+  git -C "${repo_dir}" init -b main >/dev/null
+  git -C "${repo_dir}" config user.name "Test User"
+  git -C "${repo_dir}" config user.email "test@example.com"
+
+  cat > "${repo_dir}/README.md" <<'EOF'
+hello
+EOF
+  cat > "${repo_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh" <<'EOF'
+#!/usr/bin/env bash
+echo "SYNC_ENV_STATUS=ready"
+echo "SYNC_ENV_SOURCE=workspace-stale"
+exit 0
+EOF
+  chmod +x "${repo_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
+  git -C "${repo_dir}" add README.md scripts/utilities/symphony_ensure_workspace_runtime.sh
+  git -C "${repo_dir}" commit -m "initial runtime helper" >/dev/null
+  git -C "${repo_dir}" rev-parse HEAD
+
+  cat > "${repo_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh" <<'EOF'
+#!/usr/bin/env bash
+refresh_seen="no"
+for arg in "$@"; do
+  if [[ "${arg}" == "--refresh-managed" ]]; then
+    refresh_seen="yes"
+  fi
+done
+echo "SYNC_ENV_STATUS=ready"
+echo "SYNC_ENV_SOURCE=origin-main"
+echo "SYNC_ENV_REFRESH_FLAG=${refresh_seen}"
+exit 0
+EOF
+  chmod +x "${repo_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
+  git -C "${repo_dir}" add scripts/utilities/symphony_ensure_workspace_runtime.sh
+  git -C "${repo_dir}" commit -m "refresh runtime helper" >/dev/null
+}
+
 test_guard_fails_closed_when_required_runtime_files_are_missing() {
   local temp_root source_repo workspace_root workspace source_root output status
   temp_root="$(mktemp -d)"
@@ -70,8 +109,8 @@ EOF
   rm -rf "${workspace_root}" "${temp_root}"
 }
 
-test_guard_prefers_workspace_runtime_sync_helper() {
-  local temp_root source_repo workspace_root workspace source_root output
+test_guard_prefers_origin_runtime_sync_helper_and_refreshes_overlay() {
+  local temp_root source_repo workspace_root workspace source_root output initial_sha
   temp_root="$(mktemp -d)"
   source_repo="${temp_root}/source-repo"
   workspace_root="${HOME}/.symphony/workspaces/test-guard-prefer-workspace-$$"
@@ -79,24 +118,17 @@ test_guard_prefers_workspace_runtime_sync_helper() {
   source_root="${temp_root}/source-root"
 
   mkdir -p "${workspace_root}" "${source_root}/scripts/utilities"
-  make_repo "${source_repo}"
+  initial_sha="$(make_repo_with_runtime_helper_history "${source_repo}")"
   git clone --depth 1 --branch main "${source_repo}" "${workspace}" >/dev/null 2>&1
-  mkdir -p "${workspace}/scripts/utilities"
+  git -C "${workspace}" checkout "${initial_sha}" >/dev/null 2>&1
 
   cat > "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh" <<'EOF'
 #!/usr/bin/env bash
 echo "SYNC_ENV_STATUS=missing_required"
-echo "SYNC_ENV_MISSING_REQUIRED=.symphony/WORKFLOW.md"
-exit 3
-EOF
-  chmod +x "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
-
-  cat > "${workspace}/scripts/utilities/symphony_ensure_workspace_runtime.sh" <<'EOF'
-#!/usr/bin/env bash
-echo "SYNC_ENV_STATUS=ready"
+echo "SYNC_ENV_SOURCE=source-root"
 exit 0
 EOF
-  chmod +x "${workspace}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
+  chmod +x "${source_root}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
 
   output="$(
     bash "${SCRIPT_PATH}" \
@@ -107,6 +139,8 @@ EOF
   )"
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
+  assert_contains "SYNC_ENV_SOURCE=origin-main" "${output}"
+  assert_contains "SYNC_ENV_REFRESH_FLAG=yes" "${output}"
   assert_contains "GUARD_REPO_STATUS=ok" "${output}"
   assert_contains "GUARD_REPO_REASON=match" "${output}"
 
@@ -114,6 +148,6 @@ EOF
 }
 
 test_guard_fails_closed_when_required_runtime_files_are_missing
-test_guard_prefers_workspace_runtime_sync_helper
+test_guard_prefers_origin_runtime_sync_helper_and_refreshes_overlay
 
 echo "symphony_guard_workspace_repo tests passed"
