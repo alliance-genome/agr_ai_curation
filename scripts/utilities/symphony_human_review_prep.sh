@@ -6,6 +6,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# shellcheck disable=SC1091
+source "${REPO_ROOT}/scripts/lib/rerank_provider_common.sh"
+
 usage() {
   cat <<'USAGE'
 Usage:
@@ -110,6 +113,8 @@ WORKSPACE_DIR="$(cd "${WORKSPACE_DIR}" && pwd -P)"
 COMPOSE_FILE="${WORKSPACE_DIR}/docker-compose.yml"
 TUNNEL_ENV_FILE="${WORKSPACE_DIR}/scripts/local_db_tunnel_env.sh"
 REVIEW_DEPENDENCY_SERVICES=()
+REVIEW_RERANK_PROVIDER="none"
+REVIEW_RERANKER_REQUIRED=0
 
 if [[ ! -d "${WORKSPACE_DIR}" ]]; then
   echo "Workspace directory does not exist: ${WORKSPACE_DIR}" >&2
@@ -328,12 +333,14 @@ load_exported_env_file() {
 
 compose_run() {
   local args=()
+  local compose_args=()
   if [[ -f "${PRIVATE_ENV_FILE}" ]]; then
     args+=(--env-file "${PRIVATE_ENV_FILE}")
   fi
+  append_local_reranker_profile_args "${RERANK_PROVIDER:-none}" compose_args
   (
     cd "${WORKSPACE_DIR}"
-    DOCKER_CONFIG="${WORKSPACE_DOCKER_CONFIG}" docker compose "${args[@]}" -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT}" "$@"
+    DOCKER_CONFIG="${WORKSPACE_DOCKER_CONFIG}" docker compose "${args[@]}" -f "${COMPOSE_FILE}" -p "${COMPOSE_PROJECT}" "${compose_args[@]}" "$@"
   )
 }
 
@@ -344,8 +351,15 @@ compose_service_exists() {
 
 resolve_review_dependency_services() {
   local service
-  local candidates=(postgres redis reranker-transformers weaviate)
+  local candidates=(postgres redis weaviate)
   REVIEW_DEPENDENCY_SERVICES=()
+  REVIEW_RERANK_PROVIDER="$(normalize_rerank_provider "${RERANK_PROVIDER:-none}")"
+  REVIEW_RERANKER_REQUIRED=0
+
+  if rerank_provider_requires_local_service "${REVIEW_RERANK_PROVIDER}"; then
+    candidates=(postgres redis reranker-transformers weaviate)
+    REVIEW_RERANKER_REQUIRED=1
+  fi
 
   if [[ "${INCLUDE_LANGFUSE_STACK}" == "1" ]]; then
     candidates+=(clickhouse minio langfuse langfuse-worker)
@@ -517,6 +531,8 @@ echo "weaviate_grpc_host_port=${WEAVIATE_GRPC_HOST_PORT}"
 echo "build_backend=${BUILD_BACKEND}"
 echo "build_frontend=${BUILD_FRONTEND}"
 echo "include_langfuse_stack=${INCLUDE_LANGFUSE_STACK}"
+echo "rerank_provider=${REVIEW_RERANK_PROVIDER}"
+echo "reranker_dependency_required=${REVIEW_RERANKER_REQUIRED}"
 echo "dependency_start_max_attempts=${DEPENDENCY_START_MAX_ATTEMPTS}"
 echo "run_db_bootstrap_on_start=${RUN_DB_BOOTSTRAP_ON_START}"
 echo "run_db_migrations_on_start=${RUN_DB_MIGRATIONS_ON_START}"

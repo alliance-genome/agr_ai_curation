@@ -8,10 +8,17 @@ TEST_STACK_ENV_FILE="${REPO_ROOT}/.test-stack.env"
 TEST_STACK_START_MAX_ATTEMPTS="${TEST_STACK_START_MAX_ATTEMPTS:-2}"
 TEST_STACK_START_RETRY_SLEEP_SECONDS="${TEST_STACK_START_RETRY_SLEEP_SECONDS:-3}"
 
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../lib/rerank_provider_common.sh"
+
 # Load optional local secrets and runtime vars from home env files.
 # This exports values into the current process only.
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/load-home-test-env.sh"
+
+TEST_INFRA_SERVICES=()
+TEST_RERANK_PROVIDER="none"
+TEST_RERANKER_REQUIRED=0
 
 preferred_port_if_available() {
   local env_name="$1"
@@ -60,11 +67,22 @@ test_stack_compose() {
   "${SCRIPT_DIR}/docker-test-compose.sh" "$@"
 }
 
+resolve_test_infrastructure_services() {
+  TEST_RERANK_PROVIDER="$(normalize_rerank_provider "${RERANK_PROVIDER:-none}")"
+  TEST_RERANKER_REQUIRED=0
+  TEST_INFRA_SERVICES=(postgres-test redis-test weaviate-test)
+
+  if rerank_provider_requires_local_service "${TEST_RERANK_PROVIDER}"; then
+    TEST_INFRA_SERVICES=(postgres-test reranker-transformers-test redis-test weaviate-test)
+    TEST_RERANKER_REQUIRED=1
+  fi
+}
+
 print_test_stack_diagnostics() {
   local service
   echo "Test stack diagnostics:" >&2
   test_stack_compose ps >&2 || true
-  for service in postgres-test reranker-transformers-test redis-test weaviate-test; do
+  for service in "${TEST_INFRA_SERVICES[@]}"; do
     echo "--- ${service} logs (tail) ---" >&2
     test_stack_compose logs --tail 80 "${service}" >&2 || true
   done
@@ -74,11 +92,7 @@ start_test_infrastructure() {
   local attempt
 
   for attempt in $(seq 1 "${TEST_STACK_START_MAX_ATTEMPTS}"); do
-    if test_stack_compose up -d --wait \
-      postgres-test \
-      reranker-transformers-test \
-      redis-test \
-      weaviate-test; then
+    if test_stack_compose up -d --wait "${TEST_INFRA_SERVICES[@]}"; then
       return 0
     fi
 
@@ -118,6 +132,7 @@ export WEAVIATE_PORT=${TEST_WEAVIATE_PORT_HOST}
 export TEST_WEAVIATE_GRPC_PORT_HOST=${TEST_WEAVIATE_GRPC_PORT_HOST}
 export WEAVIATE_GRPC_HOST=127.0.0.1
 export WEAVIATE_GRPC_PORT=${TEST_WEAVIATE_GRPC_PORT_HOST}
+export RERANK_PROVIDER=${TEST_RERANK_PROVIDER}
 EOF
 }
 
@@ -135,8 +150,11 @@ preferred_port_if_available TEST_WEAVIATE_PORT_HOST 18080
 preferred_port_if_available TEST_WEAVIATE_GRPC_PORT_HOST 15051
 
 TEST_DATABASE_URL_IN_STACK="postgresql://${TEST_DB_USER}:${TEST_DB_PASSWORD}@${TEST_DB_HOST}:${TEST_DB_PORT}/${TEST_DB_NAME}"
+resolve_test_infrastructure_services
 
-echo "Starting isolated test infrastructure (postgres-test + weaviate-test)..."
+echo "Starting isolated test infrastructure (${TEST_INFRA_SERVICES[*]})..."
+echo "rerank_provider=${TEST_RERANK_PROVIDER}"
+echo "reranker_dependency_required=${TEST_RERANKER_REQUIRED}"
 # Ensure deterministic infra state for schema-sensitive integration tests.
 # Recreate test containers so stale Weaviate schemas (for example legacy
 # non-vectorized DocumentChunk classes) do not persist across runs.

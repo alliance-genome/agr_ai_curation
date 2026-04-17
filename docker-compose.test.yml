@@ -11,6 +11,7 @@
 
 services:
   reranker-transformers-test:
+    profiles: ["local-reranker"]
     image: cr.weaviate.io/semitechnologies/reranker-transformers:cross-encoder-ms-marco-MiniLM-L-6-v2
     environment:
       ENABLE_CUDA: 0
@@ -59,9 +60,6 @@ services:
   # Test-specific Weaviate instance
   weaviate-test:
     image: semitechnologies/weaviate:latest
-    depends_on:
-      reranker-transformers-test:
-        condition: service_healthy
     environment:
       QUERY_DEFAULTS_LIMIT: ${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
@@ -70,6 +68,7 @@ services:
       ENABLE_MODULES: "text2vec-openai,reranker-transformers"
       OPENAI_APIKEY: ${OPENAI_API_KEY:-}
       RERANKER_INFERENCE_API: http://reranker-transformers-test:8080
+      RERANKER_WAIT_FOR_STARTUP: "false"
       CLUSTER_HOSTNAME: weaviate-test
       LOG_LEVEL: debug
       GRPC_HOST: weaviate-test
@@ -119,6 +118,8 @@ services:
       - WEAVIATE_GRPC_HOST=weaviate-test
       - WEAVIATE_GRPC_PORT=50051
       - WEAVIATE_GRPC_SECURE=false
+      - RERANK_PROVIDER=${RERANK_PROVIDER:-none}
+      - BEDROCK_RERANK_MODEL_ARN=${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -162,6 +163,8 @@ services:
       - WEAVIATE_GRPC_HOST=weaviate-test
       - WEAVIATE_GRPC_PORT=50051
       - WEAVIATE_GRPC_SECURE=false
+      - RERANK_PROVIDER=${RERANK_PROVIDER:-none}
+      - BEDROCK_RERANK_MODEL_ARN=${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -228,6 +231,8 @@ services:
       - WEAVIATE_GRPC_HOST=weaviate-test
       - WEAVIATE_GRPC_PORT=50051
       - WEAVIATE_GRPC_SECURE=false
+      - RERANK_PROVIDER=${RERANK_PROVIDER:-none}
+      - BEDROCK_RERANK_MODEL_ARN=${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -266,6 +271,8 @@ services:
       - WEAVIATE_GRPC_HOST=weaviate-test
       - WEAVIATE_GRPC_PORT=50051
       - WEAVIATE_GRPC_SECURE=false
+      - RERANK_PROVIDER=${RERANK_PROVIDER:-none}
+      - BEDROCK_RERANK_MODEL_ARN=${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}
     depends_on:
       postgres-test:
         condition: service_healthy
@@ -304,6 +311,8 @@ services:
       - WEAVIATE_GRPC_HOST=weaviate-test
       - WEAVIATE_GRPC_PORT=50051
       - WEAVIATE_GRPC_SECURE=false
+      - RERANK_PROVIDER=${RERANK_PROVIDER:-none}
+      - BEDROCK_RERANK_MODEL_ARN=${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}
     depends_on:
       postgres-test:
         condition: service_healthy

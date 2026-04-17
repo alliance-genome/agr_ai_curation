@@ -55,17 +55,33 @@ install: ## Run the standalone installer workflow
 .PHONY: dev
 dev: check-env ## Start all services (sources env from ~/.agr_ai_curation/.env)
 	@echo "$(GREEN)Starting all services...$(NC)"
-	@set -a && . "$(ENV_FILE)" && set +a && docker compose up
+	@bash -lc 'set -euo pipefail; \
+		set -a; source "$(ENV_FILE)"; set +a; \
+		source scripts/lib/rerank_provider_common.sh; \
+		compose_args=(); \
+		append_local_reranker_profile_args "$${RERANK_PROVIDER:-none}" compose_args; \
+		docker compose "$${compose_args[@]}" up'
 
 .PHONY: dev-build
 dev-build: check-env ## Rebuild and start all services (includes git SHA in frontend build)
 	@echo "$(GREEN)Rebuilding and starting all services...$(NC)"
-	@set -a && . "$(ENV_FILE)" && export VITE_GIT_SHA=$$(git rev-parse --short HEAD) && set +a && docker compose up --build
+	@bash -lc 'set -euo pipefail; \
+		set -a; source "$(ENV_FILE)"; set +a; \
+		source scripts/lib/rerank_provider_common.sh; \
+		compose_args=(); \
+		append_local_reranker_profile_args "$${RERANK_PROVIDER:-none}" compose_args; \
+		export VITE_GIT_SHA=$$(git rev-parse --short HEAD); \
+		docker compose "$${compose_args[@]}" up --build'
 
 .PHONY: dev-detached
 dev-detached: check-env ## Start all services in background (detached)
 	@echo "$(GREEN)Starting all services in background...$(NC)"
-	@set -a && . "$(ENV_FILE)" && set +a && docker compose up -d
+	@bash -lc 'set -euo pipefail; \
+		set -a; source "$(ENV_FILE)"; set +a; \
+		source scripts/lib/rerank_provider_common.sh; \
+		compose_args=(); \
+		append_local_reranker_profile_args "$${RERANK_PROVIDER:-none}" compose_args; \
+		docker compose "$${compose_args[@]}" up -d'
 
 .PHONY: down
 down: ## Stop all services
@@ -76,7 +92,12 @@ down: ## Stop all services
 restart: check-env ## Restart all services
 	@echo "$(YELLOW)Restarting all services...$(NC)"
 	@docker compose down
-	@set -a && . "$(ENV_FILE)" && set +a && docker compose up -d
+	@bash -lc 'set -euo pipefail; \
+		set -a; source "$(ENV_FILE)"; set +a; \
+		source scripts/lib/rerank_provider_common.sh; \
+		compose_args=(); \
+		append_local_reranker_profile_args "$${RERANK_PROVIDER:-none}" compose_args; \
+		docker compose "$${compose_args[@]}" up -d'
 
 # =============================================================================
 # DEVELOPMENT - Individual Services
@@ -104,9 +125,18 @@ rebuild-frontend: ## Rebuild and restart frontend (includes git SHA in build)
 	@echo "$(GREEN)Built with version from package.json, SHA: $$(git rev-parse --short HEAD)$(NC)"
 
 .PHONY: up-core
-up-core: check-env ## Start core services only (postgres, redis, weaviate) - no app
+up-core: check-env ## Start core services only (postgres, redis, weaviate, and local reranker when configured) - no app
 	@echo "$(GREEN)Starting core infrastructure...$(NC)"
-	@set -a && . "$(ENV_FILE)" && set +a && docker compose up -d postgres redis weaviate reranker-transformers
+	@bash -lc 'set -euo pipefail; \
+		set -a; source "$(ENV_FILE)"; set +a; \
+		source scripts/lib/rerank_provider_common.sh; \
+		compose_args=(); \
+		append_local_reranker_profile_args "$${RERANK_PROVIDER:-none}" compose_args; \
+		services=(postgres redis weaviate); \
+		if rerank_provider_requires_local_service "$${RERANK_PROVIDER:-none}"; then \
+			services=(postgres redis reranker-transformers weaviate); \
+		fi; \
+		docker compose "$${compose_args[@]}" up -d --wait "$${services[@]}"'
 
 .PHONY: up-app
 up-app: check-env ## Start app services only (backend, frontend) - assumes core is running
