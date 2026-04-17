@@ -119,6 +119,37 @@ require_command() {
   return 0
 }
 
+install_read_env_value() {
+  local env_file="$1"
+  local key="$2"
+
+  if [[ ! -f "$env_file" ]]; then
+    return 1
+  fi
+
+  awk -F= -v key="$key" '
+    $1 == key {
+      sub(/^[^=]*=/, "", $0)
+      print $0
+      exit
+    }
+  ' "$env_file"
+}
+
+install_normalize_rerank_provider() {
+  local provider="${1:-}"
+  provider="${provider,,}"
+
+  case "$provider" in
+    bedrock_cohere|local_transformers|none)
+      printf '%s\n' "$provider"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 require_hex_64() {
   local label="$1"
   local value="$2"

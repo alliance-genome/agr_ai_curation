@@ -42,6 +42,9 @@ required_env_keys=(
   RUN_DB_BOOTSTRAP_ON_START
   RUN_DB_MIGRATIONS_ON_START
   HEALTH_CHECK_STRICT_MODE
+  RERANK_PROVIDER
+  BEDROCK_RERANK_MODEL_ARN
+  RERANKER_URL
   LANGFUSE_DATABASE_URL
   LANGFUSE_LOCAL_DATABASE_URL
   AGR_RUNTIME_CONFIG_HOST_DIR
@@ -88,6 +91,9 @@ grep -q '^LLM_PROVIDER_STRICT_MODE=false$' "$env_template"
 grep -q '^RUN_DB_BOOTSTRAP_ON_START=true$' "$env_template"
 grep -q '^RUN_DB_MIGRATIONS_ON_START=true$' "$env_template"
 grep -q '^HEALTH_CHECK_STRICT_MODE=true$' "$env_template"
+grep -q '^RERANK_PROVIDER=bedrock_cohere$' "$env_template"
+grep -q '^BEDROCK_RERANK_MODEL_ARN=arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0$' "$env_template"
+grep -q '^RERANKER_URL=http://reranker-transformers:8080$' "$env_template"
 grep -q '^BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-backend$' "$env_template"
 grep -q '^BACKEND_IMAGE_TAG=latest$' "$env_template"
 grep -q '^FRONTEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-frontend$' "$env_template"

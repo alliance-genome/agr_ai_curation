@@ -377,6 +377,10 @@ async def lifespan(app: FastAPI):
             optional_services = get_optional_connections()
             logger.info("Required services: %s", [s.service_id for s in required_services])
             logger.info("Optional services: %s", [s.service_id for s in optional_services])
+            if any(service.service_id == "reranker" for service in required_services):
+                logger.info("Reranker startup health check is enforced by current connection requirements")
+            elif any(service.service_id == "reranker" for service in optional_services):
+                logger.info("Reranker startup health check is advisory under current connection requirements")
 
             if strict_mode and required_services:
                 logger.info("Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")

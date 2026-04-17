@@ -1,12 +1,14 @@
 """
 Pytest configuration and fixtures for backend tests.
 """
+import importlib.util
 import os
 import inspect
 import socket
 import sys
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable
 
 import asyncio
@@ -20,6 +22,25 @@ logger = logging.getLogger(__name__)
 scripts_path = Path("/app/scripts")
 if scripts_path.exists() and str(scripts_path) not in sys.path:
     sys.path.insert(0, str(scripts_path.parent))  # Add /app to path
+
+
+def _ensure_rapidfuzz_test_stub() -> None:
+    """Provide a minimal rapidfuzz stub when the dependency is unavailable."""
+    if "rapidfuzz" in sys.modules or importlib.util.find_spec("rapidfuzz") is not None:
+        return
+
+    sys.modules["rapidfuzz"] = SimpleNamespace(
+        fuzz=SimpleNamespace(
+            partial_ratio_alignment=lambda *_args, **_kwargs: SimpleNamespace(
+                dest_start=0,
+                dest_end=0,
+                score=0.0,
+            )
+        )
+    )
+
+
+_ensure_rapidfuzz_test_stub()
 
 
 def _running_in_docker() -> bool:

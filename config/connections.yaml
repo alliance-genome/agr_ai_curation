@@ -15,6 +15,10 @@
 #       - expected_status: Expected HTTP status code
 #       - headers: Optional headers for the request
 #   - required: If true, app fails to start if health check fails
+#   - required_when: Optional conditional required-ness keyed off an env var
+#       - env: Environment variable name to inspect
+#       - equals: Value that makes the service required
+#       - default: Value assumed when the env var is unset
 #   - timeout_seconds: Timeout for health check requests
 # =============================================================================
 
@@ -113,7 +117,11 @@ services:
       endpoint: "/.well-known/ready"
       method: GET
       expected_status: 204
-    required: true
+    required: false
+    required_when:
+      env: RERANK_PROVIDER
+      equals: local_transformers
+      default: bedrock_cohere
     timeout_seconds: 10
 
   # ---------------------------------------------------------------------------

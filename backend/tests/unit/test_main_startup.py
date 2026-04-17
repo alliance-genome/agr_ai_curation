@@ -104,9 +104,14 @@ class TestLifespan:
                      "summary": {"agent_count": 0},
                  },
              ) as mock_validate_agents, \
-             patch("src.lib.config.connections_loader.load_connections", return_value=[]), \
-             patch("src.lib.config.connections_loader.get_required_connections", return_value=[]), \
-             patch("src.lib.config.connections_loader.get_optional_connections", return_value=[]), \
+             patch("src.lib.config.connections_loader.load_connections", return_value=[]) as mock_load_connections, \
+             patch("src.lib.config.connections_loader.get_required_connections", return_value=[]) as mock_get_required_connections, \
+             patch("src.lib.config.connections_loader.get_optional_connections", return_value=[]) as mock_get_optional_connections, \
+             patch(
+                 "src.lib.config.connections_loader.check_required_services_healthy",
+                 new_callable=AsyncMock,
+                 return_value=(True, []),
+             ) as mock_check_required_health, \
              patch(
                  "src.lib.config.provider_validation.validate_and_cache_provider_runtime_contracts",
                  return_value={
@@ -128,7 +133,49 @@ class TestLifespan:
                 "db": mock_db,
                 "validate_schemas": mock_validate_schemas,
                 "validate_agents": mock_validate_agents,
+                "load_connections": mock_load_connections,
+                "get_required_connections": mock_get_required_connections,
+                "get_optional_connections": mock_get_optional_connections,
+                "check_required_health": mock_check_required_health,
             }
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_checks_required_service_health_in_strict_mode(self, mock_init, mock_conn_cls, mock_subsystems):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
+        reranker_service = MagicMock()
+        reranker_service.service_id = "reranker"
+        mock_subsystems["load_connections"].return_value = {"reranker": reranker_service}
+        mock_subsystems["get_required_connections"].return_value = [reranker_service]
+        mock_subsystems["get_optional_connections"].return_value = []
+
+        app = FastAPI()
+
+        async with _main_module().lifespan(app):
+            pass
+
+        mock_subsystems["check_required_health"].assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @patch("main.WeaviateConnection")
+    @patch("main.initialize_weaviate_collections")
+    async def test_skips_optional_reranker_health_in_strict_mode(self, mock_init, mock_conn_cls, mock_subsystems):
+        connection, _ = make_connection()
+        mock_conn_cls.return_value = connection
+        reranker_service = MagicMock()
+        reranker_service.service_id = "reranker"
+        mock_subsystems["load_connections"].return_value = {"reranker": reranker_service}
+        mock_subsystems["get_required_connections"].return_value = []
+        mock_subsystems["get_optional_connections"].return_value = [reranker_service]
+
+        app = FastAPI()
+
+        async with _main_module().lifespan(app):
+            pass
+
+        mock_subsystems["check_required_health"].assert_not_awaited()
 
     @pytest.mark.asyncio
     @patch("main.WeaviateConnection")

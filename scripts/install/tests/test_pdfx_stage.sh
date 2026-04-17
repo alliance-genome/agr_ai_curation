@@ -111,7 +111,7 @@ test_pdfx_setup_clones_and_generates_env() {
   output_path="$(mktemp)"
   trap 'rm -rf "$temp_home" "$stub_dir" "$output_path"' RETURN
 
-  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n\n\n'
   make_stub_tools "$stub_dir" "free"
 
   local clone_path="${temp_home}/pdfx-service"
@@ -163,7 +163,7 @@ test_pdfx_setup_handles_port_conflict() {
   output_path="$(mktemp)"
   trap 'rm -rf "$temp_home" "$stub_dir" "$output_path"' RETURN
 
-  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n\n\n'
   make_stub_tools "$stub_dir" "conflict-5000"
 
   local clone_path="${temp_home}/pdfx-port-override"
@@ -186,7 +186,7 @@ test_pdfx_setup_skip_removes_main_env_vars() {
   output_path="$(mktemp)"
   trap 'rm -rf "$temp_home" "$stub_dir" "$output_path"' RETURN
 
-  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n'
+  run_core_config "$temp_home" $'sk-openai-test\n\n\n\n\n\n'
   make_stub_tools "$stub_dir" "free"
 
   local clone_path="${temp_home}/pdfx-skip-reset"

@@ -1452,6 +1452,30 @@ class TestConnectionsLoader:
         assert "openai" in required_ids
         assert "postgres" in required_ids
 
+    def test_get_required_connections_respects_rerank_provider(self, monkeypatch):
+        """Reranker should only be required for local transformers mode."""
+        from src.lib.config.connections_loader import (
+            load_connections,
+            get_required_connections,
+        )
+
+        connections_yaml = CONFIG_PATH / "connections.yaml"
+
+        monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
+        load_connections(connections_yaml, force_reload=True)
+        required_ids = [c.service_id for c in get_required_connections()]
+        assert "reranker" in required_ids
+
+        monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+        load_connections(connections_yaml, force_reload=True)
+        required_ids = [c.service_id for c in get_required_connections()]
+        assert "reranker" not in required_ids
+
+        monkeypatch.setenv("RERANK_PROVIDER", "none")
+        load_connections(connections_yaml, force_reload=True)
+        required_ids = [c.service_id for c in get_required_connections()]
+        assert "reranker" not in required_ids
+
     def test_get_optional_connections(self):
         """Test getting only optional connections."""
         from src.lib.config.connections_loader import (
@@ -1721,6 +1745,28 @@ class TestConnectionDefinitionDataclass:
         conn = ConnectionDefinition.from_yaml("test", data)
 
         assert conn.url == "http://default-host:9999"
+
+    def test_from_yaml_with_required_when(self, monkeypatch):
+        """ConnectionDefinition.from_yaml should support conditional required services."""
+        from src.lib.config.connections_loader import ConnectionDefinition
+
+        data = {
+            "url": "http://localhost:8080",
+            "required": False,
+            "required_when": {
+                "env": "RERANK_PROVIDER",
+                "equals": "local_transformers",
+                "default": "bedrock_cohere",
+            },
+        }
+
+        monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
+        local_conn = ConnectionDefinition.from_yaml("reranker", data)
+        assert local_conn.required is True
+
+        monkeypatch.setenv("RERANK_PROVIDER", "none")
+        disabled_conn = ConnectionDefinition.from_yaml("reranker", data)
+        assert disabled_conn.required is False
 
 
 class TestHealthCheckDataclass:
