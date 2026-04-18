@@ -5,27 +5,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-assert_contains() {
-  local pattern="$1"
-  local file="$2"
-  if ! rg -n --fixed-strings "$pattern" "$file" >/dev/null 2>&1; then
-    echo "Expected to find '$pattern' in $file" >&2
-    exit 1
-  fi
-}
-
-assert_count() {
-  local expected="$1"
-  local pattern="$2"
-  local file="$3"
-  local actual
-
-  actual="$(rg -c --fixed-strings "$pattern" "$file" || true)"
-  if [[ "${actual}" != "${expected}" ]]; then
-    echo "Expected ${expected} matches for '${pattern}' in ${file}, got ${actual}" >&2
-    exit 1
-  fi
-}
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/lib/assertions.sh"
 
 make_workspace_tunnel_helpers() {
   local workspace="$1"
@@ -264,7 +245,9 @@ EOF
   assert_contains "backend_host_port=8049" "${output}"
   assert_contains "build_backend=1" "${output}"
   assert_contains "build_frontend=1" "${output}"
-  assert_contains "dependency_services=postgres,redis,reranker-transformers,weaviate" "${output}"
+  assert_contains "rerank_provider=none" "${output}"
+  assert_contains "reranker_dependency_required=0" "${output}"
+  assert_contains "dependency_services=postgres,redis,weaviate" "${output}"
   assert_contains "dependency_start_status=ready" "${output}"
   assert_contains "tunnel_env_file=${workspace}/scripts/local_db_tunnel_env.sh" "${output}"
   assert_contains "backend_health={\"status\":\"healthy\",\"services\":{\"app\":\"running\",\"curation_db\":\"connected\"}}" "${output}"
@@ -273,7 +256,8 @@ EOF
   assert_contains "review_frontend_url=http://192.168.86.44:3049/" "${output}"
   assert_contains "review_backend_url=http://192.168.86.44:8049/health" "${output}"
 
-  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis reranker-transformers weaviate" "${docker_log}"
+  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis weaviate" "${docker_log}"
+  assert_not_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis reranker-transformers weaviate" "${docker_log}"
   assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 build backend frontend" "${docker_log}"
   assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d backend frontend" "${docker_log}"
   assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --force-recreate backend" "${docker_log}"
@@ -308,6 +292,7 @@ test_review_prep_retries_dependency_start_once() {
 export OPENAI_API_KEY=test-openai
 export GROQ_API_KEY=test-groq
 export POSTGRES_PASSWORD=postgres
+export RERANK_PROVIDER=local_transformers
 EOF
 
   make_workspace_tunnel_helpers "${workspace}"
@@ -332,11 +317,14 @@ EOF
     --env-file "${env_file}" \
     > "${output}"
 
+  assert_contains "rerank_provider=local_transformers" "${output}"
+  assert_contains "reranker_dependency_required=1" "${output}"
   assert_contains "dependency_start_attempt_failed=1" "${output}"
   assert_contains "dependency_start_retry_success_attempt=2" "${output}"
   assert_contains "compose_ps_begin" "${output}"
   assert_contains "service_logs_begin=weaviate" "${output}"
-  assert_count "2" "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis reranker-transformers weaviate" "${docker_log}"
+  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 --profile local-reranker config --services" "${docker_log}"
+  assert_count "2" "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 --profile local-reranker up -d --wait postgres redis reranker-transformers weaviate" "${docker_log}"
 
   export PATH="${old_path}"
   unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
@@ -386,8 +374,8 @@ EOF
     > "${output}"
 
   assert_contains "include_langfuse_stack=1" "${output}"
-  assert_contains "dependency_services=postgres,redis,reranker-transformers,weaviate,clickhouse,minio,langfuse,langfuse-worker" "${output}"
-  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis reranker-transformers weaviate clickhouse minio langfuse langfuse-worker" "${docker_log}"
+  assert_contains "dependency_services=postgres,redis,weaviate,clickhouse,minio,langfuse,langfuse-worker" "${output}"
+  assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis weaviate clickhouse minio langfuse langfuse-worker" "${docker_log}"
 
   export PATH="${old_path}"
   unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
