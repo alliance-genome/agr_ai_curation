@@ -8,6 +8,7 @@ import type { FileInfo } from '@/components/Chat/FileDownloadCard'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
 export type TranscriptMessageRole = 'user' | 'assistant' | 'flow'
+type TranscriptFileFormat = 'csv' | 'tsv' | 'json'
 
 export interface TranscriptMessageRecord {
   id?: string
@@ -121,6 +122,23 @@ const EVIDENCE_COLOR_PALETTE = [
   },
 ] as const
 
+function assertUnreachable(value: never, context: string): never {
+  throw new Error(`Unhandled ${context}: ${String(value)}`)
+}
+
+function parseTranscriptFileFormat(format: string): TranscriptFileFormat {
+  switch (format.toLowerCase()) {
+    case 'csv':
+      return 'csv'
+    case 'tsv':
+      return 'tsv'
+    case 'json':
+      return 'json'
+    default:
+      throw new Error(`Unsupported transcript file format: ${format}`)
+  }
+}
+
 function formatEvidenceQuoteCount(count: number): string {
   return count === 1 ? '1 evidence quote' : `${count} evidence quotes`
 }
@@ -138,7 +156,7 @@ function formatStepEvidenceSummary(evidenceCount: number, previewCount: number):
 }
 
 function formatFileSize(bytes?: number): string | null {
-  if (!bytes) {
+  if (bytes == null) {
     return null
   }
 
@@ -153,24 +171,30 @@ function formatFileSize(bytes?: number): string | null {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function getFormatLabel(format: string): string {
-  const labels: Record<string, string> = {
-    csv: 'CSV',
-    tsv: 'TSV',
-    json: 'JSON',
+function getFormatLabel(format: TranscriptFileFormat): string {
+  switch (format) {
+    case 'csv':
+      return 'CSV'
+    case 'tsv':
+      return 'TSV'
+    case 'json':
+      return 'JSON'
   }
 
-  return labels[format.toLowerCase()] ?? format.toUpperCase()
+  return assertUnreachable(format, 'transcript file format')
 }
 
-function getFormatColor(format: string): string {
-  const colors: Record<string, string> = {
-    csv: '#4caf50',
-    tsv: '#2196f3',
-    json: '#ff9800',
+function getFormatColor(format: TranscriptFileFormat): string {
+  switch (format) {
+    case 'csv':
+      return '#4caf50'
+    case 'tsv':
+      return '#2196f3'
+    case 'json':
+      return '#ff9800'
   }
 
-  return colors[format.toLowerCase()] ?? '#9e9e9e'
+  return assertUnreachable(format, 'transcript file format')
 }
 
 function buildEntityData(
@@ -542,7 +566,8 @@ function TranscriptFlowStepEvidenceCard({
 }
 
 function TranscriptFileCard({ file }: TranscriptFileCardProps) {
-  const formatColor = getFormatColor(file.format)
+  const format = parseTranscriptFileFormat(file.format)
+  const formatColor = getFormatColor(format)
   const fileSize = formatFileSize(file.size_bytes)
 
   return (
@@ -603,7 +628,7 @@ function TranscriptFileCard({ file }: TranscriptFileCardProps) {
                 }}
                 variant="caption"
               >
-                {getFormatLabel(file.format)}
+                {getFormatLabel(format)}
               </Typography>
 
               {fileSize ? (
@@ -629,9 +654,10 @@ function getRoleLabel(role: TranscriptMessageRole): string {
     case 'flow':
       return 'Flow'
     case 'user':
-    default:
       return 'You'
   }
+
+  return assertUnreachable(role, 'transcript message role')
 }
 
 function getBubbleStyles(
@@ -643,30 +669,31 @@ function getBubbleStyles(
   backgroundColor: string
   borderRadius: string
 } {
-  if (role === 'user') {
-    return {
-      alignSelf: 'flex-end',
-      maxWidth: '75%',
-      backgroundColor: '#424242',
-      borderRadius: '18px 18px 4px 18px',
-    }
+  switch (role) {
+    case 'user':
+      return {
+        alignSelf: 'flex-end',
+        maxWidth: '75%',
+        backgroundColor: '#424242',
+        borderRadius: '18px 18px 4px 18px',
+      }
+    case 'flow':
+      return {
+        alignSelf: 'flex-start',
+        maxWidth: '85%',
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        borderRadius: '18px 18px 18px 4px',
+      }
+    case 'assistant':
+      return {
+        alignSelf: 'flex-start',
+        maxWidth: '85%',
+        backgroundColor: '#1565c0',
+        borderRadius: hasEvidenceCard ? '18px 18px 4px 4px' : '18px 18px 18px 4px',
+      }
   }
 
-  if (role === 'flow') {
-    return {
-      alignSelf: 'flex-start',
-      maxWidth: '85%',
-      backgroundColor: 'rgba(255, 255, 255, 0.08)',
-      borderRadius: '18px 18px 18px 4px',
-    }
-  }
-
-  return {
-    alignSelf: 'flex-start',
-    maxWidth: '85%',
-    backgroundColor: '#1565c0',
-    borderRadius: hasEvidenceCard ? '18px 18px 4px 4px' : '18px 18px 18px 4px',
-  }
+  return assertUnreachable(role, 'transcript message role')
 }
 
 export default function TranscriptMessage({ message }: TranscriptMessageProps) {

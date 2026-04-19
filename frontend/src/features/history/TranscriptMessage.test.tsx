@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { render, screen, userEvent } from '@/test/test-utils'
 import type { EvidenceRecord } from '@/features/curation/types'
@@ -88,6 +88,28 @@ describe('TranscriptMessage', () => {
     expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 
+  it('throws for unsupported stored transcript file formats', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      expect(() =>
+        renderTranscriptMessage({
+          type: 'file_download',
+          content: '',
+          fileData: {
+            file_id: 'file-2',
+            filename: 'gene-results.xml',
+            format: 'xml',
+            size_bytes: 128,
+            download_url: '/api/files/file-2/download',
+          },
+        }),
+      ).toThrow('Unsupported transcript file format: xml')
+    } finally {
+      consoleErrorSpy.mockRestore()
+    }
+  })
+
   it('renders transcript-only flow evidence rows without assistant controls', async () => {
     const user = userEvent.setup()
 
@@ -122,5 +144,20 @@ describe('TranscriptMessage', () => {
     expect(screen.getByText('p. 2 · Results')).toBeInTheDocument()
     expect(screen.getByText('“TP53 increased in the treated samples.”')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /review & curate/i })).not.toBeInTheDocument()
+  })
+
+  it('throws for unsupported transcript message roles', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    try {
+      expect(() =>
+        renderTranscriptMessage({
+          role: 'system' as TranscriptMessageRecord['role'],
+          content: 'Unexpected role payload',
+        }),
+      ).toThrow('Unhandled transcript message role: system')
+    } finally {
+      consoleErrorSpy.mockRestore()
+    }
   })
 })
