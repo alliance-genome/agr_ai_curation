@@ -11,7 +11,8 @@ still being implemented:
 4. loaded-document chat with a real OpenAI-backed answer
 5. custom-agent creation + flow creation + real flow execution over SSE
 6. batch flow validation + two-document batch execution + ZIP download
-7. best-effort cleanup and evidence JSON output
+7. optional local rerank-provider smoke across bedrock/local/none modes
+8. best-effort cleanup and evidence JSON output
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ import io
 import json
 import mimetypes
 import os
+import re
+import subprocess
 import time
 import urllib.error
 import urllib.parse
@@ -266,6 +269,7 @@ def compute_scope_limitations(args: argparse.Namespace) -> list[str]:
         ("flow", args.skip_flow),
         ("workspace", args.skip_workspace),
         ("batch", args.skip_batch),
+        ("rerank_provider_smoke", not args.include_rerank_provider_smoke),
         ("dev_mode_fallback", args.allow_dev_mode_fallback),
         ("duplicate_reuse", args.allow_duplicate_reuse),
     ):
@@ -312,6 +316,77 @@ def apply_cleanup_failures_to_evidence(evidence: Dict[str, Any]) -> None:
     if not evidence.get("error"):
         failed_steps = ", ".join(str(check.get("step", "cleanup")) for check in cleanup_failures)
         evidence["error"] = f"Cleanup failed for one or more resources: {failed_steps}"
+
+
+def resolve_repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def resolve_rerank_provider_smoke_script(path: str) -> Path:
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = resolve_repo_root() / candidate
+    return candidate.resolve()
+
+
+def extract_evidence_path_from_output(output: str) -> Optional[Path]:
+    match = re.search(r"Evidence file:\s*(?P<path>\S+)", output)
+    if not match:
+        return None
+    candidate = Path(match.group("path")).expanduser()
+    if not candidate.is_absolute():
+        candidate = resolve_repo_root() / candidate
+    return candidate.resolve()
+
+
+def run_local_rerank_provider_smoke(
+    *,
+    script_path: Path,
+    base_url: str,
+) -> Dict[str, Any]:
+    require(script_path.exists(), f"Rerank provider smoke script not found: {script_path}")
+
+    result = subprocess.run(
+        ["bash", str(script_path), base_url],
+        cwd=resolve_repo_root(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output_blob = "\n".join(
+        part for part in (result.stdout.strip(), result.stderr.strip()) if part
+    )
+    evidence_path = extract_evidence_path_from_output(output_blob)
+
+    require(
+        result.returncode == 0,
+        (
+            "Local rerank provider smoke failed "
+            f"(exit={result.returncode}). Output: {output_blob[-1500:]}"
+        ),
+    )
+    require(evidence_path is not None, f"Rerank provider smoke did not report an evidence file: {output_blob}")
+    require(evidence_path.exists(), f"Rerank provider smoke evidence file was missing: {evidence_path}")
+
+    payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+    require(
+        isinstance(payload, dict),
+        f"Rerank provider smoke evidence was not a JSON object: {evidence_path}",
+    )
+    require(
+        payload.get("overall_status") == "pass",
+        f"Rerank provider smoke reported failure: {payload}",
+    )
+
+    return {
+        "script_path": str(script_path),
+        "base_url": base_url,
+        "evidence_file": str(evidence_path),
+        "overall_status": payload.get("overall_status"),
+        "pass_count": payload.get("pass_count"),
+        "fail_count": payload.get("fail_count"),
+        "derived_checks": payload.get("derived_checks"),
+    }
 
 
 def require_pdfx_release_health(payload: Dict[str, Any], *, context: str) -> None:
@@ -1880,6 +1955,13 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "flow_summary": None,
         "workspace_summary": None,
         "batch_zip_members": None,
+        "rerank_provider_smoke": {
+            "included": args.include_rerank_provider_smoke,
+            "base_url": args.rerank_provider_smoke_base_url if args.include_rerank_provider_smoke else None,
+            "script_path": args.rerank_provider_smoke_script if args.include_rerank_provider_smoke else None,
+            "evidence_file": None,
+            "overall_status": "not_requested",
+        },
         "preflight": {},
         "document_artifacts": {},
         "expected_api_principal": {
@@ -2337,6 +2419,29 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             )
             evidence["batch_zip_members"] = zip_members
 
+        if args.include_rerank_provider_smoke:
+            print_step("Running optional local rerank provider smoke")
+            rerank_provider_smoke = run_local_rerank_provider_smoke(
+                script_path=resolve_rerank_provider_smoke_script(args.rerank_provider_smoke_script),
+                base_url=args.rerank_provider_smoke_base_url.rstrip("/"),
+            )
+            evidence["rerank_provider_smoke"] = {
+                "included": True,
+                **rerank_provider_smoke,
+            }
+            append_check(
+                checks,
+                step="rerank_provider_smoke",
+                ok=True,
+                status_code=0,
+                payload={
+                    "base_url": rerank_provider_smoke["base_url"],
+                    "evidence_file": rerank_provider_smoke["evidence_file"],
+                    "pass_count": rerank_provider_smoke["pass_count"],
+                    "fail_count": rerank_provider_smoke["fail_count"],
+                },
+            )
+
         evidence["overall_status"] = "pass"
     except Exception as exc:
         evidence["overall_status"] = "fail"
@@ -2467,6 +2572,24 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Skip the curation-workspace bootstrap stage (currently depends on flow evidence)",
     )
     parser.add_argument("--skip-batch", action="store_true", help="Skip the batch smoke stage")
+    parser.add_argument(
+        "--include-rerank-provider-smoke",
+        action="store_true",
+        help=(
+            "Run scripts/testing/rerank_provider_smoke_local.sh after the HTTP API smoke. "
+            "This is local-stack coverage and stays opt-in because it restarts the local compose backend."
+        ),
+    )
+    parser.add_argument(
+        "--rerank-provider-smoke-base-url",
+        default="http://localhost:8000",
+        help="Base URL for the local rerank provider smoke helper",
+    )
+    parser.add_argument(
+        "--rerank-provider-smoke-script",
+        default="scripts/testing/rerank_provider_smoke_local.sh",
+        help="Path to the local rerank provider smoke helper (relative to repo root by default)",
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 

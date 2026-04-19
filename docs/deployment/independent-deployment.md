@@ -178,6 +178,47 @@ The checked-in template is the manual baseline.
 When you run the installer from a Git checkout, Stage 2 rewrites those image tags to the matching published release tag or `sha-<shortsha>` for that checkout unless you pass `--image-tag`.
 Tagged releases publish a pinned `env.standalone-vX.Y.Z` companion asset so standalone installs can consume exact versioned image tags without editing the template by hand.
 
+## Rerank provider selection
+
+Standalone reranking is controlled by the same runtime sources used in local
+development:
+
+- `config/connections.yaml` decides when the `reranker` service is actually
+  required.
+- `scripts/install/lib/templates/env.standalone` is the operator-facing env
+  baseline.
+- `docker-compose.production.yml` carries the backend env wiring plus the
+  optional `local-reranker` Compose profile.
+
+The relevant env keys are:
+
+- `RERANK_PROVIDER`
+- `BEDROCK_RERANK_MODEL_ARN`
+- `RERANKER_URL`
+
+Current modes:
+
+- `RERANK_PROVIDER=bedrock_cohere`
+  This remains the standalone default because `env.standalone` already sets it.
+  Existing Bedrock-backed installs do not need to re-opt in.
+- `RERANK_PROVIDER=local_transformers`
+  Use this only when you will also run the optional `local-reranker` Compose
+  profile so the backend can reach `RERANKER_URL`.
+- `RERANK_PROVIDER=none`
+  Disables backend post-retrieval reranking and preserves retrieval order.
+
+Important behavior:
+
+- Reranking happens in the backend after retrieval. This is not a primary
+  Weaviate query-time rerank workflow.
+- The local reranker service is required only for `local_transformers`. The
+  `reranker` connection stays optional for `bedrock_cohere` and `none`.
+- `RERANKER_URL` may stay on its default internal Compose hostname unless you
+  intentionally point the backend at a different local reranker service.
+
+For operator validation steps, use
+[`docs/deployment/rerank-provider-smoke-test-matrix.md`](rerank-provider-smoke-test-matrix.md).
+
 ## Optional Alliance curation database integration
 
 `curation_db` is optional in standalone deployment and is not part of the

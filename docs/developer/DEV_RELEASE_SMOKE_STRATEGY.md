@@ -85,6 +85,15 @@ reference for why the smoke looks the way it does.
 The latest completed slice changed both infrastructure assumptions and smoke
 behavior in important ways.
 
+Historical note:
+
+1. This section captures the Bedrock-first validation slice that landed before
+   provider selection expanded to `local_transformers` and `none`.
+2. Current operator guidance for rerank provider selection now lives in
+   `docs/deployment/rerank-provider-smoke-test-matrix.md`, plus the live
+   runtime sources `config/connections.yaml`,
+   `scripts/install/lib/templates/env.standalone`, and the Compose files.
+
 ### What changed
 
 1. We stopped relying on Weaviate's built-in rerank path for live retrieval.
