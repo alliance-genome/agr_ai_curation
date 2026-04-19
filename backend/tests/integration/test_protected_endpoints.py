@@ -26,7 +26,7 @@ Implementation Notes:
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
-from fastapi import HTTPException, Security, Depends
+from fastapi import HTTPException, Security
 
 from conftest import MockCognitoUser
 

@@ -21,8 +21,6 @@ that raises 401 for all protected endpoints. This simulates missing auth token
 without trying to contact Cognito JWKS (which would cause 503 errors).
 """
 
-from typing import Optional
-
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
