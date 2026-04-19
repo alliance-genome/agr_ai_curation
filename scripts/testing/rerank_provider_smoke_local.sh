@@ -378,8 +378,24 @@ import sys
 provider = sys.argv[1]
 raw = sys.argv[2]
 payload = json.loads(raw)
-input_order = payload.get("input_order") or []
-output_order = payload.get("output_order") or []
+input_order = payload.get("input_order")
+output_order = payload.get("output_order")
+if input_order is None or output_order is None:
+    print(
+        json.dumps(
+            {
+                "test_id": f"{provider.upper()}_RERANK_BEHAVIOR",
+                "provider": provider,
+                "result": "fail",
+                "details": {
+                    "reason": "backend probe must return both input_order and output_order",
+                    "probe": payload,
+                },
+            }
+        )
+    )
+    raise SystemExit(0)
+
 top_chunk_id = payload.get("top_chunk_id")
 reordered = output_order != input_order
 
