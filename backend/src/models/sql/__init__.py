@@ -2,6 +2,8 @@
 
 from .batch import Batch, BatchDocument, BatchStatus, BatchDocumentStatus
 from .agent import Agent, Project, ProjectMember
+from .chat_message import ChatMessage
+from .chat_session import ChatSession
 from .custom_agent import CustomAgent, CustomAgentVersion
 from .curation_flow import CurationFlow
 from .database import Base, SessionLocal, engine, get_db
@@ -27,6 +29,8 @@ __all__ = [
     "Agent",
     "Project",
     "ProjectMember",
+    "ChatMessage",
+    "ChatSession",
     "CustomAgent",
     "CustomAgentVersion",
     "CurationFlow",
