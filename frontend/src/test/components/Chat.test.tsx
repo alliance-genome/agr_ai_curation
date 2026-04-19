@@ -3,11 +3,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
+import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import Chat from '../../components/Chat'
 
 const mockNavigate = vi.fn()
 const openCurationWorkspaceMock = vi.fn()
 const emitGlobalToastMock = vi.fn()
+const mockAuthState = {
+  user: { uid: 'user-1', email: 'curator@example.org' },
+}
 
 vi.mock('react-router-dom', async () => {
   const actual = await vi.importActual<typeof import('react-router-dom')>('react-router-dom')
@@ -26,10 +30,11 @@ vi.mock('@/lib/globalNotifications', () => ({
 }))
 
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({
-    user: { email: 'curator@example.org' },
-  }),
+  useAuth: () => mockAuthState,
 }))
+
+const chatStorageKeys = getChatLocalStorageKeys('user-1')
+const alternateChatStorageKeys = getChatLocalStorageKeys('user-2')
 
 const CURATION_DB_WARNING =
   'Curation database connection lost - all database queries unavailable'
@@ -176,16 +181,18 @@ function renderChat(props?: Partial<ComponentProps<typeof Chat>>) {
 
 describe('Chat persistence', () => {
   beforeEach(() => {
+    mockAuthState.user = { uid: 'user-1', email: 'curator@example.org' }
     localStorage.clear()
     Element.prototype.scrollIntoView = vi.fn()
     mockNavigate.mockReset()
     openCurationWorkspaceMock.mockReset()
     emitGlobalToastMock.mockReset()
     mockChatFetch()
+    vi.useRealTimers()
   })
 
   it('persists pending chat data on unmount and restores it on remount', async () => {
-    localStorage.setItem('chat-session-id', 'session-1')
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-1')
     const { unmount, sendMessage } = renderChat({ sessionId: 'session-1' })
 
     const input = screen.getByPlaceholderText('Type your message...')
@@ -199,7 +206,7 @@ describe('Chat persistence', () => {
     // Simulate navigating away from Home before debounce timer naturally fires.
     unmount()
 
-    const storedRaw = localStorage.getItem('chat-messages')
+    const storedRaw = localStorage.getItem(chatStorageKeys.messages)
     expect(storedRaw).not.toBeNull()
     const stored = JSON.parse(storedRaw || '{}')
     expect(stored.session_id).toBe('session-1')
@@ -218,9 +225,9 @@ describe('Chat persistence', () => {
   })
 
   it('does not delete stored messages when session id mismatches', () => {
-    localStorage.setItem('chat-session-id', 'session-2')
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-2')
     localStorage.setItem(
-      'chat-messages',
+      chatStorageKeys.messages,
       JSON.stringify({
         session_id: 'session-1',
         messages: [
@@ -235,13 +242,65 @@ describe('Chat persistence', () => {
 
     renderChat({ sessionId: 'session-2' })
 
-    expect(localStorage.getItem('chat-messages')).not.toBeNull()
+    expect(localStorage.getItem(chatStorageKeys.messages)).not.toBeNull()
+  })
+
+  it('clears the previous user chat state before a user switch can persist it into the next namespace', async () => {
+    vi.useFakeTimers()
+    localStorage.setItem(
+      chatStorageKeys.messages,
+      JSON.stringify({
+        session_id: 'session-1',
+        messages: [
+          {
+            role: 'user',
+            content: 'User one message',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      }),
+    )
+
+    const sendMessage = vi.fn().mockResolvedValue(undefined)
+    const onSessionChange = vi.fn()
+    const view = render(
+      <MemoryRouter>
+        <Chat
+          sessionId="session-1"
+          events={[]}
+          isLoading={false}
+          sendMessage={sendMessage}
+          onSessionChange={onSessionChange}
+        />
+      </MemoryRouter>,
+    )
+
+    expect(screen.getByText('User one message')).toBeInTheDocument()
+
+    mockAuthState.user = { uid: 'user-2', email: 'other@example.org' }
+    view.rerender(
+      <MemoryRouter>
+        <Chat
+          sessionId="session-2"
+          events={[]}
+          isLoading={false}
+          sendMessage={sendMessage}
+          onSessionChange={onSessionChange}
+        />
+      </MemoryRouter>,
+    )
+
+    await vi.advanceTimersByTimeAsync(600)
+
+    expect(screen.queryByText('User one message')).not.toBeInTheDocument()
+    expect(localStorage.getItem(alternateChatStorageKeys.messages)).toBeNull()
+    expect(localStorage.getItem(chatStorageKeys.messages)).not.toBeNull()
   })
 
   it('clears legacy generic review targets for restored evidence messages without curation metadata', async () => {
-    localStorage.setItem('chat-session-id', 'session-1')
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-1')
     localStorage.setItem(
-      'chat-messages',
+      chatStorageKeys.messages,
       JSON.stringify({
         session_id: 'session-1',
         messages: [

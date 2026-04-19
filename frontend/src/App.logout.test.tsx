@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProtectedRoutes } from './App';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { getChatLocalStorageKeys, legacyChatStorageKeys } from './lib/chatCacheKeys';
 
 vi.mock('./services/logger', () => ({
   logger: {
@@ -98,10 +99,13 @@ describe('ProtectedRoutes logout integration', () => {
   });
 
   it('suppresses auto-login after AuthContext logout drives the real justLoggedOut flow', async () => {
-    localStorage.setItem('chat-messages', '[]');
-    localStorage.setItem('chat-session-id', 'session-123');
-    localStorage.setItem('chat-active-document', 'doc-123');
-    localStorage.setItem('chat-user-id', 'user-123');
+    const scopedKeys = getChatLocalStorageKeys('user-123');
+
+    localStorage.setItem(legacyChatStorageKeys.messages, '[]');
+    localStorage.setItem(legacyChatStorageKeys.sessionId, 'session-123');
+    localStorage.setItem(legacyChatStorageKeys.activeDocument, 'doc-123');
+    localStorage.setItem(legacyChatStorageKeys.pdfViewerSession, '{"documentId":"doc-123"}');
+    localStorage.setItem(legacyChatStorageKeys.userId, 'user-123');
 
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -158,10 +162,15 @@ describe('ProtectedRoutes logout integration', () => {
 
     expect(sessionStorage.getItem('justLoggedOut')).toBeNull();
     expect(sessionStorage.getItem('intendedPath')).toBeNull();
-    expect(localStorage.getItem('chat-messages')).toBeNull();
-    expect(localStorage.getItem('chat-session-id')).toBeNull();
-    expect(localStorage.getItem('chat-active-document')).toBeNull();
-    expect(localStorage.getItem('chat-user-id')).toBeNull();
+    expect(localStorage.getItem(scopedKeys.messages)).toBeNull();
+    expect(localStorage.getItem(scopedKeys.sessionId)).toBeNull();
+    expect(localStorage.getItem(scopedKeys.activeDocument)).toBeNull();
+    expect(localStorage.getItem(scopedKeys.pdfViewerSession)).toBeNull();
+    expect(localStorage.getItem(legacyChatStorageKeys.messages)).toBeNull();
+    expect(localStorage.getItem(legacyChatStorageKeys.sessionId)).toBeNull();
+    expect(localStorage.getItem(legacyChatStorageKeys.activeDocument)).toBeNull();
+    expect(localStorage.getItem(legacyChatStorageKeys.pdfViewerSession)).toBeNull();
+    expect(localStorage.getItem(legacyChatStorageKeys.userId)).toBeNull();
     expect(window.location.href).toBe('https://issuer.example.org/logout');
 
     const fetchUrls = vi.mocked(global.fetch).mock.calls.map(([url]) => String(url));

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 
 import { debug } from '@/utils/env'
 import {
@@ -27,11 +27,11 @@ import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
+import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 import { useNavigate } from 'react-router-dom'
 
-// localStorage key for chat messages (shared with HomePage)
-const CHAT_MESSAGES_KEY = 'chat-messages'
 const UNSUPPORTED_CURATION_REVIEW_MESSAGE =
   "This data type is not supported for curation review yet. Review & Curate currently supports only findings from supported specialized agents in Agent Studio's PDF Extraction category."
 const MIXED_CURATION_PREP_WARNING_MESSAGE =
@@ -474,10 +474,14 @@ function shouldShowCurationDbWarning(status?: string | null): boolean {
 }
 
 // Helper to load messages from localStorage with session validation
-function loadMessagesFromStorage(sessionId?: string | null): Message[] {
+function loadMessagesFromStorage(storageKeys: ChatLocalStorageKeys | null, sessionId?: string | null): Message[] {
   try {
-    const stored = localStorage.getItem(CHAT_MESSAGES_KEY)
-    const currentSessionId = sessionId ?? localStorage.getItem(CHAT_SESSION_ID_KEY)
+    if (!storageKeys) {
+      return []
+    }
+
+    const stored = localStorage.getItem(storageKeys.messages)
+    const currentSessionId = sessionId ?? localStorage.getItem(storageKeys.sessionId)
     debug.log('[Chat] loadMessagesFromStorage called:', {
       hasStoredMessages: !!stored,
       storedLength: stored?.length || 0,
@@ -520,9 +524,6 @@ function loadMessagesFromStorage(sessionId?: string | null): Message[] {
   return []
 }
 
-// localStorage key for session ID (shared with HomePage)
-const CHAT_SESSION_ID_KEY = 'chat-session-id'
-
 function Chat({
   sessionId: propSessionId,
   onSessionChange,
@@ -531,8 +532,14 @@ function Chat({
   sendMessage
 }: ChatProps) {
   const navigate = useNavigate()
+  const { user } = useAuth()
+  const storageUserId = user?.uid ?? null
+  const chatStorageKeys = useMemo(
+    () => (storageUserId ? getChatLocalStorageKeys(storageUserId) : null),
+    [storageUserId],
+  )
   // Initialize messages from localStorage if available
-  const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage(propSessionId))
+  const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage(chatStorageKeys, propSessionId))
   const [inputMessage, setInputMessage] = useState('')
   const [progressMessage, setProgressMessage] = useState<string>('')
   const [activeDocument, setActiveDocument] = useState<ActiveDocument | null>(null)
@@ -559,9 +566,6 @@ function Chat({
   const [refineText, setRefineText] = useState<string>('')
   const [limitNotices, setLimitNotices] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
-
-  // Get authenticated user for feedback submissions
-  const { user } = useAuth()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const assistantMessageIdRef = useRef<string | null>(null)
   const progressMessageQueueRef = useRef<string[]>([])
@@ -573,20 +577,24 @@ function Chat({
   const latestSessionIdRef = useRef<string | null>(propSessionId)
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const restoredSessionRef = useRef<string | null>(null)
+  const messageStorageUserIdRef = useRef<string | null>(storageUserId)
+  const storageUserIdRef = useRef<string | null>(storageUserId)
 
   // Track ALL trace IDs from this session for feedback
   const sessionTraceIds = useRef<string[]>([])
 
   // Keep "latest" refs synchronized during render to avoid stale values during unmount cleanup.
   latestMessagesRef.current = messages
-  latestSessionIdRef.current = propSessionId
+  if (messageStorageUserIdRef.current === storageUserId) {
+    latestSessionIdRef.current = propSessionId
+  }
 
   const persistMessagesToStorage = useCallback((nextMessages: Message[], sessionId: string | null) => {
     try {
-      if (!sessionId) return
+      if (!sessionId || !chatStorageKeys || messageStorageUserIdRef.current !== storageUserId) return
 
       if (nextMessages.length === 0) {
-        localStorage.removeItem(CHAT_MESSAGES_KEY)
+        localStorage.removeItem(chatStorageKeys.messages)
         return
       }
 
@@ -598,11 +606,39 @@ function Chat({
         session_id: sessionId,
         messages: serialized
       }
-      localStorage.setItem(CHAT_MESSAGES_KEY, JSON.stringify(storageData))
+      localStorage.setItem(chatStorageKeys.messages, JSON.stringify(storageData))
     } catch (error) {
       console.warn('Failed to persist messages to localStorage:', error)
     }
-  }, [])
+  }, [chatStorageKeys, storageUserId])
+
+  const persistActiveDocumentToStorage = useCallback((document: unknown) => {
+    if (!chatStorageKeys) {
+      return
+    }
+    localStorage.setItem(chatStorageKeys.activeDocument, JSON.stringify(document))
+  }, [chatStorageKeys])
+
+  const getStoredActiveDocument = useCallback(() => {
+    if (!chatStorageKeys) {
+      return null
+    }
+    return localStorage.getItem(chatStorageKeys.activeDocument)
+  }, [chatStorageKeys])
+
+  const clearStoredActiveDocument = useCallback(() => {
+    if (!chatStorageKeys) {
+      return
+    }
+    localStorage.removeItem(chatStorageKeys.activeDocument)
+  }, [chatStorageKeys])
+
+  const clearStoredMessages = useCallback(() => {
+    if (!chatStorageKeys) {
+      return
+    }
+    localStorage.removeItem(chatStorageKeys.messages)
+  }, [chatStorageKeys])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -719,16 +755,46 @@ function Chat({
     scrollToBottom()
   }, [messages])
 
+  useEffect(() => {
+    if (storageUserIdRef.current === storageUserId) {
+      return
+    }
+
+    storageUserIdRef.current = storageUserId
+    messageStorageUserIdRef.current = null
+    restoredSessionRef.current = null
+    sessionTraceIds.current = []
+    latestMessagesRef.current = []
+    assistantMessageIdRef.current = null
+    assistantMessageRef.current = ''
+    progressMessageQueueRef.current = []
+    lastProgressUpdateRef.current = 0
+    setMessages([])
+    setActiveDocument(null)
+    setProgressMessage('')
+
+    if (progressMessageTimerRef.current) {
+      clearTimeout(progressMessageTimerRef.current)
+      progressMessageTimerRef.current = null
+    }
+
+    if (persistTimeoutRef.current) {
+      clearTimeout(persistTimeoutRef.current)
+      persistTimeoutRef.current = null
+    }
+  }, [storageUserId])
+
   // If session arrives after mount (or changes), restore persisted messages once per session.
   useEffect(() => {
     if (!propSessionId || messages.length > 0 || restoredSessionRef.current === propSessionId) return
 
     restoredSessionRef.current = propSessionId
-    const restored = loadMessagesFromStorage(propSessionId)
+    const restored = loadMessagesFromStorage(chatStorageKeys, propSessionId)
     if (restored.length > 0) {
+      messageStorageUserIdRef.current = storageUserId
       setMessages(restored)
     }
-  }, [propSessionId, messages.length])
+  }, [chatStorageKeys, propSessionId, messages.length, storageUserId])
 
   // Persist messages to localStorage whenever they change (debounced to avoid rapid writes during streaming)
   useEffect(() => {
@@ -751,6 +817,13 @@ function Chat({
       }
     }
   }, [messages, propSessionId, persistMessagesToStorage])
+
+  useEffect(() => {
+    if (messages.length === 0) {
+      messageStorageUserIdRef.current = storageUserId
+      latestSessionIdRef.current = propSessionId
+    }
+  }, [messages.length, propSessionId, storageUserId])
 
   // Flush latest chat state on unmount so navigation does not lose pending debounced updates.
   useEffect(() => {
@@ -1123,7 +1196,7 @@ function Chat({
           }
           debug.log('[Chat] fetchActiveDocument: Found active document:', payload.document.filename)
           setActiveDocument(payload.document)
-          localStorage.setItem('chat-active-document', JSON.stringify(payload.document))
+          persistActiveDocumentToStorage(payload.document)
 
           // Load the PDF in the viewer as well
           try {
@@ -1160,7 +1233,7 @@ function Chat({
           // CRITICAL: Check if the event handler has already set a document in localStorage
           // This prevents a race condition where fetchActiveDocument() completes after
           // the user loads a document from DocumentsPage
-          const localDoc = localStorage.getItem('chat-active-document')
+          const localDoc = getStoredActiveDocument()
           if (localDoc) {
             debug.log('[Chat] fetchActiveDocument: But localStorage has a document, not clearing (event handler won)')
           } else {
@@ -1169,7 +1242,7 @@ function Chat({
             }
             debug.log('[Chat] fetchActiveDocument: No document in localStorage either, clearing state')
             setActiveDocument(null)
-            localStorage.removeItem('chat-active-document')
+            clearStoredActiveDocument()
           }
         }
       } catch (error) {
@@ -1192,7 +1265,7 @@ function Chat({
         }
         debug.log('[Chat] Setting active document:', detail.document.filename || detail.document.id)
         setActiveDocument(detail.document)
-        localStorage.setItem('chat-active-document', JSON.stringify(detail.document))
+        persistActiveDocumentToStorage(detail.document)
 
         // Reset chat when loading a new document - old conversation context is no longer relevant
         debug.log('[Chat] Resetting chat for new document')
@@ -1214,7 +1287,7 @@ function Chat({
             // Clear messages from UI and localStorage
             latestMessagesRef.current = []
             setMessages([])
-            localStorage.removeItem(CHAT_MESSAGES_KEY)
+            clearStoredMessages()
             sessionTraceIds.current = []
             dispatchClearHighlights('document-change')
           }
@@ -1258,7 +1331,7 @@ function Chat({
         }
         debug.log('[Chat] Clearing active document')
         setActiveDocument(null)
-        localStorage.removeItem('chat-active-document')
+        clearStoredActiveDocument()
       }
     }
 
@@ -1270,7 +1343,13 @@ function Chat({
       window.removeEventListener('chat-document-changed', documentChangeHandler)
       clearInterval(interval)
     }
-  }, [onSessionChange])
+  }, [
+    clearStoredActiveDocument,
+    clearStoredMessages,
+    getStoredActiveDocument,
+    onSessionChange,
+    persistActiveDocumentToStorage,
+  ])
 
   const handleCopyMessage = (text: string) => {
     copyText(text).then(() => {
@@ -1507,7 +1586,7 @@ function Chat({
         // Clear messages from UI and localStorage
         latestMessagesRef.current = []
         setMessages([])
-        localStorage.removeItem(CHAT_MESSAGES_KEY)
+        clearStoredMessages()
         sessionTraceIds.current = [] // Clear accumulated trace IDs for new session
         dispatchClearHighlights('user-action')
         // Update conversation status
@@ -1548,7 +1627,7 @@ function Chat({
 
         // Clear from local state
         setActiveDocument(null)
-        localStorage.removeItem('chat-active-document')
+        clearStoredActiveDocument()
 
         // Dispatch event to notify other components (like PDF viewer)
         window.dispatchEvent(

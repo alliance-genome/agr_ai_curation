@@ -48,9 +48,9 @@ import {
   type PdfEvidenceFuzzyMatchResult,
   type PdfEvidenceFuzzyMatchStrategy,
 } from '@/features/curation/services/pdfEvidenceMatcherService'
+import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 
 const VIEWER_BASE_PATH = '/pdfjs/web/viewer.html'
-const SESSION_STORAGE_KEY = 'pdf-viewer-session'
 const SETTINGS_STORAGE_KEY = 'pdf-viewer-settings'
 const PDFJS_FIND_STATE_FOUND = 0
 const PDFJS_FIND_STATE_NOT_FOUND = 1
@@ -196,6 +196,7 @@ interface PdfEvidencePageTextCorpusCache {
 
 export interface PdfViewerProps {
   activeDocumentOwnerToken?: string
+  storageUserId?: string | null
   pendingNavigation?: EvidenceNavigationCommand | null
   onNavigationComplete?: () => void
   onNavigationStateChange?: (result: PdfViewerNavigationResult | null) => void
@@ -2889,14 +2890,18 @@ const loadStoredSettings = (): HighlightSettings => {
   }
 }
 
-const persistSession = (doc: ViewerDocument, state: ViewerState) => {
+const persistSession = (storageKey: string | null, doc: ViewerDocument, state: ViewerState) => {
+  if (!storageKey) {
+    return
+  }
+
   const session: ViewerSession = {
     ...doc,
     ...state,
     lastInteraction: new Date().toISOString(),
   }
   try {
-    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session))
+    localStorage.setItem(storageKey, JSON.stringify(session))
   } catch (error) {
     console.warn('Unable to persist viewer session', error)
   }
@@ -2939,6 +2944,7 @@ const getTextLayers = (iframeDoc: Document, specificLayer?: HTMLElement): HTMLEl
 
 export function PdfViewer({
   activeDocumentOwnerToken,
+  storageUserId = null,
   pendingNavigation = null,
   onNavigationComplete,
   onNavigationStateChange,
@@ -2988,10 +2994,16 @@ export function PdfViewer({
   const [eventPendingNavigation, setEventPendingNavigation] =
     useState<EvidenceNavigationCommand | null>(null)
   const effectivePendingNavigation = pendingNavigation ?? eventPendingNavigation
+  const viewerSessionStorageKey = useMemo(
+    () => (storageUserId ? getChatLocalStorageKeys(storageUserId).pdfViewerSession : null),
+    [storageUserId],
+  )
   const evidencePageTextCacheKey = activeDocument
     ? `${activeDocument.documentId}:${activeDocument.loadedAt}`
     : null
   const activeDocumentOwnerRef = useRef(activeDocumentOwnerToken)
+  const viewerSessionStorageUserIdRef = useRef<string | null>(storageUserId)
+  const storageUserIdRef = useRef<string | null>(storageUserId)
 
   const commitNavigationResult = useCallback((result: PdfViewerNavigationResult | null) => {
     lastPdfEvidenceNavigationResult = result
@@ -3001,6 +3013,14 @@ export function PdfViewer({
     setNavigationResult(result)
     onNavigationStateChange?.(result)
   }, [onNavigationStateChange])
+
+  const persistViewerSession = useCallback((document: ViewerDocument, state: ViewerState) => {
+    if (viewerSessionStorageUserIdRef.current !== storageUserId) {
+      return
+    }
+
+    persistSession(viewerSessionStorageKey, document, state)
+  }, [storageUserId, viewerSessionStorageKey])
 
   const resetViewerToIdle = useCallback(() => {
     handledNavigationKeyRef.current = null
@@ -3016,8 +3036,10 @@ export function PdfViewer({
     setHighlightTerms([])
     setEvidenceHighlight(null)
     commitNavigationResult(null)
-    localStorage.removeItem(SESSION_STORAGE_KEY)
-  }, [commitNavigationResult])
+    if (viewerSessionStorageKey) {
+      localStorage.removeItem(viewerSessionStorageKey)
+    }
+  }, [commitNavigationResult, viewerSessionStorageKey])
 
   /**
    * Signal that document loading is complete (whether success or failure).
@@ -3835,9 +3857,9 @@ export function PdfViewer({
         ...updates,
         lastInteraction: new Date().toISOString(),
       }
-      persistSession(activeDocument, viewerStateRef.current)
+      persistViewerSession(activeDocument, viewerStateRef.current)
     },
-    [activeDocument],
+    [activeDocument, persistViewerSession],
   )
 
   const attachPdfEventListeners = useCallback(
@@ -4032,12 +4054,13 @@ export function PdfViewer({
       lastHighlightMs: null,
       slowHighlight: false,
     }))
+    viewerSessionStorageUserIdRef.current = storageUserId
     setActiveDocument(document)
     setEvidenceHighlight(null)
     commitNavigationResult(null)
     setOverlayRenderKey((prev) => prev + 1)
-    persistSession(document, viewerStateRef.current)
-  }, [commitNavigationResult])
+    persistViewerSession(document, viewerStateRef.current)
+  }, [commitNavigationResult, persistViewerSession, storageUserId])
 
   useEffect(() => {
     const storedSettings = loadStoredSettings()
@@ -4060,6 +4083,34 @@ export function PdfViewer({
     // not wipe the live PDF.js session on their own.
     activeDocumentOwnerRef.current = activeDocumentOwnerToken
   }, [activeDocumentOwnerToken])
+
+  useEffect(() => {
+    if (storageUserIdRef.current === storageUserId) {
+      return
+    }
+
+    storageUserIdRef.current = storageUserId
+    viewerSessionStorageUserIdRef.current = null
+    handledNavigationKeyRef.current = null
+    navigationRequestIdRef.current += 1
+    viewerStateRef.current = {
+      ...DEFAULT_STATE,
+      lastInteraction: new Date().toISOString(),
+    }
+    highlightTermsRef.current = []
+    setHighlightTerms([])
+    setActiveDocument(null)
+    setStatus('idle')
+    setError(null)
+    setTelemetry({
+      lastLoadMs: null,
+      lastHighlightMs: null,
+      slowLoad: false,
+      slowHighlight: false,
+    })
+    setEvidenceHighlight(null)
+    commitNavigationResult(null)
+  }, [commitNavigationResult, storageUserId])
 
   useEffect(() => {
     const unregisterDocument = onPDFDocumentChanged((event: PDFViewerDocumentChangedEvent) => {
@@ -4253,12 +4304,14 @@ export function PdfViewer({
       setDragActive(false)
       setDropError(null)
       debug.log('🔍 [PDF VIEWER DEBUG] Active document exists, persisting session:', activeDocument.documentId)
-      persistSession(activeDocument, viewerStateRef.current)
+      persistViewerSession(activeDocument, viewerStateRef.current)
     } else {
       debug.log('🔍 [PDF VIEWER DEBUG] No active document, resetting to idle')
       handledNavigationKeyRef.current = null
       navigationRequestIdRef.current += 1
-      localStorage.removeItem(SESSION_STORAGE_KEY)
+      if (viewerSessionStorageKey && viewerSessionStorageUserIdRef.current === storageUserId) {
+        localStorage.removeItem(viewerSessionStorageKey)
+      }
       setStatus('idle')
       setError(null)
       setTelemetry({
@@ -4270,7 +4323,13 @@ export function PdfViewer({
       setEvidenceHighlight(null)
       commitNavigationResult(null)
     }
-  }, [activeDocument?.documentId, commitNavigationResult])
+  }, [activeDocument?.documentId, commitNavigationResult, persistViewerSession, storageUserId, viewerSessionStorageKey])
+
+  useEffect(() => {
+    if (!activeDocument) {
+      viewerSessionStorageUserIdRef.current = storageUserId
+    }
+  }, [activeDocument, storageUserId])
 
   useEffect(() => {
     if (status === 'ready' && highlightTermsRef.current.length) {

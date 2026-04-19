@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 
+import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import {
   HOME_PDF_VIEWER_OWNER,
   buildCurationPDFViewerOwner,
@@ -22,7 +23,25 @@ function OwnerHarness() {
   )
 }
 
+function StorageUserHarness() {
+  const [storageUserId, setStorageUserId] = useState('user-1')
+
+  return (
+    <>
+      <button onClick={() => setStorageUserId('user-2')} type="button">
+        Switch storage user
+      </button>
+      <PdfViewer storageUserId={storageUserId} />
+    </>
+  )
+}
+
 describe('PdfViewer document ownership', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    sessionStorage.clear()
+  })
+
   it('ignores document change events owned by a different route host', async () => {
     const curationOwnerToken = buildCurationPDFViewerOwner('session-1')
 
@@ -97,5 +116,35 @@ describe('PdfViewer document ownership', () => {
     await waitFor(() => {
       expect(screen.getByText('curation.pdf')).toBeInTheDocument()
     })
+  })
+
+  it('clears the live document on storage user switch without leaking it into the next namespace', async () => {
+    const userOneKeys = getChatLocalStorageKeys('user-1')
+    const userTwoKeys = getChatLocalStorageKeys('user-2')
+
+    render(<StorageUserHarness />)
+
+    dispatchPDFDocumentChanged(
+      'doc-home',
+      '/fixtures/home.pdf',
+      'home.pdf',
+      12,
+    )
+
+    expect(await screen.findByText('home.pdf')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(localStorage.getItem(userOneKeys.pdfViewerSession)).toContain('"documentId":"doc-home"')
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Switch storage user' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('home.pdf')).not.toBeInTheDocument()
+    })
+
+    expect(localStorage.getItem(userTwoKeys.pdfViewerSession)).toBeNull()
+    expect(localStorage.getItem(userOneKeys.pdfViewerSession)).toContain('"documentId":"doc-home"')
+    expect(localStorage.getItem('[object Object]')).toBeNull()
   })
 })

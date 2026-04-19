@@ -7,6 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import theme from '@/theme'
 import PersistentPdfWorkspaceLayout from './PersistentPdfWorkspaceLayout'
 
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: { uid: 'user-1' },
+  }),
+}))
+
 const viewerLifecycle = {
   mounts: 0,
   unmounts: 0,
