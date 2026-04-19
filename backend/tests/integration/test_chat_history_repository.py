@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete
 
 from src.lib.chat_history_repository import ChatHistoryRepository
 from src.models.sql.chat_message import ChatMessage
+from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.chat_session import ChatSession
 
 
 USER_A = "chat-repo-user-a"
 USER_B = "chat-repo-user-b"
 SESSION_PREFIX = "chat-repo-test-"
+DOCUMENT_PREFIX = "chat-repo-doc-"
 
 
 def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
@@ -23,6 +26,9 @@ def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
 
 @pytest.fixture
 def db_session(test_db):
+    test_db.execute(
+        delete(PDFDocument).where(PDFDocument.filename.like(f"{DOCUMENT_PREFIX}%"))
+    )
     test_db.execute(
         delete(ChatMessage).where(ChatMessage.session_id.like(f"{SESSION_PREFIX}%"))
     )
@@ -34,12 +40,29 @@ def db_session(test_db):
     yield test_db
 
     test_db.execute(
+        delete(PDFDocument).where(PDFDocument.filename.like(f"{DOCUMENT_PREFIX}%"))
+    )
+    test_db.execute(
         delete(ChatMessage).where(ChatMessage.session_id.like(f"{SESSION_PREFIX}%"))
     )
     test_db.execute(
         delete(ChatSession).where(ChatSession.session_id.like(f"{SESSION_PREFIX}%"))
     )
     test_db.commit()
+
+
+def _create_document(db_session, *, document_id, suffix: str) -> None:
+    db_session.add(
+        PDFDocument(
+            id=document_id,
+            filename=f"{DOCUMENT_PREFIX}{suffix}.pdf",
+            file_path=f"/tmp/{DOCUMENT_PREFIX}{suffix}.pdf",
+            file_hash=f"{suffix:0>64}"[:64],
+            file_size=1024,
+            page_count=2,
+        )
+    )
+    db_session.flush()
 
 
 def test_list_and_search_are_scoped_to_the_authenticated_user(db_session):
@@ -159,6 +182,69 @@ def test_list_sessions_uses_recent_activity_keyset_pagination(db_session):
         f"{SESSION_PREFIX}oldest"
     ]
     assert second_page.next_cursor is None
+
+
+def test_count_and_document_filters_respect_user_scope(db_session):
+    repository = ChatHistoryRepository(db_session)
+    document_a = uuid4()
+    document_b = uuid4()
+    _create_document(db_session, document_id=document_a, suffix="doc-a")
+    _create_document(db_session, document_id=document_b, suffix="doc-b")
+
+    repository.create_session(
+        session_id=f"{SESSION_PREFIX}doc-a-1",
+        user_auth_sub=USER_A,
+        title="Alpha doc session",
+        active_document_id=document_a,
+        created_at=_ts(9, 0),
+    )
+    repository.create_session(
+        session_id=f"{SESSION_PREFIX}doc-a-2",
+        user_auth_sub=USER_A,
+        title="Second alpha doc session",
+        active_document_id=document_a,
+        created_at=_ts(9, 30),
+    )
+    repository.create_session(
+        session_id=f"{SESSION_PREFIX}doc-b-1",
+        user_auth_sub=USER_A,
+        title="Beta doc session",
+        active_document_id=document_b,
+        created_at=_ts(10, 0),
+    )
+    repository.create_session(
+        session_id=f"{SESSION_PREFIX}other-user-doc-a",
+        user_auth_sub=USER_B,
+        title="Hidden alpha doc session",
+        active_document_id=document_a,
+        created_at=_ts(10, 30),
+    )
+    db_session.commit()
+
+    filtered = repository.list_sessions(
+        user_auth_sub=USER_A,
+        active_document_id=document_a,
+    )
+    assert [item.session_id for item in filtered.items] == [
+        f"{SESSION_PREFIX}doc-a-2",
+        f"{SESSION_PREFIX}doc-a-1",
+    ]
+    assert repository.count_sessions(user_auth_sub=USER_A) == 3
+    assert (
+        repository.count_sessions(
+            user_auth_sub=USER_A,
+            active_document_id=document_a,
+        )
+        == 2
+    )
+    assert (
+        repository.count_sessions(
+            user_auth_sub=USER_A,
+            query="alpha",
+            active_document_id=document_a,
+        )
+        == 2
+    )
 
 
 def test_get_session_detail_paginates_messages_in_chronological_order(db_session):

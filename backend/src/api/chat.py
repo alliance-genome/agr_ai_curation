@@ -9,20 +9,30 @@ Architecture:
 - Specialists: PDF, Disease Ontology, Gene Curation, Chemical Ontology
 """
 
+import base64
+import binascii
 import json
 import logging
-import uuid
 import asyncio
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from .auth import get_auth_dependency
+from ..lib.chat_history_repository import (
+    ChatHistoryRepository,
+    ChatMessageCursor,
+    ChatMessageRecord,
+    ChatSessionCursor,
+    ChatSessionRecord,
+)
 from ..lib.chat_state import document_state
 from ..lib.curation_workspace import (
     ExtractionEnvelopeCandidate,
@@ -30,8 +40,7 @@ from ..lib.curation_workspace import (
     persist_extraction_results,
 )
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
-from ..lib.weaviate_client.documents import get_document
-from ..lib.conversation_manager import conversation_manager, SessionAccessError
+from ..lib.conversation_manager import conversation_manager
 from ..lib.openai_agents import run_agent_streamed
 from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
 from ..lib.openai_agents.evidence_summary import (
@@ -39,7 +48,8 @@ from ..lib.openai_agents.evidence_summary import (
     normalize_evidence_records,
 )
 from ..lib.flows.executor import execute_flow
-from ..models.sql import get_db, CurationFlow
+from ..lib.weaviate_client.documents import get_document
+from ..models.sql import CurationFlow, get_db
 from ..schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
     CurationExtractionSourceKind,
@@ -494,9 +504,86 @@ class ChatResponse(BaseModel):
 
 
 class SessionResponse(BaseModel):
-    """Response model for session creation."""
+    """Response model for durable session creation."""
     session_id: str
-    created_at: str
+    created_at: datetime
+    updated_at: datetime
+    title: Optional[str] = None
+    active_document_id: Optional[str] = None
+    active_document: Optional[ActiveDocument] = None
+
+
+class ChatSessionSummaryResponse(BaseModel):
+    """Compact session payload for history browsing and mutations."""
+
+    session_id: str
+    title: Optional[str] = None
+    active_document_id: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+    last_message_at: Optional[datetime] = None
+    recent_activity_at: datetime
+
+
+class ChatSessionListResponse(BaseModel):
+    """Paginated durable history response."""
+
+    total_sessions: int
+    limit: int
+    query: Optional[str] = None
+    document_id: Optional[str] = None
+    next_cursor: Optional[str] = None
+    sessions: List[ChatSessionSummaryResponse]
+
+
+class ChatSessionMessageResponse(BaseModel):
+    """Transcript row returned by durable session detail responses."""
+
+    message_id: str
+    session_id: str
+    turn_id: Optional[str] = None
+    role: str
+    message_type: str
+    content: str
+    payload_json: Optional[Dict[str, Any] | List[Any]] = None
+    trace_id: Optional[str] = None
+    created_at: datetime
+
+
+class ChatSessionDetailResponse(BaseModel):
+    """Durable session detail response for resume flows."""
+
+    session: ChatSessionSummaryResponse
+    active_document: Optional[ActiveDocument] = None
+    messages: List[ChatSessionMessageResponse]
+    message_limit: int
+    next_message_cursor: Optional[str] = None
+
+
+class RenameSessionRequest(BaseModel):
+    """Rename payload for one durable chat session."""
+
+    title: str = Field(..., max_length=255)
+
+
+class RenameSessionResponse(BaseModel):
+    """Response payload for one renamed durable session."""
+
+    session: ChatSessionSummaryResponse
+
+
+class BulkDeleteSessionsRequest(BaseModel):
+    """Bulk soft-delete payload for durable chat sessions."""
+
+    session_ids: List[str] = Field(..., min_length=1, max_length=100)
+
+
+class BulkDeleteSessionsResponse(BaseModel):
+    """Bulk soft-delete outcome for durable chat sessions."""
+
+    requested_count: int
+    deleted_count: int
+    deleted_session_ids: List[str]
 
 
 class ConversationStatusResponse(BaseModel):
@@ -513,23 +600,6 @@ class ConversationResetResponse(BaseModel):
     message: str
     memory_stats: Optional[Dict[str, Any]]
     session_id: Optional[str] = None
-
-
-class SessionHistoryResponse(BaseModel):
-    """Response model for session history."""
-    session_id: str
-    exchange_count: int
-    max_exchanges: int
-    history: List[Dict[str, Any]]
-
-
-class AllSessionsStatsResponse(BaseModel):
-    """Response model for all sessions statistics."""
-    total_sessions: int
-    max_sessions: int
-    history_enabled: bool
-    max_exchanges_per_session: int
-    sessions: List[str]
 
 
 class ChatConfigResponse(BaseModel):
@@ -557,6 +627,241 @@ def _build_active_document(document_payload: Dict[str, Any]) -> ActiveDocument:
         vector_count=document_payload.get("vector_count") or document_payload.get("vectorCount"),
         metadata=document_payload.get("metadata") if isinstance(document_payload.get("metadata"), dict) else None,
     )
+
+
+def _require_user_sub(user: Dict[str, Any]) -> str:
+    """Return the authenticated user subject or raise 401."""
+
+    user_id = str(user.get("sub") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    return user_id
+
+
+def _get_chat_history_repository(db: Session) -> ChatHistoryRepository:
+    """Construct the durable chat history repository for one request."""
+
+    return ChatHistoryRepository(db)
+
+
+def _active_document_uuid_from_state(user_id: str) -> UUID | None:
+    """Return the currently loaded document UUID for the authenticated user."""
+
+    active_document = document_state.get_document(user_id)
+    if not isinstance(active_document, dict):
+        return None
+
+    raw_document_id = str(active_document.get("id") or "").strip()
+    if not raw_document_id:
+        return None
+
+    try:
+        return UUID(raw_document_id)
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid active document id while creating durable chat session",
+            extra={"user_id": user_id, "document_id": raw_document_id},
+        )
+        return None
+
+
+def _parse_document_filter(document_id: Optional[str]) -> UUID | None:
+    """Parse an optional document filter into a UUID or raise 400."""
+
+    if document_id is None:
+        return None
+
+    normalized_document_id = document_id.strip()
+    if not normalized_document_id:
+        raise HTTPException(status_code=400, detail="document_id cannot be blank")
+
+    try:
+        return UUID(normalized_document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="document_id must be a valid UUID") from exc
+
+
+def _encode_cursor(payload: Dict[str, str]) -> str:
+    """Encode a pagination cursor into a URL-safe opaque token."""
+
+    raw_payload = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    return base64.urlsafe_b64encode(raw_payload).decode("ascii").rstrip("=")
+
+
+def _decode_cursor(cursor: Optional[str], *, kind: str) -> Dict[str, str] | None:
+    """Decode a pagination cursor or raise 400 when malformed."""
+
+    if cursor is None:
+        return None
+
+    normalized_cursor = cursor.strip()
+    if not normalized_cursor:
+        raise HTTPException(status_code=400, detail=f"{kind} cursor cannot be blank")
+
+    padding = "=" * (-len(normalized_cursor) % 4)
+    try:
+        decoded_bytes = base64.urlsafe_b64decode(f"{normalized_cursor}{padding}")
+        payload = json.loads(decoded_bytes.decode("utf-8"))
+    except (ValueError, binascii.Error) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid {kind} cursor") from exc
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail=f"Invalid {kind} cursor")
+    return {str(key): str(value) for key, value in payload.items()}
+
+
+def _decode_session_cursor(cursor: Optional[str]) -> ChatSessionCursor | None:
+    """Decode an opaque history cursor into the repository representation."""
+
+    payload = _decode_cursor(cursor, kind="session")
+    if payload is None:
+        return None
+
+    session_id = payload.get("session_id", "").strip()
+    recent_activity_at = payload.get("recent_activity_at", "").strip()
+    if not session_id or not recent_activity_at:
+        raise HTTPException(status_code=400, detail="Invalid session cursor")
+
+    try:
+        return ChatSessionCursor(
+            session_id=session_id,
+            recent_activity_at=datetime.fromisoformat(recent_activity_at),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid session cursor") from exc
+
+
+def _encode_session_cursor(cursor: ChatSessionCursor | None) -> str | None:
+    """Encode one repository session cursor for API responses."""
+
+    if cursor is None:
+        return None
+
+    return _encode_cursor(
+        {
+            "recent_activity_at": cursor.recent_activity_at.isoformat(),
+            "session_id": cursor.session_id,
+        }
+    )
+
+
+def _decode_message_cursor(cursor: Optional[str]) -> ChatMessageCursor | None:
+    """Decode an opaque message cursor into the repository representation."""
+
+    payload = _decode_cursor(cursor, kind="message")
+    if payload is None:
+        return None
+
+    message_id = payload.get("message_id", "").strip()
+    created_at = payload.get("created_at", "").strip()
+    if not message_id or not created_at:
+        raise HTTPException(status_code=400, detail="Invalid message cursor")
+
+    try:
+        return ChatMessageCursor(
+            created_at=datetime.fromisoformat(created_at),
+            message_id=UUID(message_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid message cursor") from exc
+
+
+def _encode_message_cursor(cursor: ChatMessageCursor | None) -> str | None:
+    """Encode one repository message cursor for API responses."""
+
+    if cursor is None:
+        return None
+
+    return _encode_cursor(
+        {
+            "created_at": cursor.created_at.isoformat(),
+            "message_id": str(cursor.message_id),
+        }
+    )
+
+
+def _serialize_session(record: ChatSessionRecord) -> ChatSessionSummaryResponse:
+    """Convert a repository session record into the API summary payload."""
+
+    return ChatSessionSummaryResponse(
+        session_id=record.session_id,
+        title=record.title,
+        active_document_id=str(record.active_document_id) if record.active_document_id else None,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        last_message_at=record.last_message_at,
+        recent_activity_at=record.recent_activity_at,
+    )
+
+
+def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
+    """Convert a repository message row into the API detail payload."""
+
+    payload_json: Dict[str, Any] | List[Any] | None = None
+    if isinstance(record.payload_json, dict):
+        payload_json = dict(record.payload_json)
+    elif isinstance(record.payload_json, list):
+        payload_json = list(record.payload_json)
+
+    return ChatSessionMessageResponse(
+        message_id=str(record.message_id),
+        session_id=record.session_id,
+        turn_id=record.turn_id,
+        role=record.role,
+        message_type=record.message_type,
+        content=record.content,
+        payload_json=payload_json,
+        trace_id=record.trace_id,
+        created_at=record.created_at,
+    )
+
+
+async def _load_session_active_document(
+    *,
+    user_id: str,
+    active_document_id: UUID | None,
+) -> ActiveDocument | None:
+    """Best-effort hydrate active document metadata for durable session detail."""
+
+    if active_document_id is None:
+        return None
+
+    try:
+        document_detail = await get_document(user_id, str(active_document_id))
+    except HTTPException as exc:
+        if exc.status_code in {403, 404}:
+            logger.warning(
+                "Active document %s is no longer available for chat session resume",
+                active_document_id,
+                extra={"user_id": user_id, "document_id": str(active_document_id)},
+            )
+            return None
+        logger.warning(
+            "Document lookup failed while hydrating chat session %s",
+            active_document_id,
+            extra={"user_id": user_id, "document_id": str(active_document_id)},
+            exc_info=True,
+        )
+        return None
+    except Exception:
+        logger.warning(
+            "Unexpected document lookup failure while hydrating chat session resume",
+            extra={"user_id": user_id, "document_id": str(active_document_id)},
+            exc_info=True,
+        )
+        return None
+
+    document_payload = document_detail.get("document")
+    if not isinstance(document_payload, dict):
+        return None
+    return _build_active_document(document_payload)
+
+
+def _rollback_and_raise(db: Session, *, status_code: int, detail: str, exc: Exception) -> None:
+    """Rollback the current transaction and raise an HTTP exception."""
+
+    db.rollback()
+    raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 # Document Management Endpoints
@@ -649,19 +954,55 @@ async def clear_loaded_document(user: Dict[str, Any] = get_auth_dependency()) ->
 # Session Management Endpoints
 
 @router.post("/chat/session", response_model=SessionResponse)
-async def create_session(user: Dict[str, Any] = get_auth_dependency()):
-    """Create a new chat session with a unique UUID."""
-    from datetime import datetime
+async def create_session(
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Create and persist one durable chat session for the authenticated user."""
 
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
     session_id = str(uuid.uuid4())
-    created_at = datetime.now().isoformat()
+    active_document = document_state.get_document(user_id)
+
+    try:
+        session = repository.create_session(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            active_document_id=_active_document_uuid_from_state(user_id),
+        )
+        db.commit()
+    except Exception as exc:
+        logger.error(
+            "Failed to create durable chat session %s",
+            session_id,
+            extra={"session_id": session_id, "user_id": user_id},
+            exc_info=True,
+        )
+        _rollback_and_raise(
+            db,
+            status_code=500,
+            detail="Failed to create chat session",
+            exc=exc,
+        )
 
     logger.info(
-        "Created new session: %s",
+        "Created durable chat session: %s",
         session_id,
-        extra={"session_id": session_id, "user_id": user.get("sub")},
+        extra={"session_id": session_id, "user_id": user_id},
     )
-    return SessionResponse(session_id=session_id, created_at=created_at)
+    return SessionResponse(
+        session_id=session.session_id,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        title=session.title,
+        active_document_id=str(session.active_document_id) if session.active_document_id else None,
+        active_document=(
+            _build_active_document(active_document)
+            if isinstance(active_document, dict) and active_document.get("id")
+            else None
+        ),
+    )
 
 
 # Chat Endpoints (using OpenAI Agents SDK)
@@ -1467,53 +1808,230 @@ async def reset_conversation(user: Dict[str, Any] = get_auth_dependency()) -> Co
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/chat/history/{session_id}", response_model=SessionHistoryResponse)
-async def get_session_history(session_id: str, user: Dict[str, Any] = get_auth_dependency()):
-    """Get conversation history for a session owned by the authenticated user."""
-    user_id = user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User identifier not found in token")
+@router.get("/chat/history/{session_id}", response_model=ChatSessionDetailResponse)
+async def get_session_history(
+    session_id: str,
+    message_limit: int = Query(100, ge=1, le=200),
+    message_cursor: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Return one durable chat session plus one page of persisted transcript rows."""
+
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
+
+    detail = repository.get_session_detail(
+        session_id=session_id,
+        user_auth_sub=user_id,
+        message_limit=message_limit,
+        message_cursor=_decode_message_cursor(message_cursor),
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="Chat session not found")
+
+    active_document = await _load_session_active_document(
+        user_id=user_id,
+        active_document_id=detail.session.active_document_id,
+    )
+    return ChatSessionDetailResponse(
+        session=_serialize_session(detail.session),
+        active_document=active_document,
+        messages=[_serialize_message(message) for message in detail.messages],
+        message_limit=message_limit,
+        next_message_cursor=_encode_message_cursor(detail.next_message_cursor),
+    )
+
+
+@router.get("/chat/history", response_model=ChatSessionListResponse)
+async def get_all_sessions_stats(
+    limit: int = Query(20, ge=1, le=100),
+    cursor: Optional[str] = Query(None),
+    query: Optional[str] = Query(None),
+    document_id: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Browse or search durable chat sessions visible to the authenticated user."""
+
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
+    normalized_query = query.strip() if query is not None else None
+    if query is not None and not normalized_query:
+        raise HTTPException(status_code=400, detail="query cannot be blank")
+
+    active_document_id = _parse_document_filter(document_id)
+    decoded_cursor = _decode_session_cursor(cursor)
 
     try:
-        stats = conversation_manager.get_session_stats(user_id, session_id)
-        return SessionHistoryResponse(**stats)
-    except SessionAccessError as e:
-        logger.warning(
-            "Session access denied: %s",
-            e,
-            extra={"session_id": session_id, "user_id": user_id},
-        )
-        raise HTTPException(status_code=403, detail="Access denied: session belongs to another user")
+        if normalized_query:
+            page = repository.search_sessions(
+                user_auth_sub=user_id,
+                query=normalized_query,
+                limit=limit,
+                cursor=decoded_cursor,
+                active_document_id=active_document_id,
+            )
+            total_sessions = repository.count_sessions(
+                user_auth_sub=user_id,
+                query=normalized_query,
+                active_document_id=active_document_id,
+            )
+        else:
+            page = repository.list_sessions(
+                user_auth_sub=user_id,
+                limit=limit,
+                cursor=decoded_cursor,
+                active_document_id=active_document_id,
+            )
+            total_sessions = repository.count_sessions(
+                user_auth_sub=user_id,
+                active_document_id=active_document_id,
+            )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return ChatSessionListResponse(
+        total_sessions=total_sessions,
+        limit=limit,
+        query=normalized_query,
+        document_id=str(active_document_id) if active_document_id else None,
+        next_cursor=_encode_session_cursor(page.next_cursor),
+        sessions=[_serialize_session(session) for session in page.items],
+    )
 
 
-@router.delete("/chat/history/{session_id}")
-async def clear_session_history(session_id: str, user: Dict[str, Any] = get_auth_dependency()):
-    """Clear conversation history for a session owned by the authenticated user."""
-    user_id = user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User identifier not found in token")
+@router.patch("/chat/session/{session_id}", response_model=RenameSessionResponse)
+async def rename_session(
+    session_id: str,
+    request: RenameSessionRequest,
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Rename one durable chat session visible to the authenticated user."""
+
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
 
     try:
-        conversation_manager.clear_session_history(user_id, session_id)
-        return {"message": f"History cleared for session {session_id}"}
-    except SessionAccessError as e:
-        logger.warning(
-            "Session access denied: %s",
-            e,
-            extra={"session_id": session_id, "user_id": user_id},
+        session = repository.rename_session(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            title=request.title,
         )
-        raise HTTPException(status_code=403, detail="Access denied: session belongs to another user")
+        if session is None:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        db.commit()
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+    except Exception as exc:
+        logger.error(
+            "Failed to rename chat session %s",
+            session_id,
+            extra={"session_id": session_id, "user_id": user_id},
+            exc_info=True,
+        )
+        _rollback_and_raise(
+            db,
+            status_code=500,
+            detail="Failed to rename chat session",
+            exc=exc,
+        )
+
+    return RenameSessionResponse(session=_serialize_session(session))
 
 
-@router.get("/chat/history", response_model=AllSessionsStatsResponse)
-async def get_all_sessions_stats(user: Dict[str, Any] = get_auth_dependency()):
-    """Get statistics for all chat sessions belonging to the authenticated user."""
-    user_id = user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User identifier not found in token")
+@router.delete("/chat/session/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> Response:
+    """Soft-delete one durable chat session visible to the authenticated user."""
 
-    stats = conversation_manager.get_all_sessions_stats(user_id)
-    return AllSessionsStatsResponse(**stats)
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
+
+    try:
+        deleted = repository.soft_delete_session(
+            session_id=session_id,
+            user_auth_sub=user_id,
+        )
+        if not deleted:
+            db.rollback()
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        db.commit()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(
+            "Failed to delete chat session %s",
+            session_id,
+            extra={"session_id": session_id, "user_id": user_id},
+            exc_info=True,
+        )
+        _rollback_and_raise(
+            db,
+            status_code=500,
+            detail="Failed to delete chat session",
+            exc=exc,
+        )
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/chat/session/bulk-delete", response_model=BulkDeleteSessionsResponse)
+async def bulk_delete_sessions(
+    request: BulkDeleteSessionsRequest,
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Soft-delete multiple durable chat sessions visible to the authenticated user."""
+
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
+    seen_session_ids: set[str] = set()
+    normalized_session_ids: List[str] = []
+
+    for raw_session_id in request.session_ids:
+        normalized_session_id = raw_session_id.strip()
+        if not normalized_session_id:
+            raise HTTPException(status_code=400, detail="session_ids cannot include blank values")
+        if normalized_session_id in seen_session_ids:
+            continue
+        seen_session_ids.add(normalized_session_id)
+        normalized_session_ids.append(normalized_session_id)
+
+    deleted_session_ids: List[str] = []
+    try:
+        for target_session_id in normalized_session_ids:
+            if repository.soft_delete_session(
+                session_id=target_session_id,
+                user_auth_sub=user_id,
+            ):
+                deleted_session_ids.append(target_session_id)
+        db.commit()
+    except Exception as exc:
+        logger.error(
+            "Failed to bulk delete chat sessions",
+            extra={"user_id": user_id, "requested_count": len(normalized_session_ids)},
+            exc_info=True,
+        )
+        _rollback_and_raise(
+            db,
+            status_code=500,
+            detail="Failed to delete chat sessions",
+            exc=exc,
+        )
+
+    return BulkDeleteSessionsResponse(
+        requested_count=len(normalized_session_ids),
+        deleted_count=len(deleted_session_ids),
+        deleted_session_ids=deleted_session_ids,
+    )
 
 
 @router.get("/chat/config", response_model=ChatConfigResponse)

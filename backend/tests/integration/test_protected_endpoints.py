@@ -167,10 +167,13 @@ class TestProtectedEndpoints:
         Validates FR-025: Chat API endpoints protected.
         """
         chat_endpoints = [
+            ("POST", "/api/chat/session", None),
             ("POST", "/api/chat", {"message": "test", "session_id": "test"}),
             ("GET", "/api/chat/history", None),
             ("GET", "/api/chat/history/fake-session", None),
-            ("DELETE", "/api/chat/history/fake-session", None),
+            ("PATCH", "/api/chat/session/fake-session", {"title": "Renamed"}),
+            ("DELETE", "/api/chat/session/fake-session", None),
+            ("POST", "/api/chat/session/bulk-delete", {"session_ids": ["fake-session"]}),
         ]
 
         for method, endpoint, payload in chat_endpoints:
@@ -178,6 +181,8 @@ class TestProtectedEndpoints:
                 response = unauthenticated_client.get(endpoint)
             elif method == "POST":
                 response = unauthenticated_client.post(endpoint, json=payload)
+            elif method == "PATCH":
+                response = unauthenticated_client.patch(endpoint, json=payload)
             elif method == "DELETE":
                 response = unauthenticated_client.delete(endpoint)
 
@@ -345,10 +350,13 @@ class TestProtectedEndpoints:
             ("GET", "/weaviate/documents/{id}/download/processed_json"),
 
             # Chat endpoints
+            ("POST", "/api/chat/session"),
             ("POST", "/api/chat"),
             ("GET", "/api/chat/history"),
             ("GET", "/api/chat/history/{session_id}"),
-            ("DELETE", "/api/chat/history/{session_id}"),
+            ("PATCH", "/api/chat/session/{session_id}"),
+            ("DELETE", "/api/chat/session/{session_id}"),
+            ("POST", "/api/chat/session/bulk-delete"),
 
             # User endpoints
             ("GET", "/api/users/me"),

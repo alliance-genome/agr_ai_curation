@@ -126,8 +126,7 @@ API_KEY="your-secret-api-key-here"
 # Create a chat session
 curl -X POST "https://ai-curation.alliancegenome.org/api/chat/session" \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: $API_KEY" \
-  -d '{"document_id": null}'
+  -H "X-API-Key: $API_KEY"
 
 # Send a chat message
 curl -X POST "https://ai-curation.alliancegenome.org/api/chat" \
@@ -172,7 +171,7 @@ If Okta isn't configured and `DEV_MODE=false`, protected endpoints return `401` 
 |--------|-----------|------|-------|
 | Chat | POST | `/api/chat`, `/api/chat/stream` | JSON payload `{ "message": str, "session_id": optional }`. Streaming uses Server-Sent Events. |
 | Chat context | POST/GET/DELETE | `/api/chat/document/load`, `/api/chat/document` | Manage the active PDF for the current user. |
-| Sessions | POST/GET/DELETE | `/api/chat/session`, `/api/chat/history*`, `/api/chat/conversation*` | Create sessions, fetch history, reset memory. |
+| Sessions | POST/GET/PATCH/DELETE | `/api/chat/session*`, `/api/chat/history*`, `/api/chat/conversation*` | Create durable sessions, browse/search history, fetch detail, rename/delete sessions, reset memory. |
 | Documents | GET/POST/DELETE | `/weaviate/documents*` | Upload PDFs (multipart), list, inspect, delete, download artifacts. |
 | Processing | POST/GET | `/weaviate/documents/{id}/status`, `/progress/stream`, `/reprocess`, `/reembed` | Track pipeline or trigger re-processing. |
 | Chunks | GET | `/weaviate/documents/{id}/chunks` | Paginated chunk + provenance retrieval. |
@@ -201,7 +200,11 @@ Response (`SessionResponse`):
 ```json
 {
   "session_id": "1d6210d4-7af1-4bff-b797-0f3e54d99025",
-  "created_at": "2025-01-24T14:22:03.918794"
+  "created_at": "2025-01-24T14:22:03.918794+00:00",
+  "updated_at": "2025-01-24T14:22:03.918794+00:00",
+  "title": null,
+  "active_document_id": null,
+  "active_document": null
 }
 ```
 Use the returned `session_id` in subsequent chat calls; omit it to auto-generate one per request.
@@ -254,17 +257,24 @@ curl -X POST http://localhost:8000/api/chat/conversation/reset | jq
 ```
 `/conversation` exposes memory stats; reset returns a new `session_id` hint for the next turn.
 
-### 6. Conversation history APIs
+### 6. Durable history APIs
 ```bash
-# List session IDs + stats
+# Browse or search sessions
 curl http://localhost:8000/api/chat/history | jq
+curl "http://localhost:8000/api/chat/history?query=alpha&document_id=<doc-uuid>" | jq
 
-# Fetch / delete a specific session
+# Fetch, rename, delete, or bulk-delete sessions
 SESSION="1d6210d4-7af1-4bff-b797-0f3e54d99025"
 curl http://localhost:8000/api/chat/history/$SESSION | jq
-curl -X DELETE http://localhost:8000/api/chat/history/$SESSION
+curl -X PATCH http://localhost:8000/api/chat/session/$SESSION \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "Renamed session"}' | jq
+curl -X DELETE http://localhost:8000/api/chat/session/$SESSION
+curl -X POST http://localhost:8000/api/chat/session/bulk-delete \
+  -H 'Content-Type: application/json' \
+  -d '{"session_ids": ["session-a", "session-b"]}' | jq
 ```
-`history` payloads include each exchange plus supervisor routing metadata.
+`/api/chat/history` returns paginated durable session summaries with optional `query`, `document_id`, and `cursor` filters. Session detail payloads include persisted transcript rows plus best-effort `active_document` metadata for resume flows.
 
 ### 7. Chat configuration
 ```bash
