@@ -7,7 +7,7 @@ import {
   QueryKey,
 } from '@tanstack/react-query';
 import { logger } from './logger';
-import { clearAllNamespacedChatLocalStorage, clearLegacyChatLocalStorage } from '../lib/chatCacheKeys';
+import { clearAllNamespacedChatLocalStorage } from '../lib/chatCacheKeys';
 
 const API_BASE_URL = '/api/weaviate';
 
@@ -447,7 +447,6 @@ export const fetchApi = async <T>(
 
         // Clear auth-bound browser state before redirecting to login.
         clearAllNamespacedChatLocalStorage();
-        clearLegacyChatLocalStorage();
         sessionStorage.setItem('intendedPath', window.location.pathname + window.location.search);
 
         // Redirect to login endpoint (backend will redirect to Cognito)

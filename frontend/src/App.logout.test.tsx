@@ -6,7 +6,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ProtectedRoutes } from './App';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { getChatLocalStorageKeys, legacyChatStorageKeys } from './lib/chatCacheKeys';
+import { getChatLocalStorageKeys } from './lib/chatCacheKeys';
+
+const legacyChatStorageKeys = {
+  messages: 'chat-messages',
+  sessionId: 'chat-session-id',
+  activeDocument: 'chat-active-document',
+  userId: 'chat-user-id',
+  pdfViewerSession: 'pdf-viewer-session',
+} as const;
 
 vi.mock('./services/logger', () => ({
   logger: {
@@ -101,6 +109,10 @@ describe('ProtectedRoutes logout integration', () => {
   it('suppresses auto-login after AuthContext logout drives the real justLoggedOut flow', async () => {
     const scopedKeys = getChatLocalStorageKeys('user-123');
 
+    localStorage.setItem(scopedKeys.messages, '[]');
+    localStorage.setItem(scopedKeys.sessionId, 'session-123');
+    localStorage.setItem(scopedKeys.activeDocument, 'doc-123');
+    localStorage.setItem(scopedKeys.pdfViewerSession, '{"documentId":"doc-123"}');
     localStorage.setItem(legacyChatStorageKeys.messages, '[]');
     localStorage.setItem(legacyChatStorageKeys.sessionId, 'session-123');
     localStorage.setItem(legacyChatStorageKeys.activeDocument, 'doc-123');

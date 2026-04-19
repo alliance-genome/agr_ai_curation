@@ -6,7 +6,6 @@ import {
   clearChatLocalStorageForUser,
   clearLegacyChatLocalStorage,
   getChatLocalStorageKeys,
-  migrateLegacyChatLocalStorage,
 } from '../lib/chatCacheKeys';
 
 /** User data resolved from backend auth session. */
@@ -90,19 +89,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const userData = await response.json();
         // Use auth_sub (provider subject claim) as the unique user identifier
         const newUserId = userData.auth_sub;
-        const legacyMigrationResult = migrateLegacyChatLocalStorage(newUserId);
+        clearLegacyChatLocalStorage();
         const chatStorageKeys = getChatLocalStorageKeys(newUserId);
-
-        if (legacyMigrationResult !== 'noop') {
-          logger.debug('Applied legacy chat browser-state migration', {
-            component: 'AuthContext',
-            action: 'checkAuthStatus',
-            metadata: {
-              newUserId,
-              legacyMigrationResult,
-            },
-          });
-        }
 
         setUser({
           uid: newUserId,
@@ -277,7 +265,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Clear auth-bound browser state so no chat or viewer data survives logout.
       logger.debug('Clearing auth-bound chat browser state on logout', { component: 'AuthContext', action: 'logout' });
       clearAllNamespacedChatLocalStorage();
-      clearLegacyChatLocalStorage();
 
       logger.info('Logout successful', {
         component: 'AuthContext',
@@ -302,7 +289,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setUser(null);
       setIsAuthenticated(false);
       clearAllNamespacedChatLocalStorage();
-      clearLegacyChatLocalStorage();
       window.location.href = '/';
     }
   };

@@ -276,9 +276,6 @@ function HomePage() {
     // Persist to localStorage
     if (chatStorageKeys) {
       localStorage.setItem(chatStorageKeys.sessionId, newSessionId)
-    }
-    // Clear stored messages for old session (new session = fresh start)
-    if (chatStorageKeys) {
       localStorage.removeItem(chatStorageKeys.messages)
     }
     // Clear the init promise so future ensureSession calls use the new ID
