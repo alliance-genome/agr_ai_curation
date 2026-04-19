@@ -3,6 +3,7 @@ import { Box, useMediaQuery } from '@mui/material'
 import { alpha, styled, useTheme } from '@mui/material/styles'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 
+import { useAuth } from '@/contexts/AuthContext'
 import {
   HOME_PDF_VIEWER_OWNER,
   buildCurationPDFViewerOwner,
@@ -58,6 +59,7 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
 }))
 
 export default function PersistentPdfWorkspaceLayout() {
+  const { user } = useAuth()
   const theme = useTheme()
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'))
   const location = useLocation()
@@ -91,7 +93,10 @@ export default function PersistentPdfWorkspaceLayout() {
               overflow: 'hidden',
             }}
           >
-            <PdfViewer activeDocumentOwnerToken={activeDocumentOwnerToken} />
+            <PdfViewer
+              activeDocumentOwnerToken={activeDocumentOwnerToken}
+              storageUserId={user?.uid ?? null}
+            />
           </Box>
           <Box
             data-testid="persistent-pdf-route-content"
@@ -119,7 +124,10 @@ export default function PersistentPdfWorkspaceLayout() {
       >
         <Panel defaultSize={34} minSize={20} maxSize={60} order={1}>
           <PanelSection data-testid="persistent-pdf-viewer-panel">
-            <PdfViewer activeDocumentOwnerToken={activeDocumentOwnerToken} />
+            <PdfViewer
+              activeDocumentOwnerToken={activeDocumentOwnerToken}
+              storageUserId={user?.uid ?? null}
+            />
           </PanelSection>
         </Panel>
 

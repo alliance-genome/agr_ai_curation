@@ -5,6 +5,7 @@ import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import theme from '@/theme'
+import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import PersistentPdfWorkspaceLayout from './PersistentPdfWorkspaceLayout'
 import {
   HOME_PDF_VIEWER_OWNER,
@@ -12,7 +13,14 @@ import {
   dispatchPDFDocumentChanged,
 } from './pdfEvents'
 
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({
+    user: { uid: 'user-1' },
+  }),
+}))
+
 const originalMatchMedia = window.matchMedia
+const chatStorageKeys = getChatLocalStorageKeys('user-1')
 
 function setMatchMedia(matches: boolean) {
   Object.defineProperty(window, 'matchMedia', {
@@ -211,7 +219,7 @@ describe('PersistentPdfWorkspaceLayout route parity', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Load home document' }))
     expect(await screen.findByText('home.pdf')).toBeInTheDocument()
     expect(screen.getAllByTitle('PDF Viewer')).toHaveLength(1)
-    expect(localStorage.getItem('pdf-viewer-session')).toContain('"documentId":"doc-home"')
+    expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('"documentId":"doc-home"')
 
     fireEvent.click(screen.getByRole('button', { name: 'Go to curation' }))
     expect(await screen.findByText('Curation route content')).toBeInTheDocument()
@@ -219,7 +227,7 @@ describe('PersistentPdfWorkspaceLayout route parity', () => {
     await waitFor(() => {
       expect(screen.getByText('home.pdf')).toBeInTheDocument()
       expect(screen.getAllByTitle('PDF Viewer')).toHaveLength(1)
-      expect(localStorage.getItem('pdf-viewer-session')).toContain('"documentId":"doc-home"')
+      expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('"documentId":"doc-home"')
     })
   })
 

@@ -1,6 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { logger } from '../services/logger';
 import { getEnvFlag } from '../utils/env';
+import {
+  clearAllNamespacedChatLocalStorage,
+  clearChatLocalStorageForUser,
+  clearLegacyChatLocalStorage,
+  getChatLocalStorageKeys,
+} from '../lib/chatCacheKeys';
 
 /** User data resolved from backend auth session. */
 export interface AuthUser {
@@ -83,21 +89,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const userData = await response.json();
         // Use auth_sub (provider subject claim) as the unique user identifier
         const newUserId = userData.auth_sub;
-
-        // Check if this is a different user than the one whose data might be in localStorage
-        // Clear chat data to prevent data leakage between users and ensure fresh start
-        const storedUserId = localStorage.getItem('chat-user-id');
-        if (storedUserId !== newUserId) {
-          logger.debug('New user detected, clearing chat localStorage', {
-            component: 'AuthContext',
-            action: 'checkAuthStatus',
-            metadata: { previousUser: storedUserId ? 'exists' : 'none', newUser: newUserId },
-          });
-          localStorage.removeItem('chat-messages');
-          localStorage.removeItem('chat-session-id');
-          localStorage.removeItem('chat-active-document');
-          localStorage.setItem('chat-user-id', newUserId);
-        }
+        clearLegacyChatLocalStorage();
+        const chatStorageKeys = getChatLocalStorageKeys(newUserId);
 
         setUser({
           uid: newUserId,
@@ -116,8 +109,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         // Handles two scenarios:
         // 1. Backend restarted (no sessions) but localStorage has stale data -> clear localStorage
         // 2. localStorage cleared but backend has sessions (memory) -> reset backend for clean slate
-        const storedSessionId = localStorage.getItem('chat-session-id');
-        const storedMessages = localStorage.getItem('chat-messages');
+        const storedSessionId = localStorage.getItem(chatStorageKeys.sessionId);
+        const storedMessages = localStorage.getItem(chatStorageKeys.messages);
         try {
           const historyResponse = await fetch('/api/chat/history', {
             method: 'GET',
@@ -134,9 +127,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
                   action: 'checkAuthStatus',
                   metadata: { storedSessionId },
                 });
-                localStorage.removeItem('chat-messages');
-                localStorage.removeItem('chat-session-id');
-                localStorage.removeItem('chat-active-document');
+                clearChatLocalStorageForUser(newUserId);
               }
             } else if (historyData.total_sessions > 0) {
               // Case 2: localStorage is empty but backend has sessions
@@ -271,13 +262,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       setUser(null);
       setIsAuthenticated(false);
 
-      // Clear all chat localStorage - important for security and user experience
-      // When a user logs out, their chat history should not persist for the next user
-      logger.debug('Clearing chat localStorage on logout', { component: 'AuthContext', action: 'logout' });
-      localStorage.removeItem('chat-messages');
-      localStorage.removeItem('chat-session-id');
-      localStorage.removeItem('chat-active-document');
-      localStorage.removeItem('chat-user-id');
+      // Clear auth-bound browser state so no chat or viewer data survives logout.
+      logger.debug('Clearing auth-bound chat browser state on logout', { component: 'AuthContext', action: 'logout' });
+      clearAllNamespacedChatLocalStorage();
 
       logger.info('Logout successful', {
         component: 'AuthContext',
@@ -301,11 +288,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       // Even if logout fails, clear local state and redirect to home
       setUser(null);
       setIsAuthenticated(false);
-      // Clear all chat localStorage even on logout failure
-      localStorage.removeItem('chat-messages');
-      localStorage.removeItem('chat-session-id');
-      localStorage.removeItem('chat-active-document');
-      localStorage.removeItem('chat-user-id');
+      clearAllNamespacedChatLocalStorage();
       window.location.href = '/';
     }
   };

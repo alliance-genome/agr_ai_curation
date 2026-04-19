@@ -4,7 +4,7 @@ import { MemoryRouter, Outlet } from 'react-router-dom';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AppContent, ProtectedRoutes } from './App';
+import { AppContent, ProtectedRoutes, queryClient } from './App';
 import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog';
 
@@ -89,6 +89,7 @@ const jsonResponse = (payload: unknown): Response =>
 describe('AppContent global notifications', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    queryClient.clear();
     localStorage.clear();
     sessionStorage.clear();
     localStorage.setItem(`changelog:last-seen:user-1`, POPUP_CHANGELOG_ENTRY!.id);
@@ -100,6 +101,7 @@ describe('AppContent global notifications', () => {
   });
 
   afterEach(() => {
+    queryClient.clear();
     vi.useRealTimers();
   });
 
@@ -281,6 +283,46 @@ describe('AppContent global notifications', () => {
 
     expect(await screen.findByText('Curation Inventory Page')).toBeInTheDocument();
     expect(screen.getByText('Curation')).toBeInTheDocument();
+  });
+
+  it('clears the singleton react-query cache when the authenticated user changes', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    const view = renderAppContent('/');
+    await waitFor(() => {
+      expect(screen.getByText('Test User')).toBeInTheDocument();
+    });
+
+    queryClient.setQueryData(['documents'], { id: 'doc-1' });
+    expect(queryClient.getQueryData(['documents'])).toEqual({ id: 'doc-1' });
+
+    mockUseAuth.mockReturnValue({
+      user: { uid: 'user-2', name: 'Another User' },
+      logout: vi.fn().mockResolvedValue(undefined),
+      isAuthenticated: true,
+    });
+
+    await act(async () => {
+      view.rerender(
+        <ThemeProvider theme={theme}>
+          <MemoryRouter initialEntries={['/']}>
+            <AppContent />
+          </MemoryRouter>
+        </ThemeProvider>
+      );
+      await Promise.resolve();
+    });
+
+    expect(queryClient.getQueryData(['documents'])).toBeUndefined();
   });
 });
 

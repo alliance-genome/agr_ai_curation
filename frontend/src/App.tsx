@@ -21,7 +21,7 @@ import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNo
 import theme from './theme'
 import './App.css'
 
-const queryClient = new QueryClient()
+export const queryClient = new QueryClient()
 const DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS = 4000
 const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right' } as const
 
@@ -130,6 +130,7 @@ export function AppContent() {
   const { user, logout, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const lastAuthenticatedUserIdRef = React.useRef<string | null>(isAuthenticated ? user?.uid ?? null : null);
   const [logoutDialogOpen, setLogoutDialogOpen] = useState(false);
   const [changelogDialogOpen, setChangelogDialogOpen] = useState(false);
   const [globalSnackbar, setGlobalSnackbar] = useState<{
@@ -209,6 +210,16 @@ export function AppContent() {
       window.removeEventListener(GLOBAL_TOAST_EVENT, onGlobalToast as EventListener);
     };
   }, []);
+
+  useEffect(() => {
+    const currentUserId = isAuthenticated ? user?.uid ?? null : null
+
+    if (lastAuthenticatedUserIdRef.current !== currentUserId) {
+      queryClient.clear()
+    }
+
+    lastAuthenticatedUserIdRef.current = currentUserId
+  }, [isAuthenticated, user?.uid])
 
   useEffect(() => {
     if (!isAuthenticated) {

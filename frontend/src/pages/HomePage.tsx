@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { debug } from '@/utils/env'
 import { Box, Backdrop, CircularProgress, Typography, Stack, Button, Alert } from '@mui/material'
 import { alpha, styled } from '@mui/material/styles'
@@ -6,7 +6,9 @@ import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 
 import Chat from '@/components/Chat'
 import RightPanel from '@/components/RightPanel'
+import { useAuth } from '@/contexts/AuthContext'
 import { useChatStream } from '@/hooks/useChatStream'
+import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 
 const Root = styled(Box)(() => ({
   flex: 1,
@@ -55,18 +57,23 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
   },
 }))
 
-// localStorage keys for persistence
-const CHAT_SESSION_ID_KEY = 'chat-session-id'
-const CHAT_MESSAGES_KEY = 'chat-messages'
 const RIGHT_PANEL_TAB_KEY = 'home-right-panel-tab'
 
 function HomePage() {
+  const { user } = useAuth()
+  const chatStorageKeys = useMemo(
+    () => (user?.uid ? getChatLocalStorageKeys(user.uid) : null),
+    [user?.uid],
+  )
+
   // Manage session state at HomePage level for sharing between Chat and RightPanel
   // Initialize from localStorage if available
   const [sessionId, setSessionId] = useState<string | null>(() => {
-    return localStorage.getItem(CHAT_SESSION_ID_KEY)
+    return chatStorageKeys ? localStorage.getItem(chatStorageKeys.sessionId) : null
   })
-  const sessionIdRef = useRef<string | null>(localStorage.getItem(CHAT_SESSION_ID_KEY))
+  const sessionIdRef = useRef<string | null>(
+    chatStorageKeys ? localStorage.getItem(chatStorageKeys.sessionId) : null,
+  )
   const sessionInitPromiseRef = useRef<Promise<string> | null>(null)
 
   // Document loading overlay state
@@ -116,7 +123,9 @@ function HomePage() {
         sessionIdRef.current = data.session_id
         setSessionId(data.session_id)
         // Persist to localStorage for navigation persistence
-        localStorage.setItem(CHAT_SESSION_ID_KEY, data.session_id)
+        if (chatStorageKeys) {
+          localStorage.setItem(chatStorageKeys.sessionId, data.session_id)
+        }
         return data.session_id
       }
 
@@ -129,9 +138,11 @@ function HomePage() {
     sessionIdRef.current = fallbackId
     setSessionId(fallbackId)
     // Persist fallback ID too
-    localStorage.setItem(CHAT_SESSION_ID_KEY, fallbackId)
+    if (chatStorageKeys) {
+      localStorage.setItem(chatStorageKeys.sessionId, fallbackId)
+    }
     return fallbackId
-  }, [generateLocalSessionId])
+  }, [chatStorageKeys, generateLocalSessionId])
 
   // Ensure session exists before operations
   const ensureSession = useCallback(async (): Promise<string> => {
@@ -141,7 +152,7 @@ function HomePage() {
     }
 
     // Check localStorage (persisted from previous navigation)
-    const storedSessionId = localStorage.getItem(CHAT_SESSION_ID_KEY)
+    const storedSessionId = chatStorageKeys ? localStorage.getItem(chatStorageKeys.sessionId) : null
     if (storedSessionId) {
       sessionIdRef.current = storedSessionId
       setSessionId(storedSessionId)
@@ -157,21 +168,25 @@ function HomePage() {
     sessionIdRef.current = activeSessionId
     setSessionId(activeSessionId)
     return activeSessionId
-  }, [createSession])
+  }, [chatStorageKeys, createSession])
 
   /**
    * Get current document ID from PDF viewer localStorage session
    */
   const getCurrentDocumentId = useCallback((): string | undefined => {
     try {
-      const raw = localStorage.getItem('pdf-viewer-session')
+      if (!chatStorageKeys) {
+        return undefined
+      }
+
+      const raw = localStorage.getItem(chatStorageKeys.pdfViewerSession)
       if (!raw) return undefined
       const session = JSON.parse(raw)
       return session?.documentId || undefined
     } catch {
       return undefined
     }
-  }, [])
+  }, [chatStorageKeys])
 
   /**
    * Execute a curation flow with current session and document context
@@ -186,6 +201,13 @@ function HomePage() {
     const docId = documentId || getCurrentDocumentId()
     await executeFlow(flowId, currentSessionId, docId, userQuery)
   }, [ensureSession, executeFlow, getCurrentDocumentId])
+
+  useEffect(() => {
+    const storedSessionId = chatStorageKeys ? localStorage.getItem(chatStorageKeys.sessionId) : null
+    sessionIdRef.current = storedSessionId
+    setSessionId(storedSessionId)
+    sessionInitPromiseRef.current = storedSessionId ? Promise.resolve(storedSessionId) : null
+  }, [chatStorageKeys])
 
   // Initialize session on mount
   useEffect(() => {
@@ -252,12 +274,13 @@ function HomePage() {
     sessionIdRef.current = newSessionId
     setSessionId(newSessionId)
     // Persist to localStorage
-    localStorage.setItem(CHAT_SESSION_ID_KEY, newSessionId)
-    // Clear stored messages for old session (new session = fresh start)
-    localStorage.removeItem(CHAT_MESSAGES_KEY)
+    if (chatStorageKeys) {
+      localStorage.setItem(chatStorageKeys.sessionId, newSessionId)
+      localStorage.removeItem(chatStorageKeys.messages)
+    }
     // Clear the init promise so future ensureSession calls use the new ID
     sessionInitPromiseRef.current = Promise.resolve(newSessionId)
-  }, [])
+  }, [chatStorageKeys])
 
   return (
     <Root>
