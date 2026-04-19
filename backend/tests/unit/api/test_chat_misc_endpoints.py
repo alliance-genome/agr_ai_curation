@@ -844,6 +844,69 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
 
 
 @pytest.mark.asyncio
+async def test_get_session_history_returns_null_active_document_when_document_is_missing(monkeypatch):
+    active_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(
+                session_id="session-detail",
+                title="Resume me",
+                active_document_id=active_document_id,
+            )
+        ]
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+
+    async def _raise_not_found(*_args, **_kwargs):
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    monkeypatch.setattr(chat, "get_document", _raise_not_found)
+
+    payload = await chat.get_session_history(
+        "session-detail",
+        message_limit=50,
+        message_cursor=None,
+        db=object(),
+        user={"sub": "user-1"},
+    )
+
+    assert payload.session.session_id == "session-detail"
+    assert payload.active_document is None
+
+
+@pytest.mark.asyncio
+async def test_get_session_history_propagates_unexpected_document_lookup_failures(monkeypatch):
+    active_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(
+                session_id="session-detail",
+                title="Resume me",
+                active_document_id=active_document_id,
+            )
+        ]
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+
+    async def _raise_server_error(*_args, **_kwargs):
+        raise HTTPException(status_code=500, detail="Document service failure")
+
+    monkeypatch.setattr(chat, "get_document", _raise_server_error)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.get_session_history(
+            "session-detail",
+            message_limit=50,
+            message_cursor=None,
+            db=object(),
+            user={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Document service failure"
+
+
+@pytest.mark.asyncio
 async def test_rename_session_updates_title(monkeypatch):
     commits: list[str] = []
     repository = FakeChatHistoryRepository(

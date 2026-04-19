@@ -821,7 +821,7 @@ async def _load_session_active_document(
     user_id: str,
     active_document_id: UUID | None,
 ) -> ActiveDocument | None:
-    """Best-effort hydrate active document metadata for durable session detail."""
+    """Hydrate active document metadata for durable session detail."""
 
     if active_document_id is None:
         return None
@@ -836,20 +836,7 @@ async def _load_session_active_document(
                 extra={"user_id": user_id, "document_id": str(active_document_id)},
             )
             return None
-        logger.warning(
-            "Document lookup failed while hydrating chat session %s",
-            active_document_id,
-            extra={"user_id": user_id, "document_id": str(active_document_id)},
-            exc_info=True,
-        )
-        return None
-    except Exception:
-        logger.warning(
-            "Unexpected document lookup failure while hydrating chat session resume",
-            extra={"user_id": user_id, "document_id": str(active_document_id)},
-            exc_info=True,
-        )
-        return None
+        raise
 
     document_payload = document_detail.get("document")
     if not isinstance(document_payload, dict):
