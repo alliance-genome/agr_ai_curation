@@ -26,8 +26,9 @@ scripts/
 │   └── docker-test-compose.sh # Rootless-by-default wrapper for docker-compose.test.yml
 │   └── run-tests.sh             # Docker Compose test runner
 │   └── llm_provider_smoke_local.sh  # Local LLM provider smoke checks (health/contracts)
+│   └── rerank_provider_smoke_local.sh  # Local rerank provider smoke across bedrock/local/none
 │   └── file_output_storage_preflight.sh # Deployment-stage probe for export temp/output writeability
-│   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, cleanup
+│   └── dev_release_smoke.py     # Deep dev-release smoke: upload, chat, custom flow, batch, optional rerank smoke, cleanup
 │
 └── utilities/
     ├── check_services.sh               # Health check all Docker services
@@ -456,6 +457,33 @@ make smoke-llm-local
 Outputs:
 - `file_outputs/temp/llm_provider_smoke_local_<timestamp>.json`
 
+### testing/rerank_provider_smoke_local.sh
+
+Runs the local rerank provider smoke and writes evidence JSON.
+
+Checks:
+- `bedrock_cohere` backend startup without the local reranker service
+- `local_transformers` backend startup with the `local-reranker` Compose profile
+- `none` backend startup with reranking disabled
+- `/api/admin/health/connections` contract for when the reranker service is
+  actually required
+- for `local_transformers`, the backend's effective `RERANKER_URL` remains the
+  local Compose endpoint `http://reranker-transformers:8080`
+- a real `rerank_chunks(...)` probe inside the backend container to prove that
+  `bedrock_cohere` and `local_transformers` reorder results while `none`
+  preserves retrieval order
+
+```bash
+# Run directly (defaults to http://localhost:8000)
+./scripts/testing/rerank_provider_smoke_local.sh
+
+# Run against a custom backend URL
+./scripts/testing/rerank_provider_smoke_local.sh http://localhost:18000
+```
+
+Outputs:
+- `file_outputs/temp/rerank_provider_smoke_local_<timestamp>.json`
+
 ### testing/file_output_storage_preflight.sh
 
 Runs a deployment-safe export-storage probe against the live backend container.
@@ -509,8 +537,19 @@ Notes:
 - The script auto-loads `TESTING_API_KEY` from `.env` when available.
 - Default PDFs come from `backend/tests/fixtures/`.
 - Use `--skip-chat`, `--skip-flow`, or `--skip-batch` to isolate one stage while debugging.
+- Add `--include-rerank-provider-smoke` when you also want the local
+  Bedrock-vs-local-vs-none rerank smoke. That stage remains opt-in because it
+  restarts the local Compose backend.
 - Evidence output:
   - `/tmp/agr_ai_curation_dev_release_smoke/dev_release_smoke_<timestamp>.json`
+
+Full local-stack coverage example:
+
+```bash
+python3 scripts/testing/dev_release_smoke.py \
+  --base-url http://localhost:8000 \
+  --include-rerank-provider-smoke
+```
 
 ## Code Analysis Utilities
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
@@ -28,6 +29,7 @@ def test_compute_scope_limitations_includes_debug_relaxations():
         skip_flow=True,
         skip_workspace=True,
         skip_batch=False,
+        include_rerank_provider_smoke=False,
         allow_dev_mode_fallback=True,
         allow_duplicate_reuse=True,
     )
@@ -36,9 +38,80 @@ def test_compute_scope_limitations_includes_debug_relaxations():
         "user_info",
         "flow",
         "workspace",
+        "rerank_provider_smoke",
         "dev_mode_fallback",
         "duplicate_reuse",
     ]
+
+
+def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
+    smoke = _load_smoke_module()
+
+    args = smoke.parse_args([])
+
+    assert args.include_rerank_provider_smoke is False
+    assert args.rerank_provider_smoke_base_url == "http://localhost:8000"
+    assert args.rerank_provider_smoke_script == "scripts/testing/rerank_provider_smoke_local.sh"
+
+
+def test_run_local_rerank_provider_smoke_reads_nested_evidence(monkeypatch, tmp_path):
+    smoke = _load_smoke_module()
+    script_path = tmp_path / "rerank_provider_smoke_local.sh"
+    script_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    evidence_path = tmp_path / "rerank_provider_smoke.json"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "overall_status": "pass",
+                "pass_count": 6,
+                "fail_count": 0,
+                "derived_checks": [{"test_id": "BEDROCK_COHERE_RERANK_BEHAVIOR", "result": "pass"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _fake_run(cmd, **kwargs):
+        del cmd, kwargs
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"Rerank provider local smoke complete.\nEvidence file: {evidence_path}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(smoke.subprocess, "run", _fake_run)
+
+    summary = smoke.run_local_rerank_provider_smoke(
+        script_path=script_path,
+        base_url="http://localhost:8000",
+    )
+
+    assert summary["overall_status"] == "pass"
+    assert summary["evidence_file"] == str(evidence_path)
+    assert summary["pass_count"] == 6
+    assert summary["fail_count"] == 0
+
+
+def test_run_local_rerank_provider_smoke_rejects_failed_subprocess(monkeypatch, tmp_path):
+    smoke = _load_smoke_module()
+    script_path = tmp_path / "rerank_provider_smoke_local.sh"
+    script_path.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+
+    def _fake_run(cmd, **kwargs):
+        del cmd, kwargs
+        return SimpleNamespace(
+            returncode=1,
+            stdout="Rerank provider local smoke complete.\n",
+            stderr="bedrock probe failed",
+        )
+
+    monkeypatch.setattr(smoke.subprocess, "run", _fake_run)
+
+    with pytest.raises(smoke.SmokeFailure, match="Local rerank provider smoke failed"):
+        smoke.run_local_rerank_provider_smoke(
+            script_path=script_path,
+            base_url="http://localhost:8000",
+        )
 
 
 def test_ensure_worker_ready_rejects_degraded_auth_even_when_worker_available(monkeypatch):
