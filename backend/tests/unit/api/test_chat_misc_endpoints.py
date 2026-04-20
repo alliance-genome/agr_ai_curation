@@ -586,6 +586,14 @@ def test_build_context_messages_from_history_appends_current_user_turn():
     ]
 
 
+def test_build_context_messages_from_history_raises_on_malformed_history_message():
+    with pytest.raises(ValueError, match="history_messages\\[0\\] is missing a role"):
+        chat._build_context_messages_from_history(
+            [{"role": "", "content": "first question"}],
+            user_message="follow-up question",
+        )
+
+
 def test_build_context_messages_from_durable_messages_uses_text_transcript_rows():
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-context")],

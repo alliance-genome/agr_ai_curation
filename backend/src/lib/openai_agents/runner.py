@@ -137,6 +137,13 @@ def _create_openai_client_kwargs() -> dict:
     return kwargs
 
 
+def normalize_context_message_role(raw_role: Any) -> str:
+    """Normalize one context-message role into the runner contract."""
+
+    role = str(raw_role or "").strip().lower()
+    return _CONTEXT_MESSAGE_ROLE_ALIASES.get(role, role)
+
+
 def _normalize_context_messages(
     context_messages: List[Dict[str, Any]],
 ) -> tuple[List[Dict[str, Any]], str]:
@@ -150,12 +157,14 @@ def _normalize_context_messages(
 
     normalized_messages: List[Dict[str, Any]] = []
 
-    for index, raw_message in enumerate(context_messages or []):
+    if not isinstance(context_messages, list):
+        raise TypeError("context_messages must be a list of message dicts")
+
+    for index, raw_message in enumerate(context_messages):
         if not isinstance(raw_message, dict):
             raise ValueError(f"context_messages[{index}] must be a dict")
 
-        raw_role = str(raw_message.get("role") or "").strip().lower()
-        role = _CONTEXT_MESSAGE_ROLE_ALIASES.get(raw_role, raw_role)
+        role = normalize_context_message_role(raw_message.get("role"))
         if role not in _VALID_CONTEXT_MESSAGE_ROLES:
             raise ValueError(
                 f"context_messages[{index}].role must be one of "

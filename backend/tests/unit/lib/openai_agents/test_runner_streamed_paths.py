@@ -419,3 +419,48 @@ async def test_run_agent_streamed_requires_trailing_user_context_message(monkeyp
                 user_id="user-invalid",
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_requires_context_message_list(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+
+    with pytest.raises(TypeError, match="context_messages must be a list of message dicts"):
+        await _collect_events(
+            runner.run_agent_streamed(
+                context_messages=None,
+                user_id="user-invalid",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_normalizes_flow_context_roles(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+
+    async def _fake_run_agent_with_tracing(**kwargs):
+        captured["run_kwargs"] = kwargs
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {"response_length": 5, "tool_calls": 0, "agents_used": ["Supervisor"]},
+        }
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _fake_run_agent_with_tracing)
+
+    await _collect_events(
+        runner.run_agent_streamed(
+            context_messages=[
+                {"role": "flow", "content": "previous flow memory"},
+                {"role": "user", "content": "hello"},
+            ],
+            user_id="user-flow",
+        )
+    )
+
+    assert captured["run_kwargs"]["input_items"] == [
+        {"role": "assistant", "content": "previous flow memory"},
+        {"role": "user", "content": "hello"},
+    ]

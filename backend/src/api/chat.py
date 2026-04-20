@@ -42,6 +42,7 @@ from ..lib.curation_workspace import (
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
 from ..lib.conversation_manager import conversation_manager
 from ..lib.openai_agents import run_agent_streamed
+from ..lib.openai_agents.runner import normalize_context_message_role
 from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
 from ..lib.openai_agents.evidence_summary import (
     build_record_evidence_summary_record,
@@ -160,11 +161,13 @@ def _build_context_messages_from_history(
     """Convert exchange-style history plus the current turn into runner context."""
 
     context_messages: List[Dict[str, str]] = []
-    for message in history_messages:
-        role = str(message.get("role") or "").strip()
+    for index, message in enumerate(history_messages):
+        role = normalize_context_message_role(message.get("role"))
         content = str(message.get("content") or "")
-        if not role or not content.strip():
-            continue
+        if not role:
+            raise ValueError(f"history_messages[{index}] is missing a role")
+        if not content.strip():
+            raise ValueError(f"history_messages[{index}] must include non-empty content")
         context_messages.append({"role": role, "content": content})
 
     context_messages.append({"role": "user", "content": user_message})
@@ -179,13 +182,11 @@ def _durable_message_to_context_message(
     if message.message_type != "text" or not message.content.strip():
         return None
 
-    if message.role == "flow":
-        return {"role": "assistant", "content": message.content}
-
-    if message.role not in {"assistant", "user"}:
+    role = normalize_context_message_role(message.role)
+    if role not in {"assistant", "user"}:
         return None
 
-    return {"role": message.role, "content": message.content}
+    return {"role": role, "content": message.content}
 
 
 def _build_context_messages_from_durable_messages(
