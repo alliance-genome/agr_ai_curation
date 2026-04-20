@@ -189,7 +189,6 @@ def _hydrate_conversation_history_from_durable_messages(
     if not conversation_manager.history_enabled:
         return
 
-    get_session_history = conversation_manager.get_session_history
     add_exchange = conversation_manager.add_exchange
 
     durable_exchanges: List[tuple[str, str]] = []
