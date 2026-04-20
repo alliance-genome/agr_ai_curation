@@ -3,12 +3,29 @@ import { debug } from '@/utils/env'
 import { Box, Backdrop, CircularProgress, Typography, Stack, Button, Alert } from '@mui/material'
 import { alpha, styled } from '@mui/material/styles'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import { useSearchParams } from 'react-router-dom'
 
 import Chat from '@/components/Chat'
 import RightPanel from '@/components/RightPanel'
 import { useAuth } from '@/contexts/AuthContext'
 import { useChatStream } from '@/hooks/useChatStream'
-import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+  getChatLocalStorageKeys,
+} from '@/lib/chatCacheKeys'
+import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
+import {
+  HOME_PDF_VIEWER_OWNER,
+  dispatchPDFDocumentChanged,
+} from '@/components/pdfViewer/pdfEvents'
+import { loadDocumentForChat } from '@/features/documents/pdfUploadFlow'
+import { readCurationApiError } from '@/features/curation/services/api'
+import {
+  fetchChatHistoryDetail,
+  type ChatHistoryActiveDocument,
+  type ChatHistoryDetailResponse,
+  type ChatHistoryMessage,
+} from '@/services/chatHistoryApi'
 
 const Root = styled(Box)(() => ({
   flex: 1,
@@ -59,22 +76,63 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
 
 const RIGHT_PANEL_TAB_KEY = 'home-right-panel-tab'
 
+interface DurableChatSessionResponse {
+  session_id: string
+  created_at: string
+  updated_at: string
+  title?: string | null
+  active_document_id?: string | null
+  active_document?: ChatHistoryActiveDocument | null
+}
+
+interface StoredHomePageMessage {
+  role: 'user' | 'assistant' | 'flow'
+  content: string
+  timestamp: string
+  id?: string
+  traceIds?: string[]
+  type?: 'text'
+}
+
+function isRestorableMessageRole(role: string): role is StoredHomePageMessage['role'] {
+  return role === 'user' || role === 'assistant' || role === 'flow'
+}
+
+function buildStoredMessages(messages: ChatHistoryMessage[]): StoredHomePageMessage[] {
+  return messages.flatMap((message) => {
+    if (!isRestorableMessageRole(message.role)) {
+      return []
+    }
+
+    return [{
+      role: message.role,
+      content: message.content,
+      timestamp: message.created_at,
+      id: message.message_id,
+      traceIds: message.trace_id ? [message.trace_id] : undefined,
+      type: 'text',
+    }]
+  })
+}
+
 function HomePage() {
   const { user } = useAuth()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedSessionId = normalizeChatHistoryValue(searchParams.get('session'))
   const chatStorageKeys = useMemo(
     () => (user?.uid ? getChatLocalStorageKeys(user.uid) : null),
     [user?.uid],
   )
 
   // Manage session state at HomePage level for sharing between Chat and RightPanel
-  // Initialize from localStorage if available
-  const [sessionId, setSessionId] = useState<string | null>(() => {
-    return chatStorageKeys ? localStorage.getItem(chatStorageKeys.sessionId) : null
-  })
-  const sessionIdRef = useRef<string | null>(
-    chatStorageKeys ? localStorage.getItem(chatStorageKeys.sessionId) : null,
-  )
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const sessionIdRef = useRef<string | null>(null)
   const sessionInitPromiseRef = useRef<Promise<string> | null>(null)
+  const latestCreatedSessionRef = useRef<DurableChatSessionResponse | null>(null)
+  const [isBootstrappingSession, setIsBootstrappingSession] = useState(true)
+  const [missingSessionId, setMissingSessionId] = useState<string | null>(null)
+  const [sessionBootstrapError, setSessionBootstrapError] = useState<string | null>(null)
+  const [isStartingNewChat, setIsStartingNewChat] = useState(false)
 
   // Document loading overlay state
   const [loadingDocument, setLoadingDocument] = useState(false)
@@ -95,54 +153,195 @@ function HomePage() {
   // Single shared SSE stream for both Chat and AuditPanel
   const { events, isLoading, sendMessage, stopStream, executeFlow } = useChatStream()
 
-  // Generate local fallback session ID
-  const generateLocalSessionId = useCallback(() => {
-    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-      return crypto.randomUUID()
+  const persistSessionId = useCallback((nextSessionId: string | null) => {
+    sessionIdRef.current = nextSessionId
+    setSessionId(nextSessionId)
+
+    if (!nextSessionId) {
+      latestCreatedSessionRef.current = null
     }
 
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-      const r = Math.random() * 16 | 0
-      const v = c === 'x' ? r : (r & 0x3) | 0x8
-      return v.toString(16)
-    })
-  }, [])
+    if (chatStorageKeys) {
+      if (nextSessionId) {
+        localStorage.setItem(chatStorageKeys.sessionId, nextSessionId)
+      } else {
+        localStorage.removeItem(chatStorageKeys.sessionId)
+      }
+    }
 
-  // Create new session via backend API
-  const createSession = useCallback(async (): Promise<string> => {
+    sessionInitPromiseRef.current = nextSessionId ? Promise.resolve(nextSessionId) : null
+  }, [chatStorageKeys])
+
+  const clearPersistedMessages = useCallback(() => {
+    if (!chatStorageKeys) {
+      return
+    }
+
+    localStorage.removeItem(chatStorageKeys.messages)
+  }, [chatStorageKeys])
+
+  const persistSessionMessages = useCallback((
+    activeSessionId: string,
+    detail: ChatHistoryDetailResponse,
+  ) => {
+    if (!chatStorageKeys) {
+      return
+    }
+
+    const storedMessages = buildStoredMessages(detail.messages)
+    if (storedMessages.length === 0) {
+      localStorage.removeItem(chatStorageKeys.messages)
+      return
+    }
+
+    localStorage.setItem(chatStorageKeys.messages, JSON.stringify({
+      session_id: activeSessionId,
+      messages: storedMessages,
+    }))
+  }, [chatStorageKeys])
+
+  const clearDocumentContext = useCallback(async () => {
+    sessionStorage.removeItem('document-loading')
+    setLoadingDocument(false)
+
+    if (chatStorageKeys) {
+      localStorage.removeItem(chatStorageKeys.activeDocument)
+      localStorage.removeItem(chatStorageKeys.pdfViewerSession)
+    }
+
     try {
-      const response = await fetch('/api/chat/session', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+      await fetch('/api/chat/document', {
+        method: 'DELETE',
+        credentials: 'include',
       })
+    } catch (error) {
+      console.warn('Failed to clear chat document context', error)
+    }
 
-      if (response.ok) {
-        const data = await response.json()
-        sessionIdRef.current = data.session_id
-        setSessionId(data.session_id)
-        // Persist to localStorage for navigation persistence
-        if (chatStorageKeys) {
-          localStorage.setItem(chatStorageKeys.sessionId, data.session_id)
-        }
-        return data.session_id
+    window.dispatchEvent(new CustomEvent('chat-document-changed', {
+      detail: {
+        active: false,
+        document: null,
+        ownerToken: HOME_PDF_VIEWER_OWNER,
+      },
+    }))
+  }, [chatStorageKeys])
+
+  const rehydrateDocumentContext = useCallback(async (
+    document: ChatHistoryActiveDocument | null | undefined,
+  ) => {
+    if (!document) {
+      setLoadingDocument(false)
+      setLoadingError(null)
+      await clearDocumentContext()
+      return
+    }
+
+    try {
+      setLoadingError(null)
+      setLoadingDocument(true)
+      sessionStorage.setItem('document-loading', 'true')
+      window.dispatchEvent(new CustomEvent('document-load-start'))
+
+      await loadDocumentForChat(document.id)
+
+      const [detailResponse, urlResponse] = await Promise.all([
+        fetch(`/api/pdf-viewer/documents/${document.id}`),
+        fetch(`/api/pdf-viewer/documents/${document.id}/url`),
+      ])
+
+      if (!detailResponse.ok || !urlResponse.ok) {
+        throw new Error('Failed to fetch document viewer metadata')
       }
 
-      console.error('Failed to create session:', response.status, response.statusText)
+      const detail = await detailResponse.json()
+      const urlData = await urlResponse.json()
+      const viewerUrl = typeof urlData.viewer_url === 'string' ? urlData.viewer_url : null
+
+      if (!viewerUrl) {
+        throw new Error('Document viewer URL unavailable')
+      }
+
+      const filename = normalizeChatHistoryValue(detail.filename)
+        ?? normalizeChatHistoryValue(document.filename)
+      if (!filename) {
+        throw new Error('Document filename unavailable')
+      }
+
+      const pageCount = detail.page_count
+      if (
+        typeof pageCount !== 'number'
+        || !Number.isFinite(pageCount)
+        || pageCount < 1
+      ) {
+        throw new Error('Document page count unavailable')
+      }
+      const timestamp = new Date().toISOString()
+
+      if (chatStorageKeys) {
+        localStorage.setItem(chatStorageKeys.activeDocument, JSON.stringify(document))
+        localStorage.setItem(chatStorageKeys.pdfViewerSession, JSON.stringify({
+          documentId: document.id,
+          viewerUrl,
+          filename,
+          pageCount,
+          loadedAt: timestamp,
+          currentPage: 1,
+          zoomLevel: 1,
+          scrollPosition: 0,
+          lastInteraction: timestamp,
+        }))
+      }
+
+      dispatchPDFDocumentChanged(
+        document.id,
+        viewerUrl,
+        filename,
+        pageCount,
+        { ownerToken: HOME_PDF_VIEWER_OWNER },
+      )
     } catch (error) {
-      console.error('Error creating chat session', error)
+      console.error('Failed to restore document context for resumed chat', error)
+      sessionStorage.removeItem('document-loading')
+      setLoadingDocument(false)
+      setLoadingError(
+        `Unable to restore ${document.filename ?? 'the active document'} for this chat session.`,
+      )
+      await clearDocumentContext()
+    }
+  }, [chatStorageKeys, clearDocumentContext])
+
+  // Create new session via backend API
+  const createSession = useCallback(async (): Promise<DurableChatSessionResponse> => {
+    const response = await fetch('/api/chat/session', {
+      method: 'POST',
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+
+    if (!response.ok) {
+      throw new Error(await readCurationApiError(response))
     }
 
-    const fallbackId = generateLocalSessionId()
-    sessionIdRef.current = fallbackId
-    setSessionId(fallbackId)
-    // Persist fallback ID too
-    if (chatStorageKeys) {
-      localStorage.setItem(chatStorageKeys.sessionId, fallbackId)
+    const data = await response.json() as DurableChatSessionResponse
+    const nextSessionId = normalizeChatHistoryValue(data.session_id)
+    if (!nextSessionId) {
+      throw new Error('Chat session response did not include a session ID')
     }
-    return fallbackId
-  }, [chatStorageKeys, generateLocalSessionId])
+
+    persistSessionId(nextSessionId)
+    clearPersistedMessages()
+
+    const normalizedSession = {
+      ...data,
+      session_id: nextSessionId,
+    }
+    latestCreatedSessionRef.current = normalizedSession
+
+    return normalizedSession
+  }, [clearPersistedMessages, persistSessionId])
 
   // Ensure session exists before operations
   const ensureSession = useCallback(async (): Promise<string> => {
@@ -152,23 +351,28 @@ function HomePage() {
     }
 
     // Check localStorage (persisted from previous navigation)
-    const storedSessionId = chatStorageKeys ? localStorage.getItem(chatStorageKeys.sessionId) : null
+    const storedSessionId = chatStorageKeys
+      ? normalizeChatHistoryValue(localStorage.getItem(chatStorageKeys.sessionId))
+      : null
     if (storedSessionId) {
-      sessionIdRef.current = storedSessionId
-      setSessionId(storedSessionId)
+      persistSessionId(storedSessionId)
       return storedSessionId
     }
 
     // No existing session - create new one
     if (!sessionInitPromiseRef.current) {
       sessionInitPromiseRef.current = createSession()
+        .then((session) => session.session_id)
+        .catch((error) => {
+          sessionInitPromiseRef.current = null
+          throw error
+        })
     }
 
     const activeSessionId = await sessionInitPromiseRef.current
-    sessionIdRef.current = activeSessionId
-    setSessionId(activeSessionId)
+    persistSessionId(activeSessionId)
     return activeSessionId
-  }, [chatStorageKeys, createSession])
+  }, [chatStorageKeys, createSession, persistSessionId])
 
   /**
    * Get current document ID from PDF viewer localStorage session
@@ -203,16 +407,110 @@ function HomePage() {
   }, [ensureSession, executeFlow, getCurrentDocumentId])
 
   useEffect(() => {
-    const storedSessionId = chatStorageKeys ? localStorage.getItem(chatStorageKeys.sessionId) : null
-    sessionIdRef.current = storedSessionId
-    setSessionId(storedSessionId)
-    sessionInitPromiseRef.current = storedSessionId ? Promise.resolve(storedSessionId) : null
-  }, [chatStorageKeys])
+    let cancelled = false
 
-  // Initialize session on mount
-  useEffect(() => {
-    void ensureSession()
-  }, [ensureSession])
+    const bootstrapSession = async () => {
+      if (!user?.uid) {
+        return
+      }
+
+      setIsBootstrappingSession(true)
+      setMissingSessionId(null)
+      setSessionBootstrapError(null)
+
+      try {
+        if (requestedSessionId) {
+          const detail = await fetchChatHistoryDetail({
+            sessionId: requestedSessionId,
+            messageLimit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+          })
+
+          if (cancelled) {
+            return
+          }
+
+          const activeSessionId =
+            normalizeChatHistoryValue(detail.session.session_id) ?? requestedSessionId
+          persistSessionId(activeSessionId)
+          persistSessionMessages(activeSessionId, detail)
+          await rehydrateDocumentContext(detail.active_document)
+
+          if (!cancelled) {
+            setIsBootstrappingSession(false)
+          }
+          return
+        }
+
+        const storedSessionId = chatStorageKeys
+          ? normalizeChatHistoryValue(localStorage.getItem(chatStorageKeys.sessionId))
+          : null
+        if (storedSessionId) {
+          persistSessionId(storedSessionId)
+          if (!cancelled) {
+            setIsBootstrappingSession(false)
+          }
+          return
+        }
+
+        const activeSessionId = await ensureSession()
+        if (cancelled) {
+          return
+        }
+
+        const createdSession = latestCreatedSessionRef.current
+        await rehydrateDocumentContext(
+          createdSession?.session_id === activeSessionId
+            ? createdSession.active_document
+            : null,
+        )
+
+        if (!cancelled) {
+          setIsBootstrappingSession(false)
+        }
+      } catch (error) {
+        if (cancelled) {
+          return
+        }
+
+        persistSessionId(null)
+        clearPersistedMessages()
+        await clearDocumentContext()
+
+        const errorMessage = error instanceof Error
+          ? error.message
+          : 'Unable to initialize the durable chat session.'
+
+        if (
+          requestedSessionId
+          && errorMessage.toLowerCase().includes('not found')
+        ) {
+          setMissingSessionId(requestedSessionId)
+          setSessionBootstrapError(null)
+        } else {
+          setMissingSessionId(null)
+          setSessionBootstrapError(errorMessage)
+        }
+
+        setIsBootstrappingSession(false)
+      }
+    }
+
+    void bootstrapSession()
+
+    return () => {
+      cancelled = true
+    }
+  }, [
+    chatStorageKeys,
+    clearDocumentContext,
+    clearPersistedMessages,
+    ensureSession,
+    persistSessionId,
+    persistSessionMessages,
+    requestedSessionId,
+    rehydrateDocumentContext,
+    user?.uid,
+  ])
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -268,19 +566,80 @@ function HomePage() {
     sessionStorage.removeItem('document-loading')
   }, [])
 
+  const handleStartNewChat = useCallback(async () => {
+    setIsBootstrappingSession(true)
+    setIsStartingNewChat(true)
+    setMissingSessionId(null)
+    setSessionBootstrapError(null)
+    setLoadingError(null)
+
+    try {
+      const createdSession = await createSession()
+      await rehydrateDocumentContext(createdSession.active_document)
+
+      const nextSearchParams = new URLSearchParams(searchParams)
+      nextSearchParams.delete('session')
+      setSearchParams(nextSearchParams, { replace: true })
+      setIsBootstrappingSession(false)
+    } catch (error) {
+      setSessionBootstrapError(
+        error instanceof Error
+          ? error.message
+          : 'Unable to start a new durable chat session.',
+      )
+      setIsBootstrappingSession(false)
+    } finally {
+      setIsStartingNewChat(false)
+    }
+  }, [createSession, rehydrateDocumentContext, searchParams, setSearchParams])
+
   // Handle session changes from child components (e.g., Chat reset)
   const handleSessionChange = useCallback((newSessionId: string) => {
     debug.log('🔄 [HomePage] Session ID changed:', newSessionId)
-    sessionIdRef.current = newSessionId
-    setSessionId(newSessionId)
-    // Persist to localStorage
+    persistSessionId(newSessionId)
     if (chatStorageKeys) {
-      localStorage.setItem(chatStorageKeys.sessionId, newSessionId)
       localStorage.removeItem(chatStorageKeys.messages)
     }
-    // Clear the init promise so future ensureSession calls use the new ID
-    sessionInitPromiseRef.current = Promise.resolve(newSessionId)
-  }, [chatStorageKeys])
+  }, [chatStorageKeys, persistSessionId])
+
+  if (isBootstrappingSession || !user?.uid) {
+    return (
+      <Root>
+        <Stack spacing={2} alignItems="center" justifyContent="center" sx={{ flex: 1 }}>
+          <CircularProgress />
+          <Typography variant="h6">
+            {requestedSessionId ? 'Restoring chat session...' : 'Preparing chat session...'}
+          </Typography>
+        </Stack>
+      </Root>
+    )
+  }
+
+  if (missingSessionId || sessionBootstrapError) {
+    return (
+      <Root>
+        <Stack
+          spacing={2}
+          alignItems="center"
+          justifyContent="center"
+          sx={{ flex: 1, px: 3, py: 4, maxWidth: 720, mx: 'auto' }}
+        >
+          <Alert severity={missingSessionId ? 'warning' : 'error'} sx={{ width: '100%' }}>
+            {missingSessionId
+              ? 'This chat session is unavailable. It may have been deleted.'
+              : sessionBootstrapError}
+          </Alert>
+          <Button
+            variant="contained"
+            onClick={handleStartNewChat}
+            disabled={isStartingNewChat}
+          >
+            {isStartingNewChat ? 'Starting...' : 'Start new chat'}
+          </Button>
+        </Stack>
+      </Root>
+    )
+  }
 
   return (
     <Root>
