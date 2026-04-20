@@ -594,7 +594,7 @@ def test_build_context_messages_from_history_raises_on_malformed_history_message
         )
 
 
-def test_build_context_messages_from_durable_messages_uses_text_transcript_rows():
+def test_build_context_messages_from_durable_messages_preserves_completed_exchange_semantics():
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-context")],
         detail_messages={
@@ -615,16 +615,16 @@ def test_build_context_messages_from_durable_messages_uses_text_transcript_rows(
                 ),
                 _message_record(
                     session_id="session-context",
-                    role="flow",
-                    content="flow memory",
+                    role="user",
+                    content="stale interrupted question",
                     message_type="text",
                     created_at=_ts(9, 3),
                 ),
                 _message_record(
                     session_id="session-context",
-                    role="assistant",
-                    content="ignored attachment payload",
-                    message_type="json",
+                    role="flow",
+                    content="flow memory",
+                    message_type="text",
                     created_at=_ts(9, 4),
                 ),
             ]
@@ -635,12 +635,13 @@ def test_build_context_messages_from_durable_messages_uses_text_transcript_rows(
         repository,
         user_id="user-1",
         session_id="session-context",
+        user_message="current question",
     )
 
     assert context_messages == [
         {"role": "user", "content": "first question"},
         {"role": "assistant", "content": "first answer"},
-        {"role": "assistant", "content": "flow memory"},
+        {"role": "user", "content": "current question"},
     ]
 
 
@@ -1147,6 +1148,71 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     assert unregister_calls[0][0] == "non-stream-turn:session-tool-map:turn-tool-map"
     assert unregister_calls[1][0] == "non-stream-turn:session-tool-map:turn-tool-map"
     assert "non-stream-turn:session-tool-map:turn-tool-map" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_omits_unfinished_prior_user_turn_from_context_messages(monkeypatch):
+    commits: list[str] = []
+    captured_context_messages = []
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-context")],
+        detail_messages={
+            ("user-1", "session-context"): [
+                _message_record(
+                    session_id="session-context",
+                    role="user",
+                    content="first question",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-context",
+                    role="assistant",
+                    content="first answer",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 2),
+                ),
+                _message_record(
+                    session_id="session-context",
+                    role="user",
+                    content="stale interrupted question",
+                    turn_id="turn-stale",
+                    created_at=_ts(9, 3),
+                ),
+            ]
+        },
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(chat, "conversation_manager", FakeConversationManager())
+
+    async def _stream(**kwargs):
+        captured_context_messages.append(kwargs["context_messages"])
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-current"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "fresh answer"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message="current question", session_id="session-context", turn_id="turn-current"),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    assert result.response == "fresh answer"
+    assert captured_context_messages == [
+        [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "current question"},
+        ]
+    ]
+    assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
+    assert commits == ["commit", "commit"]
 
 
 @pytest.mark.asyncio

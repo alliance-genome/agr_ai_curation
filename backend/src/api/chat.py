@@ -194,10 +194,12 @@ def _build_context_messages_from_durable_messages(
     *,
     user_id: str,
     session_id: str,
+    user_message: str,
 ) -> List[Dict[str, str]]:
-    """Build runner context directly from the durable transcript rows."""
+    """Build runner context from durable rows while preserving completed-exchange semantics."""
 
-    context_messages: List[Dict[str, str]] = []
+    history_messages: List[Dict[str, str]] = []
+    pending_user_message: Optional[str] = None
     message_cursor: Optional[ChatMessageCursor] = None
 
     while True:
@@ -210,16 +212,22 @@ def _build_context_messages_from_durable_messages(
         if not message_page.items:
             break
 
-        for message in message_page.items:
-            context_message = _durable_message_to_context_message(message)
-            if context_message is not None:
-                context_messages.append(context_message)
+        page_exchanges, pending_user_message = _collect_durable_text_exchanges(
+            message_page.items,
+            pending_user_message=pending_user_message,
+        )
+        for durable_user_message, durable_assistant_message in page_exchanges:
+            history_messages.append({"role": "user", "content": durable_user_message})
+            history_messages.append({"role": "assistant", "content": durable_assistant_message})
 
         if message_page.next_cursor is None:
             break
         message_cursor = message_page.next_cursor
 
-    return context_messages
+    return _build_context_messages_from_history(
+        history_messages,
+        user_message=user_message,
+    )
 
 
 def _collect_durable_text_exchanges(
@@ -1380,6 +1388,7 @@ async def chat_endpoint(
             repository,
             user_id=user_id,
             session_id=session_id,
+            user_message=effective_user_message,
         )
         if context_messages:
             logger.info(
