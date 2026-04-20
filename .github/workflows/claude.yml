@@ -25,6 +25,7 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
+      id-token: write
       actions: read
     steps:
       # For issue_comment events, actions/checkout defaults to the default branch.
