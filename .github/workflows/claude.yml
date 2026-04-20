@@ -20,17 +20,21 @@ jobs:
         (github.event_name == 'issue_comment' && github.event.issue.pull_request && contains(github.event.comment.body, '@claude'))
       )
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
       pull-requests: write
       issues: write
-      id-token: write
       actions: read
     steps:
+      # For issue_comment events, actions/checkout defaults to the default branch.
+      # Explicitly check out the PR's merge ref so `git diff origin/main...HEAD`
+      # actually reflects the PR changes (matches pull_request event behavior).
       - name: Checkout repository
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ github.event_name == 'issue_comment' && format('refs/pull/{0}/merge', github.event.issue.number) || '' }}
 
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@v1
@@ -95,11 +99,33 @@ jobs:
             ', github.repository, github.event.issue.number) || '' }}
 
           # CLI arguments (v1 format)
+          #
+          # Permission strategy:
+          #   The GitHub Actions runner is an ephemeral, isolated VM. The scoped GITHUB_TOKEN
+          #   has `contents: read, pull-requests: write, issues: write` and dies with the job.
+          #   A narrow --allowedTools allowlist caused Claude to burn turns and budget on
+          #   permission-denied tool calls, resulting in intermittent "Reached maximum
+          #   budget ($3)" failures (33 denials in one failing run vs 1 in a successful run
+          #   on the same SHA). The allowlist also provided less security than it appeared:
+          #   per anthropics/claude-code-action#957, --allowedTools only restricts Bash
+          #   subcommands, never Read/Write/Grep/Glob.
+          #
+          #   We use --permission-mode bypassPermissions with a --disallowedTools blocklist
+          #   to close the obvious exfiltration and mutation paths while letting Claude
+          #   freely run read-only exploration commands needed for a thorough review.
+          #   See anthropics/claude-code#12232: --allowedTools is ignored in bypass mode,
+          #   so the blocklist is the only effective restriction here.
+          #
+          #   This is NOT a hardened security boundary — a determined prompt-injection
+          #   attack could exfiltrate via interpreters (python -c, node -e, /dev/tcp, etc).
+          #   The model is: ephemeral runner + trusted-contributor repo + scoped token.
+          #   If the repo ever opens to untrusted contributors, revisit this config.
           claude_args: |
             --model ${{ vars.CLAUDE_PR_REVIEW_MODEL || 'claude-sonnet-4-6' }}
             --max-turns 60
-            --max-budget-usd 3.00
-            --allowedTools "Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Bash(git diff:*),Bash(git log:*),Read,Glob,Grep"
+            --max-budget-usd 5.00
+            --permission-mode bypassPermissions
+            --disallowedTools "WebFetch,WebSearch,Edit,Write,NotebookEdit,Bash(curl:*),Bash(wget:*),Bash(nc:*),Bash(ssh:*),Bash(scp:*),Bash(rsync:*),Bash(gh pr close:*),Bash(gh pr edit:*),Bash(gh pr review:*),Bash(gh api:*),Bash(env),Bash(printenv:*),Bash(sudo:*)"
             --append-system-prompt "You are reviewing a pull request for the AI Curation application - a full-stack platform
             for AI-assisted scientific literature curation built with FastAPI (Python) backend and
             React (TypeScript) frontend.
