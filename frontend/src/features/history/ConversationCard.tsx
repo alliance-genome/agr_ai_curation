@@ -18,6 +18,8 @@ import type { ReactNode } from 'react'
 
 import type { ChatHistorySessionSummary } from '@/services/chatHistoryApi'
 
+import formatConversationTitle from './formatConversationTitle'
+
 interface ConversationCardProps {
   children?: ReactNode
   isExpanded: boolean
@@ -40,15 +42,6 @@ function formatDateTime(value?: string | null): string {
   }
 
   return date.toLocaleString()
-}
-
-function formatConversationTitle(session: ChatHistorySessionSummary): string {
-  const trimmedTitle = session.title?.trim()
-  if (trimmedTitle) {
-    return trimmedTitle
-  }
-
-  return `Conversation ${session.session_id.slice(0, 8)}`
 }
 
 export default function ConversationCard({

@@ -121,9 +121,7 @@ function extractFlowStepEvidence(payload: Record<string, unknown> | null): FlowS
       tool_name: readString(candidate.tool_name),
       agent_id: readString(candidate.agent_id),
       agent_name: readString(candidate.agent_name),
-      evidence_records: extractEvidenceRecords(
-        candidate.evidence_records ?? candidate.evidence_preview,
-      ),
+      evidence_records: extractEvidenceRecords(candidate.evidence_records),
       evidence_count: evidenceCount,
       total_evidence_records: totalEvidenceRecords,
     }
@@ -137,7 +135,7 @@ function toTranscriptRole(role: string): TranscriptMessageRecord['role'] {
     return role
   }
 
-  return 'assistant'
+  throw new Error(`Unknown transcript message role: ${role}`)
 }
 
 function toTranscriptMessage(message: ChatHistoryMessage): TranscriptMessageRecord {

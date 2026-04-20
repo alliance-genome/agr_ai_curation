@@ -19,6 +19,7 @@ import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import type { ChatHistorySessionSummary } from '@/services/chatHistoryApi'
 
 import ConversationList from './ConversationList'
+import formatConversationTitle from './formatConversationTitle'
 import HistorySearchBar from './HistorySearchBar'
 import {
   useBulkDeleteChatSessionsMutation,
@@ -43,17 +44,21 @@ function areSetsEqual(left: Set<string>, right: Set<string>): boolean {
   return true
 }
 
-function buildSessionTitle(session: ChatHistorySessionSummary | null): string {
-  if (!session) {
-    return ''
-  }
+function pruneSessionIds(
+  previousSessionIds: Set<string>,
+  visibleSessionIds: Set<string>,
+): Set<string> {
+  const nextSessionIds = new Set<string>()
 
-  const trimmedTitle = session.title?.trim()
-  if (trimmedTitle) {
-    return trimmedTitle
-  }
+  previousSessionIds.forEach((sessionId) => {
+    if (visibleSessionIds.has(sessionId)) {
+      nextSessionIds.add(sessionId)
+    }
+  })
 
-  return `Conversation ${session.session_id.slice(0, 8)}`
+  return areSetsEqual(previousSessionIds, nextSessionIds)
+    ? previousSessionIds
+    : nextSessionIds
 }
 
 export default function HistoryPage() {
@@ -77,36 +82,21 @@ export default function HistoryPage() {
 
   const sessions = listQuery.data?.sessions ?? []
   const visibleSessionIds = useMemo(() => sessions.map((session) => session.session_id), [sessions])
+  const visibleSessionIdSet = useMemo(() => new Set(visibleSessionIds), [visibleSessionIds])
   const allVisibleSelected = sessions.length > 0 && sessions.every((session) => selectedSessionIds.has(session.session_id))
   const normalizedRenameTitle = normalizeChatHistoryValue(renameTitle)
 
   useEffect(() => {
-    const nextVisibleIds = new Set(visibleSessionIds)
-
     setSelectedSessionIds((previousSelectedSessionIds) => {
-      const nextSelectedSessionIds = new Set<string>()
-      previousSelectedSessionIds.forEach((sessionId) => {
-        if (nextVisibleIds.has(sessionId)) {
-          nextSelectedSessionIds.add(sessionId)
-        }
-      })
-      return areSetsEqual(previousSelectedSessionIds, nextSelectedSessionIds)
-        ? previousSelectedSessionIds
-        : nextSelectedSessionIds
+      return pruneSessionIds(previousSelectedSessionIds, visibleSessionIdSet)
     })
+  }, [visibleSessionIdSet])
 
+  useEffect(() => {
     setExpandedSessionIds((previousExpandedSessionIds) => {
-      const nextExpandedSessionIds = new Set<string>()
-      previousExpandedSessionIds.forEach((sessionId) => {
-        if (nextVisibleIds.has(sessionId)) {
-          nextExpandedSessionIds.add(sessionId)
-        }
-      })
-      return areSetsEqual(previousExpandedSessionIds, nextExpandedSessionIds)
-        ? previousExpandedSessionIds
-        : nextExpandedSessionIds
+      return pruneSessionIds(previousExpandedSessionIds, visibleSessionIdSet)
     })
-  }, [visibleSessionIds])
+  }, [visibleSessionIdSet])
 
   useEffect(() => {
     if (!renameTarget) {
@@ -352,7 +342,7 @@ export default function HistoryPage() {
             </Alert>
           ) : null}
           <Typography variant="body2">
-            Delete <strong>{buildSessionTitle(deleteTarget)}</strong> from stored history? This action cannot be undone.
+            Delete <strong>{formatConversationTitle(deleteTarget)}</strong> from stored history? This action cannot be undone.
           </Typography>
         </DialogContent>
         <DialogActions>
