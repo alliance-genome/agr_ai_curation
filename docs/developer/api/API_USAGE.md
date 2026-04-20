@@ -274,7 +274,7 @@ curl -X POST http://localhost:8000/api/chat/session/bulk-delete \
   -H 'Content-Type: application/json' \
   -d '{"session_ids": ["session-a", "session-b"]}' | jq
 ```
-`/api/chat/history` returns paginated durable session summaries with optional `query`, `document_id`, and `cursor` filters. Session detail payloads include persisted transcript rows plus best-effort `active_document` metadata for resume flows.
+`/api/chat/history` returns paginated durable session summaries with optional `query`, `document_id`, and `cursor` filters. Session detail payloads include persisted transcript rows plus `active_document` metadata when the referenced document is available for resume flows.
 
 ### 7. Chat configuration
 ```bash
