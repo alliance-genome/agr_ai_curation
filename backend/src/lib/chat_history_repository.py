@@ -507,6 +507,42 @@ class ChatHistoryRepository:
             created=True,
         )
 
+    def get_message_by_turn_id(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+        role: str,
+    ) -> ChatMessageRecord | None:
+        """Return one visible transcript row for a specific turn id and role."""
+
+        normalized_role = _normalize_required_text(role, field_name="role")
+        if normalized_role not in VALID_CHAT_ROLES:
+            raise ValueError(f"role must be one of {sorted(VALID_CHAT_ROLES)}")
+
+        session = self._require_active_session(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+        )
+        normalized_turn_id = _normalize_required_text(turn_id, field_name="turn_id")
+        message = self._db.scalar(
+            select(ChatMessageModel)
+            .where(
+                ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.turn_id == normalized_turn_id,
+                ChatMessageModel.role == normalized_role,
+            )
+            .order_by(
+                ChatMessageModel.created_at.asc(),
+                ChatMessageModel.message_id.asc(),
+            )
+        )
+        if message is None:
+            return None
+
+        return _message_record(message)
+
     def _get_active_session(
         self,
         *,

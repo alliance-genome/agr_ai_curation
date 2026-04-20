@@ -351,7 +351,11 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
     monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
     monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
-    monkeypatch.setattr(chat, "persist_extraction_results", lambda requests: persisted_requests.extend(requests))
+    monkeypatch.setattr(
+        chat,
+        "persist_extraction_results",
+        lambda requests, **_kwargs: persisted_requests.extend(requests),
+    )
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -740,7 +744,11 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
     monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
     monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
     monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
-    monkeypatch.setattr(chat, "persist_extraction_results", lambda requests: persisted_requests.extend(requests))
+    monkeypatch.setattr(
+        chat,
+        "persist_extraction_results",
+        lambda requests, **_kwargs: persisted_requests.extend(requests),
+    )
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -845,7 +853,7 @@ def test_chat_stream_endpoint_emits_run_error_when_extraction_persistence_fails(
     monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
     monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
 
-    def _raise_persistence(_requests):
+    def _raise_persistence(_requests, **_kwargs):
         raise RuntimeError("db unavailable")
 
     monkeypatch.setattr(chat, "persist_extraction_results", _raise_persistence)

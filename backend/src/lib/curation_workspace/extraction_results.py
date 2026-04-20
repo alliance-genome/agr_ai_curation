@@ -193,7 +193,7 @@ def persist_extraction_results(
     *,
     db: Optional[Session] = None,
 ) -> list[CurationExtractionPersistenceResponse]:
-    """Persist extraction envelopes in one transaction."""
+    """Persist extraction envelopes, reusing the caller transaction when provided."""
 
     if not requests:
         return []
@@ -208,7 +208,10 @@ def persist_extraction_results(
             session.add(record)
             records.append(record)
 
-        session.commit()
+        if owns_session:
+            session.commit()
+        else:
+            session.flush()
 
         for record in records:
             session.refresh(record)

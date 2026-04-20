@@ -48,11 +48,13 @@ def _sample_legacy_envelope_payload() -> dict:
 
 
 class _FakeSession:
-    def __init__(self, *, fail_commit: bool = False):
+    def __init__(self, *, fail_commit: bool = False, fail_flush: bool = False):
         self.fail_commit = fail_commit
+        self.fail_flush = fail_flush
         self.added = None
         self.added_records = []
         self.commit_calls = 0
+        self.flush_calls = 0
         self.refresh_calls = 0
         self.rollback_calls = 0
         self.closed = False
@@ -60,6 +62,11 @@ class _FakeSession:
     def add(self, record):
         self.added = record
         self.added_records.append(record)
+
+    def flush(self):
+        self.flush_calls += 1
+        if self.fail_flush:
+            raise RuntimeError("db write failed")
 
     def commit(self):
         self.commit_calls += 1
@@ -464,7 +471,7 @@ def test_persist_extraction_result_rolls_back_on_commit_error():
     assert session.refresh_calls == 0
 
 
-def test_persist_extraction_results_writes_all_records_in_one_commit():
+def test_persist_extraction_results_flushes_all_records_on_shared_session():
     session = _FakeSession()
     requests = [
         CurationExtractionPersistenceRequest(
@@ -486,7 +493,8 @@ def test_persist_extraction_results_writes_all_records_in_one_commit():
     responses = persist_extraction_results(requests, db=session)
 
     assert len(session.added_records) == 2
-    assert session.commit_calls == 1
+    assert session.commit_calls == 0
+    assert session.flush_calls == 1
     assert session.refresh_calls == 2
     assert session.rollback_calls == 0
     assert len(responses) == 2
@@ -494,8 +502,39 @@ def test_persist_extraction_results_writes_all_records_in_one_commit():
     assert responses[1].extraction_result.agent_key == "pdf-extraction"
 
 
-def test_persist_extraction_results_rolls_back_batch_on_commit_error():
-    session = _FakeSession(fail_commit=True)
+def test_persist_extraction_results_commits_when_helper_owns_session(monkeypatch):
+    session = _FakeSession()
+    monkeypatch.setattr(module, "SessionLocal", lambda: session)
+    requests = [
+        CurationExtractionPersistenceRequest(
+            document_id=str(uuid4()),
+            adapter_key="gene",
+            agent_key="gene-expression",
+            source_kind=CurationExtractionSourceKind.CHAT,
+            payload_json=_sample_envelope_payload(),
+        ),
+        CurationExtractionPersistenceRequest(
+            document_id=str(uuid4()),
+            adapter_key="pdf",
+            agent_key="pdf-extraction",
+            source_kind=CurationExtractionSourceKind.FLOW,
+            payload_json=_sample_envelope_payload(),
+        ),
+    ]
+
+    responses = persist_extraction_results(requests)
+
+    assert len(session.added_records) == 2
+    assert session.commit_calls == 1
+    assert session.flush_calls == 0
+    assert session.refresh_calls == 2
+    assert session.rollback_calls == 0
+    assert session.closed is True
+    assert len(responses) == 2
+
+
+def test_persist_extraction_results_rolls_back_batch_on_shared_session_flush_error():
+    session = _FakeSession(fail_flush=True)
     requests = [
         CurationExtractionPersistenceRequest(
             document_id=str(uuid4()),
@@ -517,7 +556,8 @@ def test_persist_extraction_results_rolls_back_batch_on_commit_error():
         persist_extraction_results(requests, db=session)
 
     assert len(session.added_records) == 2
-    assert session.commit_calls == 1
+    assert session.commit_calls == 0
+    assert session.flush_calls == 1
     assert session.rollback_calls == 1
     assert session.refresh_calls == 0
 
