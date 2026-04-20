@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  DEFAULT_CHAT_HISTORY_LIST_LIMIT,
+  DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+  chatCacheKeys,
   clearAllNamespacedChatLocalStorage,
   clearLegacyChatLocalStorage,
   getChatLocalStorageKeys,
@@ -65,5 +68,68 @@ describe('chatCacheKeys', () => {
 
     expect(localStorage.getItem(firstUserKeys.messages)).toBeNull()
     expect(localStorage.getItem(secondUserKeys.pdfViewerSession)).toBeNull()
+  })
+
+  it('builds stable chat history list query keys from normalized request values', () => {
+    expect(
+      chatCacheKeys.history.list({
+        query: '  TP53  ',
+        cursor: ' cursor-1 ',
+        documentId: ' doc-1 ',
+      }),
+    ).toEqual([
+      'chat',
+      'history',
+      'lists',
+      {
+        limit: DEFAULT_CHAT_HISTORY_LIST_LIMIT,
+        cursor: 'cursor-1',
+        query: 'TP53',
+        documentId: 'doc-1',
+      },
+    ])
+
+    expect(
+      chatCacheKeys.history.list({
+        limit: DEFAULT_CHAT_HISTORY_LIST_LIMIT,
+        query: '   ',
+        cursor: null,
+        documentId: '',
+      }),
+    ).toEqual(chatCacheKeys.history.list())
+  })
+
+  it('builds session-scoped chat history detail keys with default message pagination', () => {
+    expect(
+      chatCacheKeys.history.detail({
+        sessionId: ' session-123 ',
+      }),
+    ).toEqual([
+      'chat',
+      'history',
+      'details',
+      'session-123',
+      {
+        messageLimit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+        messageCursor: null,
+      },
+    ])
+
+    expect(
+      chatCacheKeys.history.detail({
+        sessionId: 'session-123',
+        messageLimit: 25,
+        messageCursor: ' cursor-2 ',
+      }),
+    ).toEqual([
+      'chat',
+      'history',
+      'details',
+      'session-123',
+      {
+        messageLimit: 25,
+        messageCursor: 'cursor-2',
+      },
+    ])
   })
 })
