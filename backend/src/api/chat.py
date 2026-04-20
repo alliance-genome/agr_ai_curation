@@ -15,6 +15,7 @@ import json
 import logging
 import asyncio
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
@@ -28,6 +29,7 @@ from starlette.background import BackgroundTask
 from .auth import get_auth_dependency
 from ..lib.chat_history_repository import (
     ChatHistoryRepository,
+    ChatHistorySessionNotFoundError,
     ChatMessageCursor,
     ChatMessageRecord,
     ChatSessionCursor,
@@ -50,7 +52,7 @@ from ..lib.openai_agents.evidence_summary import (
 )
 from ..lib.flows.executor import execute_flow
 from ..lib.weaviate_client.documents import get_document
-from ..models.sql import CurationFlow, get_db
+from ..models.sql import CurationFlow, SessionLocal, get_db
 from ..schemas.curation_workspace import (
     CurationExtractionPersistenceRequest,
     CurationExtractionSourceKind,
@@ -122,35 +124,6 @@ class ChatMessage(BaseModel):
     # Only applies when using gpt-5 family models
     supervisor_reasoning: Optional[str] = None
     specialist_reasoning: Optional[str] = None
-
-
-def _get_conversation_history_for_session(user_id: str, session_id: str) -> List[Dict[str, str]]:
-    """
-    Retrieve conversation history from conversation_manager and format for OpenAI.
-
-    Converts from exchange format {'user': ..., 'assistant': ...}
-    to OpenAI message format [{'role': 'user', 'content': ...}, ...]
-
-    Args:
-        user_id: User identifier (Cognito sub claim)
-        session_id: Session identifier
-    """
-    if not conversation_manager.history_enabled:
-        return []
-
-    history = conversation_manager.get_session_history(user_id, session_id)
-    if not history:
-        return []
-
-    messages = []
-    for exchange in history:
-        # Each exchange has 'user' and 'assistant' keys
-        if exchange.get('user'):
-            messages.append({'role': 'user', 'content': exchange['user']})
-        if exchange.get('assistant'):
-            messages.append({'role': 'assistant', 'content': exchange['assistant']})
-
-    return messages
 
 
 def _build_context_messages_from_history(
@@ -781,6 +754,37 @@ class StopRequest(BaseModel):
     session_id: str
 
 
+class AssistantRescueRequest(BaseModel):
+    """Payload used to backfill a missing durable assistant row after stream save failure."""
+
+    turn_id: str
+    content: str
+    trace_id: Optional[str] = None
+
+
+class AssistantRescueResponse(BaseModel):
+    """Outcome of an assistant-rescue write."""
+
+    session_id: str
+    turn_id: str
+    created: bool
+    trace_id: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class PreparedChatStreamTurn:
+    """Durable stream state prepared before the runner starts."""
+
+    turn_id: str
+    effective_user_message: str
+    context_messages: List[Dict[str, str]]
+    replay_assistant_turn: ChatMessageRecord | None = None
+
+
+class ChatStreamAssistantSaveFailedError(RuntimeError):
+    """Raised when a completed stream only needs the assistant row to be rescued."""
+
+
 # Local fallback for cancel events (used alongside Redis for immediate in-process cancellation)
 # Redis provides cross-worker cancellation; this provides immediate same-worker cancellation
 _LOCAL_CANCEL_EVENTS: Dict[str, asyncio.Event] = {}
@@ -1060,6 +1064,234 @@ def _rollback_and_raise(db: Session, *, status_code: int, detail: str, exc: Exce
 
     db.rollback()
     raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _stream_event_payload(
+    event_type: str,
+    *,
+    session_id: str,
+    turn_id: str,
+    trace_id: Optional[str] = None,
+    **payload: Any,
+) -> Dict[str, Any]:
+    """Build one SSE payload with consistent stream/session identifiers."""
+
+    event_payload: Dict[str, Any] = {
+        "type": event_type,
+        "session_id": session_id,
+        "sessionId": session_id,
+        "turn_id": turn_id,
+    }
+    if trace_id:
+        event_payload["trace_id"] = trace_id
+    event_payload.update(payload)
+    return event_payload
+
+
+def _stream_event_sse(event_payload: Dict[str, Any]) -> str:
+    """Serialize one SSE payload."""
+
+    return f"data: {json.dumps(event_payload, default=str)}\n\n"
+
+
+def _build_terminal_turn_event(
+    event_type: str,
+    *,
+    session_id: str,
+    turn_id: str,
+    trace_id: Optional[str] = None,
+    message: Optional[str] = None,
+    error_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Build one closed terminal stream event."""
+
+    payload = _stream_event_payload(
+        event_type,
+        session_id=session_id,
+        turn_id=turn_id,
+        trace_id=trace_id,
+    )
+    if message:
+        payload["message"] = message
+    if error_type:
+        payload["error_type"] = error_type
+    return payload
+
+
+def _prepare_chat_stream_turn(
+    *,
+    repository: ChatHistoryRepository,
+    db: Session,
+    session_id: str,
+    user_id: str,
+    user_message: str,
+    requested_turn_id: Optional[str],
+    active_document_id: UUID | None,
+) -> PreparedChatStreamTurn:
+    """Persist the durable user turn and build runner context for streaming."""
+
+    turn_id = requested_turn_id or uuid.uuid4().hex
+    effective_user_message = user_message
+
+    repository.get_or_create_session(
+        session_id=session_id,
+        user_auth_sub=user_id,
+        active_document_id=active_document_id,
+    )
+    user_turn = repository.append_message(
+        session_id=session_id,
+        user_auth_sub=user_id,
+        role="user",
+        content=user_message,
+        turn_id=turn_id,
+    )
+    db.commit()
+
+    replay_assistant_turn: ChatMessageRecord | None = None
+    if not user_turn.created:
+        effective_user_message = user_turn.message.content
+        replay_assistant_turn = repository.get_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=turn_id,
+            role="assistant",
+        )
+        if replay_assistant_turn is not None:
+            logger.info(
+                "Returning durable replay for streaming chat turn %s",
+                turn_id,
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
+            )
+            return PreparedChatStreamTurn(
+                turn_id=turn_id,
+                effective_user_message=effective_user_message,
+                context_messages=[],
+                replay_assistant_turn=replay_assistant_turn,
+            )
+
+        logger.info(
+            "Retrying incomplete streaming chat turn %s after prior request ended",
+            turn_id,
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
+        )
+        if effective_user_message != user_message:
+            logger.info(
+                "Reusing stored user content for retried streaming turn %s",
+                turn_id,
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
+            )
+
+    context_messages = _build_context_messages_from_durable_messages(
+        repository,
+        user_id=user_id,
+        session_id=session_id,
+        user_message=effective_user_message,
+    )
+    return PreparedChatStreamTurn(
+        turn_id=turn_id,
+        effective_user_message=effective_user_message,
+        context_messages=context_messages,
+    )
+
+
+def _persist_completed_chat_stream_turn(
+    *,
+    session_id: str,
+    user_id: str,
+    turn_id: str,
+    user_message: str,
+    assistant_message: str,
+    trace_id: Optional[str],
+    extraction_candidates: List[ExtractionEnvelopeCandidate],
+    document_id: Optional[str],
+) -> ChatMessageRecord:
+    """Persist the completed stream assistant turn using a fresh SQL session."""
+
+    completion_db = SessionLocal()
+    try:
+        repository = _get_chat_history_repository(completion_db)
+        session = repository.get_session(
+            session_id=session_id,
+            user_auth_sub=user_id,
+        )
+        if session is None:
+            raise ChatHistorySessionNotFoundError("Chat session not found")
+
+        existing_assistant_turn = repository.get_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=turn_id,
+            role="assistant",
+        )
+        if existing_assistant_turn is not None:
+            try:
+                _ensure_conversation_history_contains_exchange(
+                    repository,
+                    user_id=user_id,
+                    session_id=session_id,
+                    user_message=user_message,
+                    assistant_message=existing_assistant_turn.content,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to refresh in-memory conversation history for replayed stream turn",
+                    extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
+                    exc_info=True,
+                )
+            return existing_assistant_turn
+
+        _persist_extraction_candidates(
+            candidates=extraction_candidates,
+            document_id=document_id,
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            source_kind=CurationExtractionSourceKind.CHAT,
+            db=completion_db,
+        )
+        completion_db.commit()
+
+        try:
+            assistant_turn = repository.append_message(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                role="assistant",
+                content=assistant_message,
+                turn_id=turn_id,
+                trace_id=trace_id,
+            )
+            completion_db.commit()
+        except Exception as exc:
+            completion_db.rollback()
+            raise ChatStreamAssistantSaveFailedError(
+                "Failed to persist stream assistant turn"
+            ) from exc
+
+        try:
+            _ensure_conversation_history_contains_exchange(
+                repository,
+                user_id=user_id,
+                session_id=session_id,
+                user_message=user_message,
+                assistant_message=assistant_turn.message.content,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to refresh in-memory conversation history after stream turn save",
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
+                exc_info=True,
+            )
+        return assistant_turn.message
+    except ChatHistorySessionNotFoundError:
+        completion_db.rollback()
+        raise
+    except ChatStreamAssistantSaveFailedError:
+        raise
+    except Exception:
+        completion_db.rollback()
+        raise
+    finally:
+        completion_db.close()
 
 
 # Document Management Endpoints
@@ -1510,13 +1742,15 @@ async def chat_endpoint(
 
 
 @router.post("/chat/stream")
-async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_auth_dependency()):
+async def chat_stream_endpoint(
+    chat_message: ChatMessage,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+):
     """Stream a chat response using Server-Sent Events."""
     session_id = chat_message.session_id or str(uuid.uuid4())
-    user_id = user.get("sub")
-
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
 
     # Set context variables for file output tools
     set_current_session_id(session_id)
@@ -1545,19 +1779,6 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
             extra={"session_id": session_id, "user_id": user_id},
         )
 
-    # Retrieve conversation history for multi-turn context
-    conversation_history = _get_conversation_history_for_session(user_id, session_id)
-    context_messages = _build_context_messages_from_history(
-        conversation_history,
-        user_message=chat_message.message,
-    )
-    if conversation_history:
-        logger.info(
-            "Including %s history messages for session %s",
-            len(conversation_history),
-            session_id,
-            extra={"session_id": session_id, "user_id": user_id},
-        )
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
     except Exception as exc:
@@ -1602,20 +1823,109 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
         await unregister_active_stream(target_session_id, user_id=user_id, stream_token=stream_claim_token)
         await clear_cancel_signal(target_session_id)
 
+    try:
+        active_document_id, _ = _resolve_session_create_active_document(
+            repository=repository,
+            user_id=user_id,
+        )
+        prepared_turn = _prepare_chat_stream_turn(
+            repository=repository,
+            db=db,
+            session_id=session_id,
+            user_id=user_id,
+            user_message=chat_message.message,
+            requested_turn_id=chat_message.turn_id,
+            active_document_id=active_document_id,
+        )
+    except HTTPException:
+        await _cleanup_stream_state(session_id)
+        raise
+    except ValueError as exc:
+        await _cleanup_stream_state(session_id)
+        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+    except Exception as exc:
+        await _cleanup_stream_state(session_id)
+        logger.error(
+            "Failed to persist durable stream user turn for session %s",
+            session_id,
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+            exc_info=True,
+        )
+        _rollback_and_raise(
+            db,
+            status_code=500,
+            detail="Failed to persist chat request",
+            exc=exc,
+        )
+
+    if prepared_turn.context_messages:
+        logger.info(
+            "Including %s durable context messages for session %s",
+            len(prepared_turn.context_messages),
+            session_id,
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": prepared_turn.turn_id},
+        )
+
+    if prepared_turn.replay_assistant_turn is not None:
+        _ensure_conversation_history_contains_exchange(
+            repository,
+            user_id=user_id,
+            session_id=session_id,
+            user_message=prepared_turn.effective_user_message,
+            assistant_message=prepared_turn.replay_assistant_turn.content,
+        )
+
+        async def replay_stream():
+            try:
+                yield _stream_event_sse(
+                    _stream_event_payload(
+                        "TEXT_MESSAGE_CONTENT",
+                        session_id=session_id,
+                        turn_id=prepared_turn.turn_id,
+                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                        content=prepared_turn.replay_assistant_turn.content,
+                    )
+                )
+                yield _stream_event_sse(
+                    _build_terminal_turn_event(
+                        "turn_completed",
+                        session_id=session_id,
+                        turn_id=prepared_turn.turn_id,
+                        trace_id=prepared_turn.replay_assistant_turn.trace_id,
+                        message="Chat turn completed.",
+                    )
+                )
+            finally:
+                await _cleanup_stream_state(session_id)
+
+        return StreamingResponse(
+            replay_stream(),
+            media_type="text/event-stream",
+            background=BackgroundTask(_cleanup_stream_state, session_id),
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
     async def generate_stream():
         """Generate SSE events from the agent runner."""
         current_session_id = session_id
+        current_turn_id = prepared_turn.turn_id
         full_response = ""
-        trace_id = None  # Capture trace_id for error reporting
+        trace_id = None
         run_finished = False
-        pending_run_finished_event: Optional[Dict[str, Any]] = None
+        runner_error_message: Optional[str] = None
+        runner_error_type: Optional[str] = None
+        interrupted_message: Optional[str] = None
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
         evidence_records: List[Dict[str, Any]] = []
         evidence_summary_event_received = False
 
         try:
             async for event in run_agent_streamed(
-                context_messages=context_messages,
+                context_messages=prepared_turn.context_messages,
                 user_id=user_id,
                 session_id=current_session_id,
                 document_id=document_id,
@@ -1628,41 +1938,46 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                 supervisor_reasoning=chat_message.supervisor_reasoning,
                 specialist_reasoning=chat_message.specialist_reasoning,
             ):
-                # Check for cancellation (local event OR Redis signal)
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
+                    interrupted_message = "Run cancelled by user"
                     logger.info(
                         "Chat stream cancelled for session %s",
                         current_session_id,
-                        extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+                        extra={
+                            "session_id": current_session_id,
+                            "user_id": user_id,
+                            "trace_id": trace_id,
+                            "turn_id": current_turn_id,
+                        },
                     )
-                    yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': 'Run cancelled by user', 'session_id': current_session_id})}\n\n"
                     break
 
-                # Flatten event: merge data fields to top level for frontend compatibility
-                # Frontend expects: {type, delta, content, trace_id, session_id, ...}
-                # Runner sends: {type, data: {delta, trace_id, ...}}
-                # Audit events send: {type, timestamp, details}
                 event_type = event.get("type")
                 event_data = event.get("data", {}) or {}
 
-                flat_event = {"type": event_type, "session_id": current_session_id, "sessionId": current_session_id}
-                flat_event.update(event_data)  # Merge all data fields to top level
+                if "trace_id" in event_data:
+                    trace_id = event_data.get("trace_id")
 
-                # Preserve audit event fields (timestamp, details) if present at top level
+                flat_event = _stream_event_payload(
+                    str(event_type),
+                    session_id=current_session_id,
+                    turn_id=current_turn_id,
+                    trace_id=trace_id,
+                )
+                flat_event.update(event_data)
+                flat_event["session_id"] = current_session_id
+                flat_event["sessionId"] = current_session_id
+                flat_event["turn_id"] = current_turn_id
+
                 if "timestamp" in event:
                     flat_event["timestamp"] = event["timestamp"]
                 if "details" in event:
                     flat_event["details"] = event["details"]
 
-                # CRITICAL: For CHUNK_PROVENANCE, copy top-level fields that aren't in event_data
                 if event_type == "CHUNK_PROVENANCE":
                     for key in ["chunk_id", "doc_items", "message_id", "source_tool"]:
                         if key in event and key not in flat_event:
                             flat_event[key] = event[key]
-
-                # Capture trace_id for error reporting (from RUN_STARTED event)
-                if event_type == "RUN_STARTED" and "trace_id" in event_data:
-                    trace_id = event_data.get("trace_id")
 
                 if event_type == "evidence_summary":
                     event_evidence_records = _extract_evidence_records(event.get("evidence_records"))
@@ -1686,13 +2001,13 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                             flat_event["evidence_records"] = event["details"]["evidence_records"]
                     for key, value in evidence_curation_metadata.items():
                         flat_event[key] = value
-                    yield f"data: {json.dumps(flat_event, default=str)}\n\n"
+                    yield _stream_event_sse(flat_event)
                     continue
 
                 candidate = _build_extraction_candidate_from_tool_event(
                     event,
                     tool_agent_map=tool_agent_map,
-                    conversation_summary=chat_message.message,
+                    conversation_summary=prepared_turn.effective_user_message,
                     metadata={"document_name": document_name} if document_name else None,
                 )
                 if candidate:
@@ -1703,63 +2018,282 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
                     if evidence_record:
                         evidence_records.append(evidence_record)
 
-                # Capture response for history
                 if event_type == "RUN_FINISHED":
                     full_response = event_data.get("response", "")
                     run_finished = True
-                    pending_run_finished_event = flat_event
                     continue
 
-                yield f"data: {json.dumps(flat_event, default=str)}\n\n"
+                if event_type == "RUN_ERROR":
+                    runner_error_message = event_data.get("message")
+                    runner_error_type = event_data.get("error_type")
+                    if not runner_error_message:
+                        logger.error(
+                            "Agent sent RUN_ERROR without message field",
+                            extra={"session_id": current_session_id, "turn_id": current_turn_id},
+                        )
+                        runner_error_message = "Agent error (no details provided)"
+                    if not runner_error_type:
+                        logger.error(
+                            "Agent sent RUN_ERROR without error_type field",
+                            extra={"session_id": current_session_id, "turn_id": current_turn_id},
+                        )
+                    logger.error(
+                        "Agent error during streaming chat: %s",
+                        runner_error_message,
+                        extra={
+                            "session_id": current_session_id,
+                            "user_id": user_id,
+                            "trace_id": trace_id,
+                            "turn_id": current_turn_id,
+                        },
+                    )
+                    break
 
-            # Save to conversation history
+                yield _stream_event_sse(flat_event)
+
+            if interrupted_message:
+                yield _stream_event_sse(
+                    _build_terminal_turn_event(
+                        "turn_interrupted",
+                        session_id=current_session_id,
+                        turn_id=current_turn_id,
+                        trace_id=trace_id,
+                        message=interrupted_message,
+                    )
+                )
+                return
+
+            if runner_error_message:
+                yield _stream_event_sse(
+                    _build_terminal_turn_event(
+                        "turn_failed",
+                        session_id=current_session_id,
+                        turn_id=current_turn_id,
+                        trace_id=trace_id,
+                        message=runner_error_message,
+                        error_type=runner_error_type,
+                    )
+                )
+                return
+
             if run_finished:
                 if evidence_records and not evidence_summary_event_received:
                     evidence_curation_metadata = _build_candidate_evidence_curation_metadata(
                         extraction_candidates,
                     )
-                    yield (
-                        "data: "
-                        f"{json.dumps({'type': 'evidence_summary', 'timestamp': datetime.now(timezone.utc).isoformat(), 'session_id': current_session_id, 'sessionId': current_session_id, 'evidence_records': evidence_records, **evidence_curation_metadata}, default=str)}\n\n"
+                    yield _stream_event_sse(
+                        _stream_event_payload(
+                            "evidence_summary",
+                            session_id=current_session_id,
+                            turn_id=current_turn_id,
+                            trace_id=trace_id,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            evidence_records=evidence_records,
+                            **evidence_curation_metadata,
+                        )
                     )
-                _persist_extraction_candidates(
-                    candidates=extraction_candidates,
-                    document_id=document_id,
-                    user_id=user_id,
-                    session_id=current_session_id,
-                    trace_id=trace_id,
-                    source_kind=CurationExtractionSourceKind.CHAT,
-                )
-                if pending_run_finished_event:
-                    yield (
-                        f"data: {json.dumps(pending_run_finished_event, default=str)}\n\n"
-                    )
-            if full_response:
-                conversation_manager.add_exchange(user_id, current_session_id, chat_message.message, full_response)
 
+                try:
+                    assistant_turn = _persist_completed_chat_stream_turn(
+                        session_id=current_session_id,
+                        user_id=user_id,
+                        turn_id=current_turn_id,
+                        user_message=prepared_turn.effective_user_message,
+                        assistant_message=full_response,
+                        trace_id=trace_id,
+                        extraction_candidates=extraction_candidates,
+                        document_id=document_id,
+                    )
+                except ChatHistorySessionNotFoundError:
+                    yield _stream_event_sse(
+                        _build_terminal_turn_event(
+                            "session_gone",
+                            session_id=current_session_id,
+                            turn_id=current_turn_id,
+                            trace_id=trace_id,
+                            message="Chat session is no longer available.",
+                        )
+                    )
+                    return
+                except ChatStreamAssistantSaveFailedError as exc:
+                    root_exc = exc.__cause__ or exc
+                    logger.error(
+                        "Failed to persist durable stream assistant turn for session %s",
+                        current_session_id,
+                        extra={
+                            "session_id": current_session_id,
+                            "user_id": user_id,
+                            "trace_id": trace_id,
+                            "turn_id": current_turn_id,
+                        },
+                        exc_info=True,
+                    )
+                    yield _stream_event_sse(
+                        _stream_event_payload(
+                            "SUPERVISOR_ERROR",
+                            session_id=current_session_id,
+                            turn_id=current_turn_id,
+                            trace_id=trace_id,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            details={
+                                "error": str(root_exc),
+                                "context": type(root_exc).__name__,
+                                "message": (
+                                    "The chat response completed, but saving the durable assistant turn failed."
+                                ),
+                            },
+                        )
+                    )
+                    yield _stream_event_sse(
+                        _build_terminal_turn_event(
+                            "turn_save_failed",
+                            session_id=current_session_id,
+                            turn_id=current_turn_id,
+                            trace_id=trace_id,
+                            message="Chat completed, but the assistant response could not be saved.",
+                            error_type=type(root_exc).__name__,
+                        )
+                    )
+                    return
+                except Exception as exc:
+                    logger.error(
+                        "Failed to persist durable stream completion side effects for session %s",
+                        current_session_id,
+                        extra={
+                            "session_id": current_session_id,
+                            "user_id": user_id,
+                            "trace_id": trace_id,
+                            "turn_id": current_turn_id,
+                        },
+                        exc_info=True,
+                    )
+                    yield _stream_event_sse(
+                        _stream_event_payload(
+                            "SUPERVISOR_ERROR",
+                            session_id=current_session_id,
+                            turn_id=current_turn_id,
+                            trace_id=trace_id,
+                            timestamp=datetime.now(timezone.utc).isoformat(),
+                            details={
+                                "error": str(exc),
+                                "context": type(exc).__name__,
+                                "message": (
+                                    "The chat response completed, but saving durable stream side effects failed."
+                                ),
+                            },
+                        )
+                    )
+                    yield _stream_event_sse(
+                        _build_terminal_turn_event(
+                            "turn_failed",
+                            session_id=current_session_id,
+                            turn_id=current_turn_id,
+                            trace_id=trace_id,
+                            message="Chat completed, but durable side effects could not be saved.",
+                            error_type=type(exc).__name__,
+                        )
+                    )
+                    return
+
+                yield _stream_event_sse(
+                    _build_terminal_turn_event(
+                        "turn_completed",
+                        session_id=current_session_id,
+                        turn_id=current_turn_id,
+                        trace_id=assistant_turn.trace_id or trace_id,
+                        message="Chat turn completed.",
+                    )
+                )
+                return
+
+            yield _stream_event_sse(
+                _build_terminal_turn_event(
+                    "turn_failed",
+                    session_id=current_session_id,
+                    turn_id=current_turn_id,
+                    trace_id=trace_id,
+                    message="Chat run did not complete.",
+                    error_type="IncompleteRun",
+                )
+            )
         except asyncio.CancelledError:
             logger.warning(
                 "Chat stream cancelled unexpectedly for session %s",
                 current_session_id,
-                extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+                extra={
+                    "session_id": current_session_id,
+                    "user_id": user_id,
+                    "trace_id": trace_id,
+                    "turn_id": current_turn_id,
+                },
             )
-            # Emit audit event so it's visible in the audit panel
-            yield f"data: {json.dumps({'type': 'SUPERVISOR_ERROR', 'timestamp': datetime.now(timezone.utc).isoformat(), 'details': {'error': 'Stream cancelled unexpectedly', 'context': 'asyncio.CancelledError', 'message': 'The request was interrupted. Please provide feedback using the ⋮ menu, then try your query again.'}, 'session_id': current_session_id})}\n\n"
-            # Emit RUN_ERROR with trace_id for feedback reporting
-            yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': 'The request was interrupted unexpectedly. Please provide feedback using the ⋮ menu on this message, then try your query again.', 'error_type': 'StreamCancelled', 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
-        except Exception as e:
+            yield _stream_event_sse(
+                _stream_event_payload(
+                    "SUPERVISOR_ERROR",
+                    session_id=current_session_id,
+                    turn_id=current_turn_id,
+                    trace_id=trace_id,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    details={
+                        "error": "Stream cancelled unexpectedly",
+                        "context": "asyncio.CancelledError",
+                        "message": (
+                            "The request was interrupted. Please provide feedback using the ⋮ menu, then try your query again."
+                        ),
+                    },
+                )
+            )
+            yield _stream_event_sse(
+                _build_terminal_turn_event(
+                    "turn_interrupted",
+                    session_id=current_session_id,
+                    turn_id=current_turn_id,
+                    trace_id=trace_id,
+                    message=(
+                        "The request was interrupted unexpectedly. Please provide feedback using the ⋮ menu on this message, then try your query again."
+                    ),
+                    error_type="StreamCancelled",
+                )
+            )
+        except Exception as exc:
             logger.error(
                 "Stream error: %s",
-                e,
-                extra={"session_id": current_session_id, "user_id": user_id, "trace_id": trace_id},
+                exc,
+                extra={
+                    "session_id": current_session_id,
+                    "user_id": user_id,
+                    "trace_id": trace_id,
+                    "turn_id": current_turn_id,
+                },
                 exc_info=True,
             )
-            # Emit audit event so it's visible in the audit panel
-            yield f"data: {json.dumps({'type': 'SUPERVISOR_ERROR', 'timestamp': datetime.now(timezone.utc).isoformat(), 'details': {'error': str(e), 'context': type(e).__name__, 'message': 'An error occurred. Please provide feedback using the ⋮ menu, then try your query again.'}, 'session_id': current_session_id})}\n\n"
-            # Emit RUN_ERROR with trace_id for feedback reporting
-            yield f"data: {json.dumps({'type': 'RUN_ERROR', 'message': 'An error occurred. Please provide feedback using the ⋮ menu on this message, then try your query again.', 'error_type': type(e).__name__, 'trace_id': trace_id, 'session_id': current_session_id})}\n\n"
+            yield _stream_event_sse(
+                _stream_event_payload(
+                    "SUPERVISOR_ERROR",
+                    session_id=current_session_id,
+                    turn_id=current_turn_id,
+                    trace_id=trace_id,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    details={
+                        "error": str(exc),
+                        "context": type(exc).__name__,
+                        "message": "An error occurred. Please provide feedback using the ⋮ menu, then try your query again.",
+                    },
+                )
+            )
+            yield _stream_event_sse(
+                _build_terminal_turn_event(
+                    "turn_failed",
+                    session_id=current_session_id,
+                    turn_id=current_turn_id,
+                    trace_id=trace_id,
+                    message=(
+                        "An error occurred. Please provide feedback using the ⋮ menu on this message, then try your query again."
+                    ),
+                    error_type=type(exc).__name__,
+                )
+            )
         finally:
-            # Cleanup: remove from local dict, unregister from Redis, clear any cancel signal
             await _cleanup_stream_state(current_session_id)
 
     return StreamingResponse(
@@ -1808,6 +2342,79 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
         local_event.set()
 
     return {"status": "ok", "message": "Cancellation requested (cooperative - may take a moment)."}
+
+
+@router.post("/chat/{session_id}/assistant-rescue", response_model=AssistantRescueResponse)
+async def assistant_rescue(
+    session_id: str,
+    request: AssistantRescueRequest,
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+):
+    """Idempotently backfill a missing durable assistant turn for one completed stream."""
+
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
+
+    try:
+        session = repository.get_session(
+            session_id=session_id,
+            user_auth_sub=user_id,
+        )
+        if session is None:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+
+        user_turn = repository.get_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=request.turn_id,
+            role="user",
+        )
+        if user_turn is None:
+            raise HTTPException(status_code=409, detail="Chat user turn not found")
+
+        assistant_turn = repository.append_message(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            role="assistant",
+            content=request.content,
+            turn_id=request.turn_id,
+            trace_id=request.trace_id,
+        )
+        db.commit()
+        _ensure_conversation_history_contains_exchange(
+            repository,
+            user_id=user_id,
+            session_id=session_id,
+            user_message=user_turn.content,
+            assistant_message=assistant_turn.message.content,
+        )
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+    except ChatHistorySessionNotFoundError as exc:
+        _rollback_and_raise(db, status_code=404, detail="Chat session not found", exc=exc)
+    except Exception as exc:
+        logger.error(
+            "Failed to rescue assistant turn for session %s",
+            session_id,
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": request.turn_id},
+            exc_info=True,
+        )
+        _rollback_and_raise(
+            db,
+            status_code=500,
+            detail="Failed to rescue assistant turn",
+            exc=exc,
+        )
+
+    return AssistantRescueResponse(
+        session_id=session_id,
+        turn_id=request.turn_id,
+        created=assistant_turn.created,
+        trace_id=assistant_turn.message.trace_id,
+    )
 
 
 @router.post("/chat/execute-flow")

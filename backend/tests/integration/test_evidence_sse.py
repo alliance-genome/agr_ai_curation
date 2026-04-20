@@ -72,7 +72,7 @@ def test_chat_stream_emits_tool_verified_evidence_summary_with_frontend_shape(
         *(["TOOL_COMPLETE"] * len(expected_sse_records)),
         "TOOL_COMPLETE",
         "evidence_summary",
-        "RUN_FINISHED",
+        "turn_completed",
     ]
 
     evidence_summary_event = next(

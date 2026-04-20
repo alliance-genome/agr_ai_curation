@@ -192,7 +192,7 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
         events = collect_sse_events(stream_response)
         assert stream_response.status_code == 200
 
-    assert [event["type"] for event in events][-2:] == ["evidence_summary", "RUN_FINISHED"]
+    assert [event["type"] for event in events][-2:] == ["evidence_summary", "turn_completed"]
 
     extraction_record = test_db.scalars(
         select(ExtractionResultModel).where(
