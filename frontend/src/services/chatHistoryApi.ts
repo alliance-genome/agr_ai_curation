@@ -1,4 +1,5 @@
 import { readCurationApiError } from '@/features/curation/services/api'
+import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 
 export interface ChatHistoryActiveDocument {
   id: string
@@ -87,15 +88,6 @@ interface ChatHistoryFetchOptions {
   expectJson?: boolean
 }
 
-function normalizeChatHistoryQueryValue(value: string | null | undefined): string | null {
-  if (value == null) {
-    return null
-  }
-
-  const normalizedValue = value.trim()
-  return normalizedValue.length > 0 ? normalizedValue : null
-}
-
 function encodeSessionId(sessionId: string): string {
   return encodeURIComponent(sessionId.trim())
 }
@@ -136,17 +128,17 @@ export function buildChatHistoryListQueryParams(
     params.set('limit', String(request.limit))
   }
 
-  const cursor = normalizeChatHistoryQueryValue(request.cursor)
+  const cursor = normalizeChatHistoryValue(request.cursor)
   if (cursor) {
     params.set('cursor', cursor)
   }
 
-  const query = normalizeChatHistoryQueryValue(request.query)
+  const query = normalizeChatHistoryValue(request.query)
   if (query) {
     params.set('query', query)
   }
 
-  const documentId = normalizeChatHistoryQueryValue(request.documentId)
+  const documentId = normalizeChatHistoryValue(request.documentId)
   if (documentId) {
     params.set('document_id', documentId)
   }
@@ -163,7 +155,7 @@ export function buildChatHistoryDetailQueryParams(
     params.set('message_limit', String(request.messageLimit))
   }
 
-  const messageCursor = normalizeChatHistoryQueryValue(request.messageCursor)
+  const messageCursor = normalizeChatHistoryValue(request.messageCursor)
   if (messageCursor) {
     params.set('message_cursor', messageCursor)
   }

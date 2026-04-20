@@ -1,3 +1,5 @@
+import { normalizeChatHistoryValue } from './chatHistoryNormalization'
+
 const CHAT_STORAGE_PREFIX = 'chat-cache:v1'
 const CHAT_QUERY_KEY_PREFIX = ['chat'] as const
 
@@ -36,15 +38,6 @@ function buildChatStorageKey(userId: string, key: string): string {
   return `${CHAT_STORAGE_PREFIX}:${userId}:${key}`
 }
 
-function normalizeChatHistoryCacheValue(value: string | null | undefined): string | null {
-  if (value == null) {
-    return null
-  }
-
-  const normalizedValue = value.trim()
-  return normalizedValue.length > 0 ? normalizedValue : null
-}
-
 export const chatCacheKeys = {
   all: CHAT_QUERY_KEY_PREFIX,
   history: {
@@ -55,9 +48,9 @@ export const chatCacheKeys = {
         ...chatCacheKeys.history.lists(),
         {
           limit: request.limit ?? DEFAULT_CHAT_HISTORY_LIST_LIMIT,
-          cursor: normalizeChatHistoryCacheValue(request.cursor),
-          query: normalizeChatHistoryCacheValue(request.query),
-          documentId: normalizeChatHistoryCacheValue(request.documentId),
+          cursor: normalizeChatHistoryValue(request.cursor),
+          query: normalizeChatHistoryValue(request.query),
+          documentId: normalizeChatHistoryValue(request.documentId),
         },
       ] as const,
     details: () => [...chatCacheKeys.history.all(), 'details'] as const,
@@ -68,7 +61,7 @@ export const chatCacheKeys = {
         ...chatCacheKeys.history.detailSession(request.sessionId),
         {
           messageLimit: request.messageLimit ?? DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
-          messageCursor: normalizeChatHistoryCacheValue(request.messageCursor),
+          messageCursor: normalizeChatHistoryValue(request.messageCursor),
         },
       ] as const,
   },
