@@ -186,13 +186,11 @@ def _hydrate_conversation_history_from_durable_messages(
 ) -> None:
     """Synchronize in-memory chat history with the durable text transcript."""
 
-    if not getattr(conversation_manager, "history_enabled", False):
+    if not conversation_manager.history_enabled:
         return
 
-    get_session_history = getattr(conversation_manager, "get_session_history", None)
-    add_exchange = getattr(conversation_manager, "add_exchange", None)
-    if get_session_history is None or add_exchange is None:
-        return
+    get_session_history = conversation_manager.get_session_history
+    add_exchange = conversation_manager.add_exchange
 
     durable_exchanges: List[tuple[str, str]] = []
     pending_user_message: Optional[str] = None
@@ -218,11 +216,7 @@ def _hydrate_conversation_history_from_durable_messages(
             break
         message_cursor = message_page.next_cursor
 
-    clear_session_history = getattr(conversation_manager, "clear_session_history", None)
-    if clear_session_history is not None:
-        clear_session_history(user_id, session_id)
-    else:
-        get_session_history(user_id, session_id).clear()
+    conversation_manager.clear_session_history(user_id, session_id)
 
     for durable_user_message, durable_assistant_message in durable_exchanges:
         add_exchange(user_id, session_id, durable_user_message, durable_assistant_message)
@@ -238,13 +232,11 @@ def _ensure_conversation_history_contains_exchange(
 ) -> None:
     """Ensure replayed durable exchanges become visible to subsequent prompt history on this worker."""
 
-    if not getattr(conversation_manager, "history_enabled", False):
+    if not conversation_manager.history_enabled:
         return
 
-    get_session_history = getattr(conversation_manager, "get_session_history", None)
-    add_exchange = getattr(conversation_manager, "add_exchange", None)
-    if get_session_history is None or add_exchange is None:
-        return
+    get_session_history = conversation_manager.get_session_history
+    add_exchange = conversation_manager.add_exchange
 
     session_history = get_session_history(user_id, session_id)
     if not session_history:

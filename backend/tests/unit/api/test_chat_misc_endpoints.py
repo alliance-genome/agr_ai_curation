@@ -519,6 +519,22 @@ class FakeConversationManager:
             {"user": user_message, "assistant": assistant_response}
         )
 
+    def clear_session_history(self, user_id: str, session_id: str) -> None:
+        self._history[(user_id, session_id)] = []
+
+
+def _conversation_manager_stub(
+    *,
+    history_enabled: bool = True,
+    add_exchange=None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        history_enabled=history_enabled,
+        get_session_history=lambda *_args: [],
+        add_exchange=add_exchange or (lambda *_args: None),
+        clear_session_history=lambda *_args: None,
+    )
+
 
 @pytest.mark.asyncio
 async def test_get_conversation_history_for_session_converts_exchange_format(monkeypatch):
@@ -546,7 +562,11 @@ async def test_get_conversation_history_for_session_converts_exchange_format(mon
 
 @pytest.mark.asyncio
 async def test_get_conversation_history_for_session_returns_empty_when_disabled(monkeypatch):
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(history_enabled=False))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(history_enabled=False),
+    )
     assert chat._get_conversation_history_for_session("user-1", "session-1") == []
 
 
@@ -790,7 +810,11 @@ async def test_chat_endpoint_success(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *args: add_calls.append(args)),
+    )
 
     async def _stream(**_kwargs):
         assert [(call["role"], call["content"]) for call in repository.append_calls] == [
@@ -836,7 +860,11 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *args: add_calls.append(args)),
+    )
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
@@ -875,7 +903,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     monkeypatch.setattr(
         chat,
         "conversation_manager",
-        SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)),
+        _conversation_manager_stub(add_exchange=lambda *args: add_calls.append(args)),
     )
 
     async def _register_active_stream(
@@ -959,7 +987,11 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *_args: None),
+    )
 
     async def _register_active_stream(
         session_id: str,
@@ -1039,7 +1071,11 @@ async def test_chat_endpoint_rejects_same_turn_while_claim_is_still_active(monke
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *_args: None),
+    )
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1308,7 +1344,11 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *_args: None),
+    )
 
     async def _stream(**kwargs):
         captured.update(kwargs)
@@ -1351,7 +1391,11 @@ async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypat
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *_args: None),
+    )
 
     async def _stream(**kwargs):
         captured.update(kwargs)
@@ -1392,7 +1436,11 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *_args: None),
+    )
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
@@ -1429,7 +1477,7 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
     monkeypatch.setattr(
         chat,
         "conversation_manager",
-        SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)),
+        _conversation_manager_stub(add_exchange=lambda *args: add_calls.append(args)),
     )
     monkeypatch.setattr(
         chat,
@@ -1506,7 +1554,11 @@ async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypat
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *_args: None),
+    )
 
     def _raise_tool_map():
         raise RuntimeError("agent registry unavailable")
@@ -1548,7 +1600,11 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
-    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        _conversation_manager_stub(add_exchange=lambda *_args: None),
+    )
 
     async def _raise(**_kwargs):
         raise RuntimeError("boom")
