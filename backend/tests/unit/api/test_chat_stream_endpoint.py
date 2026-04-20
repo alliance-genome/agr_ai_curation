@@ -176,6 +176,7 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
     assert captured["specialist_temperature"] == 0.0
     assert captured["supervisor_reasoning"] == "minimal"
     assert captured["specialist_reasoning"] == "minimal"
+    assert captured["context_messages"] == [{"role": "user", "content": "hello"}]
 
 
 def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypatch):
@@ -241,6 +242,7 @@ def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypa
     assert captured["specialist_temperature"] is None
     assert captured["supervisor_reasoning"] is None
     assert captured["specialist_reasoning"] is None
+    assert captured["context_messages"] == [{"role": "user", "content": "hello"}]
 
 
 def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monkeypatch):

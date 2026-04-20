@@ -1604,12 +1604,11 @@ async def execute_flow(
     evidence_registry = flow_execution_state["evidence_registry"]
 
     async for event in run_agent_streamed(
-        user_message=prompt,
+        context_messages=[{"role": "user", "content": prompt}],
         user_id=str(user_id),
         session_id=session_id,
         document_id=document_id,
         document_name=document_name,
-        conversation_history=None,  # Flows don't use conversation history
         active_groups=active_groups,
         agent=supervisor,  # Pass the flow supervisor
         doc_context=doc_context,  # Pass pre-fetched context (optimization)

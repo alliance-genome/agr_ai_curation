@@ -131,6 +131,7 @@ class TestAgentTestEndpoint:
         assert '"session_id": "session-1"' in stream_text
         assert run_kwargs["active_groups"] == ["WB"]
         assert run_kwargs["session_id"] == "session-1"
+        assert run_kwargs["context_messages"] == [{"role": "user", "content": "test query"}]
 
     def test_agent_test_request_accepts_legacy_mod_id_alias(self):
         import src.api.agent_studio as api_module

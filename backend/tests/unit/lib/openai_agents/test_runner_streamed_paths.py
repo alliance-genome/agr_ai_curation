@@ -69,12 +69,15 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
 
     events = await _collect_events(
         runner.run_agent_streamed(
-            user_message="hello",
+            context_messages=[
+                {"role": "user", "content": "older"},
+                {"role": "assistant", "content": "previous answer"},
+                {"role": "user", "content": "hello"},
+            ],
             user_id="user-1",
             session_id="session-1",
             document_id="11111111-1111-1111-1111-111111111111",
             document_name="Paper A",
-            conversation_history=[{"role": "user", "content": "older"}],
         )
     )
 
@@ -84,6 +87,11 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
     fallback_trace = events[0]["data"]["trace_id"]
     assert fallback_trace.startswith("chat-")
     assert captured["run_kwargs"]["trace_id"] == fallback_trace
+    assert captured["run_kwargs"]["input_items"] == [
+        {"role": "user", "content": "older"},
+        {"role": "assistant", "content": "previous answer"},
+        {"role": "user", "content": "hello"},
+    ]
     assert captured["logged"][0][0] == fallback_trace
 
 
@@ -110,7 +118,7 @@ async def test_run_agent_streamed_passes_model_overrides_to_supervisor_builder(m
 
     events = await _collect_events(
         runner.run_agent_streamed(
-            user_message="hello",
+            context_messages=[{"role": "user", "content": "hello"}],
             user_id="user-override",
             supervisor_model="gpt-5.4-nano",
             specialist_model="gpt-5.4-nano",
@@ -187,7 +195,7 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
 
     events = await _collect_events(
         runner.run_agent_streamed(
-            user_message="longer message",
+            context_messages=[{"role": "user", "content": "longer message"}],
             user_id="user-2",
             session_id="session-2",
             agent=SimpleNamespace(name="Flow Supervisor", model="gpt-5", tools=[]),
@@ -229,7 +237,10 @@ async def test_run_agent_streamed_falls_back_when_span_creation_fails(monkeypatc
     monkeypatch.setattr(runner, "_run_agent_with_tracing", _fake_run_agent_with_tracing)
 
     events = await _collect_events(
-        runner.run_agent_streamed(user_message="hello", user_id="user-3")
+        runner.run_agent_streamed(
+            context_messages=[{"role": "user", "content": "hello"}],
+            user_id="user-3",
+        )
     )
 
     assert events[0]["type"] == "RUN_STARTED"
@@ -286,7 +297,10 @@ async def test_run_agent_streamed_specialist_output_error_path(monkeypatch):
     monkeypatch.setattr(runner, "_run_agent_with_tracing", _raising_stream)
 
     events = await _collect_events(
-        runner.run_agent_streamed(user_message="hello", user_id="user-4")
+        runner.run_agent_streamed(
+            context_messages=[{"role": "user", "content": "hello"}],
+            user_id="user-4",
+        )
     )
 
     event_types = [event["type"] for event in events]
@@ -332,7 +346,10 @@ async def test_run_agent_streamed_core_only_round_trip_does_not_require_speciali
     )
 
     events = await _collect_events(
-        runner.run_agent_streamed(user_message="hello", user_id="user-core")
+        runner.run_agent_streamed(
+            context_messages=[{"role": "user", "content": "hello"}],
+            user_id="user-core",
+        )
     )
 
     event_types = [event["type"] for event in events]
@@ -374,7 +391,7 @@ async def test_run_agent_streamed_retries_transient_groq_tool_call_parse_failure
 
     events = await _collect_events(
         runner.run_agent_streamed(
-            user_message="hello",
+            context_messages=[{"role": "user", "content": "hello"}],
             user_id="user-5",
             agent=SimpleNamespace(
                 name="Flow Supervisor",
@@ -388,3 +405,62 @@ async def test_run_agent_streamed_retries_transient_groq_tool_call_parse_failure
     assert "SUPERVISOR_RETRY" in event_types
     assert event_types[-1] == "RUN_FINISHED"
     assert attempts["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_requires_trailing_user_context_message(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+
+    with pytest.raises(ValueError, match="context_messages must end with a user message"):
+        await _collect_events(
+            runner.run_agent_streamed(
+                context_messages=[{"role": "assistant", "content": "not a prompt"}],
+                user_id="user-invalid",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_requires_context_message_list(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+
+    with pytest.raises(TypeError, match="context_messages must be a list of message dicts"):
+        await _collect_events(
+            runner.run_agent_streamed(
+                context_messages=None,
+                user_id="user-invalid",
+            )
+        )
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_normalizes_flow_context_roles(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+
+    async def _fake_run_agent_with_tracing(**kwargs):
+        captured["run_kwargs"] = kwargs
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {"response_length": 5, "tool_calls": 0, "agents_used": ["Supervisor"]},
+        }
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _fake_run_agent_with_tracing)
+
+    await _collect_events(
+        runner.run_agent_streamed(
+            context_messages=[
+                {"role": "flow", "content": "previous flow memory"},
+                {"role": "user", "content": "hello"},
+            ],
+            user_id="user-flow",
+        )
+    )
+
+    assert captured["run_kwargs"]["input_items"] == [
+        {"role": "assistant", "content": "previous flow memory"},
+        {"role": "user", "content": "hello"},
+    ]

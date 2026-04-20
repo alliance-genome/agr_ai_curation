@@ -42,6 +42,7 @@ from ..lib.curation_workspace import (
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
 from ..lib.conversation_manager import conversation_manager
 from ..lib.openai_agents import run_agent_streamed
+from ..lib.openai_agents.runner import normalize_context_message_role
 from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
 from ..lib.openai_agents.evidence_summary import (
     build_record_evidence_summary_record,
@@ -150,6 +151,68 @@ def _get_conversation_history_for_session(user_id: str, session_id: str) -> List
             messages.append({'role': 'assistant', 'content': exchange['assistant']})
 
     return messages
+
+
+def _build_context_messages_from_history(
+    history_messages: List[Dict[str, str]],
+    *,
+    user_message: str,
+) -> List[Dict[str, str]]:
+    """Convert exchange-style history plus the current turn into runner context."""
+
+    context_messages: List[Dict[str, str]] = []
+    for index, message in enumerate(history_messages):
+        role = normalize_context_message_role(message.get("role"))
+        content = str(message.get("content") or "")
+        if not role:
+            raise ValueError(f"history_messages[{index}] is missing a role")
+        if not content.strip():
+            raise ValueError(f"history_messages[{index}] must include non-empty content")
+        context_messages.append({"role": role, "content": content})
+
+    context_messages.append({"role": "user", "content": user_message})
+    return context_messages
+
+
+def _build_context_messages_from_durable_messages(
+    repository: ChatHistoryRepository,
+    *,
+    user_id: str,
+    session_id: str,
+    user_message: str,
+) -> List[Dict[str, str]]:
+    """Build runner context from durable rows while preserving completed-exchange semantics."""
+
+    history_messages: List[Dict[str, str]] = []
+    pending_user_message: Optional[str] = None
+    message_cursor: Optional[ChatMessageCursor] = None
+
+    while True:
+        message_page = repository.list_messages(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            limit=200,
+            cursor=message_cursor,
+        )
+        if not message_page.items:
+            break
+
+        page_exchanges, pending_user_message = _collect_durable_text_exchanges(
+            message_page.items,
+            pending_user_message=pending_user_message,
+        )
+        for durable_user_message, durable_assistant_message in page_exchanges:
+            history_messages.append({"role": "user", "content": durable_user_message})
+            history_messages.append({"role": "assistant", "content": durable_assistant_message})
+
+        if message_page.next_cursor is None:
+            break
+        message_cursor = message_page.next_cursor
+
+    return _build_context_messages_from_history(
+        history_messages,
+        user_message=user_message,
+    )
 
 
 def _collect_durable_text_exchanges(
@@ -1306,12 +1369,16 @@ async def chat_endpoint(
             user_id=user_id,
             session_id=session_id,
         )
-        # Retrieve conversation history for multi-turn context
-        conversation_history = _get_conversation_history_for_session(user_id, session_id)
-        if conversation_history:
+        context_messages = _build_context_messages_from_durable_messages(
+            repository,
+            user_id=user_id,
+            session_id=session_id,
+            user_message=effective_user_message,
+        )
+        if context_messages:
             logger.info(
-                "Including %s history messages for session %s",
-                len(conversation_history),
+                "Including %s durable context messages for session %s",
+                len(context_messages),
                 session_id,
                 extra={"session_id": session_id, "user_id": user_id},
             )
@@ -1324,12 +1391,11 @@ async def chat_endpoint(
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
 
         async for event in run_agent_streamed(
-            user_message=effective_user_message,
+            context_messages=context_messages,
             user_id=user_id,
             session_id=session_id,
             document_id=document_id,
             document_name=document_name,
-            conversation_history=conversation_history,
             active_groups=active_groups,
             supervisor_model=chat_message.model,
             specialist_model=chat_message.specialist_model,
@@ -1481,6 +1547,10 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
 
     # Retrieve conversation history for multi-turn context
     conversation_history = _get_conversation_history_for_session(user_id, session_id)
+    context_messages = _build_context_messages_from_history(
+        conversation_history,
+        user_message=chat_message.message,
+    )
     if conversation_history:
         logger.info(
             "Including %s history messages for session %s",
@@ -1545,12 +1615,11 @@ async def chat_stream_endpoint(chat_message: ChatMessage, user: Dict[str, Any] =
 
         try:
             async for event in run_agent_streamed(
-                user_message=chat_message.message,
+                context_messages=context_messages,
                 user_id=user_id,
                 session_id=current_session_id,
                 document_id=document_id,
                 document_name=document_name,
-                conversation_history=conversation_history,
                 active_groups=active_groups,
                 supervisor_model=chat_message.model,
                 specialist_model=chat_message.specialist_model,

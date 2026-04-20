@@ -90,6 +90,11 @@ if TYPE_CHECKING:
 # Logger must be defined early since _create_openai_client_kwargs uses it at module load
 logger = logging.getLogger(__name__)
 
+_CONTEXT_MESSAGE_ROLE_ALIASES = {
+    "flow": "assistant",
+}
+_VALID_CONTEXT_MESSAGE_ROLES = {"assistant", "developer", "system", "user"}
+
 
 def _configure_api_mode():
     """Configure OpenAI SDK API mode based on default runner provider."""
@@ -130,6 +135,62 @@ def _create_openai_client_kwargs() -> dict:
     )
 
     return kwargs
+
+
+def normalize_context_message_role(raw_role: Any) -> str:
+    """Normalize one context-message role into the runner contract."""
+
+    role = str(raw_role or "").strip().lower()
+    return _CONTEXT_MESSAGE_ROLE_ALIASES.get(role, role)
+
+
+def _normalize_context_messages(
+    context_messages: List[Dict[str, Any]],
+) -> tuple[List[Dict[str, Any]], str]:
+    """Validate and normalize ordered runner context messages.
+
+    The runner contract expects callers to provide the full prompt context in
+    chronological order, ending with the current user turn. Durable chat callers
+    can build this list directly from SQL transcript rows instead of passing a
+    separate `conversation_history` plus `user_message`.
+    """
+
+    normalized_messages: List[Dict[str, Any]] = []
+
+    if not isinstance(context_messages, list):
+        raise TypeError("context_messages must be a list of message dicts")
+
+    for index, raw_message in enumerate(context_messages):
+        if not isinstance(raw_message, dict):
+            raise ValueError(f"context_messages[{index}] must be a dict")
+
+        role = normalize_context_message_role(raw_message.get("role"))
+        if role not in _VALID_CONTEXT_MESSAGE_ROLES:
+            raise ValueError(
+                f"context_messages[{index}].role must be one of "
+                f"{sorted(_VALID_CONTEXT_MESSAGE_ROLES | set(_CONTEXT_MESSAGE_ROLE_ALIASES))}"
+            )
+
+        raw_content = raw_message.get("content")
+        content = raw_content if isinstance(raw_content, str) else str(raw_content or "")
+        if not content.strip():
+            continue
+
+        normalized_messages.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+
+    if not normalized_messages:
+        raise ValueError("context_messages must include at least one non-empty message")
+
+    latest_message = normalized_messages[-1]
+    if latest_message["role"] != "user":
+        raise ValueError("context_messages must end with a user message")
+
+    return normalized_messages, latest_message["content"]
 
 
 class SafeLangfuseAsyncOpenAI(LangfuseAsyncOpenAI):
@@ -1136,12 +1197,11 @@ async def _run_agent_with_tracing(
 
 
 async def run_agent_streamed(
-    user_message: str,
+    context_messages: List[Dict[str, Any]],
     user_id: str,
     session_id: Optional[str] = None,
     document_id: Optional[str] = None,
     document_name: Optional[str] = None,
-    conversation_history: Optional[List[Dict[str, str]]] = None,
     active_groups: Optional[List[str]] = None,
     supervisor_model: Optional[str] = None,
     specialist_model: Optional[str] = None,
@@ -1168,12 +1228,12 @@ async def run_agent_streamed(
         nest all LLM calls under this parent span, creating a proper hierarchy.
 
     Args:
-        user_message: The user's question
+        context_messages: Ordered prompt-context messages ending with the
+                          current user message
         user_id: The user's user ID for tenant isolation
         session_id: Optional chat session UUID for Langfuse trace grouping
         document_id: Optional UUID of the PDF document (enables PDF specialist)
         document_name: Optional name of the document for context
-        conversation_history: Optional list of previous messages
         active_groups: Optional list of group IDs (e.g., ["MGI", "FB"]) for injecting
                        group-specific rules into agent prompts
         supervisor_model: Optional override for the supervisor model id
@@ -1198,6 +1258,7 @@ async def run_agent_streamed(
         - RUN_FINISHED: Agent execution complete
         - ERROR: Error occurred during execution
     """
+    input_items, user_message = _normalize_context_messages(context_messages)
     doc_info = f"document {document_id[:8]}..." if document_id else "no document"
     logger.info(
         "Starting streamed run for %s",
@@ -1262,16 +1323,6 @@ async def run_agent_streamed(
     # Commit pending prompts for whichever agent we're using
     # (supervisor runs immediately after creation, unlike specialists which are on-demand)
     commit_pending_prompts(agent_name)
-
-    # Build input with history if provided
-    input_items: List[Dict[str, Any]] = []
-    if conversation_history:
-        for msg in conversation_history:
-            input_items.append({
-                "role": msg.get("role", "user"),
-                "content": msg.get("content", "")
-            })
-    input_items.append({"role": "user", "content": user_message})
 
     # Generate a fallback trace ID (used when Langfuse not configured)
     doc_prefix = document_id[:8] if document_id else "nodoc"
