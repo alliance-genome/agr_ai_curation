@@ -10,6 +10,9 @@ from fastapi import HTTPException
 
 from src.api import chat
 from src.lib.chat_history_repository import (
+    AppendMessageResult,
+    ChatMessageCursor,
+    ChatMessagePage,
     ChatSessionRecord,
     ChatSessionPage,
     ChatSessionCursor,
@@ -21,6 +24,30 @@ from src.lib.curation_workspace import extraction_results as extraction_results_
 
 def _ts(hour: int, minute: int = 0) -> datetime:
     return datetime(2026, 4, 19, hour, minute, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def _stub_non_stream_turn_claims(monkeypatch):
+    chat._LOCAL_NON_STREAM_TURN_OWNERS.clear()
+
+    async def _register_active_stream(
+        _session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ) -> bool:
+        return True
+
+    async def _unregister_active_stream(
+        _session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ) -> None:
+        return None
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    yield
+    chat._LOCAL_NON_STREAM_TURN_OWNERS.clear()
 
 
 def _session_record(
@@ -46,6 +73,30 @@ def _session_record(
     )
 
 
+def _message_record(
+    *,
+    session_id: str,
+    role: str,
+    content: str,
+    turn_id: str | None = None,
+    message_type: str = "text",
+    payload_json=None,
+    trace_id: str | None = None,
+    created_at: datetime | None = None,
+) -> ChatMessageRecord:
+    return ChatMessageRecord(
+        message_id=uuid4(),
+        session_id=session_id,
+        turn_id=turn_id,
+        role=role,
+        message_type=message_type,
+        content=content,
+        payload_json=payload_json,
+        trace_id=trace_id,
+        created_at=created_at or _ts(9, 1),
+    )
+
+
 class FakeChatHistoryRepository:
     def __init__(
         self,
@@ -61,12 +112,15 @@ class FakeChatHistoryRepository:
         self.detail_messages = detail_messages or {}
         self.visible_document_ids = visible_document_ids
         self.create_calls: list[dict[str, object]] = []
+        self.get_or_create_calls: list[dict[str, object]] = []
+        self.append_calls: list[dict[str, object]] = []
         self.list_calls: list[dict[str, object]] = []
         self.search_calls: list[dict[str, object]] = []
         self.count_calls: list[dict[str, object]] = []
         self.rename_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
         self.visible_document_calls: list[dict[str, object]] = []
+        self._message_counter = 0
 
     def create_session(
         self,
@@ -112,6 +166,133 @@ class FakeChatHistoryRepository:
             return document_id
         return document_id if document_id in self.visible_document_ids else None
 
+    def get_or_create_session(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        title: str | None = None,
+        active_document_id: UUID | None = None,
+        created_at: datetime | None = None,
+    ) -> ChatSessionRecord:
+        self.get_or_create_calls.append(
+            {
+                "session_id": session_id,
+                "user_auth_sub": user_auth_sub,
+                "title": title,
+                "active_document_id": active_document_id,
+            }
+        )
+        existing = self.sessions.get((user_auth_sub, session_id))
+        if existing is not None:
+            return existing
+        return self.create_session(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            title=title,
+            active_document_id=active_document_id,
+            created_at=created_at,
+        )
+
+    def append_message(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        role: str,
+        content: str,
+        message_type: str = "text",
+        turn_id: str | None = None,
+        payload_json=None,
+        trace_id: str | None = None,
+        created_at: datetime | None = None,
+    ) -> AppendMessageResult:
+        self.append_calls.append(
+            {
+                "session_id": session_id,
+                "user_auth_sub": user_auth_sub,
+                "role": role,
+                "content": content,
+                "message_type": message_type,
+                "turn_id": turn_id,
+                "payload_json": payload_json,
+                "trace_id": trace_id,
+            }
+        )
+        if not session_id.strip():
+            raise ValueError("session_id is required")
+        if not role.strip():
+            raise ValueError("role is required")
+        if not content.strip():
+            raise ValueError("content is required")
+        if message_type is not None and not str(message_type).strip():
+            raise ValueError("message_type is required")
+        if turn_id is not None and not turn_id.strip():
+            raise ValueError("turn_id cannot be blank")
+
+        session = self.sessions.get((user_auth_sub, session_id))
+        if session is None:
+            raise ValueError("session_id is required")
+
+        existing = None
+        if turn_id is not None:
+            existing = self.get_message_by_turn_id(
+                session_id=session_id,
+                user_auth_sub=user_auth_sub,
+                turn_id=turn_id,
+                role=role,
+            )
+        if existing is not None:
+            return AppendMessageResult(message=existing, created=False)
+
+        self._message_counter += 1
+        record = ChatMessageRecord(
+            message_id=uuid4(),
+            session_id=session_id,
+            turn_id=turn_id,
+            role=role,
+            message_type=message_type,
+            content=content,
+            payload_json=payload_json,
+            trace_id=trace_id,
+            created_at=created_at or _ts(12, self._message_counter),
+        )
+        message_key = (user_auth_sub, session_id)
+        self.detail_messages.setdefault(message_key, []).append(record)
+        self.sessions[message_key] = _session_record(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            title=session.title,
+            active_document_id=session.active_document_id,
+            created_at=session.created_at,
+            updated_at=record.created_at,
+            last_message_at=record.created_at,
+        )
+        return AppendMessageResult(message=record, created=True)
+
+    def get_message_by_turn_id(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+        role: str,
+    ) -> ChatMessageRecord | None:
+        if not session_id.strip():
+            raise ValueError("session_id is required")
+        if not role.strip():
+            raise ValueError("role is required")
+        normalized_turn_id = turn_id.strip()
+        if not normalized_turn_id:
+            raise ValueError("turn_id is required")
+        if (user_auth_sub, session_id) not in self.sessions:
+            return None
+
+        for message in self.detail_messages.get((user_auth_sub, session_id), []):
+            if message.turn_id == normalized_turn_id and message.role == role:
+                return message
+        return None
+
     def get_session_detail(
         self,
         *,
@@ -125,12 +306,53 @@ class FakeChatHistoryRepository:
         session = self.sessions.get((user_auth_sub, session_id))
         if session is None:
             return None
-        messages = list(self.detail_messages.get((user_auth_sub, session_id), []))
+        message_page = self.list_messages(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            limit=message_limit,
+            cursor=message_cursor,
+        )
         return ChatSessionDetail(
             session=session,
-            messages=messages[:message_limit],
-            next_message_cursor=None,
+            messages=message_page.items,
+            next_message_cursor=message_page.next_cursor,
         )
+
+    def list_messages(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        limit: int = 100,
+        cursor: ChatMessageCursor | None = None,
+    ) -> ChatMessagePage:
+        if not session_id.strip():
+            raise ValueError("session_id is required")
+        if (user_auth_sub, session_id) not in self.sessions:
+            return ChatMessagePage(items=[], next_cursor=None)
+
+        messages = sorted(
+            self.detail_messages.get((user_auth_sub, session_id), []),
+            key=lambda message: (message.created_at, message.message_id),
+        )
+        if cursor is not None:
+            messages = [
+                message
+                for message in messages
+                if (message.created_at, message.message_id) > (cursor.created_at, cursor.message_id)
+            ]
+
+        has_more = len(messages) > limit
+        items = messages[:limit]
+        next_cursor = None
+        if has_more and items:
+            last_message = items[-1]
+            next_cursor = ChatMessageCursor(
+                created_at=last_message.created_at,
+                message_id=last_message.message_id,
+            )
+
+        return ChatMessagePage(items=items, next_cursor=next_cursor)
 
     def list_sessions(
         self,
@@ -269,6 +491,35 @@ class FakeChatHistoryRepository:
         )
 
 
+def _db_stub(*, commits: list[str] | None = None, rollbacks: list[str] | None = None):
+    return SimpleNamespace(
+        commit=lambda: commits.append("commit") if commits is not None else None,
+        rollback=lambda: rollbacks.append("rollback") if rollbacks is not None else None,
+    )
+
+
+class FakeConversationManager:
+    def __init__(self) -> None:
+        self.history_enabled = True
+        self._history: dict[tuple[str, str], list[dict[str, str]]] = {}
+        self.add_calls: list[tuple[str, str, str, str]] = []
+
+    def get_session_history(self, user_id: str, session_id: str) -> list[dict[str, str]]:
+        return self._history.setdefault((user_id, session_id), [])
+
+    def add_exchange(
+        self,
+        user_id: str,
+        session_id: str,
+        user_message: str,
+        assistant_response: str,
+    ) -> None:
+        self.add_calls.append((user_id, session_id, user_message, assistant_response))
+        self.get_session_history(user_id, session_id).append(
+            {"user": user_message, "assistant": assistant_response}
+        )
+
+
 @pytest.mark.asyncio
 async def test_get_conversation_history_for_session_converts_exchange_format(monkeypatch):
     monkeypatch.setattr(
@@ -297,6 +548,60 @@ async def test_get_conversation_history_for_session_converts_exchange_format(mon
 async def test_get_conversation_history_for_session_returns_empty_when_disabled(monkeypatch):
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(history_enabled=False))
     assert chat._get_conversation_history_for_session("user-1", "session-1") == []
+
+
+def test_hydrate_conversation_history_from_durable_messages_rebuilds_partial_history(monkeypatch):
+    conversation_manager = FakeConversationManager()
+    conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-replay")],
+        detail_messages={
+            ("user-1", "session-replay"): [
+                _message_record(
+                    session_id="session-replay",
+                    role="user",
+                    content="first question",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="assistant",
+                    content="first answer",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 2),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="user",
+                    content="replayed question",
+                    turn_id="turn-replay",
+                    created_at=_ts(9, 3),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="assistant",
+                    content="stored answer",
+                    turn_id="turn-replay",
+                    created_at=_ts(9, 4),
+                ),
+            ]
+        },
+    )
+    monkeypatch.setattr(chat, "conversation_manager", conversation_manager)
+
+    chat._hydrate_conversation_history_from_durable_messages(
+        repository,
+        user_id="user-1",
+        session_id="session-replay",
+    )
+
+    assert chat._get_conversation_history_for_session("user-1", "session-replay") == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "replayed question"},
+        {"role": "assistant", "content": "stored answer"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -476,6 +781,9 @@ async def test_create_session_drops_invalid_active_document_uuid(monkeypatch):
 @pytest.mark.asyncio
 async def test_chat_endpoint_success(monkeypatch):
     add_calls = []
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
@@ -485,20 +793,43 @@ async def test_chat_endpoint_success(monkeypatch):
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)))
 
     async def _stream(**_kwargs):
+        assert [(call["role"], call["content"]) for call in repository.append_calls] == [
+            ("user", "hello")
+        ]
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "final answer"}}
 
     monkeypatch.setattr(chat, "run_agent_streamed", _stream)
 
-    result = await chat.chat_endpoint(chat.ChatMessage(message="hello", session_id="session-1"), {"sub": "user-1", "cognito:groups": []})
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message="hello", session_id="session-1", turn_id="turn-1"),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
     assert result.response == "final answer"
     assert result.session_id == "session-1"
     assert add_calls == [("user-1", "session-1", "hello", "final answer")]
+    assert commits == ["commit", "commit"]
+    assert repository.get_or_create_calls == [
+        {
+            "session_id": "session-1",
+            "user_auth_sub": "user-1",
+            "title": None,
+            "active_document_id": None,
+        }
+    ]
+    assert [call["role"] for call in repository.append_calls] == ["user", "assistant"]
+    assert repository.append_calls[0]["turn_id"] == "turn-1"
+    assert repository.append_calls[1]["turn_id"] == "turn-1"
+    assert repository.append_calls[1]["trace_id"] == "trace-1"
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     add_calls = []
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
@@ -515,17 +846,462 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     monkeypatch.setattr(chat, "run_agent_streamed", _stream)
 
     result = await chat.chat_endpoint(
-        chat.ChatMessage(message="hello", session_id="session-2"),
+        chat.ChatMessage(message="hello", session_id="session-2", turn_id="turn-2"),
         {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
     )
 
     assert result.response == "final stabilized answer"
     assert add_calls == [("user-1", "session-2", "hello", "final stabilized answer")]
+    assert repository.append_calls[-1]["content"] == "final stabilized answer"
+    assert commits == ["commit", "commit"]
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(monkeypatch):
+    commits: list[str] = []
+    add_calls = []
+    register_calls = []
+    unregister_calls = []
+    stream_user_messages = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(
+        chat,
+        "conversation_manager",
+        SimpleNamespace(add_exchange=lambda *args: add_calls.append(args)),
+    )
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ) -> bool:
+        register_calls.append((session_id, user_id, stream_token))
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ) -> None:
+        unregister_calls.append((session_id, user_id, stream_token))
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+
+    run_attempt = 0
+
+    async def _stream(**kwargs):
+        nonlocal run_attempt
+        run_attempt += 1
+        stream_user_messages.append(kwargs["user_message"])
+        if run_attempt == 1:
+            yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
+            return
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-retry"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "recovered answer"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-retry", turn_id="turn-retry"),
+            {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits),
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "model exploded"
+    assert commits == ["commit"]
+    assert [call["role"] for call in repository.append_calls] == ["user"]
+    assert "non-stream-turn:session-retry:turn-retry" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(
+            message="different retry body should be ignored",
+            session_id="session-retry",
+            turn_id="turn-retry",
+        ),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    assert result.response == "recovered answer"
+    assert result.session_id == "session-retry"
+    assert commits == ["commit", "commit", "commit"]
+    assert stream_user_messages == ["hello", "hello"]
+    assert add_calls == [("user-1", "session-retry", "hello", "recovered answer")]
+    assert [call["role"] for call in repository.append_calls] == ["user", "user", "assistant"]
+    assert register_calls[0][0] == "non-stream-turn:session-retry:turn-retry"
+    assert register_calls[1][0] == "non-stream-turn:session-retry:turn-retry"
+    assert unregister_calls[0][0] == "non-stream-turn:session-retry:turn-retry"
+    assert unregister_calls[1][0] == "non-stream-turn:session-retry:turn-retry"
+    assert "non-stream-turn:session-retry:turn-retry" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_claim(monkeypatch):
+    commits: list[str] = []
+    register_calls = []
+    unregister_calls = []
+    stream_user_messages = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ) -> bool:
+        register_calls.append((session_id, user_id, stream_token))
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ) -> None:
+        unregister_calls.append((session_id, user_id, stream_token))
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+
+    def _raise_tool_map():
+        raise RuntimeError("agent registry unavailable")
+
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", _raise_tool_map)
+
+    async def _stream(**kwargs):
+        stream_user_messages.append(kwargs["user_message"])
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-tool-map"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "recovered answer"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-tool-map", turn_id="turn-tool-map"),
+            {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits),
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Internal configuration error: unable to process chat request"
+    assert commits == ["commit"]
+    assert [call["role"] for call in repository.append_calls] == ["user"]
+    assert "non-stream-turn:session-tool-map:turn-tool-map" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(
+            message="different retry body should be ignored",
+            session_id="session-tool-map",
+            turn_id="turn-tool-map",
+        ),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    assert result.response == "recovered answer"
+    assert result.session_id == "session-tool-map"
+    assert commits == ["commit", "commit", "commit"]
+    assert stream_user_messages == ["hello"]
+    assert [call["role"] for call in repository.append_calls] == ["user", "user", "assistant"]
+    assert register_calls[0][0] == "non-stream-turn:session-tool-map:turn-tool-map"
+    assert register_calls[1][0] == "non-stream-turn:session-tool-map:turn-tool-map"
+    assert unregister_calls[0][0] == "non-stream-turn:session-tool-map:turn-tool-map"
+    assert unregister_calls[1][0] == "non-stream-turn:session-tool-map:turn-tool-map"
+    assert "non-stream-turn:session-tool-map:turn-tool-map" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_rejects_same_turn_while_claim_is_still_active(monkeypatch):
+    claim_key = "non-stream-turn:session-active:turn-active"
+    chat._LOCAL_NON_STREAM_TURN_OWNERS[claim_key] = "existing-claim"
+
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args: None))
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-active", turn_id="turn-active"),
+            {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail == "Chat turn is already in progress"
+    assert repository.append_calls == []
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatch):
+    commits: list[str] = []
+    conversation_manager = FakeConversationManager()
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-replay")],
+        detail_messages={
+            ("user-1", "session-replay"): [
+                _message_record(
+                    session_id="session-replay",
+                    role="user",
+                    content="hello",
+                    turn_id="turn-replay",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="assistant",
+                    content="stored answer",
+                    turn_id="turn-replay",
+                    trace_id="trace-stored",
+                    created_at=_ts(9, 2),
+                ),
+            ]
+        },
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(
+        chat,
+        "get_supervisor_tool_agent_map",
+        lambda: pytest.fail("tool map should not resolve for a completed replayed turn"),
+    )
+    monkeypatch.setattr(chat, "conversation_manager", conversation_manager)
+
+    async def _stream(**_kwargs):
+        pytest.fail("run_agent_streamed should not run for a completed replayed turn")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message="hello", session_id="session-replay", turn_id="turn-replay"),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    assert result.response == "stored answer"
+    assert result.session_id == "session-replay"
+    assert commits == ["commit"]
+    assert [call["role"] for call in repository.append_calls] == ["user"]
+    assert conversation_manager.add_calls == [
+        ("user-1", "session-replay", "hello", "stored answer")
+    ]
+    assert "non-stream-turn:session-replay:turn-replay" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(monkeypatch):
+    commits: list[str] = []
+    conversation_manager = FakeConversationManager()
+    captured_histories = []
+    conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-replay")],
+        detail_messages={
+            ("user-1", "session-replay"): [
+                _message_record(
+                    session_id="session-replay",
+                    role="user",
+                    content="first question",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="assistant",
+                    content="first answer",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 2),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="user",
+                    content="replayed question",
+                    turn_id="turn-replay",
+                    created_at=_ts(9, 3),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="assistant",
+                    content="stored answer",
+                    turn_id="turn-replay",
+                    trace_id="trace-stored",
+                    created_at=_ts(9, 4),
+                ),
+            ]
+        },
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "conversation_manager", conversation_manager)
+    monkeypatch.setattr(
+        chat,
+        "get_supervisor_tool_agent_map",
+        lambda: pytest.fail("tool map should not resolve for a completed replayed turn"),
+    )
+
+    async def _unexpected_stream(**_kwargs):
+        pytest.fail("run_agent_streamed should not run for a completed replayed turn")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _unexpected_stream)
+
+    replay_result = await chat.chat_endpoint(
+        chat.ChatMessage(message="replayed question", session_id="session-replay", turn_id="turn-replay"),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    assert replay_result.response == "stored answer"
+    assert chat._get_conversation_history_for_session("user-1", "session-replay") == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "replayed question"},
+        {"role": "assistant", "content": "stored answer"},
+    ]
+
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _stream(**kwargs):
+        captured_histories.append(kwargs["conversation_history"])
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-next"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "next answer"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message="follow-up question", session_id="session-replay", turn_id="turn-next"),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    assert result.response == "next answer"
+    assert captured_histories == [
+        [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "replayed question"},
+            {"role": "assistant", "content": "stored answer"},
+        ]
+    ]
+    assert commits == ["commit", "commit", "commit"]
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stale_worker(monkeypatch):
+    commits: list[str] = []
+    captured_histories = []
+    conversation_manager = FakeConversationManager()
+    conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-replay")],
+        detail_messages={
+            ("user-1", "session-replay"): [
+                _message_record(
+                    session_id="session-replay",
+                    role="user",
+                    content="first question",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="assistant",
+                    content="first answer",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 2),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="user",
+                    content="replayed question",
+                    turn_id="turn-replay",
+                    created_at=_ts(9, 3),
+                ),
+                _message_record(
+                    session_id="session-replay",
+                    role="assistant",
+                    content="stored answer",
+                    turn_id="turn-replay",
+                    trace_id="trace-stored",
+                    created_at=_ts(9, 4),
+                ),
+            ]
+        },
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "conversation_manager", conversation_manager)
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _stream(**kwargs):
+        captured_histories.append(kwargs["conversation_history"])
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-next"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "next answer"}}
+
+    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+
+    result = await chat.chat_endpoint(
+        chat.ChatMessage(message="follow-up question", session_id="session-replay", turn_id="turn-next"),
+        {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(commits=commits),
+    )
+
+    assert result.response == "next answer"
+    assert captured_histories == [
+        [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": "replayed question"},
+            {"role": "assistant", "content": "stored answer"},
+        ]
+    ]
+    assert chat._get_conversation_history_for_session("user-1", "session-replay") == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "replayed question"},
+        {"role": "assistant", "content": "stored answer"},
+        {"role": "user", "content": "follow-up question"},
+        {"role": "assistant", "content": "next answer"},
+    ]
+    assert commits == ["commit", "commit"]
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
     captured = {}
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
@@ -553,6 +1329,7 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
             specialist_reasoning="minimal",
         ),
         {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(),
     )
 
     assert captured["supervisor_model"] == "gpt-5.4-nano"
@@ -566,6 +1343,8 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
 @pytest.mark.asyncio
 async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypatch):
     captured = {}
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
@@ -584,6 +1363,7 @@ async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypat
     await chat.chat_endpoint(
         chat.ChatMessage(message="hello", session_id="session-defaults"),
         {"sub": "user-1", "cognito:groups": []},
+        db=_db_stub(),
     )
 
     assert captured["supervisor_model"] is None
@@ -603,6 +1383,9 @@ async def test_chat_endpoint_raises_http_401_without_user_id():
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
@@ -617,14 +1400,23 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
     monkeypatch.setattr(chat, "run_agent_streamed", _stream)
 
     with pytest.raises(HTTPException) as exc:
-        await chat.chat_endpoint(chat.ChatMessage(message="hello", session_id="session-1"), {"sub": "user-1", "cognito:groups": []})
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-1", turn_id="turn-error"),
+            {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits),
+        )
     assert exc.value.status_code == 500
     assert "model exploded" in exc.value.detail
+    assert commits == ["commit"]
+    assert [call["role"] for call in repository.append_calls] == ["user"]
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkeypatch):
     add_calls = []
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(
@@ -683,23 +1475,29 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
     monkeypatch.setattr(
         chat,
         "persist_extraction_results",
-        lambda _requests: (_ for _ in ()).throw(RuntimeError("db unavailable")),
+        lambda _requests, db=None: (_ for _ in ()).throw(RuntimeError("db unavailable")),
     )
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
-            chat.ChatMessage(message="hello", session_id="session-1"),
+            chat.ChatMessage(message="hello", session_id="session-1", turn_id="turn-1"),
             {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits),
         )
 
     assert exc.value.status_code == 500
-    assert "db unavailable" in exc.value.detail
+    assert exc.value.detail == "Failed to persist chat response"
     assert add_calls == []
+    assert commits == ["commit"]
+    assert [call["role"] for call in repository.append_calls] == ["user"]
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypatch):
     """Regression: ALL-137 — tool-map resolution failure must fail closed, not silently disable extraction."""
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(
@@ -729,15 +1527,21 @@ async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypat
         await chat.chat_endpoint(
             chat.ChatMessage(message="hello", session_id="session-1"),
             {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits),
         )
 
     assert exc.value.status_code == 500
     assert "Internal configuration error" in exc.value.detail
     assert not stream_called, "Agent stream should not run when tool-map resolution fails"
+    assert commits == ["commit"]
+    assert [call["role"] for call in repository.append_calls] == ["user"]
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
@@ -753,9 +1557,15 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
     monkeypatch.setattr(chat, "run_agent_streamed", _raise)
 
     with pytest.raises(HTTPException) as exc:
-        await chat.chat_endpoint(chat.ChatMessage(message="hello", session_id="session-1"), {"sub": "user-1", "cognito:groups": []})
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-1"),
+            {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits),
+        )
     assert exc.value.status_code == 500
     assert "boom" in exc.value.detail
+    assert commits == ["commit"]
+    assert [call["role"] for call in repository.append_calls] == ["user"]
 
 
 @pytest.mark.asyncio

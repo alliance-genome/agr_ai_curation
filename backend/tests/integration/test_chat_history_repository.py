@@ -8,7 +8,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import delete
 
-from src.lib.chat_history_repository import ChatHistoryRepository
+from src.lib.chat_history_repository import ChatHistoryRepository, ChatHistorySessionNotFoundError
 from src.models.sql.chat_message import ChatMessage
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.chat_session import ChatSession
@@ -379,6 +379,52 @@ def test_get_session_detail_paginates_messages_in_chronological_order(db_session
     )
     assert [message.content for message in next_page.items] == ["Third message"]
     assert next_page.next_cursor is None
+
+
+def test_get_message_by_turn_id_returns_one_visible_turn_row(db_session):
+    repository = ChatHistoryRepository(db_session)
+    session_id = f"{SESSION_PREFIX}turn-lookup"
+
+    repository.create_session(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        title="Turn lookup session",
+        created_at=_ts(12, 0),
+    )
+    repository.append_message(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        role="user",
+        content="Persist this turn",
+        turn_id="turn-lookup-1",
+        created_at=_ts(12, 1),
+    )
+    repository.append_message(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        role="assistant",
+        content="Replay this answer",
+        turn_id="turn-lookup-1",
+        created_at=_ts(12, 2),
+    )
+    db_session.commit()
+
+    assistant_message = repository.get_message_by_turn_id(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        turn_id="turn-lookup-1",
+        role="assistant",
+    )
+    assert assistant_message is not None
+    assert assistant_message.content == "Replay this answer"
+
+    with pytest.raises(ChatHistorySessionNotFoundError):
+        repository.get_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=USER_B,
+            turn_id="turn-lookup-1",
+            role="assistant",
+        )
 
 
 def test_rename_and_soft_delete_hide_deleted_sessions_from_reads(db_session):

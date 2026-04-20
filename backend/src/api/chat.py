@@ -109,6 +109,7 @@ class ChatMessage(BaseModel):
     """
     message: str
     session_id: Optional[str] = None
+    turn_id: Optional[str] = None
     model: Optional[str] = None
     specialist_model: Optional[str] = None
 
@@ -149,6 +150,118 @@ def _get_conversation_history_for_session(user_id: str, session_id: str) -> List
             messages.append({'role': 'assistant', 'content': exchange['assistant']})
 
     return messages
+
+
+def _collect_durable_text_exchanges(
+    messages: List[ChatMessageRecord],
+    *,
+    pending_user_message: Optional[str] = None,
+) -> tuple[List[tuple[str, str]], Optional[str]]:
+    """Pair durable text transcript rows into user/assistant exchanges."""
+
+    exchanges: List[tuple[str, str]] = []
+
+    for message in messages:
+        if message.message_type != "text" or not message.content.strip():
+            continue
+
+        if message.role == "user":
+            pending_user_message = message.content
+            continue
+
+        if message.role != "assistant" or pending_user_message is None:
+            continue
+
+        exchanges.append((pending_user_message, message.content))
+        pending_user_message = None
+
+    return exchanges, pending_user_message
+
+
+def _hydrate_conversation_history_from_durable_messages(
+    repository: ChatHistoryRepository,
+    *,
+    user_id: str,
+    session_id: str,
+) -> None:
+    """Synchronize in-memory chat history with the durable text transcript."""
+
+    if not getattr(conversation_manager, "history_enabled", False):
+        return
+
+    get_session_history = getattr(conversation_manager, "get_session_history", None)
+    add_exchange = getattr(conversation_manager, "add_exchange", None)
+    if get_session_history is None or add_exchange is None:
+        return
+
+    durable_exchanges: List[tuple[str, str]] = []
+    pending_user_message: Optional[str] = None
+    message_cursor: Optional[ChatMessageCursor] = None
+
+    while True:
+        message_page = repository.list_messages(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            limit=200,
+            cursor=message_cursor,
+        )
+        if not message_page.items:
+            break
+
+        page_exchanges, pending_user_message = _collect_durable_text_exchanges(
+            messages=message_page.items,
+            pending_user_message=pending_user_message,
+        )
+        durable_exchanges.extend(page_exchanges)
+
+        if message_page.next_cursor is None:
+            break
+        message_cursor = message_page.next_cursor
+
+    clear_session_history = getattr(conversation_manager, "clear_session_history", None)
+    if clear_session_history is not None:
+        clear_session_history(user_id, session_id)
+    else:
+        get_session_history(user_id, session_id).clear()
+
+    for durable_user_message, durable_assistant_message in durable_exchanges:
+        add_exchange(user_id, session_id, durable_user_message, durable_assistant_message)
+
+
+def _ensure_conversation_history_contains_exchange(
+    repository: ChatHistoryRepository,
+    *,
+    user_id: str,
+    session_id: str,
+    user_message: str,
+    assistant_message: str,
+) -> None:
+    """Ensure replayed durable exchanges become visible to subsequent prompt history on this worker."""
+
+    if not getattr(conversation_manager, "history_enabled", False):
+        return
+
+    get_session_history = getattr(conversation_manager, "get_session_history", None)
+    add_exchange = getattr(conversation_manager, "add_exchange", None)
+    if get_session_history is None or add_exchange is None:
+        return
+
+    session_history = get_session_history(user_id, session_id)
+    if not session_history:
+        _hydrate_conversation_history_from_durable_messages(
+            repository,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        return
+
+    if any(
+        exchange.get("user") == user_message and exchange.get("assistant") == assistant_message
+        for exchange in session_history
+    ):
+        return
+
+    add_exchange(user_id, session_id, user_message, assistant_message)
 
 
 def _build_extraction_candidate_from_tool_event(
@@ -323,6 +436,7 @@ def _persist_extraction_candidates(
     trace_id: Optional[str],
     source_kind: CurationExtractionSourceKind,
     flow_run_id: Optional[str] = None,
+    db: Optional[Session] = None,
 ) -> None:
     """Persist extraction candidates and propagate failures to the caller."""
 
@@ -346,7 +460,8 @@ def _persist_extraction_candidates(
                 metadata=dict(candidate.metadata),
             )
             for candidate in candidates
-        ]
+        ],
+        db=db,
     )
 
 
@@ -616,6 +731,7 @@ class StopRequest(BaseModel):
 # Redis provides cross-worker cancellation; this provides immediate same-worker cancellation
 _LOCAL_CANCEL_EVENTS: Dict[str, asyncio.Event] = {}
 _LOCAL_SESSION_OWNERS: Dict[str, str] = {}
+_LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
 
 
 def _build_active_document(document_payload: Dict[str, Any]) -> ActiveDocument:
@@ -1035,13 +1151,15 @@ async def create_session(
 # Chat Endpoints (using OpenAI Agents SDK)
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_auth_dependency()):
+async def chat_endpoint(
+    chat_message: ChatMessage,
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
+):
     """Process a chat message and return a response (non-streaming)."""
     session_id = chat_message.session_id or str(uuid.uuid4())
-    user_id = user.get("sub")
-
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
 
     # Set context variables for file output tools
     set_current_session_id(session_id)
@@ -1056,6 +1174,22 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
     # Note: Cognito uses "cognito:groups" as the claim key
     cognito_groups = user.get("cognito:groups", [])
     active_groups = get_groups_from_cognito(cognito_groups)
+    effective_user_message = chat_message.message
+    turn_claim_key: Optional[str] = None
+    turn_claim_token: Optional[str] = None
+    turn_claim_acquired = False
+
+    async def _release_non_stream_turn_claim() -> None:
+        nonlocal turn_claim_acquired
+
+        if not turn_claim_acquired or turn_claim_key is None or turn_claim_token is None:
+            return
+
+        turn_claim_acquired = False
+        if _LOCAL_NON_STREAM_TURN_OWNERS.get(turn_claim_key) == turn_claim_token:
+            _LOCAL_NON_STREAM_TURN_OWNERS.pop(turn_claim_key, None)
+        await unregister_active_stream(turn_claim_key, user_id=turn_claim_token)
+
     if active_groups:
         logger.info(
             "User has active groups: %s (from Cognito groups: %s)",
@@ -1063,9 +1197,108 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             cognito_groups,
             extra={"session_id": session_id, "user_id": user_id},
         )
+
+    try:
+        if chat_message.turn_id:
+            turn_claim_key = f"non-stream-turn:{session_id}:{chat_message.turn_id}"
+            # Use a per-request claim token so same-turn retries stay exclusive across workers.
+            turn_claim_token = uuid.uuid4().hex
+
+            if turn_claim_key in _LOCAL_NON_STREAM_TURN_OWNERS:
+                raise HTTPException(status_code=409, detail="Chat turn is already in progress")
+
+            _LOCAL_NON_STREAM_TURN_OWNERS[turn_claim_key] = turn_claim_token
+            if not await register_active_stream(turn_claim_key, user_id=turn_claim_token):
+                _LOCAL_NON_STREAM_TURN_OWNERS.pop(turn_claim_key, None)
+                turn_claim_key = None
+                turn_claim_token = None
+                raise HTTPException(status_code=409, detail="Chat turn is already in progress")
+
+            turn_claim_acquired = True
+
+        active_document_id, _ = _resolve_session_create_active_document(
+            repository=repository,
+            user_id=user_id,
+        )
+        repository.get_or_create_session(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            active_document_id=active_document_id,
+        )
+        user_turn = repository.append_message(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            role="user",
+            content=chat_message.message,
+            turn_id=chat_message.turn_id,
+        )
+        db.commit()
+    except HTTPException:
+        await _release_non_stream_turn_claim()
+        raise
+    except ValueError as exc:
+        await _release_non_stream_turn_claim()
+        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+    except Exception as exc:
+        await _release_non_stream_turn_claim()
+        logger.error(
+            "Failed to persist durable non-stream user turn for session %s",
+            session_id,
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+            exc_info=True,
+        )
+        _rollback_and_raise(
+            db,
+            status_code=500,
+            detail="Failed to persist chat request",
+            exc=exc,
+        )
+
+    if chat_message.turn_id and not user_turn.created:
+        effective_user_message = user_turn.message.content
+        try:
+            assistant_turn = repository.get_message_by_turn_id(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                turn_id=chat_message.turn_id,
+                role="assistant",
+            )
+        except ValueError as exc:
+            await _release_non_stream_turn_claim()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        if assistant_turn is not None:
+            _ensure_conversation_history_contains_exchange(
+                repository,
+                user_id=user_id,
+                session_id=session_id,
+                user_message=effective_user_message,
+                assistant_message=assistant_turn.content,
+            )
+            logger.info(
+                "Returning durable replay for non-stream chat turn %s",
+                chat_message.turn_id,
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+            )
+            await _release_non_stream_turn_claim()
+            return ChatResponse(response=assistant_turn.content, session_id=session_id)
+
+        logger.info(
+            "Retrying incomplete non-stream chat turn %s after prior request ended",
+            chat_message.turn_id,
+            extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+        )
+        if effective_user_message != chat_message.message:
+            logger.info(
+                "Reusing stored user content for retried non-stream turn %s",
+                chat_message.turn_id,
+                extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+            )
+
     try:
         tool_agent_map = get_supervisor_tool_agent_map()
     except Exception as exc:
+        await _release_non_stream_turn_claim()
         logger.error(
             "Supervisor tool-map resolution failed; aborting chat run to prevent silent extraction data loss",
             extra={"session_id": session_id, "user_id": user_id},
@@ -1077,6 +1310,11 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
         ) from exc
 
     try:
+        _hydrate_conversation_history_from_durable_messages(
+            repository,
+            user_id=user_id,
+            session_id=session_id,
+        )
         # Retrieve conversation history for multi-turn context
         conversation_history = _get_conversation_history_for_session(user_id, session_id)
         if conversation_history:
@@ -1095,7 +1333,7 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
         extraction_candidates: List[ExtractionEnvelopeCandidate] = []
 
         async for event in run_agent_streamed(
-            user_message=chat_message.message,
+            user_message=effective_user_message,
             user_id=user_id,
             session_id=session_id,
             document_id=document_id,
@@ -1118,7 +1356,7 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             candidate = _build_extraction_candidate_from_tool_event(
                 event,
                 tool_agent_map=tool_agent_map,
-                conversation_summary=chat_message.message,
+                conversation_summary=effective_user_message,
                 metadata={"document_name": document_name} if document_name else None,
             )
             if candidate:
@@ -1143,17 +1381,60 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             raise HTTPException(status_code=500, detail=error_message)
 
         if run_finished:
-            _persist_extraction_candidates(
-                candidates=extraction_candidates,
-                document_id=document_id,
-                user_id=user_id,
-                session_id=session_id,
-                trace_id=trace_id,
-                source_kind=CurationExtractionSourceKind.CHAT,
-            )
+            try:
+                _persist_extraction_candidates(
+                    candidates=extraction_candidates,
+                    document_id=document_id,
+                    user_id=user_id,
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    source_kind=CurationExtractionSourceKind.CHAT,
+                    db=db,
+                )
+                assistant_turn = repository.append_message(
+                    session_id=session_id,
+                    user_auth_sub=user_id,
+                    role="assistant",
+                    content=full_response,
+                    turn_id=chat_message.turn_id,
+                    trace_id=trace_id,
+                )
+                if chat_message.turn_id and not assistant_turn.created:
+                    db.rollback()
+                    _ensure_conversation_history_contains_exchange(
+                        repository,
+                        user_id=user_id,
+                        session_id=session_id,
+                        user_message=effective_user_message,
+                        assistant_message=assistant_turn.message.content,
+                    )
+                    logger.info(
+                        "Discarding duplicate non-stream completion for replayed turn %s",
+                        chat_message.turn_id,
+                        extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+                    )
+                    return ChatResponse(response=assistant_turn.message.content, session_id=session_id)
+                db.commit()
+            except ValueError as exc:
+                _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+            except Exception as exc:
+                logger.error(
+                    "Failed to persist durable non-stream assistant turn for session %s",
+                    session_id,
+                    extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
+                    exc_info=True,
+                )
+                _rollback_and_raise(
+                    db,
+                    status_code=500,
+                    detail="Failed to persist chat response",
+                    exc=exc,
+                )
+        else:
+            raise HTTPException(status_code=500, detail="Chat run did not complete")
 
         # Save to conversation history
-        conversation_manager.add_exchange(user_id, session_id, chat_message.message, full_response)
+        conversation_manager.add_exchange(user_id, session_id, effective_user_message, full_response)
 
         return ChatResponse(response=full_response, session_id=session_id)
 
@@ -1167,6 +1448,8 @@ async def chat_endpoint(chat_message: ChatMessage, user: Dict[str, Any] = get_au
             exc_info=True,
         )
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        await _release_non_stream_turn_claim()
 
 
 @router.post("/chat/stream")
