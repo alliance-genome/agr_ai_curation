@@ -439,6 +439,37 @@ async def test_create_session_drops_unavailable_active_document(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_session_drops_invalid_active_document_uuid(monkeypatch):
+    repository = FakeChatHistoryRepository()
+    commits: list[str] = []
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(
+        chat,
+        "document_state",
+        SimpleNamespace(
+            get_document=lambda _uid: {
+                "id": "not-a-uuid",
+                "filename": "stale-paper.pdf",
+                "chunk_count": 11,
+            }
+        ),
+    )
+
+    payload = await chat.create_session(
+        SimpleNamespace(commit=lambda: commits.append("commit"), rollback=lambda: None),
+        {"sub": "user-1"},
+    )
+
+    UUID(payload.session_id)
+    assert payload.active_document_id is None
+    assert payload.active_document is None
+    assert commits == ["commit"]
+    assert repository.create_calls[0]["user_auth_sub"] == "user-1"
+    assert repository.create_calls[0]["active_document_id"] is None
+    assert repository.visible_document_calls == []
+
+
+@pytest.mark.asyncio
 async def test_chat_endpoint_success(monkeypatch):
     add_calls = []
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)

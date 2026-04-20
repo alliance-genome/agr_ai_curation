@@ -832,7 +832,7 @@ def _resolve_session_create_active_document(
 
     active_document_id = _active_document_uuid_from_state(user_id)
     if active_document_id is None:
-        return None, active_document
+        return None, None
 
     visible_document_id = repository.get_visible_document_id(
         document_id=active_document_id,
