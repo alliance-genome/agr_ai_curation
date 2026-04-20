@@ -1848,12 +1848,15 @@ async def get_session_history(
     user_id = _require_user_sub(user)
     repository = _get_chat_history_repository(db)
 
-    detail = repository.get_session_detail(
-        session_id=session_id,
-        user_auth_sub=user_id,
-        message_limit=message_limit,
-        message_cursor=_decode_message_cursor(message_cursor),
-    )
+    try:
+        detail = repository.get_session_detail(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            message_limit=message_limit,
+            message_cursor=_decode_message_cursor(message_cursor),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if detail is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
 
@@ -1993,6 +1996,8 @@ async def delete_session(
         db.commit()
     except HTTPException:
         raise
+    except ValueError as exc:
+        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
     except Exception as exc:
         logger.error(
             "Failed to delete chat session %s",

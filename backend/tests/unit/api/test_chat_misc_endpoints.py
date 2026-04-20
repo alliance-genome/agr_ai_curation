@@ -205,6 +205,8 @@ class FakeChatHistoryRepository:
         self.rename_calls.append(
             {"session_id": session_id, "user_auth_sub": user_auth_sub, "title": title}
         )
+        if not session_id.strip():
+            raise ValueError("session_id is required")
         normalized_title = title.strip()
         if not normalized_title:
             raise ValueError("title is required")
@@ -233,6 +235,8 @@ class FakeChatHistoryRepository:
         self.delete_calls.append(
             {"session_id": session_id, "user_auth_sub": user_auth_sub, "deleted_at": deleted_at}
         )
+        if not session_id.strip():
+            raise ValueError("session_id is required")
         return self.sessions.pop((user_auth_sub, session_id), None) is not None
 
     def _visible_sessions(
@@ -937,6 +941,24 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
 
 
 @pytest.mark.asyncio
+async def test_get_session_history_rejects_blank_session_id(monkeypatch):
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.get_session_history(
+            "   ",
+            message_limit=50,
+            message_cursor=None,
+            db=object(),
+            user={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "session_id is required"
+
+
+@pytest.mark.asyncio
 async def test_get_session_history_returns_null_active_document_when_document_is_missing(monkeypatch):
     active_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
     repository = FakeChatHistoryRepository(
@@ -1115,6 +1137,29 @@ async def test_delete_session_returns_404_for_other_users_session(monkeypatch):
             user={"sub": "user-1"},
         )
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_session_rejects_blank_session_id(monkeypatch):
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.delete_session(
+            "   ",
+            db=SimpleNamespace(
+                commit=lambda: commits.append("commit"),
+                rollback=lambda: rollbacks.append("rollback"),
+            ),
+            user={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "session_id is required"
+    assert commits == []
+    assert rollbacks == ["rollback"]
 
 
 @pytest.mark.asyncio
