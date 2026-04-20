@@ -869,6 +869,15 @@ async def _load_session_active_document(
             )
             return None
         raise
+    except ValueError as exc:
+        if str(exc) == f"Document {active_document_id} not found":
+            logger.warning(
+                "Active document %s is no longer available for chat session resume",
+                active_document_id,
+                extra={"user_id": user_id, "document_id": str(active_document_id)},
+            )
+            return None
+        raise
 
     document_payload = document_detail.get("document")
     if not isinstance(document_payload, dict):

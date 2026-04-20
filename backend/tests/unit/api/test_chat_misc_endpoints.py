@@ -919,6 +919,37 @@ async def test_get_session_history_returns_null_active_document_when_document_is
     )
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
 
+    async def _raise_missing_document(*_args, **_kwargs):
+        raise ValueError(f"Document {active_document_id} not found")
+
+    monkeypatch.setattr(chat, "get_document", _raise_missing_document)
+
+    payload = await chat.get_session_history(
+        "session-detail",
+        message_limit=50,
+        message_cursor=None,
+        db=object(),
+        user={"sub": "user-1"},
+    )
+
+    assert payload.session.session_id == "session-detail"
+    assert payload.active_document is None
+
+
+@pytest.mark.asyncio
+async def test_get_session_history_returns_null_active_document_when_document_is_missing_via_http(monkeypatch):
+    active_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(
+                session_id="session-detail",
+                title="Resume me",
+                active_document_id=active_document_id,
+            )
+        ]
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+
     async def _raise_not_found(*_args, **_kwargs):
         raise HTTPException(status_code=404, detail="Document not found")
 
@@ -934,6 +965,35 @@ async def test_get_session_history_returns_null_active_document_when_document_is
 
     assert payload.session.session_id == "session-detail"
     assert payload.active_document is None
+
+
+@pytest.mark.asyncio
+async def test_get_session_history_propagates_unexpected_document_lookup_value_errors(monkeypatch):
+    active_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(
+                session_id="session-detail",
+                title="Resume me",
+                active_document_id=active_document_id,
+            )
+        ]
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+
+    async def _raise_unexpected_value_error(*_args, **_kwargs):
+        raise ValueError("User with auth_sub user-1 not found")
+
+    monkeypatch.setattr(chat, "get_document", _raise_unexpected_value_error)
+
+    with pytest.raises(ValueError, match="User with auth_sub user-1 not found"):
+        await chat.get_session_history(
+            "session-detail",
+            message_limit=50,
+            message_cursor=None,
+            db=object(),
+            user={"sub": "user-1"},
+        )
 
 
 @pytest.mark.asyncio
