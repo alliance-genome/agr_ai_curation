@@ -375,7 +375,7 @@ describe('HomePage durable session bootstrap', () => {
     renderHomePage('/?session=deleted-session')
 
     expect(
-      await screen.findByText('Chat session deleted-session is unavailable. It may have been deleted.'),
+      await screen.findByText('This chat session is unavailable. It may have been deleted.'),
     ).toBeInTheDocument()
     expect(screen.queryByTestId('chat-session')).not.toBeInTheDocument()
 
@@ -385,5 +385,49 @@ describe('HomePage durable session bootstrap', () => {
     expect(screen.getByTestId('location-search')).toHaveTextContent('')
     expect(screen.queryByText(/deleted-session is unavailable/)).not.toBeInTheDocument()
     expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('new-session-1')
+  })
+
+  it('recovers from a fresh bootstrap failure when starting a new durable chat', async () => {
+    let createSessionAttempts = 0
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        createSessionAttempts += 1
+
+        if (createSessionAttempts === 1) {
+          return jsonResponse({ detail: 'Initial session bootstrap failed' }, 500)
+        }
+
+        return jsonResponse({
+          session_id: 'retry-session',
+          created_at: '2026-04-20T03:00:00Z',
+          updated_at: '2026-04-20T03:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/')
+
+    expect(await screen.findByText('Initial session bootstrap failed')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Start new chat' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start new chat' }))
+
+    expect(await screen.findByText('retry-session')).toBeInTheDocument()
+    expect(screen.queryByText('Preparing chat session...')).not.toBeInTheDocument()
+    expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('retry-session')
+    expect(createSessionAttempts).toBe(2)
   })
 })

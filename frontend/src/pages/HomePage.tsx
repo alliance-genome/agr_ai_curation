@@ -262,8 +262,20 @@ function HomePage() {
         throw new Error('Document viewer URL unavailable')
       }
 
-      const filename = detail.filename ?? document.filename ?? 'Untitled'
-      const pageCount = detail.page_count ?? detail.pageCount ?? 1
+      const filename = normalizeChatHistoryValue(detail.filename)
+        ?? normalizeChatHistoryValue(document.filename)
+      if (!filename) {
+        throw new Error('Document filename unavailable')
+      }
+
+      const pageCount = detail.page_count
+      if (
+        typeof pageCount !== 'number'
+        || !Number.isFinite(pageCount)
+        || pageCount < 1
+      ) {
+        throw new Error('Document page count unavailable')
+      }
       const timestamp = new Date().toISOString()
 
       if (chatStorageKeys) {
@@ -568,6 +580,7 @@ function HomePage() {
       const nextSearchParams = new URLSearchParams(searchParams)
       nextSearchParams.delete('session')
       setSearchParams(nextSearchParams, { replace: true })
+      setIsBootstrappingSession(false)
     } catch (error) {
       setSessionBootstrapError(
         error instanceof Error
@@ -584,12 +597,9 @@ function HomePage() {
   const handleSessionChange = useCallback((newSessionId: string) => {
     debug.log('🔄 [HomePage] Session ID changed:', newSessionId)
     persistSessionId(newSessionId)
-    // Persist to localStorage
     if (chatStorageKeys) {
       localStorage.removeItem(chatStorageKeys.messages)
     }
-    // Clear the init promise so future ensureSession calls use the new ID
-    sessionInitPromiseRef.current = Promise.resolve(newSessionId)
   }, [chatStorageKeys, persistSessionId])
 
   if (isBootstrappingSession || !user?.uid) {
@@ -616,7 +626,7 @@ function HomePage() {
         >
           <Alert severity={missingSessionId ? 'warning' : 'error'} sx={{ width: '100%' }}>
             {missingSessionId
-              ? `Chat session ${missingSessionId} is unavailable. It may have been deleted.`
+              ? 'This chat session is unavailable. It may have been deleted.'
               : sessionBootstrapError}
           </Alert>
           <Button
