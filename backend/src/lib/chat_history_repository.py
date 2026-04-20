@@ -12,7 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.models.sql.chat_message import ChatMessage as ChatMessageModel
+from src.models.sql.pdf_document import PDFDocument as PDFDocumentModel
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
+from src.models.sql.user import User as UserModel
 
 
 MAX_SESSION_PAGE_SIZE = 100
@@ -201,6 +203,27 @@ class ChatHistoryRepository:
         self._db.flush()
         self._db.refresh(session)
         return _session_record(session)
+
+    def get_visible_document_id(
+        self,
+        *,
+        document_id: UUID,
+        user_auth_sub: str,
+    ) -> UUID | None:
+        """Return one document UUID when it belongs to the authenticated user."""
+
+        normalized_user_auth_sub = _normalize_required_text(
+            user_auth_sub,
+            field_name="user_auth_sub",
+        )
+        return self._db.scalar(
+            select(PDFDocumentModel.id)
+            .join(UserModel, UserModel.id == PDFDocumentModel.user_id)
+            .where(
+                PDFDocumentModel.id == document_id,
+                UserModel.auth_sub == normalized_user_auth_sub,
+            )
+        )
 
     def get_or_create_session(
         self,

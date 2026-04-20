@@ -52,18 +52,21 @@ class FakeChatHistoryRepository:
         *,
         sessions: list[ChatSessionRecord] | None = None,
         detail_messages: dict[tuple[str, str], list[ChatMessageRecord]] | None = None,
+        visible_document_ids: set[UUID] | None = None,
     ) -> None:
         self.sessions = {
             (record.user_auth_sub, record.session_id): record
             for record in (sessions or [])
         }
         self.detail_messages = detail_messages or {}
+        self.visible_document_ids = visible_document_ids
         self.create_calls: list[dict[str, object]] = []
         self.list_calls: list[dict[str, object]] = []
         self.search_calls: list[dict[str, object]] = []
         self.count_calls: list[dict[str, object]] = []
         self.rename_calls: list[dict[str, object]] = []
         self.delete_calls: list[dict[str, object]] = []
+        self.visible_document_calls: list[dict[str, object]] = []
 
     def create_session(
         self,
@@ -92,6 +95,22 @@ class FakeChatHistoryRepository:
             }
         )
         return record
+
+    def get_visible_document_id(
+        self,
+        *,
+        document_id: UUID,
+        user_auth_sub: str,
+    ) -> UUID | None:
+        self.visible_document_calls.append(
+            {
+                "document_id": document_id,
+                "user_auth_sub": user_auth_sub,
+            }
+        )
+        if self.visible_document_ids is None:
+            return document_id
+        return document_id if document_id in self.visible_document_ids else None
 
     def get_session_detail(
         self,
@@ -374,6 +393,49 @@ async def test_create_session_returns_uuid_and_persists_active_document(monkeypa
     assert commits == ["commit"]
     assert repository.create_calls[0]["user_auth_sub"] == "user-1"
     assert str(repository.create_calls[0]["active_document_id"]) == payload.active_document_id
+    assert repository.visible_document_calls == [
+        {
+            "document_id": UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8"),
+            "user_auth_sub": "user-1",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_create_session_drops_unavailable_active_document(monkeypatch):
+    stale_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
+    repository = FakeChatHistoryRepository(visible_document_ids=set())
+    commits: list[str] = []
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(
+        chat,
+        "document_state",
+        SimpleNamespace(
+            get_document=lambda _uid: {
+                "id": str(stale_document_id),
+                "filename": "deleted-paper.pdf",
+                "chunk_count": 11,
+            }
+        ),
+    )
+
+    payload = await chat.create_session(
+        SimpleNamespace(commit=lambda: commits.append("commit"), rollback=lambda: None),
+        {"sub": "user-1"},
+    )
+
+    UUID(payload.session_id)
+    assert payload.active_document_id is None
+    assert payload.active_document is None
+    assert commits == ["commit"]
+    assert repository.create_calls[0]["user_auth_sub"] == "user-1"
+    assert repository.create_calls[0]["active_document_id"] is None
+    assert repository.visible_document_calls == [
+        {
+            "document_id": stale_document_id,
+            "user_auth_sub": "user-1",
+        }
+    ]
 
 
 @pytest.mark.asyncio

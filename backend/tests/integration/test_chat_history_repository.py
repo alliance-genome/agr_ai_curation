@@ -12,6 +12,7 @@ from src.lib.chat_history_repository import ChatHistoryRepository
 from src.models.sql.chat_message import ChatMessage
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.chat_session import ChatSession
+from src.models.sql.user import User
 
 
 USER_A = "chat-repo-user-a"
@@ -35,6 +36,9 @@ def db_session(test_db):
     test_db.execute(
         delete(ChatSession).where(ChatSession.session_id.like(f"{SESSION_PREFIX}%"))
     )
+    test_db.execute(
+        delete(User).where(User.auth_sub.in_((USER_A, USER_B)))
+    )
     test_db.commit()
 
     yield test_db
@@ -48,10 +52,25 @@ def db_session(test_db):
     test_db.execute(
         delete(ChatSession).where(ChatSession.session_id.like(f"{SESSION_PREFIX}%"))
     )
+    test_db.execute(
+        delete(User).where(User.auth_sub.in_((USER_A, USER_B)))
+    )
     test_db.commit()
 
 
-def _create_document(db_session, *, document_id, suffix: str) -> None:
+def _create_user(db_session, *, auth_sub: str) -> User:
+    user = User(
+        auth_sub=auth_sub,
+        email=f"{auth_sub}@example.org",
+        display_name=auth_sub,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
+def _create_document(db_session, *, document_id, suffix: str, user_id: int | None = None) -> None:
     db_session.add(
         PDFDocument(
             id=document_id,
@@ -60,6 +79,7 @@ def _create_document(db_session, *, document_id, suffix: str) -> None:
             file_hash=f"{suffix:0>64}"[:64],
             file_size=1024,
             page_count=2,
+            user_id=user_id,
         )
     )
     db_session.flush()
@@ -244,6 +264,63 @@ def test_count_and_document_filters_respect_user_scope(db_session):
             active_document_id=document_a,
         )
         == 2
+    )
+
+
+def test_get_visible_document_id_is_scoped_to_the_authenticated_user(db_session):
+    repository = ChatHistoryRepository(db_session)
+    user_a = _create_user(db_session, auth_sub=USER_A)
+    user_b = _create_user(db_session, auth_sub=USER_B)
+    visible_document_id = uuid4()
+    hidden_document_id = uuid4()
+    orphan_document_id = uuid4()
+
+    _create_document(
+        db_session,
+        document_id=visible_document_id,
+        suffix="visible",
+        user_id=user_a.id,
+    )
+    _create_document(
+        db_session,
+        document_id=hidden_document_id,
+        suffix="hidden",
+        user_id=user_b.id,
+    )
+    _create_document(
+        db_session,
+        document_id=orphan_document_id,
+        suffix="orphan",
+    )
+    db_session.commit()
+
+    assert (
+        repository.get_visible_document_id(
+            document_id=visible_document_id,
+            user_auth_sub=USER_A,
+        )
+        == visible_document_id
+    )
+    assert (
+        repository.get_visible_document_id(
+            document_id=hidden_document_id,
+            user_auth_sub=USER_A,
+        )
+        is None
+    )
+    assert (
+        repository.get_visible_document_id(
+            document_id=orphan_document_id,
+            user_auth_sub=USER_A,
+        )
+        is None
+    )
+    assert (
+        repository.get_visible_document_id(
+            document_id=uuid4(),
+            user_auth_sub=USER_A,
+        )
+        is None
     )
 
 

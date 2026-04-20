@@ -816,6 +816,38 @@ def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
     )
 
 
+def _resolve_session_create_active_document(
+    *,
+    repository: ChatHistoryRepository,
+    user_id: str,
+) -> tuple[UUID | None, ActiveDocument | None]:
+    """Resolve the loaded chat document into a durable, user-visible session reference."""
+
+    active_document_payload = document_state.get_document(user_id)
+    active_document = (
+        _build_active_document(active_document_payload)
+        if isinstance(active_document_payload, dict) and active_document_payload.get("id")
+        else None
+    )
+
+    active_document_id = _active_document_uuid_from_state(user_id)
+    if active_document_id is None:
+        return None, active_document
+
+    visible_document_id = repository.get_visible_document_id(
+        document_id=active_document_id,
+        user_auth_sub=user_id,
+    )
+    if visible_document_id is None:
+        logger.warning(
+            "Ignoring unavailable active document while creating durable chat session",
+            extra={"user_id": user_id, "document_id": str(active_document_id)},
+        )
+        return None, None
+
+    return visible_document_id, active_document
+
+
 async def _load_session_active_document(
     *,
     user_id: str,
@@ -950,13 +982,16 @@ async def create_session(
     user_id = _require_user_sub(user)
     repository = _get_chat_history_repository(db)
     session_id = str(uuid.uuid4())
-    active_document = document_state.get_document(user_id)
+    active_document_id, active_document = _resolve_session_create_active_document(
+        repository=repository,
+        user_id=user_id,
+    )
 
     try:
         session = repository.create_session(
             session_id=session_id,
             user_auth_sub=user_id,
-            active_document_id=_active_document_uuid_from_state(user_id),
+            active_document_id=active_document_id,
         )
         db.commit()
     except Exception as exc:
@@ -984,11 +1019,7 @@ async def create_session(
         updated_at=session.updated_at,
         title=session.title,
         active_document_id=str(session.active_document_id) if session.active_document_id else None,
-        active_document=(
-            _build_active_document(active_document)
-            if isinstance(active_document, dict) and active_document.get("id")
-            else None
-        ),
+        active_document=active_document,
     )
 
 
