@@ -2,7 +2,15 @@ import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button, Tooltip, Snackbar, Alert } from '@mui/material'
-import { Logout as LogoutIcon, AutoAwesome as AgentStudioIcon, FactCheck as CurationIcon, Home as HomeIcon, HelpOutline as HelpIcon, History as ChangelogIcon } from '@mui/icons-material'
+import {
+  Logout as LogoutIcon,
+  AutoAwesome as AgentStudioIcon,
+  FactCheck as CurationIcon,
+  Home as HomeIcon,
+  HelpOutline as HelpIcon,
+  History as HistoryIcon,
+  Update as ChangelogIcon,
+} from '@mui/icons-material'
 import { getVersionDisplay, getFullVersionInfo } from './config/version'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
@@ -32,6 +40,7 @@ const BatchPage = lazy(() => import('./pages/BatchPage'))
 const ChangelogPage = lazy(() => import('./pages/ChangelogPage'))
 const CurationInventoryPage = lazy(() => import('./pages/CurationInventoryPage'))
 const CurationWorkspacePage = lazy(() => import('./pages/CurationWorkspacePage'))
+const HistoryPage = lazy(() => import('./features/history/HistoryPage'))
 const PersistentPdfWorkspaceLayout = lazy(() => import('./components/pdfViewer/PersistentPdfWorkspaceLayout'))
 const Settings = lazy(() => import('./pages/weaviate/Settings'))
 const DocumentDetail = lazy(() => import('./pages/weaviate/DocumentDetail'))
@@ -437,6 +446,24 @@ export function AppContent() {
           </Box>
           <Box
             component={Link}
+            to="/history"
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 0.5,
+              textDecoration: 'none',
+              color: 'inherit',
+              marginRight: 2,
+              '&:hover': {
+                opacity: 0.8
+              }
+            }}
+          >
+            <HistoryIcon fontSize="small" />
+            <Typography variant="body2">Chat History</Typography>
+          </Box>
+          <Box
+            component={Link}
             to="/changelog"
             sx={{
               display: 'flex',
@@ -518,6 +545,7 @@ export function AppContent() {
 
       <Box component="main" sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
         <Routes>
+          <Route path="/history" element={renderLazyRoute(<HistoryPage />)} />
           <Route path="/changelog" element={renderLazyRoute(<ChangelogPage />)} />
           <Route path="/viewer-settings" element={renderLazyRoute(<ViewerSettings />)} />
           <Route path="/agent-studio" element={renderLazyRoute(<AgentStudioPage />)} />
