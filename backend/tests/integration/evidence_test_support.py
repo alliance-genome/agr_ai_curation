@@ -55,10 +55,28 @@ def client(test_db, get_auth_mock, monkeypatch):
         mock_get_auth_dep.return_value = Security(get_auth_mock.get_user)
 
         from main import app
+        from src.models.sql.chat_message import ChatMessage
+        from src.models.sql.chat_session import ChatSession
+        from src.models.sql.database import Base
         from src.models.sql.database import get_db
+        from src.models.sql.pdf_document import PDFDocument
+        from src.models.sql.user import User
 
         def override_get_db():
             yield test_db
+
+        Base.metadata.create_all(
+            bind=test_db.get_bind(),
+            tables=[
+                User.__table__,
+                PDFDocument.__table__,
+                ChatSession.__table__,
+                ChatMessage.__table__,
+            ],
+        )
+        test_db.query(ChatMessage).delete(synchronize_session=False)
+        test_db.query(ChatSession).delete(synchronize_session=False)
+        test_db.commit()
 
         app.dependency_overrides[get_db] = override_get_db
         try:
@@ -66,6 +84,9 @@ def client(test_db, get_auth_mock, monkeypatch):
             test_client.current_user_auth_sub = MOCK_USERS["curator1"]["sub"]
             yield test_client
         finally:
+            test_db.query(ChatMessage).delete(synchronize_session=False)
+            test_db.query(ChatSession).delete(synchronize_session=False)
+            test_db.commit()
             app.dependency_overrides.clear()
 
 
@@ -227,7 +248,12 @@ def configure_chat_stream_mocks(
     monkeypatch.setattr(
         chat,
         "conversation_manager",
-        SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None),
+        SimpleNamespace(
+            history_enabled=False,
+            get_session_history=lambda *_args, **_kwargs: [],
+            add_exchange=lambda *_args, **_kwargs: None,
+            clear_session_history=lambda *_args, **_kwargs: None,
+        ),
     )
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map))
 

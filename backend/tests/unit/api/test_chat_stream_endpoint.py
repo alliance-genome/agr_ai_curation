@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY
+from uuid import uuid4
 
 from fastapi.responses import StreamingResponse
 import pytest
@@ -39,10 +41,94 @@ def _expected_evidence_record() -> dict[str, object]:
     return record
 
 
-def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch):
+def _db_stub(*, commits: list[str] | None = None, rollbacks: list[str] | None = None):
+    return SimpleNamespace(
+        commit=lambda: commits.append("commit") if commits is not None else None,
+        rollback=lambda: rollbacks.append("rollback") if rollbacks is not None else None,
+    )
+
+
+def _assistant_record(*, session_id: str, turn_id: str, content: str, trace_id: str | None = None):
+    return chat.ChatMessageRecord(
+        message_id=uuid4(),
+        session_id=session_id,
+        turn_id=turn_id,
+        role="assistant",
+        message_type="text",
+        content=content,
+        payload_json=None,
+        trace_id=trace_id,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_stream_turn_persistence(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: object())
+    monkeypatch.setattr(
+        chat,
+        "_resolve_session_create_active_document",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        chat,
+        "_ensure_conversation_history_contains_exchange",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _prepare(
+        *,
+        repository,
+        db,
+        session_id: str,
+        user_id: str,
+        user_message: str,
+        requested_turn_id: str | None,
+        active_document_id,
+    ):
+        return chat.PreparedChatStreamTurn(
+            turn_id=requested_turn_id or "generated-turn",
+            effective_user_message=user_message,
+            context_messages=[{"role": "user", "content": user_message}],
+        )
+
+    def _finalize(
+        *,
+        session_id: str,
+        user_id: str,
+        turn_id: str,
+        user_message: str,
+        assistant_message: str,
+        trace_id: str | None,
+        extraction_candidates,
+        document_id: str | None,
+    ):
+        chat._persist_extraction_candidates(
+            candidates=extraction_candidates,
+            document_id=document_id,
+            user_id=user_id,
+            session_id=session_id,
+            trace_id=trace_id,
+            source_kind=chat.CurationExtractionSourceKind.CHAT,
+        )
+        return _assistant_record(
+            session_id=session_id,
+            turn_id=turn_id,
+            content=assistant_message,
+            trace_id=trace_id,
+        )
+
+    monkeypatch.setattr(chat, "_prepare_chat_stream_turn", _prepare)
+    monkeypatch.setattr(chat, "_persist_completed_chat_stream_turn", _finalize)
+    yield
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+
+def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch):
     calls = {"register": [], "unregister": [], "clear": []}
 
     monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
@@ -95,7 +181,7 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     assert response.background is not None
 
     events = asyncio.run(_consume_stream(response))
-    assert [event["type"] for event in events] == ["RUN_STARTED", "RUN_FINISHED"]
+    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
 
     # Explicitly invoke response background task to verify cleanup remains idempotent.
     asyncio.run(response.background())
@@ -169,7 +255,7 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
     )
 
     events = asyncio.run(_consume_stream(response))
-    assert [event["type"] for event in events] == ["RUN_STARTED", "RUN_FINISHED"]
+    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
     assert captured["supervisor_model"] == "gpt-5.4-nano"
     assert captured["specialist_model"] == "gpt-5.4-nano"
     assert captured["supervisor_temperature"] == 0.0
@@ -235,7 +321,7 @@ def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypa
     )
 
     events = asyncio.run(_consume_stream(response))
-    assert [event["type"] for event in events] == ["RUN_STARTED", "RUN_FINISHED"]
+    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
     assert captured["supervisor_model"] is None
     assert captured["specialist_model"] is None
     assert captured["supervisor_temperature"] is None
@@ -369,7 +455,7 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     events = asyncio.run(_consume_stream(response))
     asyncio.run(response.background())
 
-    assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "RUN_FINISHED"]
+    assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert len(persisted_requests) == 1
     persisted_request = persisted_requests[0]
     assert persisted_request.document_id == "doc-1"
@@ -462,7 +548,7 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
         "RUN_STARTED",
         "TOOL_COMPLETE",
         "evidence_summary",
-        "RUN_FINISHED",
+        "turn_completed",
     ]
     assert events[2]["evidence_records"] == [expected_record]
 
@@ -558,7 +644,7 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
         "RUN_STARTED",
         "TOOL_COMPLETE",
         "evidence_summary",
-        "RUN_FINISHED",
+        "turn_completed",
     ]
     assert sum(1 for event in events if event.get("type") == "evidence_summary") == 1
     evidence_summary_event = next(
@@ -657,7 +743,7 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
         "RUN_STARTED",
         "TOOL_COMPLETE",
         "evidence_summary",
-        "RUN_FINISHED",
+        "turn_completed",
     ]
 
     evidence_summary_event = next(
@@ -762,14 +848,14 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
     events = asyncio.run(_consume_stream(response))
     asyncio.run(response.background())
 
-    assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "RUN_FINISHED"]
+    assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
     assert len(persisted_requests) == 1
     persisted_request = persisted_requests[0]
     assert persisted_request.agent_key == "gene_extractor"
     assert persisted_request.adapter_key == "gene"
 
 
-def test_chat_stream_endpoint_emits_run_error_when_extraction_persistence_fails(monkeypatch):
+def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_persistence_fails(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -871,10 +957,343 @@ def test_chat_stream_endpoint_emits_run_error_when_extraction_persistence_fails(
     asyncio.run(response.background())
 
     event_types = [event["type"] for event in events]
-    assert event_types == ["RUN_STARTED", "TOOL_COMPLETE", "SUPERVISOR_ERROR", "RUN_ERROR"]
-    assert "RUN_FINISHED" not in event_types
+    assert event_types == ["RUN_STARTED", "TOOL_COMPLETE", "SUPERVISOR_ERROR", "turn_failed"]
     assert events[-1]["error_type"] == "RuntimeError"
     assert add_calls == []
+
+
+def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_requires_rescue(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-456"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    def _raise_assistant_save_failed(**_kwargs):
+        raise chat.ChatStreamAssistantSaveFailedError(
+            "Failed to persist stream assistant turn"
+        ) from RuntimeError("assistant row unavailable")
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    monkeypatch.setattr(chat, "_persist_completed_chat_stream_turn", _raise_assistant_save_failed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="hello", session_id="session-chat-assistant-save-fail"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    event_types = [event["type"] for event in events]
+    assert event_types == ["RUN_STARTED", "SUPERVISOR_ERROR", "turn_save_failed"]
+    assert events[-1]["error_type"] == "RuntimeError"
+
+
+def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    check_calls = {"count": 0}
+    finalize_calls = []
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        check_calls["count"] += 1
+        return check_calls["count"] > 1
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stop"}}
+        yield {"type": "TOOL_COMPLETE", "details": {"toolName": "should-not-arrive"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    monkeypatch.setattr(
+        chat,
+        "_persist_completed_chat_stream_turn",
+        lambda **_kwargs: finalize_calls.append("finalize"),
+    )
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="hello", session_id="session-stop"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_interrupted"]
+    assert events[-1]["turn_id"] == "generated-turn"
+    assert finalize_calls == []
+
+
+def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(
+        chat,
+        "_prepare_chat_stream_turn",
+        lambda **_kwargs: chat.PreparedChatStreamTurn(
+            turn_id="turn-replay",
+            effective_user_message="hello",
+            context_messages=[],
+            replay_assistant_turn=_assistant_record(
+                session_id="session-replay",
+                turn_id="turn-replay",
+                content="stored response",
+                trace_id="trace-replay",
+            ),
+        ),
+    )
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        raise AssertionError("runner should not be invoked for replayed turns")
+        yield
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="hello", session_id="session-replay", turn_id="turn-replay"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["TEXT_MESSAGE_CONTENT", "turn_completed"]
+    assert events[0]["content"] == "stored response"
+    assert events[1]["turn_id"] == "turn-replay"
+    assert events[1]["trace_id"] == "trace-replay"
+
+
+def test_chat_stream_endpoint_emits_session_gone_when_session_disappears_before_completion_save(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-gone"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    def _raise_session_gone(**_kwargs):
+        raise chat.ChatHistorySessionNotFoundError("Chat session not found")
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    monkeypatch.setattr(chat, "_persist_completed_chat_stream_turn", _raise_session_gone)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="hello", session_id="session-gone"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["RUN_STARTED", "session_gone"]
+    assert events[-1]["trace_id"] == "trace-gone"
+
+
+@pytest.mark.asyncio
+async def test_assistant_rescue_endpoint_is_idempotent_on_turn_id(monkeypatch):
+    commits: list[str] = []
+    ensure_calls = []
+    assistant_record = _assistant_record(
+        session_id="session-rescue",
+        turn_id="turn-rescue",
+        content="rescued response",
+        trace_id="trace-rescue",
+    )
+    created_values = iter([True, False])
+
+    repository = SimpleNamespace(
+        get_session=lambda **_kwargs: object(),
+        get_message_by_turn_id=lambda **kwargs: SimpleNamespace(content="hello")
+        if kwargs["role"] == "user"
+        else None,
+        append_message=lambda **_kwargs: SimpleNamespace(
+            message=assistant_record,
+            created=next(created_values),
+        ),
+    )
+
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(
+        chat,
+        "_ensure_conversation_history_contains_exchange",
+        lambda *_args, **_kwargs: ensure_calls.append("ensured"),
+    )
+
+    first_response = await chat.assistant_rescue(
+        session_id="session-rescue",
+        request=chat.AssistantRescueRequest(
+            turn_id="turn-rescue",
+            content="rescued response",
+            trace_id="trace-rescue",
+        ),
+        db=_db_stub(commits=commits),
+        user={"sub": "auth-sub"},
+    )
+    second_response = await chat.assistant_rescue(
+        session_id="session-rescue",
+        request=chat.AssistantRescueRequest(
+            turn_id="turn-rescue",
+            content="rescued response",
+            trace_id="trace-rescue",
+        ),
+        db=_db_stub(commits=commits),
+        user={"sub": "auth-sub"},
+    )
+
+    assert first_response.created is True
+    assert second_response.created is False
+    assert first_response.trace_id == "trace-rescue"
+    assert second_response.trace_id == "trace-rescue"
+    assert commits == ["commit", "commit"]
+    assert ensure_calls == ["ensured", "ensured"]
+
+
+@pytest.mark.asyncio
+async def test_assistant_rescue_endpoint_returns_404_when_session_is_missing(monkeypatch):
+    repository = SimpleNamespace(
+        get_session=lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+
+    with pytest.raises(chat.HTTPException) as exc:
+        await chat.assistant_rescue(
+            session_id="missing-session",
+            request=chat.AssistantRescueRequest(
+                turn_id="turn-rescue",
+                content="rescued response",
+            ),
+            db=_db_stub(),
+            user={"sub": "auth-sub"},
+        )
+
+    assert exc.value.status_code == 404
 
 
 def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch):
