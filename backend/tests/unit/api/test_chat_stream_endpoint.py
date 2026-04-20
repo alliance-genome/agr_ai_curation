@@ -136,7 +136,7 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
 
     async def _register_active_stream(
@@ -204,7 +204,7 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
 
     async def _register_active_stream(
@@ -276,7 +276,7 @@ def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypa
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
 
     async def _register_active_stream(
@@ -343,7 +343,7 @@ def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monk
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(
@@ -372,7 +372,7 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
     monkeypatch.setattr(
         chat,
@@ -479,7 +479,7 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
     monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
 
@@ -562,7 +562,7 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {"ask_gene_extractor_specialist": "gene_extractor"})
     monkeypatch.setattr(
@@ -667,7 +667,7 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
     monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
 
@@ -768,7 +768,7 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
     monkeypatch.setattr(
         chat,
@@ -869,7 +869,7 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -1309,7 +1309,7 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
 
     def _raise_tool_map():

@@ -536,40 +536,6 @@ def _conversation_manager_stub(
     )
 
 
-@pytest.mark.asyncio
-async def test_get_conversation_history_for_session_converts_exchange_format(monkeypatch):
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        SimpleNamespace(
-            history_enabled=True,
-            get_session_history=lambda _uid, _sid: [
-                {"user": "u1", "assistant": "a1"},
-                {"user": "u2", "assistant": ""},
-                {"user": "", "assistant": "a3"},
-            ],
-        ),
-    )
-
-    history = chat._get_conversation_history_for_session("user-1", "session-1")
-    assert history == [
-        {"role": "user", "content": "u1"},
-        {"role": "assistant", "content": "a1"},
-        {"role": "user", "content": "u2"},
-        {"role": "assistant", "content": "a3"},
-    ]
-
-
-@pytest.mark.asyncio
-async def test_get_conversation_history_for_session_returns_empty_when_disabled(monkeypatch):
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(history_enabled=False),
-    )
-    assert chat._get_conversation_history_for_session("user-1", "session-1") == []
-
-
 def test_build_context_messages_from_history_appends_current_user_turn():
     context_messages = chat._build_context_messages_from_history(
         [
@@ -691,11 +657,17 @@ def test_hydrate_conversation_history_from_durable_messages_rebuilds_partial_his
         session_id="session-replay",
     )
 
-    assert chat._get_conversation_history_for_session("user-1", "session-replay") == [
+    assert chat._build_context_messages_from_durable_messages(
+        repository,
+        user_id="user-1",
+        session_id="session-replay",
+        user_message="",
+    ) == [
         {"role": "user", "content": "first question"},
         {"role": "assistant", "content": "first answer"},
         {"role": "user", "content": "replayed question"},
         {"role": "assistant", "content": "stored answer"},
+        {"role": "user", "content": ""},
     ]
 
 
@@ -896,7 +868,7 @@ async def test_chat_endpoint_success(monkeypatch):
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -946,7 +918,7 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -986,7 +958,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -1076,7 +1048,7 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -1371,11 +1343,17 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
     )
 
     assert replay_result.response == "stored answer"
-    assert chat._get_conversation_history_for_session("user-1", "session-replay") == [
+    assert chat._build_context_messages_from_durable_messages(
+        repository,
+        user_id="user-1",
+        session_id="session-replay",
+        user_message="",
+    ) == [
         {"role": "user", "content": "first question"},
         {"role": "assistant", "content": "first answer"},
         {"role": "user", "content": "replayed question"},
         {"role": "assistant", "content": "stored answer"},
+        {"role": "user", "content": ""},
     ]
 
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
@@ -1479,13 +1457,19 @@ async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stal
             {"role": "user", "content": "follow-up question"},
         ]
     ]
-    assert chat._get_conversation_history_for_session("user-1", "session-replay") == [
+    assert chat._build_context_messages_from_durable_messages(
+        repository,
+        user_id="user-1",
+        session_id="session-replay",
+        user_message="",
+    ) == [
         {"role": "user", "content": "first question"},
         {"role": "assistant", "content": "first answer"},
         {"role": "user", "content": "replayed question"},
         {"role": "assistant", "content": "stored answer"},
         {"role": "user", "content": "follow-up question"},
         {"role": "assistant", "content": "next answer"},
+        {"role": "user", "content": ""},
     ]
     assert commits == ["commit", "commit"]
 
@@ -1500,7 +1484,7 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -1548,7 +1532,7 @@ async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypat
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -1594,7 +1578,7 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -1632,7 +1616,7 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",
@@ -1758,7 +1742,7 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
     monkeypatch.setattr(
         chat,
         "conversation_manager",

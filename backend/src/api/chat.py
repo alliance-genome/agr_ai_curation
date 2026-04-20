@@ -126,35 +126,6 @@ class ChatMessage(BaseModel):
     specialist_reasoning: Optional[str] = None
 
 
-def _get_conversation_history_for_session(user_id: str, session_id: str) -> List[Dict[str, str]]:
-    """
-    Retrieve conversation history from conversation_manager and format for OpenAI.
-
-    Converts from exchange format {'user': ..., 'assistant': ...}
-    to OpenAI message format [{'role': 'user', 'content': ...}, ...]
-
-    Args:
-        user_id: User identifier (Cognito sub claim)
-        session_id: Session identifier
-    """
-    if not conversation_manager.history_enabled:
-        return []
-
-    history = conversation_manager.get_session_history(user_id, session_id)
-    if not history:
-        return []
-
-    messages = []
-    for exchange in history:
-        # Each exchange has 'user' and 'assistant' keys
-        if exchange.get('user'):
-            messages.append({'role': 'user', 'content': exchange['user']})
-        if exchange.get('assistant'):
-            messages.append({'role': 'assistant', 'content': exchange['assistant']})
-
-    return messages
-
-
 def _build_context_messages_from_history(
     history_messages: List[Dict[str, str]],
     *,
@@ -2053,8 +2024,19 @@ async def chat_stream_endpoint(
                     continue
 
                 if event_type == "RUN_ERROR":
-                    runner_error_message = event_data.get("message", "Unknown error")
-                    runner_error_type = event_data.get("error_type") or "RunError"
+                    runner_error_message = event_data.get("message")
+                    runner_error_type = event_data.get("error_type")
+                    if not runner_error_message:
+                        logger.error(
+                            "Agent sent RUN_ERROR without message field",
+                            extra={"session_id": current_session_id, "turn_id": current_turn_id},
+                        )
+                        runner_error_message = "Agent error (no details provided)"
+                    if not runner_error_type:
+                        logger.error(
+                            "Agent sent RUN_ERROR without error_type field",
+                            extra={"session_id": current_session_id, "turn_id": current_turn_id},
+                        )
                     logger.error(
                         "Agent error during streaming chat: %s",
                         runner_error_message,

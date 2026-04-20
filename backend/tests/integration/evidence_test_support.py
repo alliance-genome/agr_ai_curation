@@ -244,7 +244,11 @@ def configure_chat_stream_mocks(
         SimpleNamespace(get_document=lambda _uid: {"id": document_id, "filename": filename}),
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_conversation_history_for_session", lambda _u, _s: [])
+    monkeypatch.setattr(
+        chat,
+        "_build_context_messages_from_durable_messages",
+        lambda *_args, **_kwargs: [{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else [],
+    )
     monkeypatch.setattr(
         chat,
         "conversation_manager",
