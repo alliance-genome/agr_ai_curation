@@ -21,8 +21,6 @@ that raises 401 for all protected endpoints. This simulates missing auth token
 without trying to contact Cognito JWKS (which would cause 503 errors).
 """
 
-from typing import Optional
-
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch
@@ -248,6 +246,38 @@ class TestAuthenticationRequired:
         assert "authenticate" in data["detail"].lower() or \
                "not authenticated" in data["detail"].lower()
 
+    def test_chat_session_create_requires_auth(self, client):
+        """Test that POST /api/chat/session returns 401 without auth."""
+        response = client.post("/api/chat/session")
+
+        assert response.status_code == 401, \
+            f"Expected 401 Unauthorized, got {response.status_code}"
+
+        data = response.json()
+        assert "detail" in data
+        assert "authenticate" in data["detail"].lower() or \
+               "not authenticated" in data["detail"].lower()
+
+    def test_chat_session_mutations_require_auth(self, client):
+        """Test rename, delete, and bulk-delete chat session endpoints require auth."""
+        rename_response = client.patch(
+            "/api/chat/session/fake-session-id",
+            json={"title": "Renamed"},
+        )
+        delete_response = client.delete("/api/chat/session/fake-session-id")
+        bulk_delete_response = client.post(
+            "/api/chat/session/bulk-delete",
+            json={"session_ids": ["fake-session-id"]},
+        )
+
+        for response in [rename_response, delete_response, bulk_delete_response]:
+            assert response.status_code == 401, \
+                f"Expected 401 Unauthorized, got {response.status_code}"
+            data = response.json()
+            assert "detail" in data
+            assert "authenticate" in data["detail"].lower() or \
+                   "not authenticated" in data["detail"].lower()
+
     def test_user_profile_requires_auth(self, client):
         """Test that GET /api/users/me returns 401 without auth.
 
@@ -407,6 +437,7 @@ class TestAuthenticationRequired:
         """
         protected_endpoints = [
             ("GET", "/weaviate/documents", None),
+            ("POST", "/api/chat/session", None),
             ("POST", "/api/chat", {"message": "test", "session_id": "test"}),
             ("GET", "/api/chat/history", None),
             ("GET", "/api/users/me", None),

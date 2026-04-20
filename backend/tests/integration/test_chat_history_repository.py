@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import delete
 
 from src.lib.chat_history_repository import ChatHistoryRepository
 from src.models.sql.chat_message import ChatMessage
+from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.chat_session import ChatSession
+from src.models.sql.user import User
 
 
 USER_A = "chat-repo-user-a"
 USER_B = "chat-repo-user-b"
 SESSION_PREFIX = "chat-repo-test-"
+DOCUMENT_PREFIX = "chat-repo-doc-"
 
 
 def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
@@ -24,22 +28,61 @@ def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
 @pytest.fixture
 def db_session(test_db):
     test_db.execute(
+        delete(PDFDocument).where(PDFDocument.filename.like(f"{DOCUMENT_PREFIX}%"))
+    )
+    test_db.execute(
         delete(ChatMessage).where(ChatMessage.session_id.like(f"{SESSION_PREFIX}%"))
     )
     test_db.execute(
         delete(ChatSession).where(ChatSession.session_id.like(f"{SESSION_PREFIX}%"))
+    )
+    test_db.execute(
+        delete(User).where(User.auth_sub.in_((USER_A, USER_B)))
     )
     test_db.commit()
 
     yield test_db
 
     test_db.execute(
+        delete(PDFDocument).where(PDFDocument.filename.like(f"{DOCUMENT_PREFIX}%"))
+    )
+    test_db.execute(
         delete(ChatMessage).where(ChatMessage.session_id.like(f"{SESSION_PREFIX}%"))
     )
     test_db.execute(
         delete(ChatSession).where(ChatSession.session_id.like(f"{SESSION_PREFIX}%"))
     )
+    test_db.execute(
+        delete(User).where(User.auth_sub.in_((USER_A, USER_B)))
+    )
     test_db.commit()
+
+
+def _create_user(db_session, *, auth_sub: str) -> User:
+    user = User(
+        auth_sub=auth_sub,
+        email=f"{auth_sub}@example.org",
+        display_name=auth_sub,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+    return user
+
+
+def _create_document(db_session, *, document_id, suffix: str, user_id: int | None = None) -> None:
+    db_session.add(
+        PDFDocument(
+            id=document_id,
+            filename=f"{DOCUMENT_PREFIX}{suffix}.pdf",
+            file_path=f"/tmp/{DOCUMENT_PREFIX}{suffix}.pdf",
+            file_hash=f"{suffix:0>64}"[:64],
+            file_size=1024,
+            page_count=2,
+            user_id=user_id,
+        )
+    )
+    db_session.flush()
 
 
 def test_list_and_search_are_scoped_to_the_authenticated_user(db_session):
@@ -159,6 +202,126 @@ def test_list_sessions_uses_recent_activity_keyset_pagination(db_session):
         f"{SESSION_PREFIX}oldest"
     ]
     assert second_page.next_cursor is None
+
+
+def test_count_and_document_filters_respect_user_scope(db_session):
+    repository = ChatHistoryRepository(db_session)
+    document_a = uuid4()
+    document_b = uuid4()
+    _create_document(db_session, document_id=document_a, suffix="doc-a")
+    _create_document(db_session, document_id=document_b, suffix="doc-b")
+
+    repository.create_session(
+        session_id=f"{SESSION_PREFIX}doc-a-1",
+        user_auth_sub=USER_A,
+        title="Alpha doc session",
+        active_document_id=document_a,
+        created_at=_ts(9, 0),
+    )
+    repository.create_session(
+        session_id=f"{SESSION_PREFIX}doc-a-2",
+        user_auth_sub=USER_A,
+        title="Second alpha doc session",
+        active_document_id=document_a,
+        created_at=_ts(9, 30),
+    )
+    repository.create_session(
+        session_id=f"{SESSION_PREFIX}doc-b-1",
+        user_auth_sub=USER_A,
+        title="Beta doc session",
+        active_document_id=document_b,
+        created_at=_ts(10, 0),
+    )
+    repository.create_session(
+        session_id=f"{SESSION_PREFIX}other-user-doc-a",
+        user_auth_sub=USER_B,
+        title="Hidden alpha doc session",
+        active_document_id=document_a,
+        created_at=_ts(10, 30),
+    )
+    db_session.commit()
+
+    filtered = repository.list_sessions(
+        user_auth_sub=USER_A,
+        active_document_id=document_a,
+    )
+    assert [item.session_id for item in filtered.items] == [
+        f"{SESSION_PREFIX}doc-a-2",
+        f"{SESSION_PREFIX}doc-a-1",
+    ]
+    assert repository.count_sessions(user_auth_sub=USER_A) == 3
+    assert (
+        repository.count_sessions(
+            user_auth_sub=USER_A,
+            active_document_id=document_a,
+        )
+        == 2
+    )
+    assert (
+        repository.count_sessions(
+            user_auth_sub=USER_A,
+            query="alpha",
+            active_document_id=document_a,
+        )
+        == 2
+    )
+
+
+def test_get_visible_document_id_is_scoped_to_the_authenticated_user(db_session):
+    repository = ChatHistoryRepository(db_session)
+    user_a = _create_user(db_session, auth_sub=USER_A)
+    user_b = _create_user(db_session, auth_sub=USER_B)
+    visible_document_id = uuid4()
+    hidden_document_id = uuid4()
+    orphan_document_id = uuid4()
+
+    _create_document(
+        db_session,
+        document_id=visible_document_id,
+        suffix="visible",
+        user_id=user_a.id,
+    )
+    _create_document(
+        db_session,
+        document_id=hidden_document_id,
+        suffix="hidden",
+        user_id=user_b.id,
+    )
+    _create_document(
+        db_session,
+        document_id=orphan_document_id,
+        suffix="orphan",
+    )
+    db_session.commit()
+
+    assert (
+        repository.get_visible_document_id(
+            document_id=visible_document_id,
+            user_auth_sub=USER_A,
+        )
+        == visible_document_id
+    )
+    assert (
+        repository.get_visible_document_id(
+            document_id=hidden_document_id,
+            user_auth_sub=USER_A,
+        )
+        is None
+    )
+    assert (
+        repository.get_visible_document_id(
+            document_id=orphan_document_id,
+            user_auth_sub=USER_A,
+        )
+        is None
+    )
+    assert (
+        repository.get_visible_document_id(
+            document_id=uuid4(),
+            user_auth_sub=USER_A,
+        )
+        is None
+    )
 
 
 def test_get_session_detail_paginates_messages_in_chronological_order(db_session):

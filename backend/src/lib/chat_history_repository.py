@@ -12,7 +12,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from src.models.sql.chat_message import ChatMessage as ChatMessageModel
+from src.models.sql.pdf_document import PDFDocument as PDFDocumentModel
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
+from src.models.sql.user import User as UserModel
 
 
 MAX_SESSION_PAGE_SIZE = 100
@@ -202,6 +204,27 @@ class ChatHistoryRepository:
         self._db.refresh(session)
         return _session_record(session)
 
+    def get_visible_document_id(
+        self,
+        *,
+        document_id: UUID,
+        user_auth_sub: str,
+    ) -> UUID | None:
+        """Return one document UUID when it belongs to the authenticated user."""
+
+        normalized_user_auth_sub = _normalize_required_text(
+            user_auth_sub,
+            field_name="user_auth_sub",
+        )
+        return self._db.scalar(
+            select(PDFDocumentModel.id)
+            .join(UserModel, UserModel.id == PDFDocumentModel.user_id)
+            .where(
+                PDFDocumentModel.id == document_id,
+                UserModel.auth_sub == normalized_user_auth_sub,
+            )
+        )
+
     def get_or_create_session(
         self,
         *,
@@ -279,6 +302,7 @@ class ChatHistoryRepository:
         user_auth_sub: str,
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
+        active_document_id: UUID | None = None,
     ) -> ChatSessionPage:
         """List active sessions ordered by null-safe recent activity descending."""
 
@@ -287,6 +311,7 @@ class ChatHistoryRepository:
             limit=limit,
             cursor=cursor,
             search_query=None,
+            active_document_id=active_document_id,
         )
 
     def search_sessions(
@@ -296,6 +321,7 @@ class ChatHistoryRepository:
         query: str,
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
+        active_document_id: UUID | None = None,
     ) -> ChatSessionPage:
         """Search active sessions with Postgres full-text search and recent ordering."""
 
@@ -305,7 +331,41 @@ class ChatHistoryRepository:
             limit=limit,
             cursor=cursor,
             search_query=normalized_query,
+            active_document_id=active_document_id,
         )
+
+    def count_sessions(
+        self,
+        *,
+        user_auth_sub: str,
+        query: str | None = None,
+        active_document_id: UUID | None = None,
+    ) -> int:
+        """Count visible sessions for the authenticated user and optional filters."""
+
+        normalized_user_auth_sub = _normalize_required_text(
+            user_auth_sub,
+            field_name="user_auth_sub",
+        )
+        stmt = select(func.count()).select_from(ChatSessionModel).where(
+            ChatSessionModel.user_auth_sub == normalized_user_auth_sub,
+            ChatSessionModel.deleted_at.is_(None),
+        )
+
+        if query is not None:
+            normalized_query = _normalize_required_text(query, field_name="query")
+            stmt = stmt.where(
+                ChatSessionModel.search_vector.op("@@")(
+                    func.websearch_to_tsquery("english", normalized_query)
+                )
+            )
+
+        if active_document_id is not None:
+            stmt = stmt.where(
+                ChatSessionModel.active_document_id == active_document_id,
+            )
+
+        return int(self._db.scalar(stmt) or 0)
 
     def rename_session(
         self,
@@ -490,6 +550,7 @@ class ChatHistoryRepository:
         limit: int,
         cursor: ChatSessionCursor | None,
         search_query: str | None,
+        active_document_id: UUID | None,
     ) -> ChatSessionPage:
         page_size = _validate_page_size(
             limit,
@@ -509,6 +570,11 @@ class ChatHistoryRepository:
             ChatSessionModel.user_auth_sub == normalized_user_auth_sub,
             ChatSessionModel.deleted_at.is_(None),
         )
+
+        if active_document_id is not None:
+            stmt = stmt.where(
+                ChatSessionModel.active_document_id == active_document_id,
+            )
 
         if search_query is not None:
             stmt = stmt.where(
