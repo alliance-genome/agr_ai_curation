@@ -286,7 +286,7 @@ class FakeChatHistoryRepository:
         if not normalized_turn_id:
             raise ValueError("turn_id is required")
         if (user_auth_sub, session_id) not in self.sessions:
-            return None
+            raise ValueError(f"session {session_id} not found")
 
         for message in self.detail_messages.get((user_auth_sub, session_id), []):
             if message.turn_id == normalized_turn_id and message.role == role:
@@ -796,6 +796,18 @@ async def test_create_session_drops_invalid_active_document_uuid(monkeypatch):
     assert repository.create_calls[0]["user_auth_sub"] == "user-1"
     assert repository.create_calls[0]["active_document_id"] is None
     assert repository.visible_document_calls == []
+
+
+def test_fake_chat_history_repository_turn_lookup_requires_existing_session():
+    repository = FakeChatHistoryRepository()
+
+    with pytest.raises(ValueError, match="session missing-session not found"):
+        repository.get_message_by_turn_id(
+            session_id="missing-session",
+            user_auth_sub="user-1",
+            turn_id="turn-1",
+            role="assistant",
+        )
 
 
 @pytest.mark.asyncio
