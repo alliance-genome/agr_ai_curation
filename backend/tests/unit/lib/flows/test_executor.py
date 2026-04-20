@@ -1809,6 +1809,38 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["failure_reason"] is not None
 
     @pytest.mark.asyncio
+    async def test_passes_prompt_as_context_messages_to_runner(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene", step_goal="Extract genes"),
+        ])
+        captured = {}
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**kwargs):
+            captured.update(kwargs)
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+
+        assert events[0]["type"] == "FLOW_STARTED"
+        assert captured["context_messages"] == [{"role": "user", "content": "run flow"}]
+
+    @pytest.mark.asyncio
     async def test_converts_run_error_into_flow_error(self, monkeypatch):
         flow = _make_flow([
             _task_input_node(),

@@ -570,6 +570,72 @@ async def test_get_conversation_history_for_session_returns_empty_when_disabled(
     assert chat._get_conversation_history_for_session("user-1", "session-1") == []
 
 
+def test_build_context_messages_from_history_appends_current_user_turn():
+    context_messages = chat._build_context_messages_from_history(
+        [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+        ],
+        user_message="follow-up question",
+    )
+
+    assert context_messages == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "follow-up question"},
+    ]
+
+
+def test_build_context_messages_from_durable_messages_uses_text_transcript_rows():
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-context")],
+        detail_messages={
+            ("user-1", "session-context"): [
+                _message_record(
+                    session_id="session-context",
+                    role="user",
+                    content="first question",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-context",
+                    role="assistant",
+                    content="first answer",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 2),
+                ),
+                _message_record(
+                    session_id="session-context",
+                    role="flow",
+                    content="flow memory",
+                    message_type="text",
+                    created_at=_ts(9, 3),
+                ),
+                _message_record(
+                    session_id="session-context",
+                    role="assistant",
+                    content="ignored attachment payload",
+                    message_type="json",
+                    created_at=_ts(9, 4),
+                ),
+            ]
+        },
+    )
+
+    context_messages = chat._build_context_messages_from_durable_messages(
+        repository,
+        user_id="user-1",
+        session_id="session-context",
+    )
+
+    assert context_messages == [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "assistant", "content": "flow memory"},
+    ]
+
+
 def test_hydrate_conversation_history_from_durable_messages_rebuilds_partial_history(monkeypatch):
     conversation_manager = FakeConversationManager()
     conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
@@ -903,7 +969,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     add_calls = []
     register_calls = []
     unregister_calls = []
-    stream_user_messages = []
+    streamed_context_messages = []
     repository = FakeChatHistoryRepository()
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
@@ -941,7 +1007,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     async def _stream(**kwargs):
         nonlocal run_attempt
         run_attempt += 1
-        stream_user_messages.append(kwargs["user_message"])
+        streamed_context_messages.append(kwargs["context_messages"])
         if run_attempt == 1:
             yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
             return
@@ -976,7 +1042,10 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     assert result.response == "recovered answer"
     assert result.session_id == "session-retry"
     assert commits == ["commit", "commit", "commit"]
-    assert stream_user_messages == ["hello", "hello"]
+    assert streamed_context_messages == [
+        [{"role": "user", "content": "hello"}],
+        [{"role": "user", "content": "hello"}],
+    ]
     assert add_calls == [("user-1", "session-retry", "hello", "recovered answer")]
     assert [call["role"] for call in repository.append_calls] == ["user", "user", "assistant"]
     assert register_calls[0][0] == "non-stream-turn:session-retry:turn-retry"
@@ -991,7 +1060,7 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     commits: list[str] = []
     register_calls = []
     unregister_calls = []
-    stream_user_messages = []
+    streamed_context_messages = []
     repository = FakeChatHistoryRepository()
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
@@ -1029,7 +1098,7 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", _raise_tool_map)
 
     async def _stream(**kwargs):
-        stream_user_messages.append(kwargs["user_message"])
+        streamed_context_messages.append(kwargs["context_messages"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-tool-map"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "recovered answer"}}
 
@@ -1063,7 +1132,7 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     assert result.response == "recovered answer"
     assert result.session_id == "session-tool-map"
     assert commits == ["commit", "commit", "commit"]
-    assert stream_user_messages == ["hello"]
+    assert streamed_context_messages == [[{"role": "user", "content": "hello"}]]
     assert [call["role"] for call in repository.append_calls] == ["user", "user", "assistant"]
     assert register_calls[0][0] == "non-stream-turn:session-tool-map:turn-tool-map"
     assert register_calls[1][0] == "non-stream-turn:session-tool-map:turn-tool-map"
@@ -1165,7 +1234,7 @@ async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatc
 async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(monkeypatch):
     commits: list[str] = []
     conversation_manager = FakeConversationManager()
-    captured_histories = []
+    captured_context_messages = []
     conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-replay")],
@@ -1238,7 +1307,7 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _stream(**kwargs):
-        captured_histories.append(kwargs["conversation_history"])
+        captured_context_messages.append(kwargs["context_messages"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-next"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "next answer"}}
 
@@ -1251,12 +1320,13 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
     )
 
     assert result.response == "next answer"
-    assert captured_histories == [
+    assert captured_context_messages == [
         [
             {"role": "user", "content": "first question"},
             {"role": "assistant", "content": "first answer"},
             {"role": "user", "content": "replayed question"},
             {"role": "assistant", "content": "stored answer"},
+            {"role": "user", "content": "follow-up question"},
         ]
     ]
     assert commits == ["commit", "commit", "commit"]
@@ -1265,7 +1335,7 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
 @pytest.mark.asyncio
 async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stale_worker(monkeypatch):
     commits: list[str] = []
-    captured_histories = []
+    captured_context_messages = []
     conversation_manager = FakeConversationManager()
     conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
     repository = FakeChatHistoryRepository(
@@ -1313,7 +1383,7 @@ async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stal
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _stream(**kwargs):
-        captured_histories.append(kwargs["conversation_history"])
+        captured_context_messages.append(kwargs["context_messages"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-next"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "next answer"}}
 
@@ -1326,12 +1396,13 @@ async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stal
     )
 
     assert result.response == "next answer"
-    assert captured_histories == [
+    assert captured_context_messages == [
         [
             {"role": "user", "content": "first question"},
             {"role": "assistant", "content": "first answer"},
             {"role": "user", "content": "replayed question"},
             {"role": "assistant", "content": "stored answer"},
+            {"role": "user", "content": "follow-up question"},
         ]
     ]
     assert chat._get_conversation_history_for_session("user-1", "session-replay") == [
@@ -1390,6 +1461,7 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
     assert captured["specialist_temperature"] == 0.0
     assert captured["supervisor_reasoning"] == "minimal"
     assert captured["specialist_reasoning"] == "minimal"
+    assert captured["context_messages"] == [{"role": "user", "content": "hello"}]
 
 
 @pytest.mark.asyncio
@@ -1428,6 +1500,7 @@ async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypat
     assert captured["specialist_temperature"] is None
     assert captured["supervisor_reasoning"] is None
     assert captured["specialist_reasoning"] is None
+    assert captured["context_messages"] == [{"role": "user", "content": "hello"}]
 
 
 @pytest.mark.asyncio

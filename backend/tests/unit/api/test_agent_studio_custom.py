@@ -138,6 +138,7 @@ class TestCustomAgentTestEndpoint:
         assert '"type": "DONE"' in stream_text
         assert '"trace_id": "trace-123"' in stream_text
         assert run_kwargs["active_groups"] == ["WB"]
+        assert run_kwargs["context_messages"] == [{"role": "user", "content": "test query"}]
 
     def test_test_request_accepts_legacy_mod_id_alias(self):
         import src.api.agent_studio_custom as api_module

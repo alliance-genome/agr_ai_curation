@@ -1029,11 +1029,10 @@ async def test_agent_endpoint(
         trace_id = None
         try:
             async for event in run_agent_streamed(
-                user_message=request.input,
+                context_messages=[{"role": "user", "content": request.input}],
                 user_id=str(user_sub),
                 session_id=session_id,
                 document_id=request.document_id,
-                conversation_history=None,
                 active_groups=active_groups,
                 agent=test_agent,
             ):
