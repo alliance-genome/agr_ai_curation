@@ -1,4 +1,10 @@
+import { normalizeChatHistoryValue } from './chatHistoryNormalization'
+
 const CHAT_STORAGE_PREFIX = 'chat-cache:v1'
+const CHAT_QUERY_KEY_PREFIX = ['chat'] as const
+
+export const DEFAULT_CHAT_HISTORY_LIST_LIMIT = 20
+export const DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT = 100
 
 const LEGACY_CHAT_STORAGE_KEYS = [
   'chat-messages',
@@ -15,8 +21,50 @@ export interface ChatLocalStorageKeys {
   pdfViewerSession: string
 }
 
+export interface ChatHistoryListCacheRequest {
+  limit?: number
+  cursor?: string | null
+  query?: string | null
+  documentId?: string | null
+}
+
+export interface ChatHistoryDetailCacheRequest {
+  sessionId: string
+  messageLimit?: number
+  messageCursor?: string | null
+}
+
 function buildChatStorageKey(userId: string, key: string): string {
   return `${CHAT_STORAGE_PREFIX}:${userId}:${key}`
+}
+
+export const chatCacheKeys = {
+  all: CHAT_QUERY_KEY_PREFIX,
+  history: {
+    all: () => [...CHAT_QUERY_KEY_PREFIX, 'history'] as const,
+    lists: () => [...chatCacheKeys.history.all(), 'lists'] as const,
+    list: (request: ChatHistoryListCacheRequest = {}) =>
+      [
+        ...chatCacheKeys.history.lists(),
+        {
+          limit: request.limit ?? DEFAULT_CHAT_HISTORY_LIST_LIMIT,
+          cursor: normalizeChatHistoryValue(request.cursor),
+          query: normalizeChatHistoryValue(request.query),
+          documentId: normalizeChatHistoryValue(request.documentId),
+        },
+      ] as const,
+    details: () => [...chatCacheKeys.history.all(), 'details'] as const,
+    detailSession: (sessionId: string) =>
+      [...chatCacheKeys.history.details(), sessionId.trim()] as const,
+    detail: (request: ChatHistoryDetailCacheRequest) =>
+      [
+        ...chatCacheKeys.history.detailSession(request.sessionId),
+        {
+          messageLimit: request.messageLimit ?? DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+          messageCursor: normalizeChatHistoryValue(request.messageCursor),
+        },
+      ] as const,
+  },
 }
 
 export function getChatLocalStorageKeys(userId: string): ChatLocalStorageKeys {
