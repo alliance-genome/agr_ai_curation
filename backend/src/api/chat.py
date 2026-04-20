@@ -174,21 +174,6 @@ def _build_context_messages_from_history(
     return context_messages
 
 
-def _durable_message_to_context_message(
-    message: ChatMessageRecord,
-) -> Optional[Dict[str, str]]:
-    """Map one durable transcript row into the runner's message format."""
-
-    if message.message_type != "text" or not message.content.strip():
-        return None
-
-    role = normalize_context_message_role(message.role)
-    if role not in {"assistant", "user"}:
-        return None
-
-    return {"role": role, "content": message.content}
-
-
 def _build_context_messages_from_durable_messages(
     repository: ChatHistoryRepository,
     *,
