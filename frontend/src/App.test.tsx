@@ -50,6 +50,7 @@ vi.mock('./pages/AgentStudioPage', () => ({ default: () => <div>Agent Studio</di
 vi.mock('./pages/BatchPage', () => ({ default: () => <div>Batch</div> }));
 vi.mock('./pages/ChangelogPage', () => ({ default: () => <div>Changelog Page</div> }));
 vi.mock('./pages/CurationInventoryPage', () => ({ default: () => <div>Curation Inventory Page</div> }));
+vi.mock('./features/history/HistoryPage', () => ({ default: () => <div>History Page</div> }));
 vi.mock('./components/pdfViewer/PersistentPdfWorkspaceLayout', () => ({
   default: () => (
     <div data-testid="persistent-pdf-workspace-layout">
@@ -283,6 +284,24 @@ describe('AppContent global notifications', () => {
 
     expect(await screen.findByText('Curation Inventory Page')).toBeInTheDocument();
     expect(screen.getByText('Curation')).toBeInTheDocument();
+  });
+
+  it('renders the Chat History nav link and history route', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    renderAppContent('/history');
+
+    expect(await screen.findByText('History Page')).toBeInTheDocument();
+    expect(screen.getByText('Chat History')).toBeInTheDocument();
   });
 
   it('clears the singleton react-query cache when the authenticated user changes', async () => {
