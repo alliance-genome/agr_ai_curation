@@ -140,6 +140,40 @@ async def test_intake_upload_happy_path_creates_job_and_dispatches(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_intake_upload_normalizes_existing_user_storage_permissions(tmp_path):
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+    user_dir = tmp_path / "user-1"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    user_dir.chmod(0o755)
+
+    async def _create_document(*_args, **_kwargs):
+        return None
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=_create_document,
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    await service.intake_upload(
+        background_tasks=BackgroundTasks(),
+        file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+        user={"sub": "user-1"},
+    )
+
+    assert user_dir.stat().st_mode & 0o777 == 0o777
+
+
+@pytest.mark.asyncio
 async def test_intake_upload_rejects_non_pdf_before_side_effects(tmp_path):
     session = _FakeSession()
     dispatch = _DispatchRecorder()

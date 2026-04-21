@@ -30,18 +30,22 @@ def make_agent_node(
     output_key: str = None,
     include_evidence: bool | None = None,
     output_filename_template: str | None = None,
+    input_source: str = "previous_output",
+    custom_input: str | None = None,
 ) -> dict:
     """Helper to create a valid agent node dict."""
     data = {
         "agent_id": agent_id,
         "agent_display_name": agent_id.replace("_", " ").title(),
-        "input_source": "previous_output",
+        "input_source": input_source,
         "output_key": output_key or f"{agent_id}_output",
     }
     if include_evidence is not None:
         data["include_evidence"] = include_evidence
     if output_filename_template is not None:
         data["output_filename_template"] = output_filename_template
+    if custom_input is not None:
+        data["custom_input"] = custom_input
 
     return {
         "id": node_id,
@@ -297,6 +301,29 @@ class TestFlowDefinitionOtherValidations:
 
         flow = FlowDefinition(**flow_data)
         assert flow.nodes[1].data.include_evidence is True
+
+    def test_custom_input_requires_non_empty_template(self):
+        """Custom input mode must provide a non-empty template."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract alleles from the paper"),
+                make_agent_node(
+                    "n1",
+                    "allele_extractor",
+                    "allele_output",
+                    input_source="custom",
+                    custom_input="   ",
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            FlowDefinition(**flow_data)
+
+        assert "custom_input is required" in str(exc_info.value)
 
     def test_unique_node_ids(self):
         """Node IDs must be unique."""

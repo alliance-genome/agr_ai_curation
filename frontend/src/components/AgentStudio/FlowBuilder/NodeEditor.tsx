@@ -140,6 +140,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const customInputVariables = Array.from(
     new Set([...availableVariables, ...BUILT_IN_TEMPLATE_VARIABLES])
   )
+  const customInputError = inputSource === 'custom' && !customInput.trim()
 
   // Initialize form when node changes
   useEffect(() => {
@@ -168,6 +169,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   // Handle save
   const handleSave = () => {
     if (!node) return
+    if (customInputError) return
 
     const nextIncludeEvidence = agentMetadataEntry
       ? resolveOutputFormatterIncludeEvidence(
@@ -180,7 +182,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
     onSave(node.id, {
       custom_instructions: customInstructions || undefined,
       input_source: inputSource,
-      custom_input: inputSource === 'custom' ? customInput : undefined,
+      custom_input: inputSource === 'custom' ? customInput.trim() : undefined,
       include_evidence: nextIncludeEvidence,
       output_filename_template: supportsOutputFormatting
         ? outputFilenameTemplate.trim() || undefined
@@ -399,6 +401,8 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
               onChange={(e) => setCustomInput(e.target.value)}
               multiline
               rows={2}
+              error={customInputError}
+              helperText={customInputError ? 'A custom input template is required for this setting.' : undefined}
             />
           </Box>
         )}
@@ -510,6 +514,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           size="small"
           startIcon={<SaveIcon />}
           onClick={handleSave}
+          disabled={customInputError}
         >
           Apply
         </Button>

@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import aiohttp
 
+from ..storage_permissions import ensure_writable_directory
 from ..exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
 from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture tooling
     PDFXResponse,
@@ -453,8 +454,7 @@ class PDFXParser:
         from ...config import get_pdf_storage_path
 
         pdf_storage = get_pdf_storage_path()
-        user_pdfx_path = pdf_storage / user_id / "pdfx_json"
-        user_pdfx_path.mkdir(parents=True, exist_ok=True)
+        user_pdfx_path = ensure_writable_directory(pdf_storage / user_id / "pdfx_json")
         file_path = user_pdfx_path / f"{document_id}.json"
 
         loop = asyncio.get_event_loop()
@@ -468,8 +468,7 @@ class PDFXParser:
         from ...config import get_pdf_storage_path
 
         pdf_storage = get_pdf_storage_path()
-        user_processed_path = pdf_storage / user_id / "processed_json"
-        user_processed_path.mkdir(parents=True, exist_ok=True)
+        user_processed_path = ensure_writable_directory(pdf_storage / user_id / "processed_json")
         file_path = user_processed_path / f"{document_id}.json"
 
         loop = asyncio.get_event_loop()

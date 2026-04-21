@@ -2,10 +2,8 @@
 
 import pytest
 from pathlib import Path
-import tempfile
 import hashlib
 from unittest.mock import Mock, AsyncMock, patch
-from datetime import datetime
 
 from src.lib.pipeline.upload import (
     PDFUploadHandler,
@@ -66,6 +64,21 @@ class TestPDFUploadHandler:
         assert document.metadata.author == "Test Author"
         assert document.metadata.title == "Test Document"
         assert document.metadata.document_type == "research"
+
+    def test_init_normalizes_storage_directory_permissions(self, tmp_path):
+        storage_path = tmp_path / "user-1"
+        storage_path.mkdir(parents=True, exist_ok=True)
+        storage_path.chmod(0o755)
+
+        PDFUploadHandler(storage_path=storage_path)
+
+        assert storage_path.stat().st_mode & 0o777 == 0o777
+
+    @pytest.mark.asyncio
+    async def test_save_uploaded_pdf_normalizes_document_directory_permissions(self, upload_handler, mock_upload_file):
+        saved_path, _document = await upload_handler.save_uploaded_pdf(mock_upload_file)
+
+        assert saved_path.parent.stat().st_mode & 0o777 == 0o777
 
     @pytest.mark.asyncio
     async def test_save_uploaded_pdf_invalid_extension(self, upload_handler):

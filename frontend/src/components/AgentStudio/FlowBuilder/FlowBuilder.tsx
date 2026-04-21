@@ -130,7 +130,17 @@ const computeValidationErrors = (
     })
   }
 
-  // Check all validators for ambiguous input sources
+  // Check all nodes that explicitly use a custom template.
+  for (const node of currentNodes) {
+    if (node.data.input_source === 'custom' && !node.data.custom_input?.trim()) {
+      errors.push({
+        nodeId: node.id,
+        message: `"${node.data.agent_display_name}" needs a custom input template when Custom is selected.`,
+      })
+    }
+  }
+
+  // Check all validators for ambiguous input sources.
   for (const node of currentNodes) {
     if (isValidationPredicate(node.data.agent_id)) {
       const result = validatorNeedsConfiguration(
@@ -823,7 +833,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
         if (isTaskInput) {
           inputSource = 'user_query'
-        } else if (agentId === 'pdf_extraction') {
+        } else if (isExtractionAgentDynamic(agentId)) {
           inputSource = 'previous_output'
         } else if (isValidationAgentDynamic(agentId)) {
           // Smart default: Validators should use extractor output, not previous validator output

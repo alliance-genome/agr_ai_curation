@@ -101,6 +101,23 @@ class FlowNodeData(BaseModel):
         description="Variable name for downstream templates"
     )
 
+    @model_validator(mode="after")
+    def validate_custom_input_requirements(self) -> "FlowNodeData":
+        """Require non-empty custom_input when input_source explicitly uses it."""
+        normalized_custom_input = (
+            self.custom_input.strip()
+            if isinstance(self.custom_input, str)
+            else None
+        )
+        if normalized_custom_input == "":
+            normalized_custom_input = None
+
+        if self.input_source == "custom" and not normalized_custom_input:
+            raise ValueError("custom_input is required when input_source='custom'")
+
+        self.custom_input = normalized_custom_input
+        return self
+
 
 class FlowNode(BaseModel):
     """A node in the flow graph."""

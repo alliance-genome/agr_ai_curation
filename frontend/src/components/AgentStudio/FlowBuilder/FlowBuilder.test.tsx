@@ -17,6 +17,10 @@ const invalidationMocks = vi.hoisted(() => ({
   notifyFlowListInvalidated: vi.fn(),
 }))
 
+const agentMetadataMocks = vi.hoisted(() => ({
+  agents: {} as Record<string, unknown>,
+}))
+
 const reactFlowMocks = vi.hoisted(() => ({
   fitView: vi.fn(),
   screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
@@ -35,7 +39,7 @@ vi.mock('@/features/flows/flowListInvalidation', () => ({
 }))
 
 vi.mock('@/contexts/AgentMetadataContext', () => ({
-  useAgentMetadata: () => ({ agents: {} }),
+  useAgentMetadata: () => agentMetadataMocks,
 }))
 
 vi.mock('react-resizable-panels', () => ({
@@ -222,6 +226,7 @@ describe('FlowBuilder', () => {
     invalidationMocks.notifyFlowListInvalidated.mockReset()
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
+    agentMetadataMocks.agents = {}
   })
 
   it('preserves prompt_version when creating a node from catalog drag data', async () => {
@@ -239,9 +244,9 @@ describe('FlowBuilder', () => {
         format === 'application/reactflow'
           ? JSON.stringify({
             type: 'agent',
-            agentId: 'gene_summary',
-            agentName: 'Gene Summary',
-            agentDescription: 'Summarize the selected gene',
+            agentId: 'pdf_extraction',
+            agentName: 'PDF Extraction',
+            agentDescription: 'Extract text from the uploaded PDF',
             promptVersion: 7,
           })
           : ''
@@ -272,7 +277,7 @@ describe('FlowBuilder', () => {
               expect.objectContaining({
                 type: 'agent',
                 data: expect.objectContaining({
-                  agent_id: 'gene_summary',
+                  agent_id: 'pdf_extraction',
                   prompt_version: 7,
                 }),
               }),
@@ -282,6 +287,68 @@ describe('FlowBuilder', () => {
       )
     })
   }, 15000) // Builder bootstrap plus save dialog interactions can exceed 5s in the full suite.
+
+  it('defaults extraction agents to previous_output when created from the palette', async () => {
+    const user = userEvent.setup()
+
+    agentMetadataMocks.agents = {
+      allele_extractor: {
+        category: 'Extraction',
+        subcategory: 'PDF extraction',
+      },
+    }
+    serviceMocks.createFlow.mockResolvedValue(buildFlowResponse({ name: 'Extractor Flow' }))
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Extractor Flow'))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    const dataTransfer = {
+      getData: vi.fn((format: string) => (
+        format === 'application/reactflow'
+          ? JSON.stringify({
+            type: 'agent',
+            agentId: 'allele_extractor',
+            agentName: 'Allele Extractor',
+            agentDescription: 'Extract allele mentions from the paper',
+          })
+          : ''
+      )),
+    }
+
+    fireEvent.drop(screen.getByTestId('react-flow'), {
+      clientX: 320,
+      clientY: 220,
+      dataTransfer,
+    })
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+
+    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
+    await user.type(within(saveDialog).getByPlaceholderText('Flow name'), 'Extractor Flow')
+    await user.click(within(saveDialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.createFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Extractor Flow',
+          flow_definition: expect.objectContaining({
+            nodes: expect.arrayContaining([
+              expect.objectContaining({
+                type: 'agent',
+                data: expect.objectContaining({
+                  agent_id: 'allele_extractor',
+                  input_source: 'previous_output',
+                }),
+              }),
+            ]),
+          }),
+        })
+      )
+    })
+  }, 15000)
 
   it('refreshes the flow list after creating a new flow and after saving an existing flow', async () => {
     const user = userEvent.setup()

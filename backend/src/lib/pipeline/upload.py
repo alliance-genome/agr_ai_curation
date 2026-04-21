@@ -9,6 +9,7 @@ from typing import Dict, Any, Optional, Tuple
 import uuid
 
 from src.models.document import PDFDocument, ProcessingStatus, EmbeddingStatus, DocumentMetadata
+from src.lib.storage_permissions import ensure_writable_directory
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class PDFUploadHandler:
             storage_path: Base path for storing uploaded PDFs (defaults to /tmp/pdf_uploads)
         """
         self.storage_path = storage_path or Path("/tmp/pdf_uploads")
-        self.storage_path.mkdir(parents=True, exist_ok=True)
+        ensure_writable_directory(self.storage_path)
         logger.info('Upload handler initialized with storage path: %s', self.storage_path)
 
     async def save_uploaded_pdf(
@@ -64,7 +65,7 @@ class PDFUploadHandler:
 
             # Create document-specific directory
             doc_dir = self.storage_path / document_id
-            doc_dir.mkdir(parents=True, exist_ok=True)
+            ensure_writable_directory(doc_dir)
 
             # Save file
             saved_path = doc_dir / original_filename
@@ -250,7 +251,7 @@ class PDFUploadHandler:
 
             # Create permanent storage location
             permanent_dir = self.storage_path / "permanent" / document_id
-            permanent_dir.mkdir(parents=True, exist_ok=True)
+            ensure_writable_directory(permanent_dir)
 
             # Copy file to permanent storage
             permanent_path = permanent_dir / file_path.name

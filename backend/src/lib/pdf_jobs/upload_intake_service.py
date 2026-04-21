@@ -27,6 +27,7 @@ from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
 from src.lib.pdf_jobs.upload_execution_service import UploadExecutionRequest, UploadExecutionService
 from src.lib.pipeline.upload import PDFUploadHandler
+from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.documents import create_document, delete_document, get_document
 from src.lib.weaviate_helpers import get_tenant_name
 from src.models.sql.database import SessionLocal
@@ -115,8 +116,7 @@ class UploadIntakeService:
 
         user_sub = user["sub"]
         base_storage = self._storage_path_provider()
-        user_storage_path = base_storage / user_sub
-        user_storage_path.mkdir(parents=True, exist_ok=True)
+        user_storage_path = ensure_writable_directory(base_storage / user_sub)
 
         upload_handler = self._upload_handler_factory(user_storage_path)
         saved_path, document = await upload_handler.save_uploaded_pdf(file)

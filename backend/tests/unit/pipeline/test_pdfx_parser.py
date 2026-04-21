@@ -1,5 +1,8 @@
 """Unit tests for PDF extraction parser adapter."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from src.lib.exceptions import ConfigurationError
@@ -282,3 +285,23 @@ async def test_poll_raises_when_status_missing_on_non_transient_response(parser_
             headers={},
             progress_callback=None,
         )
+
+
+@pytest.mark.asyncio
+async def test_save_pdfx_and_processed_json_normalize_directory_permissions(parser_env, monkeypatch, tmp_path):
+    parser = PDFXParser()
+    monkeypatch.setattr("src.config.get_pdf_storage_path", lambda: tmp_path)
+
+    user_dir = tmp_path / "user-1"
+    user_dir.mkdir(parents=True, exist_ok=True)
+    user_dir.chmod(0o755)
+
+    pdfx_path = await parser._save_pdfx_json({"status": "complete"}, "doc-1", "user-1")
+    processed_path = await parser._save_processed_json([{"type": "Title", "text": "Results"}], "doc-1", "user-1")
+
+    assert pdfx_path == Path("user-1/pdfx_json/doc-1.json")
+    assert processed_path == Path("user-1/processed_json/doc-1.json")
+    assert json.loads((tmp_path / pdfx_path).read_text())["status"] == "complete"
+    assert json.loads((tmp_path / processed_path).read_text())[0]["text"] == "Results"
+    assert (tmp_path / "user-1" / "pdfx_json").stat().st_mode & 0o777 == 0o777
+    assert (tmp_path / "user-1" / "processed_json").stat().st_mode & 0o777 == 0o777

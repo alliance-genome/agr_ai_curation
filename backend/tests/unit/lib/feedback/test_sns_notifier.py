@@ -1,5 +1,6 @@
 """Unit tests for SNS feedback notifier."""
 
+import os
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -9,9 +10,15 @@ from botocore.exceptions import ClientError
 from src.lib.feedback import sns_notifier
 
 
-def test_init_creates_sns_client(monkeypatch):
+def test_init_defers_sns_client_creation(monkeypatch):
     fake_client = MagicMock()
-    monkeypatch.setattr(sns_notifier.boto3, "client", lambda service, region_name: fake_client)
+    calls = []
+
+    def _client(service, region_name):
+        calls.append((service, region_name))
+        return fake_client
+
+    monkeypatch.setattr(sns_notifier.boto3, "client", _client)
 
     notifier = sns_notifier.SNSNotifier(
         topic_arn="arn:aws:sns:us-east-1:123456789012:feedback",
@@ -20,7 +27,36 @@ def test_init_creates_sns_client(monkeypatch):
 
     assert notifier.topic_arn.endswith(":feedback")
     assert notifier.region == "us-west-2"
-    assert notifier.sns_client is fake_client
+    assert notifier._sns_client is None
+    assert calls == []
+
+
+def test_get_sns_client_ignores_blank_aws_profile_env(monkeypatch):
+    fake_client = MagicMock()
+    observed = {}
+
+    def _client(service, region_name):
+        observed["service"] = service
+        observed["region_name"] = region_name
+        observed["aws_profile"] = os.environ.get("AWS_PROFILE")
+        observed["aws_default_profile"] = os.environ.get("AWS_DEFAULT_PROFILE")
+        return fake_client
+
+    monkeypatch.setenv("AWS_PROFILE", "")
+    monkeypatch.setenv("AWS_DEFAULT_PROFILE", " ")
+    monkeypatch.setattr(sns_notifier.boto3, "client", _client)
+
+    notifier = sns_notifier.SNSNotifier("arn:aws:sns:us-east-1:123:feedback")
+
+    assert notifier._get_sns_client() is fake_client
+    assert observed == {
+        "service": "sns",
+        "region_name": "us-east-1",
+        "aws_profile": None,
+        "aws_default_profile": None,
+    }
+    assert os.environ["AWS_PROFILE"] == ""
+    assert os.environ["AWS_DEFAULT_PROFILE"] == " "
 
 
 def test_build_email_body_includes_trace_ids(monkeypatch):
@@ -120,4 +156,3 @@ def test_send_sns_returns_false_on_unexpected_exception(monkeypatch):
     )
 
     assert ok is False
-

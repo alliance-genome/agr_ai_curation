@@ -21,6 +21,7 @@ from src.api.admin import prompts_router as admin_prompts_router
 from src.config import get_app_version, get_pdf_storage_path
 from src.lib.logging_config import configure_logging, create_request_context_middleware
 from src.lib.runtime_entrypoint import maybe_prepare_package_tool_environments_on_start
+from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.connection import WeaviateConnection, set_connection
 from src.lib.weaviate_client.settings import get_embedding_config
 from src.models.sql.database import SessionLocal
@@ -571,7 +572,7 @@ app.include_router(admin_connections_router, tags=["Admin - Health"])
 
 # Static mount for original PDF storage
 pdf_storage_path = get_pdf_storage_path()
-pdf_storage_path.mkdir(parents=True, exist_ok=True)
+ensure_writable_directory(pdf_storage_path)
 app.mount("/uploads", StaticFiles(directory=pdf_storage_path), name="uploads")
 
 
