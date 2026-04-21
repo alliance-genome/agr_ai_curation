@@ -18,6 +18,7 @@ import {
   runCurationPrep,
   type CurationPrepPreview,
 } from '@/features/curation/services/curationPrepService'
+import { readCurationApiError } from '@/features/curation/services/api'
 import {
   openCurationWorkspace,
   type CurationWorkspaceLaunchTarget,
@@ -25,10 +26,13 @@ import {
 import type { EvidenceRecord } from '@/features/curation/types'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
-import type { SSEEvent } from '@/hooks/useChatStream'
+import type { SendChatMessageOptions, SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
 import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
-import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  clearChatRenderCacheForSession,
+  getChatLocalStorageKeys,
+} from '@/lib/chatCacheKeys'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 import { useNavigate } from 'react-router-dom'
 
@@ -43,6 +47,13 @@ interface EvidenceCurationSupport {
 }
 
 type MessageRole = 'user' | 'assistant' | 'flow'
+type TerminalTurnState =
+  | 'turn_completed'
+  | 'turn_interrupted'
+  | 'turn_failed'
+  | 'turn_save_failed'
+  | 'session_gone'
+type RescueState = 'pending' | 'failed' | null
 
 interface Message {
   role: MessageRole
@@ -50,6 +61,10 @@ interface Message {
   timestamp: Date
   id?: string
   traceIds?: string[]
+  turnId?: string
+  terminalState?: TerminalTurnState | null
+  terminalMessage?: string | null
+  rescueState?: RescueState
   type?: 'text' | 'file_download'  // Message type for special rendering
   fileData?: FileInfo              // File info for file_download type
   flowStepEvidence?: FlowStepEvidenceDetails
@@ -66,6 +81,10 @@ interface SerializedMessage {
   timestamp: string
   id?: string
   traceIds?: string[]
+  turnId?: string
+  terminalState?: TerminalTurnState | null
+  terminalMessage?: string | null
+  rescueState?: RescueState
   type?: 'text' | 'file_download'
   fileData?: FileInfo
   flowStepEvidence?: FlowStepEvidenceDetails
@@ -120,7 +139,11 @@ interface ChatProps {
   /**
    * Send message function from useChatStream hook
    */
-  sendMessage: (message: string, sessionId: string) => Promise<void>
+  sendMessage: (
+    message: string,
+    sessionId: string,
+    options?: SendChatMessageOptions,
+  ) => Promise<void>
 }
 
 // Storage data structure with session validation
@@ -282,6 +305,199 @@ function extractEventTimestamp(event: SSEEvent): Date | null {
   return Number.isNaN(timestamp.getTime()) ? null : timestamp
 }
 
+function normalizeOptionalText(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null
+  }
+
+  const normalizedValue = value.trim()
+  return normalizedValue.length > 0 ? normalizedValue : null
+}
+
+function buildTurnId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+
+  return `turn-${Date.now()}`
+}
+
+function buildUserTurnMessageId(turnId: string): string {
+  return `user-turn-${turnId}`
+}
+
+function buildAssistantTurnMessageId(turnId: string): string {
+  return `assistant-turn-${turnId}`
+}
+
+function getEventSessionId(event: SSEEvent): string | null {
+  return normalizeOptionalText(event.session_id) ?? normalizeOptionalText(event.sessionId)
+}
+
+function getEventTurnId(event: SSEEvent): string | null {
+  return normalizeOptionalText(event.turn_id)
+}
+
+function mergeTraceIds(existingTraceIds?: string[], traceId?: string | null): string[] | undefined {
+  const normalizedTraceId = normalizeOptionalText(traceId)
+  if (!normalizedTraceId) {
+    return existingTraceIds && existingTraceIds.length > 0 ? existingTraceIds : undefined
+  }
+
+  if (existingTraceIds?.includes(normalizedTraceId)) {
+    return existingTraceIds
+  }
+
+  const nextTraceIds = existingTraceIds ? [...existingTraceIds, normalizedTraceId] : [normalizedTraceId]
+  return nextTraceIds
+}
+
+function findAssistantMessageIndex(messages: Message[], turnId: string): number {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.role === 'assistant' && message.turnId === turnId) {
+      return index
+    }
+  }
+
+  return -1
+}
+
+function withTraceIdOnAssistantTurn(
+  messages: Message[],
+  traceId?: string | null,
+  turnId?: string | null,
+): Message[] {
+  const normalizedTraceId = normalizeOptionalText(traceId)
+  if (!normalizedTraceId) {
+    return messages
+  }
+
+  const nextMessages = [...messages]
+  let targetIndex = -1
+  if (turnId) {
+    targetIndex = findAssistantMessageIndex(nextMessages, turnId)
+  } else {
+    for (let index = nextMessages.length - 1; index >= 0; index -= 1) {
+      if (nextMessages[index].role === 'assistant') {
+        targetIndex = index
+        break
+      }
+    }
+  }
+
+  if (targetIndex === -1) {
+    return messages
+  }
+
+  const targetMessage = nextMessages[targetIndex]
+  const nextTraceIds = mergeTraceIds(targetMessage.traceIds, normalizedTraceId)
+  if (nextTraceIds === targetMessage.traceIds) {
+    return messages
+  }
+
+  nextMessages[targetIndex] = {
+    ...targetMessage,
+    traceIds: nextTraceIds,
+  }
+  return nextMessages
+}
+
+function upsertAssistantTurnMessage(
+  messages: Message[],
+  options: {
+    turnId: string
+    content?: string
+    timestamp?: Date
+    traceId?: string | null
+    terminalState?: TerminalTurnState | null
+    terminalMessage?: string | null
+    rescueState?: RescueState
+  },
+): Message[] {
+  const existingIndex = findAssistantMessageIndex(messages, options.turnId)
+  const existingMessage = existingIndex >= 0 ? messages[existingIndex] : null
+  const terminalMessage = options.terminalMessage ?? existingMessage?.terminalMessage ?? null
+  const nextContent = options.content ?? existingMessage?.content ?? terminalMessage ?? ''
+
+  const nextMessage: Message = {
+    ...(existingMessage ?? {}),
+    role: 'assistant',
+    id: existingMessage?.id ?? buildAssistantTurnMessageId(options.turnId),
+    turnId: options.turnId,
+    content: nextContent,
+    timestamp: existingMessage?.timestamp ?? options.timestamp ?? new Date(),
+    traceIds: mergeTraceIds(existingMessage?.traceIds, options.traceId),
+    terminalState: options.terminalState ?? existingMessage?.terminalState ?? null,
+    terminalMessage,
+    rescueState: options.rescueState ?? existingMessage?.rescueState ?? null,
+  }
+
+  if (existingIndex === -1) {
+    return [...messages, nextMessage]
+  }
+
+  const nextMessages = [...messages]
+  nextMessages[existingIndex] = nextMessage
+  return nextMessages
+}
+
+function getAssistantStatusNotice(message: Message): {
+  tone: 'info' | 'warning' | 'error'
+  text: string
+} | null {
+  switch (message.terminalState) {
+    case 'turn_interrupted':
+      return {
+        tone: 'warning',
+        text: message.terminalMessage ?? 'The response was interrupted before it could be saved.',
+      }
+    case 'turn_failed':
+      return {
+        tone: 'error',
+        text: message.terminalMessage ?? 'The response failed before it could be saved.',
+      }
+    case 'turn_save_failed':
+      if (message.rescueState === 'pending') {
+        return {
+          tone: 'info',
+          text: 'Saving this response to chat history...',
+        }
+      }
+
+      if (message.rescueState === 'failed') {
+        return {
+          tone: 'error',
+          text: message.terminalMessage ?? 'This response could not be saved to chat history.',
+        }
+      }
+
+      return null
+    case 'session_gone':
+      return {
+        tone: 'error',
+        text: message.terminalMessage ?? 'This chat session is no longer available.',
+      }
+    default:
+      return null
+  }
+}
+
+function getTerminalTurnFallbackMessage(state: Exclude<TerminalTurnState, 'turn_completed'>): string {
+  switch (state) {
+    case 'turn_interrupted':
+      return 'The response was interrupted before it could be saved.'
+    case 'turn_failed':
+      return 'The response failed before it could be saved.'
+    case 'turn_save_failed':
+      return 'The response completed, but it could not be saved to chat history.'
+    case 'session_gone':
+      return 'This chat session is no longer available.'
+    default:
+      return 'The response could not be completed.'
+  }
+}
+
 function withFlowStepEvidenceMessage(
   messages: Message[],
   flowStepEvidence: FlowStepEvidenceDetails,
@@ -371,8 +587,8 @@ function sanitizeStoredMessage(message: SerializedMessage): Message {
   return {
     ...message,
     content: hasEvidenceRecords
-      ? stripDuplicateEvidenceSections(message.content)
-      : message.content,
+      ? stripDuplicateEvidenceSections(message.content || message.terminalMessage || '')
+      : (message.content || message.terminalMessage || ''),
     reviewAndCurateTarget:
       hasEvidenceRecords
       && !hasExplicitEvidenceCurationMetadata
@@ -404,6 +620,7 @@ function withEvidenceRecords(
   messages: Message[],
   evidenceRecords: EvidenceRecord[],
   options?: {
+    turnId?: string | null
     reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
     evidenceCurationSupported?: boolean | null
     evidenceCurationAdapterKey?: string | null
@@ -411,7 +628,10 @@ function withEvidenceRecords(
 ): Message[] {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
-    if (message.role !== 'assistant') {
+    if (
+      message.role !== 'assistant'
+      || (options?.turnId && message.turnId !== options.turnId)
+    ) {
       continue
     }
 
@@ -567,11 +787,12 @@ function Chat({
   const [limitNotices, setLimitNotices] = useState<string[]>([])
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const assistantMessageIdRef = useRef<string | null>(null)
   const progressMessageQueueRef = useRef<string[]>([])
   const progressMessageTimerRef = useRef<NodeJS.Timeout | null>(null)
   const lastProgressUpdateRef = useRef<number>(0)
-  const assistantMessageRef = useRef<string>('')
+  const assistantBuffersRef = useRef<Record<string, string>>({})
+  const activeTurnIdRef = useRef<string | null>(null)
+  const rescuedTurnIdsRef = useRef<Set<string>>(new Set())
   const processedEventIdsRef = useRef<Set<number>>(new Set())
   const latestMessagesRef = useRef<Message[]>(messages)
   const latestSessionIdRef = useRef<string | null>(propSessionId)
@@ -579,6 +800,7 @@ function Chat({
   const restoredSessionRef = useRef<string | null>(null)
   const messageStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
+  const previousSessionIdRef = useRef<string | null>(propSessionId)
 
   // Track ALL trace IDs from this session for feedback
   const sessionTraceIds = useRef<string[]>([])
@@ -639,6 +861,101 @@ function Chat({
     }
     localStorage.removeItem(chatStorageKeys.messages)
   }, [chatStorageKeys])
+
+  const clearProgressState = useCallback(() => {
+    setProgressMessage('')
+    if (progressMessageTimerRef.current) {
+      clearTimeout(progressMessageTimerRef.current)
+      progressMessageTimerRef.current = null
+    }
+    progressMessageQueueRef.current = []
+    lastProgressUpdateRef.current = 0
+  }, [])
+
+  const getAssistantTurnContent = useCallback((turnId: string): string => {
+    const bufferedContent = assistantBuffersRef.current[turnId]
+    if (bufferedContent) {
+      return bufferedContent
+    }
+
+    const assistantMessage = latestMessagesRef.current.find(
+      (message) => message.role === 'assistant' && message.turnId === turnId,
+    )
+    return assistantMessage?.content ?? ''
+  }, [])
+
+  const handleAssistantRescue = useCallback(async (
+    sessionId: string,
+    turnId: string,
+    traceId?: string | null,
+  ) => {
+    if (rescuedTurnIdsRef.current.has(turnId)) {
+      return
+    }
+
+    rescuedTurnIdsRef.current.add(turnId)
+    const assistantContent = getAssistantTurnContent(turnId)
+
+    if (!assistantContent.trim()) {
+      setMessages((prev) => upsertAssistantTurnMessage(prev, {
+        turnId,
+        traceId,
+        terminalState: 'turn_save_failed',
+        terminalMessage: 'The response completed, but it could not be saved to chat history.',
+        rescueState: 'failed',
+      }))
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/chat/${encodeURIComponent(sessionId)}/assistant-rescue`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          turn_id: turnId,
+          content: assistantContent,
+          trace_id: traceId ?? undefined,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(await readCurationApiError(response))
+      }
+
+      const payload = await response.json() as {
+        trace_id?: string | null
+      }
+
+      setMessages((prev) => upsertAssistantTurnMessage(prev, {
+        turnId,
+        content: assistantContent,
+        traceId: payload.trace_id ?? traceId,
+        terminalState: 'turn_completed',
+        terminalMessage: null,
+        rescueState: null,
+      }))
+    } catch (error) {
+      const errorMessage = error instanceof Error
+        ? error.message
+        : 'Failed to rescue the assistant response.'
+      setMessages((prev) => upsertAssistantTurnMessage(prev, {
+        turnId,
+        content: assistantContent,
+        traceId,
+        terminalState: 'turn_save_failed',
+        terminalMessage: `This response is shown above, but it could not be saved to chat history: ${errorMessage}`,
+        rescueState: 'failed',
+      }))
+    } finally {
+      delete assistantBuffersRef.current[turnId]
+      if (activeTurnIdRef.current === turnId) {
+        activeTurnIdRef.current = null
+      }
+    }
+  }, [getAssistantTurnContent])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -765,8 +1082,9 @@ function Chat({
     restoredSessionRef.current = null
     sessionTraceIds.current = []
     latestMessagesRef.current = []
-    assistantMessageIdRef.current = null
-    assistantMessageRef.current = ''
+    assistantBuffersRef.current = {}
+    activeTurnIdRef.current = null
+    rescuedTurnIdsRef.current = new Set()
     progressMessageQueueRef.current = []
     lastProgressUpdateRef.current = 0
     setMessages([])
@@ -795,6 +1113,18 @@ function Chat({
       setMessages(restored)
     }
   }, [chatStorageKeys, propSessionId, messages.length, storageUserId])
+
+  useEffect(() => {
+    if (previousSessionIdRef.current === propSessionId) {
+      return
+    }
+
+    previousSessionIdRef.current = propSessionId
+    assistantBuffersRef.current = {}
+    activeTurnIdRef.current = null
+    rescuedTurnIdsRef.current = new Set()
+    clearProgressState()
+  }, [clearProgressState, propSessionId])
 
   // Persist messages to localStorage whenever they change (debounced to avoid rapid writes during streaming)
   useEffect(() => {
@@ -848,97 +1178,31 @@ function Chat({
     const newEvents = events.slice(processedEventIdsRef.current.size)
 
     newEvents.forEach((parsed: SSEEvent) => {
+      const eventSessionId = getEventSessionId(parsed)
+      if (eventSessionId && propSessionId && eventSessionId !== propSessionId) {
+        debug.log('🔍 [SSE] Ignoring event for stale session:', {
+          eventType: parsed.type,
+          eventSessionId,
+          activeSessionId: propSessionId,
+        })
+        return
+      }
+
+      const turnId = getEventTurnId(parsed) ?? activeTurnIdRef.current
+      const messageTimestamp = extractEventTimestamp(parsed) ?? new Date()
       debug.log('🔍 [SSE] Processing event:', parsed.type, parsed)
 
       // RUN_STARTED
       if (parsed.type === 'RUN_STARTED') {
+        if (turnId) {
+          activeTurnIdRef.current = turnId
+        }
         updateProgressMessage('Starting...')
         // Capture trace_id early so it's available for STOP_CONFIRMED
         if (parsed.trace_id && !sessionTraceIds.current.includes(parsed.trace_id)) {
           debug.log('🔍 [TRACE] Captured trace ID from RUN_STARTED:', parsed.trace_id)
           sessionTraceIds.current.push(parsed.trace_id)
         }
-        return
-      }
-
-      // STOP_CONFIRMED (synthetic event when user clicks Stop)
-      if (parsed.type === 'STOP_CONFIRMED') {
-        updateProgressMessage('Interaction stopped by user')
-        // Append an assistant message so feedback button appears
-        // Use accumulated session trace IDs since STOP_CONFIRMED is synthetic
-        const stopMessage = 'Query stopped. Problems? Click Feedback (⋮) to report.'
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: stopMessage,
-            timestamp: new Date(),
-            id: `msg-${Date.now()}`,
-            traceIds: [...sessionTraceIds.current]
-          }
-        ])
-        return
-      }
-
-      // RUN_ERROR (surfaced on stop or actual errors)
-      if (parsed.type === 'RUN_ERROR') {
-        const stopMessage = 'Query stopped. Problems? Click Feedback (⋮) to report.'
-        // Use trace_id from error event, or fall back to session trace IDs
-        const errorTraceIds = parsed.trace_id ? [parsed.trace_id] : [...sessionTraceIds.current]
-        setMessages(prev => [
-          ...prev,
-          {
-            role: 'assistant',
-            content: stopMessage,
-            timestamp: new Date(),
-            id: `msg-${Date.now()}`,
-            traceIds: errorTraceIds
-          }
-        ])
-        return
-      }
-
-      // T026: Filter audit events for chat progress display
-      // Check if this is an audit event type that should show in chat
-      if (shouldShowInChat(parsed.type)) {
-        const friendlyMessage = getFriendlyProgressMessage(parsed)
-        debug.log('🔍 [AUDIT→CHAT] Showing filtered audit event in chat progress:', parsed.type, friendlyMessage)
-        updateProgressMessage(friendlyMessage)
-
-        // Capture refinement prompts for bulk guardrails or pending input
-        if (
-          parsed.details?.reason === 'bulk_guardrail' &&
-          (parsed.type === 'DOMAIN_SKIPPED' || parsed.type === 'PENDING_USER_INPUT' || parsed.type === 'DOMAIN_WARNING')
-        ) {
-          setRefinePrompt(parsed.details?.message || 'Please provide a limit or species filter to continue.')
-        }
-
-        // Capture applied_limit/warnings notices from tool completions
-        const appliedLimit = parsed.details?.applied_limit
-        const warnings = parsed.details?.warnings
-        if (appliedLimit || warnings) {
-          const warningText = Array.isArray(warnings) ? warnings.join('; ') : (warnings || '')
-          const notice = `Applied limit: ${appliedLimit ?? 'n/a'}${warningText ? ` | Warnings: ${warningText}` : ''}`
-          setLimitNotices(prev => prev.includes(notice) ? prev : [...prev, notice])
-        }
-
-        return
-      }
-
-      // PROGRESS events (legacy string-based progress)
-      if (parsed.type === 'PROGRESS') {
-        debug.log('🔍 [PROGRESS] Received progress event:', parsed.message)
-        updateProgressMessage(parsed.message || 'Processing...')
-        return
-      }
-
-      // CHUNK_PROVENANCE
-      if (parsed.type === 'CHUNK_PROVENANCE') {
-        debug.log('🔍 [CHAT DEBUG] Ignoring legacy CHUNK_PROVENANCE overlay event', {
-          chunk_id: parsed.chunk_id,
-          document_id: parsed.document_id,
-          active_document_id: activeDocument?.id,
-        })
         return
       }
 
@@ -950,53 +1214,232 @@ function Chat({
           sessionTraceIds.current.push(parsed.trace_id)
         }
 
-        // Attach to the current assistant message being streamed
-        setMessages(prev => {
-          const lastMsg = prev[prev.length - 1]
-          if (lastMsg && lastMsg.role === 'assistant') {
-            const currentTraceIds = lastMsg.traceIds || []
-            if (!currentTraceIds.includes(parsed.trace_id!)) {
-               return [
-                ...prev.slice(0, -1),
-                { 
-                  ...lastMsg, 
-                  traceIds: [...currentTraceIds, parsed.trace_id!] 
-                }
-              ]
-            }
+        setMessages((prev) => withTraceIdOnAssistantTurn(prev, parsed.trace_id, turnId))
+      }
+
+      if (parsed.type === 'STOP_CONFIRMED') {
+        const stopMessage =
+          normalizeOptionalText(parsed.details?.message)
+          ?? 'Interaction stopped by user'
+        clearProgressState()
+
+        if (turnId) {
+          const content = getAssistantTurnContent(turnId) || stopMessage
+          setMessages((prev) => upsertAssistantTurnMessage(prev, {
+            turnId,
+            content,
+            timestamp: messageTimestamp,
+            traceId: parsed.trace_id,
+            terminalState: 'turn_interrupted',
+            terminalMessage: stopMessage,
+            rescueState: null,
+          }))
+          delete assistantBuffersRef.current[turnId]
+          if (activeTurnIdRef.current === turnId) {
+            activeTurnIdRef.current = null
           }
-          return prev
+          return
+        }
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: stopMessage,
+            timestamp: messageTimestamp,
+            id: `msg-${Date.now()}`,
+            traceIds: mergeTraceIds([...sessionTraceIds.current], parsed.trace_id),
+            terminalState: 'turn_interrupted',
+            terminalMessage: stopMessage,
+            rescueState: null,
+          },
+        ])
+        return
+      }
+
+      if (
+        parsed.type === 'turn_completed'
+        || parsed.type === 'turn_interrupted'
+        || parsed.type === 'turn_failed'
+        || parsed.type === 'turn_save_failed'
+        || parsed.type === 'session_gone'
+      ) {
+        clearProgressState()
+
+        if (parsed.type === 'turn_completed') {
+          if (!turnId) {
+            return
+          }
+
+          setMessages((prev) => {
+            if (findAssistantMessageIndex(prev, turnId) === -1) {
+              return prev
+            }
+
+            return upsertAssistantTurnMessage(prev, {
+              turnId,
+              traceId: parsed.trace_id,
+              timestamp: messageTimestamp,
+              terminalState: 'turn_completed',
+              terminalMessage: null,
+              rescueState: null,
+            })
+          })
+          delete assistantBuffersRef.current[turnId]
+          if (activeTurnIdRef.current === turnId) {
+            activeTurnIdRef.current = null
+          }
+          return
+        }
+
+        const terminalState = parsed.type
+        const fallbackMessage =
+          normalizeOptionalText(parsed.message)
+          ?? getTerminalTurnFallbackMessage(terminalState)
+
+        if (!turnId) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: fallbackMessage,
+              timestamp: messageTimestamp,
+              id: `msg-${Date.now()}`,
+              traceIds: mergeTraceIds([...sessionTraceIds.current], parsed.trace_id),
+              terminalState,
+              terminalMessage: fallbackMessage,
+              rescueState: terminalState === 'turn_save_failed' ? 'failed' : null,
+            },
+          ])
+          return
+        }
+
+        const content = getAssistantTurnContent(turnId) || fallbackMessage
+
+        if (terminalState === 'turn_save_failed') {
+          setMessages((prev) => upsertAssistantTurnMessage(prev, {
+            turnId,
+            content,
+            timestamp: messageTimestamp,
+            traceId: parsed.trace_id,
+            terminalState: 'turn_save_failed',
+            terminalMessage: fallbackMessage,
+            rescueState: 'pending',
+          }))
+          const activeSessionId = eventSessionId ?? propSessionId
+          if (activeSessionId) {
+            void handleAssistantRescue(activeSessionId, turnId, parsed.trace_id)
+          } else {
+            setMessages((prev) => upsertAssistantTurnMessage(prev, {
+              turnId,
+              content,
+              timestamp: messageTimestamp,
+              traceId: parsed.trace_id,
+              terminalState: 'turn_save_failed',
+              terminalMessage: fallbackMessage,
+              rescueState: 'failed',
+            }))
+          }
+          return
+        }
+
+        setMessages((prev) => upsertAssistantTurnMessage(prev, {
+          turnId,
+          content,
+          timestamp: messageTimestamp,
+          traceId: parsed.trace_id,
+          terminalState,
+          terminalMessage: fallbackMessage,
+          rescueState: null,
+        }))
+        delete assistantBuffersRef.current[turnId]
+        if (activeTurnIdRef.current === turnId) {
+          activeTurnIdRef.current = null
+        }
+        return
+      }
+
+      // T026: Filter audit events for chat progress display
+      if (shouldShowInChat(parsed.type)) {
+        const friendlyMessage = getFriendlyProgressMessage(parsed)
+        debug.log('🔍 [AUDIT→CHAT] Showing filtered audit event in chat progress:', parsed.type, friendlyMessage)
+        updateProgressMessage(friendlyMessage)
+
+        if (
+          parsed.details?.reason === 'bulk_guardrail'
+          && (parsed.type === 'DOMAIN_SKIPPED' || parsed.type === 'PENDING_USER_INPUT' || parsed.type === 'DOMAIN_WARNING')
+        ) {
+          setRefinePrompt(parsed.details?.message || 'Please provide a limit or species filter to continue.')
+        }
+
+        const appliedLimit = parsed.details?.applied_limit
+        const warnings = parsed.details?.warnings
+        if (appliedLimit || warnings) {
+          const warningText = Array.isArray(warnings) ? warnings.join('; ') : (warnings || '')
+          const notice = `Applied limit: ${appliedLimit ?? 'n/a'}${warningText ? ` | Warnings: ${warningText}` : ''}`
+          setLimitNotices((prev) => prev.includes(notice) ? prev : [...prev, notice])
+        }
+
+        return
+      }
+
+      if (parsed.type === 'PROGRESS') {
+        debug.log('🔍 [PROGRESS] Received progress event:', parsed.message)
+        updateProgressMessage(parsed.message || 'Processing...')
+        return
+      }
+
+      if (parsed.type === 'CHUNK_PROVENANCE') {
+        debug.log('🔍 [CHAT DEBUG] Ignoring legacy CHUNK_PROVENANCE overlay event', {
+          chunk_id: parsed.chunk_id,
+          document_id: parsed.document_id,
+          active_document_id: activeDocument?.id,
         })
+        return
       }
 
       // TEXT_MESSAGE_CONTENT
       const messageContent = parsed.content || parsed.delta
       if (messageContent && parsed.type === 'TEXT_MESSAGE_CONTENT') {
-        assistantMessageRef.current += messageContent
+        if (turnId) {
+          activeTurnIdRef.current = turnId
+          const previousContent = assistantBuffersRef.current[turnId] ?? getAssistantTurnContent(turnId)
+          const nextContent = `${previousContent}${messageContent}`
+          assistantBuffersRef.current[turnId] = nextContent
 
-        setMessages(prev => {
+          setMessages((prev) => upsertAssistantTurnMessage(prev, {
+            turnId,
+            content: nextContent,
+            timestamp: messageTimestamp,
+            traceId: parsed.trace_id,
+            terminalState: null,
+            terminalMessage: null,
+            rescueState: null,
+          }))
+          return
+        }
+
+        setMessages((prev) => {
           const lastMsg = prev[prev.length - 1]
           if (lastMsg && lastMsg.role === 'assistant') {
-            assistantMessageIdRef.current = lastMsg.id ?? assistantMessageIdRef.current
             return [
               ...prev.slice(0, -1),
-              { ...lastMsg, content: assistantMessageRef.current }
-            ]
-          } else {
-            const newId = `msg-${Date.now()}`
-            assistantMessageIdRef.current = newId
-            return [
-              ...prev,
-              {
-                role: 'assistant',
-                content: assistantMessageRef.current,
-                timestamp: new Date(),
-                id: newId,
-                traceIds: [] // Initialize traceIds for new message
-              }
+              { ...lastMsg, content: `${lastMsg.content}${messageContent}` },
             ]
           }
+
+          return [
+            ...prev,
+            {
+              role: 'assistant',
+              content: messageContent,
+              timestamp: messageTimestamp,
+              id: `msg-${Date.now()}`,
+              traceIds: mergeTraceIds([], parsed.trace_id),
+            },
+          ]
         })
+        return
       }
 
       // CHAT_OUTPUT_READY - flow chat output is finalized in a tool call
@@ -1004,25 +1447,35 @@ function Chat({
       if (parsed.type === 'CHAT_OUTPUT_READY' && parsed.details) {
         const outputText = String(parsed.details.output || parsed.details.output_preview || '').trim()
         if (outputText) {
-          setMessages(prev => {
-            const lastMsg = prev[prev.length - 1]
-            // Avoid duplicate append if the same output is already the latest assistant message
-            if (lastMsg?.role === 'assistant' && lastMsg.content.trim() === outputText) {
-              return prev
-            }
-            return [
-              ...prev,
-              {
-                role: 'assistant',
-                content: outputText,
-                timestamp: new Date(),
-                id: `msg-${Date.now()}`,
-                traceIds: [...sessionTraceIds.current]
+          if (turnId) {
+            assistantBuffersRef.current[turnId] = outputText
+            setMessages((prev) => upsertAssistantTurnMessage(prev, {
+              turnId,
+              content: outputText,
+              timestamp: messageTimestamp,
+              traceId: parsed.trace_id,
+              terminalState: null,
+              terminalMessage: null,
+              rescueState: null,
+            }))
+          } else {
+            setMessages((prev) => {
+              const lastMsg = prev[prev.length - 1]
+              if (lastMsg?.role === 'assistant' && lastMsg.content.trim() === outputText) {
+                return prev
               }
-            ]
-          })
-          assistantMessageRef.current = ''
-          assistantMessageIdRef.current = null
+              return [
+                ...prev,
+                {
+                  role: 'assistant',
+                  content: outputText,
+                  timestamp: messageTimestamp,
+                  id: `msg-${Date.now()}`,
+                  traceIds: [...sessionTraceIds.current],
+                },
+              ]
+            })
+          }
         }
         return
       }
@@ -1045,12 +1498,13 @@ function Chat({
           {
             role: 'assistant',
             content: `File ready: ${fileData.filename}`,
-            timestamp: new Date(),
+            timestamp: messageTimestamp,
             id: `file-${Date.now()}`,
+            turnId: turnId ?? undefined,
             type: 'file_download',
             fileData,
-            traceIds: [...sessionTraceIds.current]
-          }
+            traceIds: mergeTraceIds([...sessionTraceIds.current], parsed.trace_id),
+          },
         ])
         return
       }
@@ -1092,6 +1546,7 @@ function Chat({
           : null
 
         setMessages(prev => withEvidenceRecords(prev, evidenceRecords, {
+          turnId,
           reviewAndCurateTarget,
           evidenceCurationSupported: curationSupport?.supported ?? null,
           evidenceCurationAdapterKey: curationSupport?.adapterKey ?? null,
@@ -1101,7 +1556,15 @@ function Chat({
 
     // Mark all new events as processed
     processedEventIdsRef.current = new Set(Array.from({ length: events.length }, (_, i) => i))
-  }, [events, activeDocument, propSessionId, updateProgressMessage])
+  }, [
+    events,
+    activeDocument,
+    clearProgressState,
+    getAssistantTurnContent,
+    handleAssistantRescue,
+    propSessionId,
+    updateProgressMessage,
+  ])
 
   useEffect(() => {
     if (!activeDocument?.id || !propSessionId) {
@@ -1568,19 +2031,22 @@ function Chat({
       if (response.ok) {
         const data = await response.json()
         debug.log('Conversation reset:', data)
+        const nextSessionId = normalizeOptionalText(data.session_id)
 
-        // Clear persisted audit history for the old/new session IDs so refresh stays clean.
-        if (propSessionId) {
-          localStorage.removeItem(`audit_events_${propSessionId}`)
-        }
-        if (data.session_id) {
-          localStorage.removeItem(`audit_events_${data.session_id}`)
+        if (!nextSessionId) {
+          throw new Error('Reset response did not include a replacement session ID.')
         }
 
-        // Propagate new session ID back to HomePage if reset created a new session
-        if (data.session_id && onSessionChange) {
-          debug.log('🔄 [Session Reset] Propagating new session ID to HomePage:', data.session_id)
-          onSessionChange(data.session_id)
+        if (storageUserId && propSessionId) {
+          clearChatRenderCacheForSession(storageUserId, propSessionId)
+        }
+        if (storageUserId) {
+          clearChatRenderCacheForSession(storageUserId, nextSessionId)
+        }
+
+        if (onSessionChange) {
+          debug.log('🔄 [Session Reset] Propagating new session ID to HomePage:', nextSessionId)
+          onSessionChange(nextSessionId)
         }
 
         // Clear messages from UI and localStorage
@@ -1588,6 +2054,12 @@ function Chat({
         setMessages([])
         clearStoredMessages()
         sessionTraceIds.current = [] // Clear accumulated trace IDs for new session
+        assistantBuffersRef.current = {}
+        activeTurnIdRef.current = null
+        rescuedTurnIdsRef.current = new Set()
+        setRefinePrompt(null)
+        setRefineText('')
+        clearProgressState()
         dispatchClearHighlights('user-action')
         // Update conversation status
         const statusResponse = await fetch('/api/chat/conversation')
@@ -1660,16 +2132,19 @@ function Chat({
 
     setLimitNotices([])
     dispatchClearHighlights('new-query')
-    assistantMessageIdRef.current = null
-    assistantMessageRef.current = '' // Reset assistant message accumulator
 
     const messageToSend = inputMessage
+    const turnId = buildTurnId()
+    activeTurnIdRef.current = turnId
+    rescuedTurnIdsRef.current.delete(turnId)
+    assistantBuffersRef.current[turnId] = ''
 
     const userMessage: Message = {
       role: 'user',
       content: messageToSend,
       timestamp: new Date(),
-      id: `msg-${Date.now()}`
+      id: buildUserTurnMessageId(turnId),
+      turnId,
     }
 
     setMessages(prev => [...prev, userMessage])
@@ -1677,29 +2152,25 @@ function Chat({
 
     try {
       // Use hook's sendMessage function
-      await sendMessage(messageToSend, propSessionId)
+      await sendMessage(messageToSend, propSessionId, { turnId })
       setRefinePrompt(null)
       setRefineText('')
     } catch (err) {
       console.error('Error sending message:', err)
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'Sorry, I encountered an error. Please try again.',
-          timestamp: new Date(),
-          id: `msg-${Date.now()}`
-        }
-      ])
-    } finally {
-      // Clear progress state
-      setProgressMessage('')
-      if (progressMessageTimerRef.current) {
-        clearTimeout(progressMessageTimerRef.current)
-        progressMessageTimerRef.current = null
+      delete assistantBuffersRef.current[turnId]
+      if (activeTurnIdRef.current === turnId) {
+        activeTurnIdRef.current = null
       }
-      progressMessageQueueRef.current = []
-      lastProgressUpdateRef.current = 0
+      setMessages(prev => upsertAssistantTurnMessage(prev, {
+        turnId,
+        content: 'Sorry, I encountered an error. Please try again.',
+        timestamp: new Date(),
+        terminalState: 'turn_failed',
+        terminalMessage: 'Sorry, I encountered an error. Please try again.',
+        rescueState: null,
+      }))
+    } finally {
+      clearProgressState()
     }
   }
 
@@ -1712,40 +2183,40 @@ function Chat({
 
     setLimitNotices([])
     dispatchClearHighlights('new-query')
-    assistantMessageIdRef.current = null
-    assistantMessageRef.current = '' // Reset assistant message accumulator
+    const turnId = buildTurnId()
+    activeTurnIdRef.current = turnId
+    rescuedTurnIdsRef.current.delete(turnId)
+    assistantBuffersRef.current[turnId] = ''
 
     const userMessage: Message = {
       role: 'user',
       content: text,
       timestamp: new Date(),
-      id: `msg-${Date.now()}`
+      id: buildUserTurnMessageId(turnId),
+      turnId,
     }
 
     setMessages(prev => [...prev, userMessage])
 
     try {
-      await sendMessage(text, propSessionId)
+      await sendMessage(text, propSessionId, { turnId })
       setRefinePrompt(null)
     } catch (err) {
       console.error('Error sending quick message:', err)
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'Sorry, I encountered an error. Please try again.',
-          timestamp: new Date(),
-          id: `msg-${Date.now()}`
-        }
-      ])
-    } finally {
-      setProgressMessage('')
-      if (progressMessageTimerRef.current) {
-        clearTimeout(progressMessageTimerRef.current)
-        progressMessageTimerRef.current = null
+      delete assistantBuffersRef.current[turnId]
+      if (activeTurnIdRef.current === turnId) {
+        activeTurnIdRef.current = null
       }
-      progressMessageQueueRef.current = []
-      lastProgressUpdateRef.current = 0
+      setMessages(prev => upsertAssistantTurnMessage(prev, {
+        turnId,
+        content: 'Sorry, I encountered an error. Please try again.',
+        timestamp: new Date(),
+        terminalState: 'turn_failed',
+        terminalMessage: 'Sorry, I encountered an error. Please try again.',
+        rescueState: null,
+      }))
+    } finally {
+      clearProgressState()
     }
   }
 
@@ -1784,8 +2255,8 @@ function Chat({
       && message.evidenceCurationSupported === false,
   )
   const unsupportedOnlyPrep =
-    Boolean(prepPreview)
-    && !prepPreview?.ready
+    prepPreview !== null
+    && !prepPreview.ready
     && hasUnsupportedEvidenceMessages
     && prepPreview.preparable_candidate_count === 0
     && prepPreview.extraction_result_count === 0
@@ -2100,6 +2571,7 @@ function Chat({
         ) : (
           messages.map((message, index) => {
             const hasEvidenceCard = (message.evidenceRecords?.length ?? 0) > 0
+            const assistantStatusNotice = getAssistantStatusNotice(message)
             const handleEvidenceReviewAndCurateClick = message.reviewAndCurateTarget
               ? () => {
                   const messageId = message.id
@@ -2155,6 +2627,35 @@ function Chat({
                         message.content
                       )}
                     </div>
+                    {assistantStatusNotice ? (
+                      <div
+                        role={assistantStatusNotice.tone === 'info' ? 'status' : 'alert'}
+                        style={{
+                          marginTop: '0.75rem',
+                          padding: '0.6rem 0.8rem',
+                          borderRadius: '12px',
+                          fontSize: '0.9rem',
+                          lineHeight: 1.45,
+                          border: assistantStatusNotice.tone === 'error'
+                            ? '1px solid rgba(220, 53, 69, 0.35)'
+                            : assistantStatusNotice.tone === 'warning'
+                              ? '1px solid rgba(255, 193, 7, 0.35)'
+                              : '1px solid rgba(13, 110, 253, 0.3)',
+                          background: assistantStatusNotice.tone === 'error'
+                            ? 'rgba(220, 53, 69, 0.08)'
+                            : assistantStatusNotice.tone === 'warning'
+                              ? 'rgba(255, 193, 7, 0.12)'
+                              : 'rgba(13, 110, 253, 0.08)',
+                          color: assistantStatusNotice.tone === 'error'
+                            ? '#c12d3c'
+                            : assistantStatusNotice.tone === 'warning'
+                              ? '#8a6d1d'
+                              : '#0d6efd',
+                        }}
+                      >
+                        {assistantStatusNotice.text}
+                      </div>
+                    ) : null}
                     <MessageActions
                       messageContent={message.content}
                       traceId={message.traceIds && message.traceIds.length > 0 ? message.traceIds[message.traceIds.length - 1] : undefined}

@@ -14,6 +14,11 @@ import AuditEventItem from './AuditEventItem'
 import { copyText } from './Chat/copyText'
 import { formatAuditEvent, parseSSEEvent } from '../utils/auditHelpers'
 import type { SSEEvent } from '../hooks/useChatStream'
+import { useAuth } from '../contexts/AuthContext'
+import {
+  clearChatRenderCacheForSession,
+  getChatRenderCacheKeys,
+} from '../lib/chatCacheKeys'
 
 /**
  * Props for the AuditPanel component
@@ -105,24 +110,41 @@ export interface AuditPanelProps {
  * ```
  */
 // Helper to save audit events to localStorage
-const saveAuditEventsToStorage = (sessionId: string, events: AuditEvent[]) => {
+const saveAuditEventsToStorage = (
+  userId: string | null | undefined,
+  sessionId: string,
+  events: AuditEvent[],
+) => {
   try {
-    localStorage.setItem(`audit_events_${sessionId}`, JSON.stringify(events))
+    if (!userId) {
+      return
+    }
+
+    const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
+    localStorage.setItem(auditEvents, JSON.stringify(events))
   } catch (e) {
     console.error('Failed to save audit events to localStorage:', e)
   }
 }
 
 // Helper to load audit events from localStorage
-const loadAuditEventsFromStorage = (sessionId: string): AuditEvent[] => {
+const loadAuditEventsFromStorage = (
+  userId: string | null | undefined,
+  sessionId: string,
+): AuditEvent[] => {
   try {
-    const stored = localStorage.getItem(`audit_events_${sessionId}`)
+    if (!userId) {
+      return []
+    }
+
+    const { auditEvents } = getChatRenderCacheKeys(userId, sessionId)
+    const stored = localStorage.getItem(auditEvents)
     if (stored) {
-      const events = JSON.parse(stored)
+      const events = JSON.parse(stored) as Array<Omit<AuditEvent, 'timestamp'> & { timestamp: string }>
       // Restore Date objects
-      return events.map((e: any) => ({
-        ...e,
-        timestamp: new Date(e.timestamp),
+      return events.map((event) => ({
+        ...event,
+        timestamp: new Date(event.timestamp),
       }))
     }
   } catch (e) {
@@ -132,9 +154,16 @@ const loadAuditEventsFromStorage = (sessionId: string): AuditEvent[] => {
 }
 
 // Helper to clear audit events from localStorage
-const clearAuditEventsFromStorage = (sessionId: string) => {
+const clearAuditEventsFromStorage = (
+  userId: string | null | undefined,
+  sessionId: string,
+) => {
   try {
-    localStorage.removeItem(`audit_events_${sessionId}`)
+    if (!userId) {
+      return
+    }
+
+    clearChatRenderCacheForSession(userId, sessionId)
   } catch (e) {
     console.error('Failed to clear audit events from localStorage:', e)
   }
@@ -149,13 +178,16 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   onStop,
   isStreaming = false
 }) => {
+  const { user } = useAuth()
+  const storageUserId = user?.uid ?? null
+
   // Initialize events from initialEvents prop or localStorage
   const [events, setEvents] = useState<AuditEvent[]>(() => {
     if (initialEvents.length > 0) {
       return initialEvents
     }
     if (sessionId) {
-      return loadAuditEventsFromStorage(sessionId)
+      return loadAuditEventsFromStorage(storageUserId, sessionId)
     }
     return []
   })
@@ -206,7 +238,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
     if (sessionId !== prevSessionId) {
       // Try to load saved events for the new session
       if (sessionId) {
-        const savedEvents = loadAuditEventsFromStorage(sessionId)
+        const savedEvents = loadAuditEventsFromStorage(storageUserId, sessionId)
         setEvents(savedEvents)
       } else {
         setEvents([])
@@ -216,7 +248,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
       processedEventIndicesRef.current = new Set()
       setCopied(false)
     }
-  }, [sessionId, prevSessionId])
+  }, [sessionId, prevSessionId, storageUserId])
 
   useEffect(() => {
     return () => {
@@ -235,13 +267,13 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
 
     const sessionScopedEvents = events.filter((event) => event.sessionId === sessionId)
     if (sessionScopedEvents.length > 0) {
-      saveAuditEventsToStorage(sessionId, sessionScopedEvents)
+      saveAuditEventsToStorage(storageUserId, sessionId, sessionScopedEvents)
       return
     }
 
     // If there are no events for this session, clear any stale persisted data.
-    clearAuditEventsFromStorage(sessionId)
-  }, [events, sessionId])
+    clearAuditEventsFromStorage(storageUserId, sessionId)
+  }, [events, sessionId, storageUserId])
 
   // Update events when initialEvents prop changes (for testing)
   useEffect(() => {
@@ -331,7 +363,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
 
     // Clear from localStorage
     if (sessionId) {
-      clearAuditEventsFromStorage(sessionId)
+      clearAuditEventsFromStorage(storageUserId, sessionId)
     }
 
     // Mark all current SSE events as processed to prevent them from being re-added

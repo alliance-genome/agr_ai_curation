@@ -17,7 +17,13 @@ import { debug } from '@/utils/env'
 
 export interface SSEEvent {
   type: string
+  // SSE payloads are intentionally open-ended because backend event shapes vary by tool and lane.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   [key: string]: any
+}
+
+export interface SendChatMessageOptions {
+  turnId?: string
 }
 
 export interface UseChatStreamReturn {
@@ -34,7 +40,11 @@ export interface UseChatStreamReturn {
   /**
    * Send a message and start receiving SSE events
    */
-  sendMessage: (message: string, sessionId: string) => Promise<void>
+  sendMessage: (
+    message: string,
+    sessionId: string,
+    options?: SendChatMessageOptions,
+  ) => Promise<void>
 
   /**
    * Execute a curation flow with streaming response
@@ -105,7 +115,11 @@ export function useChatStream(): UseChatStreamReturn {
     }
   }, [])
 
-  const sendMessage = useCallback(async (message: string, sessionId: string) => {
+  const sendMessage = useCallback(async (
+    message: string,
+    sessionId: string,
+    options?: SendChatMessageOptions,
+  ) => {
     if (!message.trim()) {
       console.warn('Cannot send empty message')
       return
@@ -152,7 +166,8 @@ export function useChatStream(): UseChatStreamReturn {
         },
         body: JSON.stringify({
           message,
-          session_id: sessionId
+          session_id: sessionId,
+          turn_id: options?.turnId,
         }),
         signal: abortControllerRef.current.signal
       })
@@ -170,7 +185,7 @@ export function useChatStream(): UseChatStreamReturn {
       let buffer = '' // Accumulate partial chunks
 
       // Read stream chunks
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read()
         if (done) break
 
@@ -289,7 +304,7 @@ export function useChatStream(): UseChatStreamReturn {
       const decoder = new TextDecoder()
       let buffer = ''
 
-      while (true) {
+      for (;;) {
         const { done, value } = await reader.read()
         if (done) break
 

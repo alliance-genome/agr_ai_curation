@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import { getChatLocalStorageKeys, getChatRenderCacheKeys } from '@/lib/chatCacheKeys'
 import Chat from '../../components/Chat'
 
 const mockNavigate = vi.fn()
@@ -200,7 +200,13 @@ describe('Chat persistence', () => {
     fireEvent.keyPress(input, { key: 'Enter', code: 'Enter', charCode: 13 })
 
     await waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith('Persist me across navigation', 'session-1')
+      expect(sendMessage).toHaveBeenCalledWith(
+        'Persist me across navigation',
+        'session-1',
+        expect.objectContaining({
+          turnId: expect.any(String),
+        }),
+      )
     })
 
     // Simulate navigating away from Home before debounce timer naturally fires.
@@ -389,7 +395,13 @@ describe('Chat persistence', () => {
     fireEvent.keyPress(input, { key: 'Enter', code: 'Enter', charCode: 13 })
 
     await waitFor(() => {
-      expect(sendMessage).toHaveBeenCalledWith('Copy this user message', 'session-1')
+      expect(sendMessage).toHaveBeenCalledWith(
+        'Copy this user message',
+        'session-1',
+        expect.objectContaining({
+          turnId: expect.any(String),
+        }),
+      )
     })
 
     expect(await screen.findByText('Copy this user message')).toBeInTheDocument()
@@ -405,7 +417,9 @@ describe('Chat persistence', () => {
     if (originalExecCommand) {
       Object.assign(document, { execCommand: originalExecCommand })
     } else {
-      delete (document as Document & { execCommand?: typeof document.execCommand }).execCommand
+      Object.assign(document, {
+        execCommand: undefined as unknown as typeof document.execCommand,
+      })
     }
   })
 
@@ -1044,6 +1058,322 @@ describe('Chat persistence', () => {
         })
       )
     })
+  })
+})
+
+describe('Chat turn reconciliation', () => {
+  beforeEach(() => {
+    mockAuthState.user = { uid: 'user-1', email: 'curator@example.org' }
+    localStorage.clear()
+    Element.prototype.scrollIntoView = vi.fn()
+    mockNavigate.mockReset()
+    openCurationWorkspaceMock.mockReset()
+    emitGlobalToastMock.mockReset()
+    mockChatFetch()
+  })
+
+  it('shows terminal failure notices on the assistant turn matched by turn_id', async () => {
+    renderChat({
+      sessionId: 'session-1',
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-failure-1',
+          trace_id: 'trace-failure-1',
+          content: 'Partial assistant reply',
+        },
+        {
+          type: 'turn_failed',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-failure-1',
+          trace_id: 'trace-failure-1',
+          message: 'Chat completed, but durable side effects could not be saved.',
+        },
+      ],
+    })
+
+    expect(await screen.findByText('Partial assistant reply')).toBeInTheDocument()
+    expect(
+      await screen.findByText('Chat completed, but durable side effects could not be saved.'),
+    ).toBeInTheDocument()
+  })
+
+  it('rescues turn_save_failed output exactly once per turn and preserves the streamed content', async () => {
+    const rescueBodies: Array<Record<string, unknown>> = []
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/health/deep') {
+        return {
+          ok: true,
+          json: async () => ({
+            services: {
+              weaviate: 'connected',
+              curation_db: 'connected',
+            },
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/document') {
+        return {
+          ok: true,
+          json: async () => ({
+            active: false,
+            document: null,
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/conversation') {
+        return {
+          ok: true,
+          json: async () => ({
+            is_active: true,
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/session-1/assistant-rescue' && init?.method === 'POST') {
+        rescueBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        return {
+          ok: true,
+          json: async () => ({
+            session_id: 'session-1',
+            turn_id: 'turn-save-failed-1',
+            created: true,
+            trace_id: 'trace-rescue-1',
+          }),
+        } as Response
+      }
+
+      return {
+        ok: true,
+        json: async () => ({}),
+      } as Response
+    })
+
+    renderChat({
+      sessionId: 'session-1',
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-save-failed-1',
+          trace_id: 'trace-stream-1',
+          content: 'Buffered assistant reply',
+        },
+        {
+          type: 'turn_save_failed',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-save-failed-1',
+          trace_id: 'trace-stream-1',
+          message: 'Chat completed, but the assistant response could not be saved.',
+        },
+        {
+          type: 'turn_save_failed',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-save-failed-1',
+          trace_id: 'trace-stream-1',
+          message: 'Chat completed, but the assistant response could not be saved.',
+        },
+      ],
+    })
+
+    expect(await screen.findByText('Buffered assistant reply')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(rescueBodies).toHaveLength(1)
+    })
+
+    expect(rescueBodies[0]).toMatchObject({
+      turn_id: 'turn-save-failed-1',
+      content: 'Buffered assistant reply',
+      trace_id: 'trace-stream-1',
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('Saving this response to chat history...')).not.toBeInTheDocument()
+    })
+  })
+
+  it('shows a durable save error when assistant rescue fails', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/health/deep') {
+        return {
+          ok: true,
+          json: async () => ({
+            services: {
+              weaviate: 'connected',
+              curation_db: 'connected',
+            },
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/document') {
+        return {
+          ok: true,
+          json: async () => ({
+            active: false,
+            document: null,
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/conversation') {
+        return {
+          ok: true,
+          json: async () => ({
+            is_active: true,
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/session-1/assistant-rescue' && init?.method === 'POST') {
+        return {
+          ok: false,
+          json: async () => ({
+            detail: 'database unavailable',
+          }),
+        } as Response
+      }
+
+      return {
+        ok: true,
+        json: async () => ({}),
+      } as Response
+    })
+
+    renderChat({
+      sessionId: 'session-1',
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-save-failed-2',
+          trace_id: 'trace-stream-2',
+          content: 'Rescue me',
+        },
+        {
+          type: 'turn_save_failed',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-save-failed-2',
+          trace_id: 'trace-stream-2',
+          message: 'Chat completed, but the assistant response could not be saved.',
+        },
+      ],
+    })
+
+    expect(await screen.findByText('Rescue me')).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        'This response is shown above, but it could not be saved to chat history: database unavailable',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('hands reset chat off through onSessionChange and clears auth-scoped audit caches', async () => {
+    const oldAuditCacheKey = getChatRenderCacheKeys('user-1', 'session-1').auditEvents
+    const newAuditCacheKey = getChatRenderCacheKeys('user-1', 'session-2').auditEvents
+    const onSessionChange = vi.fn()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    localStorage.setItem(oldAuditCacheKey, '[{"type":"SUPERVISOR_START"}]')
+    localStorage.setItem(newAuditCacheKey, '[{"type":"SUPERVISOR_COMPLETE"}]')
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-1')
+    localStorage.setItem(
+      chatStorageKeys.messages,
+      JSON.stringify({
+        session_id: 'session-1',
+        messages: [
+          {
+            role: 'user',
+            content: 'Reset me',
+            timestamp: new Date().toISOString(),
+          },
+        ],
+      }),
+    )
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/health/deep') {
+        return {
+          ok: true,
+          json: async () => ({
+            services: {
+              weaviate: 'connected',
+              curation_db: 'connected',
+            },
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/document') {
+        return {
+          ok: true,
+          json: async () => ({
+            active: false,
+            document: null,
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/conversation/reset' && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            session_id: 'session-2',
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/conversation') {
+        return {
+          ok: true,
+          json: async () => ({
+            is_active: false,
+          }),
+        } as Response
+      }
+
+      return {
+        ok: true,
+        json: async () => ({}),
+      } as Response
+    })
+
+    renderChat({
+      sessionId: 'session-1',
+      onSessionChange,
+    })
+
+    expect(await screen.findByText('Reset me')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /reset chat/i }))
+
+    await waitFor(() => {
+      expect(onSessionChange).toHaveBeenCalledWith('session-2')
+    })
+
+    expect(localStorage.getItem(oldAuditCacheKey)).toBeNull()
+    expect(localStorage.getItem(newAuditCacheKey)).toBeNull()
+    expect(screen.queryByText('Reset me')).not.toBeInTheDocument()
+
+    confirmSpy.mockRestore()
   })
 })
 

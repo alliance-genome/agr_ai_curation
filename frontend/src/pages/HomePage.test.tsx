@@ -329,7 +329,8 @@ describe('HomePage durable session bootstrap', () => {
       ).toHaveLength(1)
     })
 
-    resolveCreateSession?.(jsonResponse({
+    expect(resolveCreateSession).not.toBeNull()
+    resolveCreateSession!(jsonResponse({
       session_id: 'strict-session',
       created_at: '2026-04-20T02:00:00Z',
       updated_at: '2026-04-20T02:00:00Z',
