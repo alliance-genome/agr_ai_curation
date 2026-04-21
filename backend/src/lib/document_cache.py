@@ -8,7 +8,7 @@ the document hasn't changed.
 Thread Safety:
     All cache operations are protected by RLock to prevent race conditions
     in FastAPI's async environment. This matches the pattern used by
-    chat_state.py and conversation_manager.py in this codebase.
+    chat_state.py and other module-level runtime state in this codebase.
 
 Usage:
     from src.lib.document_cache import get_cached_metadata, set_cached_metadata, invalidate_cache

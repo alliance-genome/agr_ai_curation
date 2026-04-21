@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from src.api.auth import get_auth_dependency
-from src.lib.conversation_manager import SessionAccessError
 from src.lib.curation_workspace.bootstrap_service import (
     bootstrap_document_session,
     create_manual_session,
@@ -473,8 +472,6 @@ async def get_chat_prep_preview(
             user_id=user_id,
             db=db,
         )
-    except SessionAccessError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -494,8 +491,6 @@ async def trigger_chat_prep(
             current_user_id=user_id,
             db=db,
         )
-    except SessionAccessError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

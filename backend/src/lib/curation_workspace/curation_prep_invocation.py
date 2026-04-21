@@ -7,10 +7,10 @@ from typing import Iterable, Sequence
 
 from sqlalchemy.orm import Session
 
+from src.lib.chat_transcript import count_session_text_messages
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
-from src.lib.conversation_manager import conversation_manager
 from src.lib.curation_workspace.curation_prep_service import (
     CurationPrepPersistenceContext,
     run_curation_prep,
@@ -389,12 +389,12 @@ def _display_values_already_include_label(values: Sequence[str], label: str) -> 
 
 def _count_conversation_messages(*, session_id: str, user_id: str) -> int:
     try:
-        stats = conversation_manager.peek_session_stats(user_id, session_id)
+        return count_session_text_messages(
+            session_id=session_id,
+            user_id=user_id,
+        )
     except Exception:
         return 0
-    if not stats:
-        return 0
-    return max(int(stats.get("exchange_count", 0)), 0) * 2
 
 
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:

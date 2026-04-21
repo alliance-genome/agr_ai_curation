@@ -267,8 +267,7 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
 
 
 def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
-    calls = {"register": [], "unregister": [], "clear": [], "history": []}
-    session_history: dict[tuple[str, str], list[dict[str, str]]] = {}
+    calls = {"register": [], "unregister": [], "clear": []}
     repository = _FakeChatHistoryRepository()
     completion_db = _DummyCompletionDB()
 
@@ -306,28 +305,6 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
-
-    def _add_exchange(user_id: str, session_id: str, user_message: str, assistant_message: str) -> None:
-        calls["history"].append((user_id, session_id, user_message, assistant_message))
-        session_history.setdefault((user_id, session_id), []).append(
-            {"user": user_message, "assistant": assistant_message}
-        )
-
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        SimpleNamespace(
-            history_enabled=True,
-            add_exchange=_add_exchange,
-            get_session_history=lambda user_id, session_id: list(
-                session_history.get((user_id, session_id), [])
-            ),
-            clear_session_history=lambda user_id, session_id: session_history.__setitem__(
-                (user_id, session_id),
-                [],
-            ),
-        ),
-    )
 
     async def _check_cancel_signal(_session_id: str) -> bool:
         return cancel_requested
@@ -701,11 +678,13 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
     tool_complete_event = next(event for event in events if event.get("type") == "TOOL_COMPLETE")
     assert "internal" not in tool_complete_event
 
-    assert len(calls["history"]) == 1
-    history_user_id, history_session_id, history_user_msg, history_assistant_msg = calls["history"][0]
-    assert history_user_id == "auth-sub"
-    assert history_session_id == "session-flow-context"
-    assert history_user_msg == "Run gene selection flow"
+    stored_turn_messages = list(
+        calls["repository"].messages[("auth-sub", "session-flow-context")]
+    )
+    assert [message.role for message in stored_turn_messages] == ["user", "flow"]
+    history_assistant_msg = stored_turn_messages[1].payload_json[
+        chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+    ]
     assert "Flow execution summary for follow-up questions" in history_assistant_msg
     assert "<FLOW_INTERNAL_CONTEXT_JSON>" in history_assistant_msg
     assert "ask_gene_specialist" in history_assistant_msg
@@ -801,14 +780,6 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
     assert stored_turn_messages[1].payload_json[chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY].startswith(
         "Flow execution summary for follow-up questions"
     )
-    assert calls["history"] == [
-        (
-            "auth-sub",
-            "session-flow-replay",
-            "Run gene selection flow",
-            stored_turn_messages[1].payload_json[chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY],
-        )
-    ]
 
 
 def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_counter(monkeypatch):

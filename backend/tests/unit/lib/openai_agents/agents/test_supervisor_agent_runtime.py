@@ -741,12 +741,8 @@ async def test_dispatch_curation_prep_requires_prior_confirmation_prompt(monkeyp
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_history=lambda _user_id, _session_id: [
-                {"user": "Prepare the disease findings.", "assistant": "I can help with that."}
-            ]
-        ),
+        "latest_assistant_message_for_session",
+        lambda **_kwargs: "I can help with that.",
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -777,16 +773,8 @@ async def test_dispatch_curation_prep_runs_deterministic_prep_with_confirmed_sco
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_history=lambda _user_id, _session_id: [
-                {
-                    "user": "Prepare the disease findings for curation.",
-                    "assistant": "Ready to prepare these for curation?",
-                    "timestamp": "2026-03-21T00:10:00Z",
-                }
-            ]
-        ),
+        "latest_assistant_message_for_session",
+        lambda **_kwargs: "Ready to prepare these for curation?",
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -852,16 +840,8 @@ async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_history=lambda _user_id, _session_id: [
-                {
-                    "user": "Prepare these findings.",
-                    "assistant": "Ready to prepare these for curation?",
-                    "timestamp": "2026-03-21T00:20:00Z",
-                }
-            ]
-        ),
+        "latest_assistant_message_for_session",
+        lambda **_kwargs: "Ready to prepare these for curation?",
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -900,16 +880,8 @@ async def test_dispatch_curation_prep_still_filters_loaded_document_before_runni
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_history=lambda _user_id, _session_id: [
-                {
-                    "user": "Prepare the disease findings for curation.",
-                    "assistant": "Ready to prepare these for curation?",
-                    "timestamp": "2026-03-21T00:30:00Z",
-                }
-            ]
-        ),
+        "latest_assistant_message_for_session",
+        lambda **_kwargs: "Ready to prepare these for curation?",
     )
 
     def _fake_list_extraction_results(*_args, **kwargs):
@@ -969,16 +941,8 @@ async def test_dispatch_curation_prep_does_not_fall_back_to_top_level_evidence_r
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_history=lambda _user_id, _session_id: [
-                {
-                    "user": "Prepare these findings.",
-                    "assistant": "Ready to prepare these for curation?",
-                    "timestamp": "2026-03-21T00:35:00Z",
-                }
-            ]
-        ),
+        "latest_assistant_message_for_session",
+        lambda **_kwargs: "Ready to prepare these for curation?",
     )
     monkeypatch.setattr(
         supervisor_agent,
@@ -1023,16 +987,8 @@ async def test_dispatch_curation_prep_requires_document_narrowing_for_multi_docu
     )
     monkeypatch.setattr(
         supervisor_agent,
-        "conversation_manager",
-        SimpleNamespace(
-            get_session_history=lambda _user_id, _session_id: [
-                {
-                    "user": "Prepare these findings.",
-                    "assistant": "Ready to prepare these for curation?",
-                    "timestamp": "2026-03-21T00:40:00Z",
-                }
-            ]
-        ),
+        "latest_assistant_message_for_session",
+        lambda **_kwargs: "Ready to prepare these for curation?",
     )
     monkeypatch.setattr(
         supervisor_agent,

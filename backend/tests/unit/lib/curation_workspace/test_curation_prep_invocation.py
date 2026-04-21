@@ -143,9 +143,9 @@ def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
         lambda **_kwargs: [_make_extraction_result(candidate_count=2)],
     )
     monkeypatch.setattr(
-        module.conversation_manager,
-        "peek_session_stats",
-        lambda *_args, **_kwargs: {"exchange_count": 3},
+        module,
+        "count_session_text_messages",
+        lambda **_kwargs: 6,
     )
 
     preview = module.build_chat_curation_prep_preview(

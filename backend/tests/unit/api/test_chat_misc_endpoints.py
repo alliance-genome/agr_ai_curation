@@ -542,44 +542,6 @@ def _db_stub(*, commits: list[str] | None = None, rollbacks: list[str] | None = 
     )
 
 
-class FakeConversationManager:
-    def __init__(self) -> None:
-        self.history_enabled = True
-        self._history: dict[tuple[str, str], list[dict[str, str]]] = {}
-        self.add_calls: list[tuple[str, str, str, str]] = []
-
-    def get_session_history(self, user_id: str, session_id: str) -> list[dict[str, str]]:
-        return self._history.setdefault((user_id, session_id), [])
-
-    def add_exchange(
-        self,
-        user_id: str,
-        session_id: str,
-        user_message: str,
-        assistant_response: str,
-    ) -> None:
-        self.add_calls.append((user_id, session_id, user_message, assistant_response))
-        self.get_session_history(user_id, session_id).append(
-            {"user": user_message, "assistant": assistant_response}
-        )
-
-    def clear_session_history(self, user_id: str, session_id: str) -> None:
-        self._history[(user_id, session_id)] = []
-
-
-def _conversation_manager_stub(
-    *,
-    history_enabled: bool = True,
-    add_exchange=None,
-) -> SimpleNamespace:
-    return SimpleNamespace(
-        history_enabled=history_enabled,
-        get_session_history=lambda *_args: [],
-        add_exchange=add_exchange or (lambda *_args: None),
-        clear_session_history=lambda *_args: None,
-    )
-
-
 def test_build_context_messages_from_history_appends_current_user_turn():
     context_messages = chat._build_context_messages_from_history(
         [
@@ -697,65 +659,6 @@ def test_build_context_messages_from_durable_messages_rehydrates_flow_memory_fro
         {"role": "user", "content": "follow-up question"},
     ]
 
-
-def test_hydrate_conversation_history_from_durable_messages_rebuilds_partial_history(monkeypatch):
-    conversation_manager = FakeConversationManager()
-    conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
-    repository = FakeChatHistoryRepository(
-        sessions=[_session_record(session_id="session-replay")],
-        detail_messages={
-            ("user-1", "session-replay"): [
-                _message_record(
-                    session_id="session-replay",
-                    role="user",
-                    content="first question",
-                    turn_id="turn-1",
-                    created_at=_ts(9, 1),
-                ),
-                _message_record(
-                    session_id="session-replay",
-                    role="assistant",
-                    content="first answer",
-                    turn_id="turn-1",
-                    created_at=_ts(9, 2),
-                ),
-                _message_record(
-                    session_id="session-replay",
-                    role="user",
-                    content="replayed question",
-                    turn_id="turn-replay",
-                    created_at=_ts(9, 3),
-                ),
-                _message_record(
-                    session_id="session-replay",
-                    role="assistant",
-                    content="stored answer",
-                    turn_id="turn-replay",
-                    created_at=_ts(9, 4),
-                ),
-            ]
-        },
-    )
-    monkeypatch.setattr(chat, "conversation_manager", conversation_manager)
-
-    chat._hydrate_conversation_history_from_durable_messages(
-        repository,
-        user_id="user-1",
-        session_id="session-replay",
-    )
-
-    assert chat._build_context_messages_from_durable_messages(
-        repository,
-        user_id="user-1",
-        session_id="session-replay",
-        user_message="",
-    ) == [
-        {"role": "user", "content": "first question"},
-        {"role": "assistant", "content": "first answer"},
-        {"role": "user", "content": "replayed question"},
-        {"role": "assistant", "content": "stored answer"},
-        {"role": "user", "content": ""},
-    ]
 
 
 @pytest.mark.asyncio
@@ -946,7 +849,6 @@ def test_fake_chat_history_repository_turn_lookup_requires_existing_session():
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_success(monkeypatch):
-    add_calls = []
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
@@ -956,11 +858,6 @@ async def test_chat_endpoint_success(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *args: add_calls.append(args)),
-    )
 
     async def _stream(**_kwargs):
         assert [(call["role"], call["content"]) for call in repository.append_calls] == [
@@ -978,7 +875,6 @@ async def test_chat_endpoint_success(monkeypatch):
     )
     assert result.response == "final answer"
     assert result.session_id == "session-1"
-    assert add_calls == [("user-1", "session-1", "hello", "final answer")]
     assert commits == ["commit", "commit"]
     assert repository.get_or_create_calls == [
         {
@@ -997,7 +893,6 @@ async def test_chat_endpoint_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
-    add_calls = []
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
@@ -1007,11 +902,6 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *args: add_calls.append(args)),
-    )
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
@@ -1027,7 +917,6 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     )
 
     assert result.response == "final stabilized answer"
-    assert add_calls == [("user-1", "session-2", "hello", "final stabilized answer")]
     assert repository.append_calls[-1]["content"] == "final stabilized answer"
     assert commits == ["commit", "commit"]
 
@@ -1035,7 +924,6 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
 @pytest.mark.asyncio
 async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(monkeypatch):
     commits: list[str] = []
-    add_calls = []
     register_calls = []
     unregister_calls = []
     streamed_context_messages = []
@@ -1047,11 +935,6 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *args: add_calls.append(args)),
-    )
 
     async def _register_active_stream(
         session_id: str,
@@ -1115,7 +998,6 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
         [{"role": "user", "content": "hello"}],
         [{"role": "user", "content": "hello"}],
     ]
-    assert add_calls == [("user-1", "session-retry", "hello", "recovered answer")]
     assert [call["role"] for call in repository.append_calls] == ["user", "user", "assistant"]
     assert register_calls[0][0] == "non-stream-turn:session-retry:turn-retry"
     assert register_calls[1][0] == "non-stream-turn:session-retry:turn-retry"
@@ -1137,11 +1019,6 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *_args: None),
-    )
 
     async def _register_active_stream(
         session_id: str,
@@ -1248,7 +1125,6 @@ async def test_chat_endpoint_omits_unfinished_prior_user_turn_from_context_messa
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "conversation_manager", FakeConversationManager())
 
     async def _stream(**kwargs):
         captured_context_messages.append(kwargs["context_messages"])
@@ -1286,11 +1162,6 @@ async def test_chat_endpoint_rejects_same_turn_while_claim_is_still_active(monke
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *_args: None),
-    )
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1307,7 +1178,6 @@ async def test_chat_endpoint_rejects_same_turn_while_claim_is_still_active(monke
 @pytest.mark.asyncio
 async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatch):
     commits: list[str] = []
-    conversation_manager = FakeConversationManager()
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-replay")],
         detail_messages={
@@ -1340,7 +1210,6 @@ async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatc
         "get_supervisor_tool_agent_map",
         lambda: pytest.fail("tool map should not resolve for a completed replayed turn"),
     )
-    monkeypatch.setattr(chat, "conversation_manager", conversation_manager)
 
     async def _stream(**_kwargs):
         pytest.fail("run_agent_streamed should not run for a completed replayed turn")
@@ -1358,18 +1227,13 @@ async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatc
     assert result.session_id == "session-replay"
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
-    assert conversation_manager.add_calls == [
-        ("user-1", "session-replay", "hello", "stored answer")
-    ]
     assert "non-stream-turn:session-replay:turn-replay" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
 
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(monkeypatch):
     commits: list[str] = []
-    conversation_manager = FakeConversationManager()
     captured_context_messages = []
-    conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-replay")],
         detail_messages={
@@ -1411,7 +1275,6 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "conversation_manager", conversation_manager)
     monkeypatch.setattr(
         chat,
         "get_supervisor_tool_agent_map",
@@ -1476,8 +1339,6 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
 async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stale_worker(monkeypatch):
     commits: list[str] = []
     captured_context_messages = []
-    conversation_manager = FakeConversationManager()
-    conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
     repository = FakeChatHistoryRepository(
         sessions=[_session_record(session_id="session-replay")],
         detail_messages={
@@ -1519,7 +1380,6 @@ async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stal
     monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "conversation_manager", conversation_manager)
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _stream(**kwargs):
@@ -1573,11 +1433,6 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *_args: None),
-    )
 
     async def _stream(**kwargs):
         captured.update(kwargs)
@@ -1621,11 +1476,6 @@ async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypat
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *_args: None),
-    )
 
     async def _stream(**kwargs):
         captured.update(kwargs)
@@ -1667,11 +1517,6 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *_args: None),
-    )
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
@@ -1692,7 +1537,6 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkeypatch):
-    add_calls = []
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
@@ -1705,11 +1549,6 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *args: add_calls.append(args)),
-    )
     monkeypatch.setattr(
         chat,
         "get_supervisor_tool_agent_map",
@@ -1766,7 +1605,6 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to persist chat response"
-    assert add_calls == []
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
 
@@ -1787,14 +1625,9 @@ async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypat
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(
         chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *_args: None),
+        "get_supervisor_tool_agent_map",
+        lambda: (_ for _ in ()).throw(RuntimeError("agent registry unavailable")),
     )
-
-    def _raise_tool_map():
-        raise RuntimeError("agent registry unavailable")
-
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", _raise_tool_map)
 
     # run_agent_streamed should never be reached; provide a sentinel to verify.
     stream_called = False
@@ -1831,11 +1664,6 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
     monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        _conversation_manager_stub(add_exchange=lambda *_args: None),
-    )
 
     async def _raise(**_kwargs):
         raise RuntimeError("boom")
@@ -1865,22 +1693,55 @@ async def test_chat_status_reflects_openai_env(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_get_conversation_status_and_reset_and_config_endpoints(monkeypatch):
-    manager = SimpleNamespace(
-        get_memory_stats=lambda _uid: {"is_active": True, "conversation_id": "c-1"},
-        reset_conversation=lambda _uid: True,
-        history_enabled=True,
-        max_exchanges=30,
-        include_in_routing=True,
-        include_in_response=True,
-        max_sessions_per_user=10,
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(session_id="session-current"),
+        ],
+        detail_messages={
+            ("user-1", "session-current"): [
+                _message_record(
+                    session_id="session-current",
+                    role="user",
+                    content="first question",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-current",
+                    role="assistant",
+                    content="first answer",
+                    turn_id="turn-1",
+                    created_at=_ts(9, 2),
+                ),
+            ],
+        },
     )
-    monkeypatch.setattr(chat, "conversation_manager", manager)
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
+    monkeypatch.setattr(
+        chat,
+        "chat_history_config",
+        SimpleNamespace(
+            as_history_dict=lambda: {
+                "enabled": True,
+                "max_exchanges": 30,
+                "include_in_routing": True,
+                "include_in_response": True,
+                "max_sessions_per_user": 10,
+            }
+        ),
+    )
 
-    status = await chat.get_conversation_status({"sub": "user-1"})
+    status = await chat.get_conversation_status(db=object(), user={"sub": "user-1"})
     assert status.is_active is True
-    reset = await chat.reset_conversation({"sub": "user-1"})
+    assert status.conversation_id == "session-current"
+    assert status.memory_stats["memory_sizes"]["short_term"]["file_count"] == 1
+
+    reset = await chat.reset_conversation(_db_stub(commits=[]), {"sub": "user-1"})
     assert reset.success is True
     assert reset.session_id is not None
+    assert reset.memory_stats["conversation_id"] == reset.session_id
+    assert reset.memory_stats["memory_sizes"]["short_term"]["file_count"] == 0
     config = await chat.get_chat_configuration({"sub": "user-1"})
     assert config.history["enabled"] is True
 
@@ -1888,11 +1749,11 @@ async def test_get_conversation_status_and_reset_and_config_endpoints(monkeypatc
 @pytest.mark.asyncio
 async def test_conversation_endpoints_require_user_sub():
     with pytest.raises(HTTPException) as exc_status:
-        await chat.get_conversation_status({})
+        await chat.get_conversation_status(db=object(), user={})
     assert exc_status.value.status_code == 401
 
     with pytest.raises(HTTPException) as exc_reset:
-        await chat.reset_conversation({})
+        await chat.reset_conversation(db=object(), user={})
     assert exc_reset.value.status_code == 401
 
     with pytest.raises(HTTPException) as exc_hist:
