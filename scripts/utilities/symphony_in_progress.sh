@@ -15,7 +15,8 @@ CONTEXT_HELPER="${REPO_ROOT}/scripts/utilities/symphony_linear_issue_context.sh"
 # In Progress lane helper for Symphony.  Detects WHY the issue is in In
 # Progress (first implementation, review bounce, CI failure, human feedback)
 # by inspecting Linear state history, then assembles a focused brief with
-# the full ticket context, PR status, and entry-specific instructions.
+# the ticket context, highlighted handoff signals, PR status, and
+# entry-specific instructions.
 #
 # Exit codes:
 #   0  — brief generated successfully
@@ -271,7 +272,7 @@ build_brief() {
       ;;
     "In Review")
       echo "**Bounced from reviewer.** A reviewer found blocking issues and sent this back."
-      echo "Check the workpad (in Comments below) for the reviewer's findings — look for"
+      echo "Check the Current Handoff Signals section below for the reviewer's findings — look for"
       echo "entries marked \`blocking\` with file/line evidence. Address those specific issues."
       ;;
     "Ready for PR")
@@ -281,21 +282,21 @@ build_brief() {
         echo "Fix the failing tests/checks, then push and cycle back through review."
       elif [[ -n "${pr_claude_comment}" ]]; then
         echo "Claude left review feedback that needs addressing."
-        echo "Read Claude's review in Section 4 below and address the findings."
+        echo "Read Claude's review in Section 5 below and address the findings."
       else
         echo "The Ready for PR lane sent this back — check the workpad for details."
       fi
       ;;
     "Human Review")
       echo "**Sent back from Human Review.** Chris reviewed this and sent it back."
-      echo "Check the Comments section below for the latest human feedback and address it."
+      echo "Check the Current Handoff Signals section below for the latest human feedback and address it."
       ;;
     Finalizing)
       echo "**Bounced from Finalizing — PR merge conflict.** The PR was approved and ready"
       echo "to merge, but another ticket landed on \`main\` first and introduced conflicts."
       echo ""
       echo "The finalize helper identified the conflict details and wrote them to the workpad."
-      echo "Check the Comments section below for:"
+      echo "Check the Current Handoff Signals section below for:"
       echo "- Which files conflict"
       echo "- Which sibling ticket(s) caused the conflict"
       echo "- The merge error output"
@@ -320,8 +321,42 @@ build_brief() {
   printf '%s' "${context_json}" | jq -r '.issue.description // "No description provided."'
   echo ""
 
-  # Section 3: All comments
-  echo "## 3. Issue Comments (${comment_count} total)"
+  # Section 3: Current baton + latest non-workpad guidance
+  echo "## 3. Current Handoff Signals"
+  echo ""
+
+  if printf '%s' "${context_json}" | jq -e '.workpad_comment != null' >/dev/null; then
+    echo "### Latest Workpad Baton"
+    echo ""
+    echo "- Updated: $(printf '%s' "${context_json}" | jq -r '.workpad_comment.updated_at // "unknown"')"
+    echo "- Author: $(printf '%s' "${context_json}" | jq -r '.workpad_comment.user_name // "Unknown"')"
+    echo ""
+    printf '%s' "${context_json}" | jq -r '.workpad_comment.body // ""'
+    echo ""
+  else
+    echo "### Latest Workpad Baton"
+    echo ""
+    echo "No Symphony workpad comment found yet."
+    echo ""
+  fi
+
+  if printf '%s' "${context_json}" | jq -e '.latest_non_workpad_comment != null' >/dev/null; then
+    echo "### Latest Non-Workpad Guidance"
+    echo ""
+    echo "- Updated: $(printf '%s' "${context_json}" | jq -r '.latest_non_workpad_comment.updated_at // "unknown"')"
+    echo "- Author: $(printf '%s' "${context_json}" | jq -r '.latest_non_workpad_comment.user_name // "Unknown"')"
+    echo ""
+    printf '%s' "${context_json}" | jq -r '.latest_non_workpad_comment.body // ""'
+    echo ""
+  else
+    echo "### Latest Non-Workpad Guidance"
+    echo ""
+    echo "No non-workpad guidance comment is currently present."
+    echo ""
+  fi
+
+  # Section 4: fetched comments
+  echo "## 4. Fetched Issue Comments (${comment_count} fetched)"
   echo ""
 
   if [[ "${comment_count}" -eq 0 ]]; then
@@ -336,8 +371,8 @@ build_brief() {
     '
   fi
 
-  # Section 4: Open PR status
-  echo "## 4. Open Pull Request"
+  # Section 5: Open PR status
+  echo "## 5. Open Pull Request"
   echo ""
 
   if [[ -z "${pr_number}" ]]; then
@@ -379,8 +414,8 @@ build_brief() {
     fi
   fi
 
-  # Section 5: Instructions
-  echo "## 5. Implementation Instructions"
+  # Section 6: Instructions
+  echo "## 6. Implementation Instructions"
   echo ""
   echo "You are the IMPLEMENTER for this issue. Use the information above:"
   echo ""
@@ -390,41 +425,44 @@ build_brief() {
   echo "2. **Read the Issue Description** (Section 2) for scope, out-of-scope"
   echo "   boundaries, design constraints, and architecture guidance."
   echo ""
-  echo "3. **Read the Comments** (Section 3) for workpad history, prior review"
-  echo "   findings, Claude Feedback Dispositions, and human guidance."
+  echo "3. **Read the Current Handoff Signals** (Section 3) first for the latest"
+  echo "   workpad baton and the newest human guidance."
   echo ""
-  echo "4. **Check PR Status** (Section 4) for failing checks and Claude review"
+  echo "4. **Read the fetched comments** (Section 4) when you need broader issue"
+  echo "   history, prior review findings, and older workpad context."
+  echo ""
+  echo "5. **Check PR Status** (Section 5) for failing checks and Claude review"
   echo "   feedback that needs addressing."
   echo ""
 
   case "${entry_from}" in
     Todo|Backlog)
-      echo "5. **Implement** the scope checkboxes from the issue description."
+      echo "6. **Implement** the scope checkboxes from the issue description."
       ;;
     "In Review")
-      echo "5. **Fix the blocking reviewer findings** documented in the workpad,"
+      echo "6. **Fix the blocking reviewer findings** documented in the workpad,"
       echo "   then push and move to Needs Review."
       ;;
     "Ready for PR")
       if [[ -n "${failing_checks}" ]]; then
-        echo "5. **Fix the failing CI checks**: ${failing_checks}"
+        echo "6. **Fix the failing CI checks**: ${failing_checks}"
         echo "   Then push and move to Needs Review."
       else
-        echo "5. **Address the feedback** from the Ready for PR lane, push, and"
+        echo "6. **Address the feedback** from the Ready for PR lane, push, and"
         echo "   move to Needs Review."
       fi
       ;;
     "Human Review")
-      echo "5. **Address Chris's feedback** from the latest comment, push, and"
+      echo "6. **Address Chris's feedback** from the latest comment, push, and"
       echo "   move to Needs Review."
       ;;
     Finalizing)
-      echo "5. **Resolve the merge conflict**: rebase against \`main\`, resolve"
+      echo "6. **Resolve the merge conflict**: rebase against \`main\`, resolve"
       echo "   conflicting files using the workpad details, push, and move to"
       echo "   Needs Review. Keep both tickets' changes — do not drop sibling work."
       ;;
     *)
-      echo "5. **Address whatever caused the bounce**, push, and move to Needs Review."
+      echo "6. **Address whatever caused the bounce**, push, and move to Needs Review."
       ;;
   esac
   echo ""
@@ -465,6 +503,6 @@ cat <<INST
 IN_PROGRESS_INSTRUCTIONS=In Progress brief generated for ${issue_identifier} (pass #${in_progress_count}, from ${entry_from}). YOU MUST:
 1. Read the FULL brief at: ${target_file}
 2. Section 1 tells you WHY you are in In Progress and what to focus on.
-3. The brief contains the issue description, all comments, and PR status.
+3. The brief contains the issue description, current handoff signals, fetched comment context, and PR status.
 4. After addressing the issue, push and move to Needs Review.
 INST

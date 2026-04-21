@@ -44,6 +44,7 @@ Start here for new developers:
 | [2026-04-13-chat-curation-evidence-alignment-plan.md](../design/2026-04-13-chat-curation-evidence-alignment-plan.md) | Deep-dive plan for aligning chat and curation PDF evidence navigation before the production hotfix |
 | [PDF_EVIDENCE_CONSISTENCY_STRATEGY.md](PDF_EVIDENCE_CONSISTENCY_STRATEGY.md) | Deep-dive architecture strategy for replacing split Home/Curation PDF viewers with one persistent route-level PDF.js host |
 | [PDF_HIGHLIGHT_VERIFICATION.md](guides/PDF_HIGHLIGHT_VERIFICATION.md) | Verification checklist and diagnostics for PDF chunk highlighting bugs |
+| [SYMPHONY_FLOW_AND_OPTIMIZATION.md](guides/SYMPHONY_FLOW_AND_OPTIMIZATION.md) | Current Symphony runtime flow, lane transition map, and prompt/context optimization audit based on the live `.symphony` implementation |
 | [SYMPHONY_INCUS_VM_REBUILD.md](guides/SYMPHONY_INCUS_VM_REBUILD.md) | Rebuild `symphony-main` from a tracked cloud-init source, including default git safety scanners |
 | [SYMPHONY_VM_CODEX_SHORTCUTS.md](guides/SYMPHONY_VM_CODEX_SHORTCUTS.md) | Interactive Codex shortcuts in the Symphony VM, including PAT-backed `co` and rebuild persistence |
 | [UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md) | Upload runtime behavioral contract: status precedence, cancellation, rollback matrix, and idempotency expectations (implementation tracked in ALL-23) |

@@ -9,9 +9,10 @@ CONTEXT_HELPER="${REPO_ROOT}/scripts/utilities/symphony_linear_issue_context.sh"
 # =============================================================================
 # symphony_in_review.sh
 #
-# Review lane helper for Symphony.  Fetches the full Linear ticket context
-# (description + all comments) and any open PR with the latest Claude review,
-# then emits a structured review brief the agent must read before reviewing.
+# Review lane helper for Symphony. Fetches the relevant Linear ticket context
+# (description, current handoff signals, fetched comments) and any open PR with
+# the latest Claude review, then emits a structured review brief the agent must
+# read before reviewing.
 #
 # Exit codes:
 #   0  — brief generated successfully
@@ -189,8 +190,42 @@ build_brief() {
   echo "${description}"
   echo ""
 
-  # Section 2: All comments in chronological order
-  echo "## 2. Issue Comments (${comment_count} total)"
+  # Section 2: baton + latest non-workpad guidance
+  echo "## 2. Current Handoff Signals"
+  echo ""
+
+  if printf '%s' "${context_json}" | jq -e '.workpad_comment != null' >/dev/null; then
+    echo "### Latest Workpad Baton"
+    echo ""
+    echo "- Updated: $(printf '%s' "${context_json}" | jq -r '.workpad_comment.updated_at // "unknown"')"
+    echo "- Author: $(printf '%s' "${context_json}" | jq -r '.workpad_comment.user_name // "Unknown"')"
+    echo ""
+    printf '%s' "${context_json}" | jq -r '.workpad_comment.body // ""'
+    echo ""
+  else
+    echo "### Latest Workpad Baton"
+    echo ""
+    echo "No Symphony workpad comment found yet."
+    echo ""
+  fi
+
+  if printf '%s' "${context_json}" | jq -e '.latest_non_workpad_comment != null' >/dev/null; then
+    echo "### Latest Non-Workpad Guidance"
+    echo ""
+    echo "- Updated: $(printf '%s' "${context_json}" | jq -r '.latest_non_workpad_comment.updated_at // "unknown"')"
+    echo "- Author: $(printf '%s' "${context_json}" | jq -r '.latest_non_workpad_comment.user_name // "Unknown"')"
+    echo ""
+    printf '%s' "${context_json}" | jq -r '.latest_non_workpad_comment.body // ""'
+    echo ""
+  else
+    echo "### Latest Non-Workpad Guidance"
+    echo ""
+    echo "No non-workpad guidance comment is currently present."
+    echo ""
+  fi
+
+  # Section 3: fetched comments in chronological order
+  echo "## 3. Fetched Issue Comments (${comment_count} fetched)"
   echo ""
 
   if [[ "${comment_count}" -eq 0 ]]; then
@@ -205,8 +240,8 @@ build_brief() {
     '
   fi
 
-  # Section 3: Open PR + latest Claude review
-  echo "## 3. Open Pull Request"
+  # Section 4: Open PR + latest Claude review
+  echo "## 4. Open Pull Request"
   echo ""
 
   if [[ -z "${pr_number}" ]]; then
@@ -227,8 +262,8 @@ build_brief() {
     fi
   fi
 
-  # Section 4: Review instructions
-  echo "## 4. Review Instructions"
+  # Section 5: Review instructions
+  echo "## 5. Review Instructions"
   echo ""
   echo "You are the REVIEWER for this issue. Your job is to verify the implementation"
   echo "matches what was requested. Use the information above as your primary reference:"
@@ -237,15 +272,17 @@ build_brief() {
   echo "   what was requested, including scope checkboxes, out-of-scope boundaries,"
   echo "   design constraints, and architecture guidance."
   echo ""
-  echo "2. **Read the Comments** (Section 2) — these contain human guidance, scope"
-  echo "   clarifications, feedback from prior review rounds, and workpad notes"
-  echo "   documenting what was done and why."
+  echo "2. **Read the Current Handoff Signals** (Section 2) first — they surface the"
+  echo "   latest workpad baton and newest human guidance."
   echo ""
-  echo "3. **Check PR Feedback** (Section 3) — if a PR exists with Claude review"
-  echo "   comments, verify those suggestions were addressed or explicitly deferred"
-  echo "   with a reason in the workpad."
+  echo "3. **Read the fetched comments** (Section 3) when you need broader history,"
+  echo "   prior review rounds, and older workpad context."
   echo ""
-  echo "4. **Review the code changes** against all of the above. Classify findings as"
+  echo "4. **Check PR Feedback** (Section 4) — if a PR exists with Claude review"
+  echo "   comments, verify those suggestions were addressed or explicitly marked"
+  echo "   \`not taken\` with a reason in the workpad."
+  echo ""
+  echo "5. **Review the code changes** against all of the above. Classify findings as"
   echo "   \`blocking\` (with evidence: file, line, unmet criterion) or \`non-blocking\`."
   echo ""
 }
@@ -275,7 +312,7 @@ fi
 cat <<INST
 IN_REVIEW_INSTRUCTIONS=Review brief generated for ${issue_identifier}. YOU MUST:
 1. Read the FULL review brief at: ${target_file}
-2. The brief contains the issue description, all comments, and any PR feedback.
+2. The brief contains the issue description, current handoff signals, fetched comment context, and any PR feedback.
 3. Review the code changes against the brief — check scope, out-of-scope boundaries, and design constraints.
 4. Classify findings as blocking (with evidence) or non-blocking.
 5. If clean, move forward. If blocking issues exist, move to In Progress with evidence.
