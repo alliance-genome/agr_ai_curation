@@ -13,6 +13,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import aiohttp
 
+from ..pdf_limits import MAX_PDF_FILE_SIZE_BYTES, pdf_file_size_limit_message
 from ..storage_permissions import ensure_writable_directory
 from ..exceptions import ConfigurationError, PDFCancellationError, PDFParsingError
 from ...schemas.pdfx_schema import (  # noqa: F401 - re-exported for fixture tooling
@@ -680,8 +681,9 @@ def validate_pdf_file(file_path: Path) -> Dict[str, Any]:
     if file_size == 0:
         validation["is_valid"] = False
         validation["errors"].append("File is empty")
-    elif file_size > 100 * 1024 * 1024:
-        validation["errors"].append("File exceeds 100MB limit - parsing may be slow")
+    elif file_size > MAX_PDF_FILE_SIZE_BYTES:
+        validation["is_valid"] = False
+        validation["errors"].append(pdf_file_size_limit_message(file_size))
 
     try:
         with open(file_path, "rb") as file_handle:

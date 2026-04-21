@@ -25,8 +25,12 @@ from sqlalchemy.orm import Session
 
 from src.config import get_pdf_storage_path
 from src.lib.document_cleanup import cleanup_document_curation_dependencies
+from src.lib.pdf_limits import (
+    MAX_PDF_FILE_SIZE_BYTES,
+    pdf_file_size_limit_message,
+)
 from src.lib.pdf_jobs.upload_execution_service import UploadExecutionRequest, UploadExecutionService
-from src.lib.pipeline.upload import PDFUploadHandler
+from src.lib.pipeline.upload import PDFUploadHandler, UploadError
 from src.lib.storage_permissions import ensure_writable_directory
 from src.lib.weaviate_client.documents import create_document, delete_document, get_document
 from src.lib.weaviate_helpers import get_tenant_name
@@ -36,6 +40,13 @@ from src.services.user_service import principal_from_claims, provision_user
 from . import service as pdf_job_service
 
 logger = logging.getLogger(__name__)
+
+_PDF_DOCUMENT_DUPLICATE_CONSTRAINTS = frozenset(
+    {
+        "uq_pdf_documents_file_hash",
+        "uq_pdf_documents_file_path",
+    }
+)
 
 
 class UploadIntakeValidationError(ValueError):
@@ -119,7 +130,12 @@ class UploadIntakeService:
         user_storage_path = ensure_writable_directory(base_storage / user_sub)
 
         upload_handler = self._upload_handler_factory(user_storage_path)
-        saved_path, document = await upload_handler.save_uploaded_pdf(file)
+        try:
+            saved_path, document = await upload_handler.save_uploaded_pdf(file)
+        except UploadError as upload_error:
+            raise UploadIntakeValidationError(str(upload_error)) from upload_error
+        file_size_bytes = saved_path.stat().st_size
+        self._validate_saved_pdf_size(saved_path, file_size_bytes)
 
         session = self._session_factory()
         db_user = None
@@ -179,7 +195,7 @@ class UploadIntakeService:
                 filename=document.filename,
                 file_path=str(relative_path).replace("\\", "/"),
                 file_hash=scoped_file_hash,
-                file_size=saved_path.stat().st_size,
+                file_size=file_size_bytes,
                 page_count=max(document.metadata.page_count, 1),
                 user_id=db_user.id,
             )
@@ -202,13 +218,20 @@ class UploadIntakeService:
                 saved_path=saved_path,
                 weaviate_document_created=weaviate_document_created,
             )
-            raise UploadIntakeDuplicateError(
-                {
-                    "error": "duplicate_file",
-                    "message": "This file appears to have already been uploaded for your account.",
-                    "suggestion": "Refresh the document list. If needed, delete the existing document and upload again.",
-                }
-            ) from integrity_error
+            constraint_name = self._extract_integrity_constraint_name(integrity_error)
+            if constraint_name == "ck_pdf_documents_file_size":
+                raise UploadIntakeValidationError(
+                    pdf_file_size_limit_message(file_size_bytes)
+                ) from integrity_error
+            if self._is_duplicate_integrity_error(integrity_error, constraint_name):
+                raise UploadIntakeDuplicateError(
+                    {
+                        "error": "duplicate_file",
+                        "message": "This file appears to have already been uploaded for your account.",
+                        "suggestion": "Refresh the document list. If needed, delete the existing document and upload again.",
+                    }
+                ) from integrity_error
+            raise
         except Exception:
             session.rollback()
             await self._compensate_persistence_failure(
@@ -257,7 +280,7 @@ class UploadIntakeService:
             upload_timestamp=datetime.now(timezone.utc),
             processing_started_at=None,
             processing_completed_at=None,
-            file_size_bytes=saved_path.stat().st_size,
+            file_size_bytes=file_size_bytes,
             weaviate_tenant=self._tenant_name_resolver(user_sub),
             chunk_count=None,
             error_message=None,
@@ -366,3 +389,43 @@ class UploadIntakeService:
     def _validate_pdf_filename(filename: Optional[str]) -> None:
         if not filename or not filename.lower().endswith(".pdf"):
             raise UploadIntakeValidationError(f"File must be a PDF. Got: {filename}")
+
+    @classmethod
+    def _validate_saved_pdf_size(cls, saved_path: Path, file_size_bytes: int) -> None:
+        if file_size_bytes <= MAX_PDF_FILE_SIZE_BYTES:
+            return
+
+        cls._cleanup_saved_file_artifacts(saved_path)
+        raise UploadIntakeValidationError(pdf_file_size_limit_message(file_size_bytes))
+
+    @staticmethod
+    def _extract_integrity_constraint_name(error: IntegrityError) -> Optional[str]:
+        diag = getattr(getattr(error, "orig", None), "diag", None)
+        constraint_name = getattr(diag, "constraint_name", None)
+        if isinstance(constraint_name, str) and constraint_name.strip():
+            return constraint_name
+
+        error_text = " ".join(
+            str(part)
+            for part in (error, getattr(error, "orig", None))
+            if part is not None
+        )
+        for known_name in ("ck_pdf_documents_file_size", *_PDF_DOCUMENT_DUPLICATE_CONSTRAINTS):
+            if known_name in error_text:
+                return known_name
+        return None
+
+    @staticmethod
+    def _is_duplicate_integrity_error(
+        error: IntegrityError,
+        constraint_name: Optional[str],
+    ) -> bool:
+        if constraint_name in _PDF_DOCUMENT_DUPLICATE_CONSTRAINTS:
+            return True
+
+        error_text = " ".join(
+            str(part).lower()
+            for part in (error, getattr(error, "orig", None))
+            if part is not None
+        )
+        return "duplicate key" in error_text or "unique constraint" in error_text

@@ -12,11 +12,13 @@ import pytest
 from fastapi import BackgroundTasks, UploadFile
 from sqlalchemy.exc import IntegrityError
 
+from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
 from src.lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeService,
     UploadIntakeValidationError,
 )
+from src.lib.pipeline.upload import UploadError
 
 
 class _ExecuteResult:
@@ -95,6 +97,38 @@ class _UploadHandler:
             metadata=SimpleNamespace(checksum=self.checksum, page_count=3),
         )
         return saved_path, document
+
+
+class _OversizedUploadHandler(_UploadHandler):
+    async def save_uploaded_pdf(self, file):
+        doc_id = str(uuid4())
+        doc_dir = self.storage_path / doc_id
+        doc_dir.mkdir(parents=True, exist_ok=True)
+        saved_path = doc_dir / file.filename
+        with saved_path.open("wb") as file_handle:
+            file_handle.write(b"%PDF-1.7\n")
+            file_handle.seek(MAX_PDF_FILE_SIZE_BYTES)
+            file_handle.write(b"0")
+        document = SimpleNamespace(
+            id=doc_id,
+            filename=file.filename,
+            metadata=SimpleNamespace(checksum=self.checksum, page_count=3),
+        )
+        return saved_path, document
+
+
+class _ConstraintError(Exception):
+    def __init__(self, constraint_name: str, message: str):
+        super().__init__(message)
+        self.diag = SimpleNamespace(constraint_name=constraint_name)
+
+
+class _FailingUploadHandler:
+    def __init__(self, *_args, **_kwargs):
+        pass
+
+    async def save_uploaded_pdf(self, _file):
+        raise UploadError("PDF file size (100.00 MB) exceeds the maximum allowed (100 MB).")
 
 
 @pytest.mark.asyncio
@@ -193,6 +227,67 @@ async def test_intake_upload_rejects_non_pdf_before_side_effects(tmp_path):
 
     assert session.commit_calls == 0
     assert not dispatch.calls
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_maps_upload_handler_validation_errors_to_validation_error(tmp_path):
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _FailingUploadHandler(storage_path=storage_path),
+    )
+
+    with pytest.raises(UploadIntakeValidationError, match="100 MB"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert session.commit_calls == 0
+    assert not dispatch.calls
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_rejects_pdf_larger_than_100mb_before_db_work(tmp_path):
+    session = _FakeSession()
+    dispatch = _DispatchRecorder()
+    create_document_calls = []
+
+    async def _create_document(user_sub, document):
+        create_document_calls.append((user_sub, document.id))
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _OversizedUploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=_create_document,
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(UploadIntakeValidationError, match="100 MB"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
+    assert session.commit_calls == 0
+    assert create_document_calls == []
+    assert dispatch.calls == []
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
 
 
 @pytest.mark.asyncio
@@ -326,6 +421,55 @@ async def test_intake_upload_integrity_error_compensates_and_returns_duplicate_e
 
     assert exc.value.detail["error"] == "duplicate_file"
     assert create_document_calls and create_document_calls[0][0] == "user-1"
+    assert len(delete_document_calls) == 1
+    assert session.rollbacks == 1
+    user_dir = tmp_path / "user-1"
+    assert user_dir.exists()
+    assert not any(user_dir.iterdir())
+    assert not dispatch.calls
+
+
+@pytest.mark.asyncio
+async def test_intake_upload_file_size_constraint_error_maps_to_validation_error(tmp_path):
+    session = _FakeSession(
+        fail_commit_on_call=1,
+        commit_error=IntegrityError(
+            "insert",
+            {"id": "doc"},
+            _ConstraintError(
+                "ck_pdf_documents_file_size",
+                "new row for relation \"pdf_documents\" violates check constraint "
+                "\"ck_pdf_documents_file_size\"",
+            ),
+        ),
+    )
+    dispatch = _DispatchRecorder()
+    delete_document_calls = []
+
+    async def _delete_document(user_sub, document_id):
+        delete_document_calls.append((user_sub, document_id))
+
+    service = UploadIntakeService(
+        upload_execution_service=dispatch,
+        session_factory=lambda: session,
+        storage_path_provider=lambda: tmp_path,
+        upload_handler_factory=lambda storage_path: _UploadHandler(storage_path=storage_path),
+        principal_from_claims_fn=lambda _claims: SimpleNamespace(subject="user-1"),
+        provision_user_fn=lambda *_args, **_kwargs: SimpleNamespace(id=42),
+        create_document_fn=lambda *_args, **_kwargs: _async_value(None),
+        get_document_fn=lambda *_args, **_kwargs: _async_value({"document": {}}),
+        delete_document_fn=_delete_document,
+        create_job_fn=lambda **_kwargs: SimpleNamespace(job_id="job-1"),
+        tenant_name_resolver=lambda _sub: "tenant-user-1",
+    )
+
+    with pytest.raises(UploadIntakeValidationError, match="100 MB"):
+        await service.intake_upload(
+            background_tasks=BackgroundTasks(),
+            file=UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7")),
+            user={"sub": "user-1"},
+        )
+
     assert len(delete_document_calls) == 1
     assert session.rollbacks == 1
     user_dir = tmp_path / "user-1"

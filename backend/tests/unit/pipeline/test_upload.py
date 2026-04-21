@@ -5,6 +5,7 @@ from pathlib import Path
 import hashlib
 from unittest.mock import Mock, AsyncMock, patch
 
+from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES
 from src.lib.pipeline.upload import (
     PDFUploadHandler,
     save_uploaded_pdf,
@@ -136,6 +137,20 @@ class TestPDFUploadHandler:
         assert validation["is_valid"] is False
         assert validation["checks"]["not_encrypted"] is False
         assert "encrypted" in str(validation["errors"])
+
+    def test_validate_pdf_oversized_file(self, tmp_path):
+        oversized_pdf = tmp_path / "oversized.pdf"
+        with oversized_pdf.open("wb") as file_handle:
+            file_handle.write(b"%PDF-1.5\n")
+            file_handle.seek(MAX_PDF_FILE_SIZE_BYTES)
+            file_handle.write(b"\n%%EOF")
+
+        handler = PDFUploadHandler()
+        validation = handler.validate_pdf(oversized_pdf)
+
+        assert validation["is_valid"] is False
+        assert validation["checks"]["file_size_ok"] is False
+        assert "100 MB" in str(validation["errors"])
 
     @pytest.mark.asyncio
     async def test_store_raw_pdf_success(self, upload_handler, mock_pdf_file):

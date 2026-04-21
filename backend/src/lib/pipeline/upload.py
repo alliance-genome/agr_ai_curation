@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional, Tuple
 import uuid
 
+from src.lib.pdf_limits import MAX_PDF_FILE_SIZE_BYTES, pdf_file_size_limit_message
 from src.models.document import PDFDocument, ProcessingStatus, EmbeddingStatus, DocumentMetadata
 from src.lib.storage_permissions import ensure_writable_directory
 
@@ -81,6 +82,9 @@ class PDFUploadHandler:
 
             # Get file size
             file_size = saved_path.stat().st_size
+            if file_size > MAX_PDF_FILE_SIZE_BYTES:
+                shutil.rmtree(doc_dir, ignore_errors=True)
+                raise UploadError(pdf_file_size_limit_message(file_size))
 
             # Generate checksum
             checksum = await generate_checksum(saved_path)
@@ -190,13 +194,14 @@ class PDFUploadHandler:
                 validation["errors"].append("File does not have valid PDF header")
 
             # Check 3: File size
-            if 0 < file_size <= 100 * 1024 * 1024:  # Max 100MB
+            if 0 < file_size <= MAX_PDF_FILE_SIZE_BYTES:
                 validation["checks"]["file_size_ok"] = True
             elif file_size == 0:
                 validation["is_valid"] = False
                 validation["errors"].append("File is empty")
             else:
-                validation["warnings"].append(f"File size ({file_size / 1024 / 1024:.2f}MB) exceeds 100MB limit")
+                validation["is_valid"] = False
+                validation["errors"].append(pdf_file_size_limit_message(file_size))
 
             # Check 4: Not empty
             if file_size > 0:
