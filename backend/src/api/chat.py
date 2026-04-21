@@ -1343,6 +1343,12 @@ def _backfill_chat_session_generated_title(
             generated_title=generated_title,
         )
         completion_db.commit()
+    except ChatHistorySessionNotFoundError:
+        completion_db.rollback()
+        logger.info(
+            "Skipping durable chat title backfill because session is no longer available",
+            extra={"session_id": session_id, "user_id": user_id},
+        )
     except (SQLAlchemyError, ValueError):
         completion_db.rollback()
         logger.warning(

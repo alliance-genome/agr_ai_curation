@@ -2186,6 +2186,41 @@ def test_backfill_chat_session_generated_title_does_not_overwrite_user_title(mon
     assert commits == []
 
 
+def test_backfill_chat_session_generated_title_skips_when_session_disappears_before_message_load(
+    monkeypatch,
+):
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-race")],
+    )
+
+    def _list_messages(
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        limit: int = 100,
+        cursor=None,
+    ):
+        raise chat.ChatHistorySessionNotFoundError("Chat session not found")
+
+    repository.list_messages = _list_messages
+    completion_db = SimpleNamespace(
+        commit=lambda: commits.append("commit"),
+        rollback=lambda: rollbacks.append("rollback"),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+
+    chat._backfill_chat_session_generated_title("session-race", "user-1")
+
+    session = repository.sessions[("user-1", "session-race")]
+    assert session.generated_title is None
+    assert commits == []
+    assert rollbacks == ["rollback"]
+
+
 def test_serialize_message_omits_internal_flow_summary_payload_keys():
     record = ChatMessageRecord(
         message_id=uuid4(),
