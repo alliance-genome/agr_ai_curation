@@ -89,7 +89,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const userData = await response.json();
         // Use auth_sub (provider subject claim) as the unique user identifier
         const newUserId = userData.auth_sub;
-        clearLegacyChatLocalStorage();
         const chatStorageKeys = getChatLocalStorageKeys(newUserId);
 
         setUser({
@@ -214,6 +213,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
    * Initialize auth state on mount
    */
   useEffect(() => {
+    // Clear pre-namespaced chat keys once during frontend bootstrap before auth-specific startup runs.
+    clearLegacyChatLocalStorage();
     checkAuthStatus();
   }, []);
 
