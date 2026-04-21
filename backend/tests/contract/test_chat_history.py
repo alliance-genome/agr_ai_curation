@@ -1,642 +1,246 @@
-"""Contract tests for GET /api/chat/history.
+"""Live contract tests for durable chat history endpoints."""
 
-Task: T021 [P] - Contract test GET /api/chat/history
+from __future__ import annotations
 
-This test validates the FUTURE contract (not current implementation):
-1. GET /api/chat/history requires authentication
-2. Returns sessions[] array with ChatSession objects
-3. Each ChatSession has: session_id, user_id, created_at, last_message_at, messages[]
-4. Each ChatMessage has: message_id, role (user|assistant), content, timestamp, trace_id
-5. Enforces user-specific filtering (FR-014)
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
-Contract response schema (lines 108-113):
-{
-  "sessions": [
-    {
-      "session_id": "session_abc123",
-      "user_id": 123,
-      "created_at": "2025-01-25T10:30:00Z",
-      "last_message_at": "2025-01-25T10:35:00Z",
-      "messages": [...]
+
+def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
+    return datetime(2026, 4, 19, hour, minute, second, tzinfo=timezone.utc)
+
+
+def _parse_iso8601(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def test_history_list_requires_authentication(contract_client):
+    response = contract_client.get("/api/chat/history")
+
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+def test_history_list_returns_live_summary_schema_and_filters_by_user(
+    contract_client,
+    chat_contract_auth_headers,
+    seed_chat_contract_session,
+):
+    query = f"contract-history-{uuid4().hex[:8]}"
+    visible_session_id = f"{query}-visible"
+    hidden_session_id = f"{query}-hidden"
+
+    seed_chat_contract_session(
+        session_id=visible_session_id,
+        title=f"{query} visible",
+        created_at=_ts(9, 0),
+        messages=[
+            {
+                "role": "user",
+                "content": "Visible history request",
+                "turn_id": "turn-visible-1",
+                "created_at": _ts(9, 1),
+            },
+            {
+                "role": "assistant",
+                "content": "Visible history response",
+                "turn_id": "turn-visible-1",
+                "trace_id": "trace-visible-1",
+                "created_at": _ts(9, 2),
+            },
+        ],
+    )
+    seed_chat_contract_session(
+        session_id=hidden_session_id,
+        user_auth_sub="contract-chat-other-user",
+        title=f"{query} hidden",
+        created_at=_ts(10, 0),
+        messages=[
+            {
+                "role": "user",
+                "content": "Hidden history request",
+                "turn_id": "turn-hidden-1",
+                "created_at": _ts(10, 1),
+            }
+        ],
+    )
+
+    response = contract_client.get(
+        "/api/chat/history",
+        headers=chat_contract_auth_headers,
+        params={"limit": 5, "query": query},
+    )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+
+    assert payload["total_sessions"] == 1
+    assert payload["limit"] == 5
+    assert payload["query"] == query
+    assert payload["document_id"] is None
+    assert payload["next_cursor"] is None
+    assert [session["session_id"] for session in payload["sessions"]] == [visible_session_id]
+
+    summary = payload["sessions"][0]
+    assert set(summary) >= {
+        "session_id",
+        "title",
+        "active_document_id",
+        "created_at",
+        "updated_at",
+        "last_message_at",
+        "recent_activity_at",
     }
-  ]
-}
-
-NOT the current {total_sessions, max_sessions, sessions:[ids]} format!
-
-NOTE: All tests MUST fail until T027 implements the contract.
-"""
-
-import pytest
-from unittest.mock import MagicMock, patch
-from datetime import datetime
-
-
-@pytest.fixture
-def client(monkeypatch):
-    """Create test client with mocked dependencies."""
-    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-
-    with patch("requests.get") as mock_get:
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"keys": []}
-        mock_response.status_code = 200
-        mock_get.return_value = mock_response
-
-        from fastapi.testclient import TestClient
-        import sys
-        import os
-        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        from main import app
-
-        app.dependency_overrides.clear()
-        yield TestClient(app)
-        app.dependency_overrides.clear()
-
-
-def get_valid_auth_header():
-    """Generate mock Authorization header with valid JWT token."""
-    return {"X-API-Key": "contract-test-key"}
-
-
-class TestChatHistoryEndpoint:
-    """Tests for GET /api/chat/history - CONTRACT COMPLIANCE."""
-
-    def test_history_requires_auth(self, client):
-        """Test GET /api/chat/history returns 401 without authentication.
-
-        Contract: chat_endpoints.yaml lines 114-115 (401 Unauthorized)
-        """
-        response = client.get("/api/chat/history")
-
-        # Must return 401 per contract
-        assert response.status_code == 401, \
-            "Contract requires 401 Unauthorized for missing auth"
-
-        data = response.json()
-        assert "detail" in data
-
-    def test_history_rejects_invalid_token(self, client):
-        """Test invalid token returns 401.
-
-        Contract: chat_endpoints.yaml lines 114-115
-        """
-        response = client.get(
-            "/api/chat/history",
-            headers={"Authorization": "Bearer invalid_token_xyz"}
-        )
-
-        assert response.status_code == 401
-        data = response.json()
-        assert "detail" in data
-
-    def test_history_returns_sessions_array(self, client):
-        """Test authenticated request returns sessions[] array per contract.
-
-        Contract: chat_endpoints.yaml lines 108-113 (response schema)
-
-        CRITICAL CONTRACT REQUIREMENT:
-        Response must have "sessions" key with array of ChatSession objects.
-
-        NOT the current {total_sessions, max_sessions, sessions:[string_ids]} format!
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-
-        @dataclass
-        class MockCognitoUser:
-            uid: str = "test_user_id"
-            cid: str = "client_id"
-            email: str = "test@example.com"
-            name: str = "Test User"
-            groups: list = None
-            token: str = "mock_token"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
-
-        response = client.get(
-            "/api/chat/history",
-            headers=get_valid_auth_header()
-        )
-
-        # Must return 200 OK
-        assert response.status_code == 200, \
-            "Contract requires 200 OK for authenticated request"
-
-        data = response.json()
-
-        # CONTRACT REQUIREMENT: Must have "sessions" key
-        assert "sessions" in data, \
-            "Contract requires 'sessions' key in response"
-
-        # sessions must be an array
-        assert isinstance(data["sessions"], list), \
-            "Contract requires 'sessions' to be an array"
-
-    def test_history_chat_session_schema(self, client):
-        """Test ChatSession objects match contract schema.
-
-        Contract: chat_endpoints.yaml lines 161-186 (ChatSession schema)
-
-        Required fields per contract:
-        - session_id (string)
-        - user_id (integer)
-        - created_at (datetime ISO 8601)
-        - last_message_at (datetime ISO 8601, optional)
-        - messages (array of ChatMessage)
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-
-        @dataclass
-        class MockCognitoUser:
-            uid: str = "test_user_id"
-            cid: str = "client_id"
-            email: str = "test@example.com"
-            name: str = "Test User"
-            groups: list = None
-            token: str = "mock_token"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
-
-        response = client.get(
-            "/api/chat/history",
-            headers=get_valid_auth_header()
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        # If there are sessions, validate schema
-        if len(data.get("sessions", [])) > 0:
-            session = data["sessions"][0]
-
-            # Required fields per contract
-            assert "session_id" in session, \
-                "Contract requires session_id field"
-            assert "user_id" in session, \
-                "Contract requires user_id field"
-            assert "created_at" in session, \
-                "Contract requires created_at field"
-
-            # Type validation
-            assert isinstance(session["session_id"], str), \
-                "session_id must be string"
-            assert isinstance(session["user_id"], int), \
-                "user_id must be integer"
-
-            # ISO 8601 datetime format validation
-            try:
-                datetime.fromisoformat(session["created_at"].replace('Z', '+00:00'))
-            except ValueError:
-                pytest.fail("created_at must be ISO 8601 datetime")
-
-            # messages array (optional but must be array if present)
-            if "messages" in session:
-                assert isinstance(session["messages"], list), \
-                    "messages must be an array"
-
-    def test_history_chat_message_schema(self, client):
-        """Test ChatMessage objects match contract schema.
-
-        Contract: chat_endpoints.yaml lines 187-213 (ChatMessage schema)
-
-        Required fields per contract:
-        - message_id (string)
-        - role (enum: user|assistant)
-        - content (string)
-        - timestamp (datetime ISO 8601)
-        - trace_id (string, nullable, for Langfuse)
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-
-        @dataclass
-        class MockCognitoUser:
-            uid: str = "test_user_id"
-            cid: str = "client_id"
-            email: str = "test@example.com"
-            name: str = "Test User"
-            groups: list = None
-            token: str = "mock_token"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
-
-        response = client.get(
-            "/api/chat/history",
-            headers=get_valid_auth_header()
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        # Find a session with messages
-        for session in data.get("sessions", []):
-            if "messages" in session and len(session["messages"]) > 0:
-                message = session["messages"][0]
-
-                # Required fields per contract
-                assert "message_id" in message, \
-                    "Contract requires message_id field"
-                assert "role" in message, \
-                    "Contract requires role field"
-                assert "content" in message, \
-                    "Contract requires content field"
-                assert "timestamp" in message, \
-                    "Contract requires timestamp field"
-
-                # Type validation
-                assert isinstance(message["message_id"], str), \
-                    "message_id must be string"
-                assert message["role"] in ["user", "assistant"], \
-                    "role must be 'user' or 'assistant'"
-                assert isinstance(message["content"], str), \
-                    "content must be string"
-
-                # ISO 8601 datetime validation
-                try:
-                    datetime.fromisoformat(message["timestamp"].replace('Z', '+00:00'))
-                except ValueError:
-                    pytest.fail("timestamp must be ISO 8601 datetime")
-
-                # trace_id is optional but must be string or null
-                if "trace_id" in message:
-                    assert message["trace_id"] is None or isinstance(message["trace_id"], str), \
-                        "trace_id must be string or null"
-
-                break  # Validated at least one message
-
-    def test_history_session_id_filter(self, client):
-        """Test session_id query parameter filtering.
-
-        Contract: chat_endpoints.yaml lines 87-92 (session_id parameter)
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-
-        @dataclass
-        class MockCognitoUser:
-            uid: str = "test_user_id"
-            cid: str = "client_id"
-            email: str = "test@example.com"
-            name: str = "Test User"
-            groups: list = None
-            token: str = "mock_token"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
-
-        response = client.get(
-            "/api/chat/history?session_id=session_abc",
-            headers=get_valid_auth_header()
-        )
-
-        # Should return 200 and filter results
-        assert response.status_code == 200
-
-        data = response.json()
-        assert "sessions" in data
-
-        # If results returned, all should match filter
-        for session in data.get("sessions", []):
-            assert session.get("session_id") == "session_abc", \
-                "Contract requires filtering by session_id"
-
-    def test_history_limit_parameter(self, client):
-        """Test limit query parameter.
-
-        Contract: chat_endpoints.yaml lines 93-101 (limit parameter)
-        - Default: 50
-        - Minimum: 1
-        - Maximum: 500
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-
-        @dataclass
-        class MockCognitoUser:
-            uid: str = "test_user_id"
-            cid: str = "client_id"
-            email: str = "test@example.com"
-            name: str = "Test User"
-            groups: list = None
-            token: str = "mock_token"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
-
-        # Test with valid limit
-        response = client.get(
-            "/api/chat/history?limit=10",
-            headers=get_valid_auth_header()
-        )
-
-        assert response.status_code == 200
-        data = response.json()
-
-        # Response should contain at most 10 sessions
-        assert len(data.get("sessions", [])) <= 10, \
-            "Contract requires limit parameter to restrict results"
-
-    def test_history_limit_validation(self, client):
-        """Test limit parameter validation.
-
-        Contract: chat_endpoints.yaml lines 99-101
-        - minimum: 1
-        - maximum: 500
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-
-        @dataclass
-        class MockCognitoUser:
-            uid: str = "test_user_id"
-            cid: str = "client_id"
-            email: str = "test@example.com"
-            name: str = "Test User"
-            groups: list = None
-            token: str = "mock_token"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        app.dependency_overrides[auth.get_user] = lambda: MockCognitoUser()
-
-        # Test limit below minimum (0)
-        response = client.get(
-            "/api/chat/history?limit=0",
-            headers=get_valid_auth_header()
-        )
-
-        assert response.status_code == 422, \
-            "Contract requires 422 for limit < 1"
-
-        # Test limit above maximum (501)
-        response = client.get(
-            "/api/chat/history?limit=501",
-            headers=get_valid_auth_header()
-        )
-
-        assert response.status_code == 422, \
-            "Contract requires 422 for limit > 500"
-
-
-class TestChatHistoryDataIsolation:
-    """Tests for user-specific history (FR-014)."""
-
-    def test_history_returns_only_user_sessions(self, client):
-        """Test users only see their own sessions.
-
-        Contract: chat_endpoints.yaml lines 81-83
-        Requirement: FR-014 (data isolation)
-
-        CRITICAL: This test enforces that returned sessions belong to authenticated user.
-        After T027 implementation, backend MUST:
-        1. Database query filters by user_id from authenticated user
-        2. No cross-user session access possible
-        3. All returned session.user_id values match current_user
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-        from unittest.mock import patch
-
-        @dataclass
-        class MockCognitoUser:
-            uid: str = "user_a_id"
-            cid: str = "client_id"
-            email: str = "userA@test.com"
-            name: str = "User A"
-            groups: list = None
-            token: str = "mock_token"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        mock_user = MockCognitoUser()
-        app.dependency_overrides[auth.get_user] = lambda: mock_user
-
-        # Mock the endpoint's response data structure (not the internal helper)
-        # After T027: This endpoint will query database and return contract-compliant format
-        with patch("src.api.chat.get_all_sessions_stats") as mock_get_stats:
-            # Mock returns contract-compliant response format
-            async def mock_stats_response():
-                return {
-                    "sessions": [
-                        {
-                            "session_id": "session_1",
-                            "user_id": 123,  # Corresponds to user_a_id in database
-                            "created_at": "2025-01-25T10:00:00Z",
-                            "last_message_at": "2025-01-25T10:05:00Z",
-                            "messages": []
-                        }
-                    ]
-                }
-
-            mock_get_stats.return_value = mock_stats_response()
-
-            response = client.get(
-                "/api/chat/history",
-                headers=get_valid_auth_header()
-            )
-
-            assert response.status_code == 200
-            data = response.json()
-
-            # CONTRACT ENFORCEMENT: All sessions must have user_id field
-            assert "sessions" in data
-            for session in data["sessions"]:
-                assert "user_id" in session, \
-                    "Contract requires user_id field in each session"
-
-                # FR-014 ENFORCEMENT: All returned sessions must belong to authenticated user
-                # After T027: This validates database query filtered by current_user
-                # For now, we verify the structure exists and will contain correct data
-                assert isinstance(session["user_id"], int), \
-                    "user_id must be integer per contract"
-
-    def test_history_prevents_cross_user_access(self, client):
-        """Test User A cannot see User B's sessions.
-
-        Requirement: FR-014 (strict data isolation)
-
-        CRITICAL: This test enforces that User A and User B see different sessions.
-        After T027 implementation, backend MUST:
-        1. Filter database queries by current_user
-        2. Return only sessions belonging to authenticated user
-        3. User A's sessions have user_id=A, User B's have user_id=B
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-        from unittest.mock import patch
-
-        # User A requests history
-        @dataclass
-        class UserA:
-            uid: str = "user_a_id"
-            cid: str = "client_id"
-            email: str = "userA@test.com"
-            name: str = "User A"
-            groups: list = None
-            token: str = "token_a"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        user_a = UserA()
-        app.dependency_overrides[auth.get_user] = lambda: user_a
-
-        with patch("src.api.chat.get_all_sessions_stats") as mock_get_stats_a:
-            # Mock returns sessions for User A only (user_id: 100)
-            async def mock_stats_a():
-                return {
-                    "sessions": [
-                        {
-                            "session_id": "session_a1",
-                            "user_id": 100,  # User A's database ID
-                            "created_at": "2025-01-25T10:00:00Z",
-                            "messages": []
-                        }
-                    ]
-                }
-
-            mock_get_stats_a.return_value = mock_stats_a()
-
-            response_a = client.get(
-                "/api/chat/history",
-                headers=get_valid_auth_header()
-            )
-
-            assert response_a.status_code == 200
-            data_a = response_a.json()
-
-            # Verify User A sees their own sessions
-            assert "sessions" in data_a
-            for session in data_a["sessions"]:
-                # FR-014: All sessions must belong to User A (user_id: 100)
-                assert session["user_id"] == 100, \
-                    "User A should only see sessions with user_id=100"
-
-        # User B requests history
-        @dataclass
-        class UserB:
-            uid: str = "user_b_id"
-            cid: str = "client_id"
-            email: str = "userB@test.com"
-            name: str = "User B"
-            groups: list = None
-            token: str = "token_b"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        user_b = UserB()
-        app.dependency_overrides[auth.get_user] = lambda: user_b
-
-        with patch("src.api.chat.get_all_sessions_stats") as mock_get_stats_b:
-            # Mock returns sessions for User B only (user_id: 200)
-            async def mock_stats_b():
-                return {
-                    "sessions": [
-                        {
-                            "session_id": "session_b1",
-                            "user_id": 200,  # User B's database ID
-                            "created_at": "2025-01-25T11:00:00Z",
-                            "messages": []
-                        }
-                    ]
-                }
-
-            mock_get_stats_b.return_value = mock_stats_b()
-
-            response_b = client.get(
-                "/api/chat/history",
-                headers=get_valid_auth_header()
-            )
-
-            assert response_b.status_code == 200
-            data_b = response_b.json()
-
-            # Verify User B sees their own sessions
-            assert "sessions" in data_b
-            for session in data_b["sessions"]:
-                # FR-014: All sessions must belong to User B (user_id: 200)
-                assert session["user_id"] == 200, \
-                    "User B should only see sessions with user_id=200"
-
-        # FR-014 CRITICAL: Verify no overlap in session IDs
-        session_ids_a = {s["session_id"] for s in data_a.get("sessions", [])}
-        session_ids_b = {s["session_id"] for s in data_b.get("sessions", [])}
-        assert session_ids_a.isdisjoint(session_ids_b), \
-            "FR-014 violation: User A and User B must not share session IDs"
-
-    def test_history_session_id_filter_respects_ownership(self, client):
-        """Test session_id filter only returns if user owns session.
-
-        Contract: FR-014 (prevent cross-user access)
-
-        If User A requests session_id belonging to User B,
-        should return empty results or 403 Forbidden.
-        """
-        from main import app
-        from src.api.auth import auth
-        from dataclasses import dataclass
-
-        @dataclass
-        class UserA:
-            uid: str = "user_a_id"
-            cid: str = "client_id"
-            email: str = "userA@test.com"
-            name: str = "User A"
-            groups: list = None
-            token: str = "token_a"
-
-            def __post_init__(self):
-                if self.groups is None:
-                    self.groups = []
-
-        app.dependency_overrides[auth.get_user] = lambda: UserA()
-
-        # Try to access User B's session
-        response = client.get(
-            "/api/chat/history?session_id=user_b_session",
-            headers=get_valid_auth_header()
-        )
-
-        # Should return 200 with empty results or 403 Forbidden
-        assert response.status_code in [200, 403]
-
-        if response.status_code == 200:
-            data = response.json()
-            # Should return empty sessions array (no access to other user's data)
-            assert data.get("sessions", []) == [], \
-                "Contract requires empty results for non-owned sessions"
+    assert summary["title"] == f"{query} visible"
+    assert summary["active_document_id"] is None
+    assert _parse_iso8601(summary["created_at"]) == _ts(9, 0)
+    assert _parse_iso8601(summary["updated_at"]) is not None
+    assert _parse_iso8601(summary["last_message_at"]) == _ts(9, 2)
+    assert _parse_iso8601(summary["recent_activity_at"]) == _ts(9, 2)
+
+
+def test_history_detail_requires_authentication(contract_client):
+    response = contract_client.get("/api/chat/history/fake-session-id")
+
+    assert response.status_code == 401
+    assert "detail" in response.json()
+
+
+def test_history_detail_returns_transcript_schema_and_message_cursor(
+    contract_client,
+    chat_contract_auth_headers,
+    seed_chat_contract_session,
+):
+    session_id = f"contract-history-detail-{uuid4().hex[:8]}"
+    seed_chat_contract_session(
+        session_id=session_id,
+        title="Detail session",
+        created_at=_ts(11, 0),
+        messages=[
+            {
+                "role": "user",
+                "content": "First durable question",
+                "turn_id": "turn-detail-1",
+                "created_at": _ts(11, 1),
+            },
+            {
+                "role": "assistant",
+                "content": "First durable answer",
+                "turn_id": "turn-detail-1",
+                "payload_json": {"source": "contract"},
+                "trace_id": "trace-detail-1",
+                "created_at": _ts(11, 2),
+            },
+        ],
+    )
+
+    first_page = contract_client.get(
+        f"/api/chat/history/{session_id}",
+        headers=chat_contract_auth_headers,
+        params={"message_limit": 1},
+    )
+
+    assert first_page.status_code == 200, first_page.text
+    first_payload = first_page.json()
+
+    assert set(first_payload) >= {
+        "session",
+        "active_document",
+        "messages",
+        "message_limit",
+        "next_message_cursor",
+    }
+    assert first_payload["message_limit"] == 1
+    assert first_payload["active_document"] is None
+    assert first_payload["next_message_cursor"] is not None
+
+    session = first_payload["session"]
+    assert set(session) >= {
+        "session_id",
+        "title",
+        "active_document_id",
+        "created_at",
+        "updated_at",
+        "last_message_at",
+        "recent_activity_at",
+    }
+    assert session["session_id"] == session_id
+    assert session["title"] == "Detail session"
+
+    first_message = first_payload["messages"][0]
+    assert set(first_message) >= {
+        "message_id",
+        "session_id",
+        "turn_id",
+        "role",
+        "message_type",
+        "content",
+        "payload_json",
+        "trace_id",
+        "created_at",
+    }
+    UUID(first_message["message_id"])
+    assert first_message["session_id"] == session_id
+    assert first_message["turn_id"] == "turn-detail-1"
+    assert first_message["role"] == "user"
+    assert first_message["message_type"] == "text"
+    assert first_message["content"] == "First durable question"
+    assert first_message["payload_json"] is None
+    assert first_message["trace_id"] is None
+    assert _parse_iso8601(first_message["created_at"]) == _ts(11, 1)
+
+    second_page = contract_client.get(
+        f"/api/chat/history/{session_id}",
+        headers=chat_contract_auth_headers,
+        params={
+            "message_limit": 1,
+            "message_cursor": first_payload["next_message_cursor"],
+        },
+    )
+
+    assert second_page.status_code == 200, second_page.text
+    second_payload = second_page.json()
+    assert second_payload["next_message_cursor"] is None
+
+    second_message = second_payload["messages"][0]
+    UUID(second_message["message_id"])
+    assert second_message["session_id"] == session_id
+    assert second_message["turn_id"] == "turn-detail-1"
+    assert second_message["role"] == "assistant"
+    assert second_message["message_type"] == "text"
+    assert second_message["content"] == "First durable answer"
+    assert second_message["payload_json"] == {"source": "contract"}
+    assert second_message["trace_id"] == "trace-detail-1"
+    assert _parse_iso8601(second_message["created_at"]) == _ts(11, 2)
+
+
+def test_history_detail_returns_404_for_other_users_session(
+    contract_client,
+    chat_contract_auth_headers,
+    seed_chat_contract_session,
+):
+    hidden_session_id = f"contract-history-hidden-{uuid4().hex[:8]}"
+    seed_chat_contract_session(
+        session_id=hidden_session_id,
+        user_auth_sub="contract-chat-other-user",
+        title="Other user's session",
+        created_at=_ts(12, 0),
+        messages=[
+            {
+                "role": "user",
+                "content": "Private prompt",
+                "turn_id": "turn-hidden",
+                "created_at": _ts(12, 1),
+            }
+        ],
+    )
+
+    response = contract_client.get(
+        f"/api/chat/history/{hidden_session_id}",
+        headers=chat_contract_auth_headers,
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Chat session not found"

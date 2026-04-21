@@ -26,14 +26,19 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
+from uuid import uuid4
 
+from src.lib.chat_history_repository import ChatHistoryRepository
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument
 from src.lib.weaviate_helpers import get_tenant_name
-from conftest import MockCognitoUser
 
 # Note: test_db and cleanup_db fixtures are now in conftest.py
 # Note: curator1_user and curator2_user are pre-registered as "chat1" and "chat2" in conftest.py
+
+
+def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
+    return datetime(2026, 4, 19, hour, minute, second, tzinfo=timezone.utc)
 
 
 @pytest.fixture
@@ -128,36 +133,6 @@ def client_as_curator1(get_auth_mock, test_db):
     app.dependency_overrides.clear()
 
 
-@pytest.fixture
-def client_as_curator2(get_auth_mock, test_db):
-    """Create test client authenticated as Curator 2 (chat2)."""
-    # Configure shared auth mock for chat2 user
-    get_auth_mock.set_user("chat2")
-
-    import sys
-
-    modules_to_clear = [
-        name for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
-    ]
-    for module_name in modules_to_clear:
-        del sys.modules[module_name]
-
-    from main import app
-    from src.api.auth import _get_user_from_cookie_impl
-    from src.models.sql.database import get_db
-
-    def override_get_db():
-        yield test_db
-
-    app.dependency_overrides[get_db] = override_get_db
-    app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
-
-    yield TestClient(app)
-
-    app.dependency_overrides.clear()
-
-
 class TestChatIsolation:
     """Integration tests for chat query tenant isolation."""
 
@@ -187,19 +162,20 @@ class TestChatIsolation:
                 yield {"type": "RUN_FINISHED", "data": {"response": "Test response"}}
 
             mock_execute.return_value = mock_chat_generator()
+            session_id = f"test-session-{uuid4().hex[:8]}"
 
             # Send chat message
             response = client_as_curator1.post(
                 "/api/chat",
                 json={
                     "message": "What documents do I have?",
-                    "session_id": "test_session"
+                    "session_id": session_id
                 }
             )
 
             # Verify request was made (may return different status codes)
             # The key is that SupervisorState receives the correct user_id
-            assert response.status_code in [200, 422, 500], \
+            assert response.status_code in [200, 422], \
                 f"Chat endpoint should be accessible, got {response.status_code}"
 
             # Verify mock was called with authenticated user_id
@@ -210,8 +186,8 @@ class TestChatIsolation:
                     "Chat flow should receive authenticated user's ID as user_id"
 
     def test_chat_queries_isolated_between_users(
-        self, test_db, curator1_user, curator2_user,
-        client_as_curator1, client_as_curator2,
+        self, test_db, get_auth_mock, curator1_user, curator2_user,
+        client_as_curator1,
         mock_weaviate_with_tenant_tracking
     ):
         """Test that two users' chat queries are isolated.
@@ -241,8 +217,7 @@ class TestChatIsolation:
         test_db.commit()
 
         # Create documents for each user
-        import uuid
-        doc1_id = str(uuid.uuid4())
+        doc1_id = str(uuid4())
         doc1 = PDFDocument(
             id=doc1_id,
             user_id=user1.id,
@@ -256,7 +231,7 @@ class TestChatIsolation:
         test_db.add(doc1)
         test_db.commit()
 
-        doc2_id = str(uuid.uuid4())
+        doc2_id = str(uuid4())
         doc2 = PDFDocument(
             id=doc2_id,
             user_id=user2.id,
@@ -275,19 +250,25 @@ class TestChatIsolation:
             async def mock_chat_generator():
                 yield {"type": "RUN_FINISHED", "data": {"response": "Test"}}
 
-            mock_execute.return_value = mock_chat_generator()
+            mock_execute.side_effect = lambda **_kwargs: mock_chat_generator()
+            first_session_id = f"tenant-session-{uuid4().hex[:8]}"
+            second_session_id = f"tenant-session-{uuid4().hex[:8]}"
 
             # User 1 sends chat message
-            response1 = client_as_curator1.post(
+            get_auth_mock.set_user("chat1")
+            first_response = client_as_curator1.post(
                 "/api/chat",
-                json={"message": "Show my documents", "session_id": "session1"}
+                json={"message": "Show my documents", "session_id": first_session_id}
             )
+            assert first_response.status_code in [200, 422]
 
             # User 2 sends chat message
-            response2 = client_as_curator2.post(
+            get_auth_mock.set_user("chat2")
+            second_response = client_as_curator1.post(
                 "/api/chat",
-                json={"message": "Show my documents", "session_id": "session2"}
+                json={"message": "Show my documents", "session_id": second_session_id}
             )
+            assert second_response.status_code in [200, 422]
 
             # Both requests should succeed (or fail gracefully, not cross-contaminate)
             # The key is that they should use different tenants
@@ -308,9 +289,7 @@ class TestChatIsolation:
                         "Different users must use different tenants"
 
     def test_document_selection_state_is_per_user(
-        self, test_db, curator1_user, curator2_user,
-        client_as_curator1, client_as_curator2,
-        mock_weaviate_with_tenant_tracking
+        self, test_db, curator1_user, curator2_user
     ):
         """Test that DocumentSelectionState is isolated per user.
 
@@ -368,8 +347,8 @@ class TestChatIsolation:
         document_state.clear_document(curator2_user["sub"])
 
     def test_chat_history_is_user_specific(
-        self, test_db, curator1_user, curator2_user,
-        client_as_curator1, client_as_curator2,
+        self, test_db, get_auth_mock, curator1_user, curator2_user,
+        client_as_curator1,
         mock_weaviate_with_tenant_tracking
     ):
         """Test that chat history is user-specific.
@@ -398,32 +377,161 @@ class TestChatIsolation:
         test_db.add(user2)
         test_db.commit()
 
-        # User 1 gets chat history
-        response1 = client_as_curator1.get("/api/chat/history")
+        repository = ChatHistoryRepository(test_db)
+        query = f"chat-isolation-{uuid4().hex[:8]}"
+        session1_id = f"{query}-user1"
+        session2_id = f"{query}-user2"
 
-        # User 2 gets chat history
-        response2 = client_as_curator2.get("/api/chat/history")
+        repository.create_session(
+            session_id=session1_id,
+            user_auth_sub=curator1_user["sub"],
+            title=f"{query} session user1",
+            created_at=_ts(9, 0),
+        )
+        repository.append_message(
+            session_id=session1_id,
+            user_auth_sub=curator1_user["sub"],
+            role="user",
+            content="What is my TP53 evidence?",
+            turn_id="turn-user1-1",
+            created_at=_ts(9, 1),
+        )
+        repository.append_message(
+            session_id=session1_id,
+            user_auth_sub=curator1_user["sub"],
+            role="assistant",
+            content="User 1 TP53 answer",
+            turn_id="turn-user1-1",
+            trace_id="trace-user1-1",
+            created_at=_ts(9, 2),
+        )
 
-        # Both should succeed
+        repository.create_session(
+            session_id=session2_id,
+            user_auth_sub=curator2_user["sub"],
+            title=f"{query} session user2",
+            created_at=_ts(10, 0),
+        )
+        repository.append_message(
+            session_id=session2_id,
+            user_auth_sub=curator2_user["sub"],
+            role="user",
+            content="What is my EGFR evidence?",
+            turn_id="turn-user2-1",
+            created_at=_ts(10, 1),
+        )
+        repository.append_message(
+            session_id=session2_id,
+            user_auth_sub=curator2_user["sub"],
+            role="assistant",
+            content="User 2 EGFR answer",
+            turn_id="turn-user2-1",
+            trace_id="trace-user2-1",
+            created_at=_ts(10, 2),
+        )
+        test_db.commit()
+
+        get_auth_mock.set_user("chat1")
+        response1 = client_as_curator1.get("/api/chat/history", params={"query": query})
+        get_auth_mock.set_user("chat2")
+        response2 = client_as_curator1.get("/api/chat/history", params={"query": query})
+
         assert response1.status_code == 200, \
             f"User 1 chat history should be accessible, got {response1.status_code}"
         assert response2.status_code == 200, \
             f"User 2 chat history should be accessible, got {response2.status_code}"
 
-        # Chat histories should be independent
-        # (Even if empty, they should not share the same data structure)
         history1 = response1.json()
         history2 = response2.json()
 
-        # /api/chat/history returns a stats object.
-        assert isinstance(history1, dict), "Chat history response should be an object"
-        assert isinstance(history2, dict), "Chat history response should be an object"
-        assert "sessions" in history1
-        assert "sessions" in history2
+        assert history1["total_sessions"] == 1
+        assert [session["session_id"] for session in history1["sessions"]] == [session1_id]
+        assert history2["total_sessions"] == 1
+        assert [session["session_id"] for session in history2["sessions"]] == [session2_id]
 
-        # If there's any session data, verify it's user-specific
-        # (This would require actual chat sessions to be created,
-        # which is beyond scope of this test)
+        get_auth_mock.set_user("chat1")
+        detail1 = client_as_curator1.get(f"/api/chat/history/{session1_id}")
+        assert detail1.status_code == 200, detail1.text
+        assert [(message["role"], message["content"]) for message in detail1.json()["messages"]] == [
+            ("user", "What is my TP53 evidence?"),
+            ("assistant", "User 1 TP53 answer"),
+        ]
+
+        get_auth_mock.set_user("chat1")
+        hidden_from_user1 = client_as_curator1.get(f"/api/chat/history/{session2_id}")
+        get_auth_mock.set_user("chat2")
+        hidden_from_user2 = client_as_curator1.get(f"/api/chat/history/{session1_id}")
+        assert hidden_from_user1.status_code == 404
+        assert hidden_from_user2.status_code == 404
+
+    def test_assistant_rescue_is_user_specific_and_idempotent(
+        self, test_db, get_auth_mock, curator1_user, curator2_user,
+        client_as_curator1,
+        mock_weaviate_with_tenant_tracking
+    ):
+        """Test that assistant rescue respects durable session ownership."""
+        repository = ChatHistoryRepository(test_db)
+        session_id = f"chat-rescue-{uuid4().hex[:8]}"
+        turn_id = f"turn-rescue-{uuid4().hex[:8]}"
+
+        repository.create_session(
+            session_id=session_id,
+            user_auth_sub=curator1_user["sub"],
+            title="Rescue owner session",
+            created_at=_ts(11, 0),
+        )
+        repository.append_message(
+            session_id=session_id,
+            user_auth_sub=curator1_user["sub"],
+            role="user",
+            content="Recover this answer",
+            turn_id=turn_id,
+            created_at=_ts(11, 1),
+        )
+        test_db.commit()
+
+        get_auth_mock.set_user("chat2")
+        hidden_response = client_as_curator1.post(
+            f"/api/chat/{session_id}/assistant-rescue",
+            json={
+                "turn_id": turn_id,
+                "content": "Recovered response",
+                "trace_id": "trace-rescue-1",
+            },
+        )
+        assert hidden_response.status_code == 404, hidden_response.text
+
+        get_auth_mock.set_user("chat1")
+        first_owner_response = client_as_curator1.post(
+            f"/api/chat/{session_id}/assistant-rescue",
+            json={
+                "turn_id": turn_id,
+                "content": "Recovered response",
+                "trace_id": "trace-rescue-1",
+            },
+        )
+        assert first_owner_response.status_code == 200, first_owner_response.text
+        assert first_owner_response.json()["created"] is True
+
+        get_auth_mock.set_user("chat1")
+        second_owner_response = client_as_curator1.post(
+            f"/api/chat/{session_id}/assistant-rescue",
+            json={
+                "turn_id": turn_id,
+                "content": "Recovered response",
+                "trace_id": "trace-rescue-1",
+            },
+        )
+        assert second_owner_response.status_code == 200, second_owner_response.text
+        assert second_owner_response.json()["created"] is False
+
+        get_auth_mock.set_user("chat1")
+        detail = client_as_curator1.get(f"/api/chat/history/{session_id}")
+        assert detail.status_code == 200, detail.text
+        assert [(message["role"], message["turn_id"], message["content"]) for message in detail.json()["messages"]] == [
+            ("user", turn_id, "Recover this answer"),
+            ("assistant", turn_id, "Recovered response"),
+        ]
 
     def test_supervisor_state_receives_user_id(
         self, test_db, curator1_user, client_as_curator1, mock_weaviate_with_tenant_tracking
@@ -453,12 +561,13 @@ class TestChatIsolation:
                 yield {"type": "RUN_FINISHED", "data": {"response": "Test response"}}
 
             mock_execute.return_value = mock_chat_generator()
+            session_id = f"state-test-session-{uuid4().hex[:8]}"
 
             response = client_as_curator1.post(
                 "/api/chat",
-                json={"message": "test query", "session_id": "state_test_session"},
+                json={"message": "test query", "session_id": session_id},
             )
-            assert response.status_code in [200, 422, 500]
+            assert response.status_code in [200, 422]
             assert mock_execute.called
             call_kwargs = mock_execute.call_args.kwargs if mock_execute.call_args else {}
             assert call_kwargs.get("user_id") == curator1_user["sub"]
@@ -488,7 +597,7 @@ class TestChatIsolation:
         collection = client.collections.get("DocumentChunk")
 
         # Call with_tenant
-        tenant_scoped = collection.with_tenant(tenant_name)
+        collection.with_tenant(tenant_name)
 
         # Verify tenant was tracked
         tenant_calls = mock_weaviate_with_tenant_tracking["tenant_calls"]["calls"]

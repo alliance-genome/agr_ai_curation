@@ -4,8 +4,13 @@ Contract tests validate API endpoint behavior against specifications.
 These tests require proper authentication enforcement (no DEV_MODE bypass).
 """
 
-import pytest
 import os
+
+import pytest
+
+
+CHAT_CONTRACT_AUTH_SUB = "api-key-test-user"
+CHAT_CONTRACT_OTHER_AUTH_SUB = "contract-chat-other-user"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -38,3 +43,109 @@ def disable_dev_mode():
         os.environ["TESTING_API_KEY"] = original_testing_api_key
     else:
         del os.environ["TESTING_API_KEY"]
+
+
+@pytest.fixture
+def contract_client(monkeypatch):
+    """Create a FastAPI test client for durable chat contract coverage."""
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    from fastapi.testclient import TestClient
+    import sys
+
+    sys.path.insert(
+        0,
+        os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        ),
+    )
+    from main import app
+
+    app.dependency_overrides.clear()
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def chat_contract_auth_headers():
+    """Return API-key auth headers for live contract tests."""
+    return {"X-API-Key": "contract-test-key"}
+
+
+@pytest.fixture
+def chat_contract_db():
+    """Provide a database session cleaned for durable chat contract tests."""
+    from sqlalchemy import delete, select
+
+    from src.lib.chat_state import document_state
+    from src.models.sql.chat_message import ChatMessage
+    from src.models.sql.chat_session import ChatSession
+    from src.models.sql.database import SessionLocal
+
+    def _cleanup(db):
+        session_ids = db.scalars(
+            select(ChatSession.session_id).where(
+                ChatSession.user_auth_sub.in_(
+                    (CHAT_CONTRACT_AUTH_SUB, CHAT_CONTRACT_OTHER_AUTH_SUB)
+                )
+            )
+        ).all()
+        if session_ids:
+            db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(session_ids)))
+            db.execute(delete(ChatSession).where(ChatSession.session_id.in_(session_ids)))
+            db.commit()
+        document_state.clear_document(CHAT_CONTRACT_AUTH_SUB)
+        document_state.clear_document(CHAT_CONTRACT_OTHER_AUTH_SUB)
+
+    db = SessionLocal()
+    try:
+        _cleanup(db)
+        yield db
+        _cleanup(db)
+    finally:
+        db.close()
+
+
+@pytest.fixture
+def seed_chat_contract_session(chat_contract_db):
+    """Seed one durable chat session and optional transcript rows."""
+    from src.lib.chat_history_repository import ChatHistoryRepository
+
+    def _seed(
+        *,
+        session_id: str,
+        user_auth_sub: str = CHAT_CONTRACT_AUTH_SUB,
+        title: str | None = None,
+        generated_title: str | None = None,
+        active_document_id=None,
+        created_at=None,
+        messages: list[dict] | None = None,
+    ) -> str:
+        repository = ChatHistoryRepository(chat_contract_db)
+        repository.create_session(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            title=title,
+            generated_title=generated_title,
+            active_document_id=active_document_id,
+            created_at=created_at,
+        )
+        for message in messages or []:
+            repository.append_message(
+                session_id=session_id,
+                user_auth_sub=user_auth_sub,
+                role=message["role"],
+                content=message["content"],
+                message_type=message.get("message_type", "text"),
+                turn_id=message.get("turn_id"),
+                payload_json=message.get("payload_json"),
+                trace_id=message.get("trace_id"),
+                created_at=message.get("created_at"),
+            )
+        chat_contract_db.commit()
+        return session_id
+
+    return _seed

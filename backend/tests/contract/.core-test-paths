@@ -4,3 +4,6 @@ tests/contract/test_auth_users_me.py
 tests/contract/test_auth_logout.py
 tests/contract/test_admin_llm_providers_health.py
 tests/contract/test_pdf_extraction_health_auth.py
+tests/contract/test_chat_session_create.py
+tests/contract/test_chat_history.py
+tests/contract/test_chat_assistant_rescue.py
