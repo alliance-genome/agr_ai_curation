@@ -518,6 +518,49 @@ _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS = frozenset(
         _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY,
     }
 )
+_EXECUTE_FLOW_RUNTIME_STATE_KEY = "_execute_flow_runtime_state"
+_EXECUTE_FLOW_RUNTIME_FLOW_RUN_ID_KEY = "flow_run_id"
+_EXECUTE_FLOW_RUNTIME_TRACE_ID_KEY = "trace_id"
+
+
+def _extract_execute_flow_runtime_identifiers(
+    payload_json: Dict[str, Any] | List[Any] | None,
+) -> tuple[str | None, str | None]:
+    """Read persisted execute-flow runtime identifiers from a durable user row."""
+
+    if not isinstance(payload_json, dict):
+        return None, None
+
+    runtime_state = payload_json.get(_EXECUTE_FLOW_RUNTIME_STATE_KEY)
+    if not isinstance(runtime_state, dict):
+        return None, None
+
+    flow_run_id = str(
+        runtime_state.get(_EXECUTE_FLOW_RUNTIME_FLOW_RUN_ID_KEY) or ""
+    ).strip() or None
+    trace_id = str(
+        runtime_state.get(_EXECUTE_FLOW_RUNTIME_TRACE_ID_KEY) or ""
+    ).strip() or None
+    return flow_run_id, trace_id
+
+
+def _build_execute_flow_runtime_payload(
+    payload_json: Dict[str, Any] | List[Any] | None,
+    *,
+    flow_run_id: str,
+    trace_id: Optional[str],
+) -> Dict[str, Any]:
+    """Merge execute-flow runtime identifiers into a durable user-turn payload."""
+
+    next_payload = dict(payload_json) if isinstance(payload_json, dict) else {}
+    runtime_state: Dict[str, Any] = {
+        _EXECUTE_FLOW_RUNTIME_FLOW_RUN_ID_KEY: flow_run_id,
+    }
+    normalized_trace_id = str(trace_id or "").strip() or None
+    if normalized_trace_id is not None:
+        runtime_state[_EXECUTE_FLOW_RUNTIME_TRACE_ID_KEY] = normalized_trace_id
+    next_payload[_EXECUTE_FLOW_RUNTIME_STATE_KEY] = runtime_state
+    return next_payload
 
 
 def _truncate_text(value: Any, max_chars: int) -> str:
@@ -1007,9 +1050,11 @@ class PreparedExecuteFlowTurn:
     """Durable execute-flow state prepared before the flow runner starts."""
 
     turn_id: str
+    flow_run_id: str
     effective_user_message: str
     replay_events: List[Dict[str, Any]]
     replay_assistant_message: str | None = None
+    resume_trace_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1219,8 +1264,8 @@ def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
             key: value
             for key, value in record.payload_json.items()
             if not (
-                record.role == "flow"
-                and key in _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS
+                (record.role == "flow" and key in _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS)
+                or key == _EXECUTE_FLOW_RUNTIME_STATE_KEY
             )
         }
     elif isinstance(record.payload_json, list):
@@ -1557,6 +1602,7 @@ def _prepare_execute_flow_turn(
     """Persist the durable execute-flow user turn and detect completed replays."""
 
     turn_id = requested_turn_id or uuid.uuid4().hex
+    flow_run_id = str(uuid.uuid4())
     effective_user_message = user_message
 
     repository.get_or_create_session(
@@ -1570,6 +1616,11 @@ def _prepare_execute_flow_turn(
         role="user",
         content=user_message,
         turn_id=turn_id,
+        payload_json=_build_execute_flow_runtime_payload(
+            None,
+            flow_run_id=flow_run_id,
+            trace_id=None,
+        ),
     )
 
     if user_turn.created:
@@ -1578,11 +1629,31 @@ def _prepare_execute_flow_turn(
         db.commit()
         return PreparedExecuteFlowTurn(
             turn_id=turn_id,
+            flow_run_id=flow_run_id,
             effective_user_message=effective_user_message,
             replay_events=[],
         )
 
     effective_user_message = user_turn.message.content
+    stored_flow_run_id, stored_trace_id = _extract_execute_flow_runtime_identifiers(
+        user_turn.message.payload_json,
+    )
+    if stored_flow_run_id is None:
+        stored_flow_run_id = flow_run_id
+        repository.update_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=turn_id,
+            role="user",
+            payload_json=_build_execute_flow_runtime_payload(
+                user_turn.message.payload_json,
+                flow_run_id=stored_flow_run_id,
+                trace_id=stored_trace_id,
+            ),
+            trace_id=stored_trace_id,
+        )
+        db.commit()
+
     replay = _build_execute_flow_turn_replay(
         repository.list_messages_for_turn(
             session_id=session_id,
@@ -1599,9 +1670,11 @@ def _prepare_execute_flow_turn(
         )
         return PreparedExecuteFlowTurn(
             turn_id=turn_id,
+            flow_run_id=stored_flow_run_id,
             effective_user_message=effective_user_message,
             replay_events=replay_events,
             replay_assistant_message=replay_assistant_message,
+            resume_trace_id=stored_trace_id,
         )
 
     logger.info(
@@ -1615,12 +1688,80 @@ def _prepare_execute_flow_turn(
             turn_id,
             extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
         )
+    if stored_trace_id:
+        logger.info(
+            "Reusing persisted trace context for retried execute-flow turn %s",
+            turn_id,
+            extra={
+                "session_id": session_id,
+                "user_id": user_id,
+                "turn_id": turn_id,
+                "trace_id": stored_trace_id,
+                "flow_run_id": stored_flow_run_id,
+            },
+        )
 
     return PreparedExecuteFlowTurn(
         turn_id=turn_id,
+        flow_run_id=stored_flow_run_id,
         effective_user_message=effective_user_message,
         replay_events=[],
+        resume_trace_id=stored_trace_id,
     )
+
+
+def _persist_execute_flow_runtime_state(
+    *,
+    session_id: str,
+    user_id: str,
+    turn_id: str,
+    flow_run_id: str,
+    trace_id: Optional[str],
+) -> None:
+    """Persist best-effort execute-flow runtime identifiers on the durable user row."""
+
+    completion_db = SessionLocal()
+    try:
+        repository = _get_chat_history_repository(completion_db)
+        user_turn = repository.get_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=turn_id,
+            role="user",
+        )
+        if user_turn is None:
+            raise LookupError("Chat user turn not found")
+
+        existing_flow_run_id, existing_trace_id = _extract_execute_flow_runtime_identifiers(
+            user_turn.payload_json,
+        )
+        effective_flow_run_id = existing_flow_run_id or flow_run_id
+        effective_trace_id = str(trace_id or existing_trace_id or "").strip() or None
+        if (
+            existing_flow_run_id == effective_flow_run_id
+            and existing_trace_id == effective_trace_id
+            and user_turn.trace_id == effective_trace_id
+        ):
+            return
+
+        repository.update_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=turn_id,
+            role="user",
+            payload_json=_build_execute_flow_runtime_payload(
+                user_turn.payload_json,
+                flow_run_id=effective_flow_run_id,
+                trace_id=effective_trace_id,
+            ),
+            trace_id=effective_trace_id,
+        )
+        completion_db.commit()
+    except Exception:
+        completion_db.rollback()
+        raise
+    finally:
+        completion_db.close()
 
 
 def _persist_completed_execute_flow_turn(
@@ -3012,6 +3153,12 @@ async def execute_flow_endpoint(
                 document_name=document_name,
                 user_query=request.user_query,
                 active_groups=active_groups,
+                flow_run_id=prepared_turn.flow_run_id,
+                trace_context=(
+                    {"trace_id": prepared_turn.resume_trace_id}
+                    if prepared_turn.resume_trace_id
+                    else None
+                ),
             ):
                 if cancel_event.is_set() or await check_cancel_signal(current_session_id):
                     logger.info(
@@ -3042,6 +3189,27 @@ async def execute_flow_endpoint(
 
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
+                    try:
+                        _persist_execute_flow_runtime_state(
+                            session_id=current_session_id,
+                            user_id=user_id,
+                            turn_id=current_turn_id,
+                            flow_run_id=prepared_turn.flow_run_id,
+                            trace_id=trace_id,
+                        )
+                    except Exception:
+                        logger.warning(
+                            "Failed to persist execute-flow trace checkpoint for session %s",
+                            current_session_id,
+                            extra={
+                                "session_id": current_session_id,
+                                "user_id": user_id,
+                                "turn_id": current_turn_id,
+                                "flow_run_id": prepared_turn.flow_run_id,
+                                "trace_id": trace_id,
+                            },
+                            exc_info=True,
+                        )
 
                 if event_type == "RUN_FINISHED":
                     run_finished_response = str(event_data.get("response") or "")

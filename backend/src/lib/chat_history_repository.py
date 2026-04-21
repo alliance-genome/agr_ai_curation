@@ -25,6 +25,7 @@ TURN_ID_UNIQUE_CONSTRAINTS = (
 )
 IDEMPOTENT_TURN_ROLES = {"user", "assistant"}
 VALID_CHAT_ROLES = {"user", "assistant", "flow"}
+_UNSET = object()
 
 
 @dataclass(frozen=True)
@@ -569,6 +570,57 @@ class ChatHistoryRepository:
             )
         ).all()
         return [_message_record(message) for message in messages]
+
+    def update_message_by_turn_id(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+        role: str,
+        payload_json: dict[str, Any] | list[Any] | None | object = _UNSET,
+        trace_id: str | None | object = _UNSET,
+    ) -> ChatMessageRecord:
+        """Update one visible transcript row addressed by turn id and role."""
+
+        normalized_role = _normalize_required_text(role, field_name="role")
+        if normalized_role not in VALID_CHAT_ROLES:
+            raise ValueError(f"role must be one of {sorted(VALID_CHAT_ROLES)}")
+
+        session = self._require_active_session(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+        )
+        normalized_turn_id = _normalize_required_text(turn_id, field_name="turn_id")
+        message = self._db.scalar(
+            select(ChatMessageModel)
+            .where(
+                ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.turn_id == normalized_turn_id,
+                ChatMessageModel.role == normalized_role,
+            )
+            .order_by(
+                ChatMessageModel.created_at.asc(),
+                ChatMessageModel.message_id.asc(),
+            )
+        )
+        if message is None:
+            raise LookupError("Chat message not found")
+
+        if payload_json is not _UNSET:
+            message.payload_json = payload_json
+        if trace_id is not _UNSET:
+            normalized_trace_id = None
+            if trace_id is not None:
+                normalized_trace_id = _normalize_optional_text(
+                    trace_id,
+                    field_name="trace_id",
+                )
+            message.trace_id = normalized_trace_id
+
+        self._db.flush()
+        self._db.refresh(message)
+        return _message_record(message)
 
     def _get_active_session(
         self,

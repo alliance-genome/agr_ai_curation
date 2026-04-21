@@ -1211,6 +1211,7 @@ async def run_agent_streamed(
     specialist_reasoning: Optional[str] = None,
     agent: Optional[Agent] = None,
     doc_context: Optional["DocumentContext"] = None,
+    trace_context: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[Dict[str, Any], None]:
     """
     Run an agent with streaming output.
@@ -1247,6 +1248,7 @@ async def run_agent_streamed(
                If None, creates the standard supervisor agent.
         doc_context: Optional pre-fetched DocumentContext. If provided, avoids
                      redundant Weaviate queries. Used by flow executor for optimization.
+        trace_context: Optional Langfuse trace identifiers to reuse for retries.
 
     Yields:
         SSE-compatible event dictionaries with types:
@@ -1384,6 +1386,7 @@ async def run_agent_streamed(
             )
 
             span_context_manager = langfuse.start_as_current_observation(
+                trace_context=trace_context,
                 name="chat-flow",
                 as_type="span",
                 input={"query": user_message, "document_id": document_id, "document_name": document_name},

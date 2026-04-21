@@ -1839,6 +1839,7 @@ class TestExecuteFlowTermination:
 
         assert events[0]["type"] == "FLOW_STARTED"
         assert captured["context_messages"] == [{"role": "user", "content": "run flow"}]
+        assert captured["trace_context"] is None
 
     @pytest.mark.asyncio
     async def test_converts_run_error_into_flow_error(self, monkeypatch):
@@ -2239,6 +2240,116 @@ class TestExecuteFlowTermination:
         assert "FLOW_FINISHED" in [event.get("type") for event in events]
         assert len(persisted_requests) == 1
         assert persisted_requests[0].flow_run_id == "batch-123"
+
+    @pytest.mark.asyncio
+    async def test_reuses_trace_context_when_retrying_flow_run(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+        captured = {}
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: MagicMock(name="Flow Supervisor"),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+
+        async def _fake_run_agent_streamed(**kwargs):
+            captured.update(kwargs)
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-existing"}}
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="s1",
+                flow_run_id="flow-run-existing",
+                trace_context={"trace_id": "trace-existing"},
+            )
+        ]
+
+        assert events[0]["type"] == "FLOW_STARTED"
+        assert captured["trace_context"] == {"trace_id": "trace-existing"}
+
+    @pytest.mark.asyncio
+    async def test_skips_duplicate_extraction_persistence_when_flow_run_already_has_results(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+        persisted_requests = []
+        payload = _structured_step_output("notch")
+        completed_step = _make_completed_step(
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+            step=1,
+            adapter_key="gene_expression",
+            payload=payload,
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.list_extraction_results",
+            lambda **_kwargs: [SimpleNamespace(id="existing-result")],
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda requests: persisted_requests.extend(requests),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_gene_expression_specialist"},
+            }
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="flow-session-1",
+                document_id="doc-1",
+                flow_run_id="flow-run-existing",
+            )
+        ]
+
+        assert "FLOW_FINISHED" in [event.get("type") for event in events]
+        assert persisted_requests == []
 
     @pytest.mark.asyncio
     async def test_marks_flow_failed_when_extraction_persistence_fails(self, monkeypatch):

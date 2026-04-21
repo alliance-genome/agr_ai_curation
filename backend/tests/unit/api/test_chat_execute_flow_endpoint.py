@@ -182,6 +182,35 @@ class _FakeChatHistoryRepository:
             if message.turn_id == turn_id
         ]
 
+    def update_message_by_turn_id(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+        role: str,
+        payload_json=None,
+        trace_id=None,
+    ):
+        key = (user_auth_sub, session_id)
+        for index, message in enumerate(self.messages.get(key, [])):
+            if message.turn_id != turn_id or message.role != role:
+                continue
+            updated = chat.ChatMessageRecord(
+                message_id=message.message_id,
+                session_id=message.session_id,
+                turn_id=message.turn_id,
+                role=message.role,
+                message_type=message.message_type,
+                content=message.content,
+                payload_json=payload_json if payload_json is not None else message.payload_json,
+                trace_id=trace_id if trace_id is not None else message.trace_id,
+                created_at=message.created_at,
+            )
+            self.messages[key][index] = updated
+            return updated
+        raise LookupError("Chat message not found")
+
     def list_messages(
         self,
         *,
@@ -707,13 +736,18 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
         role="user",
         content="Run flow 'Retry Flow'",
         turn_id="turn-flow-retry",
+        payload_json=chat._build_execute_flow_runtime_payload(
+            None,
+            flow_run_id="flow-run-retry",
+            trace_id=None,
+        ),
         created_at=datetime(2026, 2, 26, 0, 0, tzinfo=timezone.utc),
     )
 
     execute_calls = []
 
     async def _fake_execute_flow(**_kwargs):
-        execute_calls.append(_kwargs["session_id"])
+        execute_calls.append(_kwargs)
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-retry"}}
         yield {
             "type": "CHAT_OUTPUT_READY",
@@ -750,7 +784,10 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
     events = asyncio.run(_consume_stream(response))
     asyncio.run(response.background())
 
-    assert execute_calls == ["session-flow-retry"]
+    assert len(execute_calls) == 1
+    assert execute_calls[0]["session_id"] == "session-flow-retry"
+    assert execute_calls[0]["flow_run_id"] == "flow-run-retry"
+    assert execute_calls[0]["trace_context"] is None
     assert flow.execution_count == 1
     assert db.commit_calls == 0
     assert [event["type"] for event in events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
@@ -760,6 +797,97 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
         turn_id="turn-flow-retry",
     )
     assert [message.role for message in stored_turn_messages] == ["user", "flow"]
+
+
+def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-trace-reuse",
+        turn_id="turn-flow-trace-reuse",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Trace Reuse Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+
+    _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    repository, _completion_db = _patch_durable_history(monkeypatch)
+    execute_calls = []
+
+    async def _fake_execute_flow(**kwargs):
+        execute_calls.append(kwargs)
+        if len(execute_calls) == 1:
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-first"}}
+            raise RuntimeError("socket dropped")
+
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-first"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "timestamp": "2026-02-26T00:01:03+00:00",
+            "details": {"output": "Recovered flow output."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": "2026-02-26T00:01:04+00:00",
+            "data": {
+                "flow_id": str(flow_id),
+                "flow_name": "Trace Reuse Flow",
+                "flow_run_id": kwargs["flow_run_id"],
+                "document_id": None,
+                "origin_session_id": "session-flow-trace-reuse",
+                "status": "completed",
+                "failure_reason": None,
+                "total_evidence_records": 0,
+                "step_evidence_counts": {},
+                "adapter_keys": [],
+            },
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+
+    first_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    first_events = asyncio.run(_consume_stream(first_response))
+    asyncio.run(first_response.background())
+
+    second_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    second_events = asyncio.run(_consume_stream(second_response))
+    asyncio.run(second_response.background())
+
+    assert [event["type"] for event in first_events] == ["RUN_STARTED", "SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert [event["type"] for event in second_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
+    assert len(execute_calls) == 2
+    assert execute_calls[0]["flow_run_id"]
+    assert execute_calls[1]["flow_run_id"] == execute_calls[0]["flow_run_id"]
+    assert execute_calls[0]["trace_context"] is None
+    assert execute_calls[1]["trace_context"] == {"trace_id": "trace-flow-first"}
+    user_turn = repository.get_message_by_turn_id(
+        session_id="session-flow-trace-reuse",
+        user_auth_sub="auth-sub",
+        turn_id="turn-flow-trace-reuse",
+        role="user",
+    )
+    assert user_turn is not None
+    assert user_turn.trace_id == "trace-flow-first"
+    flow_run_id, trace_id = chat._extract_execute_flow_runtime_identifiers(user_turn.payload_json)
+    assert flow_run_id == execute_calls[0]["flow_run_id"]
+    assert trace_id == "trace-flow-first"
 
 
 def test_build_flow_memory_message_keeps_hidden_json_parseable_when_compacted():

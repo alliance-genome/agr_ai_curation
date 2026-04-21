@@ -220,6 +220,74 @@ async def test_run_agent_streamed_with_langfuse_trace_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_run_agent_streamed_passes_trace_context_to_langfuse(monkeypatch):
+    captured = {}
+    _patch_common_runtime(monkeypatch, captured)
+    monkeypatch.setattr(runner, "flush_agent_configs", lambda _span: 0)
+
+    class _RootSpan:
+        trace_id = "trace-existing"
+        id = "span-existing"
+
+        def update(self, **kwargs):
+            captured["update"] = kwargs
+
+    root_span = _RootSpan()
+
+    class _SpanContext:
+        def __enter__(self):
+            return root_span
+
+        def __exit__(self, exc_type, exc, tb):
+            captured["span_exit"] = (exc_type, exc, tb)
+
+    class _TraceAttributeContext:
+        def __init__(self, kwargs):
+            self.kwargs = kwargs
+
+        def __enter__(self):
+            captured["propagate_attributes"] = self.kwargs
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            captured["trace_attr_exit"] = (exc_type, exc, tb)
+
+    class _Langfuse:
+        def start_as_current_observation(self, **kwargs):
+            captured["span_start"] = kwargs
+            return _SpanContext()
+
+    monkeypatch.setattr(runner, "get_langfuse", lambda: _Langfuse())
+    monkeypatch.setattr(runner, "propagate_attributes", lambda **kwargs: _TraceAttributeContext(kwargs))
+
+    async def _fake_run_agent_with_tracing(**_kwargs):
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {
+                "response": "grounded answer",
+                "response_length": 12,
+                "tool_calls": 1,
+                "agents_used": ["Supervisor"],
+            },
+        }
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _fake_run_agent_with_tracing)
+
+    events = await _collect_events(
+        runner.run_agent_streamed(
+            context_messages=[{"role": "user", "content": "retry me"}],
+            user_id="user-3",
+            session_id="session-3",
+            trace_context={"trace_id": "trace-existing"},
+        )
+    )
+
+    assert events[0]["type"] == "RUN_STARTED"
+    assert events[0]["data"]["trace_id"] == "trace-existing"
+    assert captured["span_start"]["trace_context"] == {"trace_id": "trace-existing"}
+
+
+@pytest.mark.asyncio
 async def test_run_agent_streamed_falls_back_when_span_creation_fails(monkeypatch):
     captured = {}
     _patch_common_runtime(monkeypatch, captured)
