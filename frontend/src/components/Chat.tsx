@@ -1403,7 +1403,7 @@ function Chat({
           timestamp: messageTimestamp,
           traceId: parsed.trace_id,
           terminalState,
-            terminalMessage: terminalMessage,
+          terminalMessage: terminalMessage,
           rescueState: null,
         }))
         delete assistantBuffersRef.current[turnId]
