@@ -20,6 +20,7 @@ class ChatSession(Base):
     session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     user_auth_sub: Mapped[str] = mapped_column(String(255), nullable=False)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    generated_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     active_document_id: Mapped[UUID | None] = mapped_column(
         PostgresUUID(as_uuid=True),
         ForeignKey("pdf_documents.id", ondelete="SET NULL"),
@@ -56,6 +57,10 @@ class ChatSession(Base):
         CheckConstraint(
             "title IS NULL OR btrim(title) <> ''",
             name="ck_chat_sessions_title_not_empty",
+        ),
+        CheckConstraint(
+            "generated_title IS NULL OR btrim(generated_title) <> ''",
+            name="ck_chat_sessions_generated_title_not_empty",
         ),
         Index(
             "ix_chat_sessions_user_auth_sub",

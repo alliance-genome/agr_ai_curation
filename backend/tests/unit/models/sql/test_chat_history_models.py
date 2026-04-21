@@ -24,6 +24,7 @@ def test_chat_session_uses_auth_sub_ownership_and_expected_indexes():
     assert "user_id" not in ChatSession.__table__.c
     assert "search_vector" in ChatSession.__table__.c
     assert "deleted_at" in ChatSession.__table__.c
+    assert "generated_title" in ChatSession.__table__.c
     assert session.title is None
 
     assert _index_names(ChatSession) == {
@@ -36,6 +37,7 @@ def test_chat_session_uses_auth_sub_ownership_and_expected_indexes():
         "ck_chat_sessions_session_id_not_empty",
         "ck_chat_sessions_user_auth_sub_not_empty",
         "ck_chat_sessions_title_not_empty",
+        "ck_chat_sessions_generated_title_not_empty",
     }
 
     foreign_keys = list(ChatSession.__table__.c["active_document_id"].foreign_keys)

@@ -78,6 +78,11 @@ def _stub_stream_turn_persistence(monkeypatch):
         "_ensure_conversation_history_contains_exchange",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        chat,
+        "_backfill_chat_session_generated_title",
+        lambda *_args, **_kwargs: None,
+    )
 
     def _prepare(
         *,

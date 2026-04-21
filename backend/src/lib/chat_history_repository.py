@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -51,11 +51,16 @@ class ChatSessionRecord:
     session_id: str
     user_auth_sub: str
     title: str | None
+    generated_title: str | None
     active_document_id: UUID | None
     created_at: datetime
     updated_at: datetime
     last_message_at: datetime | None
     deleted_at: datetime | None
+
+    @property
+    def effective_title(self) -> str | None:
+        return self.title or self.generated_title
 
     @property
     def recent_activity_at(self) -> datetime:
@@ -143,6 +148,7 @@ def _session_record(session: ChatSessionModel) -> ChatSessionRecord:
         session_id=session.session_id,
         user_auth_sub=session.user_auth_sub,
         title=session.title,
+        generated_title=session.generated_title,
         active_document_id=session.active_document_id,
         created_at=session.created_at,
         updated_at=session.updated_at,
@@ -182,6 +188,7 @@ class ChatHistoryRepository:
         session_id: str,
         user_auth_sub: str,
         title: str | None = None,
+        generated_title: str | None = None,
         active_document_id: UUID | None = None,
         created_at: datetime | None = None,
     ) -> ChatSessionRecord:
@@ -194,6 +201,10 @@ class ChatHistoryRepository:
                 field_name="user_auth_sub",
             ),
             title=_normalize_optional_text(title, field_name="title"),
+            generated_title=_normalize_optional_text(
+                generated_title,
+                field_name="generated_title",
+            ),
             active_document_id=active_document_id,
         )
         if created_at is not None:
@@ -232,6 +243,7 @@ class ChatHistoryRepository:
         session_id: str,
         user_auth_sub: str,
         title: str | None = None,
+        generated_title: str | None = None,
         active_document_id: UUID | None = None,
         created_at: datetime | None = None,
     ) -> ChatSessionRecord:
@@ -248,6 +260,7 @@ class ChatHistoryRepository:
             session_id=session_id,
             user_auth_sub=user_auth_sub,
             title=title,
+            generated_title=generated_title,
             active_document_id=active_document_id,
             created_at=created_at,
         )
@@ -386,6 +399,55 @@ class ChatHistoryRepository:
 
         session.title = _normalize_required_text(title, field_name="title")
         self._db.flush()
+        self._db.refresh(session)
+        return _session_record(session)
+
+    def set_generated_title(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        generated_title: str,
+    ) -> ChatSessionRecord | None:
+        """Persist one generated title when the session is still untitled by the user."""
+
+        session = self._get_active_session(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+        )
+        if session is None:
+            return None
+
+        if session.title is not None:
+            return _session_record(session)
+
+        normalized_generated_title = _normalize_required_text(
+            generated_title,
+            field_name="generated_title",
+        )
+        if session.generated_title is not None:
+            return _session_record(session)
+
+        rows_updated = (
+            self._db.execute(
+                update(ChatSessionModel)
+                .where(
+                    and_(
+                        ChatSessionModel.session_id == session.session_id,
+                        ChatSessionModel.user_auth_sub == session.user_auth_sub,
+                        ChatSessionModel.deleted_at.is_(None),
+                        ChatSessionModel.title.is_(None),
+                        ChatSessionModel.generated_title.is_(None),
+                    )
+                )
+                .values(generated_title=normalized_generated_title)
+            )
+            .rowcount
+        )
+        if rows_updated != 1:
+            self._db.refresh(session)
+            return _session_record(session)
+
         self._db.refresh(session)
         return _session_record(session)
 

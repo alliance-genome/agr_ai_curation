@@ -78,6 +78,7 @@ class _FakeChatHistoryRepository:
         session_id: str,
         user_auth_sub: str,
         title: str | None = None,
+        generated_title: str | None = None,
         active_document_id=None,
         created_at: datetime | None = None,
     ) -> chat.ChatSessionRecord:
@@ -90,6 +91,7 @@ class _FakeChatHistoryRepository:
             session_id=session_id,
             user_auth_sub=user_auth_sub,
             title=title,
+            generated_title=generated_title,
             active_document_id=active_document_id,
             created_at=created,
             updated_at=created,
@@ -148,6 +150,7 @@ class _FakeChatHistoryRepository:
             session_id=session.session_id,
             user_auth_sub=session.user_auth_sub,
             title=session.title,
+            generated_title=session.generated_title,
             active_document_id=session.active_document_id,
             created_at=session.created_at,
             updated_at=message_created_at,
@@ -155,6 +158,33 @@ class _FakeChatHistoryRepository:
             deleted_at=session.deleted_at,
         )
         return SimpleNamespace(message=record, created=True)
+
+    def set_generated_title(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        generated_title: str,
+    ):
+        key = (user_auth_sub, session_id)
+        session = self.sessions.get(key)
+        if session is None:
+            return None
+        if session.title is not None or session.generated_title is not None:
+            return session
+        updated = chat.ChatSessionRecord(
+            session_id=session.session_id,
+            user_auth_sub=session.user_auth_sub,
+            title=session.title,
+            generated_title=generated_title,
+            active_document_id=session.active_document_id,
+            created_at=session.created_at,
+            updated_at=session.updated_at,
+            last_message_at=session.last_message_at,
+            deleted_at=session.deleted_at,
+        )
+        self.sessions[key] = updated
+        return updated
 
     def get_message_by_turn_id(
         self,
