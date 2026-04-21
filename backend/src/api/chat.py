@@ -3311,50 +3311,37 @@ async def execute_flow_endpoint(
                     file_outputs=file_outputs,
                     failure_reason=flow_failure_reason,
                 )
-                try:
-                    summary_row = _build_execute_flow_summary_row(
-                        flow_id=str(flow.id),
-                        flow_name=flow.name,
-                        flow_run_id=str(
-                            (buffered_flow_finished_event or {}).get("flow_run_id") or ""
-                        ).strip() or None,
-                        session_id=current_session_id,
-                        document_id=str(request.document_id) if request.document_id else None,
-                        status=flow_status,
-                        trace_id=trace_id,
-                        final_user_output=chat_output_response or run_finished_response,
-                        failure_reason=flow_failure_reason,
-                        assistant_message=history_assistant_message,
-                        run_started_event=run_started_event,
-                        terminal_events=[
-                            event_payload
-                            for event_payload in [
-                                chat_output_ready_event,
-                                run_error_event,
-                                buffered_flow_finished_event,
-                            ]
-                            if event_payload is not None
-                        ],
-                    )
-                    _persist_completed_execute_flow_turn(
-                        session_id=current_session_id,
-                        user_id=user_id,
-                        turn_id=current_turn_id,
-                        user_message=prepared_turn.effective_user_message,
-                        transcript_rows=[*transcript_rows, summary_row],
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to persist durable execute-flow transcript for session %s",
-                        current_session_id,
-                        extra={
-                            "session_id": current_session_id,
-                            "user_id": user_id,
-                            "turn_id": current_turn_id,
-                            "trace_id": trace_id,
-                        },
-                        exc_info=True,
-                    )
+                summary_row = _build_execute_flow_summary_row(
+                    flow_id=str(flow.id),
+                    flow_name=flow.name,
+                    flow_run_id=str(
+                        (buffered_flow_finished_event or {}).get("flow_run_id") or ""
+                    ).strip() or None,
+                    session_id=current_session_id,
+                    document_id=str(request.document_id) if request.document_id else None,
+                    status=flow_status,
+                    trace_id=trace_id,
+                    final_user_output=chat_output_response or run_finished_response,
+                    failure_reason=flow_failure_reason,
+                    assistant_message=history_assistant_message,
+                    run_started_event=run_started_event,
+                    terminal_events=[
+                        event_payload
+                        for event_payload in [
+                            chat_output_ready_event,
+                            run_error_event,
+                            buffered_flow_finished_event,
+                        ]
+                        if event_payload is not None
+                    ],
+                )
+                _persist_completed_execute_flow_turn(
+                    session_id=current_session_id,
+                    user_id=user_id,
+                    turn_id=current_turn_id,
+                    user_message=prepared_turn.effective_user_message,
+                    transcript_rows=[*transcript_rows, summary_row],
+                )
 
             if buffered_flow_finished_event is not None:
                 yield _stream_event_sse(buffered_flow_finished_event)

@@ -1028,6 +1028,76 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
     assert calls["clear"] == ["session-trace-checkpoint-failure"]
 
 
+def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-completion-persistence-failure",
+        turn_id="turn-completion-persistence-failure",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Completion Persistence Failure Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-completion-failure"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"output": "This output should be discarded when persistence fails."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "success",
+                "flow_run_id": "flow-run-completion-failure",
+            },
+        }
+
+    def _raise_completion_failure(**_kwargs):
+        raise RuntimeError("completion transcript write failed")
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    monkeypatch.setattr(chat, "_persist_completed_execute_flow_turn", _raise_completion_failure)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "CHAT_OUTPUT_READY",
+        "SUPERVISOR_ERROR",
+        "RUN_ERROR",
+    ]
+    assert all(event["type"] != "FLOW_FINISHED" for event in events)
+    assert events[2]["details"]["context"] == "RuntimeError"
+    assert events[2]["details"]["error"] == "completion transcript write failed"
+    assert events[3]["message"] == "Flow execution error: completion transcript write failed"
+    turn_messages = calls["repository"].list_messages_for_turn(
+        session_id="session-completion-persistence-failure",
+        user_auth_sub="auth-sub",
+        turn_id="turn-completion-persistence-failure",
+    )
+    assert [message.role for message in turn_messages] == ["user"]
+    assert calls["unregister"] == [
+        ("session-completion-persistence-failure", "auth-sub", ANY)
+    ]
+    assert calls["clear"] == ["session-completion-persistence-failure"]
+
+
 def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-owned-elsewhere")
