@@ -251,6 +251,35 @@ describe('Chat persistence', () => {
     expect(localStorage.getItem(chatStorageKeys.messages)).not.toBeNull()
   })
 
+  it('replaces restored messages that have no displayable content and logs the missing data', () => {
+    const missingContentSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    localStorage.setItem(chatStorageKeys.sessionId, 'session-1')
+    localStorage.setItem(
+      chatStorageKeys.messages,
+      JSON.stringify({
+        session_id: 'session-1',
+        messages: [
+          {
+            role: 'assistant',
+            timestamp: new Date().toISOString(),
+            turnId: 'turn-empty-1',
+          },
+        ],
+      }),
+    )
+
+    renderChat({ sessionId: 'session-1' })
+
+    expect(screen.getByText('[Message content unavailable]')).toBeInTheDocument()
+    expect(missingContentSpy).toHaveBeenCalledWith(
+      '[Chat] Restored message was missing display content:',
+      expect.objectContaining({
+        turnId: 'turn-empty-1',
+      }),
+    )
+    missingContentSpy.mockRestore()
+  })
+
   it('clears the previous user chat state before a user switch can persist it into the next namespace', async () => {
     vi.useFakeTimers()
     localStorage.setItem(
@@ -1098,6 +1127,35 @@ describe('Chat turn reconciliation', () => {
     expect(await screen.findByText('Partial assistant reply')).toBeInTheDocument()
     expect(
       await screen.findByText('Chat completed, but durable side effects could not be saved.'),
+    ).toBeInTheDocument()
+  })
+
+  it('maps RUN_ERROR to assistant failure state for the matching turn', async () => {
+    renderChat({
+      sessionId: 'session-1',
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-run-error-1',
+          trace_id: 'trace-run-error-1',
+          content: 'Starting risky flow',
+        },
+        {
+          type: 'RUN_ERROR',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-run-error-1',
+          trace_id: 'trace-run-error-1',
+          message: 'The flow runner reported a timeout.',
+        },
+      ],
+    })
+
+    expect(await screen.findByText('Starting risky flow')).toBeInTheDocument()
+    expect(
+      await screen.findByText('The flow runner reported a timeout.'),
     ).toBeInTheDocument()
   })
 

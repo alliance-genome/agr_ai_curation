@@ -315,11 +315,7 @@ function normalizeOptionalText(value: unknown): string | null {
 }
 
 function buildTurnId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID()
-  }
-
-  return `turn-${Date.now()}`
+  return crypto.randomUUID()
 }
 
 function buildUserTurnMessageId(turnId: string): string {
@@ -483,7 +479,7 @@ function getAssistantStatusNotice(message: Message): {
   }
 }
 
-function getTerminalTurnFallbackMessage(state: Exclude<TerminalTurnState, 'turn_completed'>): string {
+function getTerminalTurnDefaultMessage(state: Exclude<TerminalTurnState, 'turn_completed'>): string {
   switch (state) {
     case 'turn_interrupted':
       return 'The response was interrupted before it could be saved.'
@@ -583,12 +579,22 @@ function sanitizeStoredMessage(message: SerializedMessage): Message {
   const hasAdapterScopedReviewTarget =
     Array.isArray(message.reviewAndCurateTarget?.adapterKeys)
     && message.reviewAndCurateTarget.adapterKeys.length > 0
+  const messageContent = normalizeOptionalText(message.content)
+  const terminalMessage = normalizeOptionalText(message.terminalMessage)
+  if (!messageContent && !terminalMessage) {
+    console.error('[Chat] Restored message was missing display content:', message)
+    return {
+      ...message,
+      content: '[Message content unavailable]',
+      terminalMessage: null,
+    }
+  }
 
   return {
     ...message,
     content: hasEvidenceRecords
-      ? stripDuplicateEvidenceSections(message.content || message.terminalMessage || '')
-      : (message.content || message.terminalMessage || ''),
+      ? stripDuplicateEvidenceSections(messageContent || terminalMessage || '')
+      : (messageContent || terminalMessage || ''),
     reviewAndCurateTarget:
       hasEvidenceRecords
       && !hasExplicitEvidenceCurationMetadata
@@ -1257,6 +1263,54 @@ function Chat({
         return
       }
 
+      if (parsed.type === 'RUN_ERROR') {
+        const runErrorMessage =
+          normalizeOptionalText(parsed.message)
+          ?? normalizeOptionalText(parsed.error)
+          ?? normalizeOptionalText(parsed.details?.message)
+          ?? 'The chat run encountered an unexpected error.'
+        clearProgressState()
+
+        if (!turnId) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              role: 'assistant',
+              content: runErrorMessage,
+              timestamp: messageTimestamp,
+              id: `msg-${Date.now()}`,
+              traceIds: mergeTraceIds([...sessionTraceIds.current], parsed.trace_id),
+              terminalState: 'turn_failed',
+              terminalMessage: runErrorMessage,
+              rescueState: null,
+            },
+          ])
+          return
+        }
+
+        setMessages((prev) => {
+          const existingIndex = findAssistantMessageIndex(prev, turnId)
+          const bufferedContent = normalizeOptionalText(assistantBuffersRef.current[turnId])
+            ?? normalizeOptionalText(prev[existingIndex]?.content)
+          const content = getAssistantTurnContent(turnId) || bufferedContent || runErrorMessage
+
+          return upsertAssistantTurnMessage(prev, {
+            turnId,
+            content,
+            timestamp: messageTimestamp,
+            traceId: parsed.trace_id,
+            terminalState: 'turn_failed',
+            terminalMessage: runErrorMessage,
+            rescueState: null,
+          })
+        })
+        delete assistantBuffersRef.current[turnId]
+        if (activeTurnIdRef.current === turnId) {
+          activeTurnIdRef.current = null
+        }
+        return
+      }
+
       if (
         parsed.type === 'turn_completed'
         || parsed.type === 'turn_interrupted'
@@ -1295,7 +1349,7 @@ function Chat({
         const terminalState = parsed.type
         const fallbackMessage =
           normalizeOptionalText(parsed.message)
-          ?? getTerminalTurnFallbackMessage(terminalState)
+          ?? getTerminalTurnDefaultMessage(terminalState)
 
         if (!turnId) {
           setMessages((prev) => [
