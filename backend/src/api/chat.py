@@ -20,11 +20,12 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
+from sqlalchemy.exc import SQLAlchemyError
 
 from .auth import get_auth_dependency
 from ..lib.chat_history_repository import (
@@ -36,6 +37,11 @@ from ..lib.chat_history_repository import (
     ChatSessionRecord,
 )
 from ..lib.chat_state import document_state
+from ..lib.chat_title_generator import (
+    ChatTitleSource,
+    generate_chat_title,
+    normalize_generated_chat_title,
+)
 from ..lib.curation_workspace import (
     ExtractionEnvelopeCandidate,
     build_extraction_envelope_candidate,
@@ -1094,6 +1100,7 @@ class ChatStreamAssistantSaveFailedError(RuntimeError):
 _LOCAL_CANCEL_EVENTS: Dict[str, asyncio.Event] = {}
 _LOCAL_SESSION_OWNERS: Dict[str, str] = {}
 _LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
+_TITLE_BACKFILL_MESSAGE_LIMIT = 20
 
 
 def _build_active_document(document_payload: Dict[str, Any]) -> ActiveDocument:
@@ -1258,12 +1265,139 @@ def _encode_message_cursor(cursor: ChatMessageCursor | None) -> str | None:
     )
 
 
-def _serialize_session(record: ChatSessionRecord) -> ChatSessionSummaryResponse:
+def _build_title_sources_from_messages(
+    messages: List[ChatMessageRecord],
+) -> List[ChatTitleSource]:
+    """Convert transcript rows into ordered title-candidate snippets."""
+
+    title_sources: List[ChatTitleSource] = []
+    for message in messages:
+        normalized_content = (message.content or "").strip()
+        if message.role == "flow":
+            assistant_message = _extract_flow_assistant_message(message)
+            if assistant_message:
+                title_sources.append(ChatTitleSource(role="assistant", content=assistant_message))
+            if normalized_content:
+                title_sources.append(ChatTitleSource(role="flow", content=normalized_content))
+            continue
+
+        if normalized_content:
+            title_sources.append(ChatTitleSource(role=message.role, content=normalized_content))
+    return title_sources
+
+
+def _generate_title_from_turn(
+    *,
+    user_message: Optional[str],
+    assistant_message: Optional[str] = None,
+) -> str | None:
+    """Build one title candidate from the just-completed exchange."""
+
+    title_sources: List[ChatTitleSource] = []
+    if isinstance(user_message, str) and user_message.strip():
+        title_sources.append(ChatTitleSource(role="user", content=user_message))
+    if isinstance(assistant_message, str) and assistant_message.strip():
+        title_sources.append(ChatTitleSource(role="assistant", content=assistant_message))
+    return generate_chat_title(title_sources)
+
+
+def _generate_title_from_messages(
+    messages: List[ChatMessageRecord],
+) -> str | None:
+    """Build one title candidate from persisted transcript rows."""
+
+    return generate_chat_title(_build_title_sources_from_messages(messages))
+
+
+def _backfill_chat_session_generated_title(
+    session_id: str,
+    user_id: str,
+    preferred_generated_title: str | None = None,
+) -> None:
+    """Persist one generated title using a fresh SQL session."""
+
+    completion_db = SessionLocal()
+    try:
+        repository = _get_chat_history_repository(completion_db)
+        session = repository.get_session(
+            session_id=session_id,
+            user_auth_sub=user_id,
+        )
+        if session is None or session.effective_title is not None:
+            return
+
+        generated_title = normalize_generated_chat_title(preferred_generated_title)
+        if generated_title is None:
+            message_page = repository.list_messages(
+                session_id=session_id,
+                user_auth_sub=user_id,
+                limit=_TITLE_BACKFILL_MESSAGE_LIMIT,
+            )
+            generated_title = _generate_title_from_messages(message_page.items)
+        if generated_title is None:
+            return
+
+        repository.set_generated_title(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            generated_title=generated_title,
+        )
+        completion_db.commit()
+    except ChatHistorySessionNotFoundError:
+        completion_db.rollback()
+        logger.info(
+            "Skipping durable chat title backfill because session is no longer available",
+            extra={"session_id": session_id, "user_id": user_id},
+        )
+    except (SQLAlchemyError, ValueError):
+        completion_db.rollback()
+        logger.warning(
+            "Failed to generate durable chat title",
+            extra={"session_id": session_id, "user_id": user_id},
+            exc_info=True,
+        )
+    finally:
+        completion_db.close()
+
+
+def _queue_chat_title_backfill(
+    background_tasks: BackgroundTasks | None,
+    *,
+    session_id: str,
+    user_id: str,
+    preferred_generated_title: str | None = None,
+) -> None:
+    """Schedule one best-effort background title backfill."""
+
+    if background_tasks is None:
+        logger.warning(
+            "Skipping title backfill because background tasks are unavailable",
+            extra={"session_id": session_id, "user_id": user_id},
+        )
+        return
+
+    background_tasks.add_task(
+        _backfill_chat_session_generated_title,
+        session_id,
+        user_id,
+        preferred_generated_title,
+    )
+
+
+def _serialize_session(
+    record: ChatSessionRecord,
+    *,
+    title_override: str | None = None,
+) -> ChatSessionSummaryResponse:
     """Convert a repository session record into the API summary payload."""
+
+    effective_title = title_override
+    if effective_title is None:
+        effective_title = record.effective_title
 
     return ChatSessionSummaryResponse(
         session_id=record.session_id,
-        title=record.title,
+        title=effective_title,
         active_document_id=str(record.active_document_id) if record.active_document_id else None,
         created_at=record.created_at,
         updated_at=record.updated_at,
@@ -2001,6 +2135,7 @@ async def chat_endpoint(
     chat_message: ChatMessage,
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
 ):
     """Process a chat message and return a response (non-streaming)."""
     session_id = chat_message.session_id or str(uuid.uuid4())
@@ -2120,6 +2255,15 @@ async def chat_endpoint(
                 session_id=session_id,
                 user_message=effective_user_message,
                 assistant_message=assistant_turn.content,
+            )
+            _queue_chat_title_backfill(
+                background_tasks,
+                session_id=session_id,
+                user_id=user_id,
+                preferred_generated_title=_generate_title_from_turn(
+                    user_message=effective_user_message,
+                    assistant_message=assistant_turn.content,
+                ),
             )
             logger.info(
                 "Returning durable replay for non-stream chat turn %s",
@@ -2262,8 +2406,26 @@ async def chat_endpoint(
                         chat_message.turn_id,
                         extra={"session_id": session_id, "user_id": user_id, "turn_id": chat_message.turn_id},
                     )
+                    _queue_chat_title_backfill(
+                        background_tasks,
+                        session_id=session_id,
+                        user_id=user_id,
+                        preferred_generated_title=_generate_title_from_turn(
+                            user_message=effective_user_message,
+                            assistant_message=assistant_turn.message.content,
+                        ),
+                    )
                     return ChatResponse(response=assistant_turn.message.content, session_id=session_id)
                 db.commit()
+                _queue_chat_title_backfill(
+                    background_tasks,
+                    session_id=session_id,
+                    user_id=user_id,
+                    preferred_generated_title=_generate_title_from_turn(
+                        user_message=effective_user_message,
+                        assistant_message=assistant_turn.message.content,
+                    ),
+                )
             except ValueError as exc:
                 _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
             except Exception as exc:
@@ -2370,6 +2532,7 @@ async def chat_stream_endpoint(
         raise HTTPException(status_code=403, detail="Session is active for a different user")
 
     cleanup_done = False
+    generated_title_candidate: str | None = None
 
     async def _cleanup_stream_state(target_session_id: str) -> None:
         """Best-effort idempotent cleanup for active stream bookkeeping."""
@@ -2382,6 +2545,17 @@ async def chat_stream_endpoint(
             _LOCAL_SESSION_OWNERS.pop(target_session_id, None)
         await unregister_active_stream(target_session_id, user_id=user_id, stream_token=stream_claim_token)
         await clear_cancel_signal(target_session_id)
+
+    async def _finalize_stream_state(target_session_id: str) -> None:
+        """Release stream bookkeeping, then backfill a durable title."""
+
+        await _cleanup_stream_state(target_session_id)
+        await asyncio.to_thread(
+            _backfill_chat_session_generated_title,
+            target_session_id,
+            user_id,
+            generated_title_candidate,
+        )
 
     try:
         active_document_id, _ = _resolve_session_create_active_document(
@@ -2396,6 +2570,9 @@ async def chat_stream_endpoint(
             user_message=chat_message.message,
             requested_turn_id=chat_message.turn_id,
             active_document_id=active_document_id,
+        )
+        generated_title_candidate = _generate_title_from_turn(
+            user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
         await _cleanup_stream_state(session_id)
@@ -2434,6 +2611,10 @@ async def chat_stream_endpoint(
             user_message=prepared_turn.effective_user_message,
             assistant_message=prepared_turn.replay_assistant_turn.content,
         )
+        generated_title_candidate = _generate_title_from_turn(
+            user_message=prepared_turn.effective_user_message,
+            assistant_message=prepared_turn.replay_assistant_turn.content,
+        )
 
         async def replay_stream():
             try:
@@ -2461,7 +2642,7 @@ async def chat_stream_endpoint(
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=BackgroundTask(_cleanup_stream_state, session_id),
+            background=BackgroundTask(_finalize_stream_state, session_id),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -2471,6 +2652,7 @@ async def chat_stream_endpoint(
 
     async def generate_stream():
         """Generate SSE events from the agent runner."""
+        nonlocal generated_title_candidate
         current_session_id = session_id
         current_turn_id = prepared_turn.turn_id
         full_response = ""
@@ -2755,6 +2937,10 @@ async def chat_stream_endpoint(
                     )
                     return
 
+                generated_title_candidate = _generate_title_from_turn(
+                    user_message=prepared_turn.effective_user_message,
+                    assistant_message=assistant_turn.content,
+                )
                 yield _stream_event_sse(
                     _build_terminal_turn_event(
                         "turn_completed",
@@ -2859,7 +3045,7 @@ async def chat_stream_endpoint(
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
-        background=BackgroundTask(_cleanup_stream_state, session_id),
+        background=BackgroundTask(_finalize_stream_state, session_id),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -2910,6 +3096,7 @@ async def assistant_rescue(
     request: AssistantRescueRequest,
     db: Session = Depends(get_db),
     user: Dict[str, Any] = get_auth_dependency(),
+    background_tasks: BackgroundTasks = None,
 ):
     """Idempotently backfill a missing durable assistant turn for one completed stream."""
 
@@ -2948,6 +3135,15 @@ async def assistant_rescue(
             session_id=session_id,
             user_message=user_turn.content,
             assistant_message=assistant_turn.message.content,
+        )
+        _queue_chat_title_backfill(
+            background_tasks,
+            session_id=session_id,
+            user_id=user_id,
+            preferred_generated_title=_generate_title_from_turn(
+                user_message=user_turn.content,
+                assistant_message=assistant_turn.message.content,
+            ),
         )
     except HTTPException:
         raise
@@ -3060,6 +3256,7 @@ async def execute_flow_endpoint(
         raise HTTPException(status_code=403, detail="Session is active for a different user")
 
     cleanup_done = False
+    generated_title_candidate: str | None = None
 
     async def _cleanup_stream_state(target_session_id: str) -> None:
         """Best-effort idempotent cleanup for active flow stream bookkeeping."""
@@ -3077,6 +3274,17 @@ async def execute_flow_endpoint(
         )
         await clear_cancel_signal(target_session_id)
 
+    async def _finalize_stream_state(target_session_id: str) -> None:
+        """Release flow stream bookkeeping, then backfill a durable title."""
+
+        await _cleanup_stream_state(target_session_id)
+        await asyncio.to_thread(
+            _backfill_chat_session_generated_title,
+            target_session_id,
+            user_id,
+            generated_title_candidate,
+        )
+
     try:
         active_document_id, _ = _resolve_session_create_active_document(
             repository=repository,
@@ -3091,6 +3299,9 @@ async def execute_flow_endpoint(
             user_message=history_user_message,
             requested_turn_id=request.turn_id,
             active_document_id=active_document_id,
+        )
+        generated_title_candidate = _generate_title_from_turn(
+            user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
         await _cleanup_stream_state(request.session_id)
@@ -3118,6 +3329,10 @@ async def execute_flow_endpoint(
                 user_message=prepared_turn.effective_user_message,
                 assistant_message=prepared_turn.replay_assistant_message,
             )
+            generated_title_candidate = _generate_title_from_turn(
+                user_message=prepared_turn.effective_user_message,
+                assistant_message=prepared_turn.replay_assistant_message,
+            )
 
         async def replay_stream():
             for event_payload in prepared_turn.replay_events:
@@ -3126,7 +3341,7 @@ async def execute_flow_endpoint(
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=BackgroundTask(_cleanup_stream_state, request.session_id),
+            background=BackgroundTask(_finalize_stream_state, request.session_id),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -3136,6 +3351,7 @@ async def execute_flow_endpoint(
 
     async def event_generator():
         """Generate SSE events from flow execution with cancellation support."""
+        nonlocal generated_title_candidate
         current_session_id = request.session_id
         current_turn_id = prepared_turn.turn_id
         trace_id = None
@@ -3342,6 +3558,10 @@ async def execute_flow_endpoint(
                     user_message=prepared_turn.effective_user_message,
                     transcript_rows=[*transcript_rows, summary_row],
                 )
+                generated_title_candidate = _generate_title_from_turn(
+                    user_message=prepared_turn.effective_user_message,
+                    assistant_message=chat_output_response or run_finished_response or history_assistant_message,
+                )
 
             if buffered_flow_finished_event is not None:
                 yield _stream_event_sse(buffered_flow_finished_event)
@@ -3421,7 +3641,7 @@ async def execute_flow_endpoint(
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        background=BackgroundTask(_cleanup_stream_state, request.session_id),
+        background=BackgroundTask(_finalize_stream_state, request.session_id),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -3502,6 +3722,7 @@ async def get_session_history(
     message_cursor: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     user: Dict[str, Any] = get_auth_dependency(),
+    background_tasks: BackgroundTasks = None,
 ):
     """Return one durable chat session plus one page of persisted transcript rows."""
 
@@ -3524,8 +3745,18 @@ async def get_session_history(
         user_id=user_id,
         active_document_id=detail.session.active_document_id,
     )
+    generated_title = None
+    if detail.session.effective_title is None:
+        if message_cursor is None:
+            generated_title = _generate_title_from_messages(detail.messages)
+        _queue_chat_title_backfill(
+            background_tasks,
+            session_id=session_id,
+            user_id=user_id,
+            preferred_generated_title=generated_title,
+        )
     return ChatSessionDetailResponse(
-        session=_serialize_session(detail.session),
+        session=_serialize_session(detail.session, title_override=generated_title),
         active_document=active_document,
         messages=[_serialize_message(message) for message in detail.messages],
         message_limit=message_limit,
@@ -3541,6 +3772,7 @@ async def get_all_sessions_stats(
     document_id: Optional[str] = Query(None),
     db: Session = Depends(get_db),
     user: Dict[str, Any] = get_auth_dependency(),
+    background_tasks: BackgroundTasks = None,
 ):
     """Browse or search durable chat sessions visible to the authenticated user."""
 
@@ -3580,6 +3812,14 @@ async def get_all_sessions_stats(
             )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    for session in page.items:
+        if session.effective_title is None:
+            _queue_chat_title_backfill(
+                background_tasks,
+                session_id=session.session_id,
+                user_id=user_id,
+            )
 
     return ChatSessionListResponse(
         total_sessions=total_sessions,

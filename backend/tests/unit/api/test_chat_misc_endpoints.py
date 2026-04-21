@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
-from fastapi import HTTPException
+from fastapi import BackgroundTasks, HTTPException
 
 from src.api import chat
 from src.lib.chat_history_repository import (
@@ -55,6 +55,7 @@ def _session_record(
     session_id: str,
     user_auth_sub: str = "user-1",
     title: str | None = None,
+    generated_title: str | None = None,
     active_document_id: UUID | None = None,
     created_at: datetime | None = None,
     updated_at: datetime | None = None,
@@ -65,6 +66,7 @@ def _session_record(
         session_id=session_id,
         user_auth_sub=user_auth_sub,
         title=title,
+        generated_title=generated_title,
         active_document_id=active_document_id,
         created_at=created_value,
         updated_at=updated_at or created_value,
@@ -128,6 +130,7 @@ class FakeChatHistoryRepository:
         session_id: str,
         user_auth_sub: str,
         title: str | None = None,
+        generated_title: str | None = None,
         active_document_id: UUID | None = None,
         created_at: datetime | None = None,
     ) -> ChatSessionRecord:
@@ -135,6 +138,7 @@ class FakeChatHistoryRepository:
             session_id=session_id,
             user_auth_sub=user_auth_sub,
             title=title,
+            generated_title=generated_title,
             active_document_id=active_document_id,
             created_at=created_at or _ts(10, 0),
             updated_at=created_at or _ts(10, 0),
@@ -145,6 +149,7 @@ class FakeChatHistoryRepository:
                 "session_id": session_id,
                 "user_auth_sub": user_auth_sub,
                 "title": title,
+                "generated_title": generated_title,
                 "active_document_id": active_document_id,
             }
         )
@@ -166,12 +171,21 @@ class FakeChatHistoryRepository:
             return document_id
         return document_id if document_id in self.visible_document_ids else None
 
+    def get_session(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+    ) -> ChatSessionRecord | None:
+        return self.sessions.get((user_auth_sub, session_id))
+
     def get_or_create_session(
         self,
         *,
         session_id: str,
         user_auth_sub: str,
         title: str | None = None,
+        generated_title: str | None = None,
         active_document_id: UUID | None = None,
         created_at: datetime | None = None,
     ) -> ChatSessionRecord:
@@ -180,6 +194,7 @@ class FakeChatHistoryRepository:
                 "session_id": session_id,
                 "user_auth_sub": user_auth_sub,
                 "title": title,
+                "generated_title": generated_title,
                 "active_document_id": active_document_id,
             }
         )
@@ -190,6 +205,7 @@ class FakeChatHistoryRepository:
             session_id=session_id,
             user_auth_sub=user_auth_sub,
             title=title,
+            generated_title=generated_title,
             active_document_id=active_document_id,
             created_at=created_at,
         )
@@ -263,6 +279,7 @@ class FakeChatHistoryRepository:
             session_id=session_id,
             user_auth_sub=user_auth_sub,
             title=session.title,
+            generated_title=session.generated_title,
             active_document_id=session.active_document_id,
             created_at=session.created_at,
             updated_at=record.created_at,
@@ -439,9 +456,36 @@ class FakeChatHistoryRepository:
             session_id=session.session_id,
             user_auth_sub=session.user_auth_sub,
             title=normalized_title,
+            generated_title=session.generated_title,
             active_document_id=session.active_document_id,
             created_at=session.created_at,
             updated_at=_ts(11, 15),
+            last_message_at=session.last_message_at,
+        )
+        self.sessions[(user_auth_sub, session_id)] = updated
+        return updated
+
+    def set_generated_title(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        generated_title: str,
+    ) -> ChatSessionRecord | None:
+        session = self.sessions.get((user_auth_sub, session_id))
+        if session is None:
+            return None
+        if session.title is not None or session.generated_title is not None:
+            return session
+
+        updated = _session_record(
+            session_id=session.session_id,
+            user_auth_sub=session.user_auth_sub,
+            title=session.title,
+            generated_title=generated_title,
+            active_document_id=session.active_document_id,
+            created_at=session.created_at,
+            updated_at=_ts(11, 20),
             last_message_at=session.last_message_at,
         )
         self.sessions[(user_auth_sub, session_id)] = updated
@@ -482,7 +526,7 @@ class FakeChatHistoryRepository:
             sessions = [
                 record
                 for record in sessions
-                if normalized_query in (record.title or "").lower()
+                if normalized_query in (record.effective_title or "").lower()
             ]
         return sorted(
             sessions,
@@ -941,6 +985,7 @@ async def test_chat_endpoint_success(monkeypatch):
             "session_id": "session-1",
             "user_auth_sub": "user-1",
             "title": None,
+            "generated_title": None,
             "active_document_id": None,
         }
     ]
@@ -1940,6 +1985,43 @@ async def test_get_all_sessions_stats_returns_empty_state(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_all_sessions_stats_uses_generated_titles_and_schedules_lazy_backfill(monkeypatch):
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(
+                session_id="session-generated",
+                generated_title="Auto generated title",
+                created_at=_ts(9, 0),
+                last_message_at=_ts(12, 0),
+            ),
+            _session_record(
+                session_id="session-missing",
+                created_at=_ts(8, 0),
+                last_message_at=_ts(11, 0),
+            ),
+        ]
+    )
+    background_tasks = BackgroundTasks()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+
+    payload = await chat.get_all_sessions_stats(
+        limit=10,
+        cursor=None,
+        query=None,
+        document_id=None,
+        db=object(),
+        user={"sub": "user-1"},
+        background_tasks=background_tasks,
+    )
+
+    assert [session.title for session in payload.sessions] == [
+        "Auto generated title",
+        None,
+    ]
+    assert len(background_tasks.tasks) == 1
+
+
+@pytest.mark.asyncio
 async def test_get_session_history_returns_durable_detail_with_active_document(monkeypatch):
     active_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
     message_id = uuid4()
@@ -1990,6 +2072,153 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
     assert payload.active_document.filename == "paper.pdf"
     assert payload.messages[0].message_id == str(message_id)
     assert payload.messages[0].payload_json == {"step": "answer"}
+
+
+@pytest.mark.asyncio
+async def test_get_session_history_uses_generated_title_from_first_page_and_queues_backfill(monkeypatch):
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(
+                session_id="session-generated-detail",
+                created_at=_ts(9, 0),
+                last_message_at=_ts(9, 35),
+            )
+        ],
+        detail_messages={
+            ("user-1", "session-generated-detail"): [
+                _message_record(
+                    session_id="session-generated-detail",
+                    role="user",
+                    content="How does TP53 evidence differ across AGR chat history flows?",
+                    created_at=_ts(9, 31),
+                ),
+                _message_record(
+                    session_id="session-generated-detail",
+                    role="assistant",
+                    content="Here is the breakdown.",
+                    created_at=_ts(9, 32),
+                ),
+            ]
+        },
+    )
+    background_tasks = BackgroundTasks()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "get_document", lambda *_args, **_kwargs: _async_value({"document": None}))
+
+    payload = await chat.get_session_history(
+        "session-generated-detail",
+        message_limit=50,
+        message_cursor=None,
+        db=object(),
+        user={"sub": "user-1"},
+        background_tasks=background_tasks,
+    )
+
+    assert payload.session.title == "How does TP53 evidence differ across AGR chat history flows?"
+    assert len(background_tasks.tasks) == 1
+
+
+def test_backfill_chat_session_generated_title_uses_transcript_when_user_title_is_absent(monkeypatch):
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-backfill")],
+        detail_messages={
+            ("user-1", "session-backfill"): [
+                _message_record(
+                    session_id="session-backfill",
+                    role="user",
+                    content="Hi",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-backfill",
+                    role="assistant",
+                    content="TP53 evidence summary for durable chat history",
+                    created_at=_ts(9, 2),
+                ),
+            ]
+        },
+    )
+    completion_db = SimpleNamespace(
+        commit=lambda: commits.append("commit"),
+        rollback=lambda: rollbacks.append("rollback"),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+
+    chat._backfill_chat_session_generated_title("session-backfill", "user-1")
+
+    session = repository.sessions[("user-1", "session-backfill")]
+    assert session.generated_title == "TP53 evidence summary for durable chat history"
+    assert commits == ["commit"]
+    assert rollbacks == []
+
+
+def test_backfill_chat_session_generated_title_does_not_overwrite_user_title(monkeypatch):
+    commits: list[str] = []
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(
+                session_id="session-user-title",
+                title="Renamed by curator",
+            )
+        ]
+    )
+    completion_db = SimpleNamespace(
+        commit=lambda: commits.append("commit"),
+        rollback=lambda: None,
+        close=lambda: None,
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+
+    chat._backfill_chat_session_generated_title(
+        "session-user-title",
+        "user-1",
+        "Auto generated title",
+    )
+
+    session = repository.sessions[("user-1", "session-user-title")]
+    assert session.title == "Renamed by curator"
+    assert session.generated_title is None
+    assert commits == []
+
+
+def test_backfill_chat_session_generated_title_skips_when_session_disappears_before_message_load(
+    monkeypatch,
+):
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-race")],
+    )
+
+    def _list_messages(
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        limit: int = 100,
+        cursor=None,
+    ):
+        raise chat.ChatHistorySessionNotFoundError("Chat session not found")
+
+    repository.list_messages = _list_messages
+    completion_db = SimpleNamespace(
+        commit=lambda: commits.append("commit"),
+        rollback=lambda: rollbacks.append("rollback"),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+
+    chat._backfill_chat_session_generated_title("session-race", "user-1")
+
+    session = repository.sessions[("user-1", "session-race")]
+    assert session.generated_title is None
+    assert commits == []
+    assert rollbacks == ["rollback"]
 
 
 def test_serialize_message_omits_internal_flow_summary_payload_keys():

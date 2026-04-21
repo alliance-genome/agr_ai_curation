@@ -78,6 +78,11 @@ def _stub_stream_turn_persistence(monkeypatch):
         "_ensure_conversation_history_contains_exchange",
         lambda *_args, **_kwargs: None,
     )
+    monkeypatch.setattr(
+        chat,
+        "_backfill_chat_session_generated_title",
+        lambda *_args, **_kwargs: None,
+    )
 
     def _prepare(
         *,
@@ -191,6 +196,88 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     assert calls["clear"] == ["session-chat-stream"]
     assert "session-chat-stream" not in chat._LOCAL_CANCEL_EVENTS
     assert "session-chat-stream" not in chat._LOCAL_SESSION_OWNERS
+
+
+def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_title(monkeypatch):
+    captured_backfill_calls = []
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    monkeypatch.setattr(
+        chat,
+        "_build_context_messages_from_durable_messages",
+        lambda *_args, **_kwargs: (
+            [{"role": "user", "content": _kwargs.get("user_message", "")}]
+            if _kwargs.get("user_message") is not None
+            else []
+        ),
+    )
+    monkeypatch.setattr(chat, "conversation_manager", SimpleNamespace(add_exchange=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(
+        chat,
+        "_generate_title_from_turn",
+        lambda *, user_message, assistant_message=None: (
+            "assistant-aware-title" if assistant_message else "user-only-title"
+        ),
+    )
+    monkeypatch.setattr(
+        chat,
+        "_backfill_chat_session_generated_title",
+        lambda session_id, user_id, preferred_generated_title=None: captured_backfill_calls.append(
+            (session_id, user_id, preferred_generated_title)
+        ),
+    )
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
+        yield {"type": "RUN_FINISHED", "data": {"response": "assistant reply"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(
+                message="Summarize the evidence",
+                session_id="session-stream-title",
+            ),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
+    assert captured_backfill_calls == [
+        ("session-stream-title", "auth-sub", "assistant-aware-title")
+    ]
 
 
 def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):

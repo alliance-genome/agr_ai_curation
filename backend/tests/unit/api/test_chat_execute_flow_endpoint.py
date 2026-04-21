@@ -78,6 +78,7 @@ class _FakeChatHistoryRepository:
         session_id: str,
         user_auth_sub: str,
         title: str | None = None,
+        generated_title: str | None = None,
         active_document_id=None,
         created_at: datetime | None = None,
     ) -> chat.ChatSessionRecord:
@@ -90,6 +91,7 @@ class _FakeChatHistoryRepository:
             session_id=session_id,
             user_auth_sub=user_auth_sub,
             title=title,
+            generated_title=generated_title,
             active_document_id=active_document_id,
             created_at=created,
             updated_at=created,
@@ -148,6 +150,7 @@ class _FakeChatHistoryRepository:
             session_id=session.session_id,
             user_auth_sub=session.user_auth_sub,
             title=session.title,
+            generated_title=session.generated_title,
             active_document_id=session.active_document_id,
             created_at=session.created_at,
             updated_at=message_created_at,
@@ -155,6 +158,33 @@ class _FakeChatHistoryRepository:
             deleted_at=session.deleted_at,
         )
         return SimpleNamespace(message=record, created=True)
+
+    def set_generated_title(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        generated_title: str,
+    ):
+        key = (user_auth_sub, session_id)
+        session = self.sessions.get(key)
+        if session is None:
+            return None
+        if session.title is not None or session.generated_title is not None:
+            return session
+        updated = chat.ChatSessionRecord(
+            session_id=session.session_id,
+            user_auth_sub=session.user_auth_sub,
+            title=session.title,
+            generated_title=generated_title,
+            active_document_id=session.active_document_id,
+            created_at=session.created_at,
+            updated_at=session.updated_at,
+            last_message_at=session.last_message_at,
+            deleted_at=session.deleted_at,
+        )
+        self.sessions[key] = updated
+        return updated
 
     def get_message_by_turn_id(
         self,
@@ -368,6 +398,76 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert calls["register"] == [("session-flow-1", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-flow-1", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-1"]
+
+
+def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_title(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-title",
+        user_query="Summarize TP53 evidence",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Flow Title",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    captured_backfill_calls = []
+
+    monkeypatch.setattr(
+        chat,
+        "_generate_title_from_turn",
+        lambda *, user_message, assistant_message=None: (
+            "assistant-aware-flow-title" if assistant_message else "user-only-flow-title"
+        ),
+    )
+    monkeypatch.setattr(
+        chat,
+        "_backfill_chat_session_generated_title",
+        lambda session_id, user_id, preferred_generated_title=None: captured_backfill_calls.append(
+            (session_id, user_id, preferred_generated_title)
+        ),
+    )
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-title"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"output": "Assistant flow answer"},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "failure_reason": None},
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "CHAT_OUTPUT_READY",
+        "FLOW_FINISHED",
+    ]
+    assert captured_backfill_calls == [
+        ("session-flow-title", "auth-sub", "assistant-aware-flow-title")
+    ]
+    assert calls["register"] == [("session-flow-title", "auth-sub", ANY)]
+    assert calls["unregister"] == [("session-flow-title", "auth-sub", ANY)]
+    assert calls["clear"] == ["session-flow-title"]
 
 
 def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):

@@ -485,6 +485,94 @@ def test_rename_and_soft_delete_hide_deleted_sessions_from_reads(db_session):
     )
 
 
+def test_generated_titles_are_searchable_and_visible_when_user_title_is_missing(db_session):
+    repository = ChatHistoryRepository(db_session)
+    session_id = f"{SESSION_PREFIX}generated-title"
+
+    repository.create_session(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        created_at=_ts(14, 10),
+    )
+    generated = repository.set_generated_title(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        generated_title="Auto summary for TP53 evidence",
+    )
+    assert generated is not None
+    db_session.commit()
+
+    session = repository.get_session(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+    )
+    assert session is not None
+    assert session.title is None
+    assert session.generated_title == "Auto summary for TP53 evidence"
+    assert session.effective_title == "Auto summary for TP53 evidence"
+
+    search_results = repository.search_sessions(
+        user_auth_sub=USER_A,
+        query="TP53",
+    )
+    assert [item.session_id for item in search_results.items] == [session_id]
+
+
+def test_generated_titles_do_not_overwrite_user_managed_titles(db_session):
+    repository = ChatHistoryRepository(db_session)
+    session_id = f"{SESSION_PREFIX}user-title-wins"
+
+    repository.create_session(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        title="Curator-chosen title",
+        created_at=_ts(14, 20),
+    )
+    updated = repository.set_generated_title(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        generated_title="Automated title should be ignored",
+    )
+    assert updated is not None
+    db_session.commit()
+
+    session = repository.get_session(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+    )
+    assert session is not None
+    assert session.title == "Curator-chosen title"
+    assert session.generated_title is None
+    assert session.effective_title == "Curator-chosen title"
+
+
+def test_generated_titles_do_not_overwrite_existing_automated_titles(db_session):
+    repository = ChatHistoryRepository(db_session)
+    session_id = f"{SESSION_PREFIX}auto-title-wins"
+
+    repository.create_session(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        generated_title="Precomputed summary title",
+        created_at=_ts(14, 25),
+    )
+    updated = repository.set_generated_title(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+        generated_title="Refreshed auto summary title",
+    )
+    assert updated is not None
+    db_session.commit()
+
+    session = repository.get_session(
+        session_id=session_id,
+        user_auth_sub=USER_A,
+    )
+    assert session is not None
+    assert session.generated_title == "Precomputed summary title"
+    assert session.effective_title == "Precomputed summary title"
+
+
 def test_duplicate_turn_ids_use_savepoints_without_rolling_back_the_outer_transaction(
     db_session,
 ):
