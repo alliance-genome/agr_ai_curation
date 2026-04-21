@@ -10,6 +10,13 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { AuditEvent } from '../../types/AuditEvent'
 import AuditPanel from '../../components/AuditPanel'
+import { getChatRenderCacheKeys } from '../../lib/chatCacheKeys'
+
+const mockUseAuth = vi.hoisted(() => vi.fn())
+
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => mockUseAuth(),
+}))
 
 // Helper function to create test events
 function createTestEvent(
@@ -29,6 +36,9 @@ function createTestEvent(
 
 beforeEach(() => {
   localStorage.clear()
+  mockUseAuth.mockReturnValue({
+    user: { uid: 'user-1', email: 'curator@example.org' },
+  })
 })
 
 // ===================================================================
@@ -255,20 +265,22 @@ describe('AuditPanel - Session Change (T018)', () => {
     const oldSessionEvents = [
       createTestEvent('SUPERVISOR_START', { message: 'Processing old session' })
     ]
+    const oldSessionCacheKey = getChatRenderCacheKeys('user-1', 'session123').auditEvents
+    const newSessionCacheKey = getChatRenderCacheKeys('user-1', 'session456').auditEvents
 
     const { rerender, unmount } = render(
       <AuditPanel sessionId="session123" sseEvents={[]} initialEvents={oldSessionEvents} />
     )
 
     await waitFor(() => {
-      expect(localStorage.getItem('audit_events_session123')).not.toBeNull()
+      expect(localStorage.getItem(oldSessionCacheKey)).not.toBeNull()
     })
 
     // Switch to a new session (as happens after Reset Chat)
     rerender(<AuditPanel sessionId="session456" sseEvents={[]} />)
 
     await waitFor(() => {
-      expect(localStorage.getItem('audit_events_session456')).toBeNull()
+      expect(localStorage.getItem(newSessionCacheKey)).toBeNull()
     })
 
     // Simulate refresh/remount on the new session; old events should not reappear.

@@ -91,6 +91,7 @@ interface StoredHomePageMessage {
   timestamp: string
   id?: string
   traceIds?: string[]
+  turnId?: string
   type?: 'text'
 }
 
@@ -110,6 +111,7 @@ function buildStoredMessages(messages: ChatHistoryMessage[]): StoredHomePageMess
       timestamp: message.created_at,
       id: message.message_id,
       traceIds: message.trace_id ? [message.trace_id] : undefined,
+      turnId: message.turn_id ?? undefined,
       type: 'text',
     }]
   })

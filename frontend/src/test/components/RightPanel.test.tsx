@@ -5,15 +5,28 @@
  * and renders appropriate content (AuditPanel, etc.) based on active tab.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import RightPanel from '../../components/RightPanel'
 import { INITIAL_TABS } from '../../types/ComponentProps'
 
+const mockUseAuth = vi.hoisted(() => vi.fn())
+
+vi.mock('../../contexts/AuthContext', () => ({
+  useAuth: () => mockUseAuth(),
+}))
+
 const renderWithRouter = (ui: JSX.Element) =>
   render(ui, { wrapper: MemoryRouter })
+
+beforeEach(() => {
+  localStorage.clear()
+  mockUseAuth.mockReturnValue({
+    user: { uid: 'user-1', email: 'curator@example.org' },
+  })
+})
 
 // ===================================================================
 // Tab Rendering Tests

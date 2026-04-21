@@ -21,6 +21,10 @@ export interface ChatLocalStorageKeys {
   pdfViewerSession: string
 }
 
+export interface ChatRenderCacheKeys {
+  auditEvents: string
+}
+
 export interface ChatHistoryListCacheRequest {
   limit?: number
   cursor?: string | null
@@ -36,6 +40,15 @@ export interface ChatHistoryDetailCacheRequest {
 
 function buildChatStorageKey(userId: string, key: string): string {
   return `${CHAT_STORAGE_PREFIX}:${userId}:${key}`
+}
+
+function normalizeCacheSegment(value: string, fieldName: string): string {
+  const normalizedValue = value.trim()
+  if (!normalizedValue) {
+    throw new Error(`${fieldName} is required`)
+  }
+
+  return normalizedValue
 }
 
 export const chatCacheKeys = {
@@ -74,6 +87,24 @@ export function getChatLocalStorageKeys(userId: string): ChatLocalStorageKeys {
     activeDocument: buildChatStorageKey(userId, 'active-document'),
     pdfViewerSession: buildChatStorageKey(userId, 'pdf-viewer-session'),
   }
+}
+
+export function getChatRenderCacheKeys(userId: string, sessionId: string): ChatRenderCacheKeys {
+  const normalizedUserId = normalizeCacheSegment(userId, 'userId')
+  const normalizedSessionId = normalizeCacheSegment(sessionId, 'sessionId')
+
+  return {
+    auditEvents: buildChatStorageKey(normalizedUserId, `audit-events:${normalizedSessionId}`),
+  }
+}
+
+export function clearChatRenderCacheForSession(
+  userId: string,
+  sessionId: string,
+  storage: Storage = window.localStorage,
+): void {
+  const scopedKeys = getChatRenderCacheKeys(userId, sessionId)
+  Object.values(scopedKeys).forEach((key) => storage.removeItem(key))
 }
 
 function listNamespacedChatLocalStorageKeys(storage: Storage = window.localStorage): string[] {
