@@ -388,13 +388,10 @@ def _display_values_already_include_label(values: Sequence[str], label: str) -> 
 
 
 def _count_conversation_messages(*, session_id: str, user_id: str) -> int:
-    try:
-        return count_session_text_messages(
-            session_id=session_id,
-            user_id=user_id,
-        )
-    except Exception:
-        return 0
+    return count_session_text_messages(
+        session_id=session_id,
+        user_id=user_id,
+    )
 
 
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:

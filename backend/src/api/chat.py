@@ -391,13 +391,11 @@ _FLOW_MEMORY_MAX_SPECIALIST_OUTPUT_CHARS = 3500
 _FLOW_MEMORY_MAX_SPECIALIST_SUMMARIES = 12
 _FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS = 18000
 _FLOW_MEMORY_COMPACT_SPECIALIST_OUTPUT_CHARS = 800
-_FLOW_SUMMARY_MESSAGE_TYPE = FLOW_SUMMARY_MESSAGE_TYPE
-_FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY = FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
 _FLOW_TRANSCRIPT_REPLAY_RUN_STARTED_KEY = "_replay_run_started_event"
 _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY = "_replay_terminal_events"
 _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS = frozenset(
     {
-        _FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY,
+        FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY,
         _FLOW_TRANSCRIPT_REPLAY_RUN_STARTED_KEY,
         _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY,
     }
@@ -714,7 +712,7 @@ def _build_execute_flow_summary_row(
         "trace_id": trace_id,
         "failure_reason": failure_reason,
         "final_user_output": str(final_user_output or "").strip() or None,
-        _FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: assistant_message,
+        FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: assistant_message,
         _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
             dict(event)
             for event in terminal_events
@@ -738,7 +736,7 @@ def _build_execute_flow_summary_row(
             final_user_output=final_user_output,
             failure_reason=failure_reason,
         ),
-        message_type=_FLOW_SUMMARY_MESSAGE_TYPE,
+        message_type=FLOW_SUMMARY_MESSAGE_TYPE,
         payload_json=payload_json,
         trace_id=trace_id,
         created_at=created_at,
@@ -1012,7 +1010,7 @@ def _build_durable_conversation_stats(
     user_id: str,
     current_session: ChatSessionRecord | None = None,
 ) -> dict[str, Any]:
-    """Build the legacy conversation-status payload from durable chat rows."""
+    """Build the conversation-status payload from durable chat rows."""
 
     session = current_session or _latest_visible_chat_session(repository, user_id=user_id)
     exchange_count = 0
@@ -1031,21 +1029,6 @@ def _build_durable_conversation_stats(
         "memory_sizes": {
             "short_term": {
                 "file_count": exchange_count,
-                "size_bytes": 0,
-                "size_mb": 0,
-            },
-            "long_term": {
-                "file_count": 0,
-                "size_bytes": 0,
-                "size_mb": 0,
-            },
-            "entity": {
-                "file_count": 0,
-                "size_bytes": 0,
-                "size_mb": 0,
-            },
-            "cache": {
-                "file_count": 0,
                 "size_bytes": 0,
                 "size_mb": 0,
             },
