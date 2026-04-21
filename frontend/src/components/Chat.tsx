@@ -1347,7 +1347,7 @@ function Chat({
         }
 
         const terminalState = parsed.type
-        const fallbackMessage =
+        const terminalMessage =
           normalizeOptionalText(parsed.message)
           ?? getTerminalTurnDefaultMessage(terminalState)
 
@@ -1356,19 +1356,19 @@ function Chat({
             ...prev,
             {
               role: 'assistant',
-              content: fallbackMessage,
+              content: terminalMessage,
               timestamp: messageTimestamp,
               id: `msg-${Date.now()}`,
               traceIds: mergeTraceIds([...sessionTraceIds.current], parsed.trace_id),
               terminalState,
-              terminalMessage: fallbackMessage,
+              terminalMessage: terminalMessage,
               rescueState: terminalState === 'turn_save_failed' ? 'failed' : null,
             },
           ])
           return
         }
 
-        const content = getAssistantTurnContent(turnId) || fallbackMessage
+        const content = getAssistantTurnContent(turnId) || terminalMessage
 
         if (terminalState === 'turn_save_failed') {
           setMessages((prev) => upsertAssistantTurnMessage(prev, {
@@ -1377,7 +1377,7 @@ function Chat({
             timestamp: messageTimestamp,
             traceId: parsed.trace_id,
             terminalState: 'turn_save_failed',
-            terminalMessage: fallbackMessage,
+            terminalMessage: terminalMessage,
             rescueState: 'pending',
           }))
           const activeSessionId = eventSessionId ?? propSessionId
@@ -1390,7 +1390,7 @@ function Chat({
               timestamp: messageTimestamp,
               traceId: parsed.trace_id,
               terminalState: 'turn_save_failed',
-              terminalMessage: fallbackMessage,
+              terminalMessage: terminalMessage,
               rescueState: 'failed',
             }))
           }
@@ -1403,7 +1403,7 @@ function Chat({
           timestamp: messageTimestamp,
           traceId: parsed.trace_id,
           terminalState,
-          terminalMessage: fallbackMessage,
+            terminalMessage: terminalMessage,
           rescueState: null,
         }))
         delete assistantBuffersRef.current[turnId]
