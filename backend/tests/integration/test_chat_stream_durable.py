@@ -35,16 +35,6 @@ def _configure_stream_mocks(
         SimpleNamespace(get_document=lambda _uid: document_state_payload),
     )
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        SimpleNamespace(
-            history_enabled=False,
-            get_session_history=lambda *_args, **_kwargs: [],
-            add_exchange=lambda *_args, **_kwargs: None,
-            clear_session_history=lambda *_args, **_kwargs: None,
-        ),
-    )
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map or {}))
 
     async def _register_active_stream(
