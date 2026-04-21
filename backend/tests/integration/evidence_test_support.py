@@ -249,16 +249,6 @@ def configure_chat_stream_mocks(
         "_build_context_messages_from_durable_messages",
         lambda *_args, **_kwargs: [{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else [],
     )
-    monkeypatch.setattr(
-        chat,
-        "conversation_manager",
-        SimpleNamespace(
-            history_enabled=False,
-            get_session_history=lambda *_args, **_kwargs: [],
-            add_exchange=lambda *_args, **_kwargs: None,
-            clear_session_history=lambda *_args, **_kwargs: None,
-        ),
-    )
     monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map))
 
     async def _register_active_stream(

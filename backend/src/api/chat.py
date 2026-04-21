@@ -28,6 +28,7 @@ from starlette.background import BackgroundTask
 from sqlalchemy.exc import SQLAlchemyError
 
 from .auth import get_auth_dependency
+from ..lib.chat_config import chat_history_config
 from ..lib.chat_history_repository import (
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
@@ -37,6 +38,13 @@ from ..lib.chat_history_repository import (
     ChatSessionRecord,
 )
 from ..lib.chat_state import document_state
+from ..lib.chat_transcript import (
+    FLOW_SUMMARY_MESSAGE_TYPE,
+    FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY,
+    count_session_text_messages,
+    extract_flow_assistant_message,
+    list_session_text_exchanges,
+)
 from ..lib.chat_title_generator import (
     ChatTitleSource,
     generate_chat_title,
@@ -48,7 +56,6 @@ from ..lib.curation_workspace import (
     persist_extraction_results,
 )
 from ..lib.curation_workspace.extraction_results import get_agent_curation_metadata
-from ..lib.conversation_manager import conversation_manager
 from ..lib.openai_agents import run_agent_streamed
 from ..lib.openai_agents.runner import normalize_context_message_role
 from ..lib.openai_agents.agents.supervisor_agent import get_supervisor_tool_agent_map
@@ -163,147 +170,18 @@ def _build_context_messages_from_durable_messages(
     """Build runner context from durable rows while preserving completed-exchange semantics."""
 
     history_messages: List[Dict[str, str]] = []
-    pending_user_message: Optional[str] = None
-    message_cursor: Optional[ChatMessageCursor] = None
-
-    while True:
-        message_page = repository.list_messages(
-            session_id=session_id,
-            user_auth_sub=user_id,
-            limit=200,
-            cursor=message_cursor,
-        )
-        if not message_page.items:
-            break
-
-        page_exchanges, pending_user_message = _collect_durable_text_exchanges(
-            message_page.items,
-            pending_user_message=pending_user_message,
-        )
-        for durable_user_message, durable_assistant_message in page_exchanges:
-            history_messages.append({"role": "user", "content": durable_user_message})
-            history_messages.append({"role": "assistant", "content": durable_assistant_message})
-
-        if message_page.next_cursor is None:
-            break
-        message_cursor = message_page.next_cursor
+    for durable_user_message, durable_assistant_message in list_session_text_exchanges(
+        session_id=session_id,
+        user_id=user_id,
+        repository=repository,
+    ):
+        history_messages.append({"role": "user", "content": durable_user_message})
+        history_messages.append({"role": "assistant", "content": durable_assistant_message})
 
     return _build_context_messages_from_history(
         history_messages,
         user_message=user_message,
     )
-
-
-def _collect_durable_text_exchanges(
-    messages: List[ChatMessageRecord],
-    *,
-    pending_user_message: Optional[str] = None,
-) -> tuple[List[tuple[str, str]], Optional[str]]:
-    """Pair durable text transcript rows into user/assistant exchanges."""
-
-    exchanges: List[tuple[str, str]] = []
-
-    for message in messages:
-        if not message.content.strip():
-            continue
-
-        if message.role == "user":
-            pending_user_message = message.content
-            continue
-
-        if pending_user_message is None:
-            continue
-
-        if message.role == "assistant" and message.message_type == "text":
-            exchanges.append((pending_user_message, message.content))
-            pending_user_message = None
-            continue
-
-        if message.role == "flow":
-            assistant_message = _extract_flow_assistant_message(message)
-            if assistant_message is None:
-                continue
-            exchanges.append((pending_user_message, assistant_message))
-            pending_user_message = None
-
-    return exchanges, pending_user_message
-
-
-def _hydrate_conversation_history_from_durable_messages(
-    repository: ChatHistoryRepository,
-    *,
-    user_id: str,
-    session_id: str,
-) -> None:
-    """Synchronize in-memory chat history with the durable text transcript."""
-
-    if not conversation_manager.history_enabled:
-        return
-
-    add_exchange = conversation_manager.add_exchange
-
-    durable_exchanges: List[tuple[str, str]] = []
-    pending_user_message: Optional[str] = None
-    message_cursor: Optional[ChatMessageCursor] = None
-
-    while True:
-        message_page = repository.list_messages(
-            session_id=session_id,
-            user_auth_sub=user_id,
-            limit=200,
-            cursor=message_cursor,
-        )
-        if not message_page.items:
-            break
-
-        page_exchanges, pending_user_message = _collect_durable_text_exchanges(
-            messages=message_page.items,
-            pending_user_message=pending_user_message,
-        )
-        durable_exchanges.extend(page_exchanges)
-
-        if message_page.next_cursor is None:
-            break
-        message_cursor = message_page.next_cursor
-
-    conversation_manager.clear_session_history(user_id, session_id)
-
-    for durable_user_message, durable_assistant_message in durable_exchanges:
-        add_exchange(user_id, session_id, durable_user_message, durable_assistant_message)
-
-
-def _ensure_conversation_history_contains_exchange(
-    repository: ChatHistoryRepository,
-    *,
-    user_id: str,
-    session_id: str,
-    user_message: str,
-    assistant_message: str,
-) -> None:
-    """Ensure replayed durable exchanges become visible to subsequent prompt history on this worker."""
-
-    if not conversation_manager.history_enabled:
-        return
-
-    get_session_history = conversation_manager.get_session_history
-    add_exchange = conversation_manager.add_exchange
-
-    session_history = get_session_history(user_id, session_id)
-    if not session_history:
-        _hydrate_conversation_history_from_durable_messages(
-            repository,
-            user_id=user_id,
-            session_id=session_id,
-        )
-        return
-
-    if any(
-        exchange.get("user") == user_message and exchange.get("assistant") == assistant_message
-        for exchange in session_history
-    ):
-        return
-
-    add_exchange(user_id, session_id, user_message, assistant_message)
 
 
 def _build_extraction_candidate_from_tool_event(
@@ -513,13 +391,11 @@ _FLOW_MEMORY_MAX_SPECIALIST_OUTPUT_CHARS = 3500
 _FLOW_MEMORY_MAX_SPECIALIST_SUMMARIES = 12
 _FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS = 18000
 _FLOW_MEMORY_COMPACT_SPECIALIST_OUTPUT_CHARS = 800
-_FLOW_SUMMARY_MESSAGE_TYPE = "flow_summary"
-_FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY = "_assistant_message"
 _FLOW_TRANSCRIPT_REPLAY_RUN_STARTED_KEY = "_replay_run_started_event"
 _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY = "_replay_terminal_events"
 _FLOW_TRANSCRIPT_INTERNAL_PAYLOAD_KEYS = frozenset(
     {
-        _FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY,
+        FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY,
         _FLOW_TRANSCRIPT_REPLAY_RUN_STARTED_KEY,
         _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY,
     }
@@ -736,20 +612,6 @@ def _parse_event_created_at(value: Any) -> datetime | None:
         return None
 
 
-def _extract_flow_assistant_message(message: ChatMessageRecord) -> str | None:
-    """Return the hidden assistant flow-memory message stored on a durable flow row."""
-
-    if message.role != "flow" or not isinstance(message.payload_json, dict):
-        return None
-
-    assistant_message = message.payload_json.get(_FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY)
-    if not isinstance(assistant_message, str):
-        return None
-
-    normalized = assistant_message.strip()
-    return normalized or None
-
-
 def _build_execute_flow_summary_content(
     *,
     status: str,
@@ -850,7 +712,7 @@ def _build_execute_flow_summary_row(
         "trace_id": trace_id,
         "failure_reason": failure_reason,
         "final_user_output": str(final_user_output or "").strip() or None,
-        _FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: assistant_message,
+        FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: assistant_message,
         _FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [
             dict(event)
             for event in terminal_events
@@ -874,7 +736,7 @@ def _build_execute_flow_summary_row(
             final_user_output=final_user_output,
             failure_reason=failure_reason,
         ),
-        message_type=_FLOW_SUMMARY_MESSAGE_TYPE,
+        message_type=FLOW_SUMMARY_MESSAGE_TYPE,
         payload_json=payload_json,
         trace_id=trace_id,
         created_at=created_at,
@@ -889,7 +751,7 @@ def _build_execute_flow_turn_replay(
     summary_message: ChatMessageRecord | None = None
     assistant_message: str | None = None
     for message in reversed(messages):
-        assistant_candidate = _extract_flow_assistant_message(message)
+        assistant_candidate = extract_flow_assistant_message(message)
         if assistant_candidate is None:
             continue
         summary_message = message
@@ -1129,6 +991,53 @@ def _get_chat_history_repository(db: Session) -> ChatHistoryRepository:
     return ChatHistoryRepository(db)
 
 
+def _latest_visible_chat_session(
+    repository: ChatHistoryRepository,
+    *,
+    user_id: str,
+) -> ChatSessionRecord | None:
+    """Return the most recent visible durable chat session for the user."""
+
+    page = repository.list_sessions(user_auth_sub=user_id, limit=1)
+    if not page.items:
+        return None
+    return page.items[0]
+
+
+def _build_durable_conversation_stats(
+    repository: ChatHistoryRepository,
+    *,
+    user_id: str,
+    current_session: ChatSessionRecord | None = None,
+) -> dict[str, Any]:
+    """Build the conversation-status payload from durable chat rows."""
+
+    session = current_session or _latest_visible_chat_session(repository, user_id=user_id)
+    exchange_count = 0
+    conversation_id = None
+
+    if session is not None:
+        conversation_id = session.session_id
+        exchange_count = count_session_text_messages(
+            session_id=session.session_id,
+            user_id=user_id,
+            repository=repository,
+        ) // 2
+
+    return {
+        "conversation_id": conversation_id,
+        "memory_sizes": {
+            "short_term": {
+                "file_count": exchange_count,
+                "size_bytes": 0,
+                "size_mb": 0,
+            },
+        },
+        "user_id": user_id,
+        "session_count": repository.count_sessions(user_auth_sub=user_id),
+    }
+
+
 def _active_document_uuid_from_state(user_id: str) -> UUID | None:
     """Return the currently loaded document UUID for the authenticated user."""
 
@@ -1274,7 +1183,7 @@ def _build_title_sources_from_messages(
     for message in messages:
         normalized_content = (message.content or "").strip()
         if message.role == "flow":
-            assistant_message = _extract_flow_assistant_message(message)
+            assistant_message = extract_flow_assistant_message(message)
             if assistant_message:
                 title_sources.append(ChatTitleSource(role="assistant", content=assistant_message))
             if normalized_content:
@@ -1669,20 +1578,6 @@ def _persist_completed_chat_stream_turn(
             role="assistant",
         )
         if existing_assistant_turn is not None:
-            try:
-                _ensure_conversation_history_contains_exchange(
-                    repository,
-                    user_id=user_id,
-                    session_id=session_id,
-                    user_message=user_message,
-                    assistant_message=existing_assistant_turn.content,
-                )
-            except Exception:
-                logger.warning(
-                    "Failed to refresh in-memory conversation history for replayed stream turn",
-                    extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
-                    exc_info=True,
-                )
             return existing_assistant_turn
 
         _persist_extraction_candidates(
@@ -1712,20 +1607,6 @@ def _persist_completed_chat_stream_turn(
                 "Failed to persist stream assistant turn"
             ) from exc
 
-        try:
-            _ensure_conversation_history_contains_exchange(
-                repository,
-                user_id=user_id,
-                session_id=session_id,
-                user_message=user_message,
-                assistant_message=assistant_turn.message.content,
-            )
-        except Exception:
-            logger.warning(
-                "Failed to refresh in-memory conversation history after stream turn save",
-                extra={"session_id": session_id, "user_id": user_id, "turn_id": turn_id},
-                exc_info=True,
-            )
         return assistant_turn.message
     except ChatHistorySessionNotFoundError:
         completion_db.rollback()
@@ -1943,13 +1824,6 @@ def _persist_completed_execute_flow_turn(
             )
         )
         if existing_replay is not None:
-            _ensure_conversation_history_contains_exchange(
-                repository,
-                user_id=user_id,
-                session_id=session_id,
-                user_message=user_message,
-                assistant_message=existing_replay[1],
-            )
             return
 
         for row in transcript_rows:
@@ -1966,21 +1840,6 @@ def _persist_completed_execute_flow_turn(
             )
         completion_db.commit()
 
-        replay = _build_execute_flow_turn_replay(
-            repository.list_messages_for_turn(
-                session_id=session_id,
-                user_auth_sub=user_id,
-                turn_id=turn_id,
-            )
-        )
-        if replay is not None:
-            _ensure_conversation_history_contains_exchange(
-                repository,
-                user_id=user_id,
-                session_id=session_id,
-                user_message=user_message,
-                assistant_message=replay[1],
-            )
     except Exception:
         completion_db.rollback()
         raise
@@ -2249,13 +2108,6 @@ async def chat_endpoint(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         if assistant_turn is not None:
-            _ensure_conversation_history_contains_exchange(
-                repository,
-                user_id=user_id,
-                session_id=session_id,
-                user_message=effective_user_message,
-                assistant_message=assistant_turn.content,
-            )
             _queue_chat_title_backfill(
                 background_tasks,
                 session_id=session_id,
@@ -2300,11 +2152,6 @@ async def chat_endpoint(
         ) from exc
 
     try:
-        _hydrate_conversation_history_from_durable_messages(
-            repository,
-            user_id=user_id,
-            session_id=session_id,
-        )
         context_messages = _build_context_messages_from_durable_messages(
             repository,
             user_id=user_id,
@@ -2394,13 +2241,6 @@ async def chat_endpoint(
                 )
                 if chat_message.turn_id and not assistant_turn.created:
                     db.rollback()
-                    _ensure_conversation_history_contains_exchange(
-                        repository,
-                        user_id=user_id,
-                        session_id=session_id,
-                        user_message=effective_user_message,
-                        assistant_message=assistant_turn.message.content,
-                    )
                     logger.info(
                         "Discarding duplicate non-stream completion for replayed turn %s",
                         chat_message.turn_id,
@@ -2443,9 +2283,6 @@ async def chat_endpoint(
                 )
         else:
             raise HTTPException(status_code=500, detail="Chat run did not complete")
-
-        # Save to conversation history
-        conversation_manager.add_exchange(user_id, session_id, effective_user_message, full_response)
 
         return ChatResponse(response=full_response, session_id=session_id)
 
@@ -2604,13 +2441,6 @@ async def chat_stream_endpoint(
         )
 
     if prepared_turn.replay_assistant_turn is not None:
-        _ensure_conversation_history_contains_exchange(
-            repository,
-            user_id=user_id,
-            session_id=session_id,
-            user_message=prepared_turn.effective_user_message,
-            assistant_message=prepared_turn.replay_assistant_turn.content,
-        )
         generated_title_candidate = _generate_title_from_turn(
             user_message=prepared_turn.effective_user_message,
             assistant_message=prepared_turn.replay_assistant_turn.content,
@@ -3129,13 +2959,6 @@ async def assistant_rescue(
             trace_id=request.trace_id,
         )
         db.commit()
-        _ensure_conversation_history_contains_exchange(
-            repository,
-            user_id=user_id,
-            session_id=session_id,
-            user_message=user_turn.content,
-            assistant_message=assistant_turn.message.content,
-        )
         _queue_chat_title_backfill(
             background_tasks,
             session_id=session_id,
@@ -3322,13 +3145,6 @@ async def execute_flow_endpoint(
 
     if prepared_turn.replay_events:
         if prepared_turn.replay_assistant_message is not None:
-            _ensure_conversation_history_contains_exchange(
-                repository,
-                user_id=user_id,
-                session_id=request.session_id,
-                user_message=prepared_turn.effective_user_message,
-                assistant_message=prepared_turn.replay_assistant_message,
-            )
             generated_title_candidate = _generate_title_from_turn(
                 user_message=prepared_turn.effective_user_message,
                 assistant_message=prepared_turn.replay_assistant_message,
@@ -3665,19 +3481,26 @@ async def chat_status(user: Dict[str, Any] = get_auth_dependency()):
 # Conversation History Endpoints
 
 @router.get("/chat/conversation", response_model=ConversationStatusResponse)
-async def get_conversation_status(user: Dict[str, Any] = get_auth_dependency()) -> ConversationStatusResponse:
+async def get_conversation_status(
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ConversationStatusResponse:
     """Get the current conversation status and memory statistics for the authenticated user."""
-    user_id = user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
 
     try:
-        stats = conversation_manager.get_memory_stats(user_id)
+        latest_session = _latest_visible_chat_session(repository, user_id=user_id)
+        stats = _build_durable_conversation_stats(
+            repository,
+            user_id=user_id,
+            current_session=latest_session,
+        )
         return ConversationStatusResponse(
-            is_active=stats.get("is_active", True),
-            conversation_id=stats.get("conversation_id"),
+            is_active=latest_session is not None,
+            conversation_id=latest_session.session_id if latest_session is not None else None,
             memory_stats=stats,
-            message="Conversation status retrieved successfully"
+            message="Conversation status retrieved successfully",
         )
     except Exception as e:
         logger.error("Failed to get conversation status: %s", e, extra={"user_id": user_id})
@@ -3685,32 +3508,39 @@ async def get_conversation_status(user: Dict[str, Any] = get_auth_dependency()) 
 
 
 @router.post("/chat/conversation/reset", response_model=ConversationResetResponse)
-async def reset_conversation(user: Dict[str, Any] = get_auth_dependency()) -> ConversationResetResponse:
+async def reset_conversation(
+    db: Session = Depends(get_db),
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> ConversationResetResponse:
     """Reset the conversation memory for the authenticated user and start a new conversation."""
-    user_id = user.get("sub")
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    user_id = _require_user_sub(user)
+    repository = _get_chat_history_repository(db)
 
     try:
-        success = conversation_manager.reset_conversation(user_id)
-
-        if success:
-            stats = conversation_manager.get_memory_stats(user_id)
-            new_session_id = str(uuid.uuid4())
-            return ConversationResetResponse(
-                success=True,
-                message="Conversation reset successfully. Use the provided session_id for the next message.",
-                memory_stats=stats,
-                session_id=new_session_id
-            )
-        else:
-            return ConversationResetResponse(
-                success=False,
-                message="Failed to reset conversation memory",
-                memory_stats=None,
-                session_id=None
-            )
+        active_document_id, _active_document = _resolve_session_create_active_document(
+            repository=repository,
+            user_id=user_id,
+        )
+        new_session_id = str(uuid.uuid4())
+        new_session = repository.create_session(
+            session_id=new_session_id,
+            user_auth_sub=user_id,
+            active_document_id=active_document_id,
+        )
+        db.commit()
+        stats = _build_durable_conversation_stats(
+            repository,
+            user_id=user_id,
+            current_session=new_session,
+        )
+        return ConversationResetResponse(
+            success=True,
+            message="Conversation reset successfully. Use the provided session_id for the next message.",
+            memory_stats=stats,
+            session_id=new_session_id,
+        )
     except Exception as e:
+        db.rollback()
         logger.error("Failed to reset conversation: %s", e, extra={"user_id": user_id})
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -3969,12 +3799,5 @@ async def bulk_delete_sessions(
 @router.get("/chat/config", response_model=ChatConfigResponse)
 async def get_chat_configuration(user: Dict[str, Any] = get_auth_dependency()):
     """Get current chat configuration including history settings."""
-    return ChatConfigResponse(
-        history={
-            "enabled": conversation_manager.history_enabled,
-            "max_exchanges": conversation_manager.max_exchanges,
-            "include_in_routing": conversation_manager.include_in_routing,
-            "include_in_response": conversation_manager.include_in_response,
-            "max_sessions_per_user": conversation_manager.max_sessions_per_user
-        }
-    )
+    _require_user_sub(user)
+    return ChatConfigResponse(history=chat_history_config.as_history_dict())

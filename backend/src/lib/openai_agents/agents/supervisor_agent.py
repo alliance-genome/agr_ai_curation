@@ -41,7 +41,7 @@ from src.lib.context import (
     get_current_user_id,
 )
 from src.lib.chat_state import document_state
-from src.lib.conversation_manager import conversation_manager
+from src.lib.chat_transcript import latest_assistant_message_for_session
 from src.lib.curation_workspace import (
     CurationPrepPersistenceContext,
     run_curation_prep,
@@ -103,20 +103,9 @@ def _normalize_scope_values(values: Sequence[str] | None) -> list[str]:
     return _unique_scope_values(list(values or []))
 
 
-def _latest_assistant_message(session_history: Sequence[Dict[str, Any]]) -> str | None:
-    """Return the most recent assistant message stored for the session."""
-
-    for exchange in reversed(session_history):
-        assistant_text = str(exchange.get("assistant") or "").strip()
-        if assistant_text:
-            return assistant_text
-    return None
-
-
-def _assistant_prompted_for_curation_prep(session_history: Sequence[Dict[str, Any]]) -> bool:
+def _assistant_prompted_for_curation_prep(latest_assistant: str | None) -> bool:
     """Return whether the prior assistant turn asked the required prep question."""
 
-    latest_assistant = _latest_assistant_message(session_history)
     if not latest_assistant:
         return False
     return CURATION_PREP_CONFIRMATION_QUESTION.lower() in latest_assistant.lower()
@@ -240,8 +229,11 @@ async def _dispatch_curation_prep_from_chat_context(
             "Curation prep is only available inside an active chat session.",
         )
 
-    session_history = list(conversation_manager.get_session_history(user_id, session_id))
-    if not _assistant_prompted_for_curation_prep(session_history):
+    latest_assistant_message = latest_assistant_message_for_session(
+        session_id=session_id,
+        user_id=user_id,
+    )
+    if not _assistant_prompted_for_curation_prep(latest_assistant_message):
         return _tool_response(
             "confirmation_required",
             (
