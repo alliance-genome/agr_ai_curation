@@ -682,7 +682,10 @@ def _build_flow_memory_assistant_message(
     if visible_output:
         final_output_block = visible_output
     elif status == "failed":
-        final_output_block = f"Flow failed before producing a final output. Reason: {failure_reason or 'Unknown'}"
+        final_output_block = (
+            "Flow failed before producing a final output. "
+            f"Reason: {_format_flow_failure_reason(failure_reason)}"
+        )
     else:
         final_output_block = "No final user-visible output was emitted."
 
@@ -702,8 +705,17 @@ def _build_flow_memory_assistant_message(
     )
 
 
+def _format_flow_failure_reason(failure_reason: Optional[str]) -> str:
+    """Render a failed flow reason without masking missing or blank values."""
+
+    normalized = failure_reason.strip() if isinstance(failure_reason, str) else None
+    if normalized:
+        return normalized
+    return repr(failure_reason)
+
+
 def _parse_event_created_at(value: Any) -> datetime | None:
-    """Best-effort conversion of an SSE timestamp string into a datetime."""
+    """Return a datetime when an optional SSE timestamp string parses cleanly."""
 
     if not isinstance(value, str):
         return None
@@ -744,7 +756,10 @@ def _build_execute_flow_summary_content(
     if visible_output:
         return visible_output
     if status == "failed":
-        return f"Flow failed before producing a final output. Reason: {failure_reason or 'Unknown'}"
+        return (
+            "Flow failed before producing a final output. "
+            f"Reason: {_format_flow_failure_reason(failure_reason)}"
+        )
     return "No final user-visible output was emitted."
 
 
@@ -759,9 +774,10 @@ def _build_execute_flow_transcript_row_from_event(
     created_at = _parse_event_created_at(event_payload.get("timestamp"))
 
     if event_type == "DOMAIN_WARNING":
-        content = str(details.get("message") or event_payload.get("message") or "Flow warning").strip()
+        warning_message = details.get("message") or event_payload.get("message")
+        content = warning_message.strip() if isinstance(warning_message, str) else ""
         if not content:
-            content = "Flow warning"
+            content = "Flow warning event missing message payload."
         return ExecuteFlowTranscriptRow(
             content=content,
             message_type="text",
@@ -777,7 +793,7 @@ def _build_execute_flow_transcript_row_from_event(
             quote_label = "quote" if evidence_count == 1 else "quotes"
             content = f"Flow step {step} captured {evidence_count} evidence {quote_label}."
         else:
-            content = "Flow step captured evidence records."
+            content = "Flow step evidence event missing integer step/evidence_count metadata."
         return ExecuteFlowTranscriptRow(
             content=content,
             message_type="flow_step_evidence",
@@ -787,8 +803,9 @@ def _build_execute_flow_transcript_row_from_event(
         )
 
     if event_type == "FILE_READY":
-        filename = str(details.get("filename") or event_payload.get("filename") or "").strip()
-        content = f"Generated file: {filename}" if filename else "Generated output file."
+        filename_value = details.get("filename") or event_payload.get("filename")
+        filename = filename_value.strip() if isinstance(filename_value, str) else ""
+        content = f"Generated file: {filename}" if filename else "Generated file event missing filename metadata."
         return ExecuteFlowTranscriptRow(
             content=content,
             message_type="file_download",
@@ -1718,7 +1735,7 @@ def _persist_execute_flow_runtime_state(
     flow_run_id: str,
     trace_id: Optional[str],
 ) -> None:
-    """Persist best-effort execute-flow runtime identifiers on the durable user row."""
+    """Persist execute-flow runtime identifiers on the durable user row."""
 
     completion_db = SessionLocal()
     try:
@@ -1830,9 +1847,6 @@ def _persist_completed_execute_flow_turn(
                 user_message=user_message,
                 assistant_message=replay[1],
             )
-    except ChatHistorySessionNotFoundError:
-        completion_db.rollback()
-        raise
     except Exception:
         completion_db.rollback()
         raise
@@ -3106,11 +3120,8 @@ async def execute_flow_endpoint(
             )
 
         async def replay_stream():
-            try:
-                for event_payload in prepared_turn.replay_events:
-                    yield _stream_event_sse(event_payload)
-            finally:
-                await _cleanup_stream_state(request.session_id)
+            for event_payload in prepared_turn.replay_events:
+                yield _stream_event_sse(event_payload)
 
         return StreamingResponse(
             replay_stream(),
@@ -3189,27 +3200,13 @@ async def execute_flow_endpoint(
 
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
-                    try:
-                        _persist_execute_flow_runtime_state(
-                            session_id=current_session_id,
-                            user_id=user_id,
-                            turn_id=current_turn_id,
-                            flow_run_id=prepared_turn.flow_run_id,
-                            trace_id=trace_id,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to persist execute-flow trace checkpoint for session %s",
-                            current_session_id,
-                            extra={
-                                "session_id": current_session_id,
-                                "user_id": user_id,
-                                "turn_id": current_turn_id,
-                                "flow_run_id": prepared_turn.flow_run_id,
-                                "trace_id": trace_id,
-                            },
-                            exc_info=True,
-                        )
+                    _persist_execute_flow_runtime_state(
+                        session_id=current_session_id,
+                        user_id=user_id,
+                        turn_id=current_turn_id,
+                        flow_run_id=prepared_turn.flow_run_id,
+                        trace_id=trace_id,
+                    )
 
                 if event_type == "RUN_FINISHED":
                     run_finished_response = str(event_data.get("response") or "")

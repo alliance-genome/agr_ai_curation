@@ -921,6 +921,113 @@ def test_build_flow_memory_message_keeps_hidden_json_parseable_when_compacted():
     assert parsed_hidden["flow"]["flow_id"] == "flow-123"
 
 
+def test_execute_flow_failure_messages_surface_missing_reason():
+    summary_content = chat._build_execute_flow_summary_content(
+        status="failed",
+        final_user_output=None,
+        failure_reason=None,
+    )
+    assistant_message = chat._build_flow_memory_assistant_message(
+        flow_name="Failure Flow",
+        flow_id="flow-failure",
+        session_id="session-failure",
+        status="failed",
+        trace_id="trace-failure",
+        final_user_output=None,
+        agents_used=[],
+        specialist_outputs=[],
+        specialist_summaries=[],
+        domain_warnings=[],
+        file_outputs=[],
+        failure_reason=None,
+    )
+
+    assert summary_content == "Flow failed before producing a final output. Reason: None"
+    assert "Reason: None" in assistant_message
+
+
+@pytest.mark.parametrize(
+    ("event_payload", "expected_message_type", "expected_content"),
+    [
+        (
+            {"type": "DOMAIN_WARNING", "details": {}},
+            "text",
+            "Flow warning event missing message payload.",
+        ),
+        (
+            {"type": "FLOW_STEP_EVIDENCE", "step": "one", "evidence_count": "many"},
+            "flow_step_evidence",
+            "Flow step evidence event missing integer step/evidence_count metadata.",
+        ),
+        (
+            {"type": "FILE_READY", "details": {}},
+            "file_download",
+            "Generated file event missing filename metadata.",
+        ),
+    ],
+)
+def test_build_execute_flow_transcript_row_from_event_surfaces_missing_metadata(
+    event_payload,
+    expected_message_type,
+    expected_content,
+):
+    row = chat._build_execute_flow_transcript_row_from_event(event_payload)
+
+    assert row is not None
+    assert row.message_type == expected_message_type
+    assert row.content == expected_content
+
+
+def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-trace-checkpoint-failure",
+        turn_id="turn-trace-checkpoint-failure",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Trace Checkpoint Failure Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    _patch_durable_history(monkeypatch)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-checkpoint-failure"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"output": "This output should never be reached."},
+        }
+
+    def _raise_checkpoint_failure(**_kwargs):
+        raise RuntimeError("checkpoint write failed")
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    monkeypatch.setattr(chat, "_persist_execute_flow_runtime_state", _raise_checkpoint_failure)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert events[0]["details"]["context"] == "RuntimeError"
+    assert events[0]["details"]["error"] == "checkpoint write failed"
+    assert events[1]["message"] == "Flow execution error: checkpoint write failed"
+    assert calls["unregister"] == [("session-trace-checkpoint-failure", "auth-sub", ANY)]
+    assert calls["clear"] == ["session-trace-checkpoint-failure"]
+
+
 def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-owned-elsewhere")
