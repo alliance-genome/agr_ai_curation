@@ -40,6 +40,7 @@ Start here for new developers:
 | [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add package-owned tools or maintain Alliance Defaults tool catalogs/runtime tool plumbing |
 | [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) | Comprehensive reference: unified agents table, dynamic supervisor, tool bindings, prompt management |
 | [DOCKER_CLI_REMOVAL_VERIFICATION.md](guides/DOCKER_CLI_REMOVAL_VERIFICATION.md) | 2026-03-24 backend audit for Docker CLI/socket hardening and remaining Docker references |
+| [DURABLE_CHAT_ROLLOUT_VERIFICATION.md](guides/DURABLE_CHAT_ROLLOUT_VERIFICATION.md) | 2026-04-21 ALL-242 rollout verification note for durable chat history build, test, browser QA, and follow-up findings |
 | [DEV_RELEASE_SMOKE_STRATEGY.md](DEV_RELEASE_SMOKE_STRATEGY.md) | Verbose source of truth for the deep dev release smoke gate: API coverage, gaps, evidence, rollout plan |
 | [2026-04-13-chat-curation-evidence-alignment-plan.md](../design/2026-04-13-chat-curation-evidence-alignment-plan.md) | Deep-dive plan for aligning chat and curation PDF evidence navigation before the production hotfix |
 | [PDF_EVIDENCE_CONSISTENCY_STRATEGY.md](PDF_EVIDENCE_CONSISTENCY_STRATEGY.md) | Deep-dive architecture strategy for replacing split Home/Curation PDF viewers with one persistent route-level PDF.js host |
