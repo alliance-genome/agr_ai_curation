@@ -165,6 +165,89 @@ def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClien
     assert fetched["last_executed_at"] is not None
 
 
+def test_execute_flow_persists_durable_history_and_replays_completed_turn(client: TestClient):
+    flow_name = f"it-flow-replay-{uuid4().hex[:12]}"
+
+    create_resp = client.post(
+        "/api/flows",
+        json={
+            "name": flow_name,
+            "description": "integration durable replay test",
+            "flow_definition": _flow_definition(
+                agent_id="chat_output",
+                agent_display_name="Chat Output Agent",
+            ),
+        },
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    flow_id = create_resp.json()["id"]
+
+    session_id = f"session-{uuid4().hex[:10]}"
+    turn_id = f"turn-{uuid4().hex[:10]}"
+    runner_calls = 0
+
+    async def _fake_run_agent_streamed(**_kwargs):
+        nonlocal runner_calls
+        runner_calls += 1
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-it-flow-replay"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "timestamp": "2026-02-26T00:00:03+00:00",
+            "details": {"output": "Selected TP53 for highest evidence confidence."},
+        }
+
+    execute_payload = {
+        "flow_id": flow_id,
+        "session_id": session_id,
+        "turn_id": turn_id,
+        "user_query": "Run this flow end-to-end",
+    }
+
+    with patch("src.lib.openai_agents.runner.run_agent_streamed", _fake_run_agent_streamed):
+        with client.stream("POST", "/api/chat/execute-flow", json=execute_payload) as stream_resp:
+            events = _sse_events(stream_resp)
+            assert stream_resp.status_code == 200
+
+    assert runner_calls == 1
+    assert [event.get("type") for event in events] == [
+        "FLOW_STARTED",
+        "RUN_STARTED",
+        "CHAT_OUTPUT_READY",
+        "FLOW_FINISHED",
+    ]
+    assert all(event.get("turn_id") == turn_id for event in events)
+
+    history_resp = client.get(f"/api/chat/history/{session_id}")
+    assert history_resp.status_code == 200, history_resp.text
+    history_payload = history_resp.json()
+    assert [(message["role"], message["message_type"], message["turn_id"]) for message in history_payload["messages"]] == [
+        ("user", "text", turn_id),
+        ("flow", "flow_summary", turn_id),
+    ]
+    assert history_payload["messages"][1]["content"] == "Selected TP53 for highest evidence confidence."
+    assert "_assistant_message" not in (history_payload["messages"][1]["payload_json"] or {})
+
+    async def _unexpected_run_agent_streamed(**_kwargs):
+        raise AssertionError("run_agent_streamed should not run for a completed replayed flow turn")
+        yield  # pragma: no cover
+
+    with patch("src.lib.openai_agents.runner.run_agent_streamed", _unexpected_run_agent_streamed):
+        with client.stream("POST", "/api/chat/execute-flow", json=execute_payload) as stream_resp:
+            replay_events = _sse_events(stream_resp)
+            assert stream_resp.status_code == 200
+
+    assert [event.get("type") for event in replay_events] == [
+        "RUN_STARTED",
+        "CHAT_OUTPUT_READY",
+        "FLOW_FINISHED",
+    ]
+    assert all(event.get("turn_id") == turn_id for event in replay_events)
+    assert replay_events[0]["trace_id"] == "trace-it-flow-replay"
+
+    fetched = client.get(f"/api/flows/{flow_id}").json()
+    assert fetched["execution_count"] == 1
+
+
 def test_execute_flow_emits_stream_error_for_unresolvable_agent(client: TestClient):
     flow_name = f"it-fail-flow-{uuid4().hex[:12]}"
     create_payload = {

@@ -543,6 +543,33 @@ class ChatHistoryRepository:
 
         return _message_record(message)
 
+    def list_messages_for_turn(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+    ) -> list[ChatMessageRecord]:
+        """Return all visible transcript rows for one turn in chronological order."""
+
+        session = self._require_active_session(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+        )
+        normalized_turn_id = _normalize_required_text(turn_id, field_name="turn_id")
+        messages = self._db.scalars(
+            select(ChatMessageModel)
+            .where(
+                ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.turn_id == normalized_turn_id,
+            )
+            .order_by(
+                ChatMessageModel.created_at.asc(),
+                ChatMessageModel.message_id.asc(),
+            )
+        ).all()
+        return [_message_record(message) for message in messages]
+
     def _get_active_session(
         self,
         *,

@@ -5,7 +5,7 @@ Tests the task_input node requirement and related validation.
 import pytest
 from pydantic import ValidationError
 
-from src.schemas.flows import FlowDefinition
+from src.schemas.flows import ExecuteFlowRequest, FlowDefinition
 
 
 def make_task_input_node(node_id: str = "task_input_1", task_instructions: str = "Test task") -> dict:
@@ -145,6 +145,25 @@ class TestFlowDefinitionTaskInputRequirement:
 
         with pytest.raises(ValidationError):
             FlowDefinition(**flow_data)
+
+
+def test_execute_flow_request_accepts_non_blank_turn_id():
+    payload = ExecuteFlowRequest(
+        flow_id="00000000-0000-0000-0000-000000000123",
+        session_id="session-1",
+        turn_id=" turn-1 ",
+    )
+
+    assert payload.turn_id == "turn-1"
+
+
+def test_execute_flow_request_rejects_blank_turn_id():
+    with pytest.raises(ValidationError, match="turn_id cannot be blank"):
+        ExecuteFlowRequest(
+            flow_id="00000000-0000-0000-0000-000000000123",
+            session_id="session-1",
+            turn_id="   ",
+        )
 
     def test_multiple_task_inputs_fails(self):
         """Flow with multiple task_input nodes should fail."""

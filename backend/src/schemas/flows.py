@@ -262,11 +262,26 @@ class ExecuteFlowRequest(BaseModel):
         None,
         description="Document ID for PDF-aware agents (required if flow uses pdf_extraction/gene_expression)"
     )
+    turn_id: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Optional idempotency key for durable execute-flow replay"
+    )
     user_query: Optional[str] = Field(
         None,
         max_length=2000,
         description="Optional user-provided context or query"
     )
+
+    @field_validator("turn_id")
+    @classmethod
+    def validate_turn_id_not_whitespace(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("turn_id cannot be blank")
+        return normalized
 
 
 class CreateFlowRequest(BaseModel):

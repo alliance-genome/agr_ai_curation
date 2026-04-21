@@ -611,6 +611,49 @@ def test_build_context_messages_from_durable_messages_preserves_completed_exchan
     ]
 
 
+def test_build_context_messages_from_durable_messages_rehydrates_flow_memory_from_summary_rows():
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-flow-context")],
+        detail_messages={
+            ("user-1", "session-flow-context"): [
+                _message_record(
+                    session_id="session-flow-context",
+                    role="user",
+                    content="Run gene selection flow",
+                    turn_id="turn-flow-1",
+                    created_at=_ts(9, 1),
+                ),
+                _message_record(
+                    session_id="session-flow-context",
+                    role="flow",
+                    content="Selected TP53 for highest evidence confidence.",
+                    turn_id="turn-flow-1",
+                    message_type=chat._FLOW_SUMMARY_MESSAGE_TYPE,
+                    payload_json={
+                        "flow_id": "flow-1",
+                        "status": "completed",
+                        chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: "hidden assistant flow memory",
+                    },
+                    created_at=_ts(9, 2),
+                ),
+            ]
+        },
+    )
+
+    context_messages = chat._build_context_messages_from_durable_messages(
+        repository,
+        user_id="user-1",
+        session_id="session-flow-context",
+        user_message="follow-up question",
+    )
+
+    assert context_messages == [
+        {"role": "user", "content": "Run gene selection flow"},
+        {"role": "assistant", "content": "hidden assistant flow memory"},
+        {"role": "user", "content": "follow-up question"},
+    ]
+
+
 def test_hydrate_conversation_history_from_durable_messages_rebuilds_partial_history(monkeypatch):
     conversation_manager = FakeConversationManager()
     conversation_manager.add_exchange("user-1", "session-replay", "first question", "first answer")
@@ -1947,6 +1990,32 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
     assert payload.active_document.filename == "paper.pdf"
     assert payload.messages[0].message_id == str(message_id)
     assert payload.messages[0].payload_json == {"step": "answer"}
+
+
+def test_serialize_message_omits_internal_flow_summary_payload_keys():
+    record = ChatMessageRecord(
+        message_id=uuid4(),
+        session_id="session-flow-detail",
+        turn_id="turn-flow-1",
+        role="flow",
+        message_type=chat._FLOW_SUMMARY_MESSAGE_TYPE,
+        content="Selected TP53 for highest evidence confidence.",
+        payload_json={
+            "flow_id": "flow-1",
+            "status": "completed",
+            chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY: "hidden assistant flow memory",
+            chat._FLOW_TRANSCRIPT_REPLAY_TERMINAL_EVENTS_KEY: [{"type": "FLOW_FINISHED"}],
+        },
+        trace_id="trace-flow-1",
+        created_at=_ts(9, 32),
+    )
+
+    payload = chat._serialize_message(record)
+
+    assert payload.payload_json == {
+        "flow_id": "flow-1",
+        "status": "completed",
+    }
 
 
 @pytest.mark.asyncio
