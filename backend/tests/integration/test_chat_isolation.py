@@ -175,7 +175,7 @@ class TestChatIsolation:
 
             # Verify request was made (may return different status codes)
             # The key is that SupervisorState receives the correct user_id
-            assert response.status_code in [200, 422, 500], \
+            assert response.status_code in [200, 422], \
                 f"Chat endpoint should be accessible, got {response.status_code}"
 
             # Verify mock was called with authenticated user_id
@@ -567,7 +567,7 @@ class TestChatIsolation:
                 "/api/chat",
                 json={"message": "test query", "session_id": session_id},
             )
-            assert response.status_code in [200, 422, 500]
+            assert response.status_code in [200, 422]
             assert mock_execute.called
             call_kwargs = mock_execute.call_args.kwargs if mock_execute.call_args else {}
             assert call_kwargs.get("user_id") == curator1_user["sub"]
