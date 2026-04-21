@@ -9,6 +9,11 @@ from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepChatR
 from src.schemas.curation_workspace import CurationExtractionResultRecord, CurationExtractionSourceKind
 
 
+@pytest.fixture(autouse=True)
+def _default_conversation_message_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(module, "count_session_text_messages", lambda **_kwargs: 0)
+
+
 def _make_extraction_result(
     *,
     candidate_count: int = 2,
