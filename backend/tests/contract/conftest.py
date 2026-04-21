@@ -52,7 +52,6 @@ def contract_client(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
 
     from fastapi.testclient import TestClient
-    import os
     import sys
 
     sys.path.insert(

@@ -283,16 +283,18 @@ class TestChatIsolation:
             mock_execute.return_value = mock_chat_generator()
 
             # User 1 sends chat message
-            response1 = client_as_curator1.post(
+            first_response = client_as_curator1.post(
                 "/api/chat",
                 json={"message": "Show my documents", "session_id": "session1"}
             )
+            assert first_response.status_code in [200, 422, 500]
 
             # User 2 sends chat message
-            response2 = client_as_curator2.post(
+            second_response = client_as_curator2.post(
                 "/api/chat",
                 json={"message": "Show my documents", "session_id": "session2"}
             )
+            assert second_response.status_code in [200, 422, 500]
 
             # Both requests should succeed (or fail gracefully, not cross-contaminate)
             # The key is that they should use different tenants
@@ -622,7 +624,7 @@ class TestChatIsolation:
         collection = client.collections.get("DocumentChunk")
 
         # Call with_tenant
-        tenant_scoped = collection.with_tenant(tenant_name)
+        collection.with_tenant(tenant_name)
 
         # Verify tenant was tracked
         tenant_calls = mock_weaviate_with_tenant_tracking["tenant_calls"]["calls"]
