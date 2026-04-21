@@ -683,7 +683,7 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
     )
     assert [message.role for message in stored_turn_messages] == ["user", "flow"]
     history_assistant_msg = stored_turn_messages[1].payload_json[
-        chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+        chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
     ]
     assert "Flow execution summary for follow-up questions" in history_assistant_msg
     assert "<FLOW_INTERNAL_CONTEXT_JSON>" in history_assistant_msg
@@ -708,7 +708,7 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
     )
     db = _DummyDB(flow=flow)
 
-    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    _patch_stream_dependencies(monkeypatch, cancel_requested=False)
     repository, _completion_db = _patch_durable_history(monkeypatch)
 
     execute_calls = []
@@ -776,8 +776,8 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
         turn_id="turn-flow-replay",
     )
     assert [message.role for message in stored_turn_messages] == ["user", "flow"]
-    assert stored_turn_messages[1].message_type == chat._FLOW_SUMMARY_MESSAGE_TYPE
-    assert stored_turn_messages[1].payload_json[chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY].startswith(
+    assert stored_turn_messages[1].message_type == chat.FLOW_SUMMARY_MESSAGE_TYPE
+    assert stored_turn_messages[1].payload_json[chat.FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY].startswith(
         "Flow execution summary for follow-up questions"
     )
 

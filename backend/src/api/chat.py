@@ -1840,13 +1840,6 @@ def _persist_completed_execute_flow_turn(
             )
         completion_db.commit()
 
-        replay = _build_execute_flow_turn_replay(
-            repository.list_messages_for_turn(
-                session_id=session_id,
-                user_auth_sub=user_id,
-                turn_id=turn_id,
-            )
-        )
     except Exception:
         completion_db.rollback()
         raise

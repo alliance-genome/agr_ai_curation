@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from src.lib.chat_history_repository import ChatHistorySessionNotFoundError, ChatMessageCursor, ChatMessageRecord
+from src.lib.chat_history_repository import ChatHistorySessionNotFoundError, ChatMessageRecord
 from src.lib.chat_transcript import (
     FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY,
     collect_durable_text_exchanges,
