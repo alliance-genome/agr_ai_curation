@@ -69,6 +69,9 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
    * In DEV MODE: Skips API call and maintains mock user state
    */
   const checkAuthStatus = async (): Promise<void> => {
+    // Drop pre-namespaced chat keys on every startup path before auth-specific bootstrap runs.
+    clearLegacyChatLocalStorage();
+
     // DEV MODE BYPASS: Don't call backend, just keep mock user
     if (devMode) {
       logger.debug('DEV MODE: Skipping auth check, using mock user', {
@@ -89,7 +92,6 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const userData = await response.json();
         // Use auth_sub (provider subject claim) as the unique user identifier
         const newUserId = userData.auth_sub;
-        clearLegacyChatLocalStorage();
         const chatStorageKeys = getChatLocalStorageKeys(newUserId);
 
         setUser({
