@@ -1,6 +1,6 @@
 import type { ComponentProps } from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { getChatLocalStorageKeys, getChatRenderCacheKeys } from '@/lib/chatCacheKeys'
@@ -1340,6 +1340,126 @@ describe('Chat turn reconciliation', () => {
         'This response is shown above, but it could not be saved to chat history: database unavailable',
       ),
     ).toBeInTheDocument()
+  })
+
+  it('does not restore rescued assistant output after reset hands off to a new session', async () => {
+    let resolveRescue: ((response: Response) => void) | null = null
+    const onSessionChange = vi.fn()
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/health/deep') {
+        return {
+          ok: true,
+          json: async () => ({
+            services: {
+              weaviate: 'connected',
+              curation_db: 'connected',
+            },
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/document') {
+        return {
+          ok: true,
+          json: async () => ({
+            active: false,
+            document: null,
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/conversation') {
+        return {
+          ok: true,
+          json: async () => ({
+            is_active: true,
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/conversation/reset' && init?.method === 'POST') {
+        return {
+          ok: true,
+          json: async () => ({
+            session_id: 'session-2',
+          }),
+        } as Response
+      }
+
+      if (url === '/api/chat/session-1/assistant-rescue' && init?.method === 'POST') {
+        return await new Promise<Response>((resolve) => {
+          resolveRescue = resolve
+        })
+      }
+
+      return {
+        ok: true,
+        json: async () => ({}),
+      } as Response
+    })
+
+    const user = userEvent.setup()
+
+    renderChat({
+      sessionId: 'session-1',
+      onSessionChange,
+      events: [
+        {
+          type: 'TEXT_MESSAGE_CONTENT',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-save-failed-3',
+          trace_id: 'trace-stream-3',
+          content: 'Do not restore this after reset',
+        },
+        {
+          type: 'turn_save_failed',
+          session_id: 'session-1',
+          sessionId: 'session-1',
+          turn_id: 'turn-save-failed-3',
+          trace_id: 'trace-stream-3',
+          message: 'Chat completed, but the assistant response could not be saved.',
+        },
+      ],
+    })
+
+    expect(await screen.findByText('Do not restore this after reset')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(resolveRescue).not.toBeNull()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Reset Chat' }))
+
+    await waitFor(() => {
+      expect(onSessionChange).toHaveBeenCalledWith('session-2')
+    })
+
+    await waitFor(() => {
+      expect(screen.queryByText('Do not restore this after reset')).not.toBeInTheDocument()
+    })
+
+    await act(async () => {
+      resolveRescue?.({
+        ok: true,
+        json: async () => ({
+          session_id: 'session-1',
+          turn_id: 'turn-save-failed-3',
+          created: true,
+          trace_id: 'trace-rescue-3',
+        }),
+      } as Response)
+      await Promise.resolve()
+    })
+
+    expect(screen.queryByText('Do not restore this after reset')).not.toBeInTheDocument()
+    expect(screen.queryByText('Saving this response to chat history...')).not.toBeInTheDocument()
+
+    confirmSpy.mockRestore()
   })
 
   it('hands reset chat off through onSessionChange and clears auth-scoped audit caches', async () => {

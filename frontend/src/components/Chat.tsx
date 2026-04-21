@@ -802,6 +802,7 @@ function Chat({
   const processedEventIdsRef = useRef<Set<number>>(new Set())
   const latestMessagesRef = useRef<Message[]>(messages)
   const latestSessionIdRef = useRef<string | null>(propSessionId)
+  const sessionStateVersionRef = useRef(0)
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const restoredSessionRef = useRef<string | null>(null)
   const messageStorageUserIdRef = useRef<string | null>(storageUserId)
@@ -878,6 +879,13 @@ function Chat({
     lastProgressUpdateRef.current = 0
   }, [])
 
+  const invalidateTurnRuntimeState = useCallback(() => {
+    sessionStateVersionRef.current += 1
+    assistantBuffersRef.current = {}
+    activeTurnIdRef.current = null
+    rescuedTurnIdsRef.current = new Set()
+  }, [])
+
   const getAssistantTurnContent = useCallback((turnId: string): string => {
     const bufferedContent = assistantBuffersRef.current[turnId]
     if (bufferedContent) {
@@ -895,6 +903,8 @@ function Chat({
     turnId: string,
     traceId?: string | null,
   ) => {
+    const rescueSessionVersion = sessionStateVersionRef.current
+
     if (rescuedTurnIdsRef.current.has(turnId)) {
       return
     }
@@ -903,6 +913,9 @@ function Chat({
     const assistantContent = getAssistantTurnContent(turnId)
 
     if (!assistantContent.trim()) {
+      if (sessionStateVersionRef.current !== rescueSessionVersion) {
+        return
+      }
       setMessages((prev) => upsertAssistantTurnMessage(prev, {
         turnId,
         traceId,
@@ -935,6 +948,10 @@ function Chat({
         trace_id?: string | null
       }
 
+      if (sessionStateVersionRef.current !== rescueSessionVersion) {
+        return
+      }
+
       setMessages((prev) => upsertAssistantTurnMessage(prev, {
         turnId,
         content: assistantContent,
@@ -947,6 +964,9 @@ function Chat({
       const errorMessage = error instanceof Error
         ? error.message
         : 'Failed to rescue the assistant response.'
+      if (sessionStateVersionRef.current !== rescueSessionVersion) {
+        return
+      }
       setMessages((prev) => upsertAssistantTurnMessage(prev, {
         turnId,
         content: assistantContent,
@@ -956,6 +976,9 @@ function Chat({
         rescueState: 'failed',
       }))
     } finally {
+      if (sessionStateVersionRef.current !== rescueSessionVersion) {
+        return
+      }
       delete assistantBuffersRef.current[turnId]
       if (activeTurnIdRef.current === turnId) {
         activeTurnIdRef.current = null
@@ -1088,9 +1111,7 @@ function Chat({
     restoredSessionRef.current = null
     sessionTraceIds.current = []
     latestMessagesRef.current = []
-    assistantBuffersRef.current = {}
-    activeTurnIdRef.current = null
-    rescuedTurnIdsRef.current = new Set()
+    invalidateTurnRuntimeState()
     progressMessageQueueRef.current = []
     lastProgressUpdateRef.current = 0
     setMessages([])
@@ -1106,7 +1127,7 @@ function Chat({
       clearTimeout(persistTimeoutRef.current)
       persistTimeoutRef.current = null
     }
-  }, [storageUserId])
+  }, [invalidateTurnRuntimeState, storageUserId])
 
   // If session arrives after mount (or changes), restore persisted messages once per session.
   useEffect(() => {
@@ -1126,11 +1147,9 @@ function Chat({
     }
 
     previousSessionIdRef.current = propSessionId
-    assistantBuffersRef.current = {}
-    activeTurnIdRef.current = null
-    rescuedTurnIdsRef.current = new Set()
+    invalidateTurnRuntimeState()
     clearProgressState()
-  }, [clearProgressState, propSessionId])
+  }, [clearProgressState, invalidateTurnRuntimeState, propSessionId])
 
   // Persist messages to localStorage whenever they change (debounced to avoid rapid writes during streaming)
   useEffect(() => {
@@ -2098,6 +2117,8 @@ function Chat({
           clearChatRenderCacheForSession(storageUserId, nextSessionId)
         }
 
+        invalidateTurnRuntimeState()
+
         if (onSessionChange) {
           debug.log('🔄 [Session Reset] Propagating new session ID to HomePage:', nextSessionId)
           onSessionChange(nextSessionId)
@@ -2108,9 +2129,6 @@ function Chat({
         setMessages([])
         clearStoredMessages()
         sessionTraceIds.current = [] // Clear accumulated trace IDs for new session
-        assistantBuffersRef.current = {}
-        activeTurnIdRef.current = null
-        rescuedTurnIdsRef.current = new Set()
         setRefinePrompt(null)
         setRefineText('')
         clearProgressState()
