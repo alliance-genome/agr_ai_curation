@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
@@ -40,6 +40,7 @@ describe('AuthProvider dev-mode bootstrap', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     vi.unstubAllEnvs()
   })
 
@@ -83,5 +84,38 @@ describe('AuthProvider dev-mode bootstrap', () => {
     expect(localStorage.getItem(scopedKeys.pdfViewerSession)).toBe('{"documentId":"doc-42"}')
 
     expect(vi.mocked(global.fetch)).not.toHaveBeenCalled()
+  })
+
+  it('does not repeat legacy chat cleanup on the periodic dev-mode auth refresh', async () => {
+    vi.useFakeTimers()
+    vi.stubEnv('VITE_DEV_MODE', 'true')
+
+    Object.values(legacyChatStorageKeys).forEach((key) => {
+      localStorage.setItem(key, `${key}-value`)
+    })
+
+    const removeItemSpy = vi.spyOn(Storage.prototype, 'removeItem')
+
+    render(
+      <AuthProvider>
+        <AuthProbe />
+      </AuthProvider>,
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    expect(removeItemSpy.mock.calls.map(([key]) => key)).toEqual(Object.values(legacyChatStorageKeys))
+
+    await act(async () => {
+      vi.advanceTimersByTime(5 * 60 * 1000)
+      await Promise.resolve()
+    })
+
+    expect(removeItemSpy.mock.calls.map(([key]) => key)).toEqual(Object.values(legacyChatStorageKeys))
+    expect(vi.mocked(global.fetch)).not.toHaveBeenCalled()
+
+    removeItemSpy.mockRestore()
   })
 })
