@@ -5,7 +5,7 @@ Tests the task_input node requirement and related validation.
 import pytest
 from pydantic import ValidationError
 
-from src.schemas.flows import FlowDefinition
+from src.schemas.flows import ExecuteFlowRequest, FlowDefinition
 
 
 def make_task_input_node(node_id: str = "task_input_1", task_instructions: str = "Test task") -> dict:
@@ -146,115 +146,138 @@ class TestFlowDefinitionTaskInputRequirement:
         with pytest.raises(ValidationError):
             FlowDefinition(**flow_data)
 
-    def test_multiple_task_inputs_fails(self):
-        """Flow with multiple task_input nodes should fail."""
-        flow_data = {
-            "version": "1.0",
-            "nodes": [
-                make_task_input_node("task_1", "First task"),
-                make_task_input_node("task_2", "Second task"),
-            ],
-            "edges": [],
-            "entry_node_id": "task_1",
-        }
 
-        with pytest.raises(ValidationError) as exc_info:
-            FlowDefinition(**flow_data)
+def test_execute_flow_request_accepts_non_blank_turn_id():
+    payload = ExecuteFlowRequest(
+        flow_id="00000000-0000-0000-0000-000000000123",
+        session_id="session-1",
+        turn_id=" turn-1 ",
+    )
 
-        errors = exc_info.value.errors()
-        # Should have error about unique output keys (both have same output_key)
-        # or about multiple task_input nodes
-        assert len(errors) >= 1
+    assert payload.turn_id == "turn-1"
 
-    def test_task_input_must_be_entry_node(self):
-        """task_input node must be the entry_node_id."""
-        flow_data = {
-            "version": "1.0",
-            "nodes": [
-                make_task_input_node("task_1", "Test task"),
-                make_agent_node("n1", "pdf_extraction", "pdf_output"),
-            ],
-            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
-            "entry_node_id": "n1",  # Wrong - should be task_1
-        }
 
-        with pytest.raises(ValidationError) as exc_info:
-            FlowDefinition(**flow_data)
+def test_execute_flow_request_rejects_blank_turn_id():
+    with pytest.raises(ValidationError, match="turn_id cannot be blank"):
+        ExecuteFlowRequest(
+            flow_id="00000000-0000-0000-0000-000000000123",
+            session_id="session-1",
+            turn_id="   ",
+        )
 
-        errors = exc_info.value.errors()
-        assert len(errors) >= 1
-        error_msg = str(errors[0]["msg"]).lower()
-        assert "entry" in error_msg or "task_input" in error_msg
+def test_multiple_task_inputs_fails():
+    """Flow with multiple task_input nodes should fail."""
+    flow_data = {
+        "version": "1.0",
+        "nodes": [
+            make_task_input_node("task_1", "First task"),
+            make_task_input_node("task_2", "Second task"),
+        ],
+        "edges": [],
+        "entry_node_id": "task_1",
+    }
 
-    def test_task_input_cannot_have_incoming_edges(self):
-        """task_input node cannot have incoming edges."""
-        flow_data = {
-            "version": "1.0",
-            "nodes": [
-                make_task_input_node("task_1", "Test task"),
-                make_agent_node("n1", "pdf_extraction", "pdf_output"),
-            ],
-            "edges": [{"id": "e1", "source": "n1", "target": "task_1"}],  # Wrong direction
-            "entry_node_id": "task_1",
-        }
+    with pytest.raises(ValidationError) as exc_info:
+        FlowDefinition(**flow_data)
 
-        with pytest.raises(ValidationError) as exc_info:
-            FlowDefinition(**flow_data)
+    errors = exc_info.value.errors()
+    # Should have error about unique output keys (both have same output_key)
+    # or about multiple task_input nodes
+    assert len(errors) >= 1
 
-        errors = exc_info.value.errors()
-        assert len(errors) >= 1
 
-    def test_task_input_none_instructions_fails(self):
-        """task_input node with None instructions should fail."""
-        flow_data = {
-            "version": "1.0",
-            "nodes": [
-                {
-                    "id": "task_1",
-                    "type": "task_input",
-                    "position": {"x": 0, "y": 0},
-                    "data": {
-                        "agent_id": "task_input",
-                        "agent_display_name": "Initial Instructions",
-                        "task_instructions": None,  # Explicitly None
-                        "input_source": "user_query",
-                        "output_key": "task_input",
-                    }
-                },
-                make_agent_node("n1", "pdf_extraction", "pdf_output"),
-            ],
-            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
-            "entry_node_id": "task_1",
-        }
+def test_task_input_must_be_entry_node():
+    """task_input node must be the entry_node_id."""
+    flow_data = {
+        "version": "1.0",
+        "nodes": [
+            make_task_input_node("task_1", "Test task"),
+            make_agent_node("n1", "pdf_extraction", "pdf_output"),
+        ],
+        "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+        "entry_node_id": "n1",  # Wrong - should be task_1
+    }
 
-        with pytest.raises(ValidationError):
-            FlowDefinition(**flow_data)
+    with pytest.raises(ValidationError) as exc_info:
+        FlowDefinition(**flow_data)
 
-    def test_task_input_type_requires_matching_agent_id(self):
-        """task_input type node must have agent_id='task_input'."""
-        flow_data = {
-            "version": "1.0",
-            "nodes": [{
+    errors = exc_info.value.errors()
+    assert len(errors) >= 1
+    error_msg = str(errors[0]["msg"]).lower()
+    assert "entry" in error_msg or "task_input" in error_msg
+
+
+def test_task_input_cannot_have_incoming_edges():
+    """task_input node cannot have incoming edges."""
+    flow_data = {
+        "version": "1.0",
+        "nodes": [
+            make_task_input_node("task_1", "Test task"),
+            make_agent_node("n1", "pdf_extraction", "pdf_output"),
+        ],
+        "edges": [{"id": "e1", "source": "n1", "target": "task_1"}],  # Wrong direction
+        "entry_node_id": "task_1",
+    }
+
+    with pytest.raises(ValidationError) as exc_info:
+        FlowDefinition(**flow_data)
+
+    errors = exc_info.value.errors()
+    assert len(errors) >= 1
+
+
+def test_task_input_none_instructions_fails():
+    """task_input node with None instructions should fail."""
+    flow_data = {
+        "version": "1.0",
+        "nodes": [
+            {
                 "id": "task_1",
                 "type": "task_input",
                 "position": {"x": 0, "y": 0},
                 "data": {
-                    "agent_id": "pdf_extraction",  # Wrong agent_id for task_input type
-                    "agent_display_name": "Wrong Agent",
-                    "task_instructions": "Test task",
+                    "agent_id": "task_input",
+                    "agent_display_name": "Initial Instructions",
+                    "task_instructions": None,  # Explicitly None
                     "input_source": "user_query",
                     "output_key": "task_input",
                 }
-            }],
-            "edges": [],
-            "entry_node_id": "task_1",
-        }
+            },
+            make_agent_node("n1", "pdf_extraction", "pdf_output"),
+        ],
+        "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+        "entry_node_id": "task_1",
+    }
 
-        with pytest.raises(ValidationError) as exc_info:
-            FlowDefinition(**flow_data)
+    with pytest.raises(ValidationError):
+        FlowDefinition(**flow_data)
 
-        errors = exc_info.value.errors()
-        assert len(errors) >= 1
+
+def test_task_input_type_requires_matching_agent_id():
+    """task_input type node must have agent_id='task_input'."""
+    flow_data = {
+        "version": "1.0",
+        "nodes": [{
+            "id": "task_1",
+            "type": "task_input",
+            "position": {"x": 0, "y": 0},
+            "data": {
+                "agent_id": "pdf_extraction",  # Wrong agent_id for task_input type
+                "agent_display_name": "Wrong Agent",
+                "task_instructions": "Test task",
+                "input_source": "user_query",
+                "output_key": "task_input",
+            }
+        }],
+        "edges": [],
+        "entry_node_id": "task_1",
+    }
+
+    with pytest.raises(ValidationError) as exc_info:
+        FlowDefinition(**flow_data)
+
+    errors = exc_info.value.errors()
+    assert len(errors) >= 1
 
 
 class TestFlowDefinitionOtherValidations:

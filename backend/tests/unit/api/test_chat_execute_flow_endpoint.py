@@ -1,6 +1,7 @@
 """Unit tests for /api/chat/execute-flow endpoint streaming behavior."""
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 import importlib
 import json
 from types import SimpleNamespace
@@ -49,6 +50,180 @@ class _DummyDB:
         self.rollback_calls += 1
 
 
+class _DummyCompletionDB:
+    def __init__(self):
+        self.commit_calls = 0
+        self.rollback_calls = 0
+        self.closed = False
+
+    def commit(self):
+        self.commit_calls += 1
+
+    def rollback(self):
+        self.rollback_calls += 1
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeChatHistoryRepository:
+    def __init__(self) -> None:
+        self.sessions: dict[tuple[str, str], chat.ChatSessionRecord] = {}
+        self.messages: dict[tuple[str, str], list[chat.ChatMessageRecord]] = {}
+        self._counter = 0
+
+    def get_or_create_session(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        title: str | None = None,
+        active_document_id=None,
+        created_at: datetime | None = None,
+    ) -> chat.ChatSessionRecord:
+        key = (user_auth_sub, session_id)
+        existing = self.sessions.get(key)
+        if existing is not None:
+            return existing
+        created = created_at or datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
+        record = chat.ChatSessionRecord(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            title=title,
+            active_document_id=active_document_id,
+            created_at=created,
+            updated_at=created,
+            last_message_at=None,
+            deleted_at=None,
+        )
+        self.sessions[key] = record
+        return record
+
+    def get_session(self, *, session_id: str, user_auth_sub: str):
+        return self.sessions.get((user_auth_sub, session_id))
+
+    def append_message(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        role: str,
+        content: str,
+        message_type: str = "text",
+        turn_id: str | None = None,
+        payload_json=None,
+        trace_id: str | None = None,
+        created_at: datetime | None = None,
+    ):
+        session = self.get_or_create_session(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+        )
+        if turn_id is not None and role in {"user", "assistant"}:
+            existing = self.get_message_by_turn_id(
+                session_id=session_id,
+                user_auth_sub=user_auth_sub,
+                turn_id=turn_id,
+                role=role,
+            )
+            if existing is not None:
+                return SimpleNamespace(message=existing, created=False)
+
+        self._counter += 1
+        message_created_at = created_at or datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc) + timedelta(seconds=self._counter)
+        record = chat.ChatMessageRecord(
+            message_id=uuid4(),
+            session_id=session_id,
+            turn_id=turn_id,
+            role=role,
+            message_type=message_type,
+            content=content,
+            payload_json=payload_json,
+            trace_id=trace_id,
+            created_at=message_created_at,
+        )
+        key = (user_auth_sub, session_id)
+        self.messages.setdefault(key, []).append(record)
+        self.sessions[key] = chat.ChatSessionRecord(
+            session_id=session.session_id,
+            user_auth_sub=session.user_auth_sub,
+            title=session.title,
+            active_document_id=session.active_document_id,
+            created_at=session.created_at,
+            updated_at=message_created_at,
+            last_message_at=message_created_at,
+            deleted_at=session.deleted_at,
+        )
+        return SimpleNamespace(message=record, created=True)
+
+    def get_message_by_turn_id(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+        role: str,
+    ):
+        for message in self.messages.get((user_auth_sub, session_id), []):
+            if message.turn_id == turn_id and message.role == role:
+                return message
+        return None
+
+    def list_messages_for_turn(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+    ) -> list[chat.ChatMessageRecord]:
+        return [
+            message
+            for message in self.messages.get((user_auth_sub, session_id), [])
+            if message.turn_id == turn_id
+        ]
+
+    def update_message_by_turn_id(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        turn_id: str,
+        role: str,
+        payload_json=None,
+        trace_id=None,
+    ):
+        key = (user_auth_sub, session_id)
+        for index, message in enumerate(self.messages.get(key, [])):
+            if message.turn_id != turn_id or message.role != role:
+                continue
+            updated = chat.ChatMessageRecord(
+                message_id=message.message_id,
+                session_id=message.session_id,
+                turn_id=message.turn_id,
+                role=message.role,
+                message_type=message.message_type,
+                content=message.content,
+                payload_json=payload_json if payload_json is not None else message.payload_json,
+                trace_id=trace_id if trace_id is not None else message.trace_id,
+                created_at=message.created_at,
+            )
+            self.messages[key][index] = updated
+            return updated
+        raise LookupError("Chat message not found")
+
+    def list_messages(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        limit: int = 200,
+        cursor=None,
+    ):
+        del cursor
+        messages = list(self.messages.get((user_auth_sub, session_id), []))
+        return SimpleNamespace(items=messages[:limit], next_cursor=None)
+
+
 async def _consume_stream(response: StreamingResponse) -> list[dict]:
     chunks = []
     async for chunk in response.body_iterator:
@@ -63,6 +238,9 @@ async def _consume_stream(response: StreamingResponse) -> list[dict]:
 
 def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     calls = {"register": [], "unregister": [], "clear": [], "history": []}
+    session_history: dict[tuple[str, str], list[dict[str, str]]] = {}
+    repository = _FakeChatHistoryRepository()
+    completion_db = _DummyCompletionDB()
 
     monkeypatch.setattr(
         chat,
@@ -71,6 +249,7 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     )
     monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
     monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
 
     async def _register_active_stream(
         session_id: str,
@@ -95,17 +274,46 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
     monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
     monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+
+    def _add_exchange(user_id: str, session_id: str, user_message: str, assistant_message: str) -> None:
+        calls["history"].append((user_id, session_id, user_message, assistant_message))
+        session_history.setdefault((user_id, session_id), []).append(
+            {"user": user_message, "assistant": assistant_message}
+        )
+
     monkeypatch.setattr(
         chat,
         "conversation_manager",
-        SimpleNamespace(add_exchange=lambda *args, **_kwargs: calls["history"].append(args)),
+        SimpleNamespace(
+            history_enabled=True,
+            add_exchange=_add_exchange,
+            get_session_history=lambda user_id, session_id: list(
+                session_history.get((user_id, session_id), [])
+            ),
+            clear_session_history=lambda user_id, session_id: session_history.__setitem__(
+                (user_id, session_id),
+                [],
+            ),
+        ),
     )
 
     async def _check_cancel_signal(_session_id: str) -> bool:
         return cancel_requested
 
     monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    calls["repository"] = repository
+    calls["completion_db"] = completion_db
     return calls
+
+
+def _patch_durable_history(monkeypatch):
+    repository = _FakeChatHistoryRepository()
+    completion_db = _DummyCompletionDB()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+    return repository, completion_db
 
 
 def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
@@ -404,6 +612,284 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
     assert "TP53" in history_assistant_msg
 
 
+def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-replay",
+        turn_id="turn-flow-replay",
+        user_query="Run gene selection flow",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Replayable Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    repository, _completion_db = _patch_durable_history(monkeypatch)
+
+    execute_calls = []
+
+    async def _fake_execute_flow(**_kwargs):
+        execute_calls.append(_kwargs["session_id"])
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-replay"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "timestamp": "2026-02-26T00:00:03+00:00",
+            "details": {"output": "Selected TP53 for highest evidence confidence."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": "2026-02-26T00:00:04+00:00",
+            "data": {
+                "flow_id": str(flow_id),
+                "flow_name": "Replayable Flow",
+                "flow_run_id": "flow-run-replay",
+                "document_id": None,
+                "origin_session_id": "session-flow-replay",
+                "status": "completed",
+                "failure_reason": None,
+                "total_evidence_records": 0,
+                "step_evidence_counts": {},
+                "adapter_keys": [],
+            },
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+
+    first_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    first_events = asyncio.run(_consume_stream(first_response))
+    asyncio.run(first_response.background())
+
+    second_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    second_events = asyncio.run(_consume_stream(second_response))
+    asyncio.run(second_response.background())
+
+    assert execute_calls == ["session-flow-replay"]
+    assert flow.execution_count == 1
+    assert db.commit_calls == 1
+    assert [event["type"] for event in first_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
+    assert [event["type"] for event in second_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
+    assert {event["turn_id"] for event in second_events} == {"turn-flow-replay"}
+    assert second_events[0]["trace_id"] == "trace-flow-replay"
+    assert second_events[1]["details"]["output"] == "Selected TP53 for highest evidence confidence."
+    stored_turn_messages = repository.list_messages_for_turn(
+        session_id="session-flow-replay",
+        user_auth_sub="auth-sub",
+        turn_id="turn-flow-replay",
+    )
+    assert [message.role for message in stored_turn_messages] == ["user", "flow"]
+    assert stored_turn_messages[1].message_type == chat._FLOW_SUMMARY_MESSAGE_TYPE
+    assert stored_turn_messages[1].payload_json[chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY].startswith(
+        "Flow execution summary for follow-up questions"
+    )
+    assert calls["history"] == [
+        (
+            "auth-sub",
+            "session-flow-replay",
+            "Run gene selection flow",
+            stored_turn_messages[1].payload_json[chat._FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY],
+        )
+    ]
+
+
+def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_counter(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-retry",
+        turn_id="turn-flow-retry",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Retry Flow",
+        execution_count=1,
+        last_executed_at=datetime(2026, 2, 26, 0, 0, tzinfo=timezone.utc),
+    )
+    db = _DummyDB(flow=flow)
+
+    _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    repository, _completion_db = _patch_durable_history(monkeypatch)
+    repository.get_or_create_session(session_id="session-flow-retry", user_auth_sub="auth-sub")
+    repository.append_message(
+        session_id="session-flow-retry",
+        user_auth_sub="auth-sub",
+        role="user",
+        content="Run flow 'Retry Flow'",
+        turn_id="turn-flow-retry",
+        payload_json=chat._build_execute_flow_runtime_payload(
+            None,
+            flow_run_id="flow-run-retry",
+            trace_id=None,
+        ),
+        created_at=datetime(2026, 2, 26, 0, 0, tzinfo=timezone.utc),
+    )
+
+    execute_calls = []
+
+    async def _fake_execute_flow(**_kwargs):
+        execute_calls.append(_kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-retry"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "timestamp": "2026-02-26T00:01:03+00:00",
+            "details": {"output": "Retried flow output."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": "2026-02-26T00:01:04+00:00",
+            "data": {
+                "flow_id": str(flow_id),
+                "flow_name": "Retry Flow",
+                "flow_run_id": "flow-run-retry",
+                "document_id": None,
+                "origin_session_id": "session-flow-retry",
+                "status": "completed",
+                "failure_reason": None,
+                "total_evidence_records": 0,
+                "step_evidence_counts": {},
+                "adapter_keys": [],
+            },
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert len(execute_calls) == 1
+    assert execute_calls[0]["session_id"] == "session-flow-retry"
+    assert execute_calls[0]["flow_run_id"] == "flow-run-retry"
+    assert execute_calls[0]["trace_context"] is None
+    assert flow.execution_count == 1
+    assert db.commit_calls == 0
+    assert [event["type"] for event in events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
+    stored_turn_messages = repository.list_messages_for_turn(
+        session_id="session-flow-retry",
+        user_auth_sub="auth-sub",
+        turn_id="turn-flow-retry",
+    )
+    assert [message.role for message in stored_turn_messages] == ["user", "flow"]
+
+
+def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-trace-reuse",
+        turn_id="turn-flow-trace-reuse",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Trace Reuse Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+
+    _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    repository, _completion_db = _patch_durable_history(monkeypatch)
+    execute_calls = []
+
+    async def _fake_execute_flow(**kwargs):
+        execute_calls.append(kwargs)
+        if len(execute_calls) == 1:
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-first"}}
+            raise RuntimeError("socket dropped")
+
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-first"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "timestamp": "2026-02-26T00:01:03+00:00",
+            "details": {"output": "Recovered flow output."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "timestamp": "2026-02-26T00:01:04+00:00",
+            "data": {
+                "flow_id": str(flow_id),
+                "flow_name": "Trace Reuse Flow",
+                "flow_run_id": kwargs["flow_run_id"],
+                "document_id": None,
+                "origin_session_id": "session-flow-trace-reuse",
+                "status": "completed",
+                "failure_reason": None,
+                "total_evidence_records": 0,
+                "step_evidence_counts": {},
+                "adapter_keys": [],
+            },
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+
+    first_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    first_events = asyncio.run(_consume_stream(first_response))
+    asyncio.run(first_response.background())
+
+    second_response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+    second_events = asyncio.run(_consume_stream(second_response))
+    asyncio.run(second_response.background())
+
+    assert [event["type"] for event in first_events] == ["RUN_STARTED", "SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert [event["type"] for event in second_events] == ["RUN_STARTED", "CHAT_OUTPUT_READY", "FLOW_FINISHED"]
+    assert len(execute_calls) == 2
+    assert execute_calls[0]["flow_run_id"]
+    assert execute_calls[1]["flow_run_id"] == execute_calls[0]["flow_run_id"]
+    assert execute_calls[0]["trace_context"] is None
+    assert execute_calls[1]["trace_context"] == {"trace_id": "trace-flow-first"}
+    user_turn = repository.get_message_by_turn_id(
+        session_id="session-flow-trace-reuse",
+        user_auth_sub="auth-sub",
+        turn_id="turn-flow-trace-reuse",
+        role="user",
+    )
+    assert user_turn is not None
+    assert user_turn.trace_id == "trace-flow-first"
+    flow_run_id, trace_id = chat._extract_execute_flow_runtime_identifiers(user_turn.payload_json)
+    assert flow_run_id == execute_calls[0]["flow_run_id"]
+    assert trace_id == "trace-flow-first"
+
+
 def test_build_flow_memory_message_keeps_hidden_json_parseable_when_compacted():
     assistant_message = chat._build_flow_memory_assistant_message(
         flow_name="Large Flow",
@@ -433,6 +919,183 @@ def test_build_flow_memory_message_keeps_hidden_json_parseable_when_compacted():
     assert len(hidden_json) <= chat._FLOW_MEMORY_MAX_HIDDEN_JSON_CHARS
     parsed_hidden = json.loads(hidden_json)
     assert parsed_hidden["flow"]["flow_id"] == "flow-123"
+
+
+def test_execute_flow_failure_messages_surface_missing_reason():
+    summary_content = chat._build_execute_flow_summary_content(
+        status="failed",
+        final_user_output=None,
+        failure_reason=None,
+    )
+    assistant_message = chat._build_flow_memory_assistant_message(
+        flow_name="Failure Flow",
+        flow_id="flow-failure",
+        session_id="session-failure",
+        status="failed",
+        trace_id="trace-failure",
+        final_user_output=None,
+        agents_used=[],
+        specialist_outputs=[],
+        specialist_summaries=[],
+        domain_warnings=[],
+        file_outputs=[],
+        failure_reason=None,
+    )
+
+    assert summary_content == "Flow failed before producing a final output. Reason: None"
+    assert "Reason: None" in assistant_message
+
+
+@pytest.mark.parametrize(
+    ("event_payload", "expected_message_type", "expected_content"),
+    [
+        (
+            {"type": "DOMAIN_WARNING", "details": {}},
+            "text",
+            "Flow warning event missing message payload.",
+        ),
+        (
+            {"type": "FLOW_STEP_EVIDENCE", "step": "one", "evidence_count": "many"},
+            "flow_step_evidence",
+            "Flow step evidence event missing integer step/evidence_count metadata.",
+        ),
+        (
+            {"type": "FILE_READY", "details": {}},
+            "file_download",
+            "Generated file event missing filename metadata.",
+        ),
+    ],
+)
+def test_build_execute_flow_transcript_row_from_event_surfaces_missing_metadata(
+    event_payload,
+    expected_message_type,
+    expected_content,
+):
+    row = chat._build_execute_flow_transcript_row_from_event(event_payload)
+
+    assert row is not None
+    assert row.message_type == expected_message_type
+    assert row.content == expected_content
+
+
+def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-trace-checkpoint-failure",
+        turn_id="turn-trace-checkpoint-failure",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Trace Checkpoint Failure Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    _patch_durable_history(monkeypatch)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-checkpoint-failure"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"output": "This output should never be reached."},
+        }
+
+    def _raise_checkpoint_failure(**_kwargs):
+        raise RuntimeError("checkpoint write failed")
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    monkeypatch.setattr(chat, "_persist_execute_flow_runtime_state", _raise_checkpoint_failure)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert events[0]["details"]["context"] == "RuntimeError"
+    assert events[0]["details"]["error"] == "checkpoint write failed"
+    assert events[1]["message"] == "Flow execution error: checkpoint write failed"
+    assert calls["unregister"] == [("session-trace-checkpoint-failure", "auth-sub", ANY)]
+    assert calls["clear"] == ["session-trace-checkpoint-failure"]
+
+
+def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-completion-persistence-failure",
+        turn_id="turn-completion-persistence-failure",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Completion Persistence Failure Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-completion-failure"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"output": "This output should be discarded when persistence fails."},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {
+                "status": "success",
+                "flow_run_id": "flow-run-completion-failure",
+            },
+        }
+
+    def _raise_completion_failure(**_kwargs):
+        raise RuntimeError("completion transcript write failed")
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    monkeypatch.setattr(chat, "_persist_completed_execute_flow_turn", _raise_completion_failure)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "CHAT_OUTPUT_READY",
+        "SUPERVISOR_ERROR",
+        "RUN_ERROR",
+    ]
+    assert all(event["type"] != "FLOW_FINISHED" for event in events)
+    assert events[2]["details"]["context"] == "RuntimeError"
+    assert events[2]["details"]["error"] == "completion transcript write failed"
+    assert events[3]["message"] == "Flow execution error: completion transcript write failed"
+    turn_messages = calls["repository"].list_messages_for_turn(
+        session_id="session-completion-persistence-failure",
+        user_auth_sub="auth-sub",
+        turn_id="turn-completion-persistence-failure",
+    )
+    assert [message.role for message in turn_messages] == ["user"]
+    assert calls["unregister"] == [
+        ("session-completion-persistence-failure", "auth-sub", ANY)
+    ]
+    assert calls["clear"] == ["session-completion-persistence-failure"]
 
 
 def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypatch):

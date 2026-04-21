@@ -41,6 +41,7 @@ from src.lib.curation_workspace import (
     persist_extraction_results,
     run_curation_prep,
 )
+from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
@@ -1410,6 +1411,28 @@ def _persist_flow_extraction_candidates(
     if not candidates or not document_id:
         return
 
+    normalized_flow_run_id = str(flow_run_id or "").strip() or None
+    if normalized_flow_run_id is not None:
+        existing_results = list_extraction_results(
+            document_id=document_id,
+            flow_run_id=normalized_flow_run_id,
+            origin_session_id=session_id,
+            user_id=user_id,
+            source_kind=CurationExtractionSourceKind.FLOW,
+        )
+        if existing_results:
+            logger.info(
+                "[Flow Executor] Reusing existing extraction persistence for flow run %s",
+                normalized_flow_run_id,
+                extra={
+                    "document_id": document_id,
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "flow_run_id": normalized_flow_run_id,
+                },
+            )
+            return
+
     persist_extraction_results(
         [
             CurationExtractionPersistenceRequest(
@@ -1489,6 +1512,7 @@ async def execute_flow(
     user_query: Optional[str] = None,
     active_groups: Optional[List[str]] = None,
     flow_run_id: Optional[str] = None,
+    trace_context: Optional[Dict[str, str]] = None,
 ) -> AsyncGenerator[dict, None]:
     """Execute a curation flow using the shared streaming infrastructure.
 
@@ -1507,6 +1531,7 @@ async def execute_flow(
         user_query: Optional user-provided query/context
         active_groups: Active group IDs for database queries
         flow_run_id: Optional batch/grouping identifier shared across flow executions
+        trace_context: Optional existing Langfuse trace identifiers to reuse on retry
 
     Yields:
         dict: Streaming events - FLOW_STARTED, then all regular chat events
@@ -1612,6 +1637,7 @@ async def execute_flow(
         active_groups=active_groups,
         agent=supervisor,  # Pass the flow supervisor
         doc_context=doc_context,  # Pass pre-fetched context (optimization)
+        trace_context=trace_context,
     ):
         event_type = event.get("type")
         event_data = event.get("data", {}) or {}
