@@ -400,6 +400,76 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert calls["clear"] == ["session-flow-1"]
 
 
+def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_title(monkeypatch):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(
+        flow_id=flow_id,
+        session_id="session-flow-title",
+        user_query="Summarize TP53 evidence",
+    )
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Flow Title",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    captured_backfill_calls = []
+
+    monkeypatch.setattr(
+        chat,
+        "_generate_title_from_turn",
+        lambda *, user_message, assistant_message=None: (
+            "assistant-aware-flow-title" if assistant_message else "user-only-flow-title"
+        ),
+    )
+    monkeypatch.setattr(
+        chat,
+        "_backfill_chat_session_generated_title",
+        lambda session_id, user_id, preferred_generated_title=None: captured_backfill_calls.append(
+            (session_id, user_id, preferred_generated_title)
+        ),
+    )
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-flow-title"}}
+        yield {
+            "type": "CHAT_OUTPUT_READY",
+            "details": {"output": "Assistant flow answer"},
+        }
+        yield {
+            "type": "FLOW_FINISHED",
+            "data": {"status": "completed", "failure_reason": None},
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == [
+        "RUN_STARTED",
+        "CHAT_OUTPUT_READY",
+        "FLOW_FINISHED",
+    ]
+    assert captured_backfill_calls == [
+        ("session-flow-title", "auth-sub", "assistant-aware-flow-title")
+    ]
+    assert calls["register"] == [("session-flow-title", "auth-sub", ANY)]
+    assert calls["unregister"] == [("session-flow-title", "auth-sub", ANY)]
+    assert calls["clear"] == ["session-flow-title"]
+
+
 def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-cancel")

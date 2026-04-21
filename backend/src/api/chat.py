@@ -2652,6 +2652,7 @@ async def chat_stream_endpoint(
 
     async def generate_stream():
         """Generate SSE events from the agent runner."""
+        nonlocal generated_title_candidate
         current_session_id = session_id
         current_turn_id = prepared_turn.turn_id
         full_response = ""
@@ -3350,6 +3351,7 @@ async def execute_flow_endpoint(
 
     async def event_generator():
         """Generate SSE events from flow execution with cancellation support."""
+        nonlocal generated_title_candidate
         current_session_id = request.session_id
         current_turn_id = prepared_turn.turn_id
         trace_id = None
