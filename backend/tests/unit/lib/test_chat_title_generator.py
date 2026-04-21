@@ -29,7 +29,7 @@ def test_generate_chat_title_prefers_user_message():
     assert title == "Compare TP53 and EGFR evidence trails"
 
 
-def test_generate_chat_title_falls_back_to_assistant_when_user_prompt_is_low_signal():
+def test_generate_chat_title_selects_assistant_when_user_prompt_is_low_signal():
     title = generate_chat_title(
         [
             ChatTitleSource(role="user", content="Hi"),

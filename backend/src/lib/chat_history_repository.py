@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -26,6 +27,7 @@ TURN_ID_UNIQUE_CONSTRAINTS = (
 IDEMPOTENT_TURN_ROLES = {"user", "assistant"}
 VALID_CHAT_ROLES = {"user", "assistant", "flow"}
 _UNSET = object()
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -445,6 +447,14 @@ class ChatHistoryRepository:
             .rowcount
         )
         if rows_updated != 1:
+            logger.warning(
+                "Could not update generated title for session",
+                extra={
+                    "session_id": session_id,
+                    "user_id": user_auth_sub,
+                    "rows_updated": rows_updated,
+                },
+            )
             self._db.refresh(session)
             return _session_record(session)
 

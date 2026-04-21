@@ -2118,7 +2118,7 @@ async def test_get_session_history_uses_generated_title_from_first_page_and_queu
     assert len(background_tasks.tasks) == 1
 
 
-def test_backfill_chat_session_generated_title_uses_transcript_fallback(monkeypatch):
+def test_backfill_chat_session_generated_title_uses_transcript_when_user_title_is_absent(monkeypatch):
     commits: list[str] = []
     rollbacks: list[str] = []
     repository = FakeChatHistoryRepository(

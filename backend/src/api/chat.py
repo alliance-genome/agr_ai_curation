@@ -25,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
+from sqlalchemy.exc import SQLAlchemyError
 
 from .auth import get_auth_dependency
 from ..lib.chat_history_repository import (
@@ -1271,7 +1272,7 @@ def _build_title_sources_from_messages(
 
     title_sources: List[ChatTitleSource] = []
     for message in messages:
-        normalized_content = str(message.content or "").strip()
+        normalized_content = (message.content or "").strip()
         if message.role == "flow":
             assistant_message = _extract_flow_assistant_message(message)
             if assistant_message:
@@ -1342,7 +1343,7 @@ def _backfill_chat_session_generated_title(
             generated_title=generated_title,
         )
         completion_db.commit()
-    except Exception:
+    except (SQLAlchemyError, ValueError):
         completion_db.rollback()
         logger.warning(
             "Failed to generate durable chat title",
@@ -1363,6 +1364,10 @@ def _queue_chat_title_backfill(
     """Schedule one best-effort background title backfill."""
 
     if background_tasks is None:
+        logger.warning(
+            "Skipping title backfill because background tasks are unavailable",
+            extra={"session_id": session_id, "user_id": user_id},
+        )
         return
 
     background_tasks.add_task(
