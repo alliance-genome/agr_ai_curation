@@ -20,6 +20,10 @@ history rollout.
 - Browser QA passed for the AppBar history entry point, history search,
   inline transcript expansion, rename, individual delete, bulk-delete, and
   durable resume hydration from `/?session=<session_id>`.
+- Additional rollout-gate QA passed for cross-device durable resume, live
+  chat turn replay/idempotency, durable flow replay, interrupted terminal
+  markers, assistant-rescue failure UI behavior, and generated-title versus
+  manual-title race handling.
 - One focused follow-up issue was created for a failed cleanup assumption:
   `ALL-249` tracks the dev-mode bootstrap path leaving the five legacy chat
   `localStorage` keys in place after a full page reload.
@@ -32,11 +36,11 @@ history rollout.
 - [x] Validate the rollout migration head in the isolated Docker test stack.
 - [x] Exercise browser QA for history search, inline transcript expansion,
   rename, individual delete, bulk-delete, AppBar navigation, and durable resume.
+- [x] Complete direct manual/browser coverage for cross-device resume,
+  interrupted markers, assistant-rescue failure UI, flow replay, turn
+  idempotency, and title-race behavior.
 - [x] Record the verification outcome and spin out the legacy-cache cleanup
   failure as a focused follow-up ticket.
-- [ ] Complete direct manual/browser coverage for interrupted markers,
-  assistant-rescue failure UI, flow replay, and title-race stress beyond the
-  single happy-path run captured here.
 
 ## Automated Validation
 
@@ -75,6 +79,10 @@ Results:
 The browser pass used the Symphony-managed review stack prepared from this
 workspace.
 
+- A brand-new browser context loaded
+  `/?session=cfd38fff-160e-43fe-af19-a95ec636e816` and restored the durable
+  transcript without any prior local chat cache; only the namespaced
+  `chat-cache:v1:dev-user-123:*` keys were repopulated in that fresh context.
 - The AppBar `Chat History` entry opened `/history`.
 - `/history` listed durable sessions and expanded the stored transcript inline
   for the live verification conversation.
@@ -89,6 +97,37 @@ workspace.
 - The first live chat turn generated the expected durable session title
   `Hello from ALL-242 durable history verification` and the title was visible in
   `/history` during this pass.
+- A live backend replay check posted the same `turn_id` twice to
+  `/api/chat/stream`; the second response replayed the stored assistant output
+  instead of rerunning the chat, and `/api/chat/history/<session_id>` still held
+  exactly one user row plus one assistant row for that durable turn.
+- A live backend flow replay check created one temporary `chat_output` flow,
+  executed it twice with the same `turn_id` through `/api/chat/execute-flow`,
+  and confirmed the replay response skipped a second durable execution:
+  `execution_count` stayed at `1`, while durable history remained one user row,
+  one flow evidence row, and one flow summary row for the turn.
+- Title-race stress used two new durable sessions: one was renamed
+  immediately after its first turn completed, while the other was left on the
+  generated-title path. Repeated `/api/chat/history` reads plus `/history`
+  reloads kept the manual title on the renamed session and the generated title
+  on the second session, with no reversion or cross-session mix-up.
+
+## Targeted Failure-UI QA
+
+These two terminal-state checks were executed in isolated Playwright browser
+contexts with route stubs on the review stack. The frontend failure UI is only
+reachable on rare terminal paths, so this was the safest way to verify the
+actual rendered behavior without mutating shared backend state.
+
+- Interrupted marker UI: a stubbed `/api/chat/stream` response emitted
+  `TEXT_MESSAGE_CONTENT` followed by `turn_interrupted`. The chat surface kept
+  the partial assistant content and showed the expected message
+  `The response was interrupted before it could be saved.` on that same turn.
+- Assistant-rescue failure UI: a stubbed `/api/chat/stream` response emitted
+  `turn_save_failed`, and the follow-on `/api/chat/<session_id>/assistant-rescue`
+  call returned `500 {"detail":"database unavailable"}`. The chat surface kept
+  the streamed assistant text and surfaced the expected durable-save error
+  `This response is shown above, but it could not be saved to chat history: database unavailable`.
 
 ## Finding
 
