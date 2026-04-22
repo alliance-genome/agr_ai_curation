@@ -44,6 +44,7 @@ import FeedbackDialog from '../components/Chat/FeedbackDialog';
 import { submitFeedback } from '../services/feedbackService';
 import { useAuth } from '../contexts/AuthContext';
 import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
+import { listFlows, type FlowSummaryResponse } from '@/services/agentStudioService';
 
 // Valid audit event types that should be shown in the batch audit panel
 // NOTE: Excludes AGENT_THINKING because it emits per-token events that
@@ -94,12 +95,6 @@ interface BatchDocument {
   trace_id?: string;  // Langfuse trace ID for debugging
 }
 
-interface Flow {
-  id: string;
-  name: string;
-  description?: string;
-}
-
 interface RecentBatch {
   id: string;
   flow_id: string;
@@ -148,8 +143,9 @@ const BatchPage: React.FC = () => {
   });
 
   // Available flows
-  const [flows, setFlows] = useState<Flow[]>([]);
+  const [flows, setFlows] = useState<FlowSummaryResponse[]>([]);
   const [loadingFlows, setLoadingFlows] = useState(true);
+  const [flowLoadError, setFlowLoadError] = useState<string | null>(null);
 
   // Recent batches
   const [recentBatches, setRecentBatches] = useState<RecentBatch[]>([]);
@@ -211,22 +207,32 @@ const BatchPage: React.FC = () => {
 
   // Load available flows
   useEffect(() => {
+    let isActive = true;
+
     const fetchFlows = async () => {
       try {
-        const response = await fetch('/api/flows', {
-          credentials: 'include',
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setFlows(data.flows || []);
+        const data = await listFlows();
+        if (isActive) {
+          setFlows(data.flows);
+          setFlowLoadError(null);
         }
       } catch (error) {
         console.error('Failed to load flows:', error);
+        if (isActive) {
+          setFlows([]);
+          setFlowLoadError(error instanceof Error ? error.message : 'Failed to load flows');
+        }
       } finally {
-        setLoadingFlows(false);
+        if (isActive) {
+          setLoadingFlows(false);
+        }
       }
     };
     fetchFlows();
+
+    return () => {
+      isActive = false;
+    };
   }, []);
 
   // Track if we've already auto-resumed a batch (to prevent re-triggering)
@@ -942,6 +948,12 @@ const BatchPage: React.FC = () => {
             ))}
           </Select>
         </FormControl>
+
+        {flowLoadError && (
+          <Alert severity="error" sx={{ mt: 1 }}>
+            {flowLoadError}
+          </Alert>
+        )}
 
         {/* Flow Validation Status */}
         {batchState.flowValidation && (

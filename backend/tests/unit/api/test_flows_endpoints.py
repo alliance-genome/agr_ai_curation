@@ -1,6 +1,7 @@
 """Unit tests for flow CRUD endpoint handlers."""
 
 from datetime import datetime, timezone
+import inspect
 import importlib
 from types import SimpleNamespace
 from uuid import uuid4
@@ -84,6 +85,13 @@ async def test_list_flows_returns_paginated_response(monkeypatch):
     assert response.total == 2
     assert [item.name for item in response.flows] == ["A", "B"]
     assert response.flows[0].step_count == 2
+
+
+def test_list_flows_uses_shared_default_page_size():
+    page_size_default = inspect.signature(flows.list_flows).parameters["page_size"].default
+
+    assert page_size_default.default == flows.DEFAULT_FLOW_LIST_PAGE_SIZE
+    assert flows.DEFAULT_FLOW_LIST_PAGE_SIZE == 50
 
 
 @pytest.mark.asyncio

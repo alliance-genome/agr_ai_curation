@@ -653,7 +653,7 @@ export type {
 } from '@/components/AgentStudio/FlowBuilder/types'
 
 const FLOWS_URL = '/api/flows'
-const DEFAULT_FLOW_LIST_PAGE_SIZE = 50
+export const DEFAULT_FLOW_LIST_PAGE_SIZE = 50
 
 class FlowListLoadError extends Error {
   constructor(message: string) {
