@@ -1,7 +1,7 @@
 """Add conversation_transcript column to feedback_reports.
 
 Revision ID: e4f5a6b7c8d9
-Revises: d2e3f4a5b6c7
+Revises: z9a0b1c2d3e4
 Create Date: 2026-04-22 17:00:00.000000
 
 """
@@ -15,7 +15,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision: str = "e4f5a6b7c8d9"
-down_revision: Union[str, Sequence[str], None] = "d2e3f4a5b6c7"
+down_revision: Union[str, Sequence[str], None] = "z9a0b1c2d3e4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
