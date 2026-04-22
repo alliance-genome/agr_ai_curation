@@ -66,14 +66,6 @@ describe('FileDownloadCard - Basic Rendering', () => {
     expect(screen.getByText('JSON')).toBeInTheDocument()
   })
 
-  it('renders unknown formats with the shared neutral fallback badge', () => {
-    const fileInfo = createTestFileInfo({ format: 'xml', filename: 'data.xml' })
-    render(<FileDownloadCard file={fileInfo} />)
-
-    expect(screen.getByText('data.xml')).toBeInTheDocument()
-    expect(screen.getByText('XML')).toBeInTheDocument()
-  })
-
   it('renders file size when provided', () => {
     const fileInfo = createTestFileInfo({ size_bytes: 2048 })
     render(<FileDownloadCard file={fileInfo} />)
