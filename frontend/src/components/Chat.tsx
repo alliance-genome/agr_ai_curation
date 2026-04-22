@@ -30,6 +30,7 @@ import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SendChatMessageOptions, SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
+import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
 import { getStreamEventSessionId } from '@/lib/streamEventSession'
 import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import {
@@ -272,15 +273,6 @@ function extractEventTimestamp(event: SSEEvent): Date | null {
 
   const timestamp = new Date(event.timestamp)
   return Number.isNaN(timestamp.getTime()) ? null : timestamp
-}
-
-function normalizeOptionalText(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-
-  const normalizedValue = value.trim()
-  return normalizedValue.length > 0 ? normalizedValue : null
 }
 
 function buildTurnId(): string {
