@@ -88,24 +88,26 @@ describe('TranscriptMessage', () => {
     expect(screen.queryAllByRole('button')).toHaveLength(0)
   })
 
-  it('renders unknown stored transcript file formats without throwing', () => {
-    renderTranscriptMessage({
-      type: 'file_download',
-      content: '',
-      fileData: {
-        file_id: 'file-2',
-        filename: 'gene-results.xml',
-        format: 'xml',
-        size_bytes: 128,
-        download_url: '/api/files/file-2/download',
-      },
-    })
+  it('throws for unsupported stored transcript file formats', () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
-    expect(screen.getByTestId('transcript-file-card')).toBeInTheDocument()
-    expect(screen.getByText('gene-results.xml')).toBeInTheDocument()
-    expect(screen.getByText('XML')).toBeInTheDocument()
-    expect(screen.getByText('128 B')).toBeInTheDocument()
-    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    try {
+      expect(() =>
+        renderTranscriptMessage({
+          type: 'file_download',
+          content: '',
+          fileData: {
+            file_id: 'file-2',
+            filename: 'gene-results.xml',
+            format: 'xml',
+            size_bytes: 128,
+            download_url: '/api/files/file-2/download',
+          },
+        }),
+      ).toThrow('Unsupported transcript file format: xml')
+    } finally {
+      consoleErrorSpy.mockRestore()
+    }
   })
 
   it('renders transcript-only flow evidence rows without assistant controls', async () => {

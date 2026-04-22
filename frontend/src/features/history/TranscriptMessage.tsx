@@ -7,6 +7,7 @@ import type { EvidenceRecord } from '@/features/curation/types'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
 export type TranscriptMessageRole = 'user' | 'assistant' | 'flow'
+type TranscriptFileFormat = 'csv' | 'tsv' | 'json'
 
 export interface TranscriptMessageRecord {
   id?: string
@@ -25,6 +26,19 @@ interface TranscriptMessageProps {
 
 function assertUnreachable(value: never, context: string): never {
   throw new Error(`Unhandled ${context}: ${String(value)}`)
+}
+
+function parseTranscriptFileFormat(format: string): TranscriptFileFormat {
+  switch (format.toLowerCase()) {
+    case 'csv':
+      return 'csv'
+    case 'tsv':
+      return 'tsv'
+    case 'json':
+      return 'json'
+    default:
+      throw new Error(`Unsupported transcript file format: ${format}`)
+  }
 }
 
 function getRoleLabel(role: TranscriptMessageRole): string {
@@ -90,6 +104,13 @@ export default function TranscriptMessage({ message }: TranscriptMessageProps) {
 
   const hasEvidenceCard = (message.evidenceRecords?.length ?? 0) > 0
   const bubbleStyles = getBubbleStyles(message.role, hasEvidenceCard)
+  const transcriptFile =
+    message.type === 'file_download' && message.fileData
+      ? (() => {
+          parseTranscriptFileFormat(message.fileData.format)
+          return message.fileData
+        })()
+      : null
 
   return (
     <Box
@@ -131,11 +152,11 @@ export default function TranscriptMessage({ message }: TranscriptMessageProps) {
             wordBreak: 'break-word',
           }}
         >
-          {message.type === 'file_download' && message.fileData ? (
+          {transcriptFile ? (
             <FileDownloadCard
               allowDownload={false}
               cardTestId="transcript-file-card"
-              file={message.fileData}
+              file={transcriptFile}
             />
           ) : (
             message.content
