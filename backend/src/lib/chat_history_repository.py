@@ -66,7 +66,7 @@ class ChatSessionRecord:
     updated_at: datetime
     last_message_at: datetime | None
     deleted_at: datetime | None
-    chat_kind: str = "assistant_chat"
+    chat_kind: str | None
 
     @property
     def effective_title(self) -> str | None:
@@ -165,7 +165,6 @@ def _session_record(session: ChatSessionModel) -> ChatSessionRecord:
     return ChatSessionRecord(
         session_id=session.session_id,
         user_auth_sub=session.user_auth_sub,
-        chat_kind=session.chat_kind,
         title=session.title,
         generated_title=session.generated_title,
         active_document_id=session.active_document_id,
@@ -177,15 +176,17 @@ def _session_record(session: ChatSessionModel) -> ChatSessionRecord:
     )
 
 
-def _resolve_session_chat_kind(session: ChatSessionModel) -> str:
-    raw_chat_kind = getattr(session, "chat_kind", None)
-    if raw_chat_kind is not None:
-        normalized_chat_kind = str(getattr(raw_chat_kind, "value", raw_chat_kind)).strip()
-        if normalized_chat_kind:
-            return normalized_chat_kind
-
-    # This repository currently reads the assistant-chat durable session surface.
-    return "assistant_chat"
+def _resolve_session_chat_kind(session: ChatSessionModel) -> str | None:
+    # Check the mapped class first so older ORM instances without the column can
+    # still fall back to ad-hoc row payloads that materialized chat_kind manually.
+    if hasattr(type(session), "chat_kind"):
+        raw_chat_kind = session.chat_kind
+    else:
+        raw_chat_kind = vars(session).get("chat_kind", _UNSET)
+        if raw_chat_kind is _UNSET:
+            return None
+    normalized_chat_kind = str(getattr(raw_chat_kind, "value", raw_chat_kind)).strip()
+    return normalized_chat_kind or None
 
 
 def _message_record(message: ChatMessageModel) -> ChatMessageRecord:

@@ -1,5 +1,6 @@
 """Unit tests for feedback submission API."""
 
+import pytest
 from fastapi.responses import JSONResponse
 
 from src.api import feedback as feedback_api
@@ -108,6 +109,29 @@ def test_submit_feedback_logs_dispatch_failures_but_returns_success(monkeypatch)
 
     assert response.status == "success"
     assert response.feedback_id == "feedback-123"
+
+
+def test_submit_feedback_propagates_unexpected_dispatch_errors(monkeypatch):
+    class _FakeService:
+        def __init__(self, _db):
+            pass
+
+        def create_feedback_payload(self, **_kwargs):
+            return "feedback-123"
+
+    monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+    monkeypatch.setattr(
+        feedback_api,
+        "dispatch_feedback_report_processing",
+        lambda _feedback_id: (_ for _ in ()).throw(ValueError("unexpected failure")),
+    )
+
+    with pytest.raises(ValueError, match="unexpected failure"):
+        feedback_api.submit_feedback(
+            submission=_submission(),
+            db=object(),
+            user={"sub": "user-123"},
+        )
 
 
 def test_run_feedback_processing_in_background_uses_new_session(monkeypatch):
