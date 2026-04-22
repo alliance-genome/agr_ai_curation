@@ -10,6 +10,7 @@ from fastapi import BackgroundTasks, HTTPException
 
 from src.api import chat
 from src.lib.chat_history_repository import (
+    ASSISTANT_CHAT_KIND,
     AppendMessageResult,
     ChatMessageCursor,
     ChatMessagePage,
@@ -54,6 +55,7 @@ def _session_record(
     *,
     session_id: str,
     user_auth_sub: str = "user-1",
+    chat_kind: str = ASSISTANT_CHAT_KIND,
     title: str | None = None,
     generated_title: str | None = None,
     active_document_id: UUID | None = None,
@@ -65,6 +67,7 @@ def _session_record(
     return ChatSessionRecord(
         session_id=session_id,
         user_auth_sub=user_auth_sub,
+        chat_kind=chat_kind,
         title=title,
         generated_title=generated_title,
         active_document_id=active_document_id,
@@ -80,6 +83,7 @@ def _message_record(
     session_id: str,
     role: str,
     content: str,
+    chat_kind: str = ASSISTANT_CHAT_KIND,
     turn_id: str | None = None,
     message_type: str = "text",
     payload_json=None,
@@ -89,6 +93,7 @@ def _message_record(
     return ChatMessageRecord(
         message_id=uuid4(),
         session_id=session_id,
+        chat_kind=chat_kind,
         turn_id=turn_id,
         role=role,
         message_type=message_type,
@@ -129,6 +134,7 @@ class FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         title: str | None = None,
         generated_title: str | None = None,
         active_document_id: UUID | None = None,
@@ -137,6 +143,7 @@ class FakeChatHistoryRepository:
         record = _session_record(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
             title=title,
             generated_title=generated_title,
             active_document_id=active_document_id,
@@ -148,6 +155,7 @@ class FakeChatHistoryRepository:
             {
                 "session_id": session_id,
                 "user_auth_sub": user_auth_sub,
+                "chat_kind": chat_kind,
                 "title": title,
                 "generated_title": generated_title,
                 "active_document_id": active_document_id,
@@ -184,6 +192,7 @@ class FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         title: str | None = None,
         generated_title: str | None = None,
         active_document_id: UUID | None = None,
@@ -193,17 +202,19 @@ class FakeChatHistoryRepository:
             {
                 "session_id": session_id,
                 "user_auth_sub": user_auth_sub,
+                "chat_kind": chat_kind,
                 "title": title,
                 "generated_title": generated_title,
                 "active_document_id": active_document_id,
             }
         )
         existing = self.sessions.get((user_auth_sub, session_id))
-        if existing is not None:
+        if existing is not None and existing.chat_kind == chat_kind:
             return existing
         return self.create_session(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
             title=title,
             generated_title=generated_title,
             active_document_id=active_document_id,
@@ -215,6 +226,7 @@ class FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         role: str,
         content: str,
         message_type: str = "text",
@@ -227,6 +239,7 @@ class FakeChatHistoryRepository:
             {
                 "session_id": session_id,
                 "user_auth_sub": user_auth_sub,
+                "chat_kind": chat_kind,
                 "role": role,
                 "content": content,
                 "message_type": message_type,
@@ -247,7 +260,7 @@ class FakeChatHistoryRepository:
             raise ValueError("turn_id cannot be blank")
 
         session = self.sessions.get((user_auth_sub, session_id))
-        if session is None:
+        if session is None or session.chat_kind != chat_kind:
             raise ValueError("session_id is required")
 
         existing = None
@@ -265,6 +278,7 @@ class FakeChatHistoryRepository:
         record = ChatMessageRecord(
             message_id=uuid4(),
             session_id=session_id,
+            chat_kind=chat_kind,
             turn_id=turn_id,
             role=role,
             message_type=message_type,
@@ -278,6 +292,7 @@ class FakeChatHistoryRepository:
         self.sessions[message_key] = _session_record(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=session.chat_kind,
             title=session.title,
             generated_title=session.generated_title,
             active_document_id=session.active_document_id,
@@ -326,6 +341,7 @@ class FakeChatHistoryRepository:
         message_page = self.list_messages(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=session.chat_kind,
             limit=message_limit,
             cursor=message_cursor,
         )
@@ -340,16 +356,22 @@ class FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         limit: int = 100,
         cursor: ChatMessageCursor | None = None,
     ) -> ChatMessagePage:
         if not session_id.strip():
             raise ValueError("session_id is required")
-        if (user_auth_sub, session_id) not in self.sessions:
+        session = self.sessions.get((user_auth_sub, session_id))
+        if session is None or session.chat_kind != chat_kind:
             return ChatMessagePage(items=[], next_cursor=None)
 
         messages = sorted(
-            self.detail_messages.get((user_auth_sub, session_id), []),
+            [
+                message
+                for message in self.detail_messages.get((user_auth_sub, session_id), [])
+                if message.chat_kind == chat_kind
+            ],
             key=lambda message: (message.created_at, message.message_id),
         )
         if cursor is not None:
@@ -375,6 +397,7 @@ class FakeChatHistoryRepository:
         self,
         *,
         user_auth_sub: str,
+        chat_kind: str,
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
         active_document_id: UUID | None = None,
@@ -382,6 +405,7 @@ class FakeChatHistoryRepository:
         self.list_calls.append(
             {
                 "user_auth_sub": user_auth_sub,
+                "chat_kind": chat_kind,
                 "limit": limit,
                 "cursor": cursor,
                 "active_document_id": active_document_id,
@@ -389,6 +413,7 @@ class FakeChatHistoryRepository:
         )
         items = self._visible_sessions(
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
             active_document_id=active_document_id,
         )
         return ChatSessionPage(items=items[:limit], next_cursor=None)
@@ -397,6 +422,7 @@ class FakeChatHistoryRepository:
         self,
         *,
         user_auth_sub: str,
+        chat_kind: str,
         query: str,
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
@@ -405,6 +431,7 @@ class FakeChatHistoryRepository:
         self.search_calls.append(
             {
                 "user_auth_sub": user_auth_sub,
+                "chat_kind": chat_kind,
                 "query": query,
                 "limit": limit,
                 "cursor": cursor,
@@ -413,6 +440,7 @@ class FakeChatHistoryRepository:
         )
         items = self._visible_sessions(
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
             active_document_id=active_document_id,
             query=query,
         )
@@ -422,12 +450,14 @@ class FakeChatHistoryRepository:
         self,
         *,
         user_auth_sub: str,
+        chat_kind: str,
         query: str | None = None,
         active_document_id: UUID | None = None,
     ) -> int:
         self.count_calls.append(
             {
                 "user_auth_sub": user_auth_sub,
+                "chat_kind": chat_kind,
                 "query": query,
                 "active_document_id": active_document_id,
             }
@@ -435,14 +465,27 @@ class FakeChatHistoryRepository:
         return len(
             self._visible_sessions(
                 user_auth_sub=user_auth_sub,
+                chat_kind=chat_kind,
                 active_document_id=active_document_id,
                 query=query,
             )
         )
 
-    def rename_session(self, *, session_id: str, user_auth_sub: str, title: str) -> ChatSessionRecord | None:
+    def rename_session(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        title: str,
+    ) -> ChatSessionRecord | None:
         self.rename_calls.append(
-            {"session_id": session_id, "user_auth_sub": user_auth_sub, "title": title}
+            {
+                "session_id": session_id,
+                "user_auth_sub": user_auth_sub,
+                "chat_kind": chat_kind,
+                "title": title,
+            }
         )
         if not session_id.strip():
             raise ValueError("session_id is required")
@@ -450,11 +493,12 @@ class FakeChatHistoryRepository:
         if not normalized_title:
             raise ValueError("title is required")
         session = self.sessions.get((user_auth_sub, session_id))
-        if session is None:
+        if session is None or session.chat_kind != chat_kind:
             return None
         updated = _session_record(
             session_id=session.session_id,
             user_auth_sub=session.user_auth_sub,
+            chat_kind=session.chat_kind,
             title=normalized_title,
             generated_title=session.generated_title,
             active_document_id=session.active_document_id,
@@ -470,10 +514,11 @@ class FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         generated_title: str,
     ) -> ChatSessionRecord | None:
         session = self.sessions.get((user_auth_sub, session_id))
-        if session is None:
+        if session is None or session.chat_kind != chat_kind:
             return None
         if session.title is not None or session.generated_title is not None:
             return session
@@ -481,6 +526,7 @@ class FakeChatHistoryRepository:
         updated = _session_record(
             session_id=session.session_id,
             user_auth_sub=session.user_auth_sub,
+            chat_kind=session.chat_kind,
             title=session.title,
             generated_title=generated_title,
             active_document_id=session.active_document_id,
@@ -496,26 +542,37 @@ class FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         deleted_at: datetime | None = None,
     ) -> bool:
         self.delete_calls.append(
-            {"session_id": session_id, "user_auth_sub": user_auth_sub, "deleted_at": deleted_at}
+            {
+                "session_id": session_id,
+                "user_auth_sub": user_auth_sub,
+                "chat_kind": chat_kind,
+                "deleted_at": deleted_at,
+            }
         )
         if not session_id.strip():
             raise ValueError("session_id is required")
-        return self.sessions.pop((user_auth_sub, session_id), None) is not None
+        session = self.sessions.get((user_auth_sub, session_id))
+        if session is None or session.chat_kind != chat_kind:
+            return False
+        self.sessions.pop((user_auth_sub, session_id), None)
+        return True
 
     def _visible_sessions(
         self,
         *,
         user_auth_sub: str,
+        chat_kind: str,
         active_document_id: UUID | None = None,
         query: str | None = None,
     ) -> list[ChatSessionRecord]:
         sessions = [
             record
             for (owner, _session_id), record in self.sessions.items()
-            if owner == user_auth_sub
+            if owner == user_auth_sub and record.chat_kind == chat_kind
         ]
         if active_document_id is not None:
             sessions = [
@@ -880,6 +937,7 @@ async def test_chat_endpoint_success(monkeypatch):
         {
             "session_id": "session-1",
             "user_auth_sub": "user-1",
+            "chat_kind": ASSISTANT_CHAT_KIND,
             "title": None,
             "generated_title": None,
             "active_document_id": None,
@@ -1889,6 +1947,7 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
                 ChatMessageRecord(
                     message_id=message_id,
                     session_id="session-detail",
+                    chat_kind=ASSISTANT_CHAT_KIND,
                     turn_id="turn-1",
                     role="assistant",
                     message_type="text",
@@ -2048,9 +2107,11 @@ def test_backfill_chat_session_generated_title_skips_when_session_disappears_bef
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         limit: int = 100,
         cursor=None,
     ):
+        del session_id, user_auth_sub, chat_kind, limit, cursor
         raise chat.ChatHistorySessionNotFoundError("Chat session not found")
 
     repository.list_messages = _list_messages
@@ -2074,6 +2135,7 @@ def test_serialize_message_omits_internal_flow_summary_payload_keys():
     record = ChatMessageRecord(
         message_id=uuid4(),
         session_id="session-flow-detail",
+        chat_kind=ASSISTANT_CHAT_KIND,
         turn_id="turn-flow-1",
         role="flow",
         message_type=chat.FLOW_SUMMARY_MESSAGE_TYPE,

@@ -19,6 +19,7 @@ class ChatSession(Base):
 
     session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     user_auth_sub: Mapped[str] = mapped_column(String(255), nullable=False)
+    chat_kind: Mapped[str] = mapped_column(String, nullable=False)
     title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     generated_title: Mapped[str | None] = mapped_column(String(255), nullable=True)
     active_document_id: Mapped[UUID | None] = mapped_column(
@@ -55,6 +56,10 @@ class ChatSession(Base):
         CheckConstraint("btrim(session_id) <> ''", name="ck_chat_sessions_session_id_not_empty"),
         CheckConstraint("btrim(user_auth_sub) <> ''", name="ck_chat_sessions_user_auth_sub_not_empty"),
         CheckConstraint(
+            "chat_kind IN ('assistant_chat', 'agent_studio')",
+            name="ck_chat_sessions_chat_kind",
+        ),
+        CheckConstraint(
             "title IS NULL OR btrim(title) <> ''",
             name="ck_chat_sessions_title_not_empty",
         ),
@@ -65,11 +70,13 @@ class ChatSession(Base):
         Index(
             "ix_chat_sessions_user_auth_sub",
             "user_auth_sub",
+            "chat_kind",
             postgresql_where=text("deleted_at IS NULL"),
         ),
         Index(
             "ix_chat_sessions_recent_activity",
             "user_auth_sub",
+            "chat_kind",
             text("(COALESCE(last_message_at, created_at)) DESC"),
             text("session_id DESC"),
             postgresql_where=text("deleted_at IS NULL"),
@@ -80,10 +87,20 @@ class ChatSession(Base):
             postgresql_where=text("active_document_id IS NOT NULL"),
         ),
         Index(
-            "ix_chat_sessions_search_vector",
+            "ix_chat_sessions_search_vector_assistant_chat",
             "search_vector",
             postgresql_using="gin",
-            postgresql_where=text("deleted_at IS NULL"),
+            postgresql_where=text(
+                "deleted_at IS NULL AND chat_kind = 'assistant_chat'"
+            ),
+        ),
+        Index(
+            "ix_chat_sessions_search_vector_agent_studio",
+            "search_vector",
+            postgresql_using="gin",
+            postgresql_where=text(
+                "deleted_at IS NULL AND chat_kind = 'agent_studio'"
+            ),
         ),
     )
 
@@ -91,5 +108,6 @@ class ChatSession(Base):
         return (
             f"<ChatSession(session_id='{self.session_id}', "
             f"user_auth_sub='{self.user_auth_sub}', "
+            f"chat_kind='{self.chat_kind}', "
             f"deleted_at={self.deleted_at})>"
         )

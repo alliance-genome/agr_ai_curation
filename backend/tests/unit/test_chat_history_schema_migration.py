@@ -17,6 +17,12 @@ MIGRATION_PATH = (
     / "versions"
     / "s1t2u3v4w5x6_add_chat_history_tables.py"
 )
+CHAT_KIND_MIGRATION_PATH = (
+    REPO_ROOT
+    / "alembic"
+    / "versions"
+    / "z9a0b1c2d3e4_add_chat_kind_discriminator.py"
+)
 
 
 class RecordingOp:
@@ -25,6 +31,12 @@ class RecordingOp:
     def __init__(self) -> None:
         self.created_tables: list[dict[str, object]] = []
         self.created_indexes: list[dict[str, object]] = []
+        self.dropped_indexes: list[dict[str, object]] = []
+        self.added_columns: list[tuple[str, sa.Column]] = []
+        self.altered_columns: list[dict[str, object]] = []
+        self.dropped_columns: list[tuple[str, str]] = []
+        self.created_constraints: list[tuple[str, str, str]] = []
+        self.dropped_constraints: list[tuple[str, str, str | None]] = []
         self.executed: list[str] = []
         self.dropped_tables: list[str] = []
 
@@ -44,6 +56,30 @@ class RecordingOp:
             }
         )
 
+    def drop_index(self, name, table_name=None):
+        self.dropped_indexes.append({"name": name, "table_name": table_name})
+
+    def add_column(self, table_name, column):
+        self.added_columns.append((table_name, column))
+
+    def alter_column(self, table_name, column_name, **kwargs):
+        self.altered_columns.append(
+            {
+                "table_name": table_name,
+                "column_name": column_name,
+                "kwargs": kwargs,
+            }
+        )
+
+    def drop_column(self, table_name, column_name):
+        self.dropped_columns.append((table_name, column_name))
+
+    def create_check_constraint(self, name, table_name, condition):
+        self.created_constraints.append((name, table_name, condition))
+
+    def drop_constraint(self, name, table_name, type_=None):
+        self.dropped_constraints.append((name, table_name, type_))
+
     def execute(self, statement):
         self.executed.append(str(statement))
 
@@ -51,12 +87,12 @@ class RecordingOp:
         self.dropped_tables.append(name)
 
 
-def _load_migration_module(monkeypatch, *, module_name: str):
+def _load_migration_module(monkeypatch, *, module_name: str, migration_path: Path = MIGRATION_PATH):
     dummy_alembic = types.ModuleType("alembic")
     dummy_alembic.op = object()
     monkeypatch.setitem(sys.modules, "alembic", dummy_alembic)
 
-    spec = spec_from_file_location(module_name, MIGRATION_PATH)
+    spec = spec_from_file_location(module_name, migration_path)
     assert spec is not None
     assert spec.loader is not None
 
@@ -213,5 +249,166 @@ def test_downgrade_drops_chat_history_tables_and_helpers(monkeypatch):
     )
     assert any(
         "DROP FUNCTION IF EXISTS strip_chat_search_content(text)" in statement
+        for statement in op_recorder.executed
+    )
+
+
+def test_chat_kind_upgrade_adds_discriminator_backfill_and_kind_scoped_indexes(monkeypatch):
+    module = _load_migration_module(
+        monkeypatch,
+        module_name="chat_kind_discriminator_migration_upgrade_test",
+        migration_path=CHAT_KIND_MIGRATION_PATH,
+    )
+    op_recorder = RecordingOp()
+    module.op = op_recorder
+
+    module.upgrade()
+
+    assert "partial GIN indexes" in (module.__doc__ or "")
+    assert [table_name for table_name, _column in op_recorder.added_columns] == [
+        "chat_sessions",
+        "chat_messages",
+    ]
+    assert [column.name for _table_name, column in op_recorder.added_columns] == [
+        "chat_kind",
+        "chat_kind",
+    ]
+    assert op_recorder.created_constraints == [
+        (
+            "ck_chat_sessions_chat_kind",
+            "chat_sessions",
+            "chat_kind IN ('assistant_chat', 'agent_studio')",
+        ),
+        (
+            "ck_chat_messages_chat_kind",
+            "chat_messages",
+            "chat_kind IN ('assistant_chat', 'agent_studio')",
+        ),
+    ]
+    assert op_recorder.dropped_indexes == [
+        {"name": "ix_chat_sessions_user_auth_sub", "table_name": "chat_sessions"},
+        {"name": "ix_chat_sessions_search_vector", "table_name": "chat_sessions"},
+        {"name": "ix_chat_messages_session_timeline", "table_name": "chat_messages"},
+        {"name": "ix_chat_messages_turn_lookup", "table_name": "chat_messages"},
+        {"name": "uq_chat_messages_user_turn", "table_name": "chat_messages"},
+        {"name": "uq_chat_messages_assistant_turn", "table_name": "chat_messages"},
+        {"name": "ix_chat_messages_search_vector", "table_name": "chat_messages"},
+    ]
+
+    index_map = {index["name"]: index for index in op_recorder.created_indexes}
+    assert set(index_map) == {
+        "ix_chat_sessions_user_auth_sub",
+        "ix_chat_sessions_search_vector_assistant_chat",
+        "ix_chat_sessions_search_vector_agent_studio",
+        "ix_chat_messages_session_timeline",
+        "ix_chat_messages_turn_lookup",
+        "uq_chat_messages_user_turn",
+        "uq_chat_messages_assistant_turn",
+        "ix_chat_messages_search_vector_assistant_chat",
+        "ix_chat_messages_search_vector_agent_studio",
+    }
+    assert index_map["ix_chat_sessions_user_auth_sub"]["columns"] == [
+        "user_auth_sub",
+        "chat_kind",
+    ]
+    assert index_map["ix_chat_messages_session_timeline"]["columns"] == [
+        "session_id",
+        "chat_kind",
+        "created_at",
+        "message_id",
+    ]
+
+    assert any(
+        "UPDATE chat_sessions" in statement and "assistant_chat" in statement
+        for statement in op_recorder.executed
+    )
+    assert any(
+        "UPDATE chat_messages" in statement and "assistant_chat" in statement
+        for statement in op_recorder.executed
+    )
+    assert any(
+        "CREATE INDEX ix_chat_sessions_recent_activity" in statement
+        and "chat_kind" in statement
+        for statement in op_recorder.executed
+    )
+    assert any("SELECT chat_kind" in statement for statement in op_recorder.executed)
+    assert any(
+        "AND chat_kind = resolved_chat_kind" in statement
+        for statement in op_recorder.executed
+    )
+    assert any(
+        "AFTER INSERT OR UPDATE OF title, generated_title, chat_kind" in statement
+        for statement in op_recorder.executed
+    )
+
+
+def test_chat_kind_downgrade_restores_pre_discriminator_shape(monkeypatch):
+    module = _load_migration_module(
+        monkeypatch,
+        module_name="chat_kind_discriminator_migration_downgrade_test",
+        migration_path=CHAT_KIND_MIGRATION_PATH,
+    )
+    op_recorder = RecordingOp()
+    module.op = op_recorder
+
+    module.downgrade()
+
+    assert op_recorder.dropped_indexes == [
+        {
+            "name": "ix_chat_sessions_search_vector_assistant_chat",
+            "table_name": "chat_sessions",
+        },
+        {
+            "name": "ix_chat_sessions_search_vector_agent_studio",
+            "table_name": "chat_sessions",
+        },
+        {"name": "ix_chat_sessions_user_auth_sub", "table_name": "chat_sessions"},
+        {
+            "name": "ix_chat_messages_search_vector_assistant_chat",
+            "table_name": "chat_messages",
+        },
+        {
+            "name": "ix_chat_messages_search_vector_agent_studio",
+            "table_name": "chat_messages",
+        },
+        {"name": "ix_chat_messages_session_timeline", "table_name": "chat_messages"},
+        {"name": "ix_chat_messages_turn_lookup", "table_name": "chat_messages"},
+        {"name": "uq_chat_messages_user_turn", "table_name": "chat_messages"},
+        {
+            "name": "uq_chat_messages_assistant_turn",
+            "table_name": "chat_messages",
+        },
+    ]
+    assert op_recorder.dropped_constraints == [
+        ("ck_chat_messages_chat_kind", "chat_messages", "check"),
+        ("ck_chat_sessions_chat_kind", "chat_sessions", "check"),
+    ]
+    assert op_recorder.dropped_columns == [
+        ("chat_messages", "chat_kind"),
+        ("chat_sessions", "chat_kind"),
+    ]
+
+    index_map = {index["name"]: index for index in op_recorder.created_indexes}
+    assert set(index_map) == {
+        "ix_chat_sessions_user_auth_sub",
+        "ix_chat_sessions_search_vector",
+        "ix_chat_messages_session_timeline",
+        "ix_chat_messages_turn_lookup",
+        "uq_chat_messages_user_turn",
+        "uq_chat_messages_assistant_turn",
+        "ix_chat_messages_search_vector",
+    }
+    assert index_map["ix_chat_sessions_user_auth_sub"]["columns"] == ["user_auth_sub"]
+    assert index_map["ix_chat_messages_turn_lookup"]["columns"] == [
+        "session_id",
+        "turn_id",
+    ]
+    assert any(
+        "CREATE INDEX ix_chat_sessions_recent_activity" in statement
+        and "chat_kind" not in statement
+        for statement in op_recorder.executed
+    )
+    assert any(
+        "AFTER INSERT OR UPDATE OF title, generated_title" in statement
         for statement in op_recorder.executed
     )

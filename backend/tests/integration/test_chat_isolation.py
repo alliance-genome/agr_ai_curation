@@ -28,7 +28,7 @@ from unittest.mock import patch, MagicMock
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from src.lib.chat_history_repository import ChatHistoryRepository
+from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatHistoryRepository
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument
 from src.lib.weaviate_helpers import get_tenant_name
@@ -385,12 +385,14 @@ class TestChatIsolation:
         repository.create_session(
             session_id=session1_id,
             user_auth_sub=curator1_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
             title=f"{query} session user1",
             created_at=_ts(9, 0),
         )
         repository.append_message(
             session_id=session1_id,
             user_auth_sub=curator1_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
             role="user",
             content="What is my TP53 evidence?",
             turn_id="turn-user1-1",
@@ -399,6 +401,7 @@ class TestChatIsolation:
         repository.append_message(
             session_id=session1_id,
             user_auth_sub=curator1_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
             role="assistant",
             content="User 1 TP53 answer",
             turn_id="turn-user1-1",
@@ -409,12 +412,14 @@ class TestChatIsolation:
         repository.create_session(
             session_id=session2_id,
             user_auth_sub=curator2_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
             title=f"{query} session user2",
             created_at=_ts(10, 0),
         )
         repository.append_message(
             session_id=session2_id,
             user_auth_sub=curator2_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
             role="user",
             content="What is my EGFR evidence?",
             turn_id="turn-user2-1",
@@ -423,6 +428,7 @@ class TestChatIsolation:
         repository.append_message(
             session_id=session2_id,
             user_auth_sub=curator2_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
             role="assistant",
             content="User 2 EGFR answer",
             turn_id="turn-user2-1",
@@ -477,12 +483,14 @@ class TestChatIsolation:
         repository.create_session(
             session_id=session_id,
             user_auth_sub=curator1_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
             title="Rescue owner session",
             created_at=_ts(11, 0),
         )
         repository.append_message(
             session_id=session_id,
             user_auth_sub=curator1_user["sub"],
+            chat_kind=ASSISTANT_CHAT_KIND,
             role="user",
             content="Recover this answer",
             turn_id=turn_id,

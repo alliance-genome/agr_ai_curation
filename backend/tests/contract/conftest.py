@@ -112,7 +112,10 @@ def chat_contract_db():
 @pytest.fixture
 def seed_chat_contract_session(chat_contract_db):
     """Seed one durable chat session and optional transcript rows."""
-    from src.lib.chat_history_repository import ChatHistoryRepository
+    from src.lib.chat_history_repository import (
+        ASSISTANT_CHAT_KIND,
+        ChatHistoryRepository,
+    )
 
     def _seed(
         *,
@@ -128,6 +131,7 @@ def seed_chat_contract_session(chat_contract_db):
         repository.create_session(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=ASSISTANT_CHAT_KIND,
             title=title,
             generated_title=generated_title,
             active_document_id=active_document_id,
@@ -137,6 +141,7 @@ def seed_chat_contract_session(chat_contract_db):
             repository.append_message(
                 session_id=session_id,
                 user_auth_sub=user_auth_sub,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 role=message["role"],
                 content=message["content"],
                 message_type=message.get("message_type", "text"),
