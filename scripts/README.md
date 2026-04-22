@@ -467,8 +467,9 @@ Checks:
 - `none` backend startup with reranking disabled
 - `/api/admin/health/connections` contract for when the reranker service is
   actually required
-- for `local_transformers`, the backend's effective `RERANKER_URL` remains the
-  local Compose endpoint `http://reranker-transformers:8080`
+- for `local_transformers`, the backend's effective `RERANKER_URL` matches the
+  configured target resolved from exported env, then the local backend `.env`,
+  defaulting to `http://reranker-transformers:8080`
 - a real `rerank_chunks(...)` probe inside the backend container to prove that
   `bedrock_cohere` and `local_transformers` reorder results while `none`
   preserves retrieval order

@@ -8,7 +8,9 @@ TIMESTAMP_UTC="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 STAMP_FILE="$(date -u +"%Y%m%dT%H%M%SZ")"
 OUT_DIR="file_outputs/temp"
 OUT_FILE="${OUT_DIR}/rerank_provider_smoke_local_${STAMP_FILE}.json"
-LOCAL_RERANKER_URL="http://reranker-transformers:8080"
+DEFAULT_LOCAL_RERANKER_URL="http://reranker-transformers:8080"
+REPO_ENV_FILE="${REPO_ROOT}/.env"
+SMOKE_COMPOSE_OVERRIDE_FILE=""
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" && ( "${BASE_URL}" == "-h" || "${BASE_URL}" == "--help" ) ]]; then
   cat <<'EOF'
@@ -22,6 +24,11 @@ Runs a local-stack rerank provider smoke across:
 The script restarts the local backend per provider mode, verifies backend
 startup, checks the reranker service requirement contract, and runs a real
 rerank probe from inside the backend container.
+
+If RERANKER_URL is exported for the smoke run, the script passes that override
+through to the backend. Otherwise it validates any RERANKER_URL already
+present in the local backend .env file before falling back to the default
+local Compose hostname.
 EOF
   exit 0
 fi
@@ -67,11 +74,77 @@ PY
 }
 
 compose() {
-  docker compose "$@"
+  local compose_args=()
+  append_smoke_compose_args compose_args
+  docker compose "${compose_args[@]}" "$@"
 }
 
 compose_with_local_reranker() {
-  docker compose --profile "$(rerank_local_service_compose_profile)" "$@"
+  local compose_args=()
+  append_smoke_compose_args compose_args
+  docker compose "${compose_args[@]}" --profile "$(rerank_local_service_compose_profile)" "$@"
+}
+
+append_smoke_compose_args() {
+  local args_array_name="$1"
+  # shellcheck disable=SC2178,SC2034
+  local -n compose_args_ref="${args_array_name}"
+
+  if [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE:-}" ]]; then
+    compose_args_ref+=(-f docker-compose.yml -f "${SMOKE_COMPOSE_OVERRIDE_FILE}")
+  fi
+}
+
+cleanup_smoke_compose_override() {
+  if [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE:-}" && -f "${SMOKE_COMPOSE_OVERRIDE_FILE}" ]]; then
+    rm -f "${SMOKE_COMPOSE_OVERRIDE_FILE}"
+  fi
+  SMOKE_COMPOSE_OVERRIDE_FILE=""
+}
+
+ensure_smoke_compose_override_file() {
+  if [[ -n "${SMOKE_COMPOSE_OVERRIDE_FILE:-}" || -z "${RERANKER_URL:-}" ]]; then
+    return 0
+  fi
+
+  SMOKE_COMPOSE_OVERRIDE_FILE="$(mktemp)"
+  cat > "${SMOKE_COMPOSE_OVERRIDE_FILE}" <<EOF
+services:
+  backend:
+    environment:
+      RERANKER_URL: $(json_escape "${RERANKER_URL}")
+EOF
+}
+
+read_repo_env_value() {
+  local key="$1"
+  if [[ ! -f "${REPO_ENV_FILE}" ]]; then
+    return 0
+  fi
+
+  awk -F= -v key="${key}" '
+    $0 ~ "^[[:space:]]*" key "=" {
+      print substr($0, index($0, "=") + 1)
+      exit
+    }
+  ' "${REPO_ENV_FILE}"
+}
+
+effective_local_reranker_url() {
+  local configured_url="${RERANKER_URL:-}"
+
+  if [[ -n "${configured_url}" ]]; then
+    printf "%s" "${configured_url}"
+    return 0
+  fi
+
+  configured_url="$(read_repo_env_value "RERANKER_URL")"
+  if [[ -n "${configured_url}" ]]; then
+    printf "%s" "${configured_url}"
+    return 0
+  fi
+
+  printf "%s" "${DEFAULT_LOCAL_RERANKER_URL}"
 }
 
 print_stack_diagnostics() {
@@ -237,7 +310,7 @@ assert_local_reranker_target() {
   fi
 
   ensure_python_bin
-  append_derived_check "$("${PY_BIN}" - "${provider}" "${connections_body}" "${LOCAL_RERANKER_URL}" <<'PY'
+  append_derived_check "$("${PY_BIN}" - "${provider}" "${connections_body}" "$(effective_local_reranker_url)" <<'PY'
 import json
 import sys
 
@@ -251,7 +324,7 @@ actual_url = reranker.get("url")
 
 ok = actual_url == expected_url
 reason = (
-    "local_transformers is pinned to the local Compose reranker endpoint"
+    f"local_transformers reranker URL matches configured target {expected_url!r}"
     if ok
     else f"expected local reranker URL {expected_url!r}, got {actual_url!r}"
 )
@@ -454,6 +527,8 @@ main() {
   # shellcheck disable=SC1091
   . "${SCRIPT_DIR}/load-home-test-env.sh"
   ensure_python_bin
+  ensure_smoke_compose_override_file
+  trap cleanup_smoke_compose_override EXIT
 
   for provider in "${PROVIDERS[@]}"; do
     echo "Running rerank provider smoke for ${provider}..."

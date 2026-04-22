@@ -129,7 +129,7 @@ resolve_reranker_url() {
     return 0
   fi
 
-  prompt_value_with_default "Local reranker service URL" "$default_url"
+  prompt_value_with_default "Reranker service URL for local_transformers" "$default_url"
 }
 
 generate_hex_secret() {
@@ -323,7 +323,7 @@ print_stage_intro() {
   echo "    4. Anthropic API key   (recommended - powers the in-app Claude help agent)"
   echo "    5. Gemini API key      (optional - adds Google Gemini models)"
   echo "    6. Rerank provider     (bedrock_cohere, local_transformers, or none)"
-  echo "    7. Provider companion  (Bedrock model ARN or local reranker URL when needed)"
+  echo "    7. Provider companion  (Bedrock model ARN or the configured reranker URL when needed)"
   echo
   echo "  Everything else (database passwords, encryption keys, Langfuse tokens)"
   echo "  is generated automatically. You don't need to prepare anything for those."
@@ -462,7 +462,7 @@ main() {
       bedrock_rerank_model_arn="$(resolve_bedrock_rerank_model_arn "$default_bedrock_rerank_model_arn")"
       ;;
     local_transformers)
-      log_warn "local_transformers reranking uses a memory-intensive local model; plan for at least 8 GiB RAM and run the reranker container." >&2
+      log_warn "local_transformers reranking uses a memory-intensive local model; plan for at least 8 GiB RAM and run the reranker container or point RERANKER_URL at a reachable compatible service." >&2
       reranker_url="$(resolve_reranker_url "$default_reranker_url")"
       ;;
     none)
