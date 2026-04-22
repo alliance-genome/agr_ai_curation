@@ -224,10 +224,11 @@ describe('useChatHistoryQuery', () => {
     expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenCalledTimes(2)
     expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({
+      {
         sessionId: 'session-1',
         messageLimit: 200,
-      }),
+        messageCursor: null,
+      },
     )
     expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenNthCalledWith(2, {
       sessionId: 'session-1',
@@ -244,6 +245,61 @@ describe('useChatHistoryQuery', () => {
         content: 'First answer',
       }),
     ])
+  })
+
+  it('fails transcript hydration after too many sequential pages', async () => {
+    const queryClient = createQueryClient()
+
+    serviceMocks.fetchChatHistoryDetail.mockImplementation(async ({ messageCursor }) => {
+      const pageNumber = messageCursor
+        ? Number(messageCursor.replace('cursor-', ''))
+        : 1
+
+      return {
+        session: {
+          session_id: 'session-1',
+          title: 'Stored session',
+          created_at: '2026-04-20T00:00:00Z',
+          updated_at: '2026-04-20T00:00:00Z',
+          recent_activity_at: '2026-04-20T00:00:00Z',
+        },
+        active_document: null,
+        messages: [
+          {
+            message_id: `message-${pageNumber}`,
+            session_id: 'session-1',
+            turn_id: `turn-${pageNumber}`,
+            role: 'assistant',
+            message_type: 'text',
+            content: `Page ${pageNumber}`,
+            payload_json: null,
+            trace_id: `trace-${pageNumber}`,
+            created_at: '2026-04-20T00:00:02Z',
+          },
+        ],
+        message_limit: 200,
+        next_message_cursor: pageNumber >= 51 ? null : `cursor-${pageNumber + 1}`,
+      }
+    })
+
+    const { result } = renderHook(
+      () =>
+        useChatHistoryTranscriptQuery({
+          sessionId: 'session-1',
+        }),
+      {
+        wrapper: createWrapper(queryClient),
+      },
+    )
+
+    await waitFor(() => {
+      expect(result.current.isError).toBe(true)
+    })
+
+    expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenCalledTimes(50)
+    expect(result.current.error?.message).toBe(
+      'Exceeded 50 transcript pages for session session-1',
+    )
   })
 
   it('invalidates list and detail caches after rename mutations', async () => {

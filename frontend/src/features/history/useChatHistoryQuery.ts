@@ -41,6 +41,7 @@ type ChatHistoryTranscriptQueryOptions = Omit<
 >
 
 const FULL_TRANSCRIPT_PAGE_SIZE = 200
+const FULL_TRANSCRIPT_MAX_PAGES = 50
 
 async function fetchChatHistoryTranscript(
   request: ChatHistoryDetailRequest,
@@ -53,7 +54,11 @@ async function fetchChatHistoryTranscript(
   let nextCursor = request.messageCursor ?? null
   let detailResponse: ChatHistoryDetailResponse | null = null
 
-  while (true) {
+  for (
+    let pageCount = 0;
+    pageCount < FULL_TRANSCRIPT_MAX_PAGES;
+    pageCount += 1
+  ) {
     const page = await fetchChatHistoryDetail({
       sessionId,
       messageLimit,
@@ -83,6 +88,10 @@ async function fetchChatHistoryTranscript(
     seenCursors.add(page.next_message_cursor)
     nextCursor = page.next_message_cursor
   }
+
+  throw new Error(
+    `Exceeded ${FULL_TRANSCRIPT_MAX_PAGES} transcript pages for session ${sessionId}`,
+  )
 }
 
 export function useChatHistoryListQuery(
