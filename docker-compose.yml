@@ -196,11 +196,7 @@ services:
       # Curation Database Credentials Configuration
       - CURATION_DB_CREDENTIALS_SOURCE=${CURATION_DB_CREDENTIALS_SOURCE}
       - CURATION_DB_AWS_SECRET_ID=${CURATION_DB_AWS_SECRET_ID:-}
-      # Chat History Configuration
-      - CHAT_HISTORY_ENABLED=${CHAT_HISTORY_ENABLED:-true}
-      - CHAT_MAX_HISTORY_EXCHANGES=${CHAT_MAX_HISTORY_EXCHANGES:-20}
-      - CHAT_HISTORY_IN_ROUTING=${CHAT_HISTORY_IN_ROUTING:-true}
-      - CHAT_HISTORY_IN_RESPONSE=${CHAT_HISTORY_IN_RESPONSE:-true}
+      # Chat Session Configuration
       - CHAT_MAX_SESSIONS_IN_MEMORY=${CHAT_MAX_SESSIONS_IN_MEMORY:-100}
       # Feedback System SNS Configuration (Feature 005-user-feedback-system)
       - SNS_TOPIC_ARN=${SNS_TOPIC_ARN:-}

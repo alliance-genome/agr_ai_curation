@@ -1692,7 +1692,7 @@ async def test_chat_status_reflects_openai_env(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_conversation_status_and_reset_and_config_endpoints(monkeypatch):
+async def test_get_conversation_status_and_reset_endpoints(monkeypatch):
     repository = FakeChatHistoryRepository(
         sessions=[
             _session_record(session_id="session-current"),
@@ -1718,20 +1718,6 @@ async def test_get_conversation_status_and_reset_and_config_endpoints(monkeypatc
     )
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
     monkeypatch.setattr(chat, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
-    monkeypatch.setattr(
-        chat,
-        "chat_history_config",
-        SimpleNamespace(
-            as_history_dict=lambda: {
-                "enabled": True,
-                "max_exchanges": 30,
-                "include_in_routing": True,
-                "include_in_response": True,
-                "max_sessions_per_user": 10,
-            }
-        ),
-    )
-
     status = await chat.get_conversation_status(db=object(), user={"sub": "user-1"})
     assert status.is_active is True
     assert status.conversation_id == "session-current"
@@ -1742,8 +1728,10 @@ async def test_get_conversation_status_and_reset_and_config_endpoints(monkeypatc
     assert reset.session_id is not None
     assert reset.memory_stats["conversation_id"] == reset.session_id
     assert reset.memory_stats["memory_sizes"]["short_term"]["file_count"] == 0
-    config = await chat.get_chat_configuration({"sub": "user-1"})
-    assert config.history["enabled"] is True
+
+
+def test_chat_router_omits_legacy_chat_config_route():
+    assert "/api/chat/config" not in {route.path for route in chat.router.routes}
 
 
 @pytest.mark.asyncio

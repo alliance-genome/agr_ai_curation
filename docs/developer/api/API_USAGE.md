@@ -276,11 +276,8 @@ curl -X POST http://localhost:8000/api/chat/session/bulk-delete \
 ```
 `/api/chat/history` returns paginated durable session summaries with optional `query`, `document_id`, and `cursor` filters. Session detail payloads include persisted transcript rows plus `active_document` metadata when the referenced document is available for resume flows.
 
-### 7. Chat configuration
-```bash
-curl http://localhost:8000/api/chat/config | jq
-```
-Returns CrewAI memory and routing thresholds (useful when asserting planner decisions in automated tests).
+### 7. Durable chat contract note
+The durable-chat cutover removed the legacy `/api/chat/config` surface. The supported contract is the durable session and history API above; there is no separate runtime knob endpoint to query.
 
 ---
 
