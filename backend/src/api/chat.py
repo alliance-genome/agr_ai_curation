@@ -29,6 +29,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .auth import get_auth_dependency
 from ..lib.chat_history_repository import (
+    ASSISTANT_CHAT_KIND,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
     ChatMessageCursor,
@@ -1097,7 +1098,11 @@ def _latest_visible_chat_session(
 ) -> ChatSessionRecord | None:
     """Return the most recent visible durable chat session for the user."""
 
-    page = repository.list_sessions(user_auth_sub=user_id, limit=1)
+    page = repository.list_sessions(
+        user_auth_sub=user_id,
+        chat_kind=ASSISTANT_CHAT_KIND,
+        limit=1,
+    )
     if not page.items:
         return None
     return page.items[0]
@@ -1133,7 +1138,10 @@ def _build_durable_conversation_stats(
             },
         },
         "user_id": user_id,
-        "session_count": repository.count_sessions(user_auth_sub=user_id),
+        "session_count": repository.count_sessions(
+            user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
+        ),
     }
 
 
@@ -1339,6 +1347,7 @@ def _backfill_chat_session_generated_title(
             message_page = repository.list_messages(
                 session_id=session_id,
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 limit=_TITLE_BACKFILL_MESSAGE_LIMIT,
             )
             generated_title = _generate_title_from_messages(message_page.items)
@@ -1348,6 +1357,7 @@ def _backfill_chat_session_generated_title(
         repository.set_generated_title(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             generated_title=generated_title,
         )
         completion_db.commit()
@@ -1589,11 +1599,13 @@ def _prepare_chat_stream_turn(
     repository.get_or_create_session(
         session_id=session_id,
         user_auth_sub=user_id,
+        chat_kind=ASSISTANT_CHAT_KIND,
         active_document_id=active_document_id,
     )
     user_turn = repository.append_message(
         session_id=session_id,
         user_auth_sub=user_id,
+        chat_kind=ASSISTANT_CHAT_KIND,
         role="user",
         content=user_message,
         turn_id=turn_id,
@@ -1694,6 +1706,7 @@ def _persist_completed_chat_stream_turn(
             assistant_turn = repository.append_message(
                 session_id=session_id,
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 role="assistant",
                 content=assistant_message,
                 turn_id=turn_id,
@@ -1739,11 +1752,13 @@ def _prepare_execute_flow_turn(
     repository.get_or_create_session(
         session_id=session_id,
         user_auth_sub=user_id,
+        chat_kind=ASSISTANT_CHAT_KIND,
         active_document_id=active_document_id,
     )
     user_turn = repository.append_message(
         session_id=session_id,
         user_auth_sub=user_id,
+        chat_kind=ASSISTANT_CHAT_KIND,
         role="user",
         content=user_message,
         turn_id=turn_id,
@@ -1789,6 +1804,7 @@ def _prepare_execute_flow_turn(
         repository.list_messages_for_turn(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             turn_id=turn_id,
         )
     )
@@ -1919,6 +1935,7 @@ def _persist_completed_execute_flow_turn(
             repository.list_messages_for_turn(
                 session_id=session_id,
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 turn_id=turn_id,
             )
         )
@@ -1929,6 +1946,7 @@ def _persist_completed_execute_flow_turn(
             repository.append_message(
                 session_id=session_id,
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 role="flow",
                 content=row.content,
                 message_type=row.message_type,
@@ -2054,6 +2072,7 @@ async def create_session(
         session = repository.create_session(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             active_document_id=active_document_id,
         )
         db.commit()
@@ -2162,11 +2181,13 @@ async def chat_endpoint(
         repository.get_or_create_session(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             active_document_id=active_document_id,
         )
         user_turn = repository.append_message(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             role="user",
             content=chat_message.message,
             turn_id=chat_message.turn_id,
@@ -2333,6 +2354,7 @@ async def chat_endpoint(
                 assistant_turn = repository.append_message(
                     session_id=session_id,
                     user_auth_sub=user_id,
+                    chat_kind=ASSISTANT_CHAT_KIND,
                     role="assistant",
                     content=full_response,
                     turn_id=chat_message.turn_id,
@@ -3024,6 +3046,7 @@ async def assistant_rescue(
         assistant_turn = repository.append_message(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             role="assistant",
             content=request.content,
             turn_id=request.turn_id,
@@ -3567,6 +3590,7 @@ async def reset_conversation(
         new_session = repository.create_session(
             session_id=new_session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             active_document_id=active_document_id,
         )
         db.commit()
@@ -3661,6 +3685,7 @@ async def get_all_sessions_stats(
         if normalized_query:
             page = repository.search_sessions(
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 query=normalized_query,
                 limit=limit,
                 cursor=decoded_cursor,
@@ -3668,18 +3693,21 @@ async def get_all_sessions_stats(
             )
             total_sessions = repository.count_sessions(
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 query=normalized_query,
                 active_document_id=active_document_id,
             )
         else:
             page = repository.list_sessions(
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 limit=limit,
                 cursor=decoded_cursor,
                 active_document_id=active_document_id,
             )
             total_sessions = repository.count_sessions(
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 active_document_id=active_document_id,
             )
     except ValueError as exc:
@@ -3719,6 +3747,7 @@ async def rename_session(
         session = repository.rename_session(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             title=request.title,
         )
         if session is None:
@@ -3761,6 +3790,7 @@ async def delete_session(
         deleted = repository.soft_delete_session(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
         )
         if not deleted:
             db.rollback()
@@ -3815,6 +3845,7 @@ async def bulk_delete_sessions(
             if repository.soft_delete_session(
                 session_id=target_session_id,
                 user_auth_sub=user_id,
+                chat_kind=ASSISTANT_CHAT_KIND,
             ):
                 deleted_session_ids.append(target_session_id)
         db.commit()

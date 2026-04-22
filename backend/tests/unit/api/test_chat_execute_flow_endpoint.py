@@ -77,6 +77,7 @@ class _FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         title: str | None = None,
         generated_title: str | None = None,
         active_document_id=None,
@@ -84,12 +85,13 @@ class _FakeChatHistoryRepository:
     ) -> chat.ChatSessionRecord:
         key = (user_auth_sub, session_id)
         existing = self.sessions.get(key)
-        if existing is not None:
+        if existing is not None and existing.chat_kind == chat_kind:
             return existing
         created = created_at or datetime(2026, 4, 20, 9, 0, tzinfo=timezone.utc)
         record = chat.ChatSessionRecord(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
             title=title,
             generated_title=generated_title,
             active_document_id=active_document_id,
@@ -109,6 +111,7 @@ class _FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         role: str,
         content: str,
         message_type: str = "text",
@@ -120,6 +123,7 @@ class _FakeChatHistoryRepository:
         session = self.get_or_create_session(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
         )
         if turn_id is not None and role in {"user", "assistant"}:
             existing = self.get_message_by_turn_id(
@@ -136,6 +140,7 @@ class _FakeChatHistoryRepository:
         record = chat.ChatMessageRecord(
             message_id=uuid4(),
             session_id=session_id,
+            chat_kind=chat_kind,
             turn_id=turn_id,
             role=role,
             message_type=message_type,
@@ -149,6 +154,7 @@ class _FakeChatHistoryRepository:
         self.sessions[key] = chat.ChatSessionRecord(
             session_id=session.session_id,
             user_auth_sub=session.user_auth_sub,
+            chat_kind=session.chat_kind,
             title=session.title,
             generated_title=session.generated_title,
             active_document_id=session.active_document_id,
@@ -164,17 +170,19 @@ class _FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         generated_title: str,
     ):
         key = (user_auth_sub, session_id)
         session = self.sessions.get(key)
-        if session is None:
+        if session is None or session.chat_kind != chat_kind:
             return None
         if session.title is not None or session.generated_title is not None:
             return session
         updated = chat.ChatSessionRecord(
             session_id=session.session_id,
             user_auth_sub=session.user_auth_sub,
+            chat_kind=session.chat_kind,
             title=session.title,
             generated_title=generated_title,
             active_document_id=session.active_document_id,
@@ -204,12 +212,13 @@ class _FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         turn_id: str,
     ) -> list[chat.ChatMessageRecord]:
         return [
             message
             for message in self.messages.get((user_auth_sub, session_id), [])
-            if message.turn_id == turn_id
+            if message.turn_id == turn_id and message.chat_kind == chat_kind
         ]
 
     def update_message_by_turn_id(
@@ -229,6 +238,7 @@ class _FakeChatHistoryRepository:
             updated = chat.ChatMessageRecord(
                 message_id=message.message_id,
                 session_id=message.session_id,
+                chat_kind=message.chat_kind,
                 turn_id=message.turn_id,
                 role=message.role,
                 message_type=message.message_type,
@@ -246,11 +256,16 @@ class _FakeChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         limit: int = 200,
         cursor=None,
     ):
         del cursor
-        messages = list(self.messages.get((user_auth_sub, session_id), []))
+        messages = [
+            message
+            for message in self.messages.get((user_auth_sub, session_id), [])
+            if message.chat_kind == chat_kind
+        ]
         return SimpleNamespace(items=messages[:limit], next_cursor=None)
 
 
@@ -773,6 +788,7 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
     stored_turn_messages = repository.list_messages_for_turn(
         session_id="session-flow-replay",
         user_auth_sub="auth-sub",
+        chat_kind=chat.ASSISTANT_CHAT_KIND,
         turn_id="turn-flow-replay",
     )
     assert [message.role for message in stored_turn_messages] == ["user", "flow"]
@@ -800,10 +816,15 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
 
     _patch_stream_dependencies(monkeypatch, cancel_requested=False)
     repository, _completion_db = _patch_durable_history(monkeypatch)
-    repository.get_or_create_session(session_id="session-flow-retry", user_auth_sub="auth-sub")
+    repository.get_or_create_session(
+        session_id="session-flow-retry",
+        user_auth_sub="auth-sub",
+        chat_kind=chat.ASSISTANT_CHAT_KIND,
+    )
     repository.append_message(
         session_id="session-flow-retry",
         user_auth_sub="auth-sub",
+        chat_kind=chat.ASSISTANT_CHAT_KIND,
         role="user",
         content="Run flow 'Retry Flow'",
         turn_id="turn-flow-retry",
@@ -865,6 +886,7 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
     stored_turn_messages = repository.list_messages_for_turn(
         session_id="session-flow-retry",
         user_auth_sub="auth-sub",
+        chat_kind=chat.ASSISTANT_CHAT_KIND,
         turn_id="turn-flow-retry",
     )
     assert [message.role for message in stored_turn_messages] == ["user", "flow"]
@@ -1160,6 +1182,7 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     turn_messages = calls["repository"].list_messages_for_turn(
         session_id="session-completion-persistence-failure",
         user_auth_sub="auth-sub",
+        chat_kind=chat.ASSISTANT_CHAT_KIND,
         turn_id="turn-completion-persistence-failure",
     )
     assert [message.role for message in turn_messages] == ["user"]

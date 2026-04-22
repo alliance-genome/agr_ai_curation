@@ -6,7 +6,11 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from src.lib.chat_history_repository import ChatHistorySessionNotFoundError, ChatMessageRecord
+from src.lib.chat_history_repository import (
+    ASSISTANT_CHAT_KIND,
+    ChatHistorySessionNotFoundError,
+    ChatMessageRecord,
+)
 from src.lib.chat_transcript import (
     FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY,
     collect_durable_text_exchanges,
@@ -28,6 +32,7 @@ def _message(
     return ChatMessageRecord(
         message_id=uuid4(),
         session_id=session_id,
+        chat_kind=ASSISTANT_CHAT_KIND,
         turn_id=None,
         role=role,
         message_type=message_type,
@@ -41,18 +46,19 @@ def _message(
 class _FakeRepository:
     def __init__(self, pages: dict[tuple[str, str], list[list[ChatMessageRecord]]]) -> None:
         self._pages = pages
-        self.calls: list[tuple[str, str, object]] = []
+        self.calls: list[tuple[str, str, str, object]] = []
 
     def list_messages(
         self,
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         limit: int,
         cursor,
     ):
         del limit
-        self.calls.append((session_id, user_auth_sub, cursor))
+        self.calls.append((session_id, user_auth_sub, chat_kind, cursor))
         page_sets = self._pages.get((user_auth_sub, session_id))
         if page_sets is None:
             raise ChatHistorySessionNotFoundError("Chat session not found")
@@ -113,8 +119,8 @@ def test_list_session_text_exchanges_pages_until_completion():
         ("second question", "second answer"),
     ]
     assert repository.calls == [
-        ("session-1", "user-1", None),
-        ("session-1", "user-1", 1),
+        ("session-1", "user-1", ASSISTANT_CHAT_KIND, None),
+        ("session-1", "user-1", ASSISTANT_CHAT_KIND, 1),
     ]
 
 

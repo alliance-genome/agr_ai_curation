@@ -18,6 +18,8 @@ from src.models.sql.chat_session import ChatSession as ChatSessionModel
 from src.models.sql.user import User as UserModel
 
 
+ASSISTANT_CHAT_KIND = "assistant_chat"
+AGENT_STUDIO_CHAT_KIND = "agent_studio"
 MAX_SESSION_PAGE_SIZE = 100
 MAX_MESSAGE_PAGE_SIZE = 200
 TURN_ID_UNIQUE_CONSTRAINTS = (
@@ -26,6 +28,10 @@ TURN_ID_UNIQUE_CONSTRAINTS = (
 )
 IDEMPOTENT_TURN_ROLES = {"user", "assistant"}
 VALID_CHAT_ROLES = {"user", "assistant", "flow"}
+VALID_CHAT_KINDS = {
+    ASSISTANT_CHAT_KIND,
+    AGENT_STUDIO_CHAT_KIND,
+}
 _UNSET = object()
 logger = logging.getLogger(__name__)
 
@@ -52,6 +58,7 @@ class ChatSessionRecord:
 
     session_id: str
     user_auth_sub: str
+    chat_kind: str
     title: str | None
     generated_title: str | None
     active_document_id: UUID | None
@@ -75,6 +82,7 @@ class ChatMessageRecord:
 
     message_id: UUID
     session_id: str
+    chat_kind: str
     turn_id: str | None
     role: str
     message_type: str
@@ -137,6 +145,13 @@ def _normalize_optional_text(value: str | None, *, field_name: str) -> str | Non
     return normalized
 
 
+def _normalize_chat_kind(value: str) -> str:
+    normalized = _normalize_required_text(value, field_name="chat_kind")
+    if normalized not in VALID_CHAT_KINDS:
+        raise ValueError(f"chat_kind must be one of {sorted(VALID_CHAT_KINDS)}")
+    return normalized
+
+
 def _validate_page_size(limit: int, *, field_name: str, max_value: int) -> int:
     if limit < 1:
         raise ValueError(f"{field_name} must be greater than zero")
@@ -149,6 +164,7 @@ def _session_record(session: ChatSessionModel) -> ChatSessionRecord:
     return ChatSessionRecord(
         session_id=session.session_id,
         user_auth_sub=session.user_auth_sub,
+        chat_kind=session.chat_kind,
         title=session.title,
         generated_title=session.generated_title,
         active_document_id=session.active_document_id,
@@ -163,6 +179,7 @@ def _message_record(message: ChatMessageModel) -> ChatMessageRecord:
     return ChatMessageRecord(
         message_id=message.message_id,
         session_id=message.session_id,
+        chat_kind=message.chat_kind,
         turn_id=message.turn_id,
         role=message.role,
         message_type=message.message_type,
@@ -189,6 +206,7 @@ class ChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         title: str | None = None,
         generated_title: str | None = None,
         active_document_id: UUID | None = None,
@@ -202,6 +220,7 @@ class ChatHistoryRepository:
                 user_auth_sub,
                 field_name="user_auth_sub",
             ),
+            chat_kind=_normalize_chat_kind(chat_kind),
             title=_normalize_optional_text(title, field_name="title"),
             generated_title=_normalize_optional_text(
                 generated_title,
@@ -244,6 +263,7 @@ class ChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         title: str | None = None,
         generated_title: str | None = None,
         active_document_id: UUID | None = None,
@@ -251,9 +271,11 @@ class ChatHistoryRepository:
     ) -> ChatSessionRecord:
         """Return the visible session or insert a new one when absent."""
 
-        session = self._get_active_session(
+        normalized_chat_kind = _normalize_chat_kind(chat_kind)
+        session = self._get_active_session_for_kind(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=normalized_chat_kind,
         )
         if session is not None:
             return _session_record(session)
@@ -261,6 +283,7 @@ class ChatHistoryRepository:
         return self.create_session(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=normalized_chat_kind,
             title=title,
             generated_title=generated_title,
             active_document_id=active_document_id,
@@ -303,6 +326,7 @@ class ChatHistoryRepository:
 
         message_page = self._list_messages_for_session(
             session_id=session.session_id,
+            chat_kind=session.chat_kind,
             limit=message_limit,
             cursor=message_cursor,
         )
@@ -316,6 +340,7 @@ class ChatHistoryRepository:
         self,
         *,
         user_auth_sub: str,
+        chat_kind: str,
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
         active_document_id: UUID | None = None,
@@ -324,6 +349,7 @@ class ChatHistoryRepository:
 
         return self._list_sessions(
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
             limit=limit,
             cursor=cursor,
             search_query=None,
@@ -334,6 +360,7 @@ class ChatHistoryRepository:
         self,
         *,
         user_auth_sub: str,
+        chat_kind: str,
         query: str,
         limit: int = 20,
         cursor: ChatSessionCursor | None = None,
@@ -344,6 +371,7 @@ class ChatHistoryRepository:
         normalized_query = _normalize_required_text(query, field_name="query")
         return self._list_sessions(
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
             limit=limit,
             cursor=cursor,
             search_query=normalized_query,
@@ -354,6 +382,7 @@ class ChatHistoryRepository:
         self,
         *,
         user_auth_sub: str,
+        chat_kind: str,
         query: str | None = None,
         active_document_id: UUID | None = None,
     ) -> int:
@@ -363,8 +392,10 @@ class ChatHistoryRepository:
             user_auth_sub,
             field_name="user_auth_sub",
         )
+        normalized_chat_kind = _normalize_chat_kind(chat_kind)
         stmt = select(func.count()).select_from(ChatSessionModel).where(
             ChatSessionModel.user_auth_sub == normalized_user_auth_sub,
+            ChatSessionModel.chat_kind == normalized_chat_kind,
             ChatSessionModel.deleted_at.is_(None),
         )
 
@@ -388,13 +419,15 @@ class ChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         title: str,
     ) -> ChatSessionRecord | None:
         """Rename one visible session and refresh trigger-managed columns."""
 
-        session = self._get_active_session(
+        session = self._get_active_session_for_kind(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
         )
         if session is None:
             return None
@@ -409,13 +442,15 @@ class ChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         generated_title: str,
     ) -> ChatSessionRecord | None:
         """Persist one generated title when the session is still untitled by the user."""
 
-        session = self._get_active_session(
+        session = self._get_active_session_for_kind(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
         )
         if session is None:
             return None
@@ -437,6 +472,7 @@ class ChatHistoryRepository:
                     and_(
                         ChatSessionModel.session_id == session.session_id,
                         ChatSessionModel.user_auth_sub == session.user_auth_sub,
+                        ChatSessionModel.chat_kind == session.chat_kind,
                         ChatSessionModel.deleted_at.is_(None),
                         ChatSessionModel.title.is_(None),
                         ChatSessionModel.generated_title.is_(None),
@@ -466,13 +502,15 @@ class ChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         deleted_at: datetime | None = None,
     ) -> bool:
         """Soft-delete one visible session without deleting transcript rows."""
 
-        session = self._get_active_session(
+        session = self._get_active_session_for_kind(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
         )
         if session is None:
             return False
@@ -488,17 +526,20 @@ class ChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         limit: int = 100,
         cursor: ChatMessageCursor | None = None,
     ) -> ChatMessagePage:
         """List transcript rows for one visible session in chronological order."""
 
-        self._require_active_session(
+        session = self._require_active_session_for_kind(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
         )
         return self._list_messages_for_session(
-            session_id=_normalize_required_text(session_id, field_name="session_id"),
+            session_id=session.session_id,
+            chat_kind=session.chat_kind,
             limit=limit,
             cursor=cursor,
         )
@@ -508,6 +549,7 @@ class ChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         role: str,
         content: str,
         message_type: str = "text",
@@ -522,12 +564,14 @@ class ChatHistoryRepository:
         if normalized_role not in VALID_CHAT_ROLES:
             raise ValueError(f"role must be one of {sorted(VALID_CHAT_ROLES)}")
 
-        session = self._require_active_session(
+        session = self._require_active_session_for_kind(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
         )
         message = ChatMessageModel(
             session_id=session.session_id,
+            chat_kind=session.chat_kind,
             turn_id=_normalize_optional_text(turn_id, field_name="turn_id"),
             role=normalized_role,
             message_type=_normalize_required_text(
@@ -559,6 +603,7 @@ class ChatHistoryRepository:
                 existing = self._db.scalar(
                     select(ChatMessageModel).where(
                         ChatMessageModel.session_id == session.session_id,
+                        ChatMessageModel.chat_kind == session.chat_kind,
                         ChatMessageModel.turn_id == message.turn_id,
                         ChatMessageModel.role == message.role,
                     )
@@ -603,6 +648,7 @@ class ChatHistoryRepository:
             select(ChatMessageModel)
             .where(
                 ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.chat_kind == session.chat_kind,
                 ChatMessageModel.turn_id == normalized_turn_id,
                 ChatMessageModel.role == normalized_role,
             )
@@ -621,19 +667,22 @@ class ChatHistoryRepository:
         *,
         session_id: str,
         user_auth_sub: str,
+        chat_kind: str,
         turn_id: str,
     ) -> list[ChatMessageRecord]:
         """Return all visible transcript rows for one turn in chronological order."""
 
-        session = self._require_active_session(
+        session = self._require_active_session_for_kind(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
         )
         normalized_turn_id = _normalize_required_text(turn_id, field_name="turn_id")
         messages = self._db.scalars(
             select(ChatMessageModel)
             .where(
                 ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.chat_kind == session.chat_kind,
                 ChatMessageModel.turn_id == normalized_turn_id,
             )
             .order_by(
@@ -668,6 +717,7 @@ class ChatHistoryRepository:
             select(ChatMessageModel)
             .where(
                 ChatMessageModel.session_id == session.session_id,
+                ChatMessageModel.chat_kind == session.chat_kind,
                 ChatMessageModel.turn_id == normalized_turn_id,
                 ChatMessageModel.role == normalized_role,
             )
@@ -716,6 +766,31 @@ class ChatHistoryRepository:
             )
         )
 
+    def _get_active_session_for_kind(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+    ) -> ChatSessionModel | None:
+        normalized_session_id = _normalize_required_text(
+            session_id,
+            field_name="session_id",
+        )
+        normalized_user_auth_sub = _normalize_required_text(
+            user_auth_sub,
+            field_name="user_auth_sub",
+        )
+        normalized_chat_kind = _normalize_chat_kind(chat_kind)
+        return self._db.scalar(
+            select(ChatSessionModel).where(
+                ChatSessionModel.session_id == normalized_session_id,
+                ChatSessionModel.user_auth_sub == normalized_user_auth_sub,
+                ChatSessionModel.chat_kind == normalized_chat_kind,
+                ChatSessionModel.deleted_at.is_(None),
+            )
+        )
+
     def _require_active_session(
         self,
         *,
@@ -730,10 +805,27 @@ class ChatHistoryRepository:
             raise ChatHistorySessionNotFoundError("Chat session not found")
         return session
 
+    def _require_active_session_for_kind(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+    ) -> ChatSessionModel:
+        session = self._get_active_session_for_kind(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
+        )
+        if session is None:
+            raise ChatHistorySessionNotFoundError("Chat session not found")
+        return session
+
     def _list_sessions(
         self,
         *,
         user_auth_sub: str,
+        chat_kind: str,
         limit: int,
         cursor: ChatSessionCursor | None,
         search_query: str | None,
@@ -748,6 +840,7 @@ class ChatHistoryRepository:
             user_auth_sub,
             field_name="user_auth_sub",
         )
+        normalized_chat_kind = _normalize_chat_kind(chat_kind)
         recent_activity = func.coalesce(
             ChatSessionModel.last_message_at,
             ChatSessionModel.created_at,
@@ -755,6 +848,7 @@ class ChatHistoryRepository:
 
         stmt = select(ChatSessionModel).where(
             ChatSessionModel.user_auth_sub == normalized_user_auth_sub,
+            ChatSessionModel.chat_kind == normalized_chat_kind,
             ChatSessionModel.deleted_at.is_(None),
         )
 
@@ -807,6 +901,7 @@ class ChatHistoryRepository:
         self,
         *,
         session_id: str,
+        chat_kind: str,
         limit: int,
         cursor: ChatMessageCursor | None,
     ) -> ChatMessagePage:
@@ -817,6 +912,7 @@ class ChatHistoryRepository:
         )
         stmt = select(ChatMessageModel).where(
             ChatMessageModel.session_id == session_id,
+            ChatMessageModel.chat_kind == chat_kind,
         )
 
         if cursor is not None:
@@ -854,6 +950,7 @@ class ChatHistoryRepository:
 
 
 __all__ = [
+    "ASSISTANT_CHAT_KIND",
     "AppendMessageResult",
     "ChatHistoryRepository",
     "ChatHistorySessionNotFoundError",
@@ -864,4 +961,5 @@ __all__ = [
     "ChatSessionDetail",
     "ChatSessionPage",
     "ChatSessionRecord",
+    "VALID_CHAT_KINDS",
 ]

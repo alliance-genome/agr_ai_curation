@@ -7,6 +7,7 @@ from typing import Optional, Sequence
 from sqlalchemy.orm import Session
 
 from src.lib.chat_history_repository import (
+    ASSISTANT_CHAT_KIND,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
     ChatMessageCursor,
@@ -81,6 +82,7 @@ def _list_session_messages(
         message_page = repository.list_messages(
             session_id=session_id,
             user_auth_sub=user_id,
+            chat_kind=ASSISTANT_CHAT_KIND,
             limit=200,
             cursor=message_cursor,
         )

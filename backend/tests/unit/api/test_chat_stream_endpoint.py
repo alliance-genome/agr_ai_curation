@@ -52,6 +52,7 @@ def _assistant_record(*, session_id: str, turn_id: str, content: str, trace_id: 
     return chat.ChatMessageRecord(
         message_id=uuid4(),
         session_id=session_id,
+        chat_kind=chat.ASSISTANT_CHAT_KIND,
         turn_id=turn_id,
         role="assistant",
         message_type="text",
