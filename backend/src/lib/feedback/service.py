@@ -6,11 +6,12 @@ import uuid
 from datetime import datetime
 from typing import List
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from src.lib.chat_history_repository import ChatHistoryRepository
-from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.email_notifier import EmailNotifier
+from src.lib.chat_history_repository import ChatHistoryRepository, ChatHistorySessionNotFoundError
+from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.sns_notifier import SNSNotifier
 from src.lib.feedback.transcript import capture_feedback_conversation_transcript
 
@@ -63,7 +64,6 @@ class FeedbackService:
         feedback_text: str,
         trace_ids: List[str],
         user_auth_sub: str,
-        authenticated_user_email: str | None = None,
     ) -> str:
         """Create lightweight feedback payload and save to database.
 
@@ -76,7 +76,6 @@ class FeedbackService:
             feedback_text: Feedback comments from curator
             trace_ids: List of trace IDs to attach (for reference only)
             user_auth_sub: Authenticated token subject used for transcript lookup
-            authenticated_user_email: Authenticated email claim for curator verification
 
         Returns:
             feedback_id: UUID string identifying this feedback report
@@ -87,7 +86,6 @@ class FeedbackService:
             session_id=session_id,
             curator_id=curator_id,
             user_auth_sub=user_auth_sub,
-            authenticated_user_email=authenticated_user_email,
         )
 
         report = FeedbackReport(
@@ -168,14 +166,12 @@ class FeedbackService:
         session_id: str,
         curator_id: str,
         user_auth_sub: str,
-        authenticated_user_email: str | None,
     ) -> dict | None:
         """Capture one durable transcript snapshot when the auth context matches."""
 
         if not self._curator_matches_authenticated_user(
             curator_id=curator_id,
             user_auth_sub=user_auth_sub,
-            authenticated_user_email=authenticated_user_email,
         ):
             logger.info(
                 "Skipping durable transcript lookup for feedback %s because "
@@ -192,7 +188,7 @@ class FeedbackService:
                 session_id=session_id,
                 user_auth_sub=user_auth_sub,
             )
-        except Exception as exc:
+        except (ChatHistorySessionNotFoundError, SQLAlchemyError) as exc:
             logger.warning(
                 "Failed to capture durable transcript for feedback %s "
                 "(session_id=%s, user_auth_sub=%s): %s",
@@ -245,14 +241,10 @@ class FeedbackService:
         *,
         curator_id: str,
         user_auth_sub: str,
-        authenticated_user_email: str | None,
     ) -> bool:
-        normalized_curator_id = curator_id.strip().lower()
-        if not normalized_curator_id:
+        normalized_curator_id = curator_id.strip()
+        normalized_user_auth_sub = user_auth_sub.strip()
+        if not normalized_curator_id or not normalized_user_auth_sub:
             return False
 
-        candidate_ids = {user_auth_sub.strip().lower()}
-        if authenticated_user_email is not None and authenticated_user_email.strip():
-            candidate_ids.add(authenticated_user_email.strip().lower())
-
-        return normalized_curator_id in candidate_ids
+        return normalized_curator_id == normalized_user_auth_sub

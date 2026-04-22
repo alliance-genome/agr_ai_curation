@@ -43,7 +43,6 @@ def test_submit_feedback_success_dispatches_background_processing(monkeypatch):
     assert response.feedback_id == "feedback-123"
     assert calls["dispatched_feedback_id"] == "feedback-123"
     assert calls["create_feedback_kwargs"]["user_auth_sub"] == "user-123"
-    assert calls["create_feedback_kwargs"]["authenticated_user_email"] is None
 
 
 def test_submit_feedback_returns_400_on_validation_error(monkeypatch):
@@ -207,7 +206,7 @@ def test_dispatch_feedback_report_processing_starts_daemon_thread(monkeypatch):
     assert calls["started"] is True
 
 
-def test_submit_feedback_uses_authenticated_email_for_curator_verification(monkeypatch):
+def test_submit_feedback_uses_authenticated_sub_for_authorization(monkeypatch):
     calls = {}
 
     class _FakeService:
@@ -232,4 +231,4 @@ def test_submit_feedback_uses_authenticated_email_for_curator_verification(monke
     )
 
     assert response.status == "success"
-    assert calls["kwargs"]["authenticated_user_email"] == "curator@example.org"
+    assert calls["kwargs"]["user_auth_sub"] == "user-123"

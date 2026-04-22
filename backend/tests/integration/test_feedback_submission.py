@@ -150,7 +150,7 @@ def test_feedback_submission_captures_transcript_and_includes_email_excerpt(
         "/api/feedback/submit",
         json={
             "session_id": session_id,
-            "curator_id": curator1_user.email,
+            "curator_id": curator1_user["sub"],
             "feedback_text": "Transcript should be attached.",
             "trace_ids": ["trace-happy-1"],
         },
@@ -204,7 +204,7 @@ def test_feedback_submission_logs_lookup_failure_but_still_succeeds(
         "/api/feedback/submit",
         json={
             "session_id": session_id,
-            "curator_id": curator1_user.email,
+            "curator_id": curator1_user["sub"],
             "feedback_text": "Lookup failures should not block feedback.",
             "trace_ids": ["trace-failure-1"],
         },
@@ -271,9 +271,35 @@ def test_feedback_submission_skips_transcript_for_cross_user_session(
         "/api/feedback/submit",
         json={
             "session_id": session_id,
-            "curator_id": curator1_user.email,
+            "curator_id": curator1_user["sub"],
             "feedback_text": "Cross-user transcript access should be blocked.",
             "trace_ids": ["trace-cross-user-1"],
+        },
+    )
+
+    assert response.status_code == 200
+    report = _load_feedback_report(response.json()["feedback_id"])
+
+    assert report.processing_status == ProcessingStatus.COMPLETED
+    assert report.conversation_transcript is None
+    assert len(captured_email_messages) == 1
+    assert "Conversation transcript" not in str(captured_email_messages[0].get_payload())
+
+
+def test_feedback_submission_skips_transcript_when_session_missing(
+    client,
+    curator1_user,
+    captured_email_messages,
+):
+    session_id = f"{SESSION_PREFIX}missing-session"
+
+    response = client.post(
+        "/api/feedback/submit",
+        json={
+            "session_id": session_id,
+            "curator_id": curator1_user["sub"],
+            "feedback_text": "Missing sessions should not block feedback.",
+            "trace_ids": ["trace-missing-1"],
         },
     )
 
