@@ -27,7 +27,6 @@ export interface RehydrateChatDocumentOptions {
   ensureLoadedForChat?: boolean
   ownerToken?: string
   shouldCommitViewerRestore?: (
-    result: RehydratedChatDocumentResult
   ) => Promise<boolean | void> | boolean | void
   viewerState?: PDFViewerDocumentChangedDetail['viewerState']
 }
@@ -45,7 +44,6 @@ export interface RehydrateFromSourceOptions {
   ownerToken?: string
   ensureLoadedForChat?: boolean
   shouldCommitViewerRestore?: (
-    result: RehydratedChatDocumentResult
   ) => Promise<boolean | void> | boolean | void
   onDocument?: (
     document: RehydratableChatDocument
@@ -124,7 +122,7 @@ export async function rehydrateChatDocument(
   }
 
   // Effect-scoped callers can cancel late viewer restore side effects after async fetches settle.
-  if (await shouldCommitViewerRestore?.(result) === false) {
+  if (await shouldCommitViewerRestore?.() === false) {
     return result
   }
 
