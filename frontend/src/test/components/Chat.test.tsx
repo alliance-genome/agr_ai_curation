@@ -826,6 +826,35 @@ describe('Chat persistence', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows the durable session ID controls in the header when a session exists', () => {
+    renderChat({ sessionId: 'session-1' })
+
+    expect(screen.getByText('Session:')).toBeInTheDocument()
+    expect(screen.getByText('session-1')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Copy session ID' })).toBeInTheDocument()
+  })
+
+  it('does not render session ID controls when there is no session ID', () => {
+    renderChat({ sessionId: null })
+
+    expect(screen.queryByText('Session:')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Copy session ID' })).not.toBeInTheDocument()
+  })
+
+  it('copies the durable session ID from the header and clears the feedback after 1.5 seconds', async () => {
+    const user = userEvent.setup()
+
+    renderChat({ sessionId: 'session-1' })
+
+    await user.click(screen.getByRole('button', { name: 'Copy session ID' }))
+
+    expect(screen.getByText('Copied!')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(screen.queryByText('Copied!')).not.toBeInTheDocument()
+    }, { timeout: 2500 })
+  })
+
   it('loads prep scope, confirms prep, and triggers the curation prep API', async () => {
     mockChatFetch({
       prepPreview: {
