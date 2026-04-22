@@ -714,7 +714,7 @@ async def get_service_logs(
             "data": {
                 "container": str,
                 "lines_requested": int,
-                "lines_returned": int,
+                "lines": int,
                 "logs": str
             } | None,
             "error": str | None,
@@ -783,7 +783,7 @@ async def get_service_logs(
                     "data": {
                         "container": data["container"],
                         "lines_requested": lines,
-                        "lines_returned": data["lines_returned"],
+                        "lines": data["lines"],
                         "logs": data["logs"]
                     },
                     "error": None

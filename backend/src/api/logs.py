@@ -21,10 +21,9 @@ class LogsResponse(BaseModel):
     """Response model for logs endpoint."""
 
     container: str
-    # Keep both fields because downstream callers still consume `lines_returned`,
-    # while newer clients read the shorter `lines` field.
+    # ALL-264 compatibility cleanup: Agent Studio now consumes `lines`, so the
+    # temporary `lines_returned` alias can be removed.
     lines: int
-    lines_returned: int
     logs: str
 
 
@@ -197,12 +196,11 @@ async def get_container_logs(
                 detail=_format_loki_error(result),
             )
 
-        logs_text, lines_returned = _tail_rendered_logs(result, line_limit=lines)
+        logs_text, returned_line_count = _tail_rendered_logs(result, line_limit=lines)
 
         return LogsResponse(
             container=container,
-            lines=lines_returned,
-            lines_returned=lines_returned,
+            lines=returned_line_count,
             logs=logs_text,
         )
 
