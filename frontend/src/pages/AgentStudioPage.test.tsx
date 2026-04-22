@@ -196,6 +196,32 @@ describe('AgentStudioPage', () => {
             created_at: '2026-04-22T00:00:01Z',
           },
           {
+            message_id: 'message-flow',
+            session_id: 'assistant-session-12345678',
+            turn_id: 'turn-1',
+            role: 'flow',
+            message_type: 'flow_step_evidence',
+            content: 'Flow evidence summary that should not seed Opus.',
+            payload_json: {
+              flow_id: 'flow-123',
+              flow_run_id: 'run-123',
+              step: 1,
+              evidence_count: 1,
+              total_evidence_records: 1,
+              evidence_records: [
+                {
+                  entity: 'GENE:X',
+                  verified_quote: 'Quoted evidence.',
+                  page: 1,
+                  section: 'Results',
+                  chunk_id: 'chunk-1',
+                },
+              ],
+            },
+            trace_id: null,
+            created_at: '2026-04-22T00:00:01.500Z',
+          },
+          {
             message_id: 'message-2',
             session_id: 'assistant-session-12345678',
             turn_id: 'turn-1',
@@ -232,6 +258,9 @@ describe('AgentStudioPage', () => {
     expect(screen.getByTestId('opus-chat-initial-conversation')).toHaveTextContent(
       'Why did the assistant pick gene X?|It prioritized the evidence ranking from the prior turn.'
     )
+    expect(screen.getByTestId('opus-chat-initial-conversation')).not.toHaveTextContent(
+      'Flow evidence summary that should not seed Opus.'
+    )
     expect(screen.getByTestId('opus-chat-seeded-session')).toHaveTextContent('assistant-session-12345678')
 
     fireEvent.click(screen.getByText('clone-custom'))
@@ -241,5 +270,8 @@ describe('AgentStudioPage', () => {
         'conversation:Why did the assistant pick gene X?|It prioritized the evidence ranking from the prior turn.'
       )
     })
+    expect(screen.getByTestId('prompt-workshop')).not.toHaveTextContent(
+      'Flow evidence summary that should not seed Opus.'
+    )
   })
 })

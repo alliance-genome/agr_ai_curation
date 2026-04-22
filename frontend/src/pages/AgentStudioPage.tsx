@@ -127,12 +127,12 @@ function normalizeSearchParam(value: string | null): string | null {
 
 function buildSeededOpusConversation(messages: Parameters<typeof buildRestorableChatMessages>[0]): ToolIdeaConversationEntry[] {
   return buildRestorableChatMessages(messages, { onUnknownRole: 'throw' }).flatMap((message) => {
-    if (!message.content.trim()) {
+    if (message.role === 'flow' || !message.content.trim()) {
       return []
     }
 
     return [{
-      role: message.role === 'user' ? 'user' : 'assistant',
+      role: message.role,
       content: message.content,
       timestamp: message.timestamp ?? null,
     }]
