@@ -26,8 +26,9 @@ startup, checks the reranker service requirement contract, and runs a real
 rerank probe from inside the backend container.
 
 If RERANKER_URL is exported for the smoke run, the script passes that override
-through to the backend and validates the configured target instead of the
-default local Compose hostname.
+through to the backend. Otherwise it validates any RERANKER_URL already
+present in the local backend .env file before falling back to the default
+local Compose hostname.
 EOF
   exit 0
 fi

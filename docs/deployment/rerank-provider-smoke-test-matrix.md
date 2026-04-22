@@ -34,9 +34,8 @@ Notes:
 - `RERANKER_URL` may stay on its default internal service URL unless you are
   pointing `local_transformers` at a different host.
 - The local smoke script validates the backend's effective `RERANKER_URL`.
-  By default that resolves to `http://reranker-transformers:8080`, but the
-  helper also accepts a custom override when `RERANKER_URL` is set for the
-  smoke run or already present in the local backend env file.
+  It resolves that target from an exported `RERANKER_URL`, then the local
+  backend env file, then the default `http://reranker-transformers:8080`.
 
 ## Environments
 
@@ -78,7 +77,8 @@ This script:
 4. Verifies the reranker requirement contract with
    `GET /api/admin/health/connections`.
 5. For `local_transformers`, verifies that the effective reranker URL matches
-   the configured `RERANKER_URL` value. The default remains
+   the configured target resolved from the exported `RERANKER_URL`, then the
+   local backend env file, then the default
    `http://reranker-transformers:8080`.
 6. Runs a real `rerank_chunks(...)` probe inside the backend container to prove:
    - `bedrock_cohere` reorders the candidate list

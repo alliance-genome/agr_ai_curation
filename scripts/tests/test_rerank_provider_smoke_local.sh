@@ -70,6 +70,37 @@ test_local_transformers_target_check_passes_for_custom_override_url() {
   )
 }
 
+test_local_transformers_target_check_passes_for_repo_env_url() {
+  (
+    cd "${REPO_ROOT}"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/scripts/testing/rerank_provider_smoke_local.sh"
+    ensure_python_bin
+
+    local temp_env
+    temp_env="$(mktemp)"
+    trap 'rm -f "${temp_env}"' EXIT
+    printf 'RERANKER_URL=http://repo-env-reranker:7070\n' > "${temp_env}"
+
+    unset RERANKER_URL
+    REPO_ENV_FILE="${temp_env}"
+    PASS_COUNT=0
+    FAIL_COUNT=0
+    LAST_DERIVED_JSON=""
+
+    assert_local_reranker_target \
+      "local_transformers" \
+      '{"services":{"reranker":{"url":"http://repo-env-reranker:7070"}}}'
+
+    [[ "$(json_field "${LAST_DERIVED_JSON}" "result")" == "pass" ]]
+    [[ "$(json_field "${LAST_DERIVED_JSON}" "details.reason")" == "local_transformers reranker URL matches configured target 'http://repo-env-reranker:7070'" ]]
+    [[ "$(json_field "${LAST_DERIVED_JSON}" "details.expected_url")" == "http://repo-env-reranker:7070" ]]
+    [[ "$(json_field "${LAST_DERIVED_JSON}" "details.actual_url")" == "http://repo-env-reranker:7070" ]]
+    [[ "${PASS_COUNT}" -eq 1 ]]
+    [[ "${FAIL_COUNT}" -eq 0 ]]
+  )
+}
+
 test_local_transformers_target_check_fails_for_mismatched_configured_url() {
   (
     cd "${REPO_ROOT}"
@@ -91,6 +122,26 @@ test_local_transformers_target_check_fails_for_mismatched_configured_url() {
     [[ "$(json_field "${LAST_DERIVED_JSON}" "details.actual_url")" == "http://remote-reranker:8080" ]]
     [[ "${PASS_COUNT}" -eq 0 ]]
     [[ "${FAIL_COUNT}" -eq 1 ]]
+  )
+}
+
+test_compose_override_file_is_skipped_when_repo_env_sets_reranker_url() {
+  (
+    cd "${REPO_ROOT}"
+    # shellcheck disable=SC1091
+    source "${REPO_ROOT}/scripts/testing/rerank_provider_smoke_local.sh"
+
+    local temp_env
+    temp_env="$(mktemp)"
+    trap 'rm -f "${temp_env}"' EXIT
+    printf 'RERANKER_URL=http://repo-env-reranker:7070\n' > "${temp_env}"
+
+    unset RERANKER_URL
+    REPO_ENV_FILE="${temp_env}"
+    cleanup_smoke_compose_override
+    ensure_smoke_compose_override_file
+
+    [[ -z "${SMOKE_COMPOSE_OVERRIDE_FILE}" ]]
   )
 }
 
@@ -124,7 +175,9 @@ test_compose_override_file_is_created_for_custom_reranker_url() {
 
 test_local_transformers_target_check_passes_for_local_compose_url
 test_local_transformers_target_check_passes_for_custom_override_url
+test_local_transformers_target_check_passes_for_repo_env_url
 test_local_transformers_target_check_fails_for_mismatched_configured_url
+test_compose_override_file_is_skipped_when_repo_env_sets_reranker_url
 test_compose_override_file_is_created_for_custom_reranker_url
 
 echo "rerank_provider_smoke_local tests passed"
