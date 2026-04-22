@@ -151,6 +151,25 @@ function mockChatFetch(options?: {
       } as Response
     }
 
+    if (activeDocument && url === `/api/pdf-viewer/documents/${activeDocument.id}`) {
+      return {
+        ok: true,
+        json: async () => ({
+          filename: activeDocument.filename ?? `${activeDocument.id}.pdf`,
+          page_count: 7,
+        }),
+      } as Response
+    }
+
+    if (activeDocument && url === `/api/pdf-viewer/documents/${activeDocument.id}/url`) {
+      return {
+        ok: true,
+        json: async () => ({
+          viewer_url: `/viewer/${activeDocument.id}`,
+        }),
+      } as Response
+    }
+
     return {
       ok: true,
       json: async () => ({}),
@@ -375,6 +394,41 @@ describe('Chat persistence', () => {
       await screen.findByText('Full evidence review with PDF highlighting →'),
     ).toBeInTheDocument()
     expect(screen.queryByText('Review & Curate')).not.toBeInTheDocument()
+  })
+
+  it('rehydrates a backend active document into local storage and the PDF viewer on mount', async () => {
+    const listener = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', listener as EventListener)
+
+    try {
+      mockChatFetch({
+        activeDocument: {
+          id: 'doc-7',
+          filename: 'doc-7.pdf',
+        },
+      })
+
+      renderChat()
+
+      expect(await screen.findByText('Active PDF: doc-7.pdf')).toBeInTheDocument()
+
+      await waitFor(() => {
+        expect(listener).toHaveBeenCalled()
+      })
+
+      expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('"id":"doc-7"')
+      expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('"documentId":"doc-7"')
+
+      const pdfEvent = listener.mock.calls.at(-1)?.[0] as CustomEvent
+      expect(pdfEvent.detail).toMatchObject({
+        documentId: 'doc-7',
+        viewerUrl: '/viewer/doc-7',
+        filename: 'doc-7.pdf',
+        pageCount: 7,
+      })
+    } finally {
+      window.removeEventListener('pdf-viewer-document-changed', listener as EventListener)
+    }
   })
 
   it('does not dispatch legacy pdf overlay updates for chunk provenance events', async () => {

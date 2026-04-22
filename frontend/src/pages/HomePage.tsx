@@ -16,9 +16,10 @@ import {
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import {
   HOME_PDF_VIEWER_OWNER,
-  dispatchPDFDocumentChanged,
 } from '@/components/pdfViewer/pdfEvents'
-import { loadDocumentForChat } from '@/features/documents/pdfUploadFlow'
+import {
+  rehydrateChatDocumentFromSource,
+} from '@/features/documents/chatDocumentRehydration'
 import { readCurationApiError } from '@/features/curation/services/api'
 import {
   buildRestorableChatMessages,
@@ -213,63 +214,12 @@ function HomePage() {
       sessionStorage.setItem('document-loading', 'true')
       window.dispatchEvent(new CustomEvent('document-load-start'))
 
-      await loadDocumentForChat(document.id)
-
-      const [detailResponse, urlResponse] = await Promise.all([
-        fetch(`/api/pdf-viewer/documents/${document.id}`),
-        fetch(`/api/pdf-viewer/documents/${document.id}/url`),
-      ])
-
-      if (!detailResponse.ok || !urlResponse.ok) {
-        throw new Error('Failed to fetch document viewer metadata')
-      }
-
-      const detail = await detailResponse.json()
-      const urlData = await urlResponse.json()
-      const viewerUrl = typeof urlData.viewer_url === 'string' ? urlData.viewer_url : null
-
-      if (!viewerUrl) {
-        throw new Error('Document viewer URL unavailable')
-      }
-
-      const filename = normalizeChatHistoryValue(detail.filename)
-        ?? normalizeChatHistoryValue(document.filename)
-      if (!filename) {
-        throw new Error('Document filename unavailable')
-      }
-
-      const pageCount = detail.page_count
-      if (
-        typeof pageCount !== 'number'
-        || !Number.isFinite(pageCount)
-        || pageCount < 1
-      ) {
-        throw new Error('Document page count unavailable')
-      }
-      const timestamp = new Date().toISOString()
-
-      if (chatStorageKeys) {
-        localStorage.setItem(chatStorageKeys.activeDocument, JSON.stringify(document))
-        localStorage.setItem(chatStorageKeys.pdfViewerSession, JSON.stringify({
-          documentId: document.id,
-          viewerUrl,
-          filename,
-          pageCount,
-          loadedAt: timestamp,
-          currentPage: 1,
-          zoomLevel: 1,
-          scrollPosition: 0,
-          lastInteraction: timestamp,
-        }))
-      }
-
-      dispatchPDFDocumentChanged(
-        document.id,
-        viewerUrl,
-        filename,
-        pageCount,
-        { ownerToken: HOME_PDF_VIEWER_OWNER },
-      )
+      await rehydrateChatDocumentFromSource({
+        loadDocument: async () => document,
+        chatStorageKeys,
+        ensureLoadedForChat: true,
+        ownerToken: HOME_PDF_VIEWER_OWNER,
+      })
     } catch (error) {
       console.error('Failed to restore document context for resumed chat', error)
       sessionStorage.removeItem('document-loading')
