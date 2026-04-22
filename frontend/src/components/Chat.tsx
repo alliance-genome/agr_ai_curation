@@ -830,11 +830,15 @@ function Chat({
     localStorage.removeItem(chatStorageKeys.messages)
   }, [chatStorageKeys])
 
-  const restoreDocumentToPdfViewer = useCallback(async (document: ActiveDocument) => {
+  const restoreDocumentToPdfViewer = useCallback(async (
+    document: ActiveDocument,
+    shouldCommitViewerRestore?: () => boolean,
+  ) => {
     await rehydrateChatDocumentFromSource({
       loadDocument: async () => document,
       chatStorageKeys,
       ownerToken: HOME_PDF_VIEWER_OWNER,
+      shouldCommitViewerRestore,
     })
   }, [chatStorageKeys])
 
@@ -1707,6 +1711,7 @@ function Chat({
           },
           chatStorageKeys,
           ownerToken: HOME_PDF_VIEWER_OWNER,
+          shouldCommitViewerRestore: () => isActive,
           onDocument: async (activeDocument) => {
             if (!isActive) {
               return false
@@ -1790,7 +1795,7 @@ function Chat({
         // Load the PDF in the viewer when document changes
         try {
           debug.log('[Chat] Fetching PDF metadata for:', detail.document.id)
-          await restoreDocumentToPdfViewer(detail.document)
+          await restoreDocumentToPdfViewer(detail.document, () => isActive)
 
           if (isActive) {
             debug.log('[Chat] Loading PDF in viewer after document change:', detail.document.filename)

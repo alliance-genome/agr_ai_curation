@@ -26,6 +26,9 @@ export interface RehydrateChatDocumentOptions {
   chatStorageKeys: ChatLocalStorageKeys | null
   ensureLoadedForChat?: boolean
   ownerToken?: string
+  shouldCommitViewerRestore?: (
+    result: RehydratedChatDocumentResult
+  ) => Promise<boolean | void> | boolean | void
   viewerState?: PDFViewerDocumentChangedDetail['viewerState']
 }
 
@@ -41,6 +44,9 @@ export interface RehydrateFromSourceOptions {
   chatStorageKeys: ChatLocalStorageKeys | null
   ownerToken?: string
   ensureLoadedForChat?: boolean
+  shouldCommitViewerRestore?: (
+    result: RehydratedChatDocumentResult
+  ) => Promise<boolean | void> | boolean | void
   onDocument?: (
     document: RehydratableChatDocument
   ) => Promise<boolean | void> | boolean | void
@@ -69,6 +75,7 @@ export async function rehydrateChatDocument(
     chatStorageKeys,
     ensureLoadedForChat = false,
     ownerToken = HOME_PDF_VIEWER_OWNER,
+    shouldCommitViewerRestore,
     viewerState,
   } = options
 
@@ -109,6 +116,17 @@ export async function rehydrateChatDocument(
   }
 
   const loadedAt = new Date().toISOString()
+  const result: RehydratedChatDocumentResult = {
+    viewerUrl,
+    filename,
+    pageCount,
+    loadedAt,
+  }
+
+  // Effect-scoped callers can cancel late viewer restore side effects after async fetches settle.
+  if (await shouldCommitViewerRestore?.(result) === false) {
+    return result
+  }
 
   if (chatStorageKeys) {
     localStorage.setItem(chatStorageKeys.pdfViewerSession, JSON.stringify({
@@ -135,12 +153,7 @@ export async function rehydrateChatDocument(
     },
   )
 
-  return {
-    viewerUrl,
-    filename,
-    pageCount,
-    loadedAt,
-  }
+  return result
 }
 
 export async function rehydrateChatDocumentFromSource(
@@ -151,6 +164,7 @@ export async function rehydrateChatDocumentFromSource(
     chatStorageKeys,
     ownerToken = HOME_PDF_VIEWER_OWNER,
     ensureLoadedForChat = false,
+    shouldCommitViewerRestore,
     onDocument,
     onMissingDocument,
   } = options
@@ -172,6 +186,7 @@ export async function rehydrateChatDocumentFromSource(
     chatStorageKeys,
     ensureLoadedForChat,
     ownerToken,
+    shouldCommitViewerRestore,
   })
 
   return document
