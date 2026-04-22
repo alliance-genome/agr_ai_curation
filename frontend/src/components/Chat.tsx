@@ -30,6 +30,8 @@ import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SendChatMessageOptions, SSEEvent } from '@/hooks/useChatStream'
 import { emitGlobalToast } from '@/lib/globalNotifications'
+import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
+import { getStreamEventSessionId } from '@/lib/streamEventSession'
 import type { ChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import {
   clearChatRenderCacheForSession,
@@ -273,15 +275,6 @@ function extractEventTimestamp(event: SSEEvent): Date | null {
   return Number.isNaN(timestamp.getTime()) ? null : timestamp
 }
 
-function normalizeOptionalText(value: unknown): string | null {
-  if (typeof value !== 'string') {
-    return null
-  }
-
-  const normalizedValue = value.trim()
-  return normalizedValue.length > 0 ? normalizedValue : null
-}
-
 function buildTurnId(): string {
   return crypto.randomUUID()
 }
@@ -292,10 +285,6 @@ function buildUserTurnMessageId(turnId: string): string {
 
 function buildAssistantTurnMessageId(turnId: string): string {
   return `assistant-turn-${turnId}`
-}
-
-function getEventSessionId(event: SSEEvent): string | null {
-  return normalizeOptionalText(event.session_id) ?? normalizeOptionalText(event.sessionId)
 }
 
 function getEventTurnId(event: SSEEvent): string | null {
@@ -1176,7 +1165,7 @@ function Chat({
     const newEvents = events.slice(processedEventIdsRef.current.size)
 
     newEvents.forEach((parsed: SSEEvent) => {
-      const eventSessionId = getEventSessionId(parsed)
+      const eventSessionId = getStreamEventSessionId(parsed)
       if (eventSessionId && propSessionId && eventSessionId !== propSessionId) {
         debug.log('🔍 [SSE] Ignoring event for stale session:', {
           eventType: parsed.type,

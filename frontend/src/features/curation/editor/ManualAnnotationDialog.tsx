@@ -48,6 +48,7 @@ import {
   replaceWorkspaceSession,
   updateWorkspaceActiveCandidate,
 } from '@/features/curation/workspace/workspaceState'
+import { normalizeOptionalText } from '@/lib/normalizeOptionalText'
 
 import FieldRow from './FieldRow'
 import { useEditorState } from './useEditorState'
@@ -221,11 +222,6 @@ function buildTemplateOptions(
   }
 
   return [...options.values()].sort((left, right) => left.label.localeCompare(right.label))
-}
-
-function normalizeOptionalText(value: string): string | null {
-  const normalized = value.trim()
-  return normalized.length > 0 ? normalized : null
 }
 
 function stringifyFieldValue(value: unknown): string | null {

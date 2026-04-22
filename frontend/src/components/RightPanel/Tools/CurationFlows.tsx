@@ -31,6 +31,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import type { SSEEvent } from '@/hooks/useChatStream'
+import { getStreamEventSessionId } from '@/lib/streamEventSession'
 import FlowRunCompletionCard, { type FlowRunCompletionSummary } from './FlowRunCompletionCard'
 import { subscribeToFlowListInvalidation } from '@/features/flows/flowListInvalidation'
 import { listFlows, type FlowSummaryResponse } from '@/services/agentStudioService'
@@ -88,11 +89,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
         continue
       }
 
-      const eventSessionId = typeof event.session_id === 'string'
-        ? event.session_id
-        : typeof event.sessionId === 'string'
-          ? event.sessionId
-          : null
+      const eventSessionId = getStreamEventSessionId(event)
 
       if (sessionId && eventSessionId && eventSessionId !== sessionId) {
         continue
