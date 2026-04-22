@@ -17,7 +17,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
@@ -976,6 +976,92 @@ _LOCAL_CANCEL_EVENTS: Dict[str, asyncio.Event] = {}
 _LOCAL_SESSION_OWNERS: Dict[str, str] = {}
 _LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
 _TITLE_BACKFILL_MESSAGE_LIMIT = 20
+
+
+@dataclass
+class _ActiveStreamLifecycle:
+    """Shared ownership and cleanup bookkeeping for one active stream."""
+
+    session_id: str
+    user_id: str
+    stream_token: str
+    cancel_event: asyncio.Event
+    cleanup_done: bool = False
+
+    async def cleanup(self, target_session_id: str | None = None) -> None:
+        """Release active stream ownership once, even if multiple paths call cleanup."""
+
+        session_id = target_session_id if target_session_id is not None else self.session_id
+        if self.cleanup_done:
+            return
+
+        self.cleanup_done = True
+        _LOCAL_CANCEL_EVENTS.pop(session_id, None)
+        if _LOCAL_SESSION_OWNERS.get(session_id) == self.user_id:
+            _LOCAL_SESSION_OWNERS.pop(session_id, None)
+
+        await unregister_active_stream(
+            session_id,
+            user_id=self.user_id,
+            stream_token=self.stream_token,
+        )
+        await clear_cancel_signal(session_id)
+
+    async def finalize(self, generated_title_candidate: str | None) -> None:
+        """Release stream bookkeeping, then backfill a durable title."""
+
+        await self.cleanup()
+        await asyncio.to_thread(
+            _backfill_chat_session_generated_title,
+            self.session_id,
+            self.user_id,
+            generated_title_candidate,
+        )
+
+    def background_task(
+        self,
+        generated_title_getter: Callable[[], str | None],
+    ) -> BackgroundTask:
+        """Return the shared background finalize task for SSE responses."""
+
+        return BackgroundTask(self._finalize_with_title_getter, generated_title_getter)
+
+    async def _finalize_with_title_getter(
+        self,
+        generated_title_getter: Callable[[], str | None],
+    ) -> None:
+        await self.finalize(generated_title_getter())
+
+
+async def _claim_active_stream_lifecycle(
+    *,
+    session_id: str,
+    user_id: str,
+) -> _ActiveStreamLifecycle:
+    """Claim local and cross-worker stream ownership or raise an HTTP error."""
+
+    existing_owner = _LOCAL_SESSION_OWNERS.get(session_id)
+    if existing_owner:
+        if existing_owner != user_id:
+            raise HTTPException(status_code=403, detail="Session is active for a different user")
+        raise HTTPException(status_code=409, detail="Session is already active")
+
+    stream_token = str(uuid.uuid4())
+    cancel_event = asyncio.Event()
+    _LOCAL_SESSION_OWNERS[session_id] = user_id
+    _LOCAL_CANCEL_EVENTS[session_id] = cancel_event
+
+    if not await register_active_stream(session_id, user_id=user_id, stream_token=stream_token):
+        _LOCAL_CANCEL_EVENTS.pop(session_id, None)
+        _LOCAL_SESSION_OWNERS.pop(session_id, None)
+        raise HTTPException(status_code=403, detail="Session is active for a different user")
+
+    return _ActiveStreamLifecycle(
+        session_id=session_id,
+        user_id=user_id,
+        stream_token=stream_token,
+        cancel_event=cancel_event,
+    )
 
 
 def _build_active_document(document_payload: Dict[str, Any]) -> ActiveDocument:
@@ -2364,48 +2450,9 @@ async def chat_stream_endpoint(
             detail="Internal configuration error: unable to process chat request",
         ) from exc
 
-    # Create local cancellation event (for immediate same-worker cancellation)
-    stream_claim_token = str(uuid.uuid4())
-    existing_owner = _LOCAL_SESSION_OWNERS.get(session_id)
-    if existing_owner:
-        if existing_owner != user_id:
-            raise HTTPException(status_code=403, detail="Session is active for a different user")
-        raise HTTPException(status_code=409, detail="Session is already active")
-    _LOCAL_SESSION_OWNERS[session_id] = user_id
-
-    cancel_event = asyncio.Event()
-    _LOCAL_CANCEL_EVENTS[session_id] = cancel_event
-
-    if not await register_active_stream(session_id, user_id=user_id, stream_token=stream_claim_token):
-        _LOCAL_CANCEL_EVENTS.pop(session_id, None)
-        _LOCAL_SESSION_OWNERS.pop(session_id, None)
-        raise HTTPException(status_code=403, detail="Session is active for a different user")
-
-    cleanup_done = False
+    stream_lifecycle = await _claim_active_stream_lifecycle(session_id=session_id, user_id=user_id)
+    cancel_event = stream_lifecycle.cancel_event
     generated_title_candidate: str | None = None
-
-    async def _cleanup_stream_state(target_session_id: str) -> None:
-        """Best-effort idempotent cleanup for active stream bookkeeping."""
-        nonlocal cleanup_done
-        if cleanup_done:
-            return
-        cleanup_done = True
-        _LOCAL_CANCEL_EVENTS.pop(target_session_id, None)
-        if _LOCAL_SESSION_OWNERS.get(target_session_id) == user_id:
-            _LOCAL_SESSION_OWNERS.pop(target_session_id, None)
-        await unregister_active_stream(target_session_id, user_id=user_id, stream_token=stream_claim_token)
-        await clear_cancel_signal(target_session_id)
-
-    async def _finalize_stream_state(target_session_id: str) -> None:
-        """Release stream bookkeeping, then backfill a durable title."""
-
-        await _cleanup_stream_state(target_session_id)
-        await asyncio.to_thread(
-            _backfill_chat_session_generated_title,
-            target_session_id,
-            user_id,
-            generated_title_candidate,
-        )
 
     try:
         active_document_id, _ = _resolve_session_create_active_document(
@@ -2425,13 +2472,13 @@ async def chat_stream_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
-        await _cleanup_stream_state(session_id)
+        await stream_lifecycle.cleanup(session_id)
         raise
     except ValueError as exc:
-        await _cleanup_stream_state(session_id)
+        await stream_lifecycle.cleanup(session_id)
         _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
     except Exception as exc:
-        await _cleanup_stream_state(session_id)
+        await stream_lifecycle.cleanup(session_id)
         logger.error(
             "Failed to persist durable stream user turn for session %s",
             session_id,
@@ -2480,12 +2527,12 @@ async def chat_stream_endpoint(
                     )
                 )
             finally:
-                await _cleanup_stream_state(session_id)
+                await stream_lifecycle.cleanup(session_id)
 
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=BackgroundTask(_finalize_stream_state, session_id),
+            background=stream_lifecycle.background_task(lambda: generated_title_candidate),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -2883,12 +2930,12 @@ async def chat_stream_endpoint(
                 )
             )
         finally:
-            await _cleanup_stream_state(current_session_id)
+            await stream_lifecycle.cleanup(current_session_id)
 
     return StreamingResponse(
         generate_stream(),
         media_type="text/event-stream",
-        background=BackgroundTask(_finalize_stream_state, session_id),
+        background=stream_lifecycle.background_task(lambda: generated_title_candidate),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
@@ -3097,55 +3144,12 @@ async def execute_flow_endpoint(
         extra={"session_id": request.session_id, "user_id": user_id, "turn_id": request.turn_id},
     )
 
-    stream_claim_token = str(uuid.uuid4())
-    existing_owner = _LOCAL_SESSION_OWNERS.get(request.session_id)
-    if existing_owner:
-        if existing_owner != user_id:
-            raise HTTPException(status_code=403, detail="Session is active for a different user")
-        raise HTTPException(status_code=409, detail="Session is already active")
-    _LOCAL_SESSION_OWNERS[request.session_id] = user_id
-
-    cancel_event = asyncio.Event()
-    _LOCAL_CANCEL_EVENTS[request.session_id] = cancel_event
-
-    if not await register_active_stream(
-        request.session_id,
+    stream_lifecycle = await _claim_active_stream_lifecycle(
+        session_id=request.session_id,
         user_id=user_id,
-        stream_token=stream_claim_token,
-    ):
-        _LOCAL_CANCEL_EVENTS.pop(request.session_id, None)
-        _LOCAL_SESSION_OWNERS.pop(request.session_id, None)
-        raise HTTPException(status_code=403, detail="Session is active for a different user")
-
-    cleanup_done = False
+    )
+    cancel_event = stream_lifecycle.cancel_event
     generated_title_candidate: str | None = None
-
-    async def _cleanup_stream_state(target_session_id: str) -> None:
-        """Best-effort idempotent cleanup for active flow stream bookkeeping."""
-        nonlocal cleanup_done
-        if cleanup_done:
-            return
-        cleanup_done = True
-        _LOCAL_CANCEL_EVENTS.pop(target_session_id, None)
-        if _LOCAL_SESSION_OWNERS.get(target_session_id) == user_id:
-            _LOCAL_SESSION_OWNERS.pop(target_session_id, None)
-        await unregister_active_stream(
-            target_session_id,
-            user_id=user_id,
-            stream_token=stream_claim_token,
-        )
-        await clear_cancel_signal(target_session_id)
-
-    async def _finalize_stream_state(target_session_id: str) -> None:
-        """Release flow stream bookkeeping, then backfill a durable title."""
-
-        await _cleanup_stream_state(target_session_id)
-        await asyncio.to_thread(
-            _backfill_chat_session_generated_title,
-            target_session_id,
-            user_id,
-            generated_title_candidate,
-        )
 
     try:
         active_document_id, _ = _resolve_session_create_active_document(
@@ -3166,10 +3170,10 @@ async def execute_flow_endpoint(
             user_message=prepared_turn.effective_user_message,
         )
     except HTTPException:
-        await _cleanup_stream_state(request.session_id)
+        await stream_lifecycle.cleanup(request.session_id)
         raise
     except ValueError as exc:
-        await _cleanup_stream_state(request.session_id)
+        await stream_lifecycle.cleanup(request.session_id)
         _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
     except Exception as exc:
         logger.error(
@@ -3179,7 +3183,7 @@ async def execute_flow_endpoint(
             exc_info=True,
         )
         db.rollback()
-        await _cleanup_stream_state(request.session_id)
+        await stream_lifecycle.cleanup(request.session_id)
         raise HTTPException(status_code=500, detail="Failed to start flow execution") from exc
 
     if prepared_turn.replay_events:
@@ -3196,7 +3200,7 @@ async def execute_flow_endpoint(
         return StreamingResponse(
             replay_stream(),
             media_type="text/event-stream",
-            background=BackgroundTask(_finalize_stream_state, request.session_id),
+            background=stream_lifecycle.background_task(lambda: generated_title_candidate),
             headers={
                 "Cache-Control": "no-cache",
                 "Connection": "keep-alive",
@@ -3491,12 +3495,12 @@ async def execute_flow_endpoint(
                 )
             )
         finally:
-            await _cleanup_stream_state(current_session_id)
+            await stream_lifecycle.cleanup(current_session_id)
 
     return StreamingResponse(
         event_generator(),
         media_type="text/event-stream",
-        background=BackgroundTask(_finalize_stream_state, request.session_id),
+        background=stream_lifecycle.background_task(lambda: generated_title_candidate),
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
