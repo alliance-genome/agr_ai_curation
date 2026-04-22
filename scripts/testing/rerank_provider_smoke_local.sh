@@ -106,7 +106,6 @@ ensure_smoke_compose_override_file() {
     return 0
   fi
 
-  ensure_python_bin
   SMOKE_COMPOSE_OVERRIDE_FILE="$(mktemp)"
   cat > "${SMOKE_COMPOSE_OVERRIDE_FILE}" <<EOF
 services:
@@ -138,7 +137,7 @@ effective_local_reranker_url() {
     return 0
   fi
 
-  configured_url="$(read_repo_env_value "RERANKER_URL" || true)"
+  configured_url="$(read_repo_env_value "RERANKER_URL")"
   if [[ -n "${configured_url}" ]]; then
     printf "%s" "${configured_url}"
     return 0
