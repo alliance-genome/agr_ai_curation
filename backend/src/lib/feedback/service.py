@@ -1,19 +1,19 @@
-"""FeedbackService: Orchestrate user feedback processing workflow.
-
-This module provides the main service layer that coordinates feedback
-submission and SNS notifications.
-"""
+"""FeedbackService: Orchestrate user feedback processing workflow."""
 
 import logging
 import os
 import uuid
 from datetime import datetime
 from typing import List
+
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.email_notifier import EmailNotifier
+from src.lib.chat_history_repository import ChatHistoryRepository, ChatHistorySessionNotFoundError
+from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.sns_notifier import SNSNotifier
+from src.lib.feedback.transcript import capture_feedback_conversation_transcript
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,8 @@ class FeedbackService:
         curator_id: str,
         feedback_text: str,
         trace_ids: List[str],
+        user_auth_sub: str,
+        authenticated_curator_email: str | None = None,
     ) -> str:
         """Create lightweight feedback payload and save to database.
 
@@ -74,25 +76,33 @@ class FeedbackService:
             curator_id: Email/ID of curator submitting feedback
             feedback_text: Feedback comments from curator
             trace_ids: List of trace IDs to attach (for reference only)
+            user_auth_sub: Authenticated token subject used for transcript lookup
+            authenticated_curator_email: Authenticated email used to validate
+                developer-facing curator_id values from the UI
 
         Returns:
             feedback_id: UUID string identifying this feedback report
         """
-        # Generate unique ID
         feedback_id = str(uuid.uuid4())
+        conversation_transcript = self._maybe_capture_conversation_transcript(
+            feedback_id=feedback_id,
+            session_id=session_id,
+            curator_id=curator_id,
+            user_auth_sub=user_auth_sub,
+            authenticated_curator_email=authenticated_curator_email,
+        )
 
-        # Create feedback report with PENDING status
         report = FeedbackReport(
             id=feedback_id,
             session_id=session_id,
             curator_id=curator_id,
             feedback_text=feedback_text,
             trace_ids=trace_ids,
+            conversation_transcript=conversation_transcript,
             processing_status=ProcessingStatus.PENDING,
             created_at=datetime.utcnow(),
         )
 
-        # Save to database
         self.db.add(report)
         self.db.commit()
 
@@ -152,3 +162,115 @@ class FeedbackService:
             report.processing_status = ProcessingStatus.FAILED
             report.error_details = f"Unexpected error: {str(e)}"
             self.db.commit()
+
+    def _maybe_capture_conversation_transcript(
+        self,
+        *,
+        feedback_id: str,
+        session_id: str,
+        curator_id: str,
+        user_auth_sub: str,
+        authenticated_curator_email: str | None,
+    ) -> dict | None:
+        """Capture one durable transcript snapshot when the auth context matches."""
+
+        if not self._curator_matches_authenticated_user(
+            curator_id=curator_id,
+            user_auth_sub=user_auth_sub,
+            authenticated_curator_email=authenticated_curator_email,
+        ):
+            logger.info(
+                "Skipping durable transcript lookup for feedback %s because "
+                "curator_id %s does not match the authenticated user",
+                feedback_id,
+                curator_id,
+            )
+            return None
+
+        repository = ChatHistoryRepository(self.db)
+        try:
+            transcript = capture_feedback_conversation_transcript(
+                repository=repository,
+                session_id=session_id,
+                user_auth_sub=user_auth_sub,
+            )
+        except ChatHistorySessionNotFoundError as exc:
+            logger.warning(
+                "Failed to capture durable transcript for feedback %s "
+                "(session_id=%s, user_auth_sub=%s): %s",
+                feedback_id,
+                session_id,
+                user_auth_sub,
+                exc,
+                exc_info=True,
+            )
+            return None
+        except SQLAlchemyError as exc:
+            self.db.rollback()
+            logger.warning(
+                "Failed to capture durable transcript for feedback %s "
+                "(session_id=%s, user_auth_sub=%s): %s",
+                feedback_id,
+                session_id,
+                user_auth_sub,
+                exc,
+                exc_info=True,
+            )
+            return None
+
+        if transcript is None:
+            logger.warning(
+                "Durable transcript lookup returned no session for feedback %s "
+                "(session_id=%s, user_auth_sub=%s)",
+                feedback_id,
+                session_id,
+                user_auth_sub,
+            )
+            return None
+
+        session_payload = transcript.get("session") if isinstance(transcript, dict) else None
+        chat_kind = None
+        if isinstance(session_payload, dict):
+            normalized_chat_kind = str(session_payload.get("chat_kind") or "").strip()
+            chat_kind = normalized_chat_kind or None
+
+        if chat_kind == "assistant_chat":
+            return transcript
+
+        if chat_kind == "agent_studio":
+            logger.warning(
+                "Feedback %s captured an unexpected agent_studio transcript for session %s",
+                feedback_id,
+                session_id,
+            )
+            return transcript
+
+        logger.warning(
+            "Feedback %s captured transcript for session %s with unexpected chat_kind=%r",
+            feedback_id,
+            session_id,
+            chat_kind,
+        )
+
+        return transcript
+
+    @staticmethod
+    def _curator_matches_authenticated_user(
+        *,
+        curator_id: str,
+        user_auth_sub: str,
+        authenticated_curator_email: str | None,
+    ) -> bool:
+        normalized_curator_id = curator_id.strip()
+        if not normalized_curator_id:
+            return False
+
+        normalized_user_auth_sub = user_auth_sub.strip()
+        if normalized_user_auth_sub and normalized_curator_id == normalized_user_auth_sub:
+            return True
+
+        normalized_email = (authenticated_curator_email or "").strip()
+        if normalized_email and normalized_curator_id.casefold() == normalized_email.casefold():
+            return True
+
+        return False

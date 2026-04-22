@@ -31,6 +31,13 @@ def _ts(hour: int, minute: int = 0, second: int = 0) -> datetime:
     return datetime(2026, 4, 19, hour, minute, second, tzinfo=timezone.utc)
 
 
+def _ensure_chat_history_tables_exist(db_session) -> None:
+    User.__table__.create(bind=db_session.get_bind(), checkfirst=True)
+    PDFDocument.__table__.create(bind=db_session.get_bind(), checkfirst=True)
+    ChatSession.__table__.create(bind=db_session.get_bind(), checkfirst=True)
+    ChatMessage.__table__.create(bind=db_session.get_bind(), checkfirst=True)
+
+
 def _create_session(
     repository: ChatHistoryRepository,
     *,
@@ -114,6 +121,8 @@ def _list_messages(
 
 @pytest.fixture
 def db_session(test_db):
+    _ensure_chat_history_tables_exist(test_db)
+
     test_db.execute(
         delete(PDFDocument).where(PDFDocument.filename.like(f"{DOCUMENT_PREFIX}%"))
     )

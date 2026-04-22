@@ -58,7 +58,6 @@ class ChatSessionRecord:
 
     session_id: str
     user_auth_sub: str
-    chat_kind: str
     title: str | None
     generated_title: str | None
     active_document_id: UUID | None
@@ -66,6 +65,7 @@ class ChatSessionRecord:
     updated_at: datetime
     last_message_at: datetime | None
     deleted_at: datetime | None
+    chat_kind: str | None
 
     @property
     def effective_title(self) -> str | None:
@@ -164,7 +164,6 @@ def _session_record(session: ChatSessionModel) -> ChatSessionRecord:
     return ChatSessionRecord(
         session_id=session.session_id,
         user_auth_sub=session.user_auth_sub,
-        chat_kind=session.chat_kind,
         title=session.title,
         generated_title=session.generated_title,
         active_document_id=session.active_document_id,
@@ -172,7 +171,23 @@ def _session_record(session: ChatSessionModel) -> ChatSessionRecord:
         updated_at=session.updated_at,
         last_message_at=session.last_message_at,
         deleted_at=session.deleted_at,
+        chat_kind=_resolve_session_chat_kind(session),
     )
+
+
+def _resolve_session_chat_kind(session: ChatSessionModel) -> str | None:
+    # The class-level check detects a mapped column; the instance-level check covers
+    # ad-hoc row payloads that set chat_kind outside the ORM mapping.
+    if hasattr(type(session), "chat_kind"):
+        raw_chat_kind = session.chat_kind
+    else:
+        raw_chat_kind = vars(session).get("chat_kind", _UNSET)
+        if raw_chat_kind is _UNSET:
+            return None
+    if raw_chat_kind is None:
+        return None
+    normalized_chat_kind = str(getattr(raw_chat_kind, "value", raw_chat_kind)).strip()
+    return normalized_chat_kind or None
 
 
 def _message_record(message: ChatMessageModel) -> ChatMessageRecord:

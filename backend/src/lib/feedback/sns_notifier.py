@@ -7,6 +7,8 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
+from src.lib.feedback.transcript import format_feedback_transcript_section
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +63,7 @@ class SNSNotifier:
         feedback_text: str,
         session_id: str,
         trace_ids: list[str],
+        conversation_transcript: dict[str, Any] | None = None,
     ) -> str:
         """Build plain text email body."""
         lines = [
@@ -77,6 +80,17 @@ class SNSNotifier:
             feedback_text,
             "",
         ]
+        transcript_section = format_feedback_transcript_section(
+            transcript=conversation_transcript,
+            feedback_id=feedback_id,
+        )
+        if transcript_section:
+            lines.extend(
+                [
+                    transcript_section,
+                    "",
+                ]
+            )
 
         # Add trace IDs if provided
         if trace_ids:
@@ -119,6 +133,7 @@ class SNSNotifier:
             feedback_text=feedback_report.feedback_text,
             session_id=feedback_report.session_id,
             trace_ids=feedback_report.trace_ids or [],
+            conversation_transcript=feedback_report.conversation_transcript,
         )
 
         if not success:
@@ -131,6 +146,7 @@ class SNSNotifier:
         feedback_text: str,
         session_id: str,
         trace_ids: list[str],
+        conversation_transcript: dict[str, Any] | None = None,
     ) -> bool:
         """Send feedback notification via SNS.
 
@@ -167,6 +183,7 @@ class SNSNotifier:
                 feedback_text=feedback_text,
                 session_id=session_id,
                 trace_ids=trace_ids,
+                conversation_transcript=conversation_transcript,
             )
 
             # Publish to SNS

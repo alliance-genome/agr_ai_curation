@@ -3,7 +3,7 @@
 These tests verify the API contract matches the specification in
 specs/005-user-feedback-system/contracts/submit_feedback.yaml
 
-CRITICAL: These tests MUST FAIL before implementation!
+These tests are active regression coverage for the feedback API contract.
 """
 
 import pytest
@@ -25,6 +25,13 @@ def client(monkeypatch):
         0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     )
     from main import app
+    from src.api import feedback as feedback_api
+
+    monkeypatch.setattr(
+        feedback_api,
+        "_run_feedback_processing_in_background",
+        lambda feedback_id: time.sleep(1),
+    )
 
     return TestClient(app)
 
@@ -53,16 +60,20 @@ class TestFeedbackSubmitEndpoint:
     """Contract tests for POST /api/feedback/submit endpoint."""
 
     def test_successful_feedback_submission(
-        self, client, mock_feedback_db, valid_feedback_payload
+        self, client, mock_feedback_db, valid_feedback_payload, chat_contract_auth_headers
     ):
         """Test successful feedback submission (200 response).
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint returns the documented success response.
         """
         # Measure response time
         start_time = time.time()
 
-        response = client.post("/api/feedback/submit", json=valid_feedback_payload)
+        response = client.post(
+            "/api/feedback/submit",
+            json=valid_feedback_payload,
+            headers=chat_contract_auth_headers,
+        )
 
         elapsed_time_ms = (time.time() - start_time) * 1000
 
@@ -91,16 +102,20 @@ class TestFeedbackSubmitEndpoint:
             elapsed_time_ms < 500
         ), f"Response time {elapsed_time_ms:.2f}ms exceeds 500ms requirement"
 
-    def test_empty_feedback_text_validation(self, client, valid_feedback_payload):
+    def test_empty_feedback_text_validation(self, client, valid_feedback_payload, chat_contract_auth_headers):
         """Test empty feedback_text validation (400 response).
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint rejects empty feedback text.
         """
         # Empty feedback text
         payload = valid_feedback_payload.copy()
         payload["feedback_text"] = ""
 
-        response = client.post("/api/feedback/submit", json=payload)
+        response = client.post(
+            "/api/feedback/submit",
+            json=payload,
+            headers=chat_contract_auth_headers,
+        )
 
         # Should reject with 400
         assert response.status_code == 400, f"Expected 400, got {response.status_code}"
@@ -121,17 +136,21 @@ class TestFeedbackSubmitEndpoint:
         ), "Expected validation error for 'feedback_text'"
 
     def test_whitespace_only_feedback_text_validation(
-        self, client, valid_feedback_payload
+        self, client, valid_feedback_payload, chat_contract_auth_headers
     ):
         """Test whitespace-only feedback_text validation (400 response).
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint rejects whitespace-only feedback text.
         """
         # Whitespace-only feedback text
         payload = valid_feedback_payload.copy()
         payload["feedback_text"] = "   \n\t   "
 
-        response = client.post("/api/feedback/submit", json=payload)
+        response = client.post(
+            "/api/feedback/submit",
+            json=payload,
+            headers=chat_contract_auth_headers,
+        )
 
         # Should reject with 400
         assert response.status_code == 400, f"Expected 400, got {response.status_code}"
@@ -145,17 +164,23 @@ class TestFeedbackSubmitEndpoint:
         assert "empty" in error_message or "empty" in details_str or "whitespace" in details_str, \
             "Expected error message to mention 'empty' or 'whitespace'"
 
-    def test_empty_trace_ids_accepted(self, client, mock_feedback_db, valid_feedback_payload):
+    def test_empty_trace_ids_accepted(
+        self, client, mock_feedback_db, valid_feedback_payload, chat_contract_auth_headers
+    ):
         """Test empty trace_ids is accepted (200 response).
 
         trace_ids is now optional - empty arrays are allowed.
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint accepts an empty trace id list.
         """
         # Empty trace_ids list
         payload = valid_feedback_payload.copy()
         payload["trace_ids"] = []
 
-        response = client.post("/api/feedback/submit", json=payload)
+        response = client.post(
+            "/api/feedback/submit",
+            json=payload,
+            headers=chat_contract_auth_headers,
+        )
 
         # Should accept empty trace_ids
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
@@ -165,17 +190,23 @@ class TestFeedbackSubmitEndpoint:
         assert "feedback_id" in data
         assert "message" in data
 
-    def test_omitted_trace_ids_defaults_to_empty(self, client, mock_feedback_db, valid_feedback_payload):
+    def test_omitted_trace_ids_defaults_to_empty(
+        self, client, mock_feedback_db, valid_feedback_payload, chat_contract_auth_headers
+    ):
         """Test omitted trace_ids field defaults to empty array (200 response).
 
         trace_ids is optional - if omitted, should default to empty array.
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint defaults omitted trace ids to an empty list.
         """
         # Remove trace_ids from payload entirely
         payload = valid_feedback_payload.copy()
         del payload["trace_ids"]
 
-        response = client.post("/api/feedback/submit", json=payload)
+        response = client.post(
+            "/api/feedback/submit",
+            json=payload,
+            headers=chat_contract_auth_headers,
+        )
 
         # Should accept with default empty trace_ids
         assert response.status_code == 200, f"Expected 200, got {response.status_code}"
@@ -184,13 +215,17 @@ class TestFeedbackSubmitEndpoint:
         assert data["status"] == "success"
         assert "feedback_id" in data
 
-    def test_missing_required_fields(self, client):
+    def test_missing_required_fields(self, client, chat_contract_auth_headers):
         """Test missing required fields validation (400 or 422 response).
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms request validation rejects missing required fields.
         """
         # Missing all fields
-        response = client.post("/api/feedback/submit", json={})
+        response = client.post(
+            "/api/feedback/submit",
+            json={},
+            headers=chat_contract_auth_headers,
+        )
 
         # Should reject with 400 or 422 (FastAPI validation)
         assert response.status_code in [
@@ -199,13 +234,17 @@ class TestFeedbackSubmitEndpoint:
         ], f"Expected 400 or 422, got {response.status_code}"
 
     def test_response_schema_matches_contract(
-        self, client, mock_feedback_db, valid_feedback_payload
+        self, client, mock_feedback_db, valid_feedback_payload, chat_contract_auth_headers
     ):
         """Test response schema exactly matches contract specification.
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the success payload matches the documented response schema.
         """
-        response = client.post("/api/feedback/submit", json=valid_feedback_payload)
+        response = client.post(
+            "/api/feedback/submit",
+            json=valid_feedback_payload,
+            headers=chat_contract_auth_headers,
+        )
 
         assert response.status_code == 200
 
@@ -227,16 +266,20 @@ class TestFeedbackSubmitEndpoint:
         assert data["status"] == "success"
 
     def test_multiple_trace_ids_accepted(
-        self, client, mock_feedback_db, valid_feedback_payload
+        self, client, mock_feedback_db, valid_feedback_payload, chat_contract_auth_headers
     ):
         """Test that multiple trace IDs are accepted.
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint accepts multiple trace ids.
         """
         payload = valid_feedback_payload.copy()
         payload["trace_ids"] = ["trace_1", "trace_2", "trace_3"]
 
-        response = client.post("/api/feedback/submit", json=payload)
+        response = client.post(
+            "/api/feedback/submit",
+            json=payload,
+            headers=chat_contract_auth_headers,
+        )
 
         assert response.status_code == 200
         assert response.json()["status"] == "success"

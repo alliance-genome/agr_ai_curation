@@ -80,6 +80,38 @@ def test_build_email_body_includes_trace_ids(monkeypatch):
     assert "trace-a" in body and "trace-b" in body
 
 
+def test_build_email_body_includes_transcript_excerpt(monkeypatch):
+    fake_client = MagicMock()
+    monkeypatch.setattr(sns_notifier.boto3, "client", lambda *_args, **_kwargs: fake_client)
+    notifier = sns_notifier.SNSNotifier("arn:aws:sns:us-east-1:123:feedback")
+    monkeypatch.setattr(notifier, "_get_timestamp", lambda: "2026-02-27 10:00:00 UTC")
+
+    body = notifier._build_email_body(
+        feedback_id="feedback-1",
+        curator_id="curator@example.org",
+        feedback_text="Looks good",
+        session_id="session-1",
+        trace_ids=["trace-a"],
+        conversation_transcript={
+            "messages": [
+                {"role": "user", "content": "First question"},
+                {"role": "assistant", "content": "First answer"},
+                {"role": "user", "content": "Second question"},
+                {"role": "assistant", "content": "Second answer"},
+                {"role": "user", "content": "Third question"},
+                {"role": "assistant", "content": "Third answer"},
+                {"role": "user", "content": "Fourth question"},
+            ]
+        },
+    )
+
+    assert "Conversation transcript excerpt:" in body
+    assert "Full durable transcript stored on feedback report feedback-1." in body
+    assert "1. User: First question" in body
+    assert "... 1 middle turns omitted ..." in body
+    assert "7. User: Fourth question" in body
+
+
 def test_send_feedback_notification_raises_when_send_fails(monkeypatch):
     fake_client = MagicMock()
     monkeypatch.setattr(sns_notifier.boto3, "client", lambda *_args, **_kwargs: fake_client)
@@ -92,6 +124,7 @@ def test_send_feedback_notification_raises_when_send_fails(monkeypatch):
         feedback_text="Looks good",
         session_id="session-1",
         trace_ids=None,
+        conversation_transcript=None,
     )
 
     with pytest.raises(Exception, match="Failed to send SNS notification"):

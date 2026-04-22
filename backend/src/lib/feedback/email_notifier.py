@@ -11,6 +11,8 @@ import time
 from email.message import EmailMessage
 from typing import Any
 
+from src.lib.feedback.transcript import format_feedback_transcript_section
+
 logger = logging.getLogger(__name__)
 
 
@@ -93,24 +95,35 @@ class EmailNotifier:
 
         # Build Langfuse link
         langfuse_link = f"{self.langfuse_host}/sessions/{feedback_report.session_id}"
+        transcript_section = format_feedback_transcript_section(
+            transcript=feedback_report.conversation_transcript,
+            feedback_id=str(feedback_report.id),
+        )
 
-        # Build email body
-        body = f"""
-New Curator Feedback Received
+        body_lines = [
+            "New Curator Feedback Received",
+            "",
+            f"Feedback ID: {feedback_report.id}",
+            f"Session ID: {feedback_report.session_id}",
+            f"Curator: {feedback_report.curator_id}",
+            "",
+            "Feedback Comments:",
+            str(feedback_report.feedback_text),
+            "",
+            "View in Langfuse:",
+            langfuse_link,
+        ]
+        if transcript_section:
+            body_lines.extend(["", transcript_section])
+        body_lines.extend(
+            [
+                "",
+                "---",
+                "This is an automated notification from the AI Curation Prototype.",
+            ]
+        )
 
-Feedback ID: {feedback_report.id}
-Session ID: {feedback_report.session_id}
-Curator: {feedback_report.curator_id}
-
-Feedback Comments:
-{feedback_report.feedback_text}
-
-View in Langfuse:
-{langfuse_link}
-
----
-This is an automated notification from the AI Curation Prototype.
-"""
+        body = "\n".join(body_lines)
         message.set_content(body)
         return message
 
