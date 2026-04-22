@@ -26,6 +26,11 @@ Options:
   --skip-build-frontend    Skip frontend image rebuild during review prep
   --skip-db-tunnel         Skip DB tunnel startup
   --skip-runtime-refresh   Skip managed workspace runtime refresh before prep
+  --start-test-containers BOOL
+                           Opt-in: when 'true', boot the local stack
+                           (DB tunnel, dependency services, build, up, and
+                           health checks). When 'false' (default), the wrapper
+                           prints a short "skipped" context and exits 0.
   -h, --help              Show this help
 USAGE
 }
@@ -40,6 +45,7 @@ BUILD_FRONTEND="${SYMPHONY_REVIEW_BUILD_FRONTEND:-1}"
 INCLUDE_LANGFUSE_STACK="${SYMPHONY_REVIEW_INCLUDE_LANGFUSE_STACK:-0}"
 SKIP_DB_TUNNEL=0
 SKIP_RUNTIME_REFRESH="${SYMPHONY_REVIEW_PREP_REFRESH_MANAGED:-1}"
+START_TEST_CONTAINERS=0
 DEPENDENCY_START_MAX_ATTEMPTS="${SYMPHONY_REVIEW_DEPENDENCY_START_MAX_ATTEMPTS:-2}"
 DEPENDENCY_START_RETRY_SLEEP="${SYMPHONY_REVIEW_DEPENDENCY_START_RETRY_SLEEP_SECONDS:-3}"
 FRONTEND_HEALTH_ATTEMPTS="${SYMPHONY_REVIEW_FRONTEND_HEALTH_ATTEMPTS:-20}"
@@ -95,6 +101,28 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-runtime-refresh)
       SKIP_RUNTIME_REFRESH=0
+      shift
+      ;;
+    --start-test-containers)
+      case "$2" in
+        true) START_TEST_CONTAINERS=1 ;;
+        false) START_TEST_CONTAINERS=0 ;;
+        *)
+          echo "--start-test-containers requires 'true' or 'false' (got: $2)" >&2
+          exit 2
+          ;;
+      esac
+      shift 2
+      ;;
+    --start-test-containers=*)
+      case "${1#*=}" in
+        true) START_TEST_CONTAINERS=1 ;;
+        false) START_TEST_CONTAINERS=0 ;;
+        *)
+          echo "--start-test-containers requires 'true' or 'false' (got: ${1#*=})" >&2
+          exit 2
+          ;;
+      esac
       shift
       ;;
     -h|--help)
@@ -500,6 +528,28 @@ check_required_vars
 export RUN_DB_BOOTSTRAP_ON_START="${RUN_DB_BOOTSTRAP_ON_START:-true}"
 export RUN_DB_MIGRATIONS_ON_START="${RUN_DB_MIGRATIONS_ON_START:-true}"
 
+if [[ "${START_TEST_CONTAINERS}" -eq 0 ]]; then
+  log_step "Human Review Prep stack startup skipped for ${ISSUE_KEY} (start_test_containers=false)"
+  echo "workspace_dir=${WORKSPACE_DIR}"
+  echo "compose_file=${COMPOSE_FILE}"
+  echo "compose_project=${COMPOSE_PROJECT}"
+  echo "frontend_host_port=${FRONTEND_HOST_PORT}"
+  echo "backend_host_port=${BACKEND_HOST_PORT}"
+  echo "postgres_host_port=${POSTGRES_HOST_PORT}"
+  echo "redis_host_port=${REDIS_HOST_PORT}"
+  echo "langfuse_host_port=${LANGFUSE_HOST_PORT}"
+  echo "weaviate_http_host_port=${WEAVIATE_HTTP_HOST_PORT}"
+  echo "weaviate_grpc_host_port=${WEAVIATE_GRPC_HOST_PORT}"
+  echo "start_test_containers=0"
+  echo "stack_startup=skipped_by_flag"
+  echo "dependency_start_status=skipped_by_flag"
+  echo "frontend_health=skipped_by_flag"
+  echo "backend_health=skipped_by_flag"
+  echo "curation_db_health=skipped_by_flag"
+  echo "pdf_extraction_health=skipped_by_flag"
+  exit 0
+fi
+
 if [[ "${SKIP_DB_TUNNEL}" -eq 0 ]]; then
   TUNNEL_START_HELPER="$(resolve_helper "scripts/utilities/symphony_local_db_tunnel_start.sh" || true)"
   TUNNEL_STATUS_HELPER="$(resolve_helper "scripts/utilities/symphony_local_db_tunnel_status.sh" || true)"
@@ -531,6 +581,7 @@ echo "weaviate_grpc_host_port=${WEAVIATE_GRPC_HOST_PORT}"
 echo "build_backend=${BUILD_BACKEND}"
 echo "build_frontend=${BUILD_FRONTEND}"
 echo "include_langfuse_stack=${INCLUDE_LANGFUSE_STACK}"
+echo "start_test_containers=1"
 echo "rerank_provider=${REVIEW_RERANK_PROVIDER}"
 echo "reranker_dependency_required=${REVIEW_RERANKER_REQUIRED}"
 echo "dependency_start_max_attempts=${DEPENDENCY_START_MAX_ATTEMPTS}"
