@@ -25,6 +25,13 @@ def client(monkeypatch):
         0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     )
     from main import app
+    from src.api import feedback as feedback_api
+
+    monkeypatch.setattr(
+        feedback_api,
+        "_run_feedback_processing_in_background",
+        lambda feedback_id: time.sleep(1),
+    )
 
     return TestClient(app)
 

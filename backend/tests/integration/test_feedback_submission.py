@@ -76,7 +76,7 @@ def cleanup_feedback_state():
 
 
 @pytest.fixture
-def client(get_auth_mock):
+def client(get_auth_mock, monkeypatch):
     get_auth_mock.set_user("chat1")
 
     modules_to_clear = [
@@ -88,8 +88,14 @@ def client(get_auth_mock):
 
     from main import app
     from src.api.auth import _get_user_from_cookie_impl
+    from src.api import feedback as feedback_api
 
     app.dependency_overrides[_get_user_from_cookie_impl] = get_auth_mock.get_user
+    monkeypatch.setattr(
+        feedback_api,
+        "dispatch_feedback_report_processing",
+        lambda feedback_id: feedback_api._run_feedback_processing_in_background(feedback_id),
+    )
 
     try:
         yield TestClient(app)
