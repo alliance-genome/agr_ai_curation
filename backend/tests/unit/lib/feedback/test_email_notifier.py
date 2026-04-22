@@ -27,6 +27,7 @@ def sample_feedback_report():
     report.session_id = "session_456"
     report.curator_id = "curator@example.com"
     report.feedback_text = "Test feedback comment about ontology terms"
+    report.conversation_transcript = None
     return report
 
 
@@ -258,3 +259,33 @@ class TestEmailNotifierSendNotification:
         # Should include Langfuse link
         assert "localhost:3000" in body
         assert "session_456" in body or "traces" in body.lower()
+
+    def test_send_feedback_notification_includes_transcript_excerpt_when_available(
+        self, mock_smtp, mock_config, sample_feedback_report
+    ):
+        """Test that email includes the durable transcript excerpt when captured."""
+        from src.lib.feedback.email_notifier import EmailNotifier
+
+        sample_feedback_report.conversation_transcript = {
+            "messages": [
+                {"role": "user", "content": "First question"},
+                {"role": "assistant", "content": "First answer"},
+                {"role": "user", "content": "Second question"},
+                {"role": "assistant", "content": "Second answer"},
+                {"role": "user", "content": "Third question"},
+                {"role": "assistant", "content": "Third answer"},
+                {"role": "user", "content": "Fourth question"},
+            ]
+        }
+
+        notifier = EmailNotifier()
+        notifier.send_feedback_notification(sample_feedback_report)
+
+        sent_message = mock_smtp.send_message.call_args[0][0]
+        body = str(sent_message.get_payload())
+
+        assert "Conversation transcript excerpt:" in body
+        assert "Full durable transcript stored on feedback report feedback_123." in body
+        assert "1. User: First question" in body
+        assert "... 1 middle turns omitted ..." in body
+        assert "7. User: Fourth question" in body

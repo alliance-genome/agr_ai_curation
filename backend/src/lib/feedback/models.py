@@ -1,10 +1,12 @@
 """SQLAlchemy models for user feedback system.
 
 Defines the FeedbackReport model for storing curator feedback submissions
-along with captured Langfuse trace data and processing status.
+along with captured Langfuse trace data, durable transcript snapshots, and
+processing status.
 """
 
 from sqlalchemy import Column, String, Text, DateTime, JSON, Enum as SQLEnum
+from sqlalchemy.dialects.postgresql import JSONB
 from datetime import datetime
 import enum
 import uuid
@@ -63,6 +65,7 @@ class FeedbackReport(Base):
 
     # Extracted data (populated by background task)
     trace_data = Column(JSON, nullable=True)  # Full trace extraction from Langfuse
+    conversation_transcript = Column(JSONB, nullable=True)
 
     # Error tracking
     error_details = Column(Text, nullable=True)

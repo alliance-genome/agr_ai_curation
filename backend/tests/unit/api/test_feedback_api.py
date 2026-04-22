@@ -23,7 +23,8 @@ def test_submit_feedback_success_and_background_task(monkeypatch):
         def __init__(self, _db):
             pass
 
-        def create_feedback_payload(self, **_kwargs):
+        def create_feedback_payload(self, **kwargs):
+            calls["create_feedback_kwargs"] = kwargs
             return "feedback-123"
 
         def process_feedback_report(self, feedback_id):
@@ -49,6 +50,8 @@ def test_submit_feedback_success_and_background_task(monkeypatch):
     assert response.status == "success"
     assert response.feedback_id == "feedback-123"
     assert len(background_tasks.tasks) == 1
+    assert calls["create_feedback_kwargs"]["user_auth_sub"] == "user-123"
+    assert calls["create_feedback_kwargs"]["authenticated_user_email"] is None
 
     # Execute queued background task synchronously for verification.
     background_tasks.tasks[0].func()
@@ -130,3 +133,37 @@ def test_submit_feedback_background_errors_are_swallowed(monkeypatch):
 
     # Should not raise even if background processing fails.
     background_tasks.tasks[0].func()
+
+
+def test_submit_feedback_uses_authenticated_email_for_curator_verification(monkeypatch):
+    calls = {}
+
+    class _FakeService:
+        def __init__(self, _db):
+            pass
+
+        def create_feedback_payload(self, **kwargs):
+            calls["kwargs"] = kwargs
+            return "feedback-789"
+
+        def process_feedback_report(self, _feedback_id):
+            return None
+
+    class _FakeBgDb:
+        def close(self):
+            return None
+
+    monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+
+    import src.models.sql.database as db_module
+    monkeypatch.setattr(db_module, "FeedbackSessionLocal", lambda: _FakeBgDb())
+
+    response = feedback_api.submit_feedback(
+        submission=_submission(),
+        background_tasks=BackgroundTasks(),
+        db=object(),
+        user={"sub": "user-123", "email": "curator@example.org"},
+    )
+
+    assert response.status == "success"
+    assert calls["kwargs"]["authenticated_user_email"] == "curator@example.org"

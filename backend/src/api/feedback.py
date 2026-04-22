@@ -7,7 +7,7 @@ with automatic capture of session context (Langfuse traces, messages, logs).
 import logging
 from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import Dict, Any
@@ -20,6 +20,22 @@ from src.api.auth import get_auth_dependency
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/feedback")
+
+
+def _require_user_sub(user: Dict[str, Any]) -> str:
+    """Return the authenticated user subject or raise 401."""
+
+    user_id = str(user.get("sub") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    return user_id
+
+
+def _authenticated_user_email(user: Dict[str, Any]) -> str | None:
+    """Return the authenticated email claim when available."""
+
+    email = str(user.get("email") or "").strip()
+    return email or None
 
 
 @router.post(
@@ -68,6 +84,9 @@ def submit_feedback(
     Raises:
         HTTPException: 400 for validation errors, 500 for database errors
     """
+    user_auth_sub = _require_user_sub(user)
+    authenticated_user_email = _authenticated_user_email(user)
+
     try:
         logger.info(
             f"Received feedback submission from {submission.curator_id} "
@@ -81,6 +100,8 @@ def submit_feedback(
             curator_id=submission.curator_id,
             feedback_text=submission.feedback_text,
             trace_ids=submission.trace_ids,
+            user_auth_sub=user_auth_sub,
+            authenticated_user_email=authenticated_user_email,
         )
 
         logger.info(

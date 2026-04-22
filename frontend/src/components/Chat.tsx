@@ -717,6 +717,9 @@ function Chat({
 }: ChatProps) {
   const navigate = useNavigate()
   const { user } = useAuth()
+  const feedbackSessionId = typeof propSessionId === 'string' && propSessionId.trim().length > 0
+    ? propSessionId.trim()
+    : null
   const storageUserId = user?.uid ?? null
   const chatStorageKeys = useMemo(
     () => (storageUserId ? getChatLocalStorageKeys(storageUserId) : null),
@@ -1867,6 +1870,14 @@ function Chat({
   }
 
   const handleFeedbackClick = (messageContent: string, messageTraceIds?: string[]) => {
+    if (!feedbackSessionId) {
+      emitGlobalToast({
+        message: 'Start a chat session before submitting feedback.',
+        severity: 'error',
+      })
+      return
+    }
+
     // Use specific message trace IDs if available, otherwise fallback to session IDs
     const traceIdsToUse = (messageTraceIds && messageTraceIds.length > 0) 
       ? messageTraceIds 
@@ -1891,8 +1902,16 @@ function Chat({
     feedback_text: string
     trace_ids: string[]
   }) => {
+    const normalizedSessionId = feedback.session_id.trim()
+    if (!normalizedSessionId) {
+      throw new Error('Session ID is missing')
+    }
+
     try {
-      await submitFeedback(feedback)
+      await submitFeedback({
+        ...feedback,
+        session_id: normalizedSessionId,
+      })
       debug.log('Feedback submitted successfully')
     } catch (error) {
       console.error('Failed to submit feedback:', error)
@@ -2831,7 +2850,7 @@ function Chat({
       <FeedbackDialog
         open={feedbackDialogOpen}
         onClose={handleFeedbackDialogClose}
-        sessionId={propSessionId}
+        sessionId={feedbackSessionId}
         traceIds={feedbackMessageData?.traceIds || []}
         curatorId={user?.email || 'unknown@example.com'}
         onSubmit={handleFeedbackSubmit}
