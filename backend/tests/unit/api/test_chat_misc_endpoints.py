@@ -2140,6 +2140,42 @@ def test_backfill_chat_session_generated_title_skips_when_session_disappears_bef
     assert rollbacks == ["rollback"]
 
 
+def test_backfill_chat_session_generated_title_logs_and_rolls_back_when_chat_kind_missing(
+    monkeypatch,
+    caplog,
+):
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    repository = FakeChatHistoryRepository(
+        sessions=[_session_record(session_id="session-missing-kind", chat_kind=None)]
+    )
+    completion_db = SimpleNamespace(
+        commit=lambda: commits.append("commit"),
+        rollback=lambda: rollbacks.append("rollback"),
+        close=lambda: None,
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+
+    with caplog.at_level("WARNING"):
+        chat._backfill_chat_session_generated_title("session-missing-kind", "user-1")
+
+    assert commits == []
+    assert rollbacks == ["rollback"]
+    assert "Failed to generate durable chat title" in caplog.text
+    assert "Session session-missing-kind is missing chat_kind during durable title backfill" in caplog.text
+
+
+def test_serialize_session_raises_when_chat_kind_is_missing():
+    record = _session_record(session_id="session-missing-kind", chat_kind=None)
+
+    with pytest.raises(
+        ValueError,
+        match="Session session-missing-kind is missing chat_kind during session serialization",
+    ):
+        chat._serialize_session(record)
+
+
 def test_serialize_message_omits_internal_flow_summary_payload_keys():
     record = ChatMessageRecord(
         message_id=uuid4(),

@@ -36,6 +36,7 @@ from ..lib.chat_history_repository import (
     ChatMessageRecord,
     ChatSessionCursor,
     ChatSessionRecord,
+    VALID_CHAT_KINDS,
 )
 from ..lib.chat_state import document_state
 from ..lib.chat_transcript import (
@@ -1334,6 +1335,26 @@ def _generate_title_from_messages(
     return generate_chat_title(_build_title_sources_from_messages(messages))
 
 
+def _require_persisted_session_chat_kind(
+    chat_kind: str | None,
+    *,
+    session_id: str,
+    operation: str,
+) -> str:
+    """Validate persisted session chat kind before downstream use."""
+
+    normalized_chat_kind = chat_kind.strip() if isinstance(chat_kind, str) else None
+    if not normalized_chat_kind:
+        raise ValueError(
+            f"Session {session_id} is missing chat_kind during {operation}"
+        )
+    if normalized_chat_kind not in VALID_CHAT_KINDS:
+        raise ValueError(
+            f"Session {session_id} has invalid chat_kind {normalized_chat_kind!r} during {operation}"
+        )
+    return normalized_chat_kind
+
+
 def _backfill_chat_session_generated_title(
     session_id: str,
     user_id: str,
@@ -1350,15 +1371,18 @@ def _backfill_chat_session_generated_title(
         )
         if session is None or session.effective_title is not None:
             return
-        if session.chat_kind is None:
-            return
+        session_chat_kind = _require_persisted_session_chat_kind(
+            session.chat_kind,
+            session_id=session_id,
+            operation="durable title backfill",
+        )
 
         generated_title = normalize_generated_chat_title(preferred_generated_title)
         if generated_title is None:
             message_page = repository.list_messages(
                 session_id=session_id,
                 user_auth_sub=user_id,
-                chat_kind=session.chat_kind,
+                chat_kind=session_chat_kind,
                 limit=_TITLE_BACKFILL_MESSAGE_LIMIT,
             )
             generated_title = _generate_title_from_messages(message_page.items)
@@ -1368,7 +1392,7 @@ def _backfill_chat_session_generated_title(
         repository.set_generated_title(
             session_id=session_id,
             user_auth_sub=user_id,
-            chat_kind=session.chat_kind,
+            chat_kind=session_chat_kind,
             generated_title=generated_title,
         )
         completion_db.commit()
@@ -1426,7 +1450,11 @@ def _serialize_session(
 
     return ChatSessionSummaryResponse(
         session_id=record.session_id,
-        chat_kind=record.chat_kind or ASSISTANT_CHAT_KIND,
+        chat_kind=_require_persisted_session_chat_kind(
+            record.chat_kind,
+            session_id=record.session_id,
+            operation="session serialization",
+        ),
         title=effective_title,
         active_document_id=str(record.active_document_id) if record.active_document_id else None,
         created_at=record.created_at,
