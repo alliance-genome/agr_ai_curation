@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 
 import { debug } from '@/utils/env'
 import {
@@ -752,6 +753,7 @@ function Chat({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const progressMessageQueueRef = useRef<string[]>([])
   const progressMessageTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const sessionIdCopyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastProgressUpdateRef = useRef<number>(0)
   const assistantBuffersRef = useRef<Record<string, string>>({})
   const activeTurnIdRef = useRef<string | null>(null)
@@ -765,6 +767,8 @@ function Chat({
   const messageStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
   const previousSessionIdRef = useRef<string | null>(propSessionId)
+  const normalizedSessionId = normalizeOptionalText(propSessionId)
+  const [sessionIdCopied, setSessionIdCopied] = useState(false)
 
   // Track ALL trace IDs from this session for feedback
   const sessionTraceIds = useRef<string[]>([])
@@ -1064,6 +1068,15 @@ function Chat({
   }, [messages])
 
   useEffect(() => {
+    setSessionIdCopied(false)
+
+    if (sessionIdCopyTimeoutRef.current) {
+      clearTimeout(sessionIdCopyTimeoutRef.current)
+      sessionIdCopyTimeoutRef.current = null
+    }
+  }, [normalizedSessionId])
+
+  useEffect(() => {
     if (storageUserIdRef.current === storageUserId) {
       return
     }
@@ -1145,6 +1158,11 @@ function Chat({
   // Flush latest chat state on unmount so navigation does not lose pending debounced updates.
   useEffect(() => {
     return () => {
+      if (sessionIdCopyTimeoutRef.current) {
+        clearTimeout(sessionIdCopyTimeoutRef.current)
+        sessionIdCopyTimeoutRef.current = null
+      }
+
       if (persistTimeoutRef.current) {
         clearTimeout(persistTimeoutRef.current)
         persistTimeoutRef.current = null
@@ -1827,6 +1845,27 @@ function Chat({
     })
   }
 
+  const handleCopySessionId = () => {
+    if (!normalizedSessionId) {
+      return
+    }
+
+    copyText(normalizedSessionId).then(() => {
+      setSessionIdCopied(true)
+
+      if (sessionIdCopyTimeoutRef.current) {
+        clearTimeout(sessionIdCopyTimeoutRef.current)
+      }
+
+      sessionIdCopyTimeoutRef.current = setTimeout(() => {
+        setSessionIdCopied(false)
+        sessionIdCopyTimeoutRef.current = null
+      }, 1500)
+    }).catch(err => {
+      console.error('Failed to copy session ID:', err)
+    })
+  }
+
   const handleFeedbackClick = (messageContent: string, messageTraceIds?: string[]) => {
     // Use specific message trace IDs if available, otherwise fallback to session IDs
     const traceIdsToUse = (messageTraceIds && messageTraceIds.length > 0) 
@@ -2318,7 +2357,7 @@ function Chat({
       <div className="chat-header">
         <h2>AI Assistant Chat</h2>
         <div className="chat-status">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
             {activeDocument ? (
               <span>
                 Active PDF: {activeDocument.filename || activeDocument.id}
@@ -2332,6 +2371,54 @@ function Chat({
                 Memory: {
                   conversationStatus.memory_stats?.memory_sizes?.short_term?.file_count || 0
                 } items
+              </span>
+            )}
+
+            {normalizedSessionId && (
+              <span
+                style={{
+                  fontSize: '0.9em',
+                  color: '#666',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  flexWrap: 'wrap',
+                }}
+              >
+                <span>Session:</span>
+                <span
+                  style={{
+                    fontFamily: 'SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace',
+                    overflowWrap: 'anywhere',
+                  }}
+                >
+                  {normalizedSessionId}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCopySessionId}
+                  aria-label="Copy session ID"
+                  title="Copy session ID"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#666',
+                    cursor: 'pointer',
+                    fontSize: '0.9em',
+                    lineHeight: 1,
+                  }}
+                >
+                  <ContentCopyIcon fontSize="inherit" />
+                </button>
+                {sessionIdCopied && (
+                  <span role="status" aria-live="polite">
+                    Copied!
+                  </span>
+                )}
               </span>
             )}
 
