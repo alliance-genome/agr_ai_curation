@@ -6,7 +6,7 @@ single fixed value, so two smaller partial indexes match the query shape
 directly without introducing multicolumn GIN operator-class complexity.
 
 Revision ID: z9a0b1c2d3e4
-Revises: y8z9a0b1c2d3
+Revises: b9c0d1e2f3a4
 Create Date: 2026-04-22 17:00:00.000000
 """
 
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = "z9a0b1c2d3e4"
-down_revision: Union[str, Sequence[str], None] = "y8z9a0b1c2d3"
+down_revision: Union[str, Sequence[str], None] = "b9c0d1e2f3a4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

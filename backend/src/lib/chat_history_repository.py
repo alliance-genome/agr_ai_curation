@@ -950,7 +950,6 @@ class ChatHistoryRepository:
 
 
 __all__ = [
-    "AGENT_STUDIO_CHAT_KIND",
     "ASSISTANT_CHAT_KIND",
     "AppendMessageResult",
     "ChatHistoryRepository",
