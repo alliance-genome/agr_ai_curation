@@ -991,7 +991,7 @@ class _ActiveStreamLifecycle:
     async def cleanup(self, target_session_id: str | None = None) -> None:
         """Release active stream ownership once, even if multiple paths call cleanup."""
 
-        session_id = target_session_id or self.session_id
+        session_id = target_session_id if target_session_id is not None else self.session_id
         if self.cleanup_done:
             return
 
