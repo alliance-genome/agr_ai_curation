@@ -1,3 +1,5 @@
+import { Box } from '@mui/material'
+
 import EvidenceNavigationQuoteCard from '@/features/curation/evidence/EvidenceNavigationQuoteCard'
 import {
   buildEvidenceLocationLabel,
@@ -10,6 +12,8 @@ import { copyText } from './copyText'
 interface EvidenceQuoteProps {
   evidenceRecord: EvidenceRecord
   borderColor: string
+  interactive?: boolean
+  testId?: string
 }
 
 function buildMetadataLabel(evidenceRecord: EvidenceRecord): string {
@@ -27,7 +31,45 @@ function buildEvidenceQuoteCopyText(evidenceRecord: EvidenceRecord): string {
 export default function EvidenceQuote({
   evidenceRecord,
   borderColor,
+  interactive = true,
+  testId,
 }: EvidenceQuoteProps) {
+  if (!interactive) {
+    return (
+      <Box
+        data-testid={testId}
+        sx={{
+          backgroundColor: 'rgba(255, 255, 255, 0.08)',
+          borderRadius: '8px',
+          borderLeft: `3px solid ${borderColor}`,
+          px: '12px',
+          py: '10px',
+        }}
+      >
+        <Box
+          sx={{
+            fontSize: '11px',
+            color: 'rgba(255, 255, 255, 0.6)',
+            mb: '4px',
+          }}
+        >
+          {buildMetadataLabel(evidenceRecord)}
+        </Box>
+
+        <Box
+          sx={{
+            fontSize: '13px',
+            fontStyle: 'italic',
+            lineHeight: 1.5,
+            color: 'rgba(255, 255, 255, 0.9)',
+          }}
+        >
+          &ldquo;{evidenceRecord.verified_quote}&rdquo;
+        </Box>
+      </Box>
+    )
+  }
+
   const command = buildChatEvidenceNavigationCommand(evidenceRecord)
 
   return (

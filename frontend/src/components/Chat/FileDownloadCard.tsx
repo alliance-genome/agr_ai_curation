@@ -28,6 +28,8 @@ export interface FileInfo {
 
 interface FileDownloadCardProps {
   file: FileInfo
+  allowDownload?: boolean
+  cardTestId?: string
 }
 
 /**
@@ -40,9 +42,6 @@ function formatFileSize(bytes?: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/**
- * Get display label for file format
- */
 function getFormatLabel(format: string): string {
   const labels: Record<string, string> = {
     csv: 'CSV',
@@ -57,9 +56,9 @@ function getFormatLabel(format: string): string {
  */
 function getFormatColor(format: string): string {
   const colors: Record<string, string> = {
-    csv: '#4caf50',  // green
-    tsv: '#2196f3',  // blue
-    json: '#ff9800', // orange
+    csv: '#4caf50',
+    tsv: '#2196f3',
+    json: '#ff9800',
   }
   return colors[format.toLowerCase()] || '#9e9e9e'
 }
@@ -71,7 +70,11 @@ function getFormatColor(format: string): string {
  * Shows filename, format badge, size, and a download button.
  * Handles download state with loading indicator and error handling.
  */
-function FileDownloadCard({ file }: FileDownloadCardProps) {
+function FileDownloadCard({
+  file,
+  allowDownload = true,
+  cardTestId,
+}: FileDownloadCardProps) {
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadComplete, setDownloadComplete] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -137,6 +140,7 @@ function FileDownloadCard({ file }: FileDownloadCardProps) {
   return (
     <>
       <Card
+        data-testid={cardTestId}
         sx={{
           mt: 1,
           mb: 1,
@@ -205,44 +209,47 @@ function FileDownloadCard({ file }: FileDownloadCardProps) {
             </Box>
 
             {/* Download button */}
-            <Button
-              variant="contained"
-              size="small"
-              onClick={handleDownload}
-              disabled={isDownloading}
-              sx={{
-                minWidth: 36,
-                height: 36,
-                borderRadius: 1,
-                backgroundColor: downloadComplete ? '#4caf50' : 'primary.main',
-                '&:hover': {
-                  backgroundColor: downloadComplete ? '#45a049' : 'primary.dark',
-                },
-              }}
-            >
-              {isDownloading ? (
-                <CircularProgress size={18} color="inherit" />
-              ) : downloadComplete ? (
-                <CheckCircleIcon sx={{ fontSize: 20 }} />
-              ) : (
-                <DownloadIcon sx={{ fontSize: 20 }} />
-              )}
-            </Button>
+            {allowDownload ? (
+              <Button
+                variant="contained"
+                size="small"
+                onClick={handleDownload}
+                disabled={isDownloading}
+                sx={{
+                  minWidth: 36,
+                  height: 36,
+                  borderRadius: 1,
+                  backgroundColor: downloadComplete ? '#4caf50' : 'primary.main',
+                  '&:hover': {
+                    backgroundColor: downloadComplete ? '#45a049' : 'primary.dark',
+                  },
+                }}
+              >
+                {isDownloading ? (
+                  <CircularProgress size={18} color="inherit" />
+                ) : downloadComplete ? (
+                  <CheckCircleIcon sx={{ fontSize: 20 }} />
+                ) : (
+                  <DownloadIcon sx={{ fontSize: 20 }} />
+                )}
+              </Button>
+            ) : null}
           </Box>
         </CardContent>
       </Card>
 
-      {/* Error snackbar */}
-      <Snackbar
-        open={!!error}
-        autoHideDuration={5000}
-        onClose={() => setError(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity="error" onClose={() => setError(null)}>
-          {error}
-        </Alert>
-      </Snackbar>
+      {allowDownload ? (
+        <Snackbar
+          open={!!error}
+          autoHideDuration={5000}
+          onClose={() => setError(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert severity="error" onClose={() => setError(null)}>
+            {error}
+          </Alert>
+        </Snackbar>
+      ) : null}
     </>
   )
 }

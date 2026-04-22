@@ -80,6 +80,10 @@ interface EvidenceCardProps {
   headerLabel?: string
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
   onReviewAndCurateClick?: (() => void) | null
+  interactionMode?: 'interactive' | 'readOnly'
+  containerTestId?: string
+  headerIconTestId?: string
+  quoteTestId?: string
 }
 
 function buildEntityData(
@@ -124,9 +128,14 @@ export default function EvidenceCard({
   evidenceRecords,
   headerLabel,
   onReviewAndCurateClick,
+  interactionMode = 'interactive',
+  containerTestId,
+  headerIconTestId = 'evidence-card-header-icon',
+  quoteTestId,
 }: EvidenceCardProps) {
   const [activeEntity, setActiveEntity] = useState<string | null>(null)
   const { chipItems, quoteGroups } = buildEntityData(evidenceRecords)
+  const isInteractive = interactionMode === 'interactive'
 
   const handleEntityToggle = (entity: string) => {
     setActiveEntity((currentEntity) => (currentEntity === entity ? null : entity))
@@ -134,6 +143,7 @@ export default function EvidenceCard({
 
   return (
     <Box
+      data-testid={containerTestId}
       sx={{
         backgroundColor: '#0d47a1',
         borderRadius: '0 0 18px 4px',
@@ -156,7 +166,7 @@ export default function EvidenceCard({
         <Box
           aria-hidden="true"
           component="svg"
-          data-testid="evidence-card-header-icon"
+          data-testid={headerIconTestId}
           fill="none"
           sx={{
             flexShrink: 0,
@@ -213,7 +223,9 @@ export default function EvidenceCard({
       <EvidenceQuoteList
         activeEntity={activeEntity}
         groups={quoteGroups}
-        onReviewAndCurateClick={onReviewAndCurateClick}
+        interactive={isInteractive}
+        onReviewAndCurateClick={isInteractive ? onReviewAndCurateClick : null}
+        quoteTestId={quoteTestId}
       />
     </Box>
   )
