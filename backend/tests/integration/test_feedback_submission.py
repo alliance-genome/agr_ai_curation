@@ -6,8 +6,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import delete
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import delete, text
 from fastapi.testclient import TestClient
 
 # Import database first to avoid the package init circular path when importing feedback models.
@@ -201,8 +200,8 @@ def test_feedback_submission_logs_lookup_failure_but_still_succeeds(
 ):
     session_id = f"{SESSION_PREFIX}lookup-failure"
 
-    def _raise_lookup_error(*_args, **_kwargs):
-        raise SQLAlchemyError("lookup failed")
+    def _raise_lookup_error(self, *_args, **_kwargs):
+        self._db.execute(text("SELECT * FROM feedback_lookup_missing_table"))
 
     _seed_durable_chat_session(session_id, user_auth_sub=curator1_user["sub"])
     monkeypatch.setattr(

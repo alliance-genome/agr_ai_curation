@@ -80,6 +80,31 @@ def _create_feedback_reports_table() -> None:
     )
 
 
+def _recreate_feedback_reports_audit_triggers() -> None:
+    op.execute("DROP TRIGGER IF EXISTS audit_feedback_reports_delete ON feedback_reports;")
+    op.execute("DROP TRIGGER IF EXISTS audit_feedback_reports_update ON feedback_reports;")
+    op.execute("DROP TRIGGER IF EXISTS audit_feedback_reports_insert ON feedback_reports;")
+
+    op.execute("""
+        CREATE TRIGGER audit_feedback_reports_insert
+            AFTER INSERT ON feedback_reports
+            FOR EACH ROW
+            EXECUTE FUNCTION audit_trigger_func();
+    """)
+    op.execute("""
+        CREATE TRIGGER audit_feedback_reports_update
+            AFTER UPDATE ON feedback_reports
+            FOR EACH ROW
+            EXECUTE FUNCTION audit_trigger_func();
+    """)
+    op.execute("""
+        CREATE TRIGGER audit_feedback_reports_delete
+            AFTER DELETE ON feedback_reports
+            FOR EACH ROW
+            EXECUTE FUNCTION audit_trigger_func();
+    """)
+
+
 def upgrade() -> None:
     """Upgrade schema - add durable feedback transcript storage."""
 
@@ -88,6 +113,7 @@ def upgrade() -> None:
 
     if "feedback_reports" not in inspector.get_table_names():
         _create_feedback_reports_table()
+        _recreate_feedback_reports_audit_triggers()
         return
 
     existing_columns = {
@@ -105,6 +131,7 @@ def upgrade() -> None:
             nullable=True,
         ),
     )
+    _recreate_feedback_reports_audit_triggers()
 
 
 def downgrade() -> None:

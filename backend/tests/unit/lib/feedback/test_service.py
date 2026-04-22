@@ -199,6 +199,7 @@ def test_create_feedback_payload_logs_and_continues_when_transcript_lookup_fails
     assert feedback_id == "uuid-123"
     report = db.add.call_args[0][0]
     assert report.conversation_transcript is None
+    db.rollback.assert_called_once()
     db.commit.assert_called_once()
 
 

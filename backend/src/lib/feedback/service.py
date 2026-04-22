@@ -194,7 +194,19 @@ class FeedbackService:
                 session_id=session_id,
                 user_auth_sub=user_auth_sub,
             )
-        except (ChatHistorySessionNotFoundError, SQLAlchemyError) as exc:
+        except ChatHistorySessionNotFoundError as exc:
+            logger.warning(
+                "Failed to capture durable transcript for feedback %s "
+                "(session_id=%s, user_auth_sub=%s): %s",
+                feedback_id,
+                session_id,
+                user_auth_sub,
+                exc,
+                exc_info=True,
+            )
+            return None
+        except SQLAlchemyError as exc:
+            self.db.rollback()
             logger.warning(
                 "Failed to capture durable transcript for feedback %s "
                 "(session_id=%s, user_auth_sub=%s): %s",
