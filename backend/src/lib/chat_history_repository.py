@@ -66,6 +66,7 @@ class ChatSessionRecord:
     updated_at: datetime
     last_message_at: datetime | None
     deleted_at: datetime | None
+    chat_kind: str = "assistant_chat"
 
     @property
     def effective_title(self) -> str | None:
@@ -172,7 +173,19 @@ def _session_record(session: ChatSessionModel) -> ChatSessionRecord:
         updated_at=session.updated_at,
         last_message_at=session.last_message_at,
         deleted_at=session.deleted_at,
+        chat_kind=_resolve_session_chat_kind(session),
     )
+
+
+def _resolve_session_chat_kind(session: ChatSessionModel) -> str:
+    raw_chat_kind = getattr(session, "chat_kind", None)
+    if raw_chat_kind is not None:
+        normalized_chat_kind = str(getattr(raw_chat_kind, "value", raw_chat_kind)).strip()
+        if normalized_chat_kind:
+            return normalized_chat_kind
+
+    # This repository currently reads the assistant-chat durable session surface.
+    return "assistant_chat"
 
 
 def _message_record(message: ChatMessageModel) -> ChatMessageRecord:

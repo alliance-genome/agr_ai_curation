@@ -220,12 +220,23 @@ class FeedbackService:
             normalized_chat_kind = str(session_payload.get("chat_kind") or "").strip()
             chat_kind = normalized_chat_kind or None
 
+        if chat_kind == "assistant_chat":
+            return transcript
+
         if chat_kind == "agent_studio":
             logger.warning(
                 "Feedback %s captured an unexpected agent_studio transcript for session %s",
                 feedback_id,
                 session_id,
             )
+            return transcript
+
+        logger.warning(
+            "Feedback %s captured transcript for session %s with unexpected chat_kind=%r",
+            feedback_id,
+            session_id,
+            chat_kind,
+        )
 
         return transcript
 
