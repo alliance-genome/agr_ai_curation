@@ -33,10 +33,10 @@ Notes:
   by default because that template still sets `RERANK_PROVIDER=bedrock_cohere`.
 - `RERANKER_URL` may stay on its default internal service URL unless you are
   pointing `local_transformers` at a different host.
-- The local smoke script expects the `local_transformers` leg to keep
-  `RERANKER_URL=http://reranker-transformers:8080` so it can prove the backend
-  is talking to the local Compose reranker service rather than an external
-  endpoint.
+- The local smoke script validates the backend's effective `RERANKER_URL`.
+  By default that resolves to `http://reranker-transformers:8080`, but the
+  helper also accepts a custom override when `RERANKER_URL` is set for the
+  smoke run or already present in the local backend env file.
 
 ## Environments
 
@@ -77,8 +77,9 @@ This script:
 3. Verifies backend startup with `GET /health`.
 4. Verifies the reranker requirement contract with
    `GET /api/admin/health/connections`.
-5. For `local_transformers`, verifies that the effective reranker URL still
-   resolves to `http://reranker-transformers:8080`.
+5. For `local_transformers`, verifies that the effective reranker URL matches
+   the configured `RERANKER_URL` value. The default remains
+   `http://reranker-transformers:8080`.
 6. Runs a real `rerank_chunks(...)` probe inside the backend container to prove:
    - `bedrock_cohere` reorders the candidate list
    - `local_transformers` reorders the candidate list
@@ -111,7 +112,7 @@ Record each manual test case with:
 | `BEDROCK_COHERE_SERVICE_MODE` | Bedrock service contract | Check `/api/admin/health/connections`. | `reranker.required` is `false`. | Yes |
 | `LOCAL_TRANSFORMERS_HEALTH` | Local reranker startup | Set `RERANK_PROVIDER=local_transformers`, start the `local-reranker` profile, start backend. | `/health` returns 200. | Yes |
 | `LOCAL_TRANSFORMERS_SERVICE_MODE` | Local reranker service contract | Check `/api/admin/health/connections`. | `reranker.required` is `true` and healthy. | Yes |
-| `LOCAL_TRANSFORMERS_TARGET_URL` | Local reranker endpoint pin | Check `/api/admin/health/connections`. | The backend reports `reranker.url` as `http://reranker-transformers:8080`. | Yes |
+| `LOCAL_TRANSFORMERS_TARGET_URL` | Local reranker configured endpoint | Check `/api/admin/health/connections`. | The backend reports `reranker.url` as the configured `RERANKER_URL` value. Default: `http://reranker-transformers:8080`. | Yes |
 | `NONE_HEALTH` | No-rerank startup | Set `RERANK_PROVIDER=none`, keep the local reranker service stopped, start backend. | `/health` returns 200. | Yes |
 | `NONE_SERVICE_MODE` | No-rerank service contract | Check `/api/admin/health/connections`. | `reranker.required` is `false`. | Yes |
 
@@ -128,7 +129,7 @@ Record each manual test case with:
 | ID | Test | Steps | Pass Criteria |
 |---|---|---|---|
 | `C1` | Standalone Bedrock default | Start a standalone install from `env.standalone` without changing rerank vars. | Bedrock-backed reranking remains active without requiring the local reranker service. |
-| `C2` | Standalone local reranker profile | Set `RERANK_PROVIDER=local_transformers`, keep `RERANKER_URL` aligned with Compose, and start with the `local-reranker` profile. | Backend starts cleanly and the local reranker container becomes the required dependency. |
+| `C2` | Standalone local reranker profile | Set `RERANK_PROVIDER=local_transformers`, keep `RERANKER_URL` aligned with the target reranker service, and start with the `local-reranker` profile when using the bundled container. | Backend starts cleanly and the configured reranker endpoint becomes the required dependency. |
 | `C3` | Disabled rerank mode | Set `RERANK_PROVIDER=none` and restart backend. | Retrieval order is preserved and the local reranker service is not needed. |
 
 ---
