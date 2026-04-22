@@ -32,6 +32,23 @@ interface FileDownloadCardProps {
   cardTestId?: string
 }
 
+const FILE_FORMAT_METADATA: Record<string, { label: string; color: string }> = {
+  csv: {
+    label: 'CSV',
+    color: '#4caf50',
+  },
+  tsv: {
+    label: 'TSV',
+    color: '#2196f3',
+  },
+  json: {
+    label: 'JSON',
+    color: '#ff9800',
+  },
+}
+
+const UNKNOWN_FILE_FORMAT_COLOR = '#9e9e9e'
+
 /**
  * Format file size in human-readable units
  */
@@ -42,28 +59,18 @@ function formatFileSize(bytes?: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-/**
- * Get display label for file format
- */
-function getFormatLabel(format: string): string {
-  const labels: Record<string, string> = {
-    csv: 'CSV',
-    tsv: 'TSV',
-    json: 'JSON',
-  }
-  return labels[format.toLowerCase()] || format.toUpperCase()
-}
+function getFormatDisplay(format: string): { label: string; color: string } {
+  const knownFormat = FILE_FORMAT_METADATA[format.toLowerCase()]
 
-/**
- * Get icon color based on file format
- */
-function getFormatColor(format: string): string {
-  const colors: Record<string, string> = {
-    csv: '#4caf50',  // green
-    tsv: '#2196f3',  // blue
-    json: '#ff9800', // orange
+  if (knownFormat) {
+    return knownFormat
   }
-  return colors[format.toLowerCase()] || '#9e9e9e'
+
+  // Shared live-chat/history cards intentionally degrade gracefully for new formats.
+  return {
+    label: format.toUpperCase(),
+    color: UNKNOWN_FILE_FORMAT_COLOR,
+  }
 }
 
 /**
@@ -138,7 +145,7 @@ function FileDownloadCard({
     }
   }
 
-  const formatColor = getFormatColor(file.format)
+  const formatDisplay = getFormatDisplay(file.format)
 
   return (
     <>
@@ -164,10 +171,10 @@ function FileDownloadCard({
                 width: 40,
                 height: 40,
                 borderRadius: 1,
-                backgroundColor: `${formatColor}20`,
+                backgroundColor: `${formatDisplay.color}20`,
               }}
             >
-              <InsertDriveFileIcon sx={{ color: formatColor, fontSize: 24 }} />
+              <InsertDriveFileIcon sx={{ color: formatDisplay.color, fontSize: 24 }} />
             </Box>
 
             {/* File info */}
@@ -192,13 +199,13 @@ function FileDownloadCard({
                     px: 0.75,
                     py: 0.125,
                     borderRadius: 0.5,
-                    backgroundColor: `${formatColor}30`,
-                    color: formatColor,
+                    backgroundColor: `${formatDisplay.color}30`,
+                    color: formatDisplay.color,
                     fontWeight: 600,
                     fontSize: '0.7rem',
                   }}
                 >
-                  {getFormatLabel(file.format)}
+                  {formatDisplay.label}
                 </Typography>
                 {file.size_bytes && (
                   <Typography
