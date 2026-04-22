@@ -103,9 +103,9 @@ export default function ConversationTranscriptView({
         <Alert severity="info">This conversation does not have any stored transcript messages yet.</Alert>
       ) : (
         <Stack spacing={1.5}>
-          {transcriptMessages.map((message) => (
+          {transcriptMessages.map((message, index) => (
             <TranscriptMessage
-              key={message.id ?? `${message.role}-${message.timestamp ?? 'unknown'}`}
+              key={message.id ?? `${message.role}-${message.timestamp ?? 'unknown'}-${index}`}
               message={message}
             />
           ))}

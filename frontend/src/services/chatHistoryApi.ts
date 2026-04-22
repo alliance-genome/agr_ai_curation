@@ -108,7 +108,7 @@ interface ChatHistoryFetchOptions {
   expectJson?: boolean
 }
 
-interface EvidenceCurationSupport {
+export interface EvidenceCurationSupport {
   supported: boolean
   adapterKey: string | null
 }
@@ -225,7 +225,7 @@ function extractFlowStepEvidence(payload: Record<string, unknown> | null): FlowS
   return null
 }
 
-function extractEvidenceCurationSupport(value: unknown): EvidenceCurationSupport | null {
+export function extractEvidenceCurationSupport(value: unknown): EvidenceCurationSupport | null {
   if (!isRecord(value) || typeof value.curation_supported !== 'boolean') {
     return null
   }
@@ -278,7 +278,7 @@ function buildRestorableChatMessageBase(
   }
 }
 
-export function toRestorableChatMessage(
+function toRestorableChatMessage(
   message: ChatHistoryMessage,
   options: RestorableChatMessageOptions = {},
 ): RestorableChatMessage | null {
