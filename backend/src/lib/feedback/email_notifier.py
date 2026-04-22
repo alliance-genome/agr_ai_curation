@@ -96,7 +96,7 @@ class EmailNotifier:
         # Build Langfuse link
         langfuse_link = f"{self.langfuse_host}/sessions/{feedback_report.session_id}"
         transcript_section = format_feedback_transcript_section(
-            transcript=getattr(feedback_report, "conversation_transcript", None),
+            transcript=feedback_report.conversation_transcript,
             feedback_id=str(feedback_report.id),
         )
 

@@ -253,12 +253,12 @@ class FeedbackService:
         if not normalized_curator_id:
             return False
 
-        authenticated_identifiers = {
-            candidate.strip()
-            for candidate in (user_auth_sub, authenticated_curator_email or "")
-            if candidate and candidate.strip()
-        }
-        if not authenticated_identifiers:
-            return False
+        normalized_user_auth_sub = user_auth_sub.strip()
+        if normalized_user_auth_sub and normalized_curator_id == normalized_user_auth_sub:
+            return True
 
-        return normalized_curator_id in authenticated_identifiers
+        normalized_email = (authenticated_curator_email or "").strip()
+        if normalized_email and normalized_curator_id.casefold() == normalized_email.casefold():
+            return True
+
+        return False

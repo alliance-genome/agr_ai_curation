@@ -277,6 +277,11 @@ def test_curator_matching_accepts_authenticated_email_or_sub_only():
         authenticated_curator_email="curator@example.org",
     ) is True
     assert service_module.FeedbackService._curator_matches_authenticated_user(
+        curator_id="Curator@Example.org",
+        user_auth_sub="opaque-auth-sub",
+        authenticated_curator_email="curator@example.org",
+    ) is True
+    assert service_module.FeedbackService._curator_matches_authenticated_user(
         curator_id="auth-sub-1",
         user_auth_sub="auth-sub-1",
         authenticated_curator_email="curator@example.org",

@@ -176,8 +176,8 @@ def _session_record(session: ChatSessionModel) -> ChatSessionRecord:
 
 
 def _resolve_session_chat_kind(session: ChatSessionModel) -> str | None:
-    # Check the mapped class first so older ORM instances without the column can
-    # still fall back to ad-hoc row payloads that materialized chat_kind manually.
+    # The class-level check detects a mapped column; the instance-level check covers
+    # ad-hoc row payloads that set chat_kind outside the ORM mapping.
     if hasattr(type(session), "chat_kind"):
         raw_chat_kind = session.chat_kind
     else:

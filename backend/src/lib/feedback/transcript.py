@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Any
 
 from src.lib.chat_history_repository import ChatHistoryRepository, ChatMessageCursor, ChatMessageRecord
 from src.lib.chat_transcript import FLOW_TRANSCRIPT_ASSISTANT_MESSAGE_KEY
+
+logger = logging.getLogger(__name__)
 
 
 TRANSCRIPT_PAGE_SIZE = 200
@@ -158,8 +161,13 @@ def _visible_transcript_turns(messages: Any) -> list[dict[str, str]]:
         return []
 
     turns: list[dict[str, str]] = []
-    for raw_message in messages:
+    for index, raw_message in enumerate(messages, start=1):
         if not isinstance(raw_message, dict):
+            logger.warning(
+                "Skipping malformed feedback transcript entry at position %s with type %s",
+                index,
+                type(raw_message).__name__,
+            )
             continue
 
         role = str(raw_message.get("role") or "").strip().lower()
@@ -196,7 +204,13 @@ def _display_role(role: str) -> str:
         return "User"
     if role in {"assistant", "flow"}:
         return "Assistant"
-    return role.title() or "Message"
+    if role:
+        return role.title()
+
+    logger.warning(
+        "Feedback transcript contained a message without a role; rendering it as Message"
+    )
+    return "Message"
 
 
 def _truncate_for_notification(content: str) -> str:

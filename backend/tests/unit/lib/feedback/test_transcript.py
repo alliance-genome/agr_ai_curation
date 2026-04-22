@@ -179,3 +179,25 @@ def test_format_feedback_transcript_section_includes_excerpt_for_long_transcript
     assert "... 2 middle turns omitted ..." in section
     assert "7. User: turn 4" in section
     assert "8. Assistant: reply 4" in section
+
+
+def test_format_feedback_transcript_section_logs_malformed_entries_and_blank_roles(caplog):
+    transcript = {
+        "messages": [
+            42,
+            {"role": "", "content": "No role content"},
+            {"role": "user", "content": "Visible user message"},
+        ]
+    }
+
+    with caplog.at_level("WARNING"):
+        section = transcript_module.format_feedback_transcript_section(
+            transcript=transcript,
+            feedback_id="feedback-123",
+        )
+
+    assert section is not None
+    assert "1. Message: No role content" in section
+    assert "2. User: Visible user message" in section
+    assert "Skipping malformed feedback transcript entry at position 1 with type int" in caplog.text
+    assert "Feedback transcript contained a message without a role" in caplog.text

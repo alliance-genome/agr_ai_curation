@@ -133,7 +133,7 @@ class SNSNotifier:
             feedback_text=feedback_report.feedback_text,
             session_id=feedback_report.session_id,
             trace_ids=feedback_report.trace_ids or [],
-            conversation_transcript=getattr(feedback_report, "conversation_transcript", None),
+            conversation_transcript=feedback_report.conversation_transcript,
         )
 
         if not success:
