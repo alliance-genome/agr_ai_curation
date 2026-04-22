@@ -21,10 +21,10 @@ import {
 import { loadDocumentForChat } from '@/features/documents/pdfUploadFlow'
 import { readCurationApiError } from '@/features/curation/services/api'
 import {
+  buildRestorableChatMessages,
   fetchChatHistoryDetail,
   type ChatHistoryActiveDocument,
   type ChatHistoryDetailResponse,
-  type ChatHistoryMessage,
 } from '@/services/chatHistoryApi'
 
 const Root = styled(Box)(() => ({
@@ -83,38 +83,6 @@ interface DurableChatSessionResponse {
   title?: string | null
   active_document_id?: string | null
   active_document?: ChatHistoryActiveDocument | null
-}
-
-interface StoredHomePageMessage {
-  role: 'user' | 'assistant' | 'flow'
-  content: string
-  timestamp: string
-  id?: string
-  traceIds?: string[]
-  turnId?: string
-  type?: 'text'
-}
-
-function isRestorableMessageRole(role: string): role is StoredHomePageMessage['role'] {
-  return role === 'user' || role === 'assistant' || role === 'flow'
-}
-
-function buildStoredMessages(messages: ChatHistoryMessage[]): StoredHomePageMessage[] {
-  return messages.flatMap((message) => {
-    if (!isRestorableMessageRole(message.role)) {
-      return []
-    }
-
-    return [{
-      role: message.role,
-      content: message.content,
-      timestamp: message.created_at,
-      id: message.message_id,
-      traceIds: message.trace_id ? [message.trace_id] : undefined,
-      turnId: message.turn_id ?? undefined,
-      type: 'text',
-    }]
-  })
 }
 
 function HomePage() {
@@ -190,7 +158,7 @@ function HomePage() {
       return
     }
 
-    const storedMessages = buildStoredMessages(detail.messages)
+    const storedMessages = buildRestorableChatMessages(detail.messages)
     if (storedMessages.length === 0) {
       localStorage.removeItem(chatStorageKeys.messages)
       return

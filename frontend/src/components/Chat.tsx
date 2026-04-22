@@ -33,6 +33,10 @@ import {
   clearChatRenderCacheForSession,
   getChatLocalStorageKeys,
 } from '@/lib/chatCacheKeys'
+import {
+  extractEvidenceCurationSupport,
+  type RestorableChatMessage,
+} from '@/services/chatHistoryApi'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 import { useNavigate } from 'react-router-dom'
 
@@ -40,11 +44,6 @@ const UNSUPPORTED_CURATION_REVIEW_MESSAGE =
   "This data type is not supported for curation review yet. Review & Curate currently supports only findings from supported specialized agents in Agent Studio's PDF Extraction category."
 const MIXED_CURATION_PREP_WARNING_MESSAGE =
   "This chat also contains data types that are not supported for curation review yet. Prepare for Curation will include only findings from supported specialized agents in Agent Studio's PDF Extraction category."
-
-interface EvidenceCurationSupport {
-  supported: boolean
-  adapterKey: string | null
-}
 
 type MessageRole = 'user' | 'assistant' | 'flow'
 type TerminalTurnState =
@@ -75,23 +74,11 @@ interface Message {
 }
 
 // Type for serialized messages (timestamp as string)
-interface SerializedMessage {
-  role: MessageRole
-  content: string
-  timestamp: string
-  id?: string
-  traceIds?: string[]
-  turnId?: string
+interface SerializedMessage extends RestorableChatMessage {
   terminalState?: TerminalTurnState | null
   terminalMessage?: string | null
   rescueState?: RescueState
-  type?: 'text' | 'file_download'
-  fileData?: FileInfo
-  flowStepEvidence?: FlowStepEvidenceDetails
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
-  evidenceRecords?: EvidenceRecord[]
-  evidenceCurationSupported?: boolean | null
-  evidenceCurationAdapterKey?: string | null
 }
 
 interface ActiveDocument {
@@ -192,27 +179,6 @@ function humanizeAdapterKey(value: string): string {
   return value
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, (char) => char.toUpperCase())
-}
-
-function extractEvidenceCurationSupport(value: unknown): EvidenceCurationSupport | null {
-  if (!value || typeof value !== 'object') {
-    return null
-  }
-
-  const record = value as Record<string, unknown>
-  if (typeof record.curation_supported !== 'boolean') {
-    return null
-  }
-
-  const adapterKey = typeof record.curation_adapter_key === 'string'
-    && record.curation_adapter_key.trim().length > 0
-    ? record.curation_adapter_key.trim()
-    : null
-
-  return {
-    supported: record.curation_supported,
-    adapterKey,
-  }
 }
 
 function isEvidenceRecord(value: unknown): value is EvidenceRecord {

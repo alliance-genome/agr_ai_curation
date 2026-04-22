@@ -1,5 +1,8 @@
 import { readCurationApiError } from '@/features/curation/services/api'
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
+import type { FileInfo } from '@/components/Chat/FileDownloadCard'
+import type { EvidenceRecord } from '@/features/curation/types'
+import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
 export interface ChatHistoryActiveDocument {
   id: string
@@ -29,6 +32,23 @@ export interface ChatHistoryMessage {
   payload_json?: Record<string, unknown> | unknown[] | null
   trace_id?: string | null
   created_at: string
+}
+
+export type RestorableChatMessageRole = 'user' | 'assistant' | 'flow'
+
+export interface RestorableChatMessage {
+  id?: string
+  role: RestorableChatMessageRole
+  content: string
+  timestamp: string
+  traceIds?: string[]
+  turnId?: string
+  type?: 'text' | 'file_download'
+  fileData?: FileInfo
+  flowStepEvidence?: FlowStepEvidenceDetails
+  evidenceRecords?: EvidenceRecord[]
+  evidenceCurationSupported?: boolean | null
+  evidenceCurationAdapterKey?: string | null
 }
 
 export interface ChatHistoryListRequest {
@@ -86,6 +106,230 @@ export interface BulkDeleteChatSessionsResponse {
 
 interface ChatHistoryFetchOptions {
   expectJson?: boolean
+}
+
+export interface EvidenceCurationSupport {
+  supported: boolean
+  adapterKey: string | null
+}
+
+interface RestorableChatMessageOptions {
+  onUnknownRole?: 'skip' | 'throw'
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function readString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function isEvidenceRecord(value: unknown): value is EvidenceRecord {
+  if (!isRecord(value)) {
+    return false
+  }
+
+  return (
+    typeof value.entity === 'string' &&
+    typeof value.verified_quote === 'string' &&
+    typeof value.page === 'number' &&
+    Number.isFinite(value.page) &&
+    typeof value.section === 'string' &&
+    typeof value.chunk_id === 'string'
+  )
+}
+
+function extractEvidenceRecords(value: unknown): EvidenceRecord[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  return value.filter(isEvidenceRecord)
+}
+
+function extractPayloadRecords(
+  payload: Record<string, unknown> | null,
+): Array<Record<string, unknown>> {
+  if (!payload) {
+    return []
+  }
+
+  const records = [payload]
+  const nestedValues = [payload.details, payload.data, payload.file, payload.fileData]
+
+  nestedValues.forEach((value) => {
+    if (isRecord(value)) {
+      records.push(value)
+    }
+  })
+
+  return records
+}
+
+function extractFileData(payload: Record<string, unknown> | null): FileInfo | null {
+  for (const candidate of extractPayloadRecords(payload)) {
+    const fileId = readString(candidate.file_id)
+    const filename = readString(candidate.filename)
+    const format = readString(candidate.format)
+    const downloadUrl = readString(candidate.download_url)
+
+    if (!fileId || !filename || !format || !downloadUrl) {
+      continue
+    }
+
+    return {
+      file_id: fileId,
+      filename,
+      format,
+      download_url: downloadUrl,
+      size_bytes: readNumber(candidate.size_bytes) ?? undefined,
+      mime_type: readString(candidate.mime_type) ?? undefined,
+      created_at: readString(candidate.created_at) ?? undefined,
+    }
+  }
+
+  return null
+}
+
+function extractFlowStepEvidence(payload: Record<string, unknown> | null): FlowStepEvidenceDetails | null {
+  for (const candidate of extractPayloadRecords(payload)) {
+    const flowId = readString(candidate.flow_id)
+    const flowRunId = readString(candidate.flow_run_id)
+    const step = readNumber(candidate.step)
+    const evidenceCount = readNumber(candidate.evidence_count)
+    const totalEvidenceRecords = readNumber(candidate.total_evidence_records)
+
+    if (!flowId || !flowRunId || step == null || evidenceCount == null || totalEvidenceRecords == null) {
+      continue
+    }
+
+    return {
+      flow_id: flowId,
+      flow_name: readString(candidate.flow_name),
+      flow_run_id: flowRunId,
+      step,
+      tool_name: readString(candidate.tool_name),
+      agent_id: readString(candidate.agent_id),
+      agent_name: readString(candidate.agent_name),
+      evidence_records: extractEvidenceRecords(candidate.evidence_records),
+      evidence_count: evidenceCount,
+      total_evidence_records: totalEvidenceRecords,
+    }
+  }
+
+  return null
+}
+
+export function extractEvidenceCurationSupport(value: unknown): EvidenceCurationSupport | null {
+  if (!isRecord(value) || typeof value.curation_supported !== 'boolean') {
+    return null
+  }
+
+  const adapterKey = typeof value.curation_adapter_key === 'string'
+    && value.curation_adapter_key.trim().length > 0
+    ? value.curation_adapter_key.trim()
+    : null
+
+  return {
+    supported: value.curation_supported,
+    adapterKey,
+  }
+}
+
+function toRestorableRole(
+  message: ChatHistoryMessage,
+  options: RestorableChatMessageOptions,
+): RestorableChatMessageRole | null {
+  if (message.message_type === 'file_download') {
+    return 'assistant'
+  }
+
+  if (message.message_type === 'flow_step_evidence') {
+    return 'flow'
+  }
+
+  if (message.role === 'user' || message.role === 'assistant' || message.role === 'flow') {
+    return message.role
+  }
+
+  if (options.onUnknownRole === 'throw') {
+    throw new Error(`Unknown transcript message role: ${message.role}`)
+  }
+
+  return null
+}
+
+function buildRestorableChatMessageBase(
+  message: ChatHistoryMessage,
+  role: RestorableChatMessageRole,
+): RestorableChatMessage {
+  return {
+    id: message.message_id,
+    role,
+    content: message.content,
+    timestamp: message.created_at,
+    traceIds: message.trace_id ? [message.trace_id] : undefined,
+    turnId: message.turn_id ?? undefined,
+  }
+}
+
+function toRestorableChatMessage(
+  message: ChatHistoryMessage,
+  options: RestorableChatMessageOptions = {},
+): RestorableChatMessage | null {
+  const role = toRestorableRole(message, options)
+  if (!role) {
+    return null
+  }
+
+  const baseMessage = buildRestorableChatMessageBase(message, role)
+  const payload = isRecord(message.payload_json) ? message.payload_json : null
+  const fileData = extractFileData(payload)
+
+  if (message.message_type === 'file_download' && fileData) {
+    return {
+      ...baseMessage,
+      role: 'assistant',
+      type: 'file_download',
+      fileData,
+    }
+  }
+
+  const flowStepEvidence = extractFlowStepEvidence(payload)
+  if ((message.message_type === 'flow_step_evidence' || role === 'flow') && flowStepEvidence) {
+    return {
+      ...baseMessage,
+      role: 'flow',
+      flowStepEvidence,
+      evidenceRecords: flowStepEvidence.evidence_records,
+    }
+  }
+
+  const evidenceRecords = extractEvidenceRecords(payload?.evidence_records)
+  const curationSupport = extractEvidenceCurationSupport(payload)
+
+  return {
+    ...baseMessage,
+    type: 'text',
+    evidenceRecords: evidenceRecords.length > 0 ? evidenceRecords : undefined,
+    evidenceCurationSupported: curationSupport?.supported,
+    evidenceCurationAdapterKey: curationSupport?.adapterKey ?? undefined,
+  }
+}
+
+export function buildRestorableChatMessages(
+  messages: ChatHistoryMessage[],
+  options: RestorableChatMessageOptions = {},
+): RestorableChatMessage[] {
+  return messages.flatMap((message) => {
+    const restorableMessage = toRestorableChatMessage(message, options)
+    return restorableMessage ? [restorableMessage] : []
+  })
 }
 
 function encodeSessionId(sessionId: string): string {
