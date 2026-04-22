@@ -83,7 +83,9 @@ def chat_contract_db():
     from src.lib.chat_state import document_state
     from src.models.sql.chat_message import ChatMessage
     from src.models.sql.chat_session import ChatSession
-    from src.models.sql.database import SessionLocal
+    from src.models.sql.database import Base, SessionLocal
+    from src.models.sql.pdf_document import PDFDocument
+    from src.models.sql.user import User
 
     def _cleanup(db):
         session_ids = db.scalars(
@@ -102,6 +104,15 @@ def chat_contract_db():
 
     db = SessionLocal()
     try:
+        Base.metadata.create_all(
+            bind=db.get_bind(),
+            tables=[
+                User.__table__,
+                PDFDocument.__table__,
+                ChatSession.__table__,
+                ChatMessage.__table__,
+            ],
+        )
         _cleanup(db)
         yield db
         _cleanup(db)
@@ -112,6 +123,8 @@ def chat_contract_db():
 @pytest.fixture
 def seed_chat_contract_session(chat_contract_db):
     """Seed one durable chat session and optional transcript rows."""
+    from sqlalchemy import text
+
     from src.lib.chat_history_repository import (
         ASSISTANT_CHAT_KIND,
         ChatHistoryRepository,
@@ -121,6 +134,7 @@ def seed_chat_contract_session(chat_contract_db):
         *,
         session_id: str,
         user_auth_sub: str = CHAT_CONTRACT_AUTH_SUB,
+        chat_kind: str = ASSISTANT_CHAT_KIND,
         title: str | None = None,
         generated_title: str | None = None,
         active_document_id=None,
@@ -131,7 +145,7 @@ def seed_chat_contract_session(chat_contract_db):
         repository.create_session(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
-            chat_kind=ASSISTANT_CHAT_KIND,
+            chat_kind=chat_kind,
             title=title,
             generated_title=generated_title,
             active_document_id=active_document_id,
@@ -141,7 +155,7 @@ def seed_chat_contract_session(chat_contract_db):
             repository.append_message(
                 session_id=session_id,
                 user_auth_sub=user_auth_sub,
-                chat_kind=ASSISTANT_CHAT_KIND,
+                chat_kind=message.get("chat_kind", chat_kind),
                 role=message["role"],
                 content=message["content"],
                 message_type=message.get("message_type", "text"),
@@ -150,6 +164,38 @@ def seed_chat_contract_session(chat_contract_db):
                 trace_id=message.get("trace_id"),
                 created_at=message.get("created_at"),
             )
+        chat_contract_db.commit()
+        chat_contract_db.execute(
+            text(
+                """
+                UPDATE chat_sessions
+                SET
+                    last_message_at = (
+                        SELECT MAX(chat_messages.created_at)
+                        FROM chat_messages
+                        WHERE chat_messages.session_id = :session_id
+                    ),
+                    search_vector = to_tsvector(
+                        'english',
+                        concat_ws(
+                            ' ',
+                            COALESCE(title, ''),
+                            COALESCE(generated_title, ''),
+                            COALESCE(
+                                (
+                                    SELECT string_agg(chat_messages.content, ' ' ORDER BY chat_messages.created_at)
+                                    FROM chat_messages
+                                    WHERE chat_messages.session_id = :session_id
+                                ),
+                                ''
+                            )
+                        )
+                    )
+                WHERE session_id = :session_id
+                """
+            ),
+            {"session_id": session_id},
+        )
         chat_contract_db.commit()
         return session_id
 

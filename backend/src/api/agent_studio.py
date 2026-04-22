@@ -11,7 +11,9 @@ import logging
 import os
 import re
 import asyncio
+import hashlib
 import uuid
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path as FilePath
 from typing import Any, Dict, List, Literal, Optional
@@ -21,6 +23,7 @@ import boto3
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
@@ -74,17 +77,25 @@ from src.lib.agent_studio.tool_idea_service import (
 )
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
+from src.lib.chat_history_repository import (
+    AGENT_STUDIO_CHAT_KIND,
+    ChatHistoryRepository,
+    ChatHistorySessionNotFoundError,
+    ChatMessageRecord,
+)
 from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.openai_agents import run_agent_streamed
 from src.models.sql.agent import Agent as UnifiedAgent
-from src.models.sql import get_db
+from src.models.sql import SessionLocal, get_db
+from src.models.sql.chat_session import ChatSession as ChatSessionModel
 from src.services.user_service import set_global_user_from_cognito
 
 logger = logging.getLogger(__name__)
 
 PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
 LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR = "ANTHROPIC_OPUS_MODEL"
+AGENT_STUDIO_SEEDED_SESSION_PREFIX = "agent-studio-seed:"
 AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
     # Prefer the canonical config copy when it exists; packaged files are
     # retained as fallbacks for test containers and backend-only packaging.
@@ -2068,6 +2079,326 @@ async def _handle_tool_call(
     }
 
 
+@dataclass(frozen=True)
+class PreparedAgentStudioTurn:
+    """Persisted Agent Studio turn metadata used by the Opus streaming path."""
+
+    session_id: str
+    turn_id: str
+    user_message: str
+    requested_context_session_id: str | None
+    replay_assistant_turn: ChatMessageRecord | None = None
+
+
+def _require_user_sub(user: Dict[str, Any]) -> str:
+    """Return the authenticated user subject or raise 401."""
+
+    user_id = str(user.get("sub") or "").strip()
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User identifier not found in token")
+    return user_id
+
+
+def _normalize_optional_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def _json_safe(value: Any) -> Any:
+    return json.loads(json.dumps(value, default=str))
+
+
+def _extract_latest_user_message(messages: List[ChatMessage]) -> str:
+    if not messages:
+        raise ValueError("messages must include at least one user turn")
+    latest_message = messages[-1]
+    if str(latest_message.role).strip() != "user":
+        raise ValueError("messages must end with a user turn")
+    if not latest_message.content.strip():
+        raise ValueError("messages[-1].content is required")
+    return latest_message.content
+
+
+def _build_agent_studio_turn_id(messages: List[ChatMessage]) -> str:
+    user_turn_count = sum(1 for message in messages if str(message.role).strip() == "user")
+    if user_turn_count < 1:
+        raise ValueError("messages must include at least one user turn")
+
+    digest_source = [
+        {
+            "role": str(message.role),
+            "content": message.content,
+        }
+        for message in messages
+    ]
+    digest = hashlib.sha256(
+        json.dumps(digest_source, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()[:16]
+    return f"opus-turn-{user_turn_count}-{digest}"
+
+
+def _derive_seeded_agent_studio_session_id(requested_session_id: str) -> str:
+    derived_session_id = f"{AGENT_STUDIO_SEEDED_SESSION_PREFIX}{requested_session_id}"
+    if len(derived_session_id) <= 255:
+        return derived_session_id
+
+    hashed_seed = hashlib.sha256(requested_session_id.encode("utf-8")).hexdigest()
+    return f"{AGENT_STUDIO_SEEDED_SESSION_PREFIX}{hashed_seed}"
+
+
+def _get_active_chat_session_row(db: Session, session_id: str) -> ChatSessionModel | None:
+    normalized_session_id = _normalize_optional_text(session_id)
+    if normalized_session_id is None:
+        return None
+
+    return db.scalar(
+        select(ChatSessionModel).where(
+            ChatSessionModel.session_id == normalized_session_id,
+            ChatSessionModel.deleted_at.is_(None),
+        )
+    )
+
+
+def _resolve_agent_studio_session_id(
+    *,
+    db: Session,
+    user_id: str,
+    requested_session_id: str | None,
+) -> str:
+    normalized_requested_session_id = _normalize_optional_text(requested_session_id)
+    if normalized_requested_session_id is None:
+        return str(uuid.uuid4())
+
+    existing_session = _get_active_chat_session_row(db, normalized_requested_session_id)
+    if existing_session is None:
+        return normalized_requested_session_id
+    if existing_session.user_auth_sub != user_id:
+        raise ChatHistorySessionNotFoundError("Chat session not found")
+    if existing_session.chat_kind == AGENT_STUDIO_CHAT_KIND:
+        return normalized_requested_session_id
+
+    derived_session_id = _derive_seeded_agent_studio_session_id(normalized_requested_session_id)
+    derived_session = _get_active_chat_session_row(db, derived_session_id)
+    if derived_session is None:
+        return derived_session_id
+    if derived_session.user_auth_sub != user_id or derived_session.chat_kind != AGENT_STUDIO_CHAT_KIND:
+        raise ChatHistorySessionNotFoundError("Chat session not found")
+    return derived_session_id
+
+
+def _prepare_agent_studio_turn(
+    *,
+    db: Session,
+    user_id: str,
+    request: ChatRequest,
+) -> PreparedAgentStudioTurn:
+    repository = ChatHistoryRepository(db)
+    requested_context_session_id = (
+        _normalize_optional_text(request.context.session_id) if request.context else None
+    )
+    session_id = _resolve_agent_studio_session_id(
+        db=db,
+        user_id=user_id,
+        requested_session_id=requested_context_session_id,
+    )
+    turn_id = _build_agent_studio_turn_id(request.messages)
+    user_message = _extract_latest_user_message(request.messages)
+
+    repository.get_or_create_session(
+        session_id=session_id,
+        user_auth_sub=user_id,
+        chat_kind=AGENT_STUDIO_CHAT_KIND,
+    )
+    user_turn = repository.append_message(
+        session_id=session_id,
+        user_auth_sub=user_id,
+        chat_kind=AGENT_STUDIO_CHAT_KIND,
+        role="user",
+        content=user_message,
+        turn_id=turn_id,
+    )
+    db.commit()
+
+    replay_assistant_turn = None
+    if not user_turn.created:
+        replay_assistant_turn = repository.get_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=turn_id,
+            role="assistant",
+        )
+
+    return PreparedAgentStudioTurn(
+        session_id=session_id,
+        turn_id=turn_id,
+        user_message=user_turn.message.content,
+        requested_context_session_id=requested_context_session_id,
+        replay_assistant_turn=replay_assistant_turn,
+    )
+
+
+def _assistant_tool_calls_from_payload(payload_json: Any) -> List[Dict[str, Any]]:
+    if not isinstance(payload_json, dict):
+        return []
+
+    raw_tool_calls = payload_json.get("tool_calls")
+    if not isinstance(raw_tool_calls, list):
+        return []
+
+    tool_calls: List[Dict[str, Any]] = []
+    for tool_call in raw_tool_calls:
+        if not isinstance(tool_call, dict):
+            continue
+        tool_name = _normalize_optional_text(tool_call.get("tool_name"))
+        if tool_name is None:
+            continue
+        tool_calls.append(dict(tool_call))
+    return tool_calls
+
+
+def _extract_opus_text_content(content_blocks: List[Any]) -> str:
+    text_parts: List[str] = []
+    for block in content_blocks:
+        if getattr(block, "type", None) != "text":
+            continue
+        text_value = getattr(block, "text", None)
+        if isinstance(text_value, str):
+            text_parts.append(text_value)
+    return "".join(text_parts)
+
+
+def _build_agent_studio_assistant_payload(
+    *,
+    tool_calls: List[Dict[str, Any]],
+    requested_context_session_id: str | None,
+    session_id: str,
+) -> Dict[str, Any] | None:
+    payload: Dict[str, Any] = {}
+    if tool_calls:
+        payload["tool_calls"] = tool_calls
+    if (
+        requested_context_session_id is not None
+        and requested_context_session_id != session_id
+    ):
+        payload["seed_session_id"] = requested_context_session_id
+    return payload or None
+
+
+def _persist_completed_agent_studio_turn(
+    *,
+    session_id: str,
+    user_id: str,
+    turn_id: str,
+    assistant_message: str,
+    trace_id: str | None,
+    payload_json: Dict[str, Any] | None,
+) -> ChatMessageRecord:
+    completion_db = SessionLocal()
+    try:
+        repository = ChatHistoryRepository(completion_db)
+        session = repository.get_session(
+            session_id=session_id,
+            user_auth_sub=user_id,
+        )
+        if session is None or session.chat_kind != AGENT_STUDIO_CHAT_KIND:
+            raise ChatHistorySessionNotFoundError("Chat session not found")
+
+        existing_assistant_turn = repository.get_message_by_turn_id(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            turn_id=turn_id,
+            role="assistant",
+        )
+        if existing_assistant_turn is not None:
+            return existing_assistant_turn
+
+        assistant_turn = repository.append_message(
+            session_id=session_id,
+            user_auth_sub=user_id,
+            chat_kind=AGENT_STUDIO_CHAT_KIND,
+            role="assistant",
+            content=assistant_message,
+            turn_id=turn_id,
+            trace_id=trace_id,
+            payload_json=payload_json,
+        )
+        completion_db.commit()
+        return assistant_turn.message
+    except Exception:
+        completion_db.rollback()
+        raise
+    finally:
+        completion_db.close()
+
+
+def _opus_sse_event(
+    *,
+    session_id: str,
+    turn_id: str,
+    event_type: str,
+    **payload: Any,
+) -> str:
+    event_payload: Dict[str, Any] = {
+        "type": event_type,
+        "session_id": session_id,
+        "sessionId": session_id,
+        "turn_id": turn_id,
+    }
+    event_payload.update(payload)
+    return f"data: {json.dumps(event_payload, default=str)}\n\n"
+
+
+def _build_agent_studio_replay_events(
+    *,
+    session_id: str,
+    turn_id: str,
+    assistant_turn: ChatMessageRecord,
+) -> List[str]:
+    replay_events: List[str] = []
+    for tool_call in _assistant_tool_calls_from_payload(assistant_turn.payload_json):
+        replay_events.append(
+            _opus_sse_event(
+                session_id=session_id,
+                turn_id=turn_id,
+                event_type="TOOL_USE",
+                tool_name=tool_call.get("tool_name"),
+                tool_input=tool_call.get("tool_input"),
+            )
+        )
+        if "result" in tool_call:
+            replay_events.append(
+                _opus_sse_event(
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    event_type="TOOL_RESULT",
+                    tool_name=tool_call.get("tool_name"),
+                    result=tool_call.get("result"),
+                )
+            )
+
+    if assistant_turn.content:
+        replay_events.append(
+            _opus_sse_event(
+                session_id=session_id,
+                turn_id=turn_id,
+                event_type="TEXT_DELTA",
+                delta=assistant_turn.content,
+                trace_id=assistant_turn.trace_id,
+            )
+        )
+    replay_events.append(
+        _opus_sse_event(
+            session_id=session_id,
+            turn_id=turn_id,
+            event_type="DONE",
+            trace_id=assistant_turn.trace_id,
+        )
+    )
+    return replay_events
+
+
 @router.post(
     "/chat",
     summary="Chat with configured model",
@@ -2094,7 +2425,57 @@ async def chat_with_opus(
     """Stream a conversation with the configured Anthropic model with tool support."""
     import anthropic
 
-    # Get API key
+    # Get user info for attribution and prompt personalization
+    user_id = _require_user_sub(user)
+    user_email = user.get("email", user.get("sub", "unknown"))
+    user_name = user.get("name", user.get("given_name", None))
+
+    db_user_id: int | None = None
+    try:
+        db = next(get_db())
+        try:
+            try:
+                db_user = set_global_user_from_cognito(db, user)
+                db_user_id = db_user.id
+            except Exception as exc:
+                logger.warning('Could not resolve workflow user context: %s', exc)
+
+            prepared_turn = _prepare_agent_studio_turn(
+                db=db,
+                user_id=user_id,
+                request=request,
+            )
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except ChatHistorySessionNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Chat session not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error('Failed to persist Agent Studio chat request: %s', exc, exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to persist Agent Studio chat request") from exc
+
+    if prepared_turn.replay_assistant_turn is not None:
+        async def replay_stream():
+            for event in _build_agent_studio_replay_events(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                assistant_turn=prepared_turn.replay_assistant_turn,
+            ):
+                yield event
+
+        return StreamingResponse(
+            replay_stream(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
+        )
+
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         logger.error("ANTHROPIC_API_KEY environment variable not set")
@@ -2108,23 +2489,9 @@ async def chat_with_opus(
         logger.error("%s", exc)
         raise HTTPException(status_code=500, detail="Agent Studio chat model is not configured")
 
-    # Get user info for attribution and prompt personalization
-    user_email = user.get("email", user.get("sub", "unknown"))
-    user_name = user.get("name", user.get("given_name", None))
-
-    # Set user context for flow tools (create_flow needs user_id)
-    # Get database user ID from Cognito token
-    try:
-        db = next(get_db())
-        try:
-            db_user = set_global_user_from_cognito(db, user)
-            set_workflow_user_context(user_id=db_user.id, user_email=user_email)
-            logger.debug('Set workflow context for user %s', db_user.id)
-        finally:
-            db.close()
-    except Exception as e:
-        logger.warning('Could not set workflow user context: %s', e)
-        # Continue without user context - create_flow will fail gracefully
+    if db_user_id is not None:
+        set_workflow_user_context(user_id=db_user_id, user_email=user_email)
+        logger.debug('Set workflow context for user %s', db_user_id)
 
     # Set flow context if user is on Flows tab (for get_current_flow tool)
     if request.context and request.context.active_tab == 'flows' and request.context.flow_definition:
@@ -2149,17 +2516,33 @@ async def chat_with_opus(
     )
 
     # Convert messages to Anthropic format
-    messages = [
-        {"role": msg.role, "content": msg.content}
-        for msg in request.messages
-    ]
+    latest_user_index = max(
+        (
+            index
+            for index, message in enumerate(request.messages)
+            if str(message.role).strip() == "user"
+        ),
+        default=None,
+    )
+    messages = []
+    for index, message in enumerate(request.messages):
+        message_content = (
+            prepared_turn.user_message
+            if latest_user_index is not None and index == latest_user_index
+            else message.content
+        )
+        messages.append({"role": message.role, "content": message_content})
 
     async def generate_stream():
         """Generate SSE events from Opus with true streaming and tool support."""
+        trace_id = request.context.trace_id if request.context else None
         try:
             # Use AsyncAnthropic for non-blocking streaming
             client = anthropic.AsyncAnthropic(api_key=api_key)
             current_messages = messages.copy()
+            collected_content: List[Any] = []
+            assistant_text_parts: List[str] = []
+            completed_tool_calls: List[Dict[str, Any]] = []
 
             # Note: User context was set before entering generate_stream().
             # We'll clean it up in the finally block at the end of this generator.
@@ -2182,30 +2565,23 @@ async def chat_with_opus(
             )
 
             while True:
-                # Track tool uses that need processing after stream completes
-                pending_tool_uses = []
                 collected_content = []
 
                 # Stream the response using beta API for effort parameter support
                 async with client.beta.messages.stream(**api_params) as stream:
                     async for event in stream:
-                        if event.type == "content_block_start":
-                            if event.content_block.type == "tool_use":
-                                # Tool use starting - collect it
-                                pending_tool_uses.append({
-                                    "id": event.content_block.id,
-                                    "name": event.content_block.name,
-                                    "input": {},
-                                })
-
-                        elif event.type == "content_block_delta":
+                        if event.type == "content_block_delta":
                             if hasattr(event.delta, "text"):
-                                # Stream text deltas immediately
-                                sse_event = {
-                                    "type": "TEXT_DELTA",
-                                    "delta": event.delta.text,
-                                }
-                                yield f"data: {json.dumps(sse_event)}\n\n"
+                                delta_text = event.delta.text
+                                if delta_text:
+                                    assistant_text_parts.append(delta_text)
+                                    yield _opus_sse_event(
+                                        session_id=prepared_turn.session_id,
+                                        turn_id=prepared_turn.turn_id,
+                                        event_type="TEXT_DELTA",
+                                        delta=delta_text,
+                                        trace_id=trace_id,
+                                    )
                             elif hasattr(event.delta, "partial_json"):
                                 # Tool input is being built - we'll handle complete tool use later
                                 pass
@@ -2221,13 +2597,17 @@ async def chat_with_opus(
 
                     for block in collected_content:
                         if block.type == "tool_use":
+                            safe_tool_input = _json_safe(block.input)
+
                             # Notify frontend about tool use
-                            tool_event = {
-                                "type": "TOOL_USE",
-                                "tool_name": block.name,
-                                "tool_input": block.input,
-                            }
-                            yield f"data: {json.dumps(tool_event)}\n\n"
+                            yield _opus_sse_event(
+                                session_id=prepared_turn.session_id,
+                                turn_id=prepared_turn.turn_id,
+                                event_type="TOOL_USE",
+                                tool_name=block.name,
+                                tool_input=safe_tool_input,
+                                trace_id=trace_id,
+                            )
 
                             # Execute the tool
                             tool_result = await _handle_tool_call(
@@ -2237,20 +2617,31 @@ async def chat_with_opus(
                                 user_email=user_email,
                                 messages=current_messages,
                             )
+                            safe_tool_result = _json_safe(tool_result)
 
                             # Send tool result event to frontend
-                            result_event = {
-                                "type": "TOOL_RESULT",
-                                "tool_name": block.name,
-                                "result": tool_result,
-                            }
-                            yield f"data: {json.dumps(result_event)}\n\n"
+                            yield _opus_sse_event(
+                                session_id=prepared_turn.session_id,
+                                turn_id=prepared_turn.turn_id,
+                                event_type="TOOL_RESULT",
+                                tool_name=block.name,
+                                result=safe_tool_result,
+                                trace_id=trace_id,
+                            )
+
+                            completed_tool_calls.append(
+                                {
+                                    "tool_name": block.name,
+                                    "tool_input": safe_tool_input,
+                                    "result": safe_tool_result,
+                                }
+                            )
 
                             # Collect for API continuation
                             tool_results_for_api.append({
                                 "type": "tool_result",
                                 "tool_use_id": block.id,
-                                "content": json.dumps(tool_result),
+                                "content": json.dumps(tool_result, default=str),
                             })
 
                     # Add assistant message and tool results for next turn
@@ -2269,8 +2660,30 @@ async def chat_with_opus(
                     # Done - either end_turn or max_tokens
                     break
 
-            # Send completion event
-            yield f"data: {json.dumps({'type': 'DONE'})}\n\n"
+            assistant_message = "".join(assistant_text_parts)
+            if not assistant_message:
+                assistant_message = _extract_opus_text_content(collected_content)
+
+            assistant_payload = _build_agent_studio_assistant_payload(
+                tool_calls=completed_tool_calls,
+                requested_context_session_id=prepared_turn.requested_context_session_id,
+                session_id=prepared_turn.session_id,
+            )
+            assistant_turn = _persist_completed_agent_studio_turn(
+                session_id=prepared_turn.session_id,
+                user_id=user_id,
+                turn_id=prepared_turn.turn_id,
+                assistant_message=assistant_message,
+                trace_id=trace_id,
+                payload_json=assistant_payload,
+            )
+
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="DONE",
+                trace_id=assistant_turn.trace_id,
+            )
 
         except anthropic.BadRequestError as e:
             # Check for context overflow specifically
@@ -2285,8 +2698,8 @@ async def chat_with_opus(
 
             if is_context_overflow:
                 logger.warning('Context overflow detected: %s', e)
-                error_event = {
-                    "type": "CONTEXT_OVERFLOW",
+                error_event_type = "CONTEXT_OVERFLOW"
+                error_payload = {
                     "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",
                     "recovery_hint": "Try a lighter-weight tool call: use get_trace_summary instead of full views, get_tool_calls_summary instead of get_tool_calls_page, or use smaller page_size (e.g., 5) with get_tool_calls_page. You can also filter by tool_name to get only specific tool calls.",
                     "suggested_tools": [
@@ -2294,23 +2707,23 @@ async def chat_with_opus(
                         "get_tool_calls_summary - summaries only, no full results",
                         "get_tool_calls_page with page_size=5 - smaller batches",
                         "get_tool_call_detail - single call at a time"
-                    ]
+                    ],
                 }
             else:
-                _alert_task = asyncio.create_task(
+                asyncio.create_task(
                     notify_tool_failure(
                         error_type=type(e).__name__,
                         error_message=str(e),
                         source="infrastructure",
                         specialist_name="agent_studio_opus",
-                        trace_id=request.context.trace_id if request.context else None,
-                        session_id=None,
+                        trace_id=trace_id,
+                        session_id=prepared_turn.session_id,
                         curator_id=user_email,
                     )
                 )
                 logger.error('Anthropic bad request error: %s', e, exc_info=True)
-                error_event = {
-                    "type": "ERROR",
+                error_event_type = "ERROR"
+                error_payload = {
                     "message": (
                         "Agent Studio couldn't complete that request because it ran into a "
                         "problem sending it to the model. Please review your last step and "
@@ -2318,31 +2731,53 @@ async def chat_with_opus(
                     ),
                     "error_source": "anthropic",
                 }
-            yield f"data: {json.dumps(error_event)}\n\n"
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type=error_event_type,
+                trace_id=trace_id,
+                **error_payload,
+            )
 
         except anthropic.APIError as e:
-            _alert_task = asyncio.create_task(
+            asyncio.create_task(
                 notify_tool_failure(
                     error_type=type(e).__name__,
                     error_message=str(e),
                     source="infrastructure",
                     specialist_name="agent_studio_opus",
-                    trace_id=request.context.trace_id if request.context else None,
-                    session_id=None,
+                    trace_id=trace_id,
+                    session_id=prepared_turn.session_id,
                     curator_id=user_email,
                 )
             )
             logger.error('Anthropic API error: %s', e, exc_info=True)
-            error_event = {
-                "type": "ERROR",
-                "message": (
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=trace_id,
+                message=(
                     "The model service had a temporary problem while working on your request. "
                     "Any tool actions started during this turn may already have completed, so "
                     "please check the results before retrying. If needed, try again in a moment."
                 ),
-                "error_source": "anthropic",
-            }
-            yield f"data: {json.dumps(error_event)}\n\n"
+                error_source="anthropic",
+            )
+
+        except ChatHistorySessionNotFoundError:
+            logger.warning(
+                "Agent Studio durable session disappeared before assistant completion save",
+                extra={"session_id": prepared_turn.session_id, "user_id": user_id},
+            )
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type="ERROR",
+                trace_id=trace_id,
+                message="Agent Studio completed the response, but the durable session is no longer available.",
+                error_source="history",
+            )
 
         except Exception as e:
             # Also check for context overflow in general exceptions
@@ -2356,8 +2791,8 @@ async def chat_with_opus(
 
             if is_context_overflow:
                 logger.warning('Context overflow (general exception): %s', e)
-                error_event = {
-                    "type": "CONTEXT_OVERFLOW",
+                error_event_type = "CONTEXT_OVERFLOW"
+                error_payload = {
                     "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",
                     "recovery_hint": "Try a lighter-weight tool call: use get_trace_summary, get_tool_calls_summary, or get_tool_calls_page with a smaller page_size (e.g., 5). You can also use get_tool_call_detail to fetch one specific call at a time.",
                     "suggested_tools": [
@@ -2365,26 +2800,32 @@ async def chat_with_opus(
                         "get_tool_calls_summary - summaries only, no full results",
                         "get_tool_calls_page with page_size=5 - smaller batches",
                         "get_tool_call_detail - single call at a time"
-                    ]
+                    ],
                 }
             else:
-                _alert_task = asyncio.create_task(
+                asyncio.create_task(
                     notify_tool_failure(
                         error_type=type(e).__name__,
                         error_message=str(e),
                         source="infrastructure",
                         specialist_name="agent_studio_opus",
-                        trace_id=request.context.trace_id if request.context else None,
-                        session_id=None,
+                        trace_id=trace_id,
+                        session_id=prepared_turn.session_id,
                         curator_id=user_email,
                     )
                 )
                 logger.error('Chat stream error: %s', e, exc_info=True)
-                error_event = {
-                    "type": "ERROR",
+                error_event_type = "ERROR"
+                error_payload = {
                     "message": str(e),
                 }
-            yield f"data: {json.dumps(error_event)}\n\n"
+            yield _opus_sse_event(
+                session_id=prepared_turn.session_id,
+                turn_id=prepared_turn.turn_id,
+                event_type=error_event_type,
+                trace_id=trace_id,
+                **error_payload,
+            )
 
         finally:
             # Clear user and flow context after streaming completes (success or error)

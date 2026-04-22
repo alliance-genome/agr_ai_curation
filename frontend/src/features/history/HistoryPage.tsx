@@ -16,7 +16,10 @@ import {
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
 
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
-import type { ChatHistorySessionSummary } from '@/services/chatHistoryApi'
+import {
+  ASSISTANT_CHAT_HISTORY_KIND,
+  type ChatHistorySessionSummary,
+} from '@/services/chatHistoryApi'
 
 import ConversationList from './ConversationList'
 import formatConversationTitle from './formatConversationTitle'
@@ -73,6 +76,7 @@ export default function HistoryPage() {
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
 
   const listQuery = useChatHistoryListQuery({
+    chatKind: ASSISTANT_CHAT_HISTORY_KIND,
     limit: HISTORY_PAGE_LIST_LIMIT,
     query: normalizedSearchQuery,
   })

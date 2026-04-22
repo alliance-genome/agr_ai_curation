@@ -167,9 +167,9 @@ class TestProtectedEndpoints:
         Validates FR-025: Chat API endpoints protected.
         """
         chat_endpoints = [
-            ("POST", "/api/chat/session", None),
+            ("POST", "/api/chat/session", {"chat_kind": "assistant_chat"}),
             ("POST", "/api/chat", {"message": "test", "session_id": "test"}),
-            ("GET", "/api/chat/history", None),
+            ("GET", "/api/chat/history?chat_kind=assistant_chat", None),
             ("GET", "/api/chat/history/fake-session", None),
             ("PATCH", "/api/chat/session/fake-session", {"title": "Renamed"}),
             ("DELETE", "/api/chat/session/fake-session", None),
@@ -312,7 +312,7 @@ class TestProtectedEndpoints:
         """
         test_endpoints = [
             "/weaviate/documents",
-            "/api/chat/history",
+            "/api/chat/history?chat_kind=assistant_chat",
             "/api/users/me",
         ]
 
@@ -352,7 +352,7 @@ class TestProtectedEndpoints:
             # Chat endpoints
             ("POST", "/api/chat/session"),
             ("POST", "/api/chat"),
-            ("GET", "/api/chat/history"),
+            ("GET", "/api/chat/history?chat_kind=assistant_chat"),
             ("GET", "/api/chat/history/{session_id}"),
             ("PATCH", "/api/chat/session/{session_id}"),
             ("DELETE", "/api/chat/session/{session_id}"),
@@ -385,6 +385,8 @@ class TestProtectedEndpoints:
                     # Provide minimal valid payload for each endpoint type
                     if "chat" in endpoint and "/api/chat" == endpoint:
                         payload = {"message": "test", "session_id": "test"}
+                    elif endpoint == "/api/chat/session":
+                        payload = {"chat_kind": "assistant_chat"}
                     elif "feedback" in endpoint:
                         payload = {
                             "session_id": "test",

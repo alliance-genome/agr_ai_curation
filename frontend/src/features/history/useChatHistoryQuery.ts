@@ -95,7 +95,7 @@ async function fetchChatHistoryTranscript(
 }
 
 export function useChatHistoryListQuery(
-  request: ChatHistoryListRequest = {},
+  request: ChatHistoryListRequest,
   options: ChatHistoryListQueryOptions = {},
 ) {
   return useQuery({

@@ -66,6 +66,7 @@ describe('useChatHistoryQuery', () => {
   it('stores list query results under chat history list cache keys', async () => {
     const queryClient = createQueryClient()
     const response = {
+      chat_kind: 'assistant_chat',
       total_sessions: 1,
       limit: 20,
       query: null,
@@ -74,6 +75,7 @@ describe('useChatHistoryQuery', () => {
       sessions: [
         {
           session_id: 'session-1',
+          chat_kind: 'assistant_chat',
           title: 'First session',
           created_at: '2026-04-20T00:00:00Z',
           updated_at: '2026-04-20T00:00:00Z',
@@ -87,6 +89,7 @@ describe('useChatHistoryQuery', () => {
     const { result } = renderHook(
       () =>
         useChatHistoryListQuery({
+          chatKind: 'assistant_chat',
           query: ' session search ',
         }),
       {
@@ -102,6 +105,7 @@ describe('useChatHistoryQuery', () => {
     expect(
       queryClient.getQueryData(
         chatCacheKeys.history.list({
+          chatKind: 'assistant_chat',
           query: 'session search',
         }),
       ),
@@ -113,6 +117,7 @@ describe('useChatHistoryQuery', () => {
     const response = {
       session: {
         session_id: 'session-1',
+        chat_kind: 'assistant_chat',
         title: 'Stored session',
         created_at: '2026-04-20T00:00:00Z',
         updated_at: '2026-04-20T00:00:00Z',
@@ -169,6 +174,7 @@ describe('useChatHistoryQuery', () => {
           {
             message_id: 'message-1',
             session_id: 'session-1',
+            chat_kind: 'assistant_chat',
             turn_id: 'turn-1',
             role: 'user',
             message_type: 'text',
@@ -184,6 +190,7 @@ describe('useChatHistoryQuery', () => {
       .mockResolvedValueOnce({
         session: {
           session_id: 'session-1',
+          chat_kind: 'assistant_chat',
           title: 'Stored session',
           created_at: '2026-04-20T00:00:00Z',
           updated_at: '2026-04-20T00:00:00Z',
@@ -194,6 +201,7 @@ describe('useChatHistoryQuery', () => {
           {
             message_id: 'message-2',
             session_id: 'session-1',
+            chat_kind: 'assistant_chat',
             turn_id: 'turn-1',
             role: 'assistant',
             message_type: 'text',
@@ -258,6 +266,7 @@ describe('useChatHistoryQuery', () => {
       return {
         session: {
           session_id: 'session-1',
+          chat_kind: 'assistant_chat',
           title: 'Stored session',
           created_at: '2026-04-20T00:00:00Z',
           updated_at: '2026-04-20T00:00:00Z',
@@ -268,6 +277,7 @@ describe('useChatHistoryQuery', () => {
           {
             message_id: `message-${pageNumber}`,
             session_id: 'session-1',
+            chat_kind: 'assistant_chat',
             turn_id: `turn-${pageNumber}`,
             role: 'assistant',
             message_type: 'text',
@@ -309,6 +319,7 @@ describe('useChatHistoryQuery', () => {
     serviceMocks.renameChatSession.mockResolvedValue({
       session: {
         session_id: 'session-1',
+        chat_kind: 'assistant_chat',
         title: 'Renamed session',
         created_at: '2026-04-20T00:00:00Z',
         updated_at: '2026-04-20T00:00:00Z',

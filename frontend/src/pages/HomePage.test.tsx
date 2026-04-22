@@ -581,6 +581,8 @@ describe('HomePage durable session bootstrap', () => {
       const url = String(input)
 
       if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        expect(init?.body).toBe(JSON.stringify({ chat_kind: 'assistant_chat' }))
         return createSessionPromise
       }
 
@@ -637,6 +639,8 @@ describe('HomePage durable session bootstrap', () => {
       }
 
       if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        expect(init?.body).toBe(JSON.stringify({ chat_kind: 'assistant_chat' }))
         return jsonResponse({
           session_id: 'new-session-1',
           created_at: '2026-04-20T01:00:00Z',
@@ -670,6 +674,8 @@ describe('HomePage durable session bootstrap', () => {
       const url = String(input)
 
       if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        expect(init?.body).toBe(JSON.stringify({ chat_kind: 'assistant_chat' }))
         createSessionAttempts += 1
 
         if (createSessionAttempts === 1) {

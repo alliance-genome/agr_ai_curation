@@ -17,7 +17,10 @@ def _parse_iso8601(value: str | None) -> datetime | None:
 
 
 def test_history_list_requires_authentication(contract_client):
-    response = contract_client.get("/api/chat/history")
+    response = contract_client.get(
+        "/api/chat/history",
+        params={"chat_kind": "assistant_chat"},
+    )
 
     assert response.status_code == 401
     assert "detail" in response.json()
@@ -70,12 +73,13 @@ def test_history_list_returns_live_summary_schema_and_filters_by_user(
     response = contract_client.get(
         "/api/chat/history",
         headers=chat_contract_auth_headers,
-        params={"limit": 5, "query": query},
+        params={"limit": 5, "query": query, "chat_kind": "assistant_chat"},
     )
 
     assert response.status_code == 200, response.text
     payload = response.json()
 
+    assert payload["chat_kind"] == "assistant_chat"
     assert payload["total_sessions"] == 1
     assert payload["limit"] == 5
     assert payload["query"] == query
@@ -86,6 +90,7 @@ def test_history_list_returns_live_summary_schema_and_filters_by_user(
     summary = payload["sessions"][0]
     assert set(summary) >= {
         "session_id",
+        "chat_kind",
         "title",
         "active_document_id",
         "created_at",
@@ -94,11 +99,79 @@ def test_history_list_returns_live_summary_schema_and_filters_by_user(
         "recent_activity_at",
     }
     assert summary["title"] == f"{query} visible"
+    assert summary["chat_kind"] == "assistant_chat"
     assert summary["active_document_id"] is None
     assert _parse_iso8601(summary["created_at"]) == _ts(9, 0)
     assert _parse_iso8601(summary["updated_at"]) is not None
     assert _parse_iso8601(summary["last_message_at"]) == _ts(9, 2)
     assert _parse_iso8601(summary["recent_activity_at"]) == _ts(9, 2)
+
+
+def test_history_list_supports_agent_studio_and_all_filters(
+    contract_client,
+    chat_contract_auth_headers,
+    seed_chat_contract_session,
+):
+    query = f"contract-multi-kind-{uuid4().hex[:8]}"
+    assistant_session_id = f"{query}-assistant"
+    studio_session_id = f"{query}-studio"
+
+    seed_chat_contract_session(
+        session_id=assistant_session_id,
+        chat_kind="assistant_chat",
+        title=f"{query} assistant",
+        created_at=_ts(8, 0),
+        messages=[
+            {
+                "role": "assistant",
+                "content": "Assistant durable history response",
+                "turn_id": "turn-assistant-1",
+                "created_at": _ts(8, 1),
+            },
+        ],
+    )
+    seed_chat_contract_session(
+        session_id=studio_session_id,
+        chat_kind="agent_studio",
+        title=f"{query} studio",
+        created_at=_ts(9, 0),
+        messages=[
+            {
+                "role": "assistant",
+                "content": "Agent Studio durable history response",
+                "turn_id": "turn-studio-1",
+                "created_at": _ts(9, 1),
+            },
+        ],
+    )
+
+    studio_only = contract_client.get(
+        "/api/chat/history",
+        headers=chat_contract_auth_headers,
+        params={"chat_kind": "agent_studio", "query": query},
+    )
+    assert studio_only.status_code == 200, studio_only.text
+    studio_payload = studio_only.json()
+    assert studio_payload["chat_kind"] == "agent_studio"
+    assert [session["session_id"] for session in studio_payload["sessions"]] == [studio_session_id]
+    assert [session["chat_kind"] for session in studio_payload["sessions"]] == ["agent_studio"]
+
+    all_kinds = contract_client.get(
+        "/api/chat/history",
+        headers=chat_contract_auth_headers,
+        params={"chat_kind": "all", "query": query},
+    )
+    assert all_kinds.status_code == 200, all_kinds.text
+    all_payload = all_kinds.json()
+    assert all_payload["chat_kind"] == "all"
+    assert [session["session_id"] for session in all_payload["sessions"]] == [
+        studio_session_id,
+        assistant_session_id,
+    ]
+    assert [session["chat_kind"] for session in all_payload["sessions"]] == [
+        "agent_studio",
+        "assistant_chat",
+    ]
 
 
 def test_history_detail_requires_authentication(contract_client):
@@ -116,6 +189,7 @@ def test_history_detail_returns_transcript_schema_and_message_cursor(
     session_id = f"contract-history-detail-{uuid4().hex[:8]}"
     seed_chat_contract_session(
         session_id=session_id,
+        chat_kind="agent_studio",
         title="Detail session",
         created_at=_ts(11, 0),
         messages=[
@@ -159,6 +233,7 @@ def test_history_detail_returns_transcript_schema_and_message_cursor(
     session = first_payload["session"]
     assert set(session) >= {
         "session_id",
+        "chat_kind",
         "title",
         "active_document_id",
         "created_at",
@@ -167,12 +242,14 @@ def test_history_detail_returns_transcript_schema_and_message_cursor(
         "recent_activity_at",
     }
     assert session["session_id"] == session_id
+    assert session["chat_kind"] == "agent_studio"
     assert session["title"] == "Detail session"
 
     first_message = first_payload["messages"][0]
     assert set(first_message) >= {
         "message_id",
         "session_id",
+        "chat_kind",
         "turn_id",
         "role",
         "message_type",
@@ -183,6 +260,7 @@ def test_history_detail_returns_transcript_schema_and_message_cursor(
     }
     UUID(first_message["message_id"])
     assert first_message["session_id"] == session_id
+    assert first_message["chat_kind"] == "agent_studio"
     assert first_message["turn_id"] == "turn-detail-1"
     assert first_message["role"] == "user"
     assert first_message["message_type"] == "text"
@@ -207,6 +285,7 @@ def test_history_detail_returns_transcript_schema_and_message_cursor(
     second_message = second_payload["messages"][0]
     UUID(second_message["message_id"])
     assert second_message["session_id"] == session_id
+    assert second_message["chat_kind"] == "agent_studio"
     assert second_message["turn_id"] == "turn-detail-1"
     assert second_message["role"] == "assistant"
     assert second_message["message_type"] == "text"
@@ -225,6 +304,7 @@ def test_history_detail_returns_404_for_other_users_session(
     seed_chat_contract_session(
         session_id=hidden_session_id,
         user_auth_sub="contract-chat-other-user",
+        chat_kind="agent_studio",
         title="Other user's session",
         created_at=_ts(12, 0),
         messages=[

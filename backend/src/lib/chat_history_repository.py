@@ -20,6 +20,7 @@ from src.models.sql.user import User as UserModel
 
 ASSISTANT_CHAT_KIND = "assistant_chat"
 AGENT_STUDIO_CHAT_KIND = "agent_studio"
+ALL_CHAT_KINDS_SENTINEL = "all"
 MAX_SESSION_PAGE_SIZE = 100
 MAX_MESSAGE_PAGE_SIZE = 200
 TURN_ID_UNIQUE_CONSTRAINTS = (
@@ -150,6 +151,19 @@ def _normalize_chat_kind(value: str) -> str:
     if normalized not in VALID_CHAT_KINDS:
         raise ValueError(f"chat_kind must be one of {sorted(VALID_CHAT_KINDS)}")
     return normalized
+
+
+def _normalize_list_chat_kinds(value: str) -> tuple[str, ...]:
+    normalized = _normalize_required_text(value, field_name="chat_kind")
+    if normalized == ALL_CHAT_KINDS_SENTINEL:
+        return (
+            ASSISTANT_CHAT_KIND,
+            AGENT_STUDIO_CHAT_KIND,
+        )
+    if normalized not in VALID_CHAT_KINDS:
+        valid_kinds = sorted((*VALID_CHAT_KINDS, ALL_CHAT_KINDS_SENTINEL))
+        raise ValueError(f"chat_kind must be one of {valid_kinds}")
+    return (normalized,)
 
 
 def _validate_page_size(limit: int, *, field_name: str, max_value: int) -> int:
@@ -407,10 +421,10 @@ class ChatHistoryRepository:
             user_auth_sub,
             field_name="user_auth_sub",
         )
-        normalized_chat_kind = _normalize_chat_kind(chat_kind)
+        normalized_chat_kinds = _normalize_list_chat_kinds(chat_kind)
         stmt = select(func.count()).select_from(ChatSessionModel).where(
             ChatSessionModel.user_auth_sub == normalized_user_auth_sub,
-            ChatSessionModel.chat_kind == normalized_chat_kind,
+            ChatSessionModel.chat_kind.in_(normalized_chat_kinds),
             ChatSessionModel.deleted_at.is_(None),
         )
 
@@ -855,7 +869,7 @@ class ChatHistoryRepository:
             user_auth_sub,
             field_name="user_auth_sub",
         )
-        normalized_chat_kind = _normalize_chat_kind(chat_kind)
+        normalized_chat_kinds = _normalize_list_chat_kinds(chat_kind)
         recent_activity = func.coalesce(
             ChatSessionModel.last_message_at,
             ChatSessionModel.created_at,
@@ -863,7 +877,7 @@ class ChatHistoryRepository:
 
         stmt = select(ChatSessionModel).where(
             ChatSessionModel.user_auth_sub == normalized_user_auth_sub,
-            ChatSessionModel.chat_kind == normalized_chat_kind,
+            ChatSessionModel.chat_kind.in_(normalized_chat_kinds),
             ChatSessionModel.deleted_at.is_(None),
         )
 
@@ -966,6 +980,8 @@ class ChatHistoryRepository:
 
 __all__ = [
     "ASSISTANT_CHAT_KIND",
+    "AGENT_STUDIO_CHAT_KIND",
+    "ALL_CHAT_KINDS_SENTINEL",
     "AppendMessageResult",
     "ChatHistoryRepository",
     "ChatHistorySessionNotFoundError",

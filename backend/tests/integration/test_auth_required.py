@@ -219,7 +219,7 @@ class TestAuthenticationRequired:
 
         Validates: FR-001, FR-014 - Chat history requires authentication
         """
-        response = client.get("/api/chat/history")
+        response = client.get("/api/chat/history", params={"chat_kind": "assistant_chat"})
 
         assert response.status_code == 401, \
             f"Expected 401 Unauthorized, got {response.status_code}"
@@ -248,7 +248,7 @@ class TestAuthenticationRequired:
 
     def test_chat_session_create_requires_auth(self, client):
         """Test that POST /api/chat/session returns 401 without auth."""
-        response = client.post("/api/chat/session")
+        response = client.post("/api/chat/session", json={"chat_kind": "assistant_chat"})
 
         assert response.status_code == 401, \
             f"Expected 401 Unauthorized, got {response.status_code}"
@@ -437,9 +437,9 @@ class TestAuthenticationRequired:
         """
         protected_endpoints = [
             ("GET", "/weaviate/documents", None),
-            ("POST", "/api/chat/session", None),
+            ("POST", "/api/chat/session", {"chat_kind": "assistant_chat"}),
             ("POST", "/api/chat", {"message": "test", "session_id": "test"}),
-            ("GET", "/api/chat/history", None),
+            ("GET", "/api/chat/history?chat_kind=assistant_chat", None),
             ("GET", "/api/users/me", None),
             ("POST", "/api/feedback/submit", {
                 "session_id": "test",

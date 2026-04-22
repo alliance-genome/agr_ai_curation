@@ -1029,7 +1029,13 @@ def create_chat_session(
     headers: Dict[str, str],
     checks: list[Dict[str, Any]],
 ) -> str:
-    response = http_request("POST", f"{base_url}/api/chat/session", headers=headers, timeout=20.0)
+    response = http_request(
+        "POST",
+        f"{base_url}/api/chat/session",
+        headers=headers,
+        json_body={"chat_kind": "assistant_chat"},
+        timeout=20.0,
+    )
     require(
         response.status_code == 200 and isinstance(response.json_body, dict),
         f"Unexpected session response: {response.status_code} {response.text}",

@@ -17,7 +17,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
@@ -804,10 +804,17 @@ class SessionResponse(BaseModel):
     active_document: Optional[ActiveDocument] = None
 
 
+class CreateSessionRequest(BaseModel):
+    """Request payload for durable session creation."""
+
+    chat_kind: Literal["assistant_chat", "agent_studio"]
+
+
 class ChatSessionSummaryResponse(BaseModel):
     """Compact session payload for history browsing and mutations."""
 
     session_id: str
+    chat_kind: str
     title: Optional[str] = None
     active_document_id: Optional[str] = None
     created_at: datetime
@@ -819,6 +826,7 @@ class ChatSessionSummaryResponse(BaseModel):
 class ChatSessionListResponse(BaseModel):
     """Paginated durable history response."""
 
+    chat_kind: str
     total_sessions: int
     limit: int
     query: Optional[str] = None
@@ -832,6 +840,7 @@ class ChatSessionMessageResponse(BaseModel):
 
     message_id: str
     session_id: str
+    chat_kind: str
     turn_id: Optional[str] = None
     role: str
     message_type: str
@@ -1341,13 +1350,15 @@ def _backfill_chat_session_generated_title(
         )
         if session is None or session.effective_title is not None:
             return
+        if session.chat_kind is None:
+            return
 
         generated_title = normalize_generated_chat_title(preferred_generated_title)
         if generated_title is None:
             message_page = repository.list_messages(
                 session_id=session_id,
                 user_auth_sub=user_id,
-                chat_kind=ASSISTANT_CHAT_KIND,
+                chat_kind=session.chat_kind,
                 limit=_TITLE_BACKFILL_MESSAGE_LIMIT,
             )
             generated_title = _generate_title_from_messages(message_page.items)
@@ -1357,7 +1368,7 @@ def _backfill_chat_session_generated_title(
         repository.set_generated_title(
             session_id=session_id,
             user_auth_sub=user_id,
-            chat_kind=ASSISTANT_CHAT_KIND,
+            chat_kind=session.chat_kind,
             generated_title=generated_title,
         )
         completion_db.commit()
@@ -1415,6 +1426,7 @@ def _serialize_session(
 
     return ChatSessionSummaryResponse(
         session_id=record.session_id,
+        chat_kind=record.chat_kind or ASSISTANT_CHAT_KIND,
         title=effective_title,
         active_document_id=str(record.active_document_id) if record.active_document_id else None,
         created_at=record.created_at,
@@ -1443,6 +1455,7 @@ def _serialize_message(record: ChatMessageRecord) -> ChatSessionMessageResponse:
     return ChatSessionMessageResponse(
         message_id=str(record.message_id),
         session_id=record.session_id,
+        chat_kind=record.chat_kind,
         turn_id=record.turn_id,
         role=record.role,
         message_type=record.message_type,
@@ -2055,6 +2068,7 @@ async def clear_loaded_document(user: Dict[str, Any] = get_auth_dependency()) ->
 
 @router.post("/chat/session", response_model=SessionResponse)
 async def create_session(
+    request: CreateSessionRequest,
     db: Session = Depends(get_db),
     user: Dict[str, Any] = get_auth_dependency(),
 ):
@@ -2072,7 +2086,7 @@ async def create_session(
         session = repository.create_session(
             session_id=session_id,
             user_auth_sub=user_id,
-            chat_kind=ASSISTANT_CHAT_KIND,
+            chat_kind=request.chat_kind,
             active_document_id=active_document_id,
         )
         db.commit()
@@ -3662,6 +3676,7 @@ async def get_session_history(
 
 @router.get("/chat/history", response_model=ChatSessionListResponse)
 async def get_all_sessions_stats(
+    chat_kind: Literal["assistant_chat", "agent_studio", "all"] = Query(...),
     limit: int = Query(20, ge=1, le=100),
     cursor: Optional[str] = Query(None),
     query: Optional[str] = Query(None),
@@ -3685,7 +3700,7 @@ async def get_all_sessions_stats(
         if normalized_query:
             page = repository.search_sessions(
                 user_auth_sub=user_id,
-                chat_kind=ASSISTANT_CHAT_KIND,
+                chat_kind=chat_kind,
                 query=normalized_query,
                 limit=limit,
                 cursor=decoded_cursor,
@@ -3693,21 +3708,21 @@ async def get_all_sessions_stats(
             )
             total_sessions = repository.count_sessions(
                 user_auth_sub=user_id,
-                chat_kind=ASSISTANT_CHAT_KIND,
+                chat_kind=chat_kind,
                 query=normalized_query,
                 active_document_id=active_document_id,
             )
         else:
             page = repository.list_sessions(
                 user_auth_sub=user_id,
-                chat_kind=ASSISTANT_CHAT_KIND,
+                chat_kind=chat_kind,
                 limit=limit,
                 cursor=decoded_cursor,
                 active_document_id=active_document_id,
             )
             total_sessions = repository.count_sessions(
                 user_auth_sub=user_id,
-                chat_kind=ASSISTANT_CHAT_KIND,
+                chat_kind=chat_kind,
                 active_document_id=active_document_id,
             )
     except ValueError as exc:
@@ -3722,6 +3737,7 @@ async def get_all_sessions_stats(
             )
 
     return ChatSessionListResponse(
+        chat_kind=chat_kind,
         total_sessions=total_sessions,
         limit=limit,
         query=normalized_query,

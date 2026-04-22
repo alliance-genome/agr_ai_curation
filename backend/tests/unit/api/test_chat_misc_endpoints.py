@@ -572,7 +572,9 @@ class FakeChatHistoryRepository:
         sessions = [
             record
             for (owner, _session_id), record in self.sessions.items()
-            if owner == user_auth_sub and record.chat_kind == chat_kind
+            if owner == user_auth_sub and (
+                chat_kind == "all" or record.chat_kind == chat_kind
+            )
         ]
         if active_document_id is not None:
             sessions = [
@@ -806,6 +808,7 @@ async def test_create_session_returns_uuid_and_persists_active_document(monkeypa
     )
 
     payload = await chat.create_session(
+        chat.CreateSessionRequest(chat_kind="assistant_chat"),
         SimpleNamespace(commit=lambda: commits.append("commit"), rollback=lambda: None),
         {"sub": "user-1"},
     )
@@ -843,6 +846,7 @@ async def test_create_session_drops_unavailable_active_document(monkeypatch):
     )
 
     payload = await chat.create_session(
+        chat.CreateSessionRequest(chat_kind="assistant_chat"),
         SimpleNamespace(commit=lambda: commits.append("commit"), rollback=lambda: None),
         {"sub": "user-1"},
     )
@@ -879,6 +883,7 @@ async def test_create_session_drops_invalid_active_document_uuid(monkeypatch):
     )
 
     payload = await chat.create_session(
+        chat.CreateSessionRequest(chat_kind="assistant_chat"),
         SimpleNamespace(commit=lambda: commits.append("commit"), rollback=lambda: None),
         {"sub": "user-1"},
     )
@@ -1807,7 +1812,7 @@ async def test_conversation_endpoints_require_user_sub():
     assert exc_hist.value.status_code == 401
 
     with pytest.raises(HTTPException) as exc_list:
-        await chat.get_all_sessions_stats(db=object(), user={})
+        await chat.get_all_sessions_stats(chat_kind="assistant_chat", db=object(), user={})
     assert exc_list.value.status_code == 401
 
     with pytest.raises(HTTPException) as exc_rename:
@@ -1848,6 +1853,7 @@ async def test_get_all_sessions_stats_returns_filtered_search_results(monkeypatc
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
 
     filtered = await chat.get_all_sessions_stats(
+        chat_kind="assistant_chat",
         limit=10,
         cursor=None,
         query=None,
@@ -1860,6 +1866,7 @@ async def test_get_all_sessions_stats_returns_filtered_search_results(monkeypatc
     assert repository.list_calls[0]["active_document_id"] == document_a
 
     searched = await chat.get_all_sessions_stats(
+        chat_kind="assistant_chat",
         limit=10,
         cursor=None,
         query="Alpha",
@@ -1878,6 +1885,7 @@ async def test_get_all_sessions_stats_returns_empty_state(monkeypatch):
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
 
     payload = await chat.get_all_sessions_stats(
+        chat_kind="assistant_chat",
         limit=20,
         cursor=None,
         query=None,
@@ -1912,6 +1920,7 @@ async def test_get_all_sessions_stats_uses_generated_titles_and_schedules_lazy_b
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
 
     payload = await chat.get_all_sessions_stats(
+        chat_kind="assistant_chat",
         limit=10,
         cursor=None,
         query=None,

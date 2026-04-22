@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  ASSISTANT_CHAT_HISTORY_KIND,
   buildChatHistoryDetailQueryParams,
   buildChatHistoryListQueryParams,
   bulkDeleteChatSessions,
@@ -25,6 +26,7 @@ describe('chatHistoryApi', () => {
 
   it('serializes list filters into chat history query params', () => {
     const params = buildChatHistoryListQueryParams({
+      chatKind: ASSISTANT_CHAT_HISTORY_KIND,
       limit: 50,
       cursor: ' cursor-1 ',
       query: '  TP53 sessions  ',
@@ -32,6 +34,7 @@ describe('chatHistoryApi', () => {
     })
 
     expect(params.get('limit')).toBe('50')
+    expect(params.get('chat_kind')).toBe('assistant_chat')
     expect(params.get('cursor')).toBe('cursor-1')
     expect(params.get('query')).toBe('TP53 sessions')
     expect(params.get('document_id')).toBe('doc-1')
@@ -52,6 +55,7 @@ describe('chatHistoryApi', () => {
     mockFetch.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
+          chat_kind: 'assistant_chat',
           total_sessions: 1,
           limit: 10,
           query: 'TP53',
@@ -69,13 +73,14 @@ describe('chatHistoryApi', () => {
     )
 
     await fetchChatHistoryList({
+      chatKind: ASSISTANT_CHAT_HISTORY_KIND,
       limit: 10,
       cursor: 'cursor-1',
       query: 'TP53',
     })
 
     const [url, init] = mockFetch.mock.calls[0]
-    expect(String(url)).toBe('/api/chat/history?limit=10&cursor=cursor-1&query=TP53')
+    expect(String(url)).toBe('/api/chat/history?chat_kind=assistant_chat&limit=10&cursor=cursor-1&query=TP53')
     expect(init?.credentials).toBe('include')
     expect(init?.headers).toBeInstanceOf(Headers)
   })
