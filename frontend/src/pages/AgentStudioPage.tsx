@@ -10,7 +10,7 @@
  * 2. Triple-dot menu "Open in Agent Studio" with trace context
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Box, Backdrop, CircularProgress, Alert, Typography, Stack, Tabs, Tab } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
@@ -23,7 +23,9 @@ import OpusChat from '@/components/AgentStudio/OpusChat'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
 import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
 import PromptWorkshop from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
+import { useChatHistoryTranscriptQuery } from '@/features/history/useChatHistoryQuery'
 import { cloneAgentToWorkshop, fetchPromptCatalog } from '@/services/agentStudioService'
+import { buildRestorableChatMessages } from '@/services/chatHistoryApi'
 import type {
   PromptCatalog,
   ChatContext,
@@ -119,6 +121,24 @@ type TabValue = 'agents' | 'flows' | 'agent_workshop'
 // localStorage key for tab persistence
 const AGENT_STUDIO_TAB_KEY = 'agent-studio-tab'
 
+function normalizeSearchParam(value: string | null): string | null {
+  return value?.trim() ? value.trim() : null
+}
+
+function buildSeededOpusConversation(messages: Parameters<typeof buildRestorableChatMessages>[0]): ToolIdeaConversationEntry[] {
+  return buildRestorableChatMessages(messages, { onUnknownRole: 'throw' }).flatMap((message) => {
+    if (message.role === 'flow' || !message.content.trim()) {
+      return []
+    }
+
+    return [{
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp ?? null,
+    }]
+  })
+}
+
 function AgentStudioPage() {
   const [searchParams] = useSearchParams()
 
@@ -156,9 +176,40 @@ function AgentStudioPage() {
   const [opusConversation, setOpusConversation] = useState<ToolIdeaConversationEntry[]>([])
   const [workshopPromptUpdateRequest, setWorkshopPromptUpdateRequest] = useState<WorkshopPromptUpdateRequest | null>(null)
   const promptUpdateCounterRef = useRef(0)
+  const seededDurableSessionRef = useRef<string | null>(null)
 
-  // Get trace_id from URL params (when coming from triple-dot menu)
-  const traceId = searchParams.get('trace_id')
+  // ALL-273 treats `session_id` as a one-shot seed from an assistant-chat session.
+  // It is not an Agent Studio resume id; ALL-276 will later distinguish seed vs resume
+  // behavior by chat kind once Agent Studio has its own durable sessions.
+  const seedSessionId = normalizeSearchParam(searchParams.get('session_id'))
+  const traceId = normalizeSearchParam(searchParams.get('trace_id'))
+  const durableTranscriptQuery = useChatHistoryTranscriptQuery(
+    {
+      sessionId: seedSessionId ?? '',
+    },
+    {
+      enabled: Boolean(seedSessionId),
+    },
+  )
+  const seededConversation = useMemo(
+    () => buildSeededOpusConversation(durableTranscriptQuery.data?.messages ?? []),
+    [durableTranscriptQuery.data?.messages],
+  )
+  const durableTranscriptLoading = Boolean(seedSessionId) && durableTranscriptQuery.isLoading
+  const seededDurableSessionId = seedSessionId && seededConversation.length > 0 ? seedSessionId : undefined
+
+  useEffect(() => {
+    if (!seedSessionId || !durableTranscriptQuery.isSuccess) {
+      return
+    }
+
+    if (seededDurableSessionRef.current === seedSessionId) {
+      return
+    }
+
+    seededDurableSessionRef.current = seedSessionId
+    setOpusConversation(seededConversation)
+  }, [seedSessionId, seededConversation, durableTranscriptQuery.isSuccess])
 
   // Load catalog on mount
   // Note: trace context is NOT fetched here - it's injected into Opus's prompt on the backend
@@ -201,6 +252,7 @@ function AgentStudioPage() {
     selected_group_id: effectiveSelectedGroupId,
     view_mode: effectiveViewMode,
     trace_id: traceId || undefined,
+    session_id: seedSessionId || undefined,
     // Flow context (when on flows tab)
     active_tab: activeTab,
     flow_name: activeTab === 'flows' ? flowState?.flowName : undefined,
@@ -348,12 +400,12 @@ Agent ID: ${agentId}`
           zIndex: (theme) => theme.zIndex.drawer + 1,
           backdropFilter: 'blur(4px)',
         }}
-        open={loading}
+        open={loading || durableTranscriptLoading}
       >
         <Stack spacing={2} alignItems="center">
           <CircularProgress color="inherit" size={60} />
           <Typography variant="h6" color="inherit">
-            Initializing...
+            {durableTranscriptLoading ? 'Hydrating durable chat...' : 'Initializing...'}
           </Typography>
         </Stack>
       </Backdrop>
@@ -368,6 +420,8 @@ Agent ID: ${agentId}`
           <PanelSection sx={{ pr: 1 }}>
             <OpusChat
               context={chatContext}
+              initialConversation={seededConversation}
+              seededDurableSessionId={seededDurableSessionId}
               selectedAgent={selectedAgentForChat}
               verifyMessage={verifyMessage}
               onVerifyMessageSent={handleVerifyMessageSent}

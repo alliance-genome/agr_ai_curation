@@ -129,8 +129,30 @@ interface DisplayMessage {
   toolCalls?: ToolCallRecord[]  // Tool calls made during this message
 }
 
+function buildDisplayMessages(
+  conversation: ToolIdeaConversationEntry[] | null | undefined,
+): DisplayMessage[] {
+  return (conversation ?? []).flatMap((message) => {
+    if (!message.content.trim()) {
+      return []
+    }
+
+    return [{
+      role: message.role,
+      content: message.content,
+      timestamp: message.timestamp ?? undefined,
+    }]
+  })
+}
+
+function formatShortSessionId(sessionId: string): string {
+  return sessionId.length > 8 ? `${sessionId.slice(0, 8)}...` : sessionId
+}
+
 interface OpusChatProps {
   context: ChatContext
+  initialConversation?: ToolIdeaConversationEntry[] | null
+  seededDurableSessionId?: string
   selectedAgent?: PromptInfo
   /** Message to auto-send (e.g., from Verify with Claude button) */
   verifyMessage?: string | null
@@ -221,6 +243,8 @@ function buildAutoReviewRequest(proposal: WorkshopPromptUpdateProposal): string 
 
 function OpusChat({
   context,
+  initialConversation,
+  seededDurableSessionId,
   selectedAgent,
   verifyMessage,
   onVerifyMessageSent,
@@ -229,7 +253,7 @@ function OpusChat({
   onConversationSnapshotChange,
   onApplyWorkshopPromptUpdate,
 }: OpusChatProps) {
-  const [messages, setMessages] = useState<DisplayMessage[]>([])
+  const [messages, setMessages] = useState<DisplayMessage[]>(() => buildDisplayMessages(initialConversation))
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [toolCallsExpanded, setToolCallsExpanded] = useState<{ [key: number]: boolean }>({})  // Track expanded state per message
@@ -248,11 +272,33 @@ function OpusChat({
     severity: 'success',
   })
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const appliedSeededConversationRef = useRef<string | null>(
+    seededDurableSessionId && initialConversation?.length ? seededDurableSessionId : null
+  )
 
   // Scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  useEffect(() => {
+    if (!seededDurableSessionId || !initialConversation?.length) {
+      return
+    }
+
+    if (appliedSeededConversationRef.current === seededDurableSessionId) {
+      return
+    }
+
+    setMessages((current) => {
+      if (current.length > 0) {
+        return current
+      }
+
+      return buildDisplayMessages(initialConversation)
+    })
+    appliedSeededConversationRef.current = seededDurableSessionId
+  }, [initialConversation, seededDurableSessionId])
 
   // Publish normalized conversation snapshot for features that need transcript context.
   useEffect(() => {
@@ -816,6 +862,9 @@ OUTPUT:
     activeTab === 'agent_workshop'
       ? context?.agent_workshop?.custom_agent_name || context?.agent_workshop?.template_name || undefined
       : selectedAgent?.agent_name
+  const durableSeedLabel = seededDurableSessionId
+    ? `Loaded from durable chat ${formatShortSessionId(seededDurableSessionId)}`
+    : null
 
   const handleQuickAction = (prompt: string) => {
     setInput(prompt)
@@ -833,6 +882,15 @@ OUTPUT:
             size="small"
             label={selectedChipLabel}
             sx={{ ml: 0.5, maxWidth: 150 }}
+          />
+        )}
+        {durableSeedLabel && (
+          <Chip
+            color="info"
+            size="small"
+            variant="outlined"
+            label={durableSeedLabel}
+            sx={{ ml: 0.5, maxWidth: 280 }}
           />
         )}
         <Box sx={{ ml: 'auto', display: 'flex', gap: 0.5, alignItems: 'center', flexShrink: 0 }}>

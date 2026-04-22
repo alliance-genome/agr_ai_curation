@@ -2748,6 +2748,7 @@ function Chat({
                     ) : null}
                     <MessageActions
                       messageContent={message.content}
+                      sessionId={propSessionId ?? undefined}
                       traceId={message.traceIds && message.traceIds.length > 0 ? message.traceIds[message.traceIds.length - 1] : undefined}
                       onFeedbackClick={() => handleFeedbackClick(message.content, message.traceIds)}
                       reviewAndCurateTarget={message.reviewAndCurateTarget}

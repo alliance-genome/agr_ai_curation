@@ -35,6 +35,65 @@ type ChatHistoryDetailQueryOptions = Omit<
   'queryKey' | 'queryFn'
 >
 
+type ChatHistoryTranscriptQueryOptions = Omit<
+  UseQueryOptions<ChatHistoryDetailResponse, Error, ChatHistoryDetailResponse, QueryKey>,
+  'queryKey' | 'queryFn'
+>
+
+const FULL_TRANSCRIPT_PAGE_SIZE = 200
+const FULL_TRANSCRIPT_MAX_PAGES = 50
+
+async function fetchChatHistoryTranscript(
+  request: ChatHistoryDetailRequest,
+): Promise<ChatHistoryDetailResponse> {
+  const sessionId = request.sessionId.trim()
+  const messageLimit = request.messageLimit ?? FULL_TRANSCRIPT_PAGE_SIZE
+  const messages: ChatHistoryDetailResponse['messages'] = []
+  const seenCursors = new Set<string>()
+
+  let nextCursor = request.messageCursor ?? null
+  let detailResponse: ChatHistoryDetailResponse | null = null
+
+  for (
+    let pageCount = 0;
+    pageCount < FULL_TRANSCRIPT_MAX_PAGES;
+    pageCount += 1
+  ) {
+    const page = await fetchChatHistoryDetail({
+      sessionId,
+      messageLimit,
+      messageCursor: nextCursor,
+    })
+
+    if (!detailResponse) {
+      detailResponse = page
+    }
+
+    messages.push(...page.messages)
+
+    if (!page.next_message_cursor) {
+      return {
+        ...page,
+        session: detailResponse.session,
+        active_document: detailResponse.active_document,
+        messages,
+        next_message_cursor: null,
+      }
+    }
+
+    if (seenCursors.has(page.next_message_cursor)) {
+      throw new Error(`Detected repeated chat history cursor for session ${sessionId}`)
+    }
+
+    seenCursors.add(page.next_message_cursor)
+    nextCursor = page.next_message_cursor
+  }
+
+  throw new Error(
+    `Exceeded ${FULL_TRANSCRIPT_MAX_PAGES} transcript pages for session ${sessionId}`,
+  )
+}
+
 export function useChatHistoryListQuery(
   request: ChatHistoryListRequest = {},
   options: ChatHistoryListQueryOptions = {},
@@ -56,6 +115,22 @@ export function useChatHistoryDetailQuery(
     queryFn: () => fetchChatHistoryDetail(request),
     enabled: request.sessionId.trim().length > 0,
     placeholderData: keepPreviousData,
+    ...options,
+  })
+}
+
+export function useChatHistoryTranscriptQuery(
+  request: ChatHistoryDetailRequest,
+  options: ChatHistoryTranscriptQueryOptions = {},
+) {
+  return useQuery({
+    queryKey: [
+      ...chatCacheKeys.history.detailSession(request.sessionId),
+      'transcript',
+      { messageLimit: request.messageLimit ?? FULL_TRANSCRIPT_PAGE_SIZE },
+    ],
+    queryFn: () => fetchChatHistoryTranscript(request),
+    enabled: request.sessionId.trim().length > 0,
     ...options,
   })
 }

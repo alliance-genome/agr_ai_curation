@@ -274,6 +274,7 @@ export interface ChatContext {
   selected_group_id?: string
   view_mode?: 'base' | 'group' | 'combined'
   trace_id?: string
+  session_id?: string
   // Flow context (when on Flows tab)
   active_tab?: 'agents' | 'flows' | 'agent_workshop'
   flow_name?: string

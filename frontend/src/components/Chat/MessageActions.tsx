@@ -14,6 +14,7 @@ import { copyText } from './copyText'
 
 interface MessageActionsProps {
   messageContent: string
+  sessionId?: string
   traceId?: string
   onFeedbackClick: () => void
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
@@ -35,6 +36,7 @@ const actionButtonSx = {
 
 function MessageActions({
   messageContent,
+  sessionId,
   traceId,
   onFeedbackClick,
   reviewAndCurateTarget,
@@ -77,12 +79,18 @@ function MessageActions({
 
   const handleOpenInAgentStudio = () => {
     handleMenuClose()
-    // Navigate to Agent Studio with trace context
-    if (traceId) {
-      navigate(`/agent-studio?trace_id=${traceId}`)
-    } else {
-      navigate('/agent-studio')
+    const params = new URLSearchParams()
+
+    if (sessionId?.trim()) {
+      params.set('session_id', sessionId.trim())
     }
+
+    if (traceId?.trim()) {
+      params.set('trace_id', traceId.trim())
+    }
+
+    const query = params.toString()
+    navigate(query ? `/agent-studio?${query}` : '/agent-studio')
   }
 
   return (
