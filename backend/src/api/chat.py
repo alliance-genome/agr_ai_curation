@@ -28,7 +28,6 @@ from starlette.background import BackgroundTask
 from sqlalchemy.exc import SQLAlchemyError
 
 from .auth import get_auth_dependency
-from ..lib.chat_config import chat_history_config
 from ..lib.chat_history_repository import (
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
@@ -891,11 +890,6 @@ class ConversationResetResponse(BaseModel):
     message: str
     memory_stats: Optional[Dict[str, Any]]
     session_id: Optional[str] = None
-
-
-class ChatConfigResponse(BaseModel):
-    """Response model for chat configuration."""
-    history: Dict[str, Any]
 
 
 class StopRequest(BaseModel):
@@ -3466,6 +3460,8 @@ async def execute_flow_endpoint(
     )
 
 
+# Durable chat is the only supported public contract now, so the SQL-backed
+# session/history endpoints below replace the removed legacy `/api/chat/config` surface.
 @router.get("/chat/status")
 async def chat_status(user: Dict[str, Any] = get_auth_dependency()):
     """Check the status of the chat service."""
@@ -3794,10 +3790,3 @@ async def bulk_delete_sessions(
         deleted_count=len(deleted_session_ids),
         deleted_session_ids=deleted_session_ids,
     )
-
-
-@router.get("/chat/config", response_model=ChatConfigResponse)
-async def get_chat_configuration(user: Dict[str, Any] = get_auth_dependency()):
-    """Get current chat configuration including history settings."""
-    _require_user_sub(user)
-    return ChatConfigResponse(history=chat_history_config.as_history_dict())
