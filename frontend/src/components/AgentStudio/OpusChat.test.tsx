@@ -63,6 +63,45 @@ describe('OpusChat', () => {
     })
   })
 
+  it('renders a seeded durable transcript and source pill', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    const context: ChatContext = {
+      active_tab: 'agents',
+      session_id: 'assistant-session-12345678',
+      trace_id: 'trace-789',
+    }
+
+    render(
+      <OpusChat
+        context={context}
+        seededDurableSessionId="assistant-session-12345678"
+        initialConversation={[
+          {
+            role: 'user',
+            content: 'Why did the assistant recommend gene X?',
+            timestamp: '2026-04-22T00:00:01Z',
+          },
+          {
+            role: 'assistant',
+            content: 'Because the prior turns emphasized evidence rank and assay quality.',
+            timestamp: '2026-04-22T00:00:02Z',
+          },
+        ]}
+      />
+    )
+
+    expect(screen.getByText('Why did the assistant recommend gene X?')).toBeInTheDocument()
+    expect(
+      screen.getByText('Because the prior turns emphasized evidence rank and assay quality.')
+    ).toBeInTheDocument()
+    expect(screen.getByText('Loaded from durable chat assistan...')).toBeInTheDocument()
+  })
+
   it('applies an approved workshop prompt update proposed by Claude tool call', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,

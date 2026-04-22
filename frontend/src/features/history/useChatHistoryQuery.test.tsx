@@ -9,6 +9,7 @@ import {
   useBulkDeleteChatSessionsMutation,
   useChatHistoryDetailQuery,
   useChatHistoryListQuery,
+  useChatHistoryTranscriptQuery,
   useDeleteChatSessionMutation,
   useRenameChatSessionMutation,
 } from './useChatHistoryQuery'
@@ -149,6 +150,100 @@ describe('useChatHistoryQuery', () => {
         }),
       ),
     ).toEqual(response)
+  })
+
+  it('aggregates paginated transcript pages for durable chat hydration', async () => {
+    const queryClient = createQueryClient()
+
+    serviceMocks.fetchChatHistoryDetail
+      .mockResolvedValueOnce({
+        session: {
+          session_id: 'session-1',
+          title: 'Stored session',
+          created_at: '2026-04-20T00:00:00Z',
+          updated_at: '2026-04-20T00:00:00Z',
+          recent_activity_at: '2026-04-20T00:00:00Z',
+        },
+        active_document: null,
+        messages: [
+          {
+            message_id: 'message-1',
+            session_id: 'session-1',
+            turn_id: 'turn-1',
+            role: 'user',
+            message_type: 'text',
+            content: 'First question',
+            payload_json: null,
+            trace_id: null,
+            created_at: '2026-04-20T00:00:01Z',
+          },
+        ],
+        message_limit: 200,
+        next_message_cursor: 'cursor-2',
+      })
+      .mockResolvedValueOnce({
+        session: {
+          session_id: 'session-1',
+          title: 'Stored session',
+          created_at: '2026-04-20T00:00:00Z',
+          updated_at: '2026-04-20T00:00:00Z',
+          recent_activity_at: '2026-04-20T00:00:00Z',
+        },
+        active_document: null,
+        messages: [
+          {
+            message_id: 'message-2',
+            session_id: 'session-1',
+            turn_id: 'turn-1',
+            role: 'assistant',
+            message_type: 'text',
+            content: 'First answer',
+            payload_json: null,
+            trace_id: 'trace-1',
+            created_at: '2026-04-20T00:00:02Z',
+          },
+        ],
+        message_limit: 200,
+        next_message_cursor: null,
+      })
+
+    const { result } = renderHook(
+      () =>
+        useChatHistoryTranscriptQuery({
+          sessionId: 'session-1',
+        }),
+      {
+        wrapper: createWrapper(queryClient),
+      },
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenCalledTimes(2)
+    expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        sessionId: 'session-1',
+        messageLimit: 200,
+      }),
+    )
+    expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenNthCalledWith(2, {
+      sessionId: 'session-1',
+      messageLimit: 200,
+      messageCursor: 'cursor-2',
+    })
+    expect(result.current.data?.messages).toEqual([
+      expect.objectContaining({
+        message_id: 'message-1',
+        content: 'First question',
+      }),
+      expect.objectContaining({
+        message_id: 'message-2',
+        content: 'First answer',
+      }),
+    ])
   })
 
   it('invalidates list and detail caches after rename mutations', async () => {
