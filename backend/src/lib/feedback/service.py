@@ -64,6 +64,7 @@ class FeedbackService:
         feedback_text: str,
         trace_ids: List[str],
         user_auth_sub: str,
+        authenticated_curator_email: str | None = None,
     ) -> str:
         """Create lightweight feedback payload and save to database.
 
@@ -76,6 +77,8 @@ class FeedbackService:
             feedback_text: Feedback comments from curator
             trace_ids: List of trace IDs to attach (for reference only)
             user_auth_sub: Authenticated token subject used for transcript lookup
+            authenticated_curator_email: Authenticated email used to validate
+                developer-facing curator_id values from the UI
 
         Returns:
             feedback_id: UUID string identifying this feedback report
@@ -86,6 +89,7 @@ class FeedbackService:
             session_id=session_id,
             curator_id=curator_id,
             user_auth_sub=user_auth_sub,
+            authenticated_curator_email=authenticated_curator_email,
         )
 
         report = FeedbackReport(
@@ -166,12 +170,14 @@ class FeedbackService:
         session_id: str,
         curator_id: str,
         user_auth_sub: str,
+        authenticated_curator_email: str | None,
     ) -> dict | None:
         """Capture one durable transcript snapshot when the auth context matches."""
 
         if not self._curator_matches_authenticated_user(
             curator_id=curator_id,
             user_auth_sub=user_auth_sub,
+            authenticated_curator_email=authenticated_curator_email,
         ):
             logger.info(
                 "Skipping durable transcript lookup for feedback %s because "
@@ -241,10 +247,18 @@ class FeedbackService:
         *,
         curator_id: str,
         user_auth_sub: str,
+        authenticated_curator_email: str | None,
     ) -> bool:
         normalized_curator_id = curator_id.strip()
-        normalized_user_auth_sub = user_auth_sub.strip()
-        if not normalized_curator_id or not normalized_user_auth_sub:
+        if not normalized_curator_id:
             return False
 
-        return normalized_curator_id == normalized_user_auth_sub
+        authenticated_identifiers = {
+            candidate.strip()
+            for candidate in (user_auth_sub, authenticated_curator_email or "")
+            if candidate and candidate.strip()
+        }
+        if not authenticated_identifiers:
+            return False
+
+        return normalized_curator_id in authenticated_identifiers

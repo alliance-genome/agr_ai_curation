@@ -162,7 +162,7 @@ def test_feedback_submission_captures_transcript_and_includes_email_excerpt(
         "/api/feedback/submit",
         json={
             "session_id": session_id,
-            "curator_id": curator1_user["sub"],
+            "curator_id": curator1_user["email"],
             "feedback_text": "Transcript should be attached.",
             "trace_ids": ["trace-happy-1"],
         },
@@ -201,8 +201,6 @@ def test_feedback_submission_logs_lookup_failure_but_still_succeeds(
 ):
     session_id = f"{SESSION_PREFIX}lookup-failure"
 
-    def _raise_lookup_error(**_kwargs):
-        raise RuntimeError("lookup failed")
     def _raise_lookup_error(*_args, **_kwargs):
         raise SQLAlchemyError("lookup failed")
 
@@ -216,7 +214,7 @@ def test_feedback_submission_logs_lookup_failure_but_still_succeeds(
         "/api/feedback/submit",
         json={
             "session_id": session_id,
-            "curator_id": curator1_user["sub"],
+            "curator_id": curator1_user["email"],
             "feedback_text": "Lookup failures should not block feedback.",
             "trace_ids": ["trace-failure-1"],
         },
@@ -283,7 +281,7 @@ def test_feedback_submission_skips_transcript_for_cross_user_session(
         "/api/feedback/submit",
         json={
             "session_id": session_id,
-            "curator_id": curator1_user["sub"],
+            "curator_id": curator1_user["email"],
             "feedback_text": "Cross-user transcript access should be blocked.",
             "trace_ids": ["trace-cross-user-1"],
         },
@@ -309,7 +307,7 @@ def test_feedback_submission_skips_transcript_when_session_missing(
         "/api/feedback/submit",
         json={
             "session_id": session_id,
-            "curator_id": curator1_user["sub"],
+            "curator_id": curator1_user["email"],
             "feedback_text": "Missing sessions should not block feedback.",
             "trace_ids": ["trace-missing-1"],
         },

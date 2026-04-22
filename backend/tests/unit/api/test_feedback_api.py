@@ -43,6 +43,7 @@ def test_submit_feedback_success_dispatches_background_processing(monkeypatch):
     assert response.feedback_id == "feedback-123"
     assert calls["dispatched_feedback_id"] == "feedback-123"
     assert calls["create_feedback_kwargs"]["user_auth_sub"] == "user-123"
+    assert calls["create_feedback_kwargs"]["authenticated_curator_email"] is None
 
 
 def test_submit_feedback_returns_400_on_validation_error(monkeypatch):
@@ -232,3 +233,4 @@ def test_submit_feedback_uses_authenticated_sub_for_authorization(monkeypatch):
 
     assert response.status == "success"
     assert calls["kwargs"]["user_auth_sub"] == "user-123"
+    assert calls["kwargs"]["authenticated_curator_email"] == "curator@example.org"

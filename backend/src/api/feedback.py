@@ -123,6 +123,9 @@ def submit_feedback(
             feedback_text=submission.feedback_text,
             trace_ids=submission.trace_ids,
             user_auth_sub=user_auth_sub,
+            authenticated_curator_email=(
+                str(user.get("email")).strip() if user.get("email") is not None else None
+            ),
         )
     except ValueError as exc:
         logger.warning("Validation error in feedback submission: %s", str(exc))
