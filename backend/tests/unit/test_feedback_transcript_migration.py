@@ -28,6 +28,7 @@ class RecordingOp:
         self.created_indexes: list[dict[str, object]] = []
         self.added_columns: list[tuple[str, sa.Column]] = []
         self.dropped_columns: list[tuple[str, str]] = []
+        self.dropped_tables: list[str] = []
         self.executed: list[str] = []
 
     def get_bind(self):
@@ -55,6 +56,9 @@ class RecordingOp:
     def drop_column(self, table_name, column_name):
         self.dropped_columns.append((table_name, column_name))
 
+    def drop_table(self, table_name):
+        self.dropped_tables.append(table_name)
+
     def execute(self, statement):
         self.executed.append(str(statement))
 
@@ -65,15 +69,20 @@ class InspectorStub:
         *,
         table_names: list[str],
         columns_by_table: dict[str, list[dict[str, object]]] | None = None,
+        table_comments: dict[str, str | None] | None = None,
     ) -> None:
         self._table_names = table_names
         self._columns_by_table = columns_by_table or {}
+        self._table_comments = table_comments or {}
 
     def get_table_names(self):
         return list(self._table_names)
 
     def get_columns(self, table_name):
         return list(self._columns_by_table.get(table_name, []))
+
+    def get_table_comment(self, table_name):
+        return {"text": self._table_comments.get(table_name)}
 
 
 class FakeEnumCreator:
@@ -156,6 +165,12 @@ def test_upgrade_recreates_feedback_reports_with_transcript_column_and_audit_tri
         "CREATE TRIGGER audit_feedback_reports_delete" in statement
         for statement in op_recorder.executed
     )
+    assert any(
+        "COMMENT ON TABLE feedback_reports IS "
+        "'agr_ai_curation:e4f5a6b7c8d9:recreated_feedback_reports'"
+        in statement
+        for statement in op_recorder.executed
+    )
     assert op_recorder.added_columns == []
 
 
@@ -188,3 +203,70 @@ def test_upgrade_adds_transcript_column_and_refreshes_feedback_audit_triggers(mo
         "CREATE TRIGGER audit_feedback_reports_insert" in statement
         for statement in op_recorder.executed
     )
+    assert op_recorder.dropped_tables == []
+
+
+def test_downgrade_drops_recreated_feedback_reports_table_when_upgrade_created_it(monkeypatch):
+    module = _load_migration_module(
+        monkeypatch,
+        module_name="feedback_transcript_migration_downgrade_recreated_table_test",
+    )
+    op_recorder = RecordingOp()
+    module.op = op_recorder
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: InspectorStub(
+            table_names=["feedback_reports"],
+            columns_by_table={
+                "feedback_reports": [
+                    {"name": "id"},
+                    {"name": "conversation_transcript"},
+                ]
+            },
+            table_comments={
+                "feedback_reports": (
+                    "agr_ai_curation:e4f5a6b7c8d9:recreated_feedback_reports"
+                )
+            },
+        ),
+    )
+
+    module.downgrade()
+
+    assert op_recorder.dropped_tables == ["feedback_reports"]
+    assert op_recorder.dropped_columns == []
+    assert any(
+        "DROP TYPE IF EXISTS processingstatus" in statement
+        for statement in op_recorder.executed
+    )
+
+
+def test_downgrade_only_drops_transcript_column_for_preexisting_feedback_reports_table(monkeypatch):
+    module = _load_migration_module(
+        monkeypatch,
+        module_name="feedback_transcript_migration_downgrade_drop_column_test",
+    )
+    op_recorder = RecordingOp()
+    module.op = op_recorder
+    monkeypatch.setattr(
+        module.sa,
+        "inspect",
+        lambda _bind: InspectorStub(
+            table_names=["feedback_reports"],
+            columns_by_table={
+                "feedback_reports": [
+                    {"name": "id"},
+                    {"name": "conversation_transcript"},
+                ]
+            },
+            table_comments={"feedback_reports": None},
+        ),
+    )
+
+    module.downgrade()
+
+    assert op_recorder.dropped_columns == [
+        ("feedback_reports", "conversation_transcript")
+    ]
+    assert op_recorder.dropped_tables == []

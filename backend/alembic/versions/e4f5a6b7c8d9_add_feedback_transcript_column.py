@@ -19,6 +19,10 @@ down_revision: Union[str, Sequence[str], None] = "z9a0b1c2d3e4"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
+RECREATED_FEEDBACK_REPORTS_COMMENT = (
+    "agr_ai_curation:e4f5a6b7c8d9:recreated_feedback_reports"
+)
+
 
 def _processing_status_enum(*, create_type: bool) -> postgresql.ENUM:
     return postgresql.ENUM(
@@ -78,6 +82,15 @@ def _create_feedback_reports_table() -> None:
         ["processing_status"],
         unique=False,
     )
+    op.execute(
+        "COMMENT ON TABLE feedback_reports IS "
+        f"'{RECREATED_FEEDBACK_REPORTS_COMMENT}'"
+    )
+
+
+def _feedback_reports_was_recreated(inspector: sa.Inspector) -> bool:
+    table_comment = inspector.get_table_comment("feedback_reports").get("text")
+    return table_comment == RECREATED_FEEDBACK_REPORTS_COMMENT
 
 
 def _recreate_feedback_reports_audit_triggers() -> None:
@@ -139,6 +152,11 @@ def downgrade() -> None:
 
     inspector = sa.inspect(op.get_bind())
     if "feedback_reports" not in inspector.get_table_names():
+        return
+
+    if _feedback_reports_was_recreated(inspector):
+        op.drop_table("feedback_reports")
+        op.execute("DROP TYPE IF EXISTS processingstatus")
         return
 
     existing_columns = {
