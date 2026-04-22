@@ -124,6 +124,13 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
     assert backend_env["MAINTENANCE_MESSAGE_FILE"] == (
         "${MAINTENANCE_MESSAGE_FILE:-/runtime/config/maintenance_message.txt}"
     )
+    assert backend_env["RERANK_PROVIDER"] == "${RERANK_PROVIDER:-none}"
+    assert backend_env["BEDROCK_RERANK_MODEL_ARN"] == (
+        "${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}"
+    )
+    assert backend_env["RERANKER_URL"] == (
+        "${RERANKER_URL:-http://reranker-transformers:8080}"
+    )
 
     assert langfuse_worker_env["DATABASE_URL"] == (
         "${LANGFUSE_LOCAL_DATABASE_URL:?set in standalone env}"

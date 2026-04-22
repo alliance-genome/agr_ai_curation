@@ -306,9 +306,11 @@ test_core_config_generates_env_and_backups() {
 test_core_config_honors_local_transformers_override() {
   local temp_home
   local output_path
+  local compose_handoff_output
   temp_home="$(mktemp -d)"
   output_path="$(mktemp)"
-  trap 'rm -rf "$temp_home" "$output_path"' RETURN
+  compose_handoff_output="$(mktemp)"
+  trap 'rm -rf "$temp_home" "$output_path" "$compose_handoff_output"' RETURN
 
   printf '\nsk-openai-local\n\n\n\n' | \
     HOME="$temp_home" \
@@ -321,6 +323,43 @@ test_core_config_honors_local_transformers_override() {
   assert_contains '^RERANKER_URL=http://custom-reranker:9090$' "$env_file"
   assert_contains '^BEDROCK_RERANK_MODEL_ARN=arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0$' "$env_file"
   assert_contains 'memory-intensive local model' "$output_path"
+
+  python3 - "$repo_root" "$env_file" >"$compose_handoff_output" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+import yaml
+
+
+repo_root = Path(sys.argv[1])
+env_path = Path(sys.argv[2])
+
+env_values = {}
+for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#") or "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    env_values[key] = value
+
+compose = yaml.safe_load((repo_root / "docker-compose.production.yml").read_text(encoding="utf-8"))
+backend_env = compose["services"]["backend"]["environment"]
+reranker_expr = backend_env["RERANKER_URL"]
+match = re.fullmatch(r"\$\{([^:}]+):-([^}]*)\}", reranker_expr)
+if match is None:
+    raise AssertionError(f"Unexpected compose interpolation: {reranker_expr}")
+
+env_key, fallback_value = match.groups()
+resolved_value = env_values.get(env_key, fallback_value)
+print(f"compose_expr={reranker_expr}")
+print(f"env_value={env_values['RERANKER_URL']}")
+print(f"resolved_backend_value={resolved_value}")
+PY
+
+  assert_contains '^compose_expr=\${RERANKER_URL:-http://reranker-transformers:8080}$' "$compose_handoff_output"
+  assert_contains '^env_value=http://custom-reranker:9090$' "$compose_handoff_output"
+  assert_contains '^resolved_backend_value=http://custom-reranker:9090$' "$compose_handoff_output"
 }
 
 test_core_config_seeds_alliance_profile_when_selected() {
