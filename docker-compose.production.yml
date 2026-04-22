@@ -209,6 +209,7 @@ services:
       AWS_PROFILE: "${AWS_PROFILE:-}"
       RERANK_PROVIDER: "${RERANK_PROVIDER:-none}"
       BEDROCK_RERANK_MODEL_ARN: "${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}"
+      RERANKER_URL: "${RERANKER_URL:-http://reranker-transformers:8080}"
       FEEDBACK_USE_SNS: "${FEEDBACK_USE_SNS:-false}"
       TOOL_FAILURE_ALERTS_ENABLED: "${TOOL_FAILURE_ALERTS_ENABLED:-false}"
       AUTH_PROVIDER: "${AUTH_PROVIDER:-oidc}"
