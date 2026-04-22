@@ -19,6 +19,7 @@ import {
   clearChatRenderCacheForSession,
   getChatRenderCacheKeys,
 } from '../lib/chatCacheKeys'
+import { getStreamEventSessionId } from '../lib/streamEventSession'
 
 /**
  * Props for the AuditPanel component
@@ -295,8 +296,10 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
 
       // Parse SSE event to AuditEvent
       try {
+        const eventSessionId = getStreamEventSessionId(sseEvent)
+
         // Ensure event has required fields for parseSSEEvent
-        if (!sseEvent.timestamp || !sseEvent.sessionId) {
+        if (!sseEvent.timestamp || !eventSessionId) {
           console.warn('🔍 [AUDIT] Skipping event missing required fields:', sseEvent)
           return
         }
@@ -304,7 +307,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
         const auditEvent = parseSSEEvent({
           type: sseEvent.type as AuditEventType,
           timestamp: sseEvent.timestamp,
-          sessionId: sseEvent.sessionId,
+          sessionId: eventSessionId,
           details: sseEvent.details || {}
         })
 

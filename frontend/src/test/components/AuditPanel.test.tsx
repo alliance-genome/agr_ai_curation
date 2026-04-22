@@ -161,6 +161,26 @@ describe('AuditPanel - Event Display (T018)', () => {
     }
   })
 
+  it('renders snake_case durable SSE events', async () => {
+    render(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[
+          {
+            type: 'SUPERVISOR_START',
+            timestamp: '2025-10-23T10:30:00.000Z',
+            session_id: 'session123',
+            details: { message: 'Processing snake_case event' }
+          }
+        ]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('[SUPERVISOR] Processing snake_case event')).toBeInTheDocument()
+    })
+  })
+
   it('renders FLOW_STEP_EVIDENCE SSE events in the audit list', async () => {
     render(
       <AuditPanel
