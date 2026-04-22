@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timedelta, timezone
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import delete
+from sqlalchemy.exc import SQLAlchemyError
+from fastapi.testclient import TestClient
 
 # Import database first to avoid the package init circular path when importing feedback models.
 import src.models.sql.database  # noqa: F401
@@ -15,6 +17,16 @@ from src.models.sql.database import SessionLocal
 
 
 SESSION_PREFIX = "feedback-test-"
+TRANSCRIPT_MESSAGES = [
+    ("user", "First question"),
+    ("assistant", "First answer"),
+    ("user", "Second question"),
+    ("assistant", "Second answer"),
+    ("user", "Third question"),
+    ("assistant", "Third answer"),
+    ("user", "Fourth question"),
+    ("assistant", "Fourth answer"),
+]
 
 
 def _ensure_feedback_report_table_exists(db) -> None:
@@ -22,11 +34,20 @@ def _ensure_feedback_report_table_exists(db) -> None:
 
 
 def _cleanup_feedback_state() -> None:
+    from src.models.sql.chat_message import ChatMessage
+    from src.models.sql.chat_session import ChatSession
+
     db = SessionLocal()
     try:
         _ensure_feedback_report_table_exists(db)
         db.execute(
             delete(FeedbackReport).where(FeedbackReport.session_id.like(f"{SESSION_PREFIX}%"))
+        )
+        db.execute(
+            delete(ChatMessage).where(ChatMessage.session_id.like(f"{SESSION_PREFIX}%"))
+        )
+        db.execute(
+            delete(ChatSession).where(ChatSession.session_id.like(f"{SESSION_PREFIX}%"))
         )
         db.commit()
     finally:
@@ -44,28 +65,31 @@ def _load_feedback_report(feedback_id: str) -> FeedbackReport:
         db.close()
 
 
-def _sample_transcript(session_id: str, *, chat_kind: str | None = None) -> dict:
-    session_payload = {
-        "session_id": session_id,
-        "title": "Saved title",
-    }
-    if chat_kind is not None:
-        session_payload["chat_kind"] = chat_kind
+def _seed_durable_chat_session(session_id: str, *, user_auth_sub: str) -> None:
+    from src.lib.chat_history_repository import ChatHistoryRepository
 
-    return {
-        "message_count": 8,
-        "session": session_payload,
-        "messages": [
-            {"role": "user", "content": "First question"},
-            {"role": "assistant", "content": "First answer"},
-            {"role": "user", "content": "Second question"},
-            {"role": "assistant", "content": "Second answer"},
-            {"role": "user", "content": "Third question"},
-            {"role": "assistant", "content": "Third answer"},
-            {"role": "user", "content": "Fourth question"},
-            {"role": "assistant", "content": "Fourth answer"},
-        ],
-    }
+    db = SessionLocal()
+    created_at = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+    try:
+        repository = ChatHistoryRepository(db)
+        repository.create_session(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            title="Saved title",
+            created_at=created_at,
+        )
+        for index, (role, content) in enumerate(TRANSCRIPT_MESSAGES, start=1):
+            repository.append_message(
+                session_id=session_id,
+                user_auth_sub=user_auth_sub,
+                role=role,
+                content=content,
+                turn_id=f"{session_id}-turn-{index}",
+                created_at=created_at + timedelta(minutes=index),
+            )
+        db.commit()
+    finally:
+        db.close()
 
 
 @pytest.fixture(autouse=True)
@@ -118,13 +142,9 @@ def test_feedback_submission_captures_transcript_and_includes_email_excerpt(
     client,
     curator1_user,
     captured_email_messages,
-    monkeypatch,
 ):
     session_id = f"{SESSION_PREFIX}happy-path"
-    monkeypatch.setattr(
-        "src.lib.feedback.service.capture_feedback_conversation_transcript",
-        lambda **_kwargs: _sample_transcript(session_id),
-    )
+    _seed_durable_chat_session(session_id, user_auth_sub=curator1_user["sub"])
 
     response = client.post(
         "/api/feedback/submit",
@@ -141,7 +161,15 @@ def test_feedback_submission_captures_transcript_and_includes_email_excerpt(
     report = _load_feedback_report(payload["feedback_id"])
 
     assert report.processing_status == ProcessingStatus.COMPLETED
-    assert report.conversation_transcript == _sample_transcript(session_id)
+    assert report.conversation_transcript is not None
+    assert report.conversation_transcript["message_count"] == len(TRANSCRIPT_MESSAGES)
+    assert report.conversation_transcript["session"]["session_id"] == session_id
+    assert report.conversation_transcript["session"]["title"] == "Saved title"
+    assert report.conversation_transcript["session"]["effective_title"] == "Saved title"
+    assert [
+        (message["role"], message["content"])
+        for message in report.conversation_transcript["messages"]
+    ] == TRANSCRIPT_MESSAGES
 
     assert len(captured_email_messages) == 1
     body = str(captured_email_messages[0].get_payload())
@@ -163,9 +191,12 @@ def test_feedback_submission_logs_lookup_failure_but_still_succeeds(
 
     def _raise_lookup_error(**_kwargs):
         raise RuntimeError("lookup failed")
+    def _raise_lookup_error(*_args, **_kwargs):
+        raise SQLAlchemyError("lookup failed")
 
+    _seed_durable_chat_session(session_id, user_auth_sub=curator1_user["sub"])
     monkeypatch.setattr(
-        "src.lib.feedback.service.capture_feedback_conversation_transcript",
+        "src.lib.chat_history_repository.ChatHistoryRepository.get_session_detail",
         _raise_lookup_error,
     )
 
@@ -190,19 +221,22 @@ def test_feedback_submission_logs_lookup_failure_but_still_succeeds(
 
 def test_feedback_submission_skips_transcript_when_curator_id_does_not_match_auth_user(
     client,
+    curator1_user,
     captured_email_messages,
     monkeypatch,
 ):
     session_id = f"{SESSION_PREFIX}mismatched-curator"
-    mocked_capture = []
+    _seed_durable_chat_session(
+        session_id,
+        user_auth_sub=curator1_user["sub"],
+    )
 
-    def _capture(**_kwargs):
-        mocked_capture.append("called")
-        return _sample_transcript(session_id)
+    def _unexpected_lookup(*_args, **_kwargs):
+        raise AssertionError("curator mismatch should skip transcript lookup")
 
     monkeypatch.setattr(
-        "src.lib.feedback.service.capture_feedback_conversation_transcript",
-        _capture,
+        "src.lib.chat_history_repository.ChatHistoryRepository.get_session_detail",
+        _unexpected_lookup,
     )
 
     response = client.post(
@@ -220,7 +254,6 @@ def test_feedback_submission_skips_transcript_when_curator_id_does_not_match_aut
 
     assert report.processing_status == ProcessingStatus.COMPLETED
     assert report.conversation_transcript is None
-    assert mocked_capture == []
     assert len(captured_email_messages) == 1
     assert "Conversation transcript" not in str(captured_email_messages[0].get_payload())
 
@@ -228,14 +261,11 @@ def test_feedback_submission_skips_transcript_when_curator_id_does_not_match_aut
 def test_feedback_submission_skips_transcript_for_cross_user_session(
     client,
     curator1_user,
+    curator2_user,
     captured_email_messages,
-    monkeypatch,
 ):
     session_id = f"{SESSION_PREFIX}cross-user"
-    monkeypatch.setattr(
-        "src.lib.feedback.service.capture_feedback_conversation_transcript",
-        lambda **_kwargs: None,
-    )
+    _seed_durable_chat_session(session_id, user_auth_sub=curator2_user["sub"])
 
     response = client.post(
         "/api/feedback/submit",
