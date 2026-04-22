@@ -124,6 +124,7 @@ def test_send_feedback_notification_raises_when_send_fails(monkeypatch):
         feedback_text="Looks good",
         session_id="session-1",
         trace_ids=None,
+        conversation_transcript=None,
     )
 
     with pytest.raises(Exception, match="Failed to send SNS notification"):
