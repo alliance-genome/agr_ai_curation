@@ -33,6 +33,7 @@ import {
   clearChatRenderCacheForSession,
   getChatLocalStorageKeys,
 } from '@/lib/chatCacheKeys'
+import type { RestorableChatMessage } from '@/services/chatHistoryApi'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 import { useNavigate } from 'react-router-dom'
 
@@ -75,23 +76,11 @@ interface Message {
 }
 
 // Type for serialized messages (timestamp as string)
-interface SerializedMessage {
-  role: MessageRole
-  content: string
-  timestamp: string
-  id?: string
-  traceIds?: string[]
-  turnId?: string
+interface SerializedMessage extends RestorableChatMessage {
   terminalState?: TerminalTurnState | null
   terminalMessage?: string | null
   rescueState?: RescueState
-  type?: 'text' | 'file_download'
-  fileData?: FileInfo
-  flowStepEvidence?: FlowStepEvidenceDetails
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null
-  evidenceRecords?: EvidenceRecord[]
-  evidenceCurationSupported?: boolean | null
-  evidenceCurationAdapterKey?: string | null
 }
 
 interface ActiveDocument {

@@ -232,6 +232,155 @@ describe('HomePage durable session bootstrap', () => {
     window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
   })
 
+  it('preserves non-text durable transcript rows when restoring a requested session', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === `/api/chat/history/session-rich?message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`) {
+        return jsonResponse({
+          session: {
+            session_id: 'session-rich',
+            created_at: '2026-04-20T00:00:00Z',
+            updated_at: '2026-04-20T00:05:00Z',
+            recent_activity_at: '2026-04-20T00:05:00Z',
+          },
+          active_document: null,
+          messages: [
+            {
+              message_id: 'download-1',
+              session_id: 'session-rich',
+              turn_id: 'turn-1',
+              role: 'flow',
+              message_type: 'file_download',
+              content: 'Generated file: export.tsv',
+              payload_json: {
+                type: 'FILE_READY',
+                details: {
+                  file_id: 'file-1',
+                  filename: 'export.tsv',
+                  format: 'tsv',
+                  download_url: '/api/files/file-1/download',
+                  size_bytes: 128,
+                  mime_type: 'text/tab-separated-values',
+                  created_at: '2026-04-20T00:02:00Z',
+                },
+              },
+              trace_id: 'trace-file',
+              created_at: '2026-04-20T00:02:00Z',
+            },
+            {
+              message_id: 'flow-1',
+              session_id: 'session-rich',
+              turn_id: 'turn-1',
+              role: 'flow',
+              message_type: 'flow_step_evidence',
+              content: 'Flow step 2 captured 1 evidence quote.',
+              payload_json: {
+                flow_id: 'flow-1',
+                flow_name: 'Evidence flow',
+                flow_run_id: 'run-1',
+                step: 2,
+                tool_name: 'extract_evidence',
+                agent_id: 'agent-1',
+                agent_name: 'Evidence Agent',
+                evidence_records: [
+                  {
+                    entity: 'TP53',
+                    verified_quote: 'TP53 expression was elevated.',
+                    page: 4,
+                    section: 'Results',
+                    chunk_id: 'chunk-1',
+                  },
+                ],
+                evidence_count: 1,
+                total_evidence_records: 1,
+              },
+              trace_id: 'trace-flow',
+              created_at: '2026-04-20T00:03:00Z',
+            },
+          ],
+          message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+          next_message_cursor: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage('/?session=session-rich')
+
+    expect(await screen.findByText('session-rich')).toBeInTheDocument()
+
+    const storedMessages = JSON.parse(localStorage.getItem(chatStorageKeys.messages) ?? '{}')
+    expect(storedMessages).toEqual({
+      session_id: 'session-rich',
+      messages: [
+        {
+          id: 'download-1',
+          role: 'assistant',
+          content: 'Generated file: export.tsv',
+          timestamp: '2026-04-20T00:02:00Z',
+          traceIds: ['trace-file'],
+          turnId: 'turn-1',
+          type: 'file_download',
+          fileData: {
+            file_id: 'file-1',
+            filename: 'export.tsv',
+            format: 'tsv',
+            download_url: '/api/files/file-1/download',
+            size_bytes: 128,
+            mime_type: 'text/tab-separated-values',
+            created_at: '2026-04-20T00:02:00Z',
+          },
+        },
+        {
+          id: 'flow-1',
+          role: 'flow',
+          content: 'Flow step 2 captured 1 evidence quote.',
+          timestamp: '2026-04-20T00:03:00Z',
+          traceIds: ['trace-flow'],
+          turnId: 'turn-1',
+          flowStepEvidence: {
+            flow_id: 'flow-1',
+            flow_name: 'Evidence flow',
+            flow_run_id: 'run-1',
+            step: 2,
+            tool_name: 'extract_evidence',
+            agent_id: 'agent-1',
+            agent_name: 'Evidence Agent',
+            evidence_records: [
+              {
+                entity: 'TP53',
+                verified_quote: 'TP53 expression was elevated.',
+                page: 4,
+                section: 'Results',
+                chunk_id: 'chunk-1',
+              },
+            ],
+            evidence_count: 1,
+            total_evidence_records: 1,
+          },
+          evidenceRecords: [
+            {
+              entity: 'TP53',
+              verified_quote: 'TP53 expression was elevated.',
+              page: 4,
+              section: 'Results',
+              chunk_id: 'chunk-1',
+            },
+          ],
+        },
+      ],
+    })
+  })
+
   it('waits for user.uid before hydrating a requested durable session', async () => {
     authState = { user: null }
 
