@@ -3459,9 +3459,6 @@ async def execute_flow_endpoint(
         }
     )
 
-
-# Durable chat is the only supported public contract now, so the SQL-backed
-# session/history endpoints below replace the removed legacy `/api/chat/config` surface.
 @router.get("/chat/status")
 async def chat_status(user: Dict[str, Any] = get_auth_dependency()):
     """Check the status of the chat service."""
