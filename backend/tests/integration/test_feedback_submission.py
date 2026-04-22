@@ -33,6 +33,14 @@ def _ensure_feedback_report_table_exists(db) -> None:
     FeedbackReport.__table__.create(bind=db.get_bind(), checkfirst=True)
 
 
+def _ensure_chat_history_tables_exist(db) -> None:
+    from src.models.sql.chat_message import ChatMessage
+    from src.models.sql.chat_session import ChatSession
+
+    ChatSession.__table__.create(bind=db.get_bind(), checkfirst=True)
+    ChatMessage.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+
 def _cleanup_feedback_state() -> None:
     from src.models.sql.chat_message import ChatMessage
     from src.models.sql.chat_session import ChatSession
@@ -40,6 +48,7 @@ def _cleanup_feedback_state() -> None:
     db = SessionLocal()
     try:
         _ensure_feedback_report_table_exists(db)
+        _ensure_chat_history_tables_exist(db)
         db.execute(
             delete(FeedbackReport).where(FeedbackReport.session_id.like(f"{SESSION_PREFIX}%"))
         )
@@ -66,15 +75,17 @@ def _load_feedback_report(feedback_id: str) -> FeedbackReport:
 
 
 def _seed_durable_chat_session(session_id: str, *, user_auth_sub: str) -> None:
-    from src.lib.chat_history_repository import ChatHistoryRepository
+    from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatHistoryRepository
 
     db = SessionLocal()
     created_at = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
     try:
+        _ensure_chat_history_tables_exist(db)
         repository = ChatHistoryRepository(db)
         repository.create_session(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=ASSISTANT_CHAT_KIND,
             title="Saved title",
             created_at=created_at,
         )
@@ -82,6 +93,7 @@ def _seed_durable_chat_session(session_id: str, *, user_auth_sub: str) -> None:
             repository.append_message(
                 session_id=session_id,
                 user_auth_sub=user_auth_sub,
+                chat_kind=ASSISTANT_CHAT_KIND,
                 role=role,
                 content=content,
                 turn_id=f"{session_id}-turn-{index}",

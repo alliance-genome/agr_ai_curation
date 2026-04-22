@@ -58,7 +58,6 @@ class ChatSessionRecord:
 
     session_id: str
     user_auth_sub: str
-    chat_kind: str
     title: str | None
     generated_title: str | None
     active_document_id: UUID | None
@@ -185,6 +184,8 @@ def _resolve_session_chat_kind(session: ChatSessionModel) -> str | None:
         raw_chat_kind = vars(session).get("chat_kind", _UNSET)
         if raw_chat_kind is _UNSET:
             return None
+    if raw_chat_kind is None:
+        return None
     normalized_chat_kind = str(getattr(raw_chat_kind, "value", raw_chat_kind)).strip()
     return normalized_chat_kind or None
 

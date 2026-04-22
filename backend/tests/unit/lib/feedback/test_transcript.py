@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from src.lib.chat_history_repository import ChatMessageRecord
+from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatMessageRecord
 from src.lib.feedback import transcript as transcript_module
 
 
@@ -16,12 +16,14 @@ def _message(
     role: str,
     content: str,
     minute: int,
+    chat_kind: str = ASSISTANT_CHAT_KIND,
     message_type: str = "text",
     payload_json=None,
 ) -> ChatMessageRecord:
     return ChatMessageRecord(
         message_id=uuid4(),
         session_id=session_id,
+        chat_kind=chat_kind,
         turn_id=None,
         role=role,
         message_type=message_type,
