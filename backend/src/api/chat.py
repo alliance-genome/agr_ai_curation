@@ -898,7 +898,7 @@ class StopRequest(BaseModel):
 
 
 class AssistantRescueRequest(BaseModel):
-    """Payload used to backfill a missing durable assistant row after stream save failure."""
+    """Payload used to backfill a durable assistant row; same-turn retries must match."""
 
     turn_id: str
     content: str
@@ -912,6 +912,25 @@ class AssistantRescueResponse(BaseModel):
     turn_id: str
     created: bool
     trace_id: Optional[str] = None
+
+
+def _assistant_rescue_conflicting_fields(
+    *,
+    existing_turn: ChatMessageRecord,
+    content: str,
+    trace_id: Optional[str],
+) -> list[str]:
+    """List request fields that disagree with an existing rescued assistant turn."""
+
+    conflicting_fields: list[str] = []
+    if existing_turn.content != content:
+        conflicting_fields.append("content")
+
+    normalized_trace_id = str(trace_id or "").strip() or None
+    if existing_turn.trace_id != normalized_trace_id:
+        conflicting_fields.append("trace_id")
+
+    return conflicting_fields
 
 
 @dataclass(frozen=True)
@@ -2914,7 +2933,18 @@ async def stop_chat(request: StopRequest, user: Dict[str, Any] = get_auth_depend
     return {"status": "ok", "message": "Cancellation requested (cooperative - may take a moment)."}
 
 
-@router.post("/chat/{session_id}/assistant-rescue", response_model=AssistantRescueResponse)
+@router.post(
+    "/chat/{session_id}/assistant-rescue",
+    response_model=AssistantRescueResponse,
+    responses={
+        409: {
+            "description": (
+                "The referenced user turn is missing, or the retry payload conflicts "
+                "with an existing assistant turn for the same turn_id."
+            )
+        }
+    },
+)
 async def assistant_rescue(
     session_id: str,
     request: AssistantRescueRequest,
@@ -2922,7 +2952,7 @@ async def assistant_rescue(
     user: Dict[str, Any] = get_auth_dependency(),
     background_tasks: BackgroundTasks = None,
 ):
-    """Idempotently backfill a missing durable assistant turn for one completed stream."""
+    """Backfill one durable assistant turn; retries must reuse the stored payload."""
 
     user_id = _require_user_sub(user)
     repository = _get_chat_history_repository(db)
@@ -2952,6 +2982,21 @@ async def assistant_rescue(
             turn_id=request.turn_id,
             trace_id=request.trace_id,
         )
+        if not assistant_turn.created:
+            conflicting_fields = _assistant_rescue_conflicting_fields(
+                existing_turn=assistant_turn.message,
+                content=request.content,
+                trace_id=request.trace_id,
+            )
+            if conflicting_fields:
+                db.rollback()
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Assistant rescue payload conflicts with existing assistant turn "
+                        f"for fields: {', '.join(conflicting_fields)}"
+                    ),
+                )
         db.commit()
         _queue_chat_title_backfill(
             background_tasks,
