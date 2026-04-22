@@ -6,6 +6,9 @@ import EvidenceCard from './EvidenceCard'
 
 interface FlowStepEvidenceCardProps {
   details: FlowStepEvidenceDetails
+  interactionMode?: 'interactive' | 'readOnly'
+  containerTestId?: string
+  emptyStateTestId?: string
 }
 
 function formatEvidenceQuoteCount(count: number): string {
@@ -26,6 +29,9 @@ function formatStepEvidenceSummary(evidenceCount: number, previewCount: number):
 
 export default function FlowStepEvidenceCard({
   details,
+  interactionMode = 'interactive',
+  containerTestId = 'flow-step-evidence-card',
+  emptyStateTestId = 'flow-step-evidence-empty',
 }: FlowStepEvidenceCardProps) {
   const evidenceRecords = details.evidence_records
   const previewCount = evidenceRecords.length
@@ -44,7 +50,7 @@ export default function FlowStepEvidenceCard({
 
   return (
     <Box
-      data-testid="flow-step-evidence-card"
+      data-testid={containerTestId}
       sx={{
         alignSelf: 'flex-start',
         display: 'flex',
@@ -114,10 +120,11 @@ export default function FlowStepEvidenceCard({
               ? formatEvidencePreviewCount(previewCount)
               : formatEvidenceQuoteCount(previewCount)
           }
+          interactionMode={interactionMode}
         />
       ) : (
         <Box
-          data-testid="flow-step-evidence-empty"
+          data-testid={emptyStateTestId}
           sx={{
             backgroundColor: '#0d47a1',
             borderRadius: '0 0 18px 4px',

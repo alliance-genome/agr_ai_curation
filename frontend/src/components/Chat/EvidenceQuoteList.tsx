@@ -15,12 +15,16 @@ interface EvidenceQuoteListProps {
   groups: EvidenceQuoteGroup[]
   activeEntity: string | null
   onReviewAndCurateClick?: (() => void) | null
+  interactive?: boolean
+  quoteTestId?: string
 }
 
 export default function EvidenceQuoteList({
   groups,
   activeEntity,
   onReviewAndCurateClick,
+  interactive = true,
+  quoteTestId,
 }: EvidenceQuoteListProps) {
   const scrollAnchorRefs = useRef(new Map<string, HTMLDivElement>())
   const pendingScrollTimeoutRef = useRef<number | null>(null)
@@ -95,47 +99,51 @@ export default function EvidenceQuoteList({
             <EvidenceQuote
               borderColor={activeGroup.colorHex}
               evidenceRecord={record}
+              interactive={interactive}
               key={`${activeGroup.entity}-${record.chunk_id}-${index}`}
+              testId={quoteTestId}
             />
           ))}
 
-          <Box
-            sx={{
-              mt: '8px',
-              pt: '8px',
-              borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-            }}
-          >
+          {interactive ? (
             <Box
               sx={{
-                fontSize: '11px',
-                color: 'rgba(255, 255, 255, 0.5)',
+                mt: '8px',
+                pt: '8px',
+                borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '6px',
               }}
             >
-              Full evidence review with PDF highlighting →
-            </Box>
-
-            {onReviewAndCurateClick ? (
               <Box
-                component="button"
-                onClick={onReviewAndCurateClick}
                 sx={{
-                  p: 0,
-                  border: 0,
-                  background: 'transparent',
-                  color: '#90caf9',
-                  cursor: 'pointer',
                   fontSize: '11px',
+                  color: 'rgba(255, 255, 255, 0.5)',
                 }}
-                type="button"
               >
-                Review & Curate
+                Full evidence review with PDF highlighting →
               </Box>
-            ) : null}
-          </Box>
+
+              {onReviewAndCurateClick ? (
+                <Box
+                  component="button"
+                  onClick={onReviewAndCurateClick}
+                  sx={{
+                    p: 0,
+                    border: 0,
+                    background: 'transparent',
+                    color: '#90caf9',
+                    cursor: 'pointer',
+                    fontSize: '11px',
+                  }}
+                  type="button"
+                >
+                  Review & Curate
+                </Box>
+              ) : null}
+            </Box>
+          ) : null}
 
           <Box
             aria-hidden="true"

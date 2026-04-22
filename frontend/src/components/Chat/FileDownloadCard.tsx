@@ -28,6 +28,8 @@ export interface FileInfo {
 
 interface FileDownloadCardProps {
   file: FileInfo
+  allowDownload?: boolean
+  cardTestId?: string
 }
 
 /**
@@ -71,7 +73,11 @@ function getFormatColor(format: string): string {
  * Shows filename, format badge, size, and a download button.
  * Handles download state with loading indicator and error handling.
  */
-function FileDownloadCard({ file }: FileDownloadCardProps) {
+function FileDownloadCard({
+  file,
+  allowDownload = true,
+  cardTestId,
+}: FileDownloadCardProps) {
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadComplete, setDownloadComplete] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -137,6 +143,7 @@ function FileDownloadCard({ file }: FileDownloadCardProps) {
   return (
     <>
       <Card
+        data-testid={cardTestId}
         sx={{
           mt: 1,
           mb: 1,
@@ -205,44 +212,47 @@ function FileDownloadCard({ file }: FileDownloadCardProps) {
             </Box>
 
             {/* Download button */}
-            <Button
-              variant="contained"
-              size="small"
-              onClick={handleDownload}
-              disabled={isDownloading}
-              sx={{
-                minWidth: 36,
-                height: 36,
-                borderRadius: 1,
-                backgroundColor: downloadComplete ? '#4caf50' : 'primary.main',
-                '&:hover': {
-                  backgroundColor: downloadComplete ? '#45a049' : 'primary.dark',
-                },
-              }}
-            >
-              {isDownloading ? (
-                <CircularProgress size={18} color="inherit" />
-              ) : downloadComplete ? (
-                <CheckCircleIcon sx={{ fontSize: 20 }} />
-              ) : (
-                <DownloadIcon sx={{ fontSize: 20 }} />
-              )}
-            </Button>
+            {allowDownload ? (
+              <Button
+                variant="contained"
+                size="small"
+                onClick={handleDownload}
+                disabled={isDownloading}
+                sx={{
+                  minWidth: 36,
+                  height: 36,
+                  borderRadius: 1,
+                  backgroundColor: downloadComplete ? '#4caf50' : 'primary.main',
+                  '&:hover': {
+                    backgroundColor: downloadComplete ? '#45a049' : 'primary.dark',
+                  },
+                }}
+              >
+                {isDownloading ? (
+                  <CircularProgress size={18} color="inherit" />
+                ) : downloadComplete ? (
+                  <CheckCircleIcon sx={{ fontSize: 20 }} />
+                ) : (
+                  <DownloadIcon sx={{ fontSize: 20 }} />
+                )}
+              </Button>
+            ) : null}
           </Box>
         </CardContent>
       </Card>
 
-      {/* Error snackbar */}
-      <Snackbar
-        open={!!error}
-        autoHideDuration={5000}
-        onClose={() => setError(null)}
-        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-      >
-        <Alert severity="error" onClose={() => setError(null)}>
-          {error}
-        </Alert>
-      </Snackbar>
+      {allowDownload ? (
+        <Snackbar
+          open={!!error}
+          autoHideDuration={5000}
+          onClose={() => setError(null)}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        >
+          <Alert severity="error" onClose={() => setError(null)}>
+            {error}
+          </Alert>
+        </Snackbar>
+      ) : null}
     </>
   )
 }
