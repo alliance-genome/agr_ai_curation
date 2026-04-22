@@ -21,8 +21,6 @@ class LogsResponse(BaseModel):
     """Response model for logs endpoint."""
 
     container: str
-    # ALL-264 compatibility cleanup: Agent Studio now consumes `lines`, so the
-    # temporary `lines_returned` alias can be removed.
     lines: int
     logs: str
 
