@@ -3,7 +3,7 @@
 These tests verify the API contract matches the specification in
 specs/005-user-feedback-system/contracts/submit_feedback.yaml
 
-CRITICAL: These tests MUST FAIL before implementation!
+These tests are active regression coverage for the feedback API contract.
 """
 
 import pytest
@@ -64,7 +64,7 @@ class TestFeedbackSubmitEndpoint:
     ):
         """Test successful feedback submission (200 response).
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint returns the documented success response.
         """
         # Measure response time
         start_time = time.time()
@@ -105,7 +105,7 @@ class TestFeedbackSubmitEndpoint:
     def test_empty_feedback_text_validation(self, client, valid_feedback_payload, chat_contract_auth_headers):
         """Test empty feedback_text validation (400 response).
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint rejects empty feedback text.
         """
         # Empty feedback text
         payload = valid_feedback_payload.copy()
@@ -140,7 +140,7 @@ class TestFeedbackSubmitEndpoint:
     ):
         """Test whitespace-only feedback_text validation (400 response).
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint rejects whitespace-only feedback text.
         """
         # Whitespace-only feedback text
         payload = valid_feedback_payload.copy()
@@ -170,7 +170,7 @@ class TestFeedbackSubmitEndpoint:
         """Test empty trace_ids is accepted (200 response).
 
         trace_ids is now optional - empty arrays are allowed.
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint accepts an empty trace id list.
         """
         # Empty trace_ids list
         payload = valid_feedback_payload.copy()
@@ -196,7 +196,7 @@ class TestFeedbackSubmitEndpoint:
         """Test omitted trace_ids field defaults to empty array (200 response).
 
         trace_ids is optional - if omitted, should default to empty array.
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint defaults omitted trace ids to an empty list.
         """
         # Remove trace_ids from payload entirely
         payload = valid_feedback_payload.copy()
@@ -218,7 +218,7 @@ class TestFeedbackSubmitEndpoint:
     def test_missing_required_fields(self, client, chat_contract_auth_headers):
         """Test missing required fields validation (400 or 422 response).
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms request validation rejects missing required fields.
         """
         # Missing all fields
         response = client.post(
@@ -238,7 +238,7 @@ class TestFeedbackSubmitEndpoint:
     ):
         """Test response schema exactly matches contract specification.
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the success payload matches the documented response schema.
         """
         response = client.post(
             "/api/feedback/submit",
@@ -270,7 +270,7 @@ class TestFeedbackSubmitEndpoint:
     ):
         """Test that multiple trace IDs are accepted.
 
-        VERIFY: This test should FAIL initially (endpoint doesn't exist yet).
+        Confirms the endpoint accepts multiple trace ids.
         """
         payload = valid_feedback_payload.copy()
         payload["trace_ids"] = ["trace_1", "trace_2", "trace_3"]
