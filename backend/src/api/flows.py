@@ -42,6 +42,7 @@ from ..services.user_service import set_global_user_from_cognito
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/flows")
+DEFAULT_FLOW_LIST_PAGE_SIZE = 50
 
 
 def verify_flow_ownership(
@@ -124,7 +125,7 @@ def _safe_attachment_filename(filename: str) -> str:
 @router.get("", response_model=FlowListResponse)
 async def list_flows(
     page: int = Query(1, ge=1, description="Page number (1-indexed)"),
-    page_size: int = Query(20, ge=1, le=100, description="Items per page (max 100)"),
+    page_size: int = Query(DEFAULT_FLOW_LIST_PAGE_SIZE, ge=1, le=100, description="Items per page (max 100)"),
     user: Dict[str, Any] = get_auth_dependency(),
     db: Session = Depends(get_db),
 ) -> FlowListResponse:

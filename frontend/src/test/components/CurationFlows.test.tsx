@@ -123,7 +123,9 @@ describe('CurationFlows', () => {
     renderComponent([completedRunEvent()])
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50')
+      expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50', {
+        credentials: 'include',
+      })
     })
 
     expect(screen.getByText('Latest flow run')).toBeInTheDocument()
@@ -211,7 +213,9 @@ describe('CurationFlows', () => {
     ])
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50')
+      expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50', {
+        credentials: 'include',
+      })
     })
 
     expect(screen.queryByText('Latest flow run')).not.toBeInTheDocument()
