@@ -35,10 +35,10 @@ def _message(
 
 
 class _Repository:
-    def __init__(self, detail, page):
+    def __init__(self, detail, pages):
         self._detail = detail
-        self._page = page
-        self.calls: list[tuple[str, object]] = []
+        self._pages = list(pages)
+        self.calls: list[tuple[str, str, object]] = []
 
     def get_session_detail(self, *, session_id: str, user_auth_sub: str, message_limit: int):
         assert session_id == "session-1"
@@ -46,12 +46,22 @@ class _Repository:
         assert message_limit == transcript_module.TRANSCRIPT_PAGE_SIZE
         return self._detail
 
-    def list_messages(self, *, session_id: str, user_auth_sub: str, limit: int, cursor):
-        self.calls.append((session_id, cursor))
+    def list_messages(
+        self,
+        *,
+        session_id: str,
+        user_auth_sub: str,
+        chat_kind: str,
+        limit: int,
+        cursor,
+    ):
+        self.calls.append((session_id, chat_kind, cursor))
         assert session_id == "session-1"
         assert user_auth_sub == "auth-sub-1"
+        assert chat_kind == ASSISTANT_CHAT_KIND
         assert limit == transcript_module.TRANSCRIPT_PAGE_SIZE
-        return self._page
+        assert self._pages
+        return self._pages.pop(0)
 
 
 def test_capture_feedback_conversation_transcript_collects_all_pages():
@@ -70,15 +80,23 @@ def test_capture_feedback_conversation_transcript_collects_all_pages():
         messages=[
             _message(session_id="session-1", role="user", content="hello", minute=1),
         ],
-        next_message_cursor="next-page",
+        next_message_cursor="next-page-1",
     )
-    page = SimpleNamespace(
-        items=[
-            _message(session_id="session-1", role="assistant", content="world", minute=2),
-        ],
-        next_cursor=None,
-    )
-    repository = _Repository(detail, page)
+    pages = [
+        SimpleNamespace(
+            items=[
+                _message(session_id="session-1", role="assistant", content="world", minute=2),
+            ],
+            next_cursor="next-page-2",
+        ),
+        SimpleNamespace(
+            items=[
+                _message(session_id="session-1", role="user", content="again", minute=3),
+            ],
+            next_cursor=None,
+        ),
+    ]
+    repository = _Repository(detail, pages)
 
     transcript = transcript_module.capture_feedback_conversation_transcript(
         repository=repository,
@@ -87,15 +105,18 @@ def test_capture_feedback_conversation_transcript_collects_all_pages():
     )
 
     assert transcript is not None
-    assert transcript["message_count"] == 2
+    assert transcript["message_count"] == 3
     assert transcript["session"]["session_id"] == "session-1"
     assert transcript["session"]["chat_kind"] == "assistant_chat"
-    assert [message["content"] for message in transcript["messages"]] == ["hello", "world"]
-    assert repository.calls == [("session-1", "next-page")]
+    assert [message["content"] for message in transcript["messages"]] == ["hello", "world", "again"]
+    assert repository.calls == [
+        ("session-1", ASSISTANT_CHAT_KIND, "next-page-1"),
+        ("session-1", ASSISTANT_CHAT_KIND, "next-page-2"),
+    ]
 
 
 def test_capture_feedback_conversation_transcript_returns_none_for_missing_session():
-    repository = _Repository(detail=None, page=None)
+    repository = _Repository(detail=None, pages=[])
 
     assert (
         transcript_module.capture_feedback_conversation_transcript(

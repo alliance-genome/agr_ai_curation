@@ -31,12 +31,16 @@ def capture_feedback_conversation_transcript(
     if detail is None:
         return None
 
+    chat_kind = _normalized_session_chat_kind(detail.session)
     messages = list(detail.messages)
     cursor: ChatMessageCursor | None = detail.next_message_cursor
     while cursor is not None:
+        if chat_kind is None:
+            raise ValueError("chat_kind is required to paginate a feedback transcript")
         message_page = repository.list_messages(
             session_id=session_id,
             user_auth_sub=user_auth_sub,
+            chat_kind=chat_kind,
             limit=TRANSCRIPT_PAGE_SIZE,
             cursor=cursor,
         )
@@ -62,9 +66,8 @@ def capture_feedback_conversation_transcript(
         ),
     }
 
-    chat_kind = getattr(detail.session, "chat_kind", None)
-    if isinstance(chat_kind, str) and chat_kind.strip():
-        session_payload["chat_kind"] = chat_kind.strip()
+    if chat_kind is not None:
+        session_payload["chat_kind"] = chat_kind
 
     return {
         "captured_at": datetime.now(timezone.utc).isoformat(),
@@ -72,6 +75,15 @@ def capture_feedback_conversation_transcript(
         "session": session_payload,
         "messages": [_serialize_message(message) for message in messages],
     }
+
+
+def _normalized_session_chat_kind(session: Any) -> str | None:
+    raw_chat_kind = getattr(session, "chat_kind", None)
+    if raw_chat_kind is None:
+        return None
+
+    normalized_chat_kind = str(raw_chat_kind).strip()
+    return normalized_chat_kind or None
 
 
 def format_feedback_transcript_section(
