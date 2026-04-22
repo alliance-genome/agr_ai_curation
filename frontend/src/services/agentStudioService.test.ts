@@ -247,7 +247,9 @@ describe('agentStudioService', () => {
 
     await listFlows()
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50')
+    expect(mockFetch).toHaveBeenCalledWith('/api/flows?page=1&page_size=50', {
+      credentials: 'include',
+    })
   })
 
   it('listFlows maps unauthorized responses to the shared login message', async () => {

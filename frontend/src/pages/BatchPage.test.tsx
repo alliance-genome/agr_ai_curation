@@ -108,7 +108,9 @@ describe('BatchPage', () => {
     renderPage()
 
     await waitFor(() => {
-      expect(mockFetch).toHaveBeenCalledWith(`/api/flows?page=1&page_size=${DEFAULT_FLOW_LIST_PAGE_SIZE}`)
+      expect(mockFetch).toHaveBeenCalledWith(`/api/flows?page=1&page_size=${DEFAULT_FLOW_LIST_PAGE_SIZE}`, {
+        credentials: 'include',
+      })
     })
   })
 

@@ -680,7 +680,9 @@ function createFlowListLoadError(status?: number): FlowListLoadError {
 export async function listFlows(page = 1, pageSize = DEFAULT_FLOW_LIST_PAGE_SIZE): Promise<FlowListResponse> {
   let response: Response
   try {
-    response = await fetch(`${FLOWS_URL}?page=${page}&page_size=${pageSize}`)
+    response = await fetch(`${FLOWS_URL}?page=${page}&page_size=${pageSize}`, {
+      credentials: 'include',
+    })
   } catch {
     throw createFlowListLoadError()
   }
