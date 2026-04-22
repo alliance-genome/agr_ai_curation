@@ -256,6 +256,6 @@ export interface FileReadyDetails {
 export interface AuditEventSSE {
   type: AuditEventType
   timestamp: string // ISO 8601 format
-  sessionId: string
+  session_id: string
   details: Record<string, any>
 }
