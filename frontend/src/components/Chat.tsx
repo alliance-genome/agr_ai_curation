@@ -4,7 +4,6 @@ import { debug } from '@/utils/env'
 import {
   HOME_PDF_VIEWER_OWNER,
   dispatchClearHighlights,
-  dispatchPDFDocumentChanged,
 } from '@/components/pdfViewer/pdfEvents'
 import MessageActions from '@/components/Chat/MessageActions'
 import FeedbackDialog from '@/components/Chat/FeedbackDialog'
@@ -23,6 +22,9 @@ import {
   openCurationWorkspace,
   type CurationWorkspaceLaunchTarget,
 } from '@/features/curation/navigation/openCurationWorkspace'
+import {
+  rehydrateChatDocumentFromSource,
+} from '@/features/documents/chatDocumentRehydration'
 import type { EvidenceRecord } from '@/features/curation/types'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
@@ -807,13 +809,6 @@ function Chat({
     }
   }, [chatStorageKeys, storageUserId])
 
-  const persistActiveDocumentToStorage = useCallback((document: unknown) => {
-    if (!chatStorageKeys) {
-      return
-    }
-    localStorage.setItem(chatStorageKeys.activeDocument, JSON.stringify(document))
-  }, [chatStorageKeys])
-
   const getStoredActiveDocument = useCallback(() => {
     if (!chatStorageKeys) {
       return null
@@ -833,6 +828,18 @@ function Chat({
       return
     }
     localStorage.removeItem(chatStorageKeys.messages)
+  }, [chatStorageKeys])
+
+  const restoreDocumentToPdfViewer = useCallback(async (
+    document: ActiveDocument,
+    shouldCommitViewerRestore?: () => boolean,
+  ) => {
+    await rehydrateChatDocumentFromSource({
+      loadDocument: async () => document,
+      chatStorageKeys,
+      ownerToken: HOME_PDF_VIEWER_OWNER,
+      shouldCommitViewerRestore,
+    })
   }, [chatStorageKeys])
 
   const clearProgressState = useCallback(() => {
@@ -1684,69 +1691,58 @@ function Chat({
     const fetchActiveDocument = async () => {
       debug.log('[Chat] fetchActiveDocument called')
       try {
-        const response = await fetch('/api/chat/document')
-        if (!response.ok) {
-          console.error('[Chat] fetchActiveDocument failed:', response.status)
-          throw new Error('Failed to fetch active document')
-        }
-        const payload = await response.json()
-        debug.log('[Chat] fetchActiveDocument response:', payload)
-
-        if (payload?.active && payload.document) {
-          if (!isActive) {
-            return
-          }
-          debug.log('[Chat] fetchActiveDocument: Found active document:', payload.document.filename)
-          setActiveDocument(payload.document)
-          persistActiveDocumentToStorage(payload.document)
-
-          // Load the PDF in the viewer as well
-          try {
-            const documentId = payload.document.id
-            const [detailResponse, urlResponse] = await Promise.all([
-              fetch(`/api/pdf-viewer/documents/${documentId}`),
-              fetch(`/api/pdf-viewer/documents/${documentId}/url`)
-            ])
-
-            if (detailResponse.ok && urlResponse.ok) {
-              const detail = await detailResponse.json()
-              const urlData = await urlResponse.json()
-              const viewerUrl = urlData.viewer_url
-
-              if (viewerUrl && detail && isActive) {
-                debug.log('[PDF RESTORE] Restoring active document to PDF viewer:', payload.document.filename)
-                dispatchPDFDocumentChanged(
-                  documentId,
-                  viewerUrl,
-                  detail.filename ?? payload.document.filename ?? 'Untitled',
-                  detail.page_count ?? detail.pageCount ?? 1,
-                  { ownerToken: HOME_PDF_VIEWER_OWNER },
-                )
-              }
-            } else {
-              console.warn('[PDF RESTORE] Failed to fetch PDF metadata for active document')
+        await rehydrateChatDocumentFromSource({
+          loadDocument: async () => {
+            const response = await fetch('/api/chat/document')
+            if (!response.ok) {
+              console.error('[Chat] fetchActiveDocument failed:', response.status)
+              throw new Error('Failed to fetch active document')
             }
-          } catch (pdfError) {
-            console.warn('[PDF RESTORE] Unable to load PDF viewer for active document:', pdfError)
-          }
-        } else {
-          debug.log('[Chat] fetchActiveDocument: No active document from backend')
+            const payload = await response.json()
+            debug.log('[Chat] fetchActiveDocument response:', payload)
 
-          // CRITICAL: Check if the event handler has already set a document in localStorage
-          // This prevents a race condition where fetchActiveDocument() completes after
-          // the user loads a document from DocumentsPage
-          const localDoc = getStoredActiveDocument()
-          if (localDoc) {
-            debug.log('[Chat] fetchActiveDocument: But localStorage has a document, not clearing (event handler won)')
-          } else {
+            if (payload?.active && payload.document) {
+              debug.log('[Chat] fetchActiveDocument: Found active document:', payload.document.filename)
+              return payload.document as ActiveDocument
+            }
+
+            debug.log('[Chat] fetchActiveDocument: No active document from backend')
+            return null
+          },
+          chatStorageKeys,
+          ownerToken: HOME_PDF_VIEWER_OWNER,
+          shouldCommitViewerRestore: () => isActive,
+          onDocument: async (activeDocument) => {
+            if (!isActive) {
+              return false
+            }
+
+            debug.log(
+              '[Chat] Setting active document:',
+              activeDocument.filename || activeDocument.id,
+            )
+            setActiveDocument(activeDocument)
+            debug.log('[PDF RESTORE] Restoring active document to PDF viewer:', activeDocument.filename)
+          },
+          onMissingDocument: async () => {
+            // CRITICAL: Check if the event handler has already set a document in localStorage
+            // This prevents a race condition where fetchActiveDocument() completes after
+            // the user loads a document from DocumentsPage
+            const localDoc = getStoredActiveDocument()
+            if (localDoc) {
+              debug.log('[Chat] fetchActiveDocument: But localStorage has a document, not clearing (event handler won)')
+              return
+            }
+
             if (!isActive) {
               return
             }
+
             debug.log('[Chat] fetchActiveDocument: No document in localStorage either, clearing state')
             setActiveDocument(null)
             clearStoredActiveDocument()
-          }
-        }
+          },
+        })
       } catch (error) {
         console.error('[Chat] fetchActiveDocument error:', error)
       }
@@ -1767,7 +1763,6 @@ function Chat({
         }
         debug.log('[Chat] Setting active document:', detail.document.filename || detail.document.id)
         setActiveDocument(detail.document)
-        persistActiveDocumentToStorage(detail.document)
 
         // Reset chat when loading a new document - old conversation context is no longer relevant
         debug.log('[Chat] Resetting chat for new document')
@@ -1799,30 +1794,11 @@ function Chat({
 
         // Load the PDF in the viewer when document changes
         try {
-          const documentId = detail.document.id
-          debug.log('[Chat] Fetching PDF metadata for:', documentId)
-          const [detailResponse, urlResponse] = await Promise.all([
-            fetch(`/api/pdf-viewer/documents/${documentId}`),
-            fetch(`/api/pdf-viewer/documents/${documentId}/url`)
-          ])
+          debug.log('[Chat] Fetching PDF metadata for:', detail.document.id)
+          await restoreDocumentToPdfViewer(detail.document, () => isActive)
 
-          if (detailResponse.ok && urlResponse.ok) {
-            const pdfDetail = await detailResponse.json()
-            const urlData = await urlResponse.json()
-            const viewerUrl = urlData.viewer_url
-
-            if (viewerUrl && pdfDetail && isActive) {
-              debug.log('[Chat] Loading PDF in viewer after document change:', detail.document.filename)
-              dispatchPDFDocumentChanged(
-                documentId,
-                viewerUrl,
-                pdfDetail.filename ?? detail.document.filename ?? 'Untitled',
-                pdfDetail.page_count ?? pdfDetail.pageCount ?? 1,
-                { ownerToken: HOME_PDF_VIEWER_OWNER },
-              )
-            }
-          } else {
-            console.warn('[Chat] Failed to fetch PDF metadata for document change')
+          if (isActive) {
+            debug.log('[Chat] Loading PDF in viewer after document change:', detail.document.filename)
           }
         } catch (pdfError) {
           console.warn('[Chat] Unable to load PDF viewer after document change:', pdfError)
@@ -1850,7 +1826,7 @@ function Chat({
     clearStoredMessages,
     getStoredActiveDocument,
     onSessionChange,
-    persistActiveDocumentToStorage,
+    restoreDocumentToPdfViewer,
   ])
 
   const handleCopyMessage = (text: string) => {

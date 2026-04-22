@@ -1,4 +1,4 @@
-import { StrictMode } from 'react'
+import { type ComponentProps, StrictMode } from 'react'
 import { ThemeProvider } from '@mui/material/styles'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
@@ -12,6 +12,7 @@ const mockUseAuth = vi.hoisted(() => vi.fn())
 const mockUseChatStream = vi.hoisted(() => vi.fn())
 const chatRenderSpy = vi.hoisted(() => vi.fn())
 const rightPanelRenderSpy = vi.hoisted(() => vi.fn())
+const actualChatMode = vi.hoisted(() => ({ enabled: false }))
 
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => mockUseAuth(),
@@ -21,12 +22,22 @@ vi.mock('@/hooks/useChatStream', () => ({
   useChatStream: () => mockUseChatStream(),
 }))
 
-vi.mock('@/components/Chat', () => ({
-  default: (props: { sessionId: string | null }) => {
-    chatRenderSpy(props)
-    return <div data-testid="chat-session">{props.sessionId ?? 'none'}</div>
-  },
-}))
+vi.mock('@/components/Chat', async () => {
+  const actual = await vi.importActual<typeof import('@/components/Chat')>('@/components/Chat')
+
+  return {
+    default: (props: ComponentProps<typeof actual.default>) => {
+      chatRenderSpy(props)
+
+      if (actualChatMode.enabled) {
+        const ActualChat = actual.default
+        return <ActualChat {...props} />
+      }
+
+      return <div data-testid="chat-session">{props.sessionId ?? 'none'}</div>
+    },
+  }
+})
 
 vi.mock('@/components/RightPanel', () => ({
   default: (props: { sessionId: string | null; currentDocumentId?: string }) => {
@@ -96,8 +107,10 @@ describe('HomePage durable session bootstrap', () => {
 
   beforeEach(() => {
     authState = { user: { uid: 'user-1' } }
+    actualChatMode.enabled = false
     localStorage.clear()
     sessionStorage.clear()
+    Element.prototype.scrollIntoView = vi.fn()
     chatRenderSpy.mockReset()
     rightPanelRenderSpy.mockReset()
     vi.mocked(global.fetch).mockReset()
@@ -106,6 +119,7 @@ describe('HomePage durable session bootstrap', () => {
   })
 
   afterEach(() => {
+    actualChatMode.enabled = false
     vi.restoreAllMocks()
   })
 
@@ -379,6 +393,118 @@ describe('HomePage durable session bootstrap', () => {
         },
       ],
     })
+  })
+
+  it('mounts the real chat and preserves session resume with PDF restore together', async () => {
+    actualChatMode.enabled = true
+
+    const pdfDocumentChangedSpy = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+
+    try {
+      vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input)
+
+        if (url === `/api/chat/history/session-42?message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`) {
+          return jsonResponse({
+            session: {
+              session_id: 'session-42',
+              created_at: '2026-04-20T00:00:00Z',
+              updated_at: '2026-04-20T00:05:00Z',
+              recent_activity_at: '2026-04-20T00:05:00Z',
+            },
+            active_document: {
+              id: 'doc-42',
+              filename: 'resume.pdf',
+            },
+            messages: [
+              {
+                message_id: 'msg-1',
+                session_id: 'session-42',
+                role: 'assistant',
+                message_type: 'text',
+                content: 'Restored response',
+                trace_id: 'trace-1',
+                created_at: '2026-04-20T00:01:00Z',
+              },
+            ],
+            message_limit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
+            next_message_cursor: null,
+          })
+        }
+
+        if (url === '/api/chat/document/load') {
+          expect(init?.method).toBe('POST')
+          return jsonResponse({
+            active: true,
+            document: {
+              id: 'doc-42',
+              filename: 'resume.pdf',
+            },
+          })
+        }
+
+        if (url === '/api/chat/document') {
+          return jsonResponse({
+            active: true,
+            document: {
+              id: 'doc-42',
+              filename: 'resume.pdf',
+            },
+          })
+        }
+
+        if (url === '/api/chat/conversation') {
+          return jsonResponse({
+            is_active: true,
+            memory_stats: {
+              memory_sizes: {
+                short_term: { file_count: 1, size_mb: 0.1 },
+              },
+            },
+          })
+        }
+
+        if (url === '/health/deep') {
+          return jsonResponse({
+            services: {
+              weaviate: 'connected',
+              curation_db: 'connected',
+            },
+          })
+        }
+
+        if (url === '/api/pdf-viewer/documents/doc-42') {
+          return jsonResponse({
+            filename: 'resume.pdf',
+            page_count: 7,
+          })
+        }
+
+        if (url === '/api/pdf-viewer/documents/doc-42/url') {
+          return jsonResponse({
+            viewer_url: '/viewer/doc-42',
+          })
+        }
+
+        throw new Error(`Unexpected fetch: ${url}`)
+      })
+
+      renderHomePage('/?session=session-42')
+
+      expect(await screen.findByText('Restored response')).toBeInTheDocument()
+      expect(await screen.findByText('Active PDF: resume.pdf')).toBeInTheDocument()
+
+      await waitFor(() => {
+        expect(pdfDocumentChangedSpy).toHaveBeenCalled()
+      })
+
+      expect(localStorage.getItem(chatStorageKeys.sessionId)).toBe('session-42')
+      expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('"documentId":"doc-42"')
+      expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('"id":"doc-42"')
+    } finally {
+      window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+    }
   })
 
   it('waits for user.uid before hydrating a requested durable session', async () => {

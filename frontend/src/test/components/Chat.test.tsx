@@ -151,11 +151,42 @@ function mockChatFetch(options?: {
       } as Response
     }
 
+    if (activeDocument && url === `/api/pdf-viewer/documents/${activeDocument.id}`) {
+      return {
+        ok: true,
+        json: async () => ({
+          filename: activeDocument.filename ?? `${activeDocument.id}.pdf`,
+          page_count: 7,
+        }),
+      } as Response
+    }
+
+    if (activeDocument && url === `/api/pdf-viewer/documents/${activeDocument.id}/url`) {
+      return {
+        ok: true,
+        json: async () => ({
+          viewer_url: `/viewer/${activeDocument.id}`,
+        }),
+      } as Response
+    }
+
     return {
       ok: true,
       json: async () => ({}),
     } as Response
   })
+}
+
+function createDeferredResponse() {
+  let resolve!: (response: Response) => void
+  const promise = new Promise<Response>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+
+  return {
+    promise,
+    resolve,
+  }
 }
 
 function renderChat(props?: Partial<ComponentProps<typeof Chat>>) {
@@ -375,6 +406,135 @@ describe('Chat persistence', () => {
       await screen.findByText('Full evidence review with PDF highlighting →'),
     ).toBeInTheDocument()
     expect(screen.queryByText('Review & Curate')).not.toBeInTheDocument()
+  })
+
+  it('rehydrates a backend active document into local storage and the PDF viewer on mount', async () => {
+    const listener = vi.fn()
+    window.addEventListener('pdf-viewer-document-changed', listener as EventListener)
+
+    try {
+      mockChatFetch({
+        activeDocument: {
+          id: 'doc-7',
+          filename: 'doc-7.pdf',
+        },
+      })
+
+      renderChat()
+
+      expect(await screen.findByText('Active PDF: doc-7.pdf')).toBeInTheDocument()
+
+      await waitFor(() => {
+        expect(listener).toHaveBeenCalled()
+      })
+
+      expect(localStorage.getItem(chatStorageKeys.activeDocument)).toContain('"id":"doc-7"')
+      expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toContain('"documentId":"doc-7"')
+
+      const pdfEvent = listener.mock.calls.at(-1)?.[0] as CustomEvent
+      expect(pdfEvent.detail).toMatchObject({
+        documentId: 'doc-7',
+        viewerUrl: '/viewer/doc-7',
+        filename: 'doc-7.pdf',
+        pageCount: 7,
+      })
+    } finally {
+      window.removeEventListener('pdf-viewer-document-changed', listener as EventListener)
+    }
+  })
+
+  it('does not dispatch a late PDF restore after Chat unmounts', async () => {
+    const listener = vi.fn()
+    const detailResponse = createDeferredResponse()
+    const urlResponse = createDeferredResponse()
+    window.addEventListener('pdf-viewer-document-changed', listener as EventListener)
+
+    try {
+      vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+        const url = String(input)
+
+        if (url === '/health/deep') {
+          return {
+            ok: true,
+            json: async () => ({
+              services: {
+                weaviate: 'connected',
+                curation_db: 'connected',
+              },
+            }),
+          } as Response
+        }
+
+        if (url === '/api/chat/conversation') {
+          return {
+            ok: true,
+            json: async () => ({
+              is_active: true,
+              memory_stats: {
+                memory_sizes: {
+                  short_term: { file_count: 1, size_mb: 0.1 },
+                },
+              },
+            }),
+          } as Response
+        }
+
+        if (url === '/api/chat/document') {
+          return {
+            ok: true,
+            json: async () => ({
+              active: true,
+              document: {
+                id: 'doc-late',
+                filename: 'doc-late.pdf',
+              },
+            }),
+          } as Response
+        }
+
+        if (url === '/api/pdf-viewer/documents/doc-late') {
+          return detailResponse.promise
+        }
+
+        if (url === '/api/pdf-viewer/documents/doc-late/url') {
+          return urlResponse.promise
+        }
+
+        return {
+          ok: true,
+          json: async () => ({}),
+        } as Response
+      })
+
+      const { unmount } = renderChat()
+
+      expect(await screen.findByText('Active PDF: doc-late.pdf')).toBeInTheDocument()
+
+      unmount()
+
+      await act(async () => {
+        detailResponse.resolve({
+          ok: true,
+          json: async () => ({
+            filename: 'doc-late.pdf',
+            page_count: 7,
+          }),
+        } as Response)
+        urlResponse.resolve({
+          ok: true,
+          json: async () => ({
+            viewer_url: '/viewer/doc-late',
+          }),
+        } as Response)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+
+      expect(listener).not.toHaveBeenCalled()
+      expect(localStorage.getItem(chatStorageKeys.pdfViewerSession)).toBeNull()
+    } finally {
+      window.removeEventListener('pdf-viewer-document-changed', listener as EventListener)
+    }
   })
 
   it('does not dispatch legacy pdf overlay updates for chunk provenance events', async () => {
