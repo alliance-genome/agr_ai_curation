@@ -79,7 +79,6 @@ def test_chat_stream_emits_tool_verified_evidence_summary_with_frontend_shape(
         event for event in events if event["type"] == "evidence_summary"
     )
     assert evidence_summary_event["session_id"] == session_id
-    assert evidence_summary_event["sessionId"] == session_id
     _assert_frontend_evidence_records_match(
         evidence_summary_event["evidence_records"],
         expected_sse_records,

@@ -381,7 +381,6 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert events[0]["type"] == "RUN_STARTED"
     assert events[0]["trace_id"] == "trace-123"
     assert events[0]["session_id"] == "session-flow-1"
-    assert events[0]["sessionId"] == "session-flow-1"
     assert events[1]["type"] == "TEXT_MESSAGE_CONTENT"
     assert events[1]["delta"] == "hello"
     assert events[1]["timestamp"] == "2026-02-26T00:00:00+00:00"

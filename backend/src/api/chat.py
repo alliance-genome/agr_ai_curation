@@ -1583,7 +1583,6 @@ def _stream_event_payload(
     event_payload: Dict[str, Any] = {
         "type": event_type,
         "session_id": session_id,
-        "sessionId": session_id,
         "turn_id": turn_id,
     }
     if trace_id:
@@ -2662,7 +2661,6 @@ async def chat_stream_endpoint(
                 )
                 flat_event.update(event_data)
                 flat_event["session_id"] = current_session_id
-                flat_event["sessionId"] = current_session_id
                 flat_event["turn_id"] = current_turn_id
 
                 if "timestamp" in event:
@@ -3390,7 +3388,6 @@ async def execute_flow_endpoint(
                 flat_event = {
                     "type": event_type,
                     "session_id": current_session_id,
-                    "sessionId": current_session_id,
                     "turn_id": current_turn_id,
                 }
                 flat_event.update(event_data)

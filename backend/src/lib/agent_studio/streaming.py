@@ -10,7 +10,6 @@ def flatten_runner_event(event: Dict[str, Any], session_id: str) -> Dict[str, An
     flat_event = {
         "type": event_type,
         "session_id": session_id,
-        "sessionId": session_id,
     }
     if isinstance(event_data, dict):
         flat_event.update(event_data)

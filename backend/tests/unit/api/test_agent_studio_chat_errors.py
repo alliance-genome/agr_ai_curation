@@ -150,7 +150,6 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
         {
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
-            "sessionId": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
             "trace_id": "trace-123",
             "message": (
@@ -200,7 +199,6 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
         {
             "type": "ERROR",
             "session_id": "agent-studio-session-1",
-            "sessionId": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
             "trace_id": "trace-123",
             "message": (
@@ -246,7 +244,6 @@ def test_chat_with_opus_preserves_context_overflow_branch(monkeypatch):
         {
             "type": "CONTEXT_OVERFLOW",
             "session_id": "agent-studio-session-1",
-            "sessionId": "agent-studio-session-1",
             "turn_id": "opus-turn-1",
             "trace_id": "trace-123",
             "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",

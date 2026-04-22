@@ -29,7 +29,6 @@ class TestAgentTestEndpoint:
         assert flattened["delta"] == "hello"
         assert flattened["trace_id"] == "trace-123"
         assert flattened["session_id"] == "session-123"
-        assert flattened["sessionId"] == "session-123"
         assert flattened["timestamp"] == "2026-02-11T00:00:00Z"
         assert flattened["details"] == {"message": "ok"}
 

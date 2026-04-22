@@ -148,7 +148,7 @@ export function useChatStream(): UseChatStreamReturn {
       ...prev,
       {
         type: 'AGENT_GENERATING',
-        sessionId: sessionId,
+        session_id: sessionId,
         timestamp: new Date().toISOString(),
         details: {
           agentRole: 'System',
@@ -269,7 +269,7 @@ export function useChatStream(): UseChatStreamReturn {
       ...prev,
       {
         type: 'AGENT_GENERATING',
-        sessionId: sessionId,
+        session_id: sessionId,
         timestamp: new Date().toISOString(),
         details: {
           agentRole: 'System',

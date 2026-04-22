@@ -455,7 +455,6 @@ async def test_custom_agent_endpoint(
             done_event = {
                 "type": "DONE",
                 "session_id": session_id,
-                "sessionId": session_id,
                 "trace_id": trace_id,
             }
             yield f"data: {json.dumps(done_event)}\n\n"
@@ -467,7 +466,6 @@ async def test_custom_agent_endpoint(
                 "error_type": "StreamCancelled",
                 "trace_id": trace_id,
                 "session_id": session_id,
-                "sessionId": session_id,
             }
             yield f"data: {json.dumps(error_event)}\n\n"
         except Exception as exc:
@@ -480,7 +478,6 @@ async def test_custom_agent_endpoint(
                 "error_type": type(exc).__name__,
                 "trace_id": trace_id,
                 "session_id": session_id,
-                "sessionId": session_id,
             }
             yield f"data: {json.dumps(error_event)}\n\n"
 
