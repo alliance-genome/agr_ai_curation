@@ -180,7 +180,7 @@ async def test_get_service_logs_success_and_error_branches(monkeypatch):
     capture = {}
     _patch_async_client(
         monkeypatch,
-        response=_FakeResponse(200, {"container": "backend", "lines_returned": 5, "logs": "line1\nline2"}),
+        response=_FakeResponse(200, {"container": "backend", "lines": 5, "logs": "line1\nline2"}),
         capture=capture,
     )
     success = await tools.get_service_logs(
@@ -190,7 +190,12 @@ async def test_get_service_logs_success_and_error_branches(monkeypatch):
         since=15,
     )
     assert success["status"] == "success"
-    assert success["data"]["lines_requested"] == 100  # clamped minimum
+    assert success["data"] == {
+        "container": "backend",
+        "lines_requested": 100,  # clamped minimum
+        "lines": 5,
+        "logs": "line1\nline2",
+    }
     assert capture["params"]["lines"] == 100
     assert capture["params"]["level"] == "FATAL"
     assert capture["params"]["since"] == 15
@@ -216,7 +221,7 @@ async def test_get_service_logs_success_and_error_branches(monkeypatch):
 async def test_get_service_logs_rejects_non_integer_since(monkeypatch):
     _patch_async_client(
         monkeypatch,
-        response=_FakeResponse(200, {"container": "backend", "lines_returned": 5, "logs": "line1\nline2"}),
+        response=_FakeResponse(200, {"container": "backend", "lines": 5, "logs": "line1\nline2"}),
     )
 
     invalid_since = await tools.get_service_logs(container="backend", since="15")  # type: ignore[arg-type]

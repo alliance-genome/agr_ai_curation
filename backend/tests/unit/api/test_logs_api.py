@@ -93,10 +93,11 @@ async def test_get_container_logs_queries_loki_with_default_lookback_and_service
         frozen_now - logs_api.DEFAULT_LOKI_LOOKBACK
     )
     assert capture["params"]["end"] == logs_api.loki.normalize_time(frozen_now)
-    assert payload.container == "backend"
-    assert payload.lines == 2
-    assert payload.lines_returned == 2
-    assert payload.logs == "earlier line\nlater line\n"
+    assert payload.model_dump() == {
+        "container": "backend",
+        "lines": 2,
+        "logs": "earlier line\nlater line\n",
+    }
 
 
 @pytest.mark.asyncio
@@ -137,9 +138,11 @@ async def test_get_container_logs_passes_since_level_and_limit_to_loki(
         frozen_now - timedelta(minutes=15)
     )
     assert capture["params"]["end"] == logs_api.loki.normalize_time(frozen_now)
-    assert payload.lines == 1
-    assert payload.lines_returned == 1
-    assert payload.logs == "FATAL line\n"
+    assert payload.model_dump() == {
+        "container": "backend",
+        "lines": 1,
+        "logs": "FATAL line\n",
+    }
 
 
 @pytest.mark.asyncio
@@ -157,9 +160,11 @@ async def test_get_container_logs_returns_empty_payload_for_no_logs(
 
     assert capture["params"]["query"] == '{service="backend"}'
     assert capture["params"]["limit"] == 100
-    assert payload.lines == 0
-    assert payload.lines_returned == 0
-    assert payload.logs == ""
+    assert payload.model_dump() == {
+        "container": "backend",
+        "lines": 0,
+        "logs": "",
+    }
 
 
 @pytest.mark.asyncio
