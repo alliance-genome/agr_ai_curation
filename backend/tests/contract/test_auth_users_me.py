@@ -40,14 +40,12 @@ def client(monkeypatch):
     from src.api import auth as auth_module
 
     auth_module._provider = None
-    auth_module._provider_error = None
     app.dependency_overrides.clear()
 
     yield TestClient(app)
 
     app.dependency_overrides.clear()
     auth_module._provider = None
-    auth_module._provider_error = None
 
 
 def _override_authenticated_user():

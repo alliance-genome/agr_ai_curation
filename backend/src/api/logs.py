@@ -7,7 +7,7 @@ Used by Agent Studio's get_service_logs tool.
 
 from datetime import datetime, timedelta, timezone
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -100,7 +100,7 @@ def _format_loki_error(result: dict[str, str]) -> str:
     return detail
 
 
-def _raise_loki_query_error(*, container: str, result: dict[str, str]) -> None:
+def _raise_loki_query_error(*, container: str, result: dict[str, str]) -> NoReturn:
     """Log the full Loki failure details while returning a stable client message."""
 
     logger.error(

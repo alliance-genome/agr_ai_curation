@@ -12,18 +12,15 @@ from src.api import auth as auth_api
 def _reset_auth_provider_state():
     """Isolate module-level provider cache between tests."""
     original_provider = auth_api._provider
-    original_provider_error = auth_api._provider_error
     original_provider_failed = auth_api._provider_failed
 
     auth_api._provider = None
-    auth_api._provider_error = None
     auth_api._provider_failed = False
 
     try:
         yield
     finally:
         auth_api._provider = original_provider
-        auth_api._provider_error = original_provider_error
         auth_api._provider_failed = original_provider_failed
 
 

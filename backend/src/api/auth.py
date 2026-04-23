@@ -32,7 +32,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
 
 _provider: Optional[AuthProvider] = None
-_provider_error: Optional[str] = None
 _provider_failed: bool = False
 _provider_lock = threading.Lock()
 
@@ -47,19 +46,17 @@ def _get_provider_or_503() -> AuthProvider:
     Initialization failures are cached for the current process lifetime.
     After configuration changes, restart the process to retry initialization.
     """
-    global _provider, _provider_error, _provider_failed
+    global _provider, _provider_failed
 
     if _provider is None and not _provider_failed:
         with _provider_lock:
             if _provider is None and not _provider_failed:
                 try:
                     _provider = create_auth_provider()
-                    _provider_error = None
                     _provider_failed = False
                     logger.info("Auth provider initialized: %s", _provider.provider_name)
                 except Exception as exc:
                     _provider = None
-                    _provider_error = str(exc)
                     _provider_failed = True
                     logger.error("Failed to initialize auth provider: %s", exc)
 
