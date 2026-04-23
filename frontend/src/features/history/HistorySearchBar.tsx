@@ -21,6 +21,7 @@ interface HistorySearchBarProps {
   onBulkDelete: () => void
   onChange: (value: string) => void
   onToggleSelectAll: (checked: boolean) => void
+  searchScopeLabel: string
   selectedCount: number
   totalSessions: number
   value: string
@@ -39,6 +40,7 @@ export default function HistorySearchBar({
   onBulkDelete,
   onChange,
   onToggleSelectAll,
+  searchScopeLabel,
   selectedCount,
   totalSessions,
   value,
@@ -126,6 +128,9 @@ export default function HistorySearchBar({
           </Typography>
           <Typography color="text.secondary" variant="body2">
             {selectedCount} {pluralize(selectedCount, 'conversation')} selected
+          </Typography>
+          <Typography color="text.secondary" variant="body2">
+            Searching within {searchScopeLabel}
           </Typography>
           {isFiltering ? (
             <Typography color="primary" variant="body2">

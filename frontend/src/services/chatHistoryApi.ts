@@ -7,7 +7,9 @@ import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 export type PersistedChatHistoryKind = 'assistant_chat' | 'agent_studio'
 export type ChatHistoryListKind = PersistedChatHistoryKind | 'all'
 
+export const ALL_CHAT_HISTORY_KIND: ChatHistoryListKind = 'all'
 export const ASSISTANT_CHAT_HISTORY_KIND: PersistedChatHistoryKind = 'assistant_chat'
+export const AGENT_STUDIO_CHAT_HISTORY_KIND: PersistedChatHistoryKind = 'agent_studio'
 
 export interface ChatHistoryActiveDocument {
   id: string
