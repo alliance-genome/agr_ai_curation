@@ -984,7 +984,7 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
     assert persisted_request.adapter_key == "gene"
 
 
-def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_persistence_fails(monkeypatch):
+def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_persistence_fails(monkeypatch, caplog):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -1067,6 +1067,7 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
         raise RuntimeError("db unavailable")
 
     monkeypatch.setattr(chat, "persist_extraction_results", _raise_persistence)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -1080,10 +1081,13 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
 
     event_types = [event["type"] for event in events]
     assert event_types == ["RUN_STARTED", "TOOL_COMPLETE", "SUPERVISOR_ERROR", "turn_failed"]
+    assert events[2]["details"]["error"] == "Failed to save chat side effects."
+    assert "db unavailable" not in json.dumps(events)
+    assert "db unavailable" in caplog.text
     assert events[-1]["error_type"] == "RuntimeError"
 
 
-def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_requires_rescue(monkeypatch):
+def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_requires_rescue(monkeypatch, caplog):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
@@ -1128,6 +1132,7 @@ def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_
     monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
     monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
     monkeypatch.setattr(chat, "_persist_completed_chat_stream_turn", _raise_assistant_save_failed)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -1141,7 +1146,69 @@ def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_
 
     event_types = [event["type"] for event in events]
     assert event_types == ["RUN_STARTED", "SUPERVISOR_ERROR", "turn_save_failed"]
+    assert events[1]["details"]["error"] == "Failed to save the assistant response."
+    assert "assistant row unavailable" not in json.dumps(events)
+    assert "assistant row unavailable" in caplog.text
     assert events[-1]["error_type"] == "RuntimeError"
+
+
+def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, caplog):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_ERROR", "data": {"message": "runner exploded", "error_type": "RuntimeError"}}
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="hello", session_id="session-chat-run-error"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["turn_failed"]
+    assert (
+        events[0]["message"]
+        == "An error occurred. Please provide feedback using the ⋮ menu on this message, then try your query again."
+    )
+    assert "runner exploded" not in json.dumps(events)
+    assert "runner exploded" in caplog.text
 
 
 def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatch):

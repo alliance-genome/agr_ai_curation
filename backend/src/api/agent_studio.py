@@ -89,7 +89,7 @@ from src.lib.chat_history_repository import (
 )
 from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
-from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.openai_agents import run_agent_streamed
 from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import SessionLocal, get_db
@@ -1158,6 +1158,25 @@ async def test_agent_endpoint(
                 flat = _flatten_runner_event(event, session_id)
                 if flat.get("type") == "RUN_STARTED":
                     trace_id = flat.get("trace_id")
+                elif flat.get("type") == "RUN_ERROR":
+                    raw_message = str(flat.get("message") or "").strip()
+                    if raw_message:
+                        logger.error(
+                            "Agent test runner emitted RUN_ERROR for %s: %s",
+                            agent_id,
+                            raw_message,
+                            extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
+                        )
+                    else:
+                        logger.error(
+                            "Agent test runner emitted RUN_ERROR without message for %s",
+                            agent_id,
+                            extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
+                        )
+                    flat["message"] = "Agent test failed unexpectedly."
+                    details = flat.get("details")
+                    if isinstance(details, dict) and "error" in details:
+                        flat["details"] = {**details, "error": "Agent test failed unexpectedly."}
                 yield f"data: {json.dumps(flat, default=str)}\n\n"
 
             done_event = {
@@ -1177,10 +1196,14 @@ async def test_agent_endpoint(
             }
             yield f"data: {json.dumps(error_event)}\n\n"
         except Exception as exc:
-            logger.error('Agent test stream error for %s: %s', agent_id, exc, exc_info=True)
+            log_exception(
+                logger,
+                message=f"Agent test stream error for {agent_id}",
+                exc=exc,
+            )
             error_event = {
                 "type": "RUN_ERROR",
-                "message": f"Agent test failed: {exc}",
+                "message": "Agent test failed unexpectedly.",
                 "error_type": type(exc).__name__,
                 "trace_id": trace_id,
                 "session_id": session_id,
@@ -2348,7 +2371,7 @@ async def _handle_tool_call(
             logger.error('Diagnostic tool %s failed: %s', tool_name, e, exc_info=True)
             return {
                 "success": False,
-                "error": f"Tool execution failed: {str(e)}",
+                "error": "Tool execution failed unexpectedly.",
             }
 
     return {
@@ -3197,7 +3220,12 @@ async def chat_with_opus(
                 logger.error('Chat stream error: %s', e, exc_info=True)
                 error_event_type = "ERROR"
                 error_payload = {
-                    "message": str(e),
+                    "message": (
+                        "Agent Studio ran into an unexpected problem while completing your request. "
+                        "Any tool actions started during this turn may already have completed, so "
+                        "please check the results before retrying. If needed, refresh Agent Studio "
+                        "and try again."
+                    ),
                 }
             yield _opus_sse_event(
                 session_id=prepared_turn.session_id,
@@ -3509,7 +3537,7 @@ Please review our conversation history above and submit a general suggestion usi
         return DirectSubmissionResponse(
             success=False,
             message="An error occurred",
-            error=str(e)
+            error="Failed to submit suggestion",
         )
 
 

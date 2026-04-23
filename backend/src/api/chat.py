@@ -1581,6 +1581,21 @@ def _rollback_and_raise(
     raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
+def _stream_error_details(
+    *,
+    error: str,
+    exc: Exception,
+    message: str | None = None,
+) -> Dict[str, str]:
+    details = {
+        "error": error,
+        "context": type(exc).__name__,
+    }
+    if message is not None:
+        details["message"] = message
+    return details
+
+
 def _stream_event_payload(
     event_type: str,
     *,
@@ -2406,7 +2421,7 @@ async def chat_endpoint(
 
         # If we got an error, raise it
         if error_message:
-            raise HTTPException(status_code=500, detail=error_message)
+            raise HTTPException(status_code=500, detail="Failed to process chat request")
 
         if run_finished:
             try:
@@ -2782,6 +2797,10 @@ async def chat_stream_endpoint(
                             "turn_id": current_turn_id,
                         },
                     )
+                    runner_error_message = (
+                        "An error occurred. Please provide feedback using the ⋮ menu on this message, "
+                        "then try your query again."
+                    )
                     break
 
                 yield _stream_event_sse(flat_event)
@@ -2870,13 +2889,11 @@ async def chat_stream_endpoint(
                             turn_id=current_turn_id,
                             trace_id=trace_id,
                             timestamp=datetime.now(timezone.utc).isoformat(),
-                            details={
-                                "error": str(root_exc),
-                                "context": type(root_exc).__name__,
-                                "message": (
-                                    "The chat response completed, but saving the durable assistant turn failed."
-                                ),
-                            },
+                            details=_stream_error_details(
+                                error="Failed to save the assistant response.",
+                                exc=root_exc,
+                                message="The chat response completed, but saving the durable assistant turn failed.",
+                            ),
                         )
                     )
                     yield _stream_event_sse(
@@ -2909,13 +2926,13 @@ async def chat_stream_endpoint(
                             turn_id=current_turn_id,
                             trace_id=trace_id,
                             timestamp=datetime.now(timezone.utc).isoformat(),
-                            details={
-                                "error": str(exc),
-                                "context": type(exc).__name__,
-                                "message": (
+                            details=_stream_error_details(
+                                error="Failed to save chat side effects.",
+                                exc=exc,
+                                message=(
                                     "The chat response completed, but saving durable stream side effects failed."
                                 ),
-                            },
+                            ),
                         )
                     )
                     yield _stream_event_sse(
@@ -3013,11 +3030,11 @@ async def chat_stream_endpoint(
                     turn_id=current_turn_id,
                     trace_id=trace_id,
                     timestamp=datetime.now(timezone.utc).isoformat(),
-                    details={
-                        "error": str(exc),
-                        "context": type(exc).__name__,
-                        "message": "An error occurred. Please provide feedback using the ⋮ menu, then try your query again.",
-                    },
+                    details=_stream_error_details(
+                        error="Chat stream failed unexpectedly.",
+                        exc=exc,
+                        message="An error occurred. Please provide feedback using the ⋮ menu, then try your query again.",
+                    ),
                 )
             )
             yield _stream_event_sse(
@@ -3475,6 +3492,32 @@ async def execute_flow_endpoint(
                 elif event_type == "CHAT_OUTPUT_READY":
                     chat_output_ready_event = dict(flat_event)
                 elif event_type == "RUN_ERROR":
+                    raw_message = str(flat_event.get("message") or "").strip()
+                    if raw_message:
+                        logger.error(
+                            "Flow runner emitted RUN_ERROR: %s",
+                            raw_message,
+                            extra={
+                                "session_id": current_session_id,
+                                "user_id": user_id,
+                                "trace_id": trace_id,
+                                "turn_id": current_turn_id,
+                            },
+                        )
+                    else:
+                        logger.error(
+                            "Flow runner emitted RUN_ERROR without message field",
+                            extra={
+                                "session_id": current_session_id,
+                                "user_id": user_id,
+                                "trace_id": trace_id,
+                                "turn_id": current_turn_id,
+                            },
+                        )
+                    flat_event["message"] = "Flow execution failed unexpectedly."
+                    details = flat_event.get("details")
+                    if isinstance(details, dict) and "error" in details:
+                        flat_event["details"] = {**details, "error": "Flow execution failed unexpectedly."}
                     run_error_event = dict(flat_event)
                 elif event_type == "FLOW_FINISHED":
                     buffered_flow_finished_event = dict(flat_event)
@@ -3595,10 +3638,10 @@ async def execute_flow_endpoint(
                     turn_id=current_turn_id,
                     trace_id=trace_id,
                     timestamp=datetime.now(timezone.utc).isoformat(),
-                    details={
-                        "error": str(exc),
-                        "context": type(exc).__name__,
-                    },
+                    details=_stream_error_details(
+                        error="Flow execution failed unexpectedly.",
+                        exc=exc,
+                    ),
                 )
             )
             yield _stream_event_sse(
@@ -3607,7 +3650,7 @@ async def execute_flow_endpoint(
                     session_id=current_session_id,
                     turn_id=current_turn_id,
                     trace_id=trace_id,
-                    message=f"Flow execution error: {str(exc)}",
+                    message="Flow execution failed unexpectedly.",
                     error_type=type(exc).__name__,
                 )
             )

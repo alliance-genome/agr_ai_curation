@@ -396,7 +396,7 @@ class TestAgentTestEndpoint:
 
         assert exc_info.value.status_code == 401
 
-    def test_endpoint_stream_emits_error_events_on_cancel_and_exception(self, monkeypatch):
+    def test_endpoint_stream_emits_error_events_on_cancel_and_exception(self, monkeypatch, caplog):
         import src.api.agent_studio as api_module
 
         monkeypatch.setattr(
@@ -446,6 +446,7 @@ class TestAgentTestEndpoint:
             raise RuntimeError("boom stream")
 
         monkeypatch.setattr(api_module, "run_agent_streamed", _error_stream)
+        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
         response = asyncio.run(
             api_module.test_agent_endpoint(
                 agent_id="gene",
@@ -457,7 +458,9 @@ class TestAgentTestEndpoint:
         error_events = _parse_sse_payloads(asyncio.run(_consume(response)))
         assert error_events[-1]["type"] == "RUN_ERROR"
         assert error_events[-1]["error_type"] == "RuntimeError"
-        assert "boom stream" in error_events[-1]["message"]
+        assert error_events[-1]["message"] == "Agent test failed unexpectedly."
+        assert "boom stream" not in error_events[-1]["message"]
+        assert "boom stream" in caplog.text
         assert not any(event.get("type") == "DONE" for event in error_events)
 
 
@@ -728,6 +731,42 @@ class TestAgentWorkshopSystemPrompt:
         assert "## Output" in result["proposed_prompt"]
         assert "Return JSON with evidence and citations." in result["proposed_prompt"]
         assert "Return concise bullet points." not in result["proposed_prompt"]
+
+    def test_handle_tool_call_sanitizes_diagnostic_tool_failures(self, monkeypatch, caplog):
+        from src.api import agent_studio as api_module
+
+        def _raise_tool_failure(**_kwargs):
+            raise RuntimeError("registry backend unavailable")
+
+        monkeypatch.setattr(
+            api_module,
+            "get_diagnostic_tools_registry",
+            lambda: SimpleNamespace(
+                get_tool=lambda tool_name: (
+                    SimpleNamespace(handler=_raise_tool_failure)
+                    if tool_name == "diagnostic_tool"
+                    else None
+                )
+            ),
+        )
+        monkeypatch.setattr(api_module, "_ensure_flow_tools_registered", lambda _registry: None)
+        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="diagnostic_tool",
+                tool_input={"foo": "bar"},
+                context=None,
+                user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
+                messages=[],
+            )
+        )
+
+        assert result["success"] is False
+        assert result["error"] == "Tool execution failed unexpectedly."
+        assert "registry backend unavailable" not in result["error"]
+        assert "registry backend unavailable" in caplog.text
 
     def test_handle_update_workshop_prompt_tool_supports_group_targeted_edit(self):
         from src.api import agent_studio as api_module

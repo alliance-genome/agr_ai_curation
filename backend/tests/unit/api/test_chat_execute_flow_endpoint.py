@@ -1071,7 +1071,7 @@ def test_build_execute_flow_transcript_row_from_event_surfaces_missing_metadata(
     assert row.content == expected_content
 
 
-def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(monkeypatch):
+def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(monkeypatch, caplog):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(
         flow_id=flow_id,
@@ -1101,6 +1101,7 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
 
     monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
     monkeypatch.setattr(chat, "_persist_execute_flow_runtime_state", _raise_checkpoint_failure)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1115,13 +1116,15 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
 
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
     assert events[0]["details"]["context"] == "RuntimeError"
-    assert events[0]["details"]["error"] == "checkpoint write failed"
-    assert events[1]["message"] == "Flow execution error: checkpoint write failed"
+    assert events[0]["details"]["error"] == "Flow execution failed unexpectedly."
+    assert events[1]["message"] == "Flow execution failed unexpectedly."
+    assert "checkpoint write failed" not in json.dumps(events)
+    assert "checkpoint write failed" in caplog.text
     assert calls["unregister"] == [("session-trace-checkpoint-failure", "auth-sub", ANY)]
     assert calls["clear"] == ["session-trace-checkpoint-failure"]
 
 
-def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypatch):
+def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypatch, caplog):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(
         flow_id=flow_id,
@@ -1157,6 +1160,7 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
 
     monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
     monkeypatch.setattr(chat, "_persist_completed_execute_flow_turn", _raise_completion_failure)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1177,8 +1181,10 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     ]
     assert all(event["type"] != "FLOW_FINISHED" for event in events)
     assert events[2]["details"]["context"] == "RuntimeError"
-    assert events[2]["details"]["error"] == "completion transcript write failed"
-    assert events[3]["message"] == "Flow execution error: completion transcript write failed"
+    assert events[2]["details"]["error"] == "Flow execution failed unexpectedly."
+    assert events[3]["message"] == "Flow execution failed unexpectedly."
+    assert "completion transcript write failed" not in json.dumps(events)
+    assert "completion transcript write failed" in caplog.text
     turn_messages = calls["repository"].list_messages_for_turn(
         session_id="session-completion-persistence-failure",
         user_auth_sub="auth-sub",
@@ -1327,7 +1333,7 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
     assert chat._LOCAL_CANCEL_EVENTS["session-active-same-user"] is existing_event
 
 
-def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch):
+def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkeypatch, caplog):
     flow_id = uuid4()
     request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-error")
     flow = SimpleNamespace(
@@ -1346,6 +1352,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
         raise RuntimeError("executor boom")
 
     monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1357,10 +1364,58 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
 
     events = asyncio.run(_consume_stream(response))
     assert [event["type"] for event in events] == ["SUPERVISOR_ERROR", "RUN_ERROR"]
+    assert events[0]["details"]["error"] == "Flow execution failed unexpectedly."
+    assert events[1]["message"] == "Flow execution failed unexpectedly."
+    assert "executor boom" not in json.dumps(events)
+    assert "executor boom" in caplog.text
     assert events[1]["error_type"] == "RuntimeError"
     assert events[1]["session_id"] == "session-flow-error"
     assert calls["unregister"] == [("session-flow-error", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-error"]
+
+
+def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, caplog):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-run-error")
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Runner Error Flow",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    async def _fake_execute_flow(**_kwargs):
+        yield {
+            "type": "RUN_ERROR",
+            "timestamp": "2026-02-26T00:01:03+00:00",
+            "data": {"message": "runner exploded", "error_type": "RuntimeError"},
+            "details": {"error": "runner exploded"},
+        }
+
+    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
+
+    response = asyncio.run(
+        chat.execute_flow_endpoint(
+            request=request,
+            db=db,
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["RUN_ERROR"]
+    assert events[0]["message"] == "Flow execution failed unexpectedly."
+    assert events[0]["details"]["error"] == "Flow execution failed unexpectedly."
+    assert "runner exploded" not in json.dumps(events)
+    assert "runner exploded" in caplog.text
+    assert calls["unregister"] == [("session-flow-run-error", "auth-sub", ANY)]
+    assert calls["clear"] == ["session-flow-run-error"]
 
 
 def test_execute_flow_endpoint_returns_404_when_flow_missing(monkeypatch):

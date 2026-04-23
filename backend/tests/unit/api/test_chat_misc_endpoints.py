@@ -989,7 +989,7 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(monkeypatch):
+async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(monkeypatch, caplog):
     commits: list[str] = []
     register_calls = []
     unregister_calls = []
@@ -1020,6 +1020,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
 
     monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
     monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     run_attempt = 0
 
@@ -1043,7 +1044,9 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
         )
 
     assert exc.value.status_code == 500
-    assert exc.value.detail == "model exploded"
+    assert exc.value.detail == "Failed to process chat request"
+    assert "model exploded" not in str(exc.value.detail)
+    assert "model exploded" in caplog.text
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
     assert "non-stream-turn:session-retry:turn-retry" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
@@ -1574,7 +1577,7 @@ async def test_chat_endpoint_raises_http_401_without_user_id():
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
+async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
@@ -1589,6 +1592,7 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
         yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
 
     monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1597,7 +1601,9 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
             db=_db_stub(commits=commits),
         )
     assert exc.value.status_code == 500
-    assert "model exploded" in exc.value.detail
+    assert exc.value.detail == "Failed to process chat request"
+    assert "model exploded" not in str(exc.value.detail)
+    assert "model exploded" in caplog.text
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
 

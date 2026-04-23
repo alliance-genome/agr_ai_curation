@@ -840,4 +840,6 @@ class TestCustomAgentCrudErrorsAndBranches:
 
         stream_text = asyncio.run(_consume_stream())
         assert '"type": "RUN_ERROR"' in stream_text
-        assert "stream exploded" in stream_text
+        assert "Custom-agent test failed unexpectedly." in stream_text
+        assert "stream exploded" not in stream_text
+        assert "stream exploded" in caplog.text

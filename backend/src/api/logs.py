@@ -100,6 +100,17 @@ def _format_loki_error(result: dict[str, str]) -> str:
     return detail
 
 
+def _raise_loki_query_error(*, container: str, result: dict[str, str]) -> None:
+    """Log the full Loki failure details while returning a stable client message."""
+
+    logger.error(
+        "Loki log query failed for container %s: %s",
+        container,
+        _format_loki_error(result),
+    )
+    raise HTTPException(status_code=500, detail="Failed to retrieve logs from Loki")
+
+
 async def _query_logs(
     loki_client: loki.LokiClient,
     *,
@@ -192,10 +203,7 @@ async def get_container_logs(
         )
 
         if isinstance(result, dict) and result.get("status") == "error":
-            raise HTTPException(
-                status_code=500,
-                detail=_format_loki_error(result),
-            )
+            _raise_loki_query_error(container=container, result=result)
 
         logs_text, returned_line_count = _tail_rendered_logs(result, line_limit=lines)
 

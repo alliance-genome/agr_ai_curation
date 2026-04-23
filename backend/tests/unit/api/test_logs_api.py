@@ -191,17 +191,18 @@ async def test_get_container_logs_returns_empty_payload_for_no_logs(
     ],
 )
 async def test_get_container_logs_formats_loki_unavailable_errors(
-    patch_loki_async_client, exc, expected_error, expected_help
+    patch_loki_async_client, exc, expected_error, expected_help, caplog
 ):
     patch_loki_async_client(logs_api.loki, exc=exc)
+    caplog.set_level(logging.ERROR, logger=logs_api.logger.name)
 
     with pytest.raises(HTTPException) as error:
         await logs_api.get_container_logs("backend", lines=200)
 
     assert error.value.status_code == 500
-    assert error.value.detail.startswith("Failed to retrieve logs from Loki: ")
-    assert expected_error in error.value.detail
-    assert expected_help in error.value.detail
+    assert error.value.detail == "Failed to retrieve logs from Loki"
+    assert expected_error in caplog.text
+    assert expected_help in caplog.text
 
 
 @pytest.mark.asyncio

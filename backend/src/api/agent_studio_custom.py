@@ -35,7 +35,7 @@ from src.lib.agent_studio.custom_agent_service import (
     soft_delete_custom_agent,
     update_custom_agent,
 )
-from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 
 logger = logging.getLogger(__name__)
 
@@ -523,6 +523,25 @@ async def test_custom_agent_endpoint(
                 flat = _flatten_runner_event(event, session_id)
                 if flat.get("type") == "RUN_STARTED":
                     trace_id = flat.get("trace_id")
+                elif flat.get("type") == "RUN_ERROR":
+                    raw_message = str(flat.get("message") or "").strip()
+                    if raw_message:
+                        logger.error(
+                            "Custom-agent test runner emitted RUN_ERROR for %s: %s",
+                            custom_agent_id,
+                            raw_message,
+                            extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
+                        )
+                    else:
+                        logger.error(
+                            "Custom-agent test runner emitted RUN_ERROR without message for %s",
+                            custom_agent_id,
+                            extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
+                        )
+                    flat["message"] = "Custom-agent test failed unexpectedly."
+                    details = flat.get("details")
+                    if isinstance(details, dict) and "error" in details:
+                        flat["details"] = {**details, "error": "Custom-agent test failed unexpectedly."}
                 yield f"data: {json.dumps(flat, default=str)}\n\n"
 
             done_event = {
@@ -542,12 +561,14 @@ async def test_custom_agent_endpoint(
             }
             yield f"data: {json.dumps(error_event)}\n\n"
         except Exception as exc:
-            logger.error(
-                'Custom-agent test stream error for %s: %s', custom_agent_id, exc, exc_info=True,
+            log_exception(
+                logger,
+                message=f"Custom-agent test stream error for {custom_agent_id}",
+                exc=exc,
             )
             error_event = {
                 "type": "RUN_ERROR",
-                "message": f"Custom-agent test failed: {exc}",
+                "message": "Custom-agent test failed unexpectedly.",
                 "error_type": type(exc).__name__,
                 "trace_id": trace_id,
                 "session_id": session_id,

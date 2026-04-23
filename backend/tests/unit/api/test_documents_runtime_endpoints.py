@@ -653,6 +653,36 @@ async def test_stream_document_progress_emits_final_completed_event(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_stream_document_progress_sanitizes_stream_errors(monkeypatch, caplog):
+    doc_id = str(uuid4())
+
+    async def _status(*_args, **_kwargs):
+        raise RuntimeError("progress backend unavailable")
+
+    monkeypatch.setenv("PDF_PROCESSING_SSE_POLL_INTERVAL_SECONDS", "1")
+    monkeypatch.setenv("PDF_PROCESSING_SSE_TIMEOUT_SECONDS", "5")
+    monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
+    monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
+    monkeypatch.setattr(documents, "provision_user", lambda *_args, **_kwargs: SimpleNamespace(id=7))
+    monkeypatch.setattr(documents.pdf_job_service, "get_latest_job_for_document", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        documents,
+        "get_document",
+        lambda *_args, **_kwargs: _async_value({"document": {"processing_status": "processing"}}),
+    )
+    monkeypatch.setattr(documents.pipeline_tracker, "get_pipeline_status", _status)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+
+    response = await documents.stream_document_progress(doc_id, {"sub": "user-1"})
+    payload = await _collect_stream(response)
+
+    assert '"error": "Failed to stream document progress"' in payload
+    assert "progress backend unavailable" not in payload
+    assert "progress backend unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_stream_document_progress_prefers_terminal_cancelled_job_snapshot(monkeypatch):
     now = datetime.now(timezone.utc)
     doc_id = str(uuid4())

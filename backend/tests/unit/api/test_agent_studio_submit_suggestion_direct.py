@@ -1,6 +1,7 @@
 """Tests for AI-assisted direct suggestion submission endpoints."""
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -147,3 +148,30 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
 
     assert notified["user_email"] == "curator@example.org"
     assert "did not call submit_prompt_suggestion" in notified["error_message"]
+
+
+def test_submit_suggestion_direct_sanitizes_unexpected_errors(monkeypatch, caplog):
+    import src.api.agent_studio as api_module
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        api_module,
+        "set_global_user_from_cognito",
+        lambda _db, _user: (_ for _ in ()).throw(RuntimeError("database unavailable")),
+    )
+    caplog.set_level(logging.ERROR, logger=api_module.logger.name)
+
+    response = asyncio.run(
+        api_module.submit_suggestion_direct(
+            request=api_module.DirectSubmissionRequest(),
+            background_tasks=BackgroundTasks(),
+            db=SimpleNamespace(),
+            user={"email": "curator@example.org", "sub": "auth-sub-1"},
+        )
+    )
+
+    assert response.success is False
+    assert response.message == "An error occurred"
+    assert response.error == "Failed to submit suggestion"
+    assert "database unavailable" not in str(response.error)
+    assert "database unavailable" in caplog.text

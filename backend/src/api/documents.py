@@ -1518,9 +1518,13 @@ async def stream_document_progress(
                 yield f"data: {json.dumps(timeout_data)}\n\n"
 
         except Exception as e:
-            logger.error('Error in SSE stream for document %s: %s', document_id, e)
+            log_exception(
+                logger,
+                message=f"Error in SSE stream for document {document_id}",
+                exc=e,
+            )
             error_data = {
-                'error': str(e),
+                'error': "Failed to stream document progress",
                 'document_id': document_id,
                 'timestamp': datetime.now().isoformat()
             }
