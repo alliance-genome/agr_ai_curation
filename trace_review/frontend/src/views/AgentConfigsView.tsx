@@ -22,6 +22,7 @@ import DescriptionIcon from '@mui/icons-material/Description';
 import CodeIcon from '@mui/icons-material/Code';
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
 import HistoryIcon from '@mui/icons-material/History';
+import { alpha } from '@mui/material/styles';
 import { AgentConfigsData, AgentConfigEntry, PromptVersionSummary } from '../types';
 
 // Helper to get prompt version from agent config
@@ -105,7 +106,7 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
         <Grid container spacing={2}>
           {/* Model Settings */}
           <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 2, backgroundColor: 'rgba(0, 0, 0, 0.02)' }}>
+            <Paper sx={{ p: 2, backgroundColor: 'action.hover' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <SettingsIcon fontSize="small" color="primary" />
                 <Typography variant="subtitle2" fontWeight="bold">Model Settings</Typography>
@@ -135,7 +136,16 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
                 )}
                 {/* Prompt Version */}
                 {promptVersion !== null && (
-                  <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 1, pt: 1, borderTop: '1px dashed rgba(0,0,0,0.1)' }}>
+                  <Box
+                    sx={(theme) => ({
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      mt: 1,
+                      pt: 1,
+                      borderTop: `1px dashed ${theme.palette.divider}`,
+                    })}
+                  >
                     <Typography variant="body2" color="text.secondary">Prompt Version</Typography>
                     <Chip
                       icon={<HistoryIcon />}
@@ -164,7 +174,7 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
 
           {/* Tools Available */}
           <Grid item xs={12} md={6}>
-            <Paper sx={{ p: 2, backgroundColor: 'rgba(0, 0, 0, 0.02)' }}>
+            <Paper sx={{ p: 2, backgroundColor: 'action.hover' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <BuildIcon fontSize="small" color="primary" />
                 <Typography variant="subtitle2" fontWeight="bold">Available Tools</Typography>
@@ -193,7 +203,7 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
               <Accordion
                 expanded={metadataExpanded}
                 onChange={() => setMetadataExpanded(!metadataExpanded)}
-                sx={{ backgroundColor: 'rgba(0, 0, 0, 0.02)' }}
+                sx={{ backgroundColor: 'action.hover' }}
               >
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -208,13 +218,13 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
                 </AccordionSummary>
                 <AccordionDetails>
                   <Paper
-                    sx={{
+                    sx={(theme) => ({
                       p: 2,
-                      backgroundColor: '#1e1e1e',
+                      backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.16 : 0.06),
                       maxHeight: 300,
                       overflow: 'auto',
                       borderRadius: 1,
-                    }}
+                    })}
                   >
                     <Typography
                       component="pre"
@@ -223,7 +233,7 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
                         fontSize: '0.8rem',
                         whiteSpace: 'pre-wrap',
                         wordBreak: 'break-word',
-                        color: '#d4d4d4',
+                        color: 'text.primary',
                         margin: 0,
                       }}
                     >
@@ -237,7 +247,7 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
 
           {/* Instruction Stats */}
           <Grid item xs={12}>
-            <Paper sx={{ p: 2, backgroundColor: 'rgba(0, 0, 0, 0.02)' }}>
+            <Paper sx={{ p: 2, backgroundColor: 'action.hover' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                 <DescriptionIcon fontSize="small" color="primary" />
                 <Typography variant="subtitle2" fontWeight="bold">System Prompt Stats</Typography>
@@ -276,7 +286,9 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
             <Accordion
               expanded={instructionsExpanded}
               onChange={() => setInstructionsExpanded(!instructionsExpanded)}
-              sx={{ backgroundColor: 'rgba(33, 150, 243, 0.05)' }}
+              sx={(theme) => ({
+                backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.05),
+              })}
             >
               <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -294,13 +306,13 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
               </AccordionSummary>
               <AccordionDetails>
                 <Paper
-                  sx={{
+                  sx={(theme) => ({
                     p: 2,
-                    backgroundColor: '#1e1e1e',
+                    backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.16 : 0.06),
                     maxHeight: 600,
                     overflow: 'auto',
                     borderRadius: 1,
-                  }}
+                  })}
                 >
                   <Typography
                     component="pre"
@@ -309,7 +321,7 @@ function AgentCard({ agent, defaultExpanded }: { agent: AgentConfigEntry; defaul
                       fontSize: '0.85rem',
                       whiteSpace: 'pre-wrap',
                       wordBreak: 'break-word',
-                      color: '#d4d4d4',
+                      color: 'text.primary',
                       margin: 0,
                       lineHeight: 1.5,
                     }}
@@ -383,7 +395,13 @@ export function AgentConfigsView({ data }: AgentConfigsViewProps) {
         {/* Prompt Versions - show first if present */}
         {hasPromptVersions && (
           <Grid item xs={12} md={4}>
-            <Card sx={{ backgroundColor: 'rgba(33, 150, 243, 0.05)', border: '1px solid rgba(33, 150, 243, 0.2)' }}>
+            <Card
+              sx={(theme) => ({
+                backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.05),
+                border: '1px solid',
+                borderColor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.28 : 0.2),
+              })}
+            >
               <CardContent>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
                   <HistoryIcon color="info" />

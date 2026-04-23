@@ -3,6 +3,7 @@ import { Box, Typography, Paper, Chip, Card, CardContent, Grid, Accordion, Accor
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import BuildIcon from '@mui/icons-material/Build';
+import { alpha } from '@mui/material/styles';
 import { AgentContextData, AgentConfig } from '../types';
 
 interface AgentContextViewProps {
@@ -59,7 +60,10 @@ function AgentCard({ agent, title }: { agent: AgentConfig; title: string }) {
           <Accordion
             expanded={showInstructions}
             onChange={() => setShowInstructions(!showInstructions)}
-            sx={{ mt: 2, backgroundColor: 'rgba(255,255,255,0.05)' }}
+            sx={(theme) => ({
+              mt: 2,
+              backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.05 : 0.03),
+            })}
           >
             <AccordionSummary expandIcon={<ExpandMoreIcon />}>
               <Typography variant="body2">
@@ -68,17 +72,17 @@ function AgentCard({ agent, title }: { agent: AgentConfig; title: string }) {
             </AccordionSummary>
             <AccordionDetails>
               <Box
-                sx={{
+                sx={(theme) => ({
                   fontFamily: 'monospace',
                   fontSize: '0.8rem',
                   whiteSpace: 'pre-wrap',
                   wordBreak: 'break-word',
                   maxHeight: 500,
                   overflow: 'auto',
-                  backgroundColor: 'rgba(0,0,0,0.2)',
+                  backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.16 : 0.06),
                   p: 2,
                   borderRadius: 1
-                }}
+                })}
               >
                 {agent.full_instructions || agent.instructions_preview}
               </Box>

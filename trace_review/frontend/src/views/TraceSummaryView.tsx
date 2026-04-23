@@ -5,6 +5,7 @@ import WarningIcon from '@mui/icons-material/Warning';
 import BuildIcon from '@mui/icons-material/Build';
 import QuestionAnswerIcon from '@mui/icons-material/QuestionAnswer';
 import BiotechIcon from '@mui/icons-material/Biotech';
+import { alpha } from '@mui/material/styles';
 import { TraceSummaryData } from '../types';
 
 interface TraceSummaryViewProps {
@@ -55,12 +56,12 @@ export function TraceSummaryView({ data }: TraceSummaryViewProps) {
         <Box sx={{ mb: 2 }}>
           <Typography color="text.secondary" variant="body2" gutterBottom>Query</Typography>
           <Paper
-            sx={{
+            sx={(theme) => ({
               p: 2,
-              backgroundColor: 'rgba(33, 150, 243, 0.1)',
+              backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.12 : 0.1),
               borderLeft: '4px solid',
               borderLeftColor: 'primary.main'
-            }}
+            })}
           >
             <Typography variant="body1">{data.query}</Typography>
           </Paper>
@@ -78,14 +79,14 @@ export function TraceSummaryView({ data }: TraceSummaryViewProps) {
               )}
             </Box>
             <Paper
-              sx={{
+              sx={(theme) => ({
                 p: 2,
-                backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                backgroundColor: alpha(theme.palette.success.main, theme.palette.mode === 'dark' ? 0.12 : 0.1),
                 borderLeft: '4px solid',
                 borderLeftColor: 'success.main',
                 maxHeight: 300,
                 overflow: 'auto'
-              }}
+              })}
             >
               <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>
                 {data.response_preview}
