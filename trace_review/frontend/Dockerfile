@@ -7,7 +7,8 @@ ARG NODE_ENV=development
 ENV NODE_ENV=${NODE_ENV}
 
 COPY package*.json ./
-RUN npm install
+# Build with the committed lockfile and keep devDependencies available for vite/tsc.
+RUN npm ci --include=dev
 COPY . .
 RUN npm run build
 
