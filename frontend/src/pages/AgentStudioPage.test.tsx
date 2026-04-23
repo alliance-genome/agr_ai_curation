@@ -512,4 +512,41 @@ describe('AgentStudioPage', () => {
       'Persisted follow-up only|Persisted Agent Studio reply only'
     )
   })
+
+  it('surfaces durable transcript errors after an internal URL swap mints a new session id', async () => {
+    historyMocks.useChatHistoryDetailQuery.mockImplementation(({ sessionId }) => {
+      if (sessionId === 'agent-studio-session-999') {
+        return {
+          data: undefined,
+          isLoading: false,
+          isSuccess: false,
+          error: new Error('Unable to hydrate the new durable session.'),
+        }
+      }
+
+      return {
+        data: undefined,
+        isLoading: false,
+        isSuccess: false,
+        error: null,
+      }
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/agent-studio?trace_id=trace-789']}>
+        <LocationProbe />
+        <AgentStudioPage />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.click(screen.getByText('mint-durable-session'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Unable to hydrate the new durable session.'
+    )
+  })
 })

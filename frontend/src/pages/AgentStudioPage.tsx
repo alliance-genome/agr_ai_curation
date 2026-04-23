@@ -181,9 +181,9 @@ function AgentStudioPage() {
   const [discussMessage, setDiscussMessage] = useState<string | null>(null)
   const [opusConversation, setOpusConversation] = useState<ToolIdeaConversationEntry[]>([])
   const [workshopPromptUpdateRequest, setWorkshopPromptUpdateRequest] = useState<WorkshopPromptUpdateRequest | null>(null)
+  const [pendingUrlSwapSessionId, setPendingUrlSwapSessionId] = useState<string | null>(null)
   const promptUpdateCounterRef = useRef(0)
   const hydratedConversationSessionRef = useRef<string | null>(null)
-  const pendingUrlSwapSessionRef = useRef<string | null>(null)
 
   // ALL-276: `session_id` is overloaded in Agent Studio. We classify it by the
   // persisted session's `chat_kind` so assistant-chat sessions seed a new Opus
@@ -214,7 +214,7 @@ function AgentStudioPage() {
     () => buildSeededOpusConversation(durableTranscriptQuery.data?.messages ?? []),
     [durableTranscriptQuery.data?.messages],
   )
-  const isPendingInternalUrlSwap = pendingUrlSwapSessionRef.current === requestedSessionId
+  const isPendingInternalUrlSwap = pendingUrlSwapSessionId === requestedSessionId
   const durableTranscriptLoading = Boolean(requestedSessionId) && !isPendingInternalUrlSwap && (
     requestedSessionDetailQuery.isLoading
     || (Boolean(requestedSessionChatKind) && durableTranscriptQuery.isLoading)
@@ -238,11 +238,10 @@ function AgentStudioPage() {
       return
     }
 
-    const shouldPreserveCurrentConversation = pendingUrlSwapSessionRef.current === requestedSessionId
+    const shouldPreserveCurrentConversation = pendingUrlSwapSessionId === requestedSessionId
 
     setOpusConversation((currentConversation) => {
       hydratedConversationSessionRef.current = requestedSessionId
-      pendingUrlSwapSessionRef.current = null
 
       if (shouldPreserveCurrentConversation && currentConversation.length > 0) {
         return currentConversation
@@ -250,7 +249,27 @@ function AgentStudioPage() {
 
       return seededConversation
     })
-  }, [requestedSessionId, seededConversation, durableTranscriptQuery.isSuccess])
+    setPendingUrlSwapSessionId((currentPendingSessionId) => (
+      currentPendingSessionId === requestedSessionId ? null : currentPendingSessionId
+    ))
+  }, [requestedSessionId, seededConversation, durableTranscriptQuery.isSuccess, pendingUrlSwapSessionId])
+
+  useEffect(() => {
+    if (pendingUrlSwapSessionId !== requestedSessionId) {
+      return
+    }
+
+    if (!requestedSessionDetailQuery.error && !durableTranscriptQuery.error) {
+      return
+    }
+
+    setPendingUrlSwapSessionId(null)
+  }, [
+    pendingUrlSwapSessionId,
+    requestedSessionId,
+    requestedSessionDetailQuery.error,
+    durableTranscriptQuery.error,
+  ])
 
   // Load catalog on mount
   // Note: trace context is NOT fetched here - it's injected into Opus's prompt on the backend
@@ -430,7 +449,7 @@ Agent ID: ${agentId}`
       return
     }
 
-    pendingUrlSwapSessionRef.current = newSessionId
+    setPendingUrlSwapSessionId(newSessionId)
     const nextSearchParams = new URLSearchParams(searchParams)
     nextSearchParams.set('session_id', newSessionId)
     setSearchParams(nextSearchParams, { replace: true })
