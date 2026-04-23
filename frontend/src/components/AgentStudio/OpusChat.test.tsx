@@ -161,6 +161,57 @@ describe('OpusChat', () => {
     expect(onDurableSessionIdChange).toHaveBeenCalledWith('agent-studio-session-12345678')
   })
 
+  it('keeps using the first minted session when the parent re-renders before the prop catches up', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'Durable reply' }
+      yield { type: 'DONE' }
+    })
+
+    function Harness() {
+      const [renderCount, setRenderCount] = useState(0)
+
+      return (
+        <>
+          <div data-testid="render-count">{renderCount}</div>
+          <OpusChat
+            context={{ active_tab: 'agents' }}
+            onDurableSessionIdChange={() => setRenderCount((currentCount) => currentCount + 1)}
+          />
+        </>
+      )
+    }
+
+    render(<Harness />)
+
+    const input = screen.getByPlaceholderText('Ask about prompts...')
+
+    fireEvent.change(input, { target: { value: 'First durable question' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    await waitFor(() => {
+      expect(serviceMocks.createAgentStudioSession).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(screen.getByTestId('render-count')).toHaveTextContent('1')
+    })
+
+    fireEvent.change(input, { target: { value: 'Second durable question' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    await waitFor(() => {
+      expect(serviceMocks.streamOpusChat).toHaveBeenCalledTimes(2)
+    })
+
+    expect(serviceMocks.createAgentStudioSession).toHaveBeenCalledTimes(1)
+    expect(serviceMocks.streamOpusChat.mock.calls[1][2]).toBe('agent-studio-session-12345678')
+  })
+
   it('reuses an existing durable Agent Studio session instead of minting another one', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,

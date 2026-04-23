@@ -184,6 +184,11 @@ function AgentStudioPage() {
   const [pendingUrlSwapSessionId, setPendingUrlSwapSessionId] = useState<string | null>(null)
   const promptUpdateCounterRef = useRef(0)
   const hydratedConversationSessionRef = useRef<string | null>(null)
+  const searchParamsRef = useRef(searchParams)
+
+  useEffect(() => {
+    searchParamsRef.current = searchParams
+  }, [searchParams])
 
   // ALL-276: `session_id` is overloaded in Agent Studio. We classify it by the
   // persisted session's `chat_kind` so assistant-chat sessions seed a new Opus
@@ -198,9 +203,15 @@ function AgentStudioPage() {
     },
     {
       enabled: Boolean(requestedSessionId),
+      placeholderData: undefined,
     },
   )
-  const requestedSessionChatKind = requestedSessionDetailQuery.data?.session.chat_kind ?? null
+  // ALL-276: this page uses `session_id` for both assistant-chat seeding and
+  // agent-studio resume, so stale detail data must never classify a new URL.
+  const requestedSessionDetail = requestedSessionDetailQuery.data?.session.session_id === requestedSessionId
+    ? requestedSessionDetailQuery.data
+    : null
+  const requestedSessionChatKind = requestedSessionDetail?.session.chat_kind ?? null
   const durableTranscriptQuery = useChatHistoryTranscriptQuery(
     {
       sessionId: requestedSessionId ?? '',
@@ -228,6 +239,7 @@ function AgentStudioPage() {
     requestedSessionChatKind === AGENT_STUDIO_CHAT_HISTORY_KIND
       ? requestedSessionId
       : null
+  const effectiveDurableSessionId = pendingUrlSwapSessionId ?? resumedDurableSessionId
 
   useEffect(() => {
     if (!requestedSessionId || !durableTranscriptQuery.isSuccess) {
@@ -312,7 +324,7 @@ function AgentStudioPage() {
     selected_group_id: effectiveSelectedGroupId,
     view_mode: effectiveViewMode,
     trace_id: traceId || undefined,
-    session_id: resumedDurableSessionId || undefined,
+    session_id: effectiveDurableSessionId || undefined,
     // Flow context (when on flows tab)
     active_tab: activeTab,
     flow_name: activeTab === 'flows' ? flowState?.flowName : undefined,
@@ -444,16 +456,17 @@ Agent ID: ${agentId}`
   }, [])
 
   const handleDurableSessionIdChange = useCallback((newSessionId: string) => {
-    const currentSessionId = normalizeSearchParam(searchParams.get('session_id'))
+    const currentSessionId = normalizeSearchParam(searchParamsRef.current.get('session_id'))
     if (currentSessionId === newSessionId) {
       return
     }
 
     setPendingUrlSwapSessionId(newSessionId)
-    const nextSearchParams = new URLSearchParams(searchParams)
+    const nextSearchParams = new URLSearchParams(searchParamsRef.current)
     nextSearchParams.set('session_id', newSessionId)
+    searchParamsRef.current = nextSearchParams
     setSearchParams(nextSearchParams, { replace: true })
-  }, [searchParams, setSearchParams])
+  }, [setSearchParams])
 
   if (error || durableTranscriptError) {
     return (
@@ -493,7 +506,7 @@ Agent ID: ${agentId}`
             <OpusChat
               context={chatContext}
               initialConversation={seededConversation}
-              durableSessionId={resumedDurableSessionId}
+              durableSessionId={effectiveDurableSessionId}
               sourceSessionId={transcriptSourceSessionId}
               selectedAgent={selectedAgentForChat}
               verifyMessage={verifyMessage}

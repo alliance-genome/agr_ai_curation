@@ -176,6 +176,15 @@ function buildTranscript(
   }
 }
 
+function buildEmptyHistoryQueryResult() {
+  return {
+    data: undefined,
+    isLoading: false,
+    isSuccess: false,
+    error: null,
+  }
+}
+
 describe('AgentStudioPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -185,18 +194,8 @@ describe('AgentStudioPage', () => {
       id: '11111111-1111-1111-1111-111111111111',
       template_source: 'gene',
     })
-    historyMocks.useChatHistoryDetailQuery.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isSuccess: false,
-      error: null,
-    })
-    historyMocks.useChatHistoryTranscriptQuery.mockReturnValue({
-      data: undefined,
-      isLoading: false,
-      isSuccess: false,
-      error: null,
-    })
+    historyMocks.useChatHistoryDetailQuery.mockReturnValue(buildEmptyHistoryQueryResult())
+    historyMocks.useChatHistoryTranscriptQuery.mockReturnValue(buildEmptyHistoryQueryResult())
   })
 
   it('passes cloned custom agent id into PromptWorkshop after clone-to-workshop', async () => {
@@ -310,7 +309,10 @@ describe('AgentStudioPage', () => {
         chatKind: 'all',
         messageLimit: 1,
       },
-      { enabled: true },
+      expect.objectContaining({
+        enabled: true,
+        placeholderData: undefined,
+      }),
     )
     expect(historyMocks.useChatHistoryTranscriptQuery).toHaveBeenCalledWith(
       {
@@ -416,6 +418,77 @@ describe('AgentStudioPage', () => {
     })
   })
 
+  it('does not reuse stale chat_kind detail data when a minted Agent Studio session replaces a seed URL session', async () => {
+    historyMocks.useChatHistoryDetailQuery.mockImplementation(({ sessionId }) => {
+      if (sessionId === 'assistant-seed-session') {
+        return buildSessionDetail('assistant-seed-session', 'assistant_chat')
+      }
+
+      if (sessionId === 'agent-studio-session-999') {
+        // Simulate react-query placeholder detail data from the previous seed session.
+        return buildSessionDetail('assistant-seed-session', 'assistant_chat')
+      }
+
+      return buildEmptyHistoryQueryResult()
+    })
+
+    historyMocks.useChatHistoryTranscriptQuery.mockImplementation(({ sessionId, chatKind }) => {
+      if (sessionId === 'assistant-seed-session' && chatKind === 'assistant_chat') {
+        return buildTranscript('assistant-seed-session', 'assistant_chat', [
+          {
+            message_id: 'seed-user',
+            role: 'user',
+            message_type: 'text',
+            content: 'Seeded question',
+            created_at: '2026-04-22T00:00:01Z',
+          },
+          {
+            message_id: 'seed-assistant',
+            role: 'assistant',
+            message_type: 'text',
+            content: 'Seeded answer',
+            created_at: '2026-04-22T00:00:02Z',
+          },
+        ])
+      }
+
+      return buildEmptyHistoryQueryResult()
+    })
+
+    render(
+      <MemoryRouter initialEntries={['/agent-studio?session_id=assistant-seed-session&trace_id=trace-789']}>
+        <LocationProbe />
+        <AgentStudioPage />
+      </MemoryRouter>
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchPromptCatalog).toHaveBeenCalledTimes(1)
+    })
+
+    fireEvent.click(screen.getByText('mint-durable-session'))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location-search')).toHaveTextContent(
+        '?session_id=agent-studio-session-999&trace_id=trace-789'
+      )
+    })
+
+    await waitFor(() => {
+      expect(historyMocks.useChatHistoryTranscriptQuery).toHaveBeenLastCalledWith(
+        {
+          sessionId: 'agent-studio-session-999',
+          chatKind: 'all',
+        },
+        { enabled: false },
+      )
+    })
+
+    expect(screen.getByTestId('opus-chat-durable-session')).toHaveTextContent(
+      'agent-studio-session-999'
+    )
+  })
+
   it('replaces a seed session_id with the minted Agent Studio session id without losing the live transcript snapshot', async () => {
     historyMocks.useChatHistoryDetailQuery.mockImplementation(({ sessionId }) => {
       if (sessionId === 'assistant-seed-session') {
@@ -426,12 +499,7 @@ describe('AgentStudioPage', () => {
         return buildSessionDetail('agent-studio-session-999', 'agent_studio')
       }
 
-      return {
-        data: undefined,
-        isLoading: false,
-        isSuccess: false,
-        error: null,
-      }
+      return buildEmptyHistoryQueryResult()
     })
 
     historyMocks.useChatHistoryTranscriptQuery.mockImplementation(({ sessionId, chatKind }) => {
@@ -473,12 +541,7 @@ describe('AgentStudioPage', () => {
         ])
       }
 
-      return {
-        data: undefined,
-        isLoading: false,
-        isSuccess: false,
-        error: null,
-      }
+      return buildEmptyHistoryQueryResult()
     })
 
     render(
@@ -524,12 +587,7 @@ describe('AgentStudioPage', () => {
         }
       }
 
-      return {
-        data: undefined,
-        isLoading: false,
-        isSuccess: false,
-        error: null,
-      }
+      return buildEmptyHistoryQueryResult()
     })
 
     render(

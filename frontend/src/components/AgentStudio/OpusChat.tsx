@@ -304,8 +304,11 @@ function OpusChat({
   }, [messages])
 
   useEffect(() => {
-    syncDurableSessionId(durableSessionIdProp ?? null)
-  }, [durableSessionIdProp, syncDurableSessionId])
+    // Only mirror actual durable-session prop changes. Parent URL updates can
+    // recreate callbacks before the prop catches up, and we must not clear a
+    // freshly minted session during that handoff window.
+    setDurableSessionId(durableSessionIdProp ?? null)
+  }, [durableSessionIdProp])
 
   useEffect(() => {
     if (!sourceSessionId || !initialConversation?.length) {
