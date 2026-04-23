@@ -15,7 +15,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import SecurityScopes
-from jose import JWTError
 from jwt.exceptions import PyJWTError
 from sqlalchemy.orm import Session
 
@@ -35,6 +34,10 @@ _provider: Optional[AuthProvider] = None
 _provider_error: Optional[str] = None
 _provider_failed: bool = False
 _provider_lock = threading.Lock()
+
+
+class _InvalidAuthTokenError(ValueError):
+    """Raised when authenticated claims are structurally invalid."""
 
 
 def _get_provider_or_503() -> AuthProvider:
@@ -241,7 +244,7 @@ async def _get_user_from_cookie_impl(
         claims = await provider.validate_token(token)
         principal = provider.extract_principal(claims)
         if not principal.subject:
-            raise JWTError("Authenticated principal missing subject")
+            raise _InvalidAuthTokenError("Authenticated principal missing subject")
 
         payload = {
             "sub": principal.subject,
@@ -252,7 +255,7 @@ async def _get_user_from_cookie_impl(
         }
         payload = _with_group_claim_aliases(payload, principal.groups)
         return _build_mock_user(payload)
-    except (JWTError, PyJWTError) as exc:
+    except (_InvalidAuthTokenError, PyJWTError) as exc:
         logger.error("Token validation failed: %s", exc)
         raise HTTPException(status_code=401, detail="Invalid authentication token")
     except Exception as exc:
