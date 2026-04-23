@@ -134,6 +134,34 @@ describe('PdfViewer document ownership', () => {
     expect(screen.queryByText('external.pdf')).not.toBeInTheDocument()
   })
 
+  it('clears the current document when a replacement viewer url is rejected', async () => {
+    render(<PdfViewer />)
+
+    dispatchPDFDocumentChanged(
+      'doc-home',
+      '/fixtures/home.pdf',
+      'home.pdf',
+      12,
+    )
+
+    expect(await screen.findByText('home.pdf')).toBeInTheDocument()
+
+    dispatchPDFDocumentChanged(
+      'doc-external',
+      'https://example.org/external.pdf',
+      'external.pdf',
+      3,
+    )
+
+    expect(
+      await screen.findByText('The PDF viewer only supports same-origin document URLs.'),
+    ).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByText('home.pdf')).not.toBeInTheDocument()
+    })
+    expect(screen.getByText('No document loaded')).toBeInTheDocument()
+  })
+
   it('clears the live document on storage user switch without leaking it into the next namespace', async () => {
     const userOneKeys = getChatLocalStorageKeys('user-1')
     const userTwoKeys = getChatLocalStorageKeys('user-2')

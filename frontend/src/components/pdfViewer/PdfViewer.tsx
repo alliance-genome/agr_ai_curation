@@ -3005,6 +3005,7 @@ export function PdfViewer({
   const activeDocumentOwnerRef = useRef(activeDocumentOwnerToken)
   const viewerSessionStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
+  const idleResetErrorRef = useRef<string | null>(null)
 
   const commitNavigationResult = useCallback((result: PdfViewerNavigationResult | null) => {
     lastPdfEvidenceNavigationResult = result
@@ -3023,7 +3024,7 @@ export function PdfViewer({
     persistSession(viewerSessionStorageKey, document, state)
   }, [storageUserId, viewerSessionStorageKey])
 
-  const resetViewerToIdle = useCallback(() => {
+  const resetViewerToIdle = useCallback((nextError: string | null = null) => {
     handledNavigationKeyRef.current = null
     navigationRequestIdRef.current += 1
     viewerStateRef.current = {
@@ -3031,9 +3032,10 @@ export function PdfViewer({
       lastInteraction: new Date().toISOString(),
     }
     highlightTermsRef.current = []
+    idleResetErrorRef.current = nextError
     setActiveDocument(null)
-    setStatus('idle')
-    setError(null)
+    setStatus(nextError ? 'error' : 'idle')
+    setError(nextError)
     setHighlightTerms([])
     setEvidenceHighlight(null)
     commitNavigationResult(null)
@@ -4138,8 +4140,7 @@ export function PdfViewer({
           viewerUrl: event.detail.viewerUrl,
           error,
         })
-        setStatus('error')
-        setError(error instanceof Error ? error.message : String(error))
+        resetViewerToIdle(error instanceof Error ? error.message : String(error))
         loadStartRef.current = null
         signalLoadComplete()
         return
@@ -4331,8 +4332,10 @@ export function PdfViewer({
       if (viewerSessionStorageKey && viewerSessionStorageUserIdRef.current === storageUserId) {
         localStorage.removeItem(viewerSessionStorageKey)
       }
-      setStatus('idle')
-      setError(null)
+      const nextIdleError = idleResetErrorRef.current
+      idleResetErrorRef.current = null
+      setStatus(nextIdleError ? 'error' : 'idle')
+      setError(nextIdleError)
       setTelemetry({
         lastLoadMs: null,
         lastHighlightMs: null,
