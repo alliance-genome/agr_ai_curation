@@ -36,7 +36,7 @@ _provider_failed: bool = False
 _provider_lock = threading.Lock()
 
 
-class _InvalidAuthTokenError(ValueError):
+class _InvalidAuthTokenError(PyJWTError):
     """Raised when authenticated claims are structurally invalid."""
 
 
@@ -255,7 +255,7 @@ async def _get_user_from_cookie_impl(
         }
         payload = _with_group_claim_aliases(payload, principal.groups)
         return _build_mock_user(payload)
-    except (_InvalidAuthTokenError, PyJWTError) as exc:
+    except PyJWTError as exc:
         logger.error("Token validation failed: %s", exc)
         raise HTTPException(status_code=401, detail="Invalid authentication token")
     except Exception as exc:
