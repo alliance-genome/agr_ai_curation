@@ -78,6 +78,7 @@ async def test_handle_tool_call_trace_summary_missing_trace_id():
         tool_input={},
         context=None,
         user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
         messages=[],
     )
     assert result["status"] == "error"
@@ -98,6 +99,7 @@ async def test_handle_tool_call_get_tool_calls_page_forwards_inputs(monkeypatch)
         tool_input={"trace_id": "trace-1", "page": 2, "page_size": 25, "tool_name": "read_section"},
         context=None,
         user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
         messages=[],
     )
 
@@ -142,6 +144,7 @@ async def test_handle_tool_call_get_service_logs_forwards_inputs(monkeypatch):
         tool_input={"container": "backend", "lines": 250, "level": "FATAL", "since": 30},
         context=None,
         user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
         messages=[],
     )
 
@@ -161,6 +164,7 @@ async def test_handle_tool_call_get_docker_logs_is_unknown():
         tool_input={"container": "backend"},
         context=None,
         user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
         messages=[],
     )
 
@@ -175,6 +179,7 @@ async def test_handle_tool_call_get_tool_call_detail_requires_call_id():
         tool_input={"trace_id": "trace-1"},
         context=None,
         user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
         messages=[],
     )
     assert result["status"] == "error"
@@ -192,6 +197,7 @@ async def test_handle_tool_call_submit_prompt_suggestion_invalid_type():
         },
         context=None,
         user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
         messages=[],
     )
     assert result["success"] is False
@@ -221,6 +227,7 @@ async def test_handle_tool_call_submit_prompt_suggestion_returns_clear_failure(m
         },
         context=ChatContext(trace_id="trace-1", selected_group_id="WB"),
         user_email="dev@example.org",
+        user_auth_sub="auth-sub-1",
         messages=[{"role": "user", "content": "help"}],
     )
 
