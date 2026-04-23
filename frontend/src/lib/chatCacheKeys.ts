@@ -35,6 +35,7 @@ export interface ChatHistoryListCacheRequest {
 
 export interface ChatHistoryDetailCacheRequest {
   sessionId: string
+  chatKind?: 'assistant_chat' | 'agent_studio' | 'all'
   messageLimit?: number
   messageCursor?: string | null
 }
@@ -75,6 +76,7 @@ export const chatCacheKeys = {
       [
         ...chatCacheKeys.history.detailSession(request.sessionId),
         {
+          chatKind: request.chatKind ?? null,
           messageLimit: request.messageLimit ?? DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
           messageCursor: normalizeChatHistoryValue(request.messageCursor),
         },

@@ -2,8 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   cloneAgentToWorkshop,
+  createAgentStudioSession,
   createFlow,
   createCustomAgent,
+  fetchAgentStudioHistoryList,
+  fetchAgentStudioSessionDetail,
   listFlows,
   listCustomAgents,
   listToolIdeaRequests,
@@ -18,6 +21,91 @@ global.fetch = mockFetch
 describe('agentStudioService', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  it('createAgentStudioSession posts the agent_studio chat kind to the shared session endpoint', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        session_id: 'agent-studio-session-123',
+        created_at: '2026-04-23T00:00:00Z',
+        updated_at: '2026-04-23T00:00:00Z',
+      }),
+    })
+
+    const result = await createAgentStudioSession()
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      '/api/chat/session',
+      expect.objectContaining({
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_kind: 'agent_studio' }),
+      }),
+    )
+    expect(result.session_id).toBe('agent-studio-session-123')
+  })
+
+  it('fetchAgentStudioHistoryList scopes the shared history list to agent_studio', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          chat_kind: 'agent_studio',
+          total_sessions: 0,
+          limit: 20,
+          query: null,
+          document_id: null,
+          next_cursor: null,
+          sessions: [],
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+
+    await fetchAgentStudioHistoryList({ query: ' prompt tuning ' })
+
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(String(url)).toBe('/api/chat/history?chat_kind=agent_studio&query=prompt+tuning')
+    expect(init?.credentials).toBe('include')
+  })
+
+  it('fetchAgentStudioSessionDetail scopes transcript detail reads to agent_studio', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          session: {
+            session_id: 'agent-studio-session-123',
+            chat_kind: 'agent_studio',
+            created_at: '2026-04-23T00:00:00Z',
+            updated_at: '2026-04-23T00:00:00Z',
+            recent_activity_at: '2026-04-23T00:00:00Z',
+          },
+          active_document: null,
+          messages: [],
+          message_limit: 50,
+          next_message_cursor: null,
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+
+    await fetchAgentStudioSessionDetail({
+      sessionId: 'agent-studio-session-123',
+      messageLimit: 50,
+    })
+
+    const [url, init] = mockFetch.mock.calls[0]
+    expect(String(url)).toBe(
+      '/api/chat/history/agent-studio-session-123?chat_kind=agent_studio&message_limit=50',
+    )
+    expect(init?.credentials).toBe('include')
   })
 
   it('listCustomAgents sends template_source query param when provided', async () => {

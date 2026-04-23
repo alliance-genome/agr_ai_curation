@@ -346,6 +346,7 @@ function HomePage() {
         if (requestedSessionId) {
           const detail = await fetchChatHistoryDetail({
             sessionId: requestedSessionId,
+            chatKind: ASSISTANT_CHAT_HISTORY_KIND,
             messageLimit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
           })
 

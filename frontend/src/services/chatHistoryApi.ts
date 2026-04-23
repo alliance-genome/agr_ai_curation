@@ -8,6 +8,7 @@ export type PersistedChatHistoryKind = 'assistant_chat' | 'agent_studio'
 export type ChatHistoryListKind = PersistedChatHistoryKind | 'all'
 
 export const ASSISTANT_CHAT_HISTORY_KIND: PersistedChatHistoryKind = 'assistant_chat'
+export const AGENT_STUDIO_CHAT_HISTORY_KIND: PersistedChatHistoryKind = 'agent_studio'
 
 export interface ChatHistoryActiveDocument {
   id: string
@@ -78,6 +79,7 @@ export interface ChatHistoryListResponse {
 
 export interface ChatHistoryDetailRequest {
   sessionId: string
+  chatKind?: ChatHistoryListKind
   messageLimit?: number
   messageCursor?: string | null
 }
@@ -404,6 +406,10 @@ export function buildChatHistoryDetailQueryParams(
   request: ChatHistoryDetailRequest,
 ): URLSearchParams {
   const params = new URLSearchParams()
+
+  if (request.chatKind) {
+    params.set('chat_kind', request.chatKind)
+  }
 
   if (typeof request.messageLimit === 'number') {
     params.set('message_limit', String(request.messageLimit))

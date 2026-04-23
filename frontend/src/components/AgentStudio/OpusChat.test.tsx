@@ -1,17 +1,27 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
 
 import OpusChat from './OpusChat'
 import type { ChatContext } from '@/types/promptExplorer'
 
 const serviceMocks = vi.hoisted(() => ({
+  createAgentStudioSession: vi.fn(),
   streamOpusChat: vi.fn(),
 }))
 
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 
 describe('OpusChat', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    serviceMocks.createAgentStudioSession.mockResolvedValue({
+      session_id: 'agent-studio-session-12345678',
+      created_at: '2026-04-23T00:00:00Z',
+      updated_at: '2026-04-23T00:00:00Z',
+    })
+  })
+
   it('publishes conversation snapshots for tool-idea transcript capture', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
@@ -79,7 +89,7 @@ describe('OpusChat', () => {
     render(
       <OpusChat
         context={context}
-        seededDurableSessionId="assistant-session-12345678"
+        sourceSessionId="assistant-session-12345678"
         initialConversation={[
           {
             role: 'user',
@@ -100,6 +110,112 @@ describe('OpusChat', () => {
       screen.getByText('Because the prior turns emphasized evidence rank and assay quality.')
     ).toBeInTheDocument()
     expect(screen.getByText('Loaded from durable chat assistan...')).toBeInTheDocument()
+  })
+
+  it('creates and reports a durable Agent Studio session on the first user turn', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'First durable reply' }
+      yield { type: 'DONE' }
+    })
+
+    const onDurableSessionIdChange = vi.fn()
+    const context: ChatContext = {
+      active_tab: 'agents',
+      trace_id: 'trace-789',
+    }
+
+    render(
+      <OpusChat
+        context={context}
+        onDurableSessionIdChange={onDurableSessionIdChange}
+      />
+    )
+
+    const input = screen.getByPlaceholderText('Ask about prompts...')
+    fireEvent.change(input, { target: { value: 'Please review this prompt setup.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    await waitFor(() => {
+      expect(serviceMocks.createAgentStudioSession).toHaveBeenCalledTimes(1)
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.streamOpusChat).toHaveBeenCalledWith(
+        [
+          {
+            role: 'user',
+            content: 'Please review this prompt setup.',
+          },
+        ],
+        context,
+        'agent-studio-session-12345678',
+      )
+    })
+
+    expect(onDurableSessionIdChange).toHaveBeenCalledWith('agent-studio-session-12345678')
+  })
+
+  it('reuses an existing durable Agent Studio session instead of minting another one', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield { type: 'TEXT_DELTA', delta: 'Resumed reply' }
+      yield { type: 'DONE' }
+    })
+
+    const context: ChatContext = {
+      active_tab: 'agents',
+      session_id: 'agent-studio-session-existing',
+      trace_id: 'trace-789',
+    }
+
+    render(
+      <OpusChat
+        context={context}
+        durableSessionId="agent-studio-session-existing"
+        sourceSessionId="agent-studio-session-existing"
+        initialConversation={[
+          {
+            role: 'assistant',
+            content: 'Existing durable transcript',
+            timestamp: '2026-04-22T00:00:02Z',
+          },
+        ]}
+      />
+    )
+
+    const input = screen.getByPlaceholderText('Ask about prompts...')
+    fireEvent.change(input, { target: { value: 'Continue from this session.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    await waitFor(() => {
+      expect(serviceMocks.streamOpusChat).toHaveBeenCalledWith(
+        [
+          {
+            role: 'assistant',
+            content: 'Existing durable transcript',
+          },
+          {
+            role: 'user',
+            content: 'Continue from this session.',
+          },
+        ],
+        context,
+        'agent-studio-session-existing',
+      )
+    })
+
+    expect(serviceMocks.createAgentStudioSession).not.toHaveBeenCalled()
   })
 
   it('applies an approved workshop prompt update proposed by Claude tool call', async () => {

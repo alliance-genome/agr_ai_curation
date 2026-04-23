@@ -34,7 +34,10 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import BuildIcon from '@mui/icons-material/Build'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
-import { streamOpusChat } from '@/services/agentStudioService'
+import {
+  createAgentStudioSession,
+  streamOpusChat,
+} from '@/services/agentStudioService'
 import type {
   ChatMessage,
   ChatContext,
@@ -152,7 +155,8 @@ function formatShortSessionId(sessionId: string): string {
 interface OpusChatProps {
   context: ChatContext
   initialConversation?: ToolIdeaConversationEntry[] | null
-  seededDurableSessionId?: string
+  durableSessionId?: string | null
+  sourceSessionId?: string
   selectedAgent?: PromptInfo
   /** Message to auto-send (e.g., from Verify with Claude button) */
   verifyMessage?: string | null
@@ -162,6 +166,8 @@ interface OpusChatProps {
   discussMessage?: string | null
   /** Callback after discuss message is sent */
   onDiscussMessageSent?: () => void
+  /** Notify parent when a new durable Agent Studio session is minted */
+  onDurableSessionIdChange?: (sessionId: string) => void
   /** Callback with current chat transcript for workshop tool ideation */
   onConversationSnapshotChange?: (messages: ToolIdeaConversationEntry[]) => void
   /** Apply an approved prompt replacement into the Agent Workshop editor */
@@ -244,18 +250,21 @@ function buildAutoReviewRequest(proposal: WorkshopPromptUpdateProposal): string 
 function OpusChat({
   context,
   initialConversation,
-  seededDurableSessionId,
+  durableSessionId: durableSessionIdProp,
+  sourceSessionId,
   selectedAgent,
   verifyMessage,
   onVerifyMessageSent,
   discussMessage,
   onDiscussMessageSent,
+  onDurableSessionIdChange,
   onConversationSnapshotChange,
   onApplyWorkshopPromptUpdate,
 }: OpusChatProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>(() => buildDisplayMessages(initialConversation))
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
+  const [durableSessionId, setDurableSessionId] = useState<string | null>(durableSessionIdProp ?? null)
   const [toolCallsExpanded, setToolCallsExpanded] = useState<{ [key: number]: boolean }>({})  // Track expanded state per message
   const [suggestionDialogOpen, setSuggestionDialogOpen] = useState(false)
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false)
@@ -272,9 +281,22 @@ function OpusChat({
     severity: 'success',
   })
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const appliedSeededConversationRef = useRef<string | null>(
-    seededDurableSessionId && initialConversation?.length ? seededDurableSessionId : null
+  const appliedSourceConversationRef = useRef<string | null>(
+    sourceSessionId && initialConversation?.length ? sourceSessionId : null
   )
+  const preserveCurrentConversationSessionRef = useRef<string | null>(null)
+  const sessionCreatePromiseRef = useRef<Promise<string> | null>(null)
+
+  const syncDurableSessionId = useCallback((
+    nextSessionId: string | null,
+    options: { notifyParent?: boolean } = {},
+  ) => {
+    setDurableSessionId(nextSessionId)
+
+    if (nextSessionId && options.notifyParent) {
+      onDurableSessionIdChange?.(nextSessionId)
+    }
+  }, [onDurableSessionIdChange])
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -282,23 +304,32 @@ function OpusChat({
   }, [messages])
 
   useEffect(() => {
-    if (!seededDurableSessionId || !initialConversation?.length) {
+    syncDurableSessionId(durableSessionIdProp ?? null)
+  }, [durableSessionIdProp, syncDurableSessionId])
+
+  useEffect(() => {
+    if (!sourceSessionId || !initialConversation?.length) {
       return
     }
 
-    if (appliedSeededConversationRef.current === seededDurableSessionId) {
+    if (appliedSourceConversationRef.current === sourceSessionId) {
       return
     }
 
-    setMessages((current) => {
-      if (current.length > 0) {
-        return current
+    const shouldPreserveCurrentConversation =
+      preserveCurrentConversationSessionRef.current === sourceSessionId
+
+    setMessages((currentMessages) => {
+      appliedSourceConversationRef.current = sourceSessionId
+      preserveCurrentConversationSessionRef.current = null
+
+      if (shouldPreserveCurrentConversation && currentMessages.length > 0) {
+        return currentMessages
       }
 
       return buildDisplayMessages(initialConversation)
     })
-    appliedSeededConversationRef.current = seededDurableSessionId
-  }, [initialConversation, seededDurableSessionId])
+  }, [initialConversation, sourceSessionId])
 
   // Publish normalized conversation snapshot for features that need transcript context.
   useEffect(() => {
@@ -312,6 +343,26 @@ function OpusChat({
       .filter((message) => Boolean(message.content && message.content.trim()))
     onConversationSnapshotChange(snapshot)
   }, [messages, onConversationSnapshotChange])
+
+  const ensureDurableSessionId = useCallback(async (): Promise<string> => {
+    if (durableSessionId) {
+      return durableSessionId
+    }
+
+    if (!sessionCreatePromiseRef.current) {
+      sessionCreatePromiseRef.current = createAgentStudioSession()
+        .then((session) => {
+          preserveCurrentConversationSessionRef.current = session.session_id
+          syncDurableSessionId(session.session_id, { notifyParent: true })
+          return session.session_id
+        })
+        .finally(() => {
+          sessionCreatePromiseRef.current = null
+        })
+    }
+
+    return sessionCreatePromiseRef.current
+  }, [durableSessionId, syncDurableSessionId])
 
   // Reference for auto-sending verify message
   const handleSendRef = useRef<(messageText: string) => Promise<void>>()
@@ -513,7 +564,9 @@ function OpusChat({
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
 
     try {
-      for await (const event of streamOpusChat(apiMessages, context)) {
+      const activeSessionId = await ensureDurableSessionId()
+
+      for await (const event of streamOpusChat(apiMessages, context, activeSessionId)) {
         if (event.type === 'TEXT_DELTA' && event.delta) {
           setMessages((prev) => {
             const updated = [...prev]
@@ -560,7 +613,7 @@ function OpusChat({
     } finally {
       setIsStreaming(false)
     }
-  }, [input, messages, context, isStreaming, handleToolEvent])
+  }, [input, messages, context, isStreaming, ensureDurableSessionId, handleToolEvent])
 
   // Update ref for auto-send
   handleSendRef.current = handleSend
@@ -862,8 +915,8 @@ OUTPUT:
     activeTab === 'agent_workshop'
       ? context?.agent_workshop?.custom_agent_name || context?.agent_workshop?.template_name || undefined
       : selectedAgent?.agent_name
-  const durableSeedLabel = seededDurableSessionId
-    ? `Loaded from durable chat ${formatShortSessionId(seededDurableSessionId)}`
+  const durableSeedLabel = sourceSessionId
+    ? `Loaded from durable chat ${formatShortSessionId(sourceSessionId)}`
     : null
 
   const handleQuickAction = (prompt: string) => {
