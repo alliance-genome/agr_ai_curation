@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -1737,6 +1738,65 @@ def test_submission_adapter_registry_is_built_lazily_and_cached(monkeypatch):
     assert first == {"transport_key": "reference_target"}
     assert second == {"transport_key": "reference_target"}
     assert build_calls == ["built"]
+
+
+def test_resolve_submission_transport_adapter_sanitizes_missing_target(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=module.logger.name)
+    module._submission_adapter_registry.cache_clear()
+
+    class StubRegistry:
+        def require(self, target_key):
+            raise KeyError(f"Submission target '{target_key}' is missing")
+
+    monkeypatch.setattr(
+        module,
+        "build_default_submission_adapter_registry",
+        lambda: StubRegistry(),
+    )
+
+    try:
+        with pytest.raises(module.HTTPException) as exc:
+            module._resolve_submission_transport_adapter("missing_target")
+    finally:
+        module._submission_adapter_registry.cache_clear()
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Submission target is not configured"
+    assert "missing_target" not in str(exc.value.detail)
+    assert "missing_target" in caplog.text
+
+
+def test_build_submission_execute_payload_sanitizes_adapter_errors(caplog, monkeypatch):
+    caplog.set_level(logging.WARNING, logger=module.logger.name)
+
+    class StubExportAdapter:
+        def build_submission_payload(self, *, mode, target_key, payload_context):
+            raise ValueError("Payload builder exploded while preparing submission output.")
+
+    db = SimpleNamespace(get=lambda *_args, **_kwargs: None)
+    session_row = SimpleNamespace(
+        id=uuid4(),
+        document_id="document-1",
+        adapter_key=REFERENCE_ADAPTER_KEY,
+    )
+
+    monkeypatch.setattr(module, "_resolve_export_adapter", lambda _adapter_key: StubExportAdapter())
+
+    with pytest.raises(module.HTTPException) as exc:
+        module._build_submission_execute_payload(
+            db=db,
+            session_row=session_row,
+            mode=SubmissionMode.DIRECT_SUBMIT,
+            target_key="target-1",
+            ready_candidates=[],
+            session_validation=None,
+            adapter_key=REFERENCE_ADAPTER_KEY,
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Submission payload could not be built"
+    assert "payload builder exploded" not in str(exc.value.detail).lower()
+    assert "payload builder exploded" in caplog.text.lower()
 
 
 def test_execute_submission_persists_submission_updates_session_and_logs_action(db_session):

@@ -1,5 +1,7 @@
 """Unit tests for curation workspace prep endpoints."""
 
+import logging
+
 import pytest
 from uuid import uuid4
 
@@ -82,6 +84,31 @@ async def test_get_chat_prep_preview_returns_service_payload(monkeypatch):
     assert response.ready is True
     assert response.adapter_keys == ["reference_adapter"]
     assert response.candidate_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_chat_prep_preview_maps_value_error_to_sanitized_http_400(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=module.logger.name)
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    monkeypatch.setattr(
+        module,
+        "build_chat_curation_prep_preview",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ValueError("No candidate annotations are available from this chat yet.")
+        ),
+    )
+
+    with pytest.raises(module.HTTPException) as exc:
+        await module.get_chat_prep_preview(
+            session_id="session-1",
+            user={"sub": "user-1"},
+            db=object(),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid curation prep preview request"
+    assert "No candidate annotations" not in str(exc.value.detail)
+    assert "No candidate annotations" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -960,7 +987,8 @@ async def test_post_evidence_resolve_delegates_to_service(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_trigger_chat_prep_maps_value_error_to_http_400(monkeypatch):
+async def test_trigger_chat_prep_maps_value_error_to_http_400(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=module.logger.name)
     monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
 
     async def _raise_value_error(*_args, **_kwargs):
@@ -976,7 +1004,9 @@ async def test_trigger_chat_prep_maps_value_error_to_http_400(monkeypatch):
         )
 
     assert exc.value.status_code == 400
-    assert "No candidate annotations" in exc.value.detail
+    assert exc.value.detail == "Invalid curation prep request"
+    assert "No candidate annotations" not in str(exc.value.detail)
+    assert "No candidate annotations" in caplog.text
 
 
 @pytest.mark.asyncio

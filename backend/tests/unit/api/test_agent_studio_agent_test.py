@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 import uuid
 
@@ -317,9 +318,10 @@ class TestAgentTestEndpoint:
             )
         assert access_exc.value.status_code == 403
 
-    def test_endpoint_maps_metadata_lookup_and_init_errors(self, monkeypatch):
+    def test_endpoint_maps_metadata_lookup_and_init_errors(self, monkeypatch, caplog):
         import src.api.agent_studio as api_module
 
+        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -357,7 +359,9 @@ class TestAgentTestEndpoint:
                 )
             )
         assert init_exc.value.status_code == 400
-        assert "Failed to initialize agent" in str(init_exc.value.detail)
+        assert init_exc.value.detail == "Failed to initialize agent"
+        assert "init failed" not in str(init_exc.value.detail)
+        assert "init failed" in caplog.text
 
     def test_endpoint_requires_user_identifier(self, monkeypatch):
         import src.api.agent_studio as api_module

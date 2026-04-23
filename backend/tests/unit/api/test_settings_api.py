@@ -1,5 +1,7 @@
 """Unit tests for settings API endpoints."""
 
+import logging
+
 import pytest
 from fastapi import HTTPException
 
@@ -39,7 +41,9 @@ async def test_get_settings_endpoint_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_settings_endpoint_raises_500_on_error(monkeypatch):
+async def test_get_settings_endpoint_raises_500_on_error(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=settings.logger.name)
+
     async def _boom():
         raise RuntimeError("settings backend down")
 
@@ -51,7 +55,9 @@ async def test_get_settings_endpoint_raises_500_on_error(monkeypatch):
         await settings.get_settings_endpoint({"sub": "dev-user-123"})
 
     assert exc.value.status_code == 500
-    assert "Failed to retrieve settings" in str(exc.value.detail)
+    assert exc.value.detail == "Failed to retrieve settings"
+    assert "settings backend down" not in str(exc.value.detail)
+    assert "settings backend down" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -172,7 +178,9 @@ async def test_update_settings_endpoint_no_payload_returns_warning(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_settings_endpoint_internal_error_returns_500(monkeypatch):
+async def test_update_settings_endpoint_internal_error_returns_500(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=settings.logger.name)
+
     async def _models():
         raise RuntimeError("model backend unavailable")
 
@@ -195,4 +203,6 @@ async def test_update_settings_endpoint_internal_error_returns_500(monkeypatch):
         )
 
     assert exc.value.status_code == 500
-    assert "Failed to update settings" in str(exc.value.detail)
+    assert exc.value.detail == "Failed to update settings"
+    assert "model backend unavailable" not in str(exc.value.detail)
+    assert "model backend unavailable" in caplog.text

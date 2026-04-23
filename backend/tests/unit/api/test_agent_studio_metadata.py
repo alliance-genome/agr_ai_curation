@@ -1,5 +1,8 @@
 """Tests for agent metadata API endpoint."""
+import logging
 from types import SimpleNamespace
+
+import pytest
 
 
 class TestGetRegistryMetadata:
@@ -379,6 +382,31 @@ class TestGetRegistryMetadata:
         )
 
         assert "CUSTOM WB OVERRIDE" in result.prompt
+
+    @pytest.mark.asyncio
+    async def test_get_prompt_preview_maps_unexpected_errors_to_500(self, monkeypatch, caplog):
+        from src.api import agent_studio as api_module
+
+        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
+
+        class _BrokenService:
+            def get_agent(self, _agent_id):
+                raise RuntimeError("preview exploded")
+
+        monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: _BrokenService())
+
+        with pytest.raises(api_module.HTTPException) as exc_info:
+            await api_module.get_prompt_preview(
+                agent_id="gene",
+                group_id=None,
+                user={"sub": "test-sub"},
+                db=SimpleNamespace(),
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == "Failed to get prompt preview"
+        assert "preview exploded" not in str(exc_info.value.detail)
+        assert "preview exploded" in caplog.text
 
     def test_group_rule_info_legacy_alias_serializes_canonical_group_id(self):
         from src.lib.agent_studio.models import GroupRuleInfo

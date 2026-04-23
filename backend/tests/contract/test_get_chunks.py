@@ -90,4 +90,5 @@ def test_get_chunks_bubbles_internal_error_as_500(client: TestClient):
         response = client.get("/weaviate/documents/doc-500/chunks?page=1&page_size=20")
 
     assert response.status_code == 500
-    assert "Failed to retrieve chunks" in response.json()["detail"]
+    assert response.json()["detail"] == "Failed to retrieve chunks"
+    assert "backend blew up" not in response.text

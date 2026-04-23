@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -735,6 +736,88 @@ async def test_ensure_bootstrap_extraction_result_runs_chat_prep_when_missing(mo
     assert captured["request"].session_id == "chat-session-1"
     assert captured["request"].adapter_keys == ["gene"]
     assert captured["user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_ensure_bootstrap_extraction_result_sanitizes_validation_errors(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=module.logger.name)
+
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        lambda db, *, document_id, request: (_ for _ in ()).throw(
+            module.HTTPException(status_code=404, detail="missing")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_chat_curation_prep_request",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            ValueError("Adapter scope confirmation is missing for this chat.")
+        ),
+    )
+
+    with pytest.raises(module.HTTPException) as exc:
+        await module._ensure_bootstrap_extraction_result(
+            object(),
+            document_id="document-1",
+            request=CurationDocumentBootstrapRequest(
+                origin_session_id="chat-session-1",
+                adapter_key="gene",
+            ),
+            current_user_id="user-1",
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "Bootstrap origin session could not be validated"
+    assert "scope confirmation" not in str(exc.value.detail).lower()
+    assert "scope confirmation" in caplog.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_ensure_bootstrap_extraction_result_sanitizes_chat_prep_errors(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=module.logger.name)
+
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        lambda db, *, document_id, request: (_ for _ in ()).throw(
+            module.HTTPException(status_code=404, detail="missing")
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "validate_chat_curation_prep_request",
+        lambda **_kwargs: (
+            SimpleNamespace(
+                extraction_results=[
+                    SimpleNamespace(document_id="document-1", flow_run_id=None),
+                ]
+            ),
+            ["gene"],
+        ),
+    )
+
+    async def _raise_value_error(*_args, **_kwargs):
+        raise ValueError("Downstream curation prep execution failed.")
+
+    monkeypatch.setattr(module, "run_chat_curation_prep", _raise_value_error)
+
+    with pytest.raises(module.HTTPException) as exc:
+        await module._ensure_bootstrap_extraction_result(
+            object(),
+            document_id="document-1",
+            request=CurationDocumentBootstrapRequest(
+                origin_session_id="chat-session-1",
+                adapter_key="gene",
+            ),
+            current_user_id="user-1",
+        )
+
+    assert exc.value.status_code == 422
+    assert exc.value.detail == "Bootstrap curation prep could not be prepared"
+    assert "downstream curation prep execution failed" not in str(exc.value.detail).lower()
+    assert "downstream curation prep execution failed" in caplog.text.lower()
 
 
 @pytest.mark.asyncio

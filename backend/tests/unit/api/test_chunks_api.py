@@ -1,5 +1,7 @@
 """Unit tests for chunks API endpoint handler."""
 
+import logging
+
 import pytest
 from fastapi import HTTPException
 
@@ -136,7 +138,9 @@ async def test_get_document_chunks_accepts_minimal_metadata_when_include_metadat
 
 
 @pytest.mark.asyncio
-async def test_get_document_chunks_maps_unexpected_errors_to_500(monkeypatch):
+async def test_get_document_chunks_maps_unexpected_errors_to_500(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=chunks_api.logger.name)
+
     async def _boom(_document_id, _pagination, _user_id):
         raise RuntimeError("downstream exploded")
 
@@ -151,4 +155,6 @@ async def test_get_document_chunks_maps_unexpected_errors_to_500(monkeypatch):
             user={"sub": "user-1"},
         )
     assert exc.value.status_code == 500
-    assert "downstream exploded" in exc.value.detail
+    assert exc.value.detail == "Failed to retrieve chunks"
+    assert "downstream exploded" not in str(exc.value.detail)
+    assert "downstream exploded" in caplog.text

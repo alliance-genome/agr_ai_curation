@@ -1,5 +1,7 @@
 """Unit tests for document processing API endpoints."""
 
+import logging
+
 from fastapi import BackgroundTasks, HTTPException
 import pytest
 from types import SimpleNamespace
@@ -388,3 +390,56 @@ async def test_reembed_document_allows_stale_processing_status_when_job_terminal
     )
 
     assert result.success is True
+
+
+@pytest.mark.asyncio
+async def test_reprocess_document_maps_internal_error_to_sanitized_500(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=processing.logger.name)
+
+    async def _boom(_user_id, _doc_id):
+        raise RuntimeError("reprocess backend unavailable")
+
+    async def _update_status(_doc_id, _uid, _status):
+        return None
+
+    monkeypatch.setattr(processing, "get_document", _boom)
+    monkeypatch.setattr(processing, "update_document_status", _update_status)
+
+    with pytest.raises(HTTPException) as exc:
+        await processing.reprocess_document_endpoint(
+            BackgroundTasks(),
+            document_id="doc-1",
+            request=ReprocessRequest(strategy_name="default", force_reparse=False),
+            user={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to initiate reprocessing"
+    assert "reprocess backend unavailable" not in str(exc.value.detail)
+    assert "reprocess backend unavailable" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reembed_document_maps_internal_error_to_sanitized_500(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=processing.logger.name)
+
+    async def _boom(_user_id, _doc_id):
+        raise RuntimeError("embedding backend unavailable")
+
+    async def _update_status(_doc_id, _uid, _status):
+        return None
+
+    monkeypatch.setattr(processing, "get_document", _boom)
+    monkeypatch.setattr(processing, "update_document_status", _update_status)
+
+    with pytest.raises(HTTPException) as exc:
+        await processing.reembed_document_endpoint(
+            document_id="doc-1",
+            request=None,
+            user={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to initiate re-embedding"
+    assert "embedding backend unavailable" not in str(exc.value.detail)
+    assert "embedding backend unavailable" in caplog.text

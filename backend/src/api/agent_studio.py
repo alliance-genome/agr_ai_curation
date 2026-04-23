@@ -89,6 +89,7 @@ from src.lib.chat_history_repository import (
 )
 from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
+from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.openai_agents import run_agent_streamed
 from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import SessionLocal, get_db
@@ -821,9 +822,14 @@ async def get_catalog(
         service = get_prompt_catalog()
         catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
         return CatalogResponse(catalog=catalog)
-    except Exception as e:
-        logger.error('Failed to get prompt catalog: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load prompt catalog",
+            log_message="Failed to get prompt catalog",
+            exc=exc,
+        )
 
 
 @router.post(
@@ -842,9 +848,14 @@ async def refresh_catalog(
         service.refresh()
         catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
         return CatalogResponse(catalog=catalog)
-    except Exception as e:
-        logger.error('Failed to refresh prompt catalog: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to refresh prompt catalog",
+            log_message="Failed to refresh prompt catalog",
+            exc=exc,
+        )
 
 
 @router.post(
@@ -873,9 +884,14 @@ async def get_combined_prompt(
         )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error('Failed to get combined prompt: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to get combined prompt",
+            log_message="Failed to get combined prompt",
+            exc=exc,
+        )
 
 
 @router.get(
@@ -976,9 +992,14 @@ async def get_prompt_preview(
         )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("Failed to get prompt preview for '%s': %s", agent_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to get prompt preview",
+            log_message=f"Failed to get prompt preview for '{agent_id}'",
+            exc=exc,
+        )
 
 
 @router.post(
@@ -1038,7 +1059,13 @@ async def test_agent_endpoint(
             active_groups=active_groups,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to initialize agent '{agent_id}': {exc}")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Failed to initialize agent",
+            log_message=f"Failed to initialize agent '{agent_id}' for isolated test execution",
+            exc=exc,
+        )
 
     async def _stream_events():
         trace_id = None
@@ -3962,9 +3989,14 @@ async def get_all_tools_endpoint(
     try:
         tools = get_all_tools()
         return {"tools": tools}
-    except Exception as e:
-        logger.error('Failed to get tools: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to retrieve tools",
+            log_message="Failed to get tools",
+            exc=exc,
+        )
 
 
 @router.get(
@@ -4006,6 +4038,11 @@ async def get_tool_details_endpoint(
         return {"tool": tool}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error('Failed to get tool details: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to retrieve tool details",
+            log_message=f"Failed to get tool details for '{tool_id}'",
+            exc=exc,
+        )
