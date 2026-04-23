@@ -110,6 +110,46 @@ AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
 ]
 
 
+def _raise_agent_studio_lookup_http_exception(
+    *,
+    exc: CustomAgentNotFoundError | CustomAgentAccessError,
+    log_message: str,
+    not_found_detail: str,
+    access_denied_detail: str,
+) -> None:
+    """Map lookup/access failures to client-safe HTTP errors with logging."""
+
+    status_code = 404 if exc.__class__.__name__ == "CustomAgentNotFoundError" else 403
+    detail = not_found_detail if status_code == 404 else access_denied_detail
+    raise_sanitized_http_exception(
+        logger,
+        status_code=status_code,
+        detail=detail,
+        log_message=log_message,
+        exc=exc,
+        level=logging.WARNING,
+    )
+
+
+def _raise_agent_studio_validation_http_exception(
+    *,
+    exc: Exception,
+    status_code: int,
+    detail: str,
+    log_message: str,
+) -> None:
+    """Log validation failures while returning a stable client response."""
+
+    raise_sanitized_http_exception(
+        logger,
+        status_code=status_code,
+        detail=detail,
+        log_message=log_message,
+        exc=exc,
+        level=logging.WARNING,
+    )
+
+
 def _list_anthropic_catalog_models() -> List[Any]:
     """Return Anthropic models from catalog, sorted with defaults first."""
     try:
@@ -645,7 +685,12 @@ async def create_tool_idea_endpoint(
         return ToolIdeaResponseItem(**tool_idea_request_to_dict(record))
     except ValueError as exc:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc))
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Tool idea request is invalid",
+            log_message="Failed to create tool idea request",
+        )
 
 
 @router.get(
@@ -690,17 +735,29 @@ async def clone_agent_endpoint(
         db.commit()
         db.refresh(custom_agent)
         return custom_agent_to_dict(custom_agent)
-    except CustomAgentNotFoundError as exc:
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        db.rollback()
-        raise HTTPException(status_code=403, detail=str(exc))
+        _raise_agent_studio_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to clone visible agent '{agent_id}'",
+            not_found_detail="Agent not found",
+            access_denied_detail="Access denied to agent",
+        )
     except ValueError as exc:
         db.rollback()
         if "already exists" in str(exc):
-            raise HTTPException(status_code=409, detail=str(exc))
-        raise HTTPException(status_code=400, detail=str(exc))
+            _raise_agent_studio_validation_http_exception(
+                exc=exc,
+                status_code=409,
+                detail="A custom agent with this name already exists",
+                log_message=f"Failed to clone visible agent '{agent_id}' because the target name already exists",
+            )
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Agent clone request is invalid",
+            log_message=f"Failed to clone visible agent '{agent_id}'",
+        )
 
 
 @router.post(
@@ -732,15 +789,22 @@ async def share_agent_endpoint(
         db.commit()
         db.refresh(custom_agent)
         return custom_agent_to_dict(custom_agent)
-    except CustomAgentNotFoundError as exc:
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        db.rollback()
-        raise HTTPException(status_code=403, detail=str(exc))
+        _raise_agent_studio_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to update visibility for agent '{agent_id}'",
+            not_found_detail="Custom agent not found",
+            access_denied_detail="Access denied to custom agent",
+        )
     except ValueError as exc:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc))
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Agent visibility update is invalid",
+            log_message=f"Failed to update visibility for agent '{agent_id}'",
+        )
 
 @router.get(
     "/registry/metadata",
@@ -921,15 +985,18 @@ async def get_prompt_preview(
 
             custom_uuid = parse_custom_agent_id(agent_id)
             if not custom_uuid:
-                raise HTTPException(status_code=400, detail=f"Invalid custom agent id: {agent_id}")
+                raise HTTPException(status_code=400, detail="Invalid custom agent id")
 
             db_user = set_global_user_from_cognito(db, user)
             try:
                 custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
-            except CustomAgentNotFoundError as exc:
-                raise HTTPException(status_code=404, detail=str(exc))
-            except CustomAgentAccessError as exc:
-                raise HTTPException(status_code=403, detail=str(exc))
+            except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+                _raise_agent_studio_lookup_http_exception(
+                    exc=exc,
+                    log_message=f"Failed to load prompt preview for custom agent '{agent_id}'",
+                    not_found_detail="Custom agent not found",
+                    access_denied_detail="Access denied to custom agent",
+                )
             preview = custom_agent.custom_prompt
 
             custom_group_rules_enabled = bool(
@@ -1020,19 +1087,27 @@ async def test_agent_endpoint(
     if agent_id.startswith("ca_"):
         custom_uuid = parse_custom_agent_id(agent_id)
         if not custom_uuid:
-            raise HTTPException(status_code=400, detail=f"Invalid custom agent id: {agent_id}")
+            raise HTTPException(status_code=400, detail="Invalid custom agent id")
         try:
             custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
             resolved_agent_id = make_custom_agent_id(custom_agent.id)
-        except CustomAgentNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
-        except CustomAgentAccessError as exc:
-            raise HTTPException(status_code=403, detail=str(exc))
+        except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+            _raise_agent_studio_lookup_http_exception(
+                exc=exc,
+                log_message=f"Failed to resolve custom agent '{agent_id}' for isolated test execution",
+                not_found_detail="Custom agent not found",
+                access_denied_detail="Access denied to custom agent",
+            )
 
     try:
         metadata = get_agent_metadata(resolved_agent_id, db_user_id=db_user.id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=404,
+            detail="Agent not found",
+            log_message=f"Failed to load agent metadata for '{resolved_agent_id}'",
+        )
 
     if metadata.get("requires_document") and not request.document_id:
         raise HTTPException(
@@ -2749,7 +2824,12 @@ async def chat_with_opus(
     except ChatHistorySessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Chat session not found") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Agent Studio chat request is invalid",
+            log_message="Failed to persist Agent Studio chat request because the request was invalid",
+        )
     except Exception as exc:
         logger.error('Failed to persist Agent Studio chat request: %s', exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to persist Agent Studio chat request") from exc

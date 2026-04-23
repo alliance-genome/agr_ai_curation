@@ -274,10 +274,12 @@ class TestAgentTestEndpoint:
             )
 
         assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Invalid custom agent id"
 
-    def test_endpoint_maps_custom_agent_lookup_errors(self, monkeypatch):
+    def test_endpoint_maps_custom_agent_lookup_errors(self, monkeypatch, caplog):
         import src.api.agent_studio as api_module
 
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         custom_uuid = uuid.uuid4()
         monkeypatch.setattr(
             api_module,
@@ -301,6 +303,9 @@ class TestAgentTestEndpoint:
                 )
             )
         assert not_found_exc.value.status_code == 404
+        assert not_found_exc.value.detail == "Custom agent not found"
+        assert "missing" not in str(not_found_exc.value.detail)
+        assert "missing" in caplog.text
 
         monkeypatch.setattr(
             api_module,
@@ -317,11 +322,14 @@ class TestAgentTestEndpoint:
                 )
             )
         assert access_exc.value.status_code == 403
+        assert access_exc.value.detail == "Access denied to custom agent"
+        assert "forbidden" not in str(access_exc.value.detail)
+        assert "forbidden" in caplog.text
 
     def test_endpoint_maps_metadata_lookup_and_init_errors(self, monkeypatch, caplog):
         import src.api.agent_studio as api_module
 
-        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -342,6 +350,9 @@ class TestAgentTestEndpoint:
                 )
             )
         assert metadata_exc.value.status_code == 404
+        assert metadata_exc.value.detail == "Agent not found"
+        assert "unknown agent" not in str(metadata_exc.value.detail)
+        assert "unknown agent" in caplog.text
 
         monkeypatch.setattr(api_module, "get_agent_metadata", lambda *_args, **_kwargs: {"requires_document": False})
         monkeypatch.setattr(

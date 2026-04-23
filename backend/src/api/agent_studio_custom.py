@@ -35,10 +35,49 @@ from src.lib.agent_studio.custom_agent_service import (
     soft_delete_custom_agent,
     update_custom_agent,
 )
+from src.lib.http_errors import raise_sanitized_http_exception
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agent-studio/custom-agents")
+
+
+def _raise_custom_agent_lookup_http_exception(
+    *,
+    exc: CustomAgentNotFoundError | CustomAgentAccessError,
+    log_message: str,
+) -> None:
+    """Map custom-agent lookup failures to client-safe HTTP errors."""
+
+    status_code = 404 if exc.__class__.__name__ == "CustomAgentNotFoundError" else 403
+    detail = "Custom agent not found" if status_code == 404 else "Access denied to custom agent"
+    raise_sanitized_http_exception(
+        logger,
+        status_code=status_code,
+        detail=detail,
+        log_message=log_message,
+        exc=exc,
+        level=logging.WARNING,
+    )
+
+
+def _raise_custom_agent_validation_http_exception(
+    *,
+    exc: Exception,
+    status_code: int,
+    detail: str,
+    log_message: str,
+) -> None:
+    """Log validation failures while returning a stable client response."""
+
+    raise_sanitized_http_exception(
+        logger,
+        status_code=status_code,
+        detail=detail,
+        log_message=log_message,
+        exc=exc,
+        level=logging.WARNING,
+    )
 
 
 class CreateCustomAgentRequest(BaseModel):
@@ -219,8 +258,18 @@ async def create_custom_agent_endpoint(
     except ValueError as exc:
         db.rollback()
         if "already exists" in str(exc):
-            raise HTTPException(status_code=409, detail=str(exc))
-        raise HTTPException(status_code=400, detail=str(exc))
+            _raise_custom_agent_validation_http_exception(
+                exc=exc,
+                status_code=409,
+                detail="A custom agent with this name already exists",
+                log_message="Failed to create custom agent because the target name already exists",
+            )
+        _raise_custom_agent_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Custom agent request is invalid",
+            log_message="Failed to create custom agent",
+        )
     except IntegrityError as exc:
         db.rollback()
         error_text = str(exc.orig)
@@ -248,7 +297,12 @@ async def list_custom_agents_endpoint(
             total=len(agents),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        _raise_custom_agent_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Custom agent query is invalid",
+            log_message="Failed to list custom agents",
+        )
 
 
 @router.get("/{custom_agent_id}", response_model=CustomAgentResponse)
@@ -262,10 +316,11 @@ async def get_custom_agent_endpoint(
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
         return _as_response_payload(custom_agent)
-    except CustomAgentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+        _raise_custom_agent_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to load custom agent '{custom_agent_id}'",
+        )
 
 
 @router.put("/{custom_agent_id}", response_model=CustomAgentResponse)
@@ -299,17 +354,27 @@ async def update_custom_agent_endpoint(
         db.commit()
         db.refresh(custom_agent)
         return _as_response_payload(custom_agent)
-    except CustomAgentNotFoundError as exc:
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        db.rollback()
-        raise HTTPException(status_code=403, detail=str(exc))
+        _raise_custom_agent_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to update custom agent '{custom_agent_id}'",
+        )
     except ValueError as exc:
         db.rollback()
         if "already exists" in str(exc):
-            raise HTTPException(status_code=409, detail=str(exc))
-        raise HTTPException(status_code=400, detail=str(exc))
+            _raise_custom_agent_validation_http_exception(
+                exc=exc,
+                status_code=409,
+                detail="A custom agent with this name already exists",
+                log_message=f"Failed to update custom agent '{custom_agent_id}' because the target name already exists",
+            )
+        _raise_custom_agent_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Custom agent update is invalid",
+            log_message=f"Failed to update custom agent '{custom_agent_id}'",
+        )
     except IntegrityError as exc:
         db.rollback()
         error_text = str(exc.orig)
@@ -335,12 +400,12 @@ async def delete_custom_agent_endpoint(
         soft_delete_custom_agent(custom_agent)
         db.commit()
         return {"status": "deleted", "id": str(custom_agent_id)}
-    except CustomAgentNotFoundError as exc:
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        db.rollback()
-        raise HTTPException(status_code=403, detail=str(exc))
+        _raise_custom_agent_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to delete custom agent '{custom_agent_id}'",
+        )
 
 
 @router.get("/{custom_agent_id}/versions", response_model=List[CustomAgentVersionResponse])
@@ -355,10 +420,11 @@ async def list_custom_agent_versions_endpoint(
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
         versions = list_custom_agent_versions(db, custom_agent.id)
         return [_as_version_payload(v) for v in versions]
-    except CustomAgentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+        _raise_custom_agent_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to list versions for custom agent '{custom_agent_id}'",
+        )
 
 
 @router.post("/{custom_agent_id}/revert/{version}", response_model=CustomAgentResponse)
@@ -382,12 +448,12 @@ async def revert_custom_agent_endpoint(
         db.commit()
         db.refresh(custom_agent)
         return _as_response_payload(custom_agent)
-    except CustomAgentNotFoundError as exc:
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        db.rollback()
-        raise HTTPException(status_code=403, detail=str(exc))
+        _raise_custom_agent_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to revert custom agent '{custom_agent_id}' to version {version}",
+        )
 
 
 @router.post("/{custom_agent_id}/test")
@@ -401,10 +467,11 @@ async def test_custom_agent_endpoint(
     db_user = set_global_user_from_cognito(db, user)
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
-    except CustomAgentNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+        _raise_custom_agent_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to initialize custom agent test for '{custom_agent_id}'",
+        )
 
     runtime_info = get_custom_agent_runtime_info(make_custom_agent_id(custom_agent.id), db=db)
     if not runtime_info:
@@ -434,7 +501,13 @@ async def test_custom_agent_endpoint(
             active_groups=active_groups,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to initialize custom agent: {exc}")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Failed to initialize custom agent",
+            log_message=f"Failed to initialize custom agent '{custom_agent_id}' for isolated test execution",
+            exc=exc,
+        )
 
     async def _stream_events():
         trace_id = None

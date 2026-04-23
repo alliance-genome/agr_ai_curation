@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
+import logging
 from types import SimpleNamespace
 import uuid
 
@@ -83,10 +84,11 @@ def test_create_tool_idea_endpoint_submits_request(monkeypatch):
     assert response.status == "submitted"
 
 
-def test_create_tool_idea_endpoint_returns_400_on_validation_error(monkeypatch):
+def test_create_tool_idea_endpoint_returns_400_on_validation_error(monkeypatch, caplog):
     import src.api.agent_studio as api_module
 
     rollback_called = {"value": False}
+    caplog.set_level(logging.WARNING, logger=api_module.logger.name)
 
     monkeypatch.setattr(
         api_module,
@@ -124,7 +126,9 @@ def test_create_tool_idea_endpoint_returns_400_on_validation_error(monkeypatch):
 
     assert rollback_called["value"] is True
     assert exc_info.value.status_code == 400
-    assert "description is required" in str(exc_info.value.detail)
+    assert exc_info.value.detail == "Tool idea request is invalid"
+    assert "description is required" not in str(exc_info.value.detail)
+    assert "description is required" in caplog.text
 
 
 def test_list_tool_ideas_endpoint_returns_current_user_requests(monkeypatch):

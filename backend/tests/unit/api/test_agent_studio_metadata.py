@@ -383,6 +383,64 @@ class TestGetRegistryMetadata:
 
         assert "CUSTOM WB OVERRIDE" in result.prompt
 
+    def test_get_prompt_preview_custom_agent_lookup_errors_are_sanitized(self, monkeypatch, caplog):
+        import asyncio
+        from src.api import agent_studio as api_module
+
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
+
+        CustomAgentNotFoundError = type("CustomAgentNotFoundError", (Exception,), {})
+        CustomAgentAccessError = type("CustomAgentAccessError", (Exception,), {})
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+
+        fake_custom_module = SimpleNamespace(
+            parse_custom_agent_id=lambda _aid: "uuid",
+            get_custom_agent_for_user=lambda _db, _uuid, _uid: (_ for _ in ()).throw(
+                CustomAgentNotFoundError("custom prompt missing")
+            ),
+            CustomAgentNotFoundError=CustomAgentNotFoundError,
+            CustomAgentAccessError=CustomAgentAccessError,
+        )
+        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
+
+        with pytest.raises(api_module.HTTPException) as not_found_exc:
+            asyncio.run(
+                api_module.get_prompt_preview(
+                    agent_id="ca_11111111-2222-3333-4444-555555555555",
+                    group_id=None,
+                    user={"sub": "test-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+
+        assert not_found_exc.value.status_code == 404
+        assert not_found_exc.value.detail == "Custom agent not found"
+        assert "custom prompt missing" not in str(not_found_exc.value.detail)
+        assert "custom prompt missing" in caplog.text
+
+        fake_custom_module.get_custom_agent_for_user = lambda _db, _uuid, _uid: (_ for _ in ()).throw(
+            CustomAgentAccessError("custom prompt forbidden")
+        )
+        with pytest.raises(api_module.HTTPException) as access_exc:
+            asyncio.run(
+                api_module.get_prompt_preview(
+                    agent_id="ca_11111111-2222-3333-4444-555555555555",
+                    group_id=None,
+                    user={"sub": "test-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+
+        assert access_exc.value.status_code == 403
+        assert access_exc.value.detail == "Access denied to custom agent"
+        assert "custom prompt forbidden" not in str(access_exc.value.detail)
+        assert "custom prompt forbidden" in caplog.text
+
     @pytest.mark.asyncio
     async def test_get_prompt_preview_maps_unexpected_errors_to_500(self, monkeypatch, caplog):
         from src.api import agent_studio as api_module

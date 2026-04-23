@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
+import logging
 from types import SimpleNamespace
 import uuid
 from unittest.mock import MagicMock
@@ -255,9 +256,10 @@ class TestCustomAgentCrudContract:
         assert request.group_prompt_overrides == {"WB": "Rules"}
         assert request.include_group_rules is True
 
-    def test_create_endpoint_returns_400_for_unknown_model(self, monkeypatch):
+    def test_create_endpoint_returns_400_for_unknown_model(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -289,7 +291,9 @@ class TestCustomAgentCrudContract:
             )
 
         assert exc_info.value.status_code == 400
-        assert "Unknown model_id" in str(exc_info.value.detail)
+        assert exc_info.value.detail == "Custom agent request is invalid"
+        assert "Unknown model_id" not in str(exc_info.value.detail)
+        assert "Unknown model_id" in caplog.text
 
     def test_list_endpoint_filters_by_template_source_only(self, monkeypatch):
         import src.api.agent_studio_custom as api_module
@@ -379,9 +383,10 @@ def _db_mock():
 
 
 class TestCustomAgentCrudErrorsAndBranches:
-    def test_create_endpoint_returns_409_for_duplicate_name_value_error(self, monkeypatch):
+    def test_create_endpoint_returns_409_for_duplicate_name_value_error(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -404,6 +409,8 @@ class TestCustomAgentCrudErrorsAndBranches:
             )
 
         assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "A custom agent with this name already exists"
+        assert "custom agent already exists" in caplog.text
         db.rollback.assert_called_once()
 
     def test_create_endpoint_returns_409_for_unique_integrity_error(self, monkeypatch):
@@ -466,9 +473,10 @@ class TestCustomAgentCrudErrorsAndBranches:
         assert exc_info.value.status_code == 500
         db.rollback.assert_called_once()
 
-    def test_list_endpoint_value_error_maps_to_400(self, monkeypatch):
+    def test_list_endpoint_value_error_maps_to_400(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -490,13 +498,17 @@ class TestCustomAgentCrudErrorsAndBranches:
             )
 
         assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Custom agent query is invalid"
+        assert "invalid template source" not in str(exc_info.value.detail)
+        assert "invalid template source" in caplog.text
 
-    def test_get_endpoint_maps_not_found_and_access_errors(self, monkeypatch):
+    def test_get_endpoint_maps_not_found_and_access_errors(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 
         from src.lib.agent_studio.custom_agent_service import CustomAgentAccessError, CustomAgentNotFoundError
 
         custom_agent_id = uuid.uuid4()
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -506,7 +518,9 @@ class TestCustomAgentCrudErrorsAndBranches:
         monkeypatch.setattr(
             api_module,
             "get_custom_agent_for_user",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(CustomAgentNotFoundError("not found")),
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                CustomAgentNotFoundError(f"Custom agent '{custom_agent_id}' not found")
+            ),
         )
         with pytest.raises(HTTPException) as not_found_exc:
             asyncio.run(
@@ -517,6 +531,9 @@ class TestCustomAgentCrudErrorsAndBranches:
                 )
             )
         assert not_found_exc.value.status_code == 404
+        assert not_found_exc.value.detail == "Custom agent not found"
+        assert str(custom_agent_id) not in str(not_found_exc.value.detail)
+        assert str(custom_agent_id) in caplog.text
 
         monkeypatch.setattr(
             api_module,
@@ -532,6 +549,9 @@ class TestCustomAgentCrudErrorsAndBranches:
                 )
             )
         assert access_exc.value.status_code == 403
+        assert access_exc.value.detail == "Access denied to custom agent"
+        assert "forbidden" not in str(access_exc.value.detail)
+        assert "forbidden" in caplog.text
 
     def test_update_endpoint_success_commits_refreshes_and_returns_payload(self, monkeypatch):
         import src.api.agent_studio_custom as api_module
@@ -560,10 +580,11 @@ class TestCustomAgentCrudErrorsAndBranches:
         db.commit.assert_called_once()
         db.refresh.assert_called_once_with(custom_agent)
 
-    def test_update_endpoint_maps_value_and_integrity_errors(self, monkeypatch):
+    def test_update_endpoint_maps_value_and_integrity_errors(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 
         custom_agent = SimpleNamespace(id=uuid.uuid4())
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -587,6 +608,8 @@ class TestCustomAgentCrudErrorsAndBranches:
                 )
             )
         assert conflict_exc.value.status_code == 409
+        assert conflict_exc.value.detail == "A custom agent with this name already exists"
+        assert "name already exists" in caplog.text
         db.rollback.assert_called_once()
 
         db_unique = IntegrityError(
@@ -612,12 +635,13 @@ class TestCustomAgentCrudErrorsAndBranches:
         assert integrity_exc.value.status_code == 409
         db.rollback.assert_called_once()
 
-    def test_delete_and_versions_endpoints_map_access_errors(self, monkeypatch):
+    def test_delete_and_versions_endpoints_map_access_errors(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 
         from src.lib.agent_studio.custom_agent_service import CustomAgentAccessError, CustomAgentNotFoundError
 
         custom_agent_id = uuid.uuid4()
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -639,6 +663,9 @@ class TestCustomAgentCrudErrorsAndBranches:
                 )
             )
         assert delete_exc.value.status_code == 403
+        assert delete_exc.value.detail == "Access denied to custom agent"
+        assert "forbidden" not in str(delete_exc.value.detail)
+        assert "forbidden" in caplog.text
         db.rollback.assert_called_once()
 
         monkeypatch.setattr(
@@ -655,13 +682,17 @@ class TestCustomAgentCrudErrorsAndBranches:
                 )
             )
         assert versions_exc.value.status_code == 404
+        assert versions_exc.value.detail == "Custom agent not found"
+        assert "missing" not in str(versions_exc.value.detail)
+        assert "missing" in caplog.text
 
-    def test_revert_endpoint_success_and_404(self, monkeypatch):
+    def test_revert_endpoint_success_and_404(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 
         from src.lib.agent_studio.custom_agent_service import CustomAgentNotFoundError
 
         custom_agent = SimpleNamespace(id=uuid.uuid4())
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -702,12 +733,16 @@ class TestCustomAgentCrudErrorsAndBranches:
                 )
             )
         assert revert_exc.value.status_code == 404
+        assert revert_exc.value.detail == "Custom agent not found"
+        assert "missing" not in str(revert_exc.value.detail)
+        assert "missing" in caplog.text
         db.rollback.assert_called_once()
 
-    def test_test_endpoint_runtime_and_stream_error_branches(self, monkeypatch):
+    def test_test_endpoint_runtime_and_stream_error_branches(self, monkeypatch, caplog):
         import src.api.agent_studio_custom as api_module
 
         custom_agent_id = uuid.uuid4()
+        caplog.set_level(logging.WARNING, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -776,6 +811,9 @@ class TestCustomAgentCrudErrorsAndBranches:
                 )
             )
         assert init_exc.value.status_code == 400
+        assert init_exc.value.detail == "Failed to initialize custom agent"
+        assert "init failed" not in str(init_exc.value.detail)
+        assert "init failed" in caplog.text
 
         monkeypatch.setattr(api_module, "get_agent_by_id", lambda *_args, **_kwargs: object())
 

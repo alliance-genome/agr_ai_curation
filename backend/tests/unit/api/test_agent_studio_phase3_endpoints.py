@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import UTC, datetime
+import logging
 from types import SimpleNamespace
 import uuid
 
@@ -77,10 +78,51 @@ def test_clone_agent_endpoint_clones_visible_agent(monkeypatch):
     assert response["agent_id"] == "ca_11111111-1111-1111-1111-111111111111"
 
 
-def test_clone_agent_endpoint_returns_403_on_access_error(monkeypatch):
+def test_clone_agent_endpoint_returns_404_with_sanitized_missing_agent_detail(monkeypatch, caplog):
     import src.api.agent_studio as api_module
 
     rollback_called = {"value": False}
+    caplog.set_level(logging.WARNING, logger=api_module.logger.name)
+
+    monkeypatch.setattr(
+        api_module,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=1, auth_sub="auth-sub"),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "clone_visible_agent_for_user",
+        lambda **_kwargs: (_ for _ in ()).throw(api_module.CustomAgentNotFoundError("Agent 'ca_source' not found")),
+    )
+
+    db = SimpleNamespace(
+        commit=lambda: None,
+        refresh=lambda _obj: None,
+        rollback=lambda: rollback_called.__setitem__("value", True),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_module.clone_agent_endpoint(
+                agent_id="ca_source",
+                request=api_module.CloneAgentRequest(name="Gene Copy"),
+                user={"sub": "auth-sub"},
+                db=db,
+            )
+        )
+
+    assert rollback_called["value"] is True
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Agent not found"
+    assert "ca_source" not in str(exc_info.value.detail)
+    assert "ca_source" in caplog.text
+
+
+def test_clone_agent_endpoint_returns_403_on_access_error(monkeypatch, caplog):
+    import src.api.agent_studio as api_module
+
+    rollback_called = {"value": False}
+    caplog.set_level(logging.WARNING, logger=api_module.logger.name)
 
     monkeypatch.setattr(
         api_module,
@@ -111,13 +153,16 @@ def test_clone_agent_endpoint_returns_403_on_access_error(monkeypatch):
 
     assert rollback_called["value"] is True
     assert exc_info.value.status_code == 403
-    assert "forbidden" in str(exc_info.value.detail)
+    assert exc_info.value.detail == "Access denied to agent"
+    assert "forbidden" not in str(exc_info.value.detail)
+    assert "forbidden" in caplog.text
 
 
-def test_clone_agent_endpoint_returns_409_for_duplicate_name(monkeypatch):
+def test_clone_agent_endpoint_returns_409_for_duplicate_name(monkeypatch, caplog):
     import src.api.agent_studio as api_module
 
     rollback_called = {"value": False}
+    caplog.set_level(logging.WARNING, logger=api_module.logger.name)
 
     monkeypatch.setattr(
         api_module,
@@ -148,6 +193,8 @@ def test_clone_agent_endpoint_returns_409_for_duplicate_name(monkeypatch):
 
     assert rollback_called["value"] is True
     assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "A custom agent with this name already exists"
+    assert "custom agent already exists" in caplog.text
 
 
 def test_share_agent_endpoint_updates_visibility(monkeypatch):
@@ -197,11 +244,12 @@ def test_share_agent_endpoint_updates_visibility(monkeypatch):
     assert response["agent_id"] == "ca_11111111-1111-1111-1111-111111111111"
 
 
-def test_share_agent_endpoint_returns_403_on_access_error(monkeypatch):
+def test_share_agent_endpoint_returns_403_on_access_error(monkeypatch, caplog):
     import src.api.agent_studio as api_module
 
     custom_agent_uuid = uuid.uuid4()
     rollback_called = {"value": False}
+    caplog.set_level(logging.WARNING, logger=api_module.logger.name)
 
     monkeypatch.setattr(
         api_module,
@@ -233,7 +281,9 @@ def test_share_agent_endpoint_returns_403_on_access_error(monkeypatch):
 
     assert rollback_called["value"] is True
     assert exc_info.value.status_code == 403
-    assert "not allowed" in str(exc_info.value.detail)
+    assert exc_info.value.detail == "Access denied to custom agent"
+    assert "not allowed" not in str(exc_info.value.detail)
+    assert "not allowed" in caplog.text
 
 
 def test_share_agent_endpoint_rejects_non_custom_agent_id():
