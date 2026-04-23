@@ -1,7 +1,7 @@
 # Core dependencies
 fastapi
 uvicorn[standard]
-python-multipart  # Required for file uploads
+python-multipart>=0.0.26  # Required for file uploads; keep the direct spec on the latest patched multipart parser line.
 pydantic>=2.0
 pydantic-settings
 python-dotenv>=1.2.2

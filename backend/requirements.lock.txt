@@ -196,7 +196,7 @@ uvloop==0.22.1
 validators==0.35.0
 watchdog==6.0.0
 watchfiles==1.1.1
-weaviate-client==4.20.5
+weaviate-client==4.21.0
 webcolors==25.10.0
 websockets==16.0
 wrapt==1.17.3
