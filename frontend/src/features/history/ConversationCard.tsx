@@ -3,6 +3,7 @@ import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 import ExpandLessIcon from '@mui/icons-material/ExpandLess'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import LinkIcon from '@mui/icons-material/Link'
+import RestoreOutlinedIcon from '@mui/icons-material/RestoreOutlined'
 import {
   Box,
   Button,
@@ -14,15 +15,21 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 import type { ReactNode } from 'react'
 
-import type { ChatHistorySessionSummary } from '@/services/chatHistoryApi'
+import {
+  AGENT_STUDIO_CHAT_HISTORY_KIND,
+  type ChatHistorySessionSummary,
+  type PersistedChatHistoryKind,
+} from '@/services/chatHistoryApi'
 
 import formatConversationTitle from './formatConversationTitle'
 
 interface ConversationCardProps {
   children?: ReactNode
   isExpanded: boolean
+  onRestore: () => void
   isSelected: boolean
   onDelete: () => void
   onRename: () => void
@@ -44,9 +51,22 @@ function formatDateTime(value?: string | null): string {
   return date.toLocaleString()
 }
 
+function getChatKindLabel(chatKind: PersistedChatHistoryKind): string {
+  return chatKind === AGENT_STUDIO_CHAT_HISTORY_KIND
+    ? 'Agent Studio chat'
+    : 'AI assistant chat'
+}
+
+function getRestoreLabel(chatKind: PersistedChatHistoryKind): string {
+  return chatKind === AGENT_STUDIO_CHAT_HISTORY_KIND
+    ? 'Open in Agent Studio'
+    : 'Resume chat'
+}
+
 export default function ConversationCard({
   children,
   isExpanded,
+  onRestore,
   isSelected,
   onDelete,
   onRename,
@@ -83,9 +103,36 @@ export default function ConversationCard({
               alignItems={{ md: 'flex-start' }}
             >
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="h6" sx={{ wordBreak: 'break-word' }}>
-                  {formatConversationTitle(session)}
-                </Typography>
+                <Stack
+                  direction="row"
+                  spacing={1}
+                  alignItems="center"
+                  flexWrap="wrap"
+                  useFlexGap
+                >
+                  <Typography variant="h6" sx={{ wordBreak: 'break-word' }}>
+                    {formatConversationTitle(session)}
+                  </Typography>
+                  <Chip
+                    label={getChatKindLabel(session.chat_kind)}
+                    size="small"
+                    variant="outlined"
+                    sx={(theme) => ({
+                      borderColor:
+                        session.chat_kind === AGENT_STUDIO_CHAT_HISTORY_KIND
+                          ? alpha(theme.palette.warning.main, 0.3)
+                          : alpha(theme.palette.primary.main, 0.3),
+                      bgcolor:
+                        session.chat_kind === AGENT_STUDIO_CHAT_HISTORY_KIND
+                          ? alpha(theme.palette.warning.main, 0.12)
+                          : alpha(theme.palette.primary.main, 0.12),
+                      color:
+                        session.chat_kind === AGENT_STUDIO_CHAT_HISTORY_KIND
+                          ? theme.palette.warning.dark
+                          : theme.palette.primary.dark,
+                    })}
+                  />
+                </Stack>
                 <Typography color="text.secondary" variant="body2" sx={{ mt: 0.5 }}>
                   Updated {formatDateTime(session.recent_activity_at)}
                 </Typography>
@@ -120,6 +167,9 @@ export default function ConversationCard({
             </Typography>
 
             <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+              <Button onClick={onRestore} startIcon={<RestoreOutlinedIcon />} variant="contained">
+                {getRestoreLabel(session.chat_kind)}
+              </Button>
               <Button
                 onClick={onToggleExpand}
                 startIcon={isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}

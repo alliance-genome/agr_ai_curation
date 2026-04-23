@@ -112,6 +112,103 @@ describe('useChatHistoryQuery', () => {
     ).toEqual(response)
   })
 
+  it('keeps all-history and single-kind list caches separate', async () => {
+    const queryClient = createQueryClient()
+    const allResponse = {
+      chat_kind: 'all',
+      total_sessions: 2,
+      limit: 20,
+      query: 'workflow',
+      document_id: null,
+      next_cursor: null,
+      sessions: [
+        {
+          session_id: 'session-1',
+          chat_kind: 'assistant_chat',
+          title: 'Assistant workflow review',
+          created_at: '2026-04-20T00:00:00Z',
+          updated_at: '2026-04-20T00:00:00Z',
+          recent_activity_at: '2026-04-20T00:00:00Z',
+        },
+        {
+          session_id: 'session-2',
+          chat_kind: 'agent_studio',
+          title: 'Agent workflow review',
+          created_at: '2026-04-20T00:00:00Z',
+          updated_at: '2026-04-20T00:00:00Z',
+          recent_activity_at: '2026-04-20T00:00:00Z',
+        },
+      ],
+    }
+    const agentStudioResponse = {
+      chat_kind: 'agent_studio',
+      total_sessions: 1,
+      limit: 20,
+      query: 'workflow',
+      document_id: null,
+      next_cursor: null,
+      sessions: [
+        {
+          session_id: 'session-2',
+          chat_kind: 'agent_studio',
+          title: 'Agent workflow review',
+          created_at: '2026-04-20T00:00:00Z',
+          updated_at: '2026-04-20T00:00:00Z',
+          recent_activity_at: '2026-04-20T00:00:00Z',
+        },
+      ],
+    }
+
+    serviceMocks.fetchChatHistoryList
+      .mockResolvedValueOnce(allResponse)
+      .mockResolvedValueOnce(agentStudioResponse)
+
+    const wrapper = createWrapper(queryClient)
+
+    const { result: allResult } = renderHook(
+      () =>
+        useChatHistoryListQuery({
+          chatKind: 'all',
+          query: ' workflow ',
+        }),
+      { wrapper },
+    )
+
+    await waitFor(() => {
+      expect(allResult.current.isSuccess).toBe(true)
+    })
+
+    const { result: agentStudioResult } = renderHook(
+      () =>
+        useChatHistoryListQuery({
+          chatKind: 'agent_studio',
+          query: ' workflow ',
+        }),
+      { wrapper },
+    )
+
+    await waitFor(() => {
+      expect(agentStudioResult.current.isSuccess).toBe(true)
+    })
+
+    expect(
+      queryClient.getQueryData(
+        chatCacheKeys.history.list({
+          chatKind: 'all',
+          query: 'workflow',
+        }),
+      ),
+    ).toEqual(allResponse)
+    expect(
+      queryClient.getQueryData(
+        chatCacheKeys.history.list({
+          chatKind: 'agent_studio',
+          query: 'workflow',
+        }),
+      ),
+    ).toEqual(agentStudioResponse)
+  })
+
   it('stores detail query results under session-scoped cache keys', async () => {
     const queryClient = createQueryClient()
     const response = {

@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider, createTheme } from '@mui/material/styles'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -48,14 +48,37 @@ function createQueryClient(): QueryClient {
   })
 }
 
-function renderHistoryPage() {
+function CurrentLocation() {
+  const location = useLocation()
+
+  return (
+    <div data-testid="current-location">
+      {location.pathname}
+      {location.search}
+    </div>
+  )
+}
+
+function renderHistoryPage(initialEntry = '/history') {
   const queryClient = createQueryClient()
 
   return render(
     <QueryClientProvider client={queryClient}>
       <ThemeProvider theme={theme}>
-        <MemoryRouter initialEntries={['/history']}>
-          <HistoryPage />
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route
+              path="/history"
+              element={(
+                <>
+                  <HistoryPage />
+                  <CurrentLocation />
+                </>
+              )}
+            />
+            <Route path="/" element={<CurrentLocation />} />
+            <Route path="/agent-studio" element={<CurrentLocation />} />
+          </Routes>
         </MemoryRouter>
       </ThemeProvider>
     </QueryClientProvider>,
@@ -81,7 +104,7 @@ function buildListResponse(
   overrides: Partial<ChatHistoryListResponse> = {},
 ): ChatHistoryListResponse {
   return {
-    chat_kind: 'assistant_chat',
+    chat_kind: 'all',
     total_sessions: sessions.length,
     limit: 100,
     query: null,
@@ -159,11 +182,12 @@ describe('HistoryPage', () => {
   beforeEach(() => {
     vi.clearAllMocks()
 
-    const sessions = [
+    const sessions: ChatHistorySessionSummary[] = [
       buildSession(),
       buildSession({
         session_id: 'session-2',
-        title: 'BRCA1 follow-up',
+        chat_kind: 'agent_studio',
+        title: 'Agent workflow prototype',
         active_document_id: 'doc-2',
         created_at: '2026-04-19T10:00:00Z',
         updated_at: '2026-04-19T10:30:00Z',
@@ -174,28 +198,46 @@ describe('HistoryPage', () => {
 
     hookMocks.useChatHistoryListQuery.mockImplementation((
       request?: { chatKind?: string; query?: string | null },
-    ) => ({
-      data: buildListResponse(
-        request?.query === 'TP53'
-          ? [sessions[0]]
-          : sessions,
-        { query: request?.query ?? null },
-      ),
-      error: null,
-      isLoading: false,
-      isFetching: false,
-      refetch: vi.fn(),
-    }))
+    ) => {
+      const requestedKind = request?.chatKind ?? 'all'
+      const normalizedQuery = request?.query?.toLowerCase() ?? null
+      const visibleSessions = sessions
+        .filter((session) => requestedKind === 'all' || session.chat_kind === requestedKind)
+        .filter((session) => {
+          if (!normalizedQuery) {
+            return true
+          }
+
+          return (session.title ?? '').toLowerCase().includes(normalizedQuery)
+        })
+
+      return {
+        data: buildListResponse(visibleSessions, {
+          chat_kind: requestedKind as ChatHistoryListResponse['chat_kind'],
+          query: request?.query ?? null,
+          total_sessions: visibleSessions.length,
+        }),
+        error: null,
+        isLoading: false,
+        isFetching: false,
+        refetch: vi.fn(),
+      }
+    })
 
     hookMocks.useChatHistoryDetailQuery.mockImplementation((
       request: { sessionId: string },
       options?: { enabled?: boolean },
-    ) => ({
-      data: options?.enabled ? buildDetailResponse({ session: buildSession({ session_id: request.sessionId }) }) : undefined,
-      error: null,
-      isLoading: false,
-      isFetching: false,
-    }))
+    ) => {
+      const session = sessions.find((candidate) => candidate.session_id === request.sessionId)
+        ?? sessions[0]
+
+      return {
+        data: options?.enabled ? buildDetailResponse({ session }) : undefined,
+        error: null,
+        isLoading: false,
+        isFetching: false,
+      }
+    })
 
     hookMocks.useRenameChatSessionMutation.mockReturnValue(
       createMutationResult<RenameChatSessionRequest>(vi.fn().mockResolvedValue(undefined)),
@@ -208,13 +250,15 @@ describe('HistoryPage', () => {
     )
   })
 
-  it('renders stored conversation cards and expands transcripts inline', async () => {
+  it('renders mixed-kind conversation cards and expands transcripts inline', async () => {
     const user = userEvent.setup()
 
     renderHistoryPage()
 
     expect(screen.getByText('TP53 evidence review')).toBeInTheDocument()
-    expect(screen.getByText('BRCA1 follow-up')).toBeInTheDocument()
+    expect(screen.getByText('Agent workflow prototype')).toBeInTheDocument()
+    expect(screen.getAllByText('AI assistant chat')).not.toHaveLength(0)
+    expect(screen.getAllByText('Agent Studio chat')).not.toHaveLength(0)
 
     await user.click(screen.getAllByRole('button', { name: 'Show transcript' })[0])
 
@@ -226,25 +270,121 @@ describe('HistoryPage', () => {
     expect(screen.getByText('TP53 increased in treated samples.')).toBeInTheDocument()
   })
 
-  it('passes trimmed search text into the history list query', async () => {
+  it('syncs the selected kind filter through the URL across all three modes', async () => {
+    const user = userEvent.setup()
+
     renderHistoryPage()
 
-    fireEvent.change(screen.getByLabelText('Search chat history'), {
-      target: { value: '  TP53  ' },
+    await waitFor(() => {
+      expect(hookMocks.useChatHistoryListQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          chatKind: 'all',
+          limit: 100,
+          query: null,
+        }),
+      )
     })
+    expect(screen.getByTestId('current-location')).toHaveTextContent('/history?kind=all')
+
+    await user.click(screen.getByRole('tab', { name: 'AI assistant chat' }))
 
     await waitFor(() => {
       expect(hookMocks.useChatHistoryListQuery).toHaveBeenLastCalledWith(
         expect.objectContaining({
           chatKind: 'assistant_chat',
           limit: 100,
-          query: 'TP53',
+          query: null,
+        }),
+      )
+    })
+    expect(screen.getByTestId('current-location')).toHaveTextContent('/history?kind=assistant_chat')
+
+    await user.click(screen.getByRole('tab', { name: 'Agent Studio chat' }))
+
+    await waitFor(() => {
+      expect(hookMocks.useChatHistoryListQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          chatKind: 'agent_studio',
+          limit: 100,
+          query: null,
+        }),
+      )
+    })
+    expect(screen.getByTestId('current-location')).toHaveTextContent('/history?kind=agent_studio')
+  })
+
+  it('reads kind and search state from the URL and scopes search results within that kind', async () => {
+    renderHistoryPage('/history?kind=agent_studio&q=workflow')
+
+    await waitFor(() => {
+      expect(hookMocks.useChatHistoryListQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          chatKind: 'agent_studio',
+          limit: 100,
+          query: 'workflow',
         }),
       )
     })
 
-    expect(screen.getByText('TP53 evidence review')).toBeInTheDocument()
-    expect(screen.queryByText('BRCA1 follow-up')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Search chat history')).toHaveValue('workflow')
+    expect(screen.getByText('Agent workflow prototype')).toBeInTheDocument()
+    expect(screen.queryByText('TP53 evidence review')).not.toBeInTheDocument()
+    expect(screen.getByTestId('current-location')).toHaveTextContent(
+      '/history?kind=agent_studio&q=workflow',
+    )
+  })
+
+  it('passes the selected kind into title searches', async () => {
+    const user = userEvent.setup()
+
+    renderHistoryPage()
+
+    await user.click(screen.getByRole('tab', { name: 'Agent Studio chat' }))
+    fireEvent.change(screen.getByLabelText('Search chat history'), {
+      target: { value: '  workflow  ' },
+    })
+
+    await waitFor(() => {
+      expect(hookMocks.useChatHistoryListQuery).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          chatKind: 'agent_studio',
+          limit: 100,
+          query: 'workflow',
+        }),
+      )
+    })
+
+    expect(screen.getByText('Agent workflow prototype')).toBeInTheDocument()
+    expect(screen.queryByText('TP53 evidence review')).not.toBeInTheDocument()
+    expect(screen.getByTestId('current-location')).toHaveTextContent(
+      '/history?kind=agent_studio&q=workflow',
+    )
+  })
+
+  it('routes assistant chat restores back to the home page session param', async () => {
+    const user = userEvent.setup()
+
+    renderHistoryPage()
+
+    await user.click(screen.getByRole('button', { name: 'Resume chat' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-location')).toHaveTextContent('/?session=session-1')
+    })
+  })
+
+  it('routes Agent Studio restores to the agent studio session_id param', async () => {
+    const user = userEvent.setup()
+
+    renderHistoryPage()
+
+    await user.click(screen.getByRole('button', { name: 'Open in Agent Studio' }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('current-location')).toHaveTextContent(
+        '/agent-studio?session_id=session-2',
+      )
+    })
   })
 
   it('supports renaming a conversation from the list', async () => {

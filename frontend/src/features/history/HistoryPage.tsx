@@ -9,15 +9,22 @@ import {
   DialogContent,
   DialogTitle,
   LinearProgress,
+  Paper,
   Stack,
+  Tab,
+  Tabs,
   TextField,
   Typography,
 } from '@mui/material'
 import { useDeferredValue, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 import {
+  ALL_CHAT_HISTORY_KIND,
+  AGENT_STUDIO_CHAT_HISTORY_KIND,
   ASSISTANT_CHAT_HISTORY_KIND,
+  type ChatHistoryListKind,
   type ChatHistorySessionSummary,
 } from '@/services/chatHistoryApi'
 
@@ -32,6 +39,11 @@ import {
 } from './useChatHistoryQuery'
 
 const HISTORY_PAGE_LIST_LIMIT = 100
+const HISTORY_KIND_OPTIONS: Array<{ label: string; value: ChatHistoryListKind }> = [
+  { label: 'All', value: ALL_CHAT_HISTORY_KIND },
+  { label: 'AI assistant chat', value: ASSISTANT_CHAT_HISTORY_KIND },
+  { label: 'Agent Studio chat', value: AGENT_STUDIO_CHAT_HISTORY_KIND },
+]
 
 function areSetsEqual(left: Set<string>, right: Set<string>): boolean {
   if (left.size !== right.size) {
@@ -64,8 +76,45 @@ function pruneSessionIds(
     : nextSessionIds
 }
 
+function normalizeHistoryKind(value: string | null): ChatHistoryListKind {
+  if (
+    value === ALL_CHAT_HISTORY_KIND
+    || value === ASSISTANT_CHAT_HISTORY_KIND
+    || value === AGENT_STUDIO_CHAT_HISTORY_KIND
+  ) {
+    return value
+  }
+
+  return ALL_CHAT_HISTORY_KIND
+}
+
+function getHistorySearchScopeLabel(chatKind: ChatHistoryListKind): string {
+  if (chatKind === AGENT_STUDIO_CHAT_HISTORY_KIND) {
+    return 'Agent Studio chats'
+  }
+
+  if (chatKind === ASSISTANT_CHAT_HISTORY_KIND) {
+    return 'AI assistant chats'
+  }
+
+  return 'all chats'
+}
+
+function buildRestoreLocation(session: ChatHistorySessionSummary): string {
+  const encodedSessionId = encodeURIComponent(session.session_id)
+
+  if (session.chat_kind === AGENT_STUDIO_CHAT_HISTORY_KIND) {
+    return `/agent-studio?session_id=${encodedSessionId}`
+  }
+
+  return `/?session=${encodedSessionId}`
+}
+
 export default function HistoryPage() {
-  const [searchInput, setSearchInput] = useState('')
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const selectedKind = normalizeHistoryKind(searchParams.get('kind'))
+  const searchInput = normalizeChatHistoryValue(searchParams.get('q')) ?? ''
   const deferredSearchInput = useDeferredValue(searchInput)
   const normalizedSearchQuery = normalizeChatHistoryValue(deferredSearchInput)
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(new Set())
@@ -75,8 +124,33 @@ export default function HistoryPage() {
   const [deleteTarget, setDeleteTarget] = useState<ChatHistorySessionSummary | null>(null)
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = useState(false)
 
+  useEffect(() => {
+    const nextSearchParams = new URLSearchParams(searchParams)
+    let changed = false
+
+    if (searchParams.get('kind') !== selectedKind) {
+      nextSearchParams.set('kind', selectedKind)
+      changed = true
+    }
+
+    const rawQueryParam = searchParams.get('q')
+    const normalizedQueryParam = normalizeChatHistoryValue(rawQueryParam)
+    if ((normalizedQueryParam ?? null) !== rawQueryParam) {
+      if (normalizedQueryParam) {
+        nextSearchParams.set('q', normalizedQueryParam)
+      } else {
+        nextSearchParams.delete('q')
+      }
+      changed = true
+    }
+
+    if (changed) {
+      setSearchParams(nextSearchParams, { replace: true })
+    }
+  }, [searchParams, selectedKind, setSearchParams])
+
   const listQuery = useChatHistoryListQuery({
-    chatKind: ASSISTANT_CHAT_HISTORY_KIND,
+    chatKind: selectedKind,
     limit: HISTORY_PAGE_LIST_LIMIT,
     query: normalizedSearchQuery,
   })
@@ -89,6 +163,28 @@ export default function HistoryPage() {
   const visibleSessionIdSet = useMemo(() => new Set(visibleSessionIds), [visibleSessionIds])
   const allVisibleSelected = sessions.length > 0 && sessions.every((session) => selectedSessionIds.has(session.session_id))
   const normalizedRenameTitle = normalizeChatHistoryValue(renameTitle)
+
+  const updateHistoryParams = ({
+    chatKind = selectedKind,
+    query = searchInput,
+  }: {
+    chatKind?: ChatHistoryListKind
+    query?: string
+  }) => {
+    setSearchParams((currentSearchParams) => {
+      const nextSearchParams = new URLSearchParams(currentSearchParams)
+      nextSearchParams.set('kind', chatKind)
+
+      const normalizedQuery = normalizeChatHistoryValue(query)
+      if (normalizedQuery) {
+        nextSearchParams.set('q', normalizedQuery)
+      } else {
+        nextSearchParams.delete('q')
+      }
+
+      return nextSearchParams
+    }, { replace: true })
+  }
 
   useEffect(() => {
     setSelectedSessionIds((previousSelectedSessionIds) => {
@@ -219,6 +315,10 @@ export default function HistoryPage() {
     clearBulkDeleteDialog()
   }
 
+  const handleRestoreSession = (session: ChatHistorySessionSummary) => {
+    navigate(buildRestoreLocation(session))
+  }
+
   return (
     <Box
       sx={{
@@ -240,6 +340,27 @@ export default function HistoryPage() {
           </Typography>
         </Stack>
 
+        <Paper elevation={0} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 3 }}>
+          <Tabs
+            aria-label="Chat kind filter"
+            onChange={(_event, nextKind: ChatHistoryListKind) => updateHistoryParams({ chatKind: nextKind })}
+            value={selectedKind}
+            variant="scrollable"
+            allowScrollButtonsMobile
+            sx={{
+              px: 1,
+              '& .MuiTab-root': {
+                minHeight: 56,
+                textTransform: 'none',
+              },
+            }}
+          >
+            {HISTORY_KIND_OPTIONS.map((option) => (
+              <Tab key={option.value} label={option.label} value={option.value} />
+            ))}
+          </Tabs>
+        </Paper>
+
         <HistorySearchBar
           allVisibleSelected={allVisibleSelected}
           bulkDeleteDisabled={
@@ -248,8 +369,9 @@ export default function HistoryPage() {
           hasVisibleSessions={sessions.length > 0}
           isFiltering={searchInput !== deferredSearchInput}
           onBulkDelete={() => setBulkDeleteDialogOpen(true)}
-          onChange={setSearchInput}
+          onChange={(value) => updateHistoryParams({ query: value })}
           onToggleSelectAll={handleToggleSelectAll}
+          searchScopeLabel={getHistorySearchScopeLabel(selectedKind)}
           selectedCount={selectedSessionIds.size}
           totalSessions={listQuery.data?.total_sessions ?? sessions.length}
           value={searchInput}
@@ -282,9 +404,11 @@ export default function HistoryPage() {
             </Alert>
           ) : (
             <ConversationList
+              chatKind={selectedKind}
               expandedSessionIds={expandedSessionIds}
               onDeleteSession={setDeleteTarget}
               onRenameSession={setRenameTarget}
+              onRestoreSession={handleRestoreSession}
               onSelectSession={handleSelectSession}
               onToggleExpandSession={handleToggleExpandSession}
               searchQuery={normalizedSearchQuery ?? ''}
