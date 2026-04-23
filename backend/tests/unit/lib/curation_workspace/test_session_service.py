@@ -2003,6 +2003,7 @@ def test_execute_submission_persists_validation_errors_without_marking_session_s
 def test_execute_submission_normalizes_transport_errors_to_failed_submission_record(
     db_session,
     monkeypatch,
+    caplog,
 ):
     seeded = _create_decision_session(
         db_session,
@@ -2027,13 +2028,7 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
         lambda _target_key: ExplodingSubmissionAdapter(),
     )
 
-    logged = {}
-
-    def _capture_exception(message, *args):
-        logged["message"] = message
-        logged["args"] = args
-
-    monkeypatch.setattr(module.logger, "exception", _capture_exception)
+    caplog.set_level(logging.ERROR, logger=module.logger.name)
 
     response = module.execute_submission(
         db_session,
@@ -2046,23 +2041,25 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
     )
 
     assert response.submission.status == CurationSubmissionStatus.FAILED
-    assert "timeout talking to downstream submitter" in (response.submission.response_message or "")
+    assert response.submission.response_message == module.SUBMISSION_TRANSPORT_FAILURE_MESSAGE
+    assert "timeout talking to downstream submitter" not in (
+        response.submission.response_message or ""
+    )
     assert response.session.status == CurationSessionStatus.NEW
     assert response.session.submitted_at is None
-    assert logged["message"] == (
-        "Submission transport adapter '%s' failed for session '%s' and target '%s'"
-    )
-    assert logged["args"] == (
-        "exploding_submission",
-        seeded["session_id"],
-        DEFAULT_JSON_BUNDLE_TARGET_KEY,
-    )
+    assert "Submission transport adapter 'exploding_submission' failed" in caplog.text
+    assert seeded["session_id"] in caplog.text
+    assert DEFAULT_JSON_BUNDLE_TARGET_KEY in caplog.text
+    assert "timeout talking to downstream submitter" in caplog.text
 
     persisted_submission = db_session.scalars(
         select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
     ).one()
     assert persisted_submission.status == CurationSubmissionStatus.FAILED
-    assert "timeout talking to downstream submitter" in (persisted_submission.response_message or "")
+    assert persisted_submission.response_message == module.SUBMISSION_TRANSPORT_FAILURE_MESSAGE
+    assert "timeout talking to downstream submitter" not in (
+        persisted_submission.response_message or ""
+    )
 
 
 def test_retry_submission_creates_new_submission_row_and_logs_retry_action(db_session):

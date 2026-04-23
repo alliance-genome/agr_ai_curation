@@ -346,6 +346,7 @@ EVIDENCE_COUNT_SORT_ORDER = (
 )
 
 LIKE_ESCAPE_CHAR = "\\"
+SUBMISSION_TRANSPORT_FAILURE_MESSAGE = "Submission failed unexpectedly. Please try again."
 
 
 def _viewer_url(file_path: str | None) -> str | None:
@@ -2787,9 +2788,7 @@ def _coerce_failed_submission_result(
 
     return normalize_submission_transport_result(
         status=CurationSubmissionStatus.FAILED,
-        response_message=(
-            f"Submission adapter '{adapter.transport_key}' failed: {error}"
-        ),
+        response_message=SUBMISSION_TRANSPORT_FAILURE_MESSAGE,
     )
 
 
