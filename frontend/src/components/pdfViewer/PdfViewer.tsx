@@ -31,6 +31,7 @@ import {
   onPDFDocumentChanged,
   onPDFViewerNavigateEvidence,
 } from '@/components/pdfViewer/pdfEvents'
+import { normalizePdfViewerDocumentUrl } from '@/components/pdfViewer/viewerDocumentUrl'
 import {
   buildNormalizedTextSourceMap,
   normalizeTextForEvidenceMatch,
@@ -3004,6 +3005,7 @@ export function PdfViewer({
   const activeDocumentOwnerRef = useRef(activeDocumentOwnerToken)
   const viewerSessionStorageUserIdRef = useRef<string | null>(storageUserId)
   const storageUserIdRef = useRef<string | null>(storageUserId)
+  const idleResetErrorRef = useRef<string | null>(null)
 
   const commitNavigationResult = useCallback((result: PdfViewerNavigationResult | null) => {
     lastPdfEvidenceNavigationResult = result
@@ -3022,7 +3024,7 @@ export function PdfViewer({
     persistSession(viewerSessionStorageKey, document, state)
   }, [storageUserId, viewerSessionStorageKey])
 
-  const resetViewerToIdle = useCallback(() => {
+  const resetViewerToIdle = useCallback((nextError: string | null = null) => {
     handledNavigationKeyRef.current = null
     navigationRequestIdRef.current += 1
     viewerStateRef.current = {
@@ -3030,9 +3032,10 @@ export function PdfViewer({
       lastInteraction: new Date().toISOString(),
     }
     highlightTermsRef.current = []
+    idleResetErrorRef.current = nextError
     setActiveDocument(null)
-    setStatus('idle')
-    setError(null)
+    setStatus(nextError ? 'error' : 'idle')
+    setError(nextError)
     setHighlightTerms([])
     setEvidenceHighlight(null)
     commitNavigationResult(null)
@@ -4126,9 +4129,26 @@ export function PdfViewer({
         return
       }
 
+      let normalizedViewerUrl: string
+      try {
+        normalizedViewerUrl = normalizePdfViewerDocumentUrl(
+          event.detail.viewerUrl,
+          window.location.origin,
+        )
+      } catch (error) {
+        console.warn('Rejected unsupported PDF document URL', {
+          viewerUrl: event.detail.viewerUrl,
+          error,
+        })
+        resetViewerToIdle(error instanceof Error ? error.message : String(error))
+        loadStartRef.current = null
+        signalLoadComplete()
+        return
+      }
+
       const sameLoadedDocument = activeDocument
         && activeDocument.documentId === event.detail.documentId
-        && activeDocument.viewerUrl === event.detail.viewerUrl
+        && activeDocument.viewerUrl === normalizedViewerUrl
         && activeDocument.pageCount === event.detail.pageCount
         && activeDocument.filename === event.detail.filename
 
@@ -4142,7 +4162,7 @@ export function PdfViewer({
 
       const nextDoc: ViewerDocument = {
         documentId: event.detail.documentId,
-        viewerUrl: event.detail.viewerUrl,
+        viewerUrl: normalizedViewerUrl,
         filename: event.detail.filename,
         pageCount: event.detail.pageCount,
         loadedAt: new Date().toISOString(),
@@ -4312,8 +4332,10 @@ export function PdfViewer({
       if (viewerSessionStorageKey && viewerSessionStorageUserIdRef.current === storageUserId) {
         localStorage.removeItem(viewerSessionStorageKey)
       }
-      setStatus('idle')
-      setError(null)
+      const nextIdleError = idleResetErrorRef.current
+      idleResetErrorRef.current = null
+      setStatus(nextIdleError ? 'error' : 'idle')
+      setError(nextIdleError)
       setTelemetry({
         lastLoadMs: null,
         lastHighlightMs: null,
@@ -4901,6 +4923,11 @@ export function PdfViewer({
                   Upload in progress...
                 </Typography>
               </Stack>
+            )}
+            {error && (
+              <Alert severity="error" sx={{ mb: 2, maxWidth: 640 }}>
+                {error}
+              </Alert>
             )}
             {dropError && (
               <Alert severity="error" sx={{ mb: 2, maxWidth: 640 }}>

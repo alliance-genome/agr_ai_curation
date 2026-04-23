@@ -24,18 +24,41 @@ Object.defineProperty(window, 'matchMedia', {
 });
 
 // Mock IntersectionObserver
-global.IntersectionObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}));
+class MockIntersectionObserver implements IntersectionObserver {
+  readonly root: Element | Document | null = null
+  readonly rootMargin = ''
+  readonly thresholds: ReadonlyArray<number> = []
+
+  constructor(
+    _callback: IntersectionObserverCallback,
+    _options?: IntersectionObserverInit,
+  ) {}
+
+  disconnect(): void {}
+
+  observe(_target: Element): void {}
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return []
+  }
+
+  unobserve(_target: Element): void {}
+}
+
+globalThis.IntersectionObserver = MockIntersectionObserver as typeof IntersectionObserver
 
 // Mock ResizeObserver
-global.ResizeObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-}));
+class MockResizeObserver implements ResizeObserver {
+  constructor(_callback: ResizeObserverCallback) {}
+
+  disconnect(): void {}
+
+  observe(_target: Element, _options?: ResizeObserverOptions): void {}
+
+  unobserve(_target: Element): void {}
+}
+
+globalThis.ResizeObserver = MockResizeObserver as typeof ResizeObserver
 
 // Mock fetch
 global.fetch = vi.fn();
