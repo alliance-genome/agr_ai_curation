@@ -17,7 +17,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, NoReturn, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, status
@@ -74,6 +74,7 @@ from ..schemas.curation_workspace import (
 from ..schemas.flows import ExecuteFlowRequest
 from ..services.user_service import set_global_user_from_cognito
 from ..lib.group_rules import get_groups_from_cognito
+from ..lib.http_errors import log_exception, raise_sanitized_http_exception
 from ..lib.redis_client import (
     set_cancel_signal,
     check_cancel_signal,
@@ -1563,10 +1564,20 @@ async def _load_session_active_document(
     return _build_active_document(document_payload)
 
 
-def _rollback_and_raise(db: Session, *, status_code: int, detail: str, exc: Exception) -> None:
+def _rollback_and_raise(
+    db: Session,
+    *,
+    status_code: int,
+    detail: str,
+    exc: Exception,
+    log_message: str | None = None,
+    level: int = logging.ERROR,
+) -> NoReturn:
     """Rollback the current transaction and raise an HTTP exception."""
 
     db.rollback()
+    if log_message is not None:
+        log_exception(logger, message=log_message, exc=exc, level=level)
     raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
@@ -2027,12 +2038,14 @@ async def load_document_for_chat(
             extra={"user_id": user_id, "document_id": payload.document_id},
         )
     except ValueError as exc:
-        logger.warning(
-            "Document not found: %s",
-            payload.document_id,
-            extra={"user_id": user_id, "document_id": payload.document_id},
+        raise_sanitized_http_exception(
+            logger,
+            status_code=404,
+            detail="Document not found",
+            log_message=f"Document {payload.document_id} is unavailable for chat load",
+            exc=exc,
+            level=logging.WARNING,
         )
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except Exception as exc:
         logger.error(
             "Error loading document %s: %s",
@@ -2239,7 +2252,14 @@ async def chat_endpoint(
         raise
     except ValueError as exc:
         await _release_non_stream_turn_claim()
-        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+        _rollback_and_raise(
+            db,
+            status_code=400,
+            detail="Invalid chat request",
+            exc=exc,
+            log_message=f"Failed to persist durable non-stream user turn for session {session_id}",
+            level=logging.WARNING,
+        )
     except Exception as exc:
         await _release_non_stream_turn_claim()
         logger.error(
@@ -2266,7 +2286,14 @@ async def chat_endpoint(
             )
         except ValueError as exc:
             await _release_non_stream_turn_claim()
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            raise_sanitized_http_exception(
+                logger,
+                status_code=400,
+                detail="Invalid chat replay request",
+                log_message=f"Failed to load durable replay state for session {session_id}",
+                exc=exc,
+                level=logging.WARNING,
+            )
 
         if assistant_turn is not None:
             _queue_chat_title_backfill(
@@ -2429,7 +2456,14 @@ async def chat_endpoint(
                     ),
                 )
             except ValueError as exc:
-                _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+                _rollback_and_raise(
+                    db,
+                    status_code=400,
+                    detail="Invalid chat response state",
+                    exc=exc,
+                    log_message=f"Failed to persist durable non-stream assistant turn for session {session_id}",
+                    level=logging.WARNING,
+                )
             except Exception as exc:
                 logger.error(
                     "Failed to persist durable non-stream assistant turn for session %s",
@@ -2457,7 +2491,7 @@ async def chat_endpoint(
             extra={"session_id": session_id, "user_id": user_id},
             exc_info=True,
         )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Failed to process chat request") from e
     finally:
         await _release_non_stream_turn_claim()
 
@@ -2539,7 +2573,14 @@ async def chat_stream_endpoint(
         raise
     except ValueError as exc:
         await stream_lifecycle.cleanup(session_id)
-        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+        _rollback_and_raise(
+            db,
+            status_code=400,
+            detail="Invalid chat request",
+            exc=exc,
+            log_message=f"Failed to prepare durable stream user turn for session {session_id}",
+            level=logging.WARNING,
+        )
     except Exception as exc:
         await stream_lifecycle.cleanup(session_id)
         logger.error(
@@ -3120,7 +3161,14 @@ async def assistant_rescue(
     except HTTPException:
         raise
     except ValueError as exc:
-        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+        _rollback_and_raise(
+            db,
+            status_code=400,
+            detail="Invalid assistant rescue request",
+            exc=exc,
+            log_message=f"Failed to rescue assistant turn for session {session_id}",
+            level=logging.WARNING,
+        )
     except ChatHistorySessionNotFoundError as exc:
         _rollback_and_raise(db, status_code=404, detail="Chat session not found", exc=exc)
     except Exception as exc:
@@ -3237,7 +3285,14 @@ async def execute_flow_endpoint(
         raise
     except ValueError as exc:
         await stream_lifecycle.cleanup(request.session_id)
-        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+        _rollback_and_raise(
+            db,
+            status_code=400,
+            detail="Invalid flow execution request",
+            exc=exc,
+            log_message=f"Failed to prepare execute-flow request for session {request.session_id}",
+            level=logging.WARNING,
+        )
     except Exception as exc:
         logger.error(
             "Failed to persist execute-flow request for session %s",
@@ -3607,8 +3662,13 @@ async def get_conversation_status(
             message="Conversation status retrieved successfully",
         )
     except Exception as e:
-        logger.error("Failed to get conversation status: %s", e, extra={"user_id": user_id})
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(
+            "Failed to get conversation status: %s",
+            e,
+            extra={"user_id": user_id},
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Failed to retrieve conversation status") from e
 
 
 @router.post("/chat/conversation/reset", response_model=ConversationResetResponse)
@@ -3646,8 +3706,13 @@ async def reset_conversation(
         )
     except Exception as e:
         db.rollback()
-        logger.error("Failed to reset conversation: %s", e, extra={"user_id": user_id})
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(
+            "Failed to reset conversation: %s",
+            e,
+            extra={"user_id": user_id},
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Failed to reset conversation") from e
 
 
 @router.get("/chat/history/{session_id}", response_model=ChatSessionDetailResponse)
@@ -3662,6 +3727,8 @@ async def get_session_history(
     """Return one durable chat session plus one page of persisted transcript rows."""
 
     user_id = _require_user_sub(user)
+    if not session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id is required")
     repository = _get_chat_history_repository(db)
 
     try:
@@ -3672,7 +3739,14 @@ async def get_session_history(
             message_cursor=_decode_message_cursor(message_cursor),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Invalid chat history request",
+            log_message=f"Failed to load chat history for session {session_id}",
+            exc=exc,
+            level=logging.WARNING,
+        )
     if detail is None:
         raise HTTPException(status_code=404, detail="Chat session not found")
 
@@ -3751,7 +3825,14 @@ async def get_all_sessions_stats(
                 active_document_id=active_document_id,
             )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Invalid chat history query",
+            log_message=f"Failed to list chat history for user {user_id}",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
     for session in page.items:
         if session.effective_title is None:
@@ -3798,7 +3879,14 @@ async def rename_session(
     except HTTPException:
         raise
     except ValueError as exc:
-        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+        _rollback_and_raise(
+            db,
+            status_code=400,
+            detail="Invalid chat session update",
+            exc=exc,
+            log_message=f"Failed to rename chat session {session_id}",
+            level=logging.WARNING,
+        )
     except Exception as exc:
         logger.error(
             "Failed to rename chat session %s",
@@ -3825,6 +3913,8 @@ async def delete_session(
     """Soft-delete one durable chat session visible to the authenticated user."""
 
     user_id = _require_user_sub(user)
+    if not session_id.strip():
+        raise HTTPException(status_code=400, detail="session_id is required")
     repository = _get_chat_history_repository(db)
 
     try:
@@ -3840,7 +3930,14 @@ async def delete_session(
     except HTTPException:
         raise
     except ValueError as exc:
-        _rollback_and_raise(db, status_code=400, detail=str(exc), exc=exc)
+        _rollback_and_raise(
+            db,
+            status_code=400,
+            detail="Invalid chat session request",
+            exc=exc,
+            log_message=f"Failed to delete chat session {session_id}",
+            level=logging.WARNING,
+        )
     except Exception as exc:
         logger.error(
             "Failed to delete chat session %s",

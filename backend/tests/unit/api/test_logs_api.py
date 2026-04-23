@@ -1,6 +1,7 @@
 """Unit tests for the Loki-backed logs API endpoint."""
 
 from datetime import datetime, timedelta, timezone
+import logging
 
 import httpx
 import pytest
@@ -204,14 +205,16 @@ async def test_get_container_logs_formats_loki_unavailable_errors(
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_wraps_unexpected_errors(monkeypatch):
+async def test_get_container_logs_wraps_unexpected_errors(monkeypatch, caplog):
     async def _fake_query_logs(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    caplog.set_level(logging.ERROR, logger=logs_api.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await logs_api.get_container_logs("backend", lines=200)
 
     assert exc.value.status_code == 500
-    assert exc.value.detail == "Unexpected error: boom"
+    assert exc.value.detail == "Failed to retrieve logs"
+    assert "boom" in caplog.text

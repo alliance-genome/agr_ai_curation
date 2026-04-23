@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from io import BytesIO
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -169,6 +170,36 @@ def test_normalize_pipeline_result_supports_object_payload():
 
 
 @pytest.mark.asyncio
+async def test_list_documents_endpoint_sanitizes_backend_error(monkeypatch, caplog):
+    monkeypatch.setattr(documents, "cleanup_phantom_documents", lambda *_args, **_kwargs: _async_value(0))
+
+    async def _raise(*_args, **_kwargs):
+        raise RuntimeError("weaviate down")
+
+    monkeypatch.setattr(documents, "list_documents", _raise)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.list_documents_endpoint(
+            user={"sub": "user-1"},
+            page=1,
+            page_size=20,
+            search=None,
+            embedding_status=None,
+            sort_by=documents.SortBy.CREATION_DATE,
+            sort_order=documents.SortOrder.DESC,
+            date_from=None,
+            date_to=None,
+            min_vector_count=None,
+            max_vector_count=None,
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to retrieve documents"
+    assert "weaviate down" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_get_document_endpoint_returns_document_response(monkeypatch):
     upload_time = datetime.now(timezone.utc)
     pg_doc = SimpleNamespace(filename="paper.pdf", upload_timestamp=upload_time, file_size=123)
@@ -193,7 +224,7 @@ async def test_get_document_endpoint_returns_document_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_document_endpoint_raises_500_on_backend_error(monkeypatch):
+async def test_get_document_endpoint_raises_500_on_backend_error(monkeypatch, caplog):
     monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: SimpleNamespace(filename="a", upload_timestamp=datetime.now(timezone.utc), file_size=1))
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
@@ -203,10 +234,13 @@ async def test_get_document_endpoint_raises_500_on_backend_error(monkeypatch):
         raise RuntimeError("weaviate down")
 
     monkeypatch.setattr(documents, "get_document", _raise)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await documents.get_document_endpoint("doc-1", {"sub": "user-1"})
     assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to retrieve document"
+    assert "weaviate down" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -230,7 +264,7 @@ async def test_update_document_endpoint_updates_title_and_commits(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_document_endpoint_rolls_back_on_error(monkeypatch):
+async def test_update_document_endpoint_rolls_back_on_error(monkeypatch, caplog):
     session = _FakeSession()
     monkeypatch.setattr(documents, "SessionLocal", lambda: session)
 
@@ -238,12 +272,15 @@ async def test_update_document_endpoint_rolls_back_on_error(monkeypatch):
         raise RuntimeError("db exploded")
 
     monkeypatch.setattr(documents, "verify_document_ownership", _boom)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await documents.update_document_endpoint(DocumentUpdateRequest(title="x"), "doc-1", {"sub": "user-1"})
     assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to update document"
     assert session.rollbacks == 1
     assert session.closed is True
+    assert "db exploded" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -432,6 +469,7 @@ async def test_delete_document_endpoint_raises_500_when_delete_fails(monkeypatch
     with pytest.raises(HTTPException) as exc:
         await documents.delete_document_endpoint(doc_id, {"sub": "user-1"})
     assert exc.value.status_code == 500
+    assert exc.value.detail == "nope"
 
 
 @pytest.mark.asyncio
@@ -448,7 +486,7 @@ async def test_status_endpoint_returns_404_when_document_missing(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_status_endpoint_raises_500_on_unexpected_error(monkeypatch):
+async def test_status_endpoint_raises_500_on_unexpected_error(monkeypatch, caplog):
     monkeypatch.setattr(documents, "SessionLocal", lambda: _FakeSession())
     monkeypatch.setattr(documents, "verify_document_ownership", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(documents, "principal_from_claims", lambda _claims: SimpleNamespace(subject="user-1"))
@@ -458,14 +496,17 @@ async def test_status_endpoint_raises_500_on_unexpected_error(monkeypatch):
         raise RuntimeError("lookup failed")
 
     monkeypatch.setattr(documents, "get_document", _boom)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await documents.get_document_processing_status("doc-1", {"sub": "user-1"})
     assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to get document status"
+    assert "lookup failed" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_upload_document_endpoint_rejects_non_pdf(monkeypatch):
+async def test_upload_document_endpoint_rejects_non_pdf(monkeypatch, caplog):
     background_tasks = BackgroundTasks()
     upload = UploadFile(filename="notes.txt", file=BytesIO(b"text"))
 
@@ -473,10 +514,13 @@ async def test_upload_document_endpoint_rejects_non_pdf(monkeypatch):
         raise UploadIntakeValidationError("File must be a PDF. Got: notes.txt")
 
     monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _raise_validation)
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
     assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid document upload request"
+    assert "File must be a PDF. Got: notes.txt" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -534,6 +578,25 @@ async def test_upload_document_endpoint_maps_duplicate_error_to_409(monkeypatch)
         await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
     assert exc.value.status_code == 409
     assert exc.value.detail["error"] == "duplicate_file"
+
+
+@pytest.mark.asyncio
+async def test_upload_document_endpoint_sanitizes_unexpected_error(monkeypatch, caplog):
+    background_tasks = BackgroundTasks()
+    upload = UploadFile(filename="paper.pdf", file=BytesIO(b"%PDF-1.7"))
+
+    async def _raise_unexpected(**_kwargs):
+        raise RuntimeError("storage backend unavailable")
+
+    monkeypatch.setattr(documents.upload_intake_service, "intake_upload", _raise_unexpected)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.upload_document_endpoint(background_tasks, upload, {"sub": "user-1"})
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to upload document"
+    assert "storage backend unavailable" in caplog.text
 
 
 @pytest.mark.asyncio

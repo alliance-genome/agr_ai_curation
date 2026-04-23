@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import ANY
@@ -191,6 +192,60 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
     assert calls["clear"] == ["session-chat-stream"]
     assert "session-chat-stream" not in chat._LOCAL_CANCEL_EVENTS
     assert "session-chat-stream" not in chat._LOCAL_SESSION_OWNERS
+
+
+def test_chat_stream_endpoint_sanitizes_prepare_turn_validation_error(monkeypatch, caplog):
+    calls = {"register": [], "unregister": [], "clear": []}
+
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        calls["register"].append((session_id, user_id, stream_token))
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        calls["unregister"].append((session_id, user_id, stream_token))
+
+    async def _clear_cancel_signal(session_id: str):
+        calls["clear"].append(session_id)
+
+    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+
+    def _raise_prepare(**_kwargs):
+        raise ValueError("stream turn invalid because hidden detail leaked")
+
+    monkeypatch.setattr(chat, "_prepare_chat_stream_turn", _raise_prepare)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
+
+    with pytest.raises(chat.HTTPException) as exc:
+        asyncio.run(
+            chat.chat_stream_endpoint(
+                chat_message=chat.ChatMessage(message="hello", session_id="session-stream-invalid"),
+                user={"sub": "auth-sub", "cognito:groups": []},
+                db=_db_stub(rollbacks=[]),
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid chat request"
+    assert "stream turn invalid because hidden detail leaked" in caplog.text
+    assert calls["register"] == [("session-stream-invalid", "auth-sub", ANY)]
+    assert calls["unregister"] == [("session-stream-invalid", "auth-sub", ANY)]
+    assert calls["clear"] == ["session-stream-invalid"]
 
 
 def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_title(monkeypatch):
@@ -1353,6 +1408,33 @@ async def test_assistant_rescue_endpoint_returns_404_when_session_is_missing(mon
         )
 
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_assistant_rescue_endpoint_sanitizes_validation_error(monkeypatch, caplog):
+    repository = SimpleNamespace(
+        get_session=lambda **_kwargs: SimpleNamespace(session_id="session-rescue"),
+        get_message_by_turn_id=lambda **_kwargs: (_ for _ in ()).throw(ValueError("assistant rescue invariant exploded")),
+    )
+    rollbacks: list[str] = []
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
+
+    with pytest.raises(chat.HTTPException) as exc:
+        await chat.assistant_rescue(
+            session_id="session-rescue",
+            request=chat.AssistantRescueRequest(
+                turn_id="turn-rescue",
+                content="rescued response",
+            ),
+            db=_db_stub(rollbacks=rollbacks),
+            user={"sub": "auth-sub"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid assistant rescue request"
+    assert rollbacks == ["rollback"]
+    assert "assistant rescue invariant exploded" in caplog.text
 
 
 def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch):

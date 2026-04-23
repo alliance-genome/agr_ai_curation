@@ -46,6 +46,7 @@ from ..lib.pdf_jobs.upload_execution_service import (
     UploadExecutionService,
 )
 from ..lib.document_cleanup import cleanup_document_curation_dependencies
+from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeService,
@@ -558,11 +559,15 @@ async def list_documents_endpoint(
             offset=result["offset"]
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error('Error listing documents: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to retrieve documents: {str(e)}"
+            detail="Failed to retrieve documents",
+            log_message="Error listing documents",
+            exc=e,
         )
 
 
@@ -954,10 +959,12 @@ async def get_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error retrieving document %s: %s', document_id, e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to retrieve document: {str(e)}"
+            detail="Failed to retrieve document",
+            log_message=f"Error retrieving document {document_id}",
+            exc=e,
         )
 
 
@@ -994,10 +1001,12 @@ async def update_document_endpoint(
         raise
     except Exception as e:
         session.rollback()
-        logger.error('Error updating document %s: %s', document_id, e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to update document: {str(e)}"
+            detail="Failed to update document",
+            log_message=f"Error updating document {document_id}",
+            exc=e,
         )
     finally:
         session.close()
@@ -1162,10 +1171,12 @@ async def delete_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error deleting document %s: %s', document_id, e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to delete document: {str(e)}"
+            detail="Failed to delete document",
+            log_message=f"Error deleting document {document_id}",
+            exc=e,
         )
 
 
@@ -1209,14 +1220,23 @@ async def upload_document_endpoint(
             error_message=intake_result.error_message,
         )
     except UploadIntakeValidationError as validation_error:
-        raise HTTPException(status_code=400, detail=str(validation_error)) from validation_error
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Invalid document upload request",
+            log_message="Document upload validation failed",
+            exc=validation_error,
+            level=logging.WARNING,
+        )
     except UploadIntakeDuplicateError as duplicate_error:
         raise HTTPException(status_code=409, detail=duplicate_error.detail) from duplicate_error
     except Exception as e:
-        logger.error('Error uploading document: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to upload document: {str(e)}"
+            detail="Failed to upload document",
+            log_message="Error uploading document",
+            exc=e,
         )
 
 
@@ -1287,10 +1307,12 @@ async def get_document_processing_status(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error getting document status: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to get document status: {str(e)}"
+            detail="Failed to get document status",
+            log_message=f"Error getting document status for {document_id}",
+            exc=e,
         )
 
 
@@ -1554,10 +1576,12 @@ async def get_download_info(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error getting download info for document %s: %s', document_id, e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to get download info: {str(e)}"
+            detail="Failed to get download info",
+            log_message=f"Error getting download info for document {document_id}",
+            exc=e,
         )
 
 
@@ -1669,8 +1693,10 @@ async def download_document_file(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error downloading %s for document %s: %s', file_type, document_id, e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to download file: {str(e)}"
+            detail="Failed to download file",
+            log_message=f"Error downloading {file_type} for document {document_id}",
+            exc=e,
         )

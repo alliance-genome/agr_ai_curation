@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime, timezone
+import logging
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -206,7 +207,7 @@ async def test_get_batch_endpoint_404(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_cancel_batch_endpoint_maps_value_error(monkeypatch):
+async def test_cancel_batch_endpoint_maps_value_error(monkeypatch, caplog):
     _mock_auth(monkeypatch, user_id=8)
 
     def _raise(*_args, **_kwargs):
@@ -214,10 +215,13 @@ async def test_cancel_batch_endpoint_maps_value_error(monkeypatch):
 
     service = SimpleNamespace(cancel_batch=_raise)
     monkeypatch.setattr(batch_api, "BatchService", lambda _db: service)
+    caplog.set_level(logging.WARNING, logger=batch_api.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await batch_api.cancel_batch(uuid4(), {"sub": "u-1"}, db=object())
     assert exc.value.status_code == 400
+    assert exc.value.detail == "Batch cannot be cancelled"
+    assert "Cannot cancel batch" in caplog.text
 
 
 @pytest.mark.asyncio

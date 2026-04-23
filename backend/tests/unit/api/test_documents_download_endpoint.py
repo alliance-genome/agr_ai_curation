@@ -1,6 +1,7 @@
 """Unit tests for document file download endpoint."""
 
 import importlib
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -275,6 +276,45 @@ async def test_get_download_info_invalid_uuid_returns_400(monkeypatch):
         )
 
     assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_download_info_sanitizes_unexpected_error(monkeypatch, caplog):
+    def _raise_session():
+        raise RuntimeError("storage exploded")
+
+    monkeypatch.setattr(documents, "SessionLocal", _raise_session)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.get_download_info(
+            document_id=_DOC_ID,
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to get download info"
+    assert "storage exploded" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_download_document_file_sanitizes_unexpected_error(monkeypatch, caplog):
+    def _raise_session():
+        raise RuntimeError("download exploded")
+
+    monkeypatch.setattr(documents, "SessionLocal", _raise_session)
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await documents.download_document_file(
+            document_id=_DOC_ID,
+            file_type="pdf",
+            user={"sub": "user123"},
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Failed to download file"
+    assert "download exploded" in caplog.text
 
 
 @pytest.mark.asyncio

@@ -6,15 +6,18 @@ Used by Agent Studio's get_service_logs tool.
 """
 
 from datetime import datetime, timedelta, timezone
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.lib import loki_client as loki
+from src.lib.http_errors import raise_sanitized_http_exception
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class LogsResponse(BaseModel):
@@ -205,7 +208,10 @@ async def get_container_logs(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Unexpected error: {str(e)}",
+            detail="Failed to retrieve logs",
+            log_message=f"Unexpected error retrieving logs for container {container}",
+            exc=e,
         )

@@ -4,6 +4,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 import importlib
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import ANY
 from uuid import uuid4
@@ -1411,6 +1412,43 @@ def test_execute_flow_endpoint_returns_403_for_cross_user_flow(monkeypatch):
         )
 
     assert exc.value.status_code == 403
+
+
+def test_execute_flow_endpoint_sanitizes_validation_error(monkeypatch, caplog):
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-invalid-flow")
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Flow Validation",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+
+    def _raise_prepare(**_kwargs):
+        raise ValueError("flow request contains hidden validation detail")
+
+    monkeypatch.setattr(chat, "_prepare_execute_flow_turn", _raise_prepare)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
+
+    with pytest.raises(chat.HTTPException) as exc:
+        asyncio.run(
+            chat.execute_flow_endpoint(
+                request=request,
+                db=db,
+                user={"sub": "auth-sub", "cognito:groups": []},
+            )
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid flow execution request"
+    assert "flow request contains hidden validation detail" in caplog.text
+    assert db.rollback_calls == 1
+    assert calls["register"] == [("session-invalid-flow", "auth-sub", ANY)]
+    assert calls["unregister"] == [("session-invalid-flow", "auth-sub", ANY)]
+    assert calls["clear"] == ["session-invalid-flow"]
 
 
 def test_execute_flow_endpoint_requires_user_sub(monkeypatch):
