@@ -39,7 +39,7 @@ describe('parseSSEEvent (T012)', () => {
     const sseData: AuditEventSSE = {
       type: 'SUPERVISOR_START',
       timestamp: '2025-10-23T10:30:00.000Z',
-      sessionId: 'session123',
+      session_id: 'session123',
       details: { message: 'Processing user query' }
     }
 
@@ -53,7 +53,7 @@ describe('parseSSEEvent (T012)', () => {
     const sseData: AuditEventSSE = {
       type: 'CREW_START',
       timestamp: '2025-10-23T10:30:01.000Z',
-      sessionId: 'session123',
+      session_id: 'session123',
       details: { crewName: 'disease_ontology' }
     }
 
@@ -72,7 +72,7 @@ describe('parseSSEEvent (T012)', () => {
     const sseData: AuditEventSSE = {
       type: 'CREW_START',
       timestamp: '2025-10-23T10:30:01.000Z',
-      sessionId: 'session123',
+      session_id: 'session123',
       details: { crewName: 'disease_ontology' }
     }
 
@@ -85,11 +85,11 @@ describe('parseSSEEvent (T012)', () => {
     }
   })
 
-  it('preserves type and sessionId from SSE data', () => {
+  it('preserves type and maps session_id to sessionId', () => {
     const sseData: AuditEventSSE = {
       type: 'TOOL_START',
       timestamp: '2025-10-23T10:30:02.000Z',
-      sessionId: 'session456',
+      session_id: 'session456',
       details: { toolName: 'sql_query_tool', friendlyName: 'Searching database...' }
     }
 
@@ -118,7 +118,7 @@ describe('parseSSEEvent (T012)', () => {
       const sseData: AuditEventSSE = {
         type,
         timestamp: '2025-10-23T10:30:00.000Z',
-        sessionId: 'session123',
+        session_id: 'session123',
         details: {}
       }
 
@@ -142,7 +142,7 @@ describe('parseSSEEvent (T012)', () => {
     const sseData: AuditEventSSE = {
       type: 'SUPERVISOR_DISPATCH',
       timestamp: '2025-10-23T10:30:00.000Z',
-      sessionId: 'session123',
+      session_id: 'session123',
       details
     }
 

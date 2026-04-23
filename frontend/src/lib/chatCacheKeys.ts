@@ -26,6 +26,7 @@ export interface ChatRenderCacheKeys {
 }
 
 export interface ChatHistoryListCacheRequest {
+  chatKind: 'assistant_chat' | 'agent_studio' | 'all'
   limit?: number
   cursor?: string | null
   query?: string | null
@@ -56,10 +57,11 @@ export const chatCacheKeys = {
   history: {
     all: () => [...CHAT_QUERY_KEY_PREFIX, 'history'] as const,
     lists: () => [...chatCacheKeys.history.all(), 'lists'] as const,
-    list: (request: ChatHistoryListCacheRequest = {}) =>
+    list: (request: ChatHistoryListCacheRequest) =>
       [
         ...chatCacheKeys.history.lists(),
         {
+          chatKind: request.chatKind,
           limit: request.limit ?? DEFAULT_CHAT_HISTORY_LIST_LIMIT,
           cursor: normalizeChatHistoryValue(request.cursor),
           query: normalizeChatHistoryValue(request.query),

@@ -307,7 +307,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
         const auditEvent = parseSSEEvent({
           type: sseEvent.type as AuditEventType,
           timestamp: sseEvent.timestamp,
-          sessionId: eventSessionId,
+          session_id: eventSessionId,
           details: sseEvent.details || {}
         })
 

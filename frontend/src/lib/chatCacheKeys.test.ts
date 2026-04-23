@@ -94,6 +94,7 @@ describe('chatCacheKeys', () => {
   it('builds stable chat history list query keys from normalized request values', () => {
     expect(
       chatCacheKeys.history.list({
+        chatKind: 'assistant_chat',
         query: '  TP53  ',
         cursor: ' cursor-1 ',
         documentId: ' doc-1 ',
@@ -103,6 +104,7 @@ describe('chatCacheKeys', () => {
       'history',
       'lists',
       {
+        chatKind: 'assistant_chat',
         limit: DEFAULT_CHAT_HISTORY_LIST_LIMIT,
         cursor: 'cursor-1',
         query: 'TP53',
@@ -112,12 +114,17 @@ describe('chatCacheKeys', () => {
 
     expect(
       chatCacheKeys.history.list({
+        chatKind: 'assistant_chat',
         limit: DEFAULT_CHAT_HISTORY_LIST_LIMIT,
         query: '   ',
         cursor: null,
         documentId: '',
       }),
-    ).toEqual(chatCacheKeys.history.list())
+    ).toEqual(
+      chatCacheKeys.history.list({
+        chatKind: 'assistant_chat',
+      }),
+    )
   })
 
   it('builds session-scoped chat history detail keys with default message pagination', () => {

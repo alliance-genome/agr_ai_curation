@@ -49,6 +49,12 @@ class _FakeAnthropicClient:
 def _configure_chat_endpoint(monkeypatch, error: Exception):
     alerts = []
     logger_errors = []
+    prepared_turn = api_module.PreparedAgentStudioTurn(
+        session_id="agent-studio-session-1",
+        turn_id="opus-turn-1",
+        user_message="Please help",
+        requested_context_session_id=None,
+    )
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(
@@ -66,6 +72,11 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
         api_module,
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=1),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "_prepare_agent_studio_turn",
+        lambda **_kwargs: prepared_turn,
     )
 
     def _fake_get_db():
@@ -138,6 +149,9 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
     assert events == [
         {
             "type": "ERROR",
+            "session_id": "agent-studio-session-1",
+            "turn_id": "opus-turn-1",
+            "trace_id": "trace-123",
             "message": (
                 "Agent Studio couldn't complete that request because it ran into a problem "
                 "sending it to the model. Please review your last step and try again. If "
@@ -154,7 +168,7 @@ def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
             "source": "infrastructure",
             "specialist_name": "agent_studio_opus",
             "trace_id": "trace-123",
-            "session_id": None,
+            "session_id": "agent-studio-session-1",
             "curator_id": "curator@example.org",
         }
     ]
@@ -184,6 +198,9 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
     assert events == [
         {
             "type": "ERROR",
+            "session_id": "agent-studio-session-1",
+            "turn_id": "opus-turn-1",
+            "trace_id": "trace-123",
             "message": (
                 "The model service had a temporary problem while working on your request. "
                 "Any tool actions started during this turn may already have completed, so "
@@ -200,7 +217,7 @@ def test_chat_with_opus_sanitizes_api_errors(monkeypatch):
             "source": "infrastructure",
             "specialist_name": "agent_studio_opus",
             "trace_id": "trace-123",
-            "session_id": None,
+            "session_id": "agent-studio-session-1",
             "curator_id": "curator@example.org",
         }
     ]
@@ -226,6 +243,9 @@ def test_chat_with_opus_preserves_context_overflow_branch(monkeypatch):
     assert events == [
         {
             "type": "CONTEXT_OVERFLOW",
+            "session_id": "agent-studio-session-1",
+            "turn_id": "opus-turn-1",
+            "trace_id": "trace-123",
             "message": "I've hit my token limit for this conversation. The last tool call returned too much data.",
             "recovery_hint": (
                 "Try a lighter-weight tool call: use get_trace_summary instead of full views, "

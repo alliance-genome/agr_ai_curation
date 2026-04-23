@@ -7,6 +7,7 @@ import {
   clearLegacyChatLocalStorage,
   getChatLocalStorageKeys,
 } from '../lib/chatCacheKeys';
+import { ASSISTANT_CHAT_HISTORY_KIND } from '../services/chatHistoryApi';
 
 /** User data resolved from backend auth session. */
 export interface AuthUser {
@@ -111,7 +112,10 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         const storedSessionId = localStorage.getItem(chatStorageKeys.sessionId);
         const storedMessages = localStorage.getItem(chatStorageKeys.messages);
         try {
-          const historyResponse = await fetch('/api/chat/history', {
+          const historyQuery = new URLSearchParams({
+            chat_kind: ASSISTANT_CHAT_HISTORY_KIND,
+          });
+          const historyResponse = await fetch(`/api/chat/history?${historyQuery.toString()}`, {
             method: 'GET',
             credentials: 'include',
           });

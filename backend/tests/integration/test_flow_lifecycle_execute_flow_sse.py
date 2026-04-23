@@ -153,7 +153,6 @@ def test_flow_lifecycle_create_update_execute_stream_and_stats(client: TestClien
     flow_started = next(event for event in events if event.get("type") == "FLOW_STARTED")
     assert flow_started.get("flow_id") == flow_id
     assert flow_started.get("session_id") == execute_payload["session_id"]
-    assert flow_started.get("sessionId") == execute_payload["session_id"]
 
     flow_finished = next(event for event in events if event.get("type") == "FLOW_FINISHED")
     assert flow_finished.get("status") == "completed"

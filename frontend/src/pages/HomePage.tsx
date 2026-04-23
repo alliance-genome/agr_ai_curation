@@ -22,6 +22,7 @@ import {
 } from '@/features/documents/chatDocumentRehydration'
 import { readCurationApiError } from '@/features/curation/services/api'
 import {
+  ASSISTANT_CHAT_HISTORY_KIND,
   buildRestorableChatMessages,
   fetchChatHistoryDetail,
   type ChatHistoryActiveDocument,
@@ -239,6 +240,9 @@ function HomePage() {
       headers: {
         'Content-Type': 'application/json',
       },
+      body: JSON.stringify({
+        chat_kind: ASSISTANT_CHAT_HISTORY_KIND,
+      }),
     })
 
     if (!response.ok) {

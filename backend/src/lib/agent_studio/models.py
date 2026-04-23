@@ -233,6 +233,10 @@ class ChatContext(BaseModel):
         None,
         description="Trace ID if opened from a chat message"
     )
+    session_id: Optional[str] = Field(
+        None,
+        description="Durable or seeded session ID carried with the Agent Studio chat context",
+    )
     view_mode: str = Field(
         "base",
         description="Current view mode: 'base', 'group', or 'combined'"

@@ -19,6 +19,7 @@ function buildDetailResponse(
   return {
     session: {
       session_id: 'session-1',
+      chat_kind: 'assistant_chat',
       title: 'Stored conversation',
       active_document_id: null,
       created_at: '2026-04-20T09:00:00Z',
@@ -42,6 +43,7 @@ describe('ConversationTranscriptView', () => {
           {
             message_id: 'flow-message-1',
             session_id: 'session-1',
+            chat_kind: 'assistant_chat',
             turn_id: 'turn-1',
             role: 'flow',
             message_type: 'flow_step_evidence',
@@ -94,6 +96,7 @@ describe('ConversationTranscriptView', () => {
           {
             message_id: 'message-system-1',
             session_id: 'session-1',
+            chat_kind: 'assistant_chat',
             turn_id: 'turn-1',
             role: 'system',
             message_type: 'text',

@@ -27,7 +27,10 @@ class ChatInterface {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
-                }
+                },
+                body: JSON.stringify({
+                    chat_kind: 'assistant_chat'
+                })
             });
 
             if (response.ok) {

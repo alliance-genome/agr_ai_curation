@@ -437,7 +437,6 @@ def _enrich_event_for_batch(
     enriched["batch_id"] = batch_id
     enriched["document_id"] = document_id
     enriched["session_id"] = session_id
-    enriched["sessionId"] = session_id  # Frontend expects both formats
 
     # Flatten 'data' field if present (matches chat.py pattern)
     if "data" in event:

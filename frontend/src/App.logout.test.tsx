@@ -130,7 +130,7 @@ describe('ProtectedRoutes logout integration', () => {
         });
       }
 
-      if (url === '/api/chat/history') {
+      if (url === '/api/chat/history?chat_kind=assistant_chat') {
         return jsonResponse({ total_sessions: 1 });
       }
 
@@ -186,6 +186,10 @@ describe('ProtectedRoutes logout integration', () => {
     expect(window.location.href).toBe('https://issuer.example.org/logout');
 
     const fetchUrls = vi.mocked(global.fetch).mock.calls.map(([url]) => String(url));
-    expect(fetchUrls).toEqual(['/api/users/me', '/api/chat/history', '/api/auth/logout']);
+    expect(fetchUrls).toEqual([
+      '/api/users/me',
+      '/api/chat/history?chat_kind=assistant_chat',
+      '/api/auth/logout',
+    ]);
   });
 });

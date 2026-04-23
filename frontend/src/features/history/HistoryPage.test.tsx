@@ -65,6 +65,7 @@ function renderHistoryPage() {
 function buildSession(overrides: Partial<ChatHistorySessionSummary> = {}): ChatHistorySessionSummary {
   return {
     session_id: 'session-1',
+    chat_kind: 'assistant_chat',
     title: 'TP53 evidence review',
     active_document_id: null,
     created_at: '2026-04-20T09:00:00Z',
@@ -80,6 +81,7 @@ function buildListResponse(
   overrides: Partial<ChatHistoryListResponse> = {},
 ): ChatHistoryListResponse {
   return {
+    chat_kind: 'assistant_chat',
     total_sessions: sessions.length,
     limit: 100,
     query: null,
@@ -106,6 +108,7 @@ function buildDetailResponse(
       {
         message_id: 'message-user',
         session_id: 'session-1',
+        chat_kind: 'assistant_chat',
         turn_id: 'turn-1',
         role: 'user',
         message_type: 'text',
@@ -117,6 +120,7 @@ function buildDetailResponse(
       {
         message_id: 'message-assistant',
         session_id: 'session-1',
+        chat_kind: 'assistant_chat',
         turn_id: 'turn-1',
         role: 'assistant',
         message_type: 'text',
@@ -168,7 +172,9 @@ describe('HistoryPage', () => {
       }),
     ]
 
-    hookMocks.useChatHistoryListQuery.mockImplementation((request?: { query?: string | null }) => ({
+    hookMocks.useChatHistoryListQuery.mockImplementation((
+      request?: { chatKind?: string; query?: string | null },
+    ) => ({
       data: buildListResponse(
         request?.query === 'TP53'
           ? [sessions[0]]
@@ -230,6 +236,7 @@ describe('HistoryPage', () => {
     await waitFor(() => {
       expect(hookMocks.useChatHistoryListQuery).toHaveBeenLastCalledWith(
         expect.objectContaining({
+          chatKind: 'assistant_chat',
           limit: 100,
           query: 'TP53',
         }),

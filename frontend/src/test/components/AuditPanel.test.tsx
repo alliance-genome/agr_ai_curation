@@ -146,7 +146,7 @@ describe('AuditPanel - Event Display (T018)', () => {
             {
               type: 'SUPERVISOR_START',
               timestamp: '2025-10-23T10:30:00.000Z',
-              sessionId: 'session123',
+              session_id: 'session123',
               details: { message: 'Processing from SSE' }
             }
           ]}
@@ -189,7 +189,7 @@ describe('AuditPanel - Event Display (T018)', () => {
           {
             type: 'FLOW_STEP_EVIDENCE',
             timestamp: '2026-02-26T00:00:01.000Z',
-            sessionId: 'session123',
+            session_id: 'session123',
             details: {
               flow_id: 'flow-1',
               flow_name: 'Flow Evidence',

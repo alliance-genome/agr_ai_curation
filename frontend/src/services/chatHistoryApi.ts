@@ -4,6 +4,11 @@ import type { FileInfo } from '@/components/Chat/FileDownloadCard'
 import type { EvidenceRecord } from '@/features/curation/types'
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
+export type PersistedChatHistoryKind = 'assistant_chat' | 'agent_studio'
+export type ChatHistoryListKind = PersistedChatHistoryKind | 'all'
+
+export const ASSISTANT_CHAT_HISTORY_KIND: PersistedChatHistoryKind = 'assistant_chat'
+
 export interface ChatHistoryActiveDocument {
   id: string
   filename?: string | null
@@ -14,6 +19,7 @@ export interface ChatHistoryActiveDocument {
 
 export interface ChatHistorySessionSummary {
   session_id: string
+  chat_kind: PersistedChatHistoryKind
   title?: string | null
   active_document_id?: string | null
   created_at: string
@@ -25,6 +31,7 @@ export interface ChatHistorySessionSummary {
 export interface ChatHistoryMessage {
   message_id: string
   session_id: string
+  chat_kind: PersistedChatHistoryKind
   turn_id?: string | null
   role: string
   message_type: string
@@ -52,6 +59,7 @@ export interface RestorableChatMessage {
 }
 
 export interface ChatHistoryListRequest {
+  chatKind: ChatHistoryListKind
   limit?: number
   cursor?: string | null
   query?: string | null
@@ -59,6 +67,7 @@ export interface ChatHistoryListRequest {
 }
 
 export interface ChatHistoryListResponse {
+  chat_kind: ChatHistoryListKind
   total_sessions: number
   limit: number
   query?: string | null
@@ -364,9 +373,10 @@ async function fetchChatHistoryJson<T>(
 }
 
 export function buildChatHistoryListQueryParams(
-  request: ChatHistoryListRequest = {},
+  request: ChatHistoryListRequest,
 ): URLSearchParams {
   const params = new URLSearchParams()
+  params.set('chat_kind', request.chatKind)
 
   if (typeof request.limit === 'number') {
     params.set('limit', String(request.limit))
@@ -408,7 +418,7 @@ export function buildChatHistoryDetailQueryParams(
 }
 
 export async function fetchChatHistoryList(
-  request: ChatHistoryListRequest = {},
+  request: ChatHistoryListRequest,
 ): Promise<ChatHistoryListResponse> {
   const params = buildChatHistoryListQueryParams(request)
   const query = params.toString()

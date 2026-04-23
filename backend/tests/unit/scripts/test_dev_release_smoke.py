@@ -184,6 +184,42 @@ def test_ensure_worker_ready_allows_healthy_payload_with_status_error(monkeypatc
     assert checks[0]["ok"] is True
 
 
+def test_create_chat_session_posts_assistant_chat_kind(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    request_log: dict[str, object] = {}
+
+    def _fake_http_request(method, url, **kwargs):
+        request_log["method"] = method
+        request_log["url"] = url
+        request_log["kwargs"] = kwargs
+        return smoke.Response(
+            status_code=200,
+            body=b'{"session_id":"session-123"}',
+            text='{"session_id":"session-123"}',
+            json_body={"session_id": "session-123"},
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    session_id = smoke.create_chat_session(
+        base_url="http://example.test",
+        headers={"X-API-Key": "test-key"},
+        checks=checks,
+    )
+
+    assert session_id == "session-123"
+    assert request_log["method"] == "POST"
+    assert request_log["url"] == "http://example.test/api/chat/session"
+    assert request_log["kwargs"] == {
+        "headers": {"X-API-Key": "test-key"},
+        "json_body": {"chat_kind": "assistant_chat"},
+        "timeout": 20.0,
+    }
+    assert checks[-1]["step"] == "chat_session"
+    assert checks[-1]["ok"] is True
+
+
 def test_ask_streaming_chat_question_returns_trace_and_model_summary(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []

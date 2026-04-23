@@ -1297,7 +1297,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'TEXT_MESSAGE_CONTENT',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-failure-1',
           trace_id: 'trace-failure-1',
           content: 'Partial assistant reply',
@@ -1305,7 +1304,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'turn_failed',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-failure-1',
           trace_id: 'trace-failure-1',
           message: 'Chat completed, but durable side effects could not be saved.',
@@ -1326,7 +1324,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'TEXT_MESSAGE_CONTENT',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-run-error-1',
           trace_id: 'trace-run-error-1',
           content: 'Starting risky flow',
@@ -1334,7 +1331,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'RUN_ERROR',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-run-error-1',
           trace_id: 'trace-run-error-1',
           message: 'The flow runner reported a timeout.',
@@ -1410,7 +1406,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'TEXT_MESSAGE_CONTENT',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-save-failed-1',
           trace_id: 'trace-stream-1',
           content: 'Buffered assistant reply',
@@ -1418,7 +1413,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'turn_save_failed',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-save-failed-1',
           trace_id: 'trace-stream-1',
           message: 'Chat completed, but the assistant response could not be saved.',
@@ -1426,7 +1420,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'turn_save_failed',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-save-failed-1',
           trace_id: 'trace-stream-1',
           message: 'Chat completed, but the assistant response could not be saved.',
@@ -1507,7 +1500,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'TEXT_MESSAGE_CONTENT',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-save-failed-2',
           trace_id: 'trace-stream-2',
           content: 'Rescue me',
@@ -1515,7 +1507,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'turn_save_failed',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-save-failed-2',
           trace_id: 'trace-stream-2',
           message: 'Chat completed, but the assistant response could not be saved.',
@@ -1600,7 +1591,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'TEXT_MESSAGE_CONTENT',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-save-failed-3',
           trace_id: 'trace-stream-3',
           content: 'Do not restore this after reset',
@@ -1608,7 +1598,6 @@ describe('Chat turn reconciliation', () => {
         {
           type: 'turn_save_failed',
           session_id: 'session-1',
-          sessionId: 'session-1',
           turn_id: 'turn-save-failed-3',
           trace_id: 'trace-stream-3',
           message: 'Chat completed, but the assistant response could not be saved.',
@@ -1763,7 +1752,7 @@ describe('Chat flow evidence rendering', () => {
         {
           type: 'FLOW_STEP_EVIDENCE',
           timestamp: '2026-02-26T00:00:01.000Z',
-          sessionId: 'session-flow-evidence',
+          session_id: 'session-flow-evidence',
           details: {
             flow_id: 'flow-1',
             flow_name: 'Flow Evidence',
@@ -1819,7 +1808,7 @@ describe('Chat flow evidence rendering', () => {
         {
           type: 'FLOW_STEP_EVIDENCE',
           timestamp: '2026-02-26T00:00:01.000Z',
-          sessionId: 'session-flow-evidence-preview',
+          session_id: 'session-flow-evidence-preview',
           details: {
             flow_id: 'flow-1',
             flow_name: 'Flow Evidence',
@@ -1874,7 +1863,7 @@ describe('Chat flow evidence rendering', () => {
           {
             type: 'FLOW_STEP_EVIDENCE',
             timestamp: '2026-02-26T00:00:01.000Z',
-            sessionId: 'session-flow-evidence',
+            session_id: 'session-flow-evidence',
             details: {
               flow_id: 'flow-1',
               flow_name: 'Flow Evidence',
@@ -1912,7 +1901,7 @@ describe('Chat flow evidence rendering', () => {
         events: [
           {
             type: 'FLOW_STEP_EVIDENCE',
-            sessionId: 'session-flow-evidence',
+            session_id: 'session-flow-evidence',
             details: {
               flow_id: 'flow-1',
               flow_name: 'Flow Evidence',

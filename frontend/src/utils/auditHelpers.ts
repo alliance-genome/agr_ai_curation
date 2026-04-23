@@ -84,7 +84,7 @@ const FORMATTER_SPECIALISTS = new Set([
  * const sse: AuditEventSSE = {
  *   type: 'SUPERVISOR_START',
  *   timestamp: '2025-10-23T10:30:00.000Z',
- *   sessionId: 'session123',
+ *   session_id: 'session123',
  *   details: { message: 'Processing user query' }
  * }
  * const event = parseSSEEvent(sse)
@@ -96,7 +96,7 @@ export function parseSSEEvent(sseData: AuditEventSSE): AuditEvent {
     id: generateAuditEventId(),
     type: sseData.type,
     timestamp: new Date(sseData.timestamp),
-    sessionId: sseData.sessionId,
+    sessionId: sseData.session_id,
     details: sseData.details as AuditEventDetails
   }
 }

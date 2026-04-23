@@ -29,6 +29,8 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from src.lib.chat_history_repository import ASSISTANT_CHAT_KIND, ChatHistoryRepository
+from src.models.sql.chat_message import ChatMessage as ChatMessageModel
+from src.models.sql.chat_session import ChatSession as ChatSessionModel
 from src.models.sql.user import User
 from src.models.sql.pdf_document import PDFDocument
 from src.lib.weaviate_helpers import get_tenant_name
@@ -378,15 +380,19 @@ class TestChatIsolation:
         test_db.commit()
 
         repository = ChatHistoryRepository(test_db)
-        query = f"chat-isolation-{uuid4().hex[:8]}"
-        session1_id = f"{query}-user1"
-        session2_id = f"{query}-user2"
+        query_token = uuid4().hex[:8]
+        session1_id = f"chat-isolation-{query_token}-user1"
+        session2_id = f"chat-isolation-{query_token}-user2"
+
+        test_db.query(ChatMessageModel).delete(synchronize_session=False)
+        test_db.query(ChatSessionModel).delete(synchronize_session=False)
+        test_db.commit()
 
         repository.create_session(
             session_id=session1_id,
             user_auth_sub=curator1_user["sub"],
             chat_kind=ASSISTANT_CHAT_KIND,
-            title=f"{query} session user1",
+            title=f"chat isolation {query_token} session user1",
             created_at=_ts(9, 0),
         )
         repository.append_message(
@@ -413,7 +419,7 @@ class TestChatIsolation:
             session_id=session2_id,
             user_auth_sub=curator2_user["sub"],
             chat_kind=ASSISTANT_CHAT_KIND,
-            title=f"{query} session user2",
+            title=f"chat isolation {query_token} session user2",
             created_at=_ts(10, 0),
         )
         repository.append_message(
@@ -438,9 +444,15 @@ class TestChatIsolation:
         test_db.commit()
 
         get_auth_mock.set_user("chat1")
-        response1 = client_as_curator1.get("/api/chat/history", params={"query": query})
+        response1 = client_as_curator1.get(
+            "/api/chat/history",
+            params={"chat_kind": "assistant_chat"},
+        )
         get_auth_mock.set_user("chat2")
-        response2 = client_as_curator1.get("/api/chat/history", params={"query": query})
+        response2 = client_as_curator1.get(
+            "/api/chat/history",
+            params={"chat_kind": "assistant_chat"},
+        )
 
         assert response1.status_code == 200, \
             f"User 1 chat history should be accessible, got {response1.status_code}"
@@ -452,8 +464,10 @@ class TestChatIsolation:
 
         assert history1["total_sessions"] == 1
         assert [session["session_id"] for session in history1["sessions"]] == [session1_id]
+        assert [session["chat_kind"] for session in history1["sessions"]] == [ASSISTANT_CHAT_KIND]
         assert history2["total_sessions"] == 1
         assert [session["session_id"] for session in history2["sessions"]] == [session2_id]
+        assert [session["chat_kind"] for session in history2["sessions"]] == [ASSISTANT_CHAT_KIND]
 
         get_auth_mock.set_user("chat1")
         detail1 = client_as_curator1.get(f"/api/chat/history/{session1_id}")

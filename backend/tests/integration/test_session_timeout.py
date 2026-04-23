@@ -20,7 +20,7 @@ Implementation Notes:
 
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 import jwt
 
@@ -301,7 +301,7 @@ class TestSessionTimeout:
             ("GET", "/weaviate/documents", None),
             ("GET", "/api/users/me", None),
             ("POST", "/api/chat", {"message": "test", "session_id": "test"}),
-            ("GET", "/api/chat/history", None),
+            ("GET", "/api/chat/history?chat_kind=assistant_chat", None),
         ]
 
         for method, endpoint, payload in protected_endpoints:
