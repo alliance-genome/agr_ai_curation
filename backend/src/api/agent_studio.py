@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path as FilePath
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, NoReturn, Optional
 
 import anthropic
 import boto3
@@ -116,10 +116,11 @@ def _raise_agent_studio_lookup_http_exception(
     log_message: str,
     not_found_detail: str,
     access_denied_detail: str,
-) -> None:
+    not_found_error_types: tuple[type[Exception], ...] = (CustomAgentNotFoundError,),
+) -> NoReturn:
     """Map lookup/access failures to client-safe HTTP errors with logging."""
 
-    status_code = 404 if exc.__class__.__name__ == "CustomAgentNotFoundError" else 403
+    status_code = 404 if isinstance(exc, not_found_error_types) else 403
     detail = not_found_detail if status_code == 404 else access_denied_detail
     raise_sanitized_http_exception(
         logger,
@@ -137,7 +138,7 @@ def _raise_agent_studio_validation_http_exception(
     status_code: int,
     detail: str,
     log_message: str,
-) -> None:
+) -> NoReturn:
     """Log validation failures while returning a stable client response."""
 
     raise_sanitized_http_exception(
@@ -996,6 +997,7 @@ async def get_prompt_preview(
                     log_message=f"Failed to load prompt preview for custom agent '{agent_id}'",
                     not_found_detail="Custom agent not found",
                     access_denied_detail="Access denied to custom agent",
+                    not_found_error_types=(CustomAgentNotFoundError,),
                 )
             preview = custom_agent.custom_prompt
 

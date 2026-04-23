@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NoReturn, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -46,10 +46,10 @@ def _raise_custom_agent_lookup_http_exception(
     *,
     exc: CustomAgentNotFoundError | CustomAgentAccessError,
     log_message: str,
-) -> None:
+) -> NoReturn:
     """Map custom-agent lookup failures to client-safe HTTP errors."""
 
-    status_code = 404 if exc.__class__.__name__ == "CustomAgentNotFoundError" else 403
+    status_code = 404 if isinstance(exc, CustomAgentNotFoundError) else 403
     detail = "Custom agent not found" if status_code == 404 else "Access denied to custom agent"
     raise_sanitized_http_exception(
         logger,
@@ -67,7 +67,7 @@ def _raise_custom_agent_validation_http_exception(
     status_code: int,
     detail: str,
     log_message: str,
-) -> None:
+) -> NoReturn:
     """Log validation failures while returning a stable client response."""
 
     raise_sanitized_http_exception(
