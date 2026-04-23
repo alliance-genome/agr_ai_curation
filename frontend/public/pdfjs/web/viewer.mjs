@@ -11,7 +11,6 @@ import {
 } from "./pdf_viewer.mjs";
 
 const SUPPORTED_PROTOCOLS = new Set(["http:", "https:"]);
-const GENERIC_LOAD_ERROR = "Unable to load the requested PDF document.";
 
 const viewerContainer = document.getElementById("viewerContainer");
 const viewer = document.getElementById("viewer");
@@ -20,6 +19,10 @@ const errorNode = document.getElementById("viewerError");
 
 if (!(viewerContainer instanceof HTMLDivElement) || !(viewer instanceof HTMLDivElement)) {
   throw new Error("The PDF viewer shell did not render correctly.");
+}
+
+if (!(loadingNode instanceof HTMLDivElement) || !(errorNode instanceof HTMLDivElement)) {
+  throw new Error("The PDF viewer status elements did not render correctly.");
 }
 
 GlobalWorkerOptions.workerSrc = "../build/pdf.worker.mjs";
@@ -40,10 +43,6 @@ const pdfViewer = new PDFViewer({
 linkService.setViewer(pdfViewer);
 
 const setLoadingState = (message = "") => {
-  if (!loadingNode) {
-    return;
-  }
-
   if (message) {
     loadingNode.textContent = message;
     loadingNode.hidden = false;
@@ -54,10 +53,6 @@ const setLoadingState = (message = "") => {
 };
 
 const setErrorState = (message = "") => {
-  if (!errorNode) {
-    return;
-  }
-
   if (message) {
     errorNode.textContent = message;
     errorNode.hidden = false;
@@ -89,6 +84,14 @@ const toSameOriginDocumentUrl = (input) => {
   }
 
   return resolvedUrl;
+};
+
+const toDisplayErrorMessage = (error) => {
+  if (error instanceof Error) {
+    return error.message || String(error);
+  }
+
+  return String(error);
 };
 
 const PDFViewerApplication = {
@@ -161,9 +164,7 @@ const PDFViewerApplication = {
       this.pdfViewer.setDocument(null);
       console.error("Failed to load PDF document.", error);
       setLoadingState("");
-      setErrorState(
-        error instanceof Error && error.message ? error.message : GENERIC_LOAD_ERROR,
-      );
+      setErrorState(toDisplayErrorMessage(error));
       throw error;
     }
   },

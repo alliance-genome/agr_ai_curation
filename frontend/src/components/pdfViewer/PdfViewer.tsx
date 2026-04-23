@@ -4139,7 +4139,7 @@ export function PdfViewer({
           error,
         })
         setStatus('error')
-        setError(error instanceof Error ? error.message : 'Unsupported PDF document URL.')
+        setError(error instanceof Error ? error.message : String(error))
         loadStartRef.current = null
         signalLoadComplete()
         return
