@@ -1,28 +1,26 @@
 # Core dependencies
 fastapi
 uvicorn[standard]
-python-multipart  # Required for file uploads
+python-multipart>=0.0.26  # Required for file uploads; keep the direct spec on the latest patched multipart parser line.
 pydantic>=2.0
 pydantic-settings
-python-dotenv
+python-dotenv>=1.2.2
 pyyaml
 
-# Authentication (AWS Cognito - Okta completely removed)
-# RIP AND REPLACE complete: All Okta code deleted, including vendor/agr_fastapi_okta
+# Authentication (AWS Cognito via the in-repo OIDC provider)
+# RIP AND REPLACE complete: All Okta code deleted, including vendor/agr_fastapi_okta.
 
-# AWS Cognito Authentication
+# AWS Cognito authentication
 boto3>=1.34.0  # AWS SDK for Python (moved from AWS Services section)
-fastapi-cognito>=1.0.0  # FastAPI integration for AWS Cognito
-pyjwt[crypto]>=2.8.0  # JWT token handling with cryptography support
-python-jose[cryptography]>=3.3.0  # JWT validation and JWKS handling
+pyjwt[crypto]>=2.8.0  # JWT token handling and JWKS validation
 
 # AI and Chat dependencies
 openai
 tiktoken  # Token preflight checks for embedding limits
-openai-agents[litellm]  # OpenAI Agents SDK for multi-agent orchestration (with LiteLLM for Gemini support)
-litellm<1.82.7  # Pin below compromised 1.82.8 (supply chain attack — malicious .pth file, yanked from PyPI)
-anthropic>=0.40.0  # Anthropic SDK for Opus chat in Prompt Explorer
-aiohttp  # Async HTTP client for PDFX service
+openai-agents[litellm]==0.12.5  # Preserve the current Agents SDK integration while refreshing LiteLLM separately.
+litellm>=1.83.0  # Patched after the 1.82.8 supply-chain incident and current Dependabot CVEs.
+anthropic>=0.87.0  # Anthropic SDK for Opus chat in Prompt Explorer
+aiohttp>=3.13.4  # Async HTTP client for PDFX service
 langfuse>=4.0.0,<5.0.0  # Observability for LLM applications (v4 API: start_as_current_observation + propagate_attributes)
 
 # Database dependencies
@@ -30,7 +28,7 @@ sqlalchemy>=2.0
 psycopg2-binary
 alembic
 agr-abc-document-parsers>=1.5.0
-agr-curation-api-client  # Use the published client release; keep lockfile current when updating
+agr-curation-api-client  # Use the published client release; see backend/DEPENDENCY_ALERT_DISPOSITIONS.md for the unresolved transitive ecdsa alert.
 
 # Ontology processing
 pronto  # OBO file parsing for biological ontologies
@@ -52,7 +50,7 @@ redis>=5.0
 click
 
 # Testing
-pytest
+pytest>=9.0.3
 pytest-asyncio
 pytest-cov
 pytest-mock
