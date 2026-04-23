@@ -1,5 +1,7 @@
 """Unit tests for API health and readiness endpoints."""
 
+import logging
+
 import pytest
 from fastapi import HTTPException
 
@@ -53,7 +55,8 @@ async def test_health_check_endpoint_unhealthy_weaviate_raises_503(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_health_check_endpoint_exception_raises_503(monkeypatch):
+async def test_health_check_endpoint_exception_raises_503(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=health.logger.name)
     monkeypatch.setattr(health, "is_cognito_configured", lambda: False)
     monkeypatch.setattr(
         health,
@@ -67,7 +70,10 @@ async def test_health_check_endpoint_exception_raises_503(monkeypatch):
     assert exc.value.status_code == 503
     detail = exc.value.detail
     assert detail["checks"]["weaviate"] == "unhealthy"
-    assert detail["details"]["weaviate"]["error"] == "connection failed"
+    assert detail["details"]["weaviate"]["error"] == "Weaviate health check failed"
+    assert detail["details"]["weaviate"]["message"] == "Weaviate connection not ready"
+    assert "connection failed" not in str(detail).lower()
+    assert "connection failed" in caplog.text.lower()
 
 
 @pytest.mark.asyncio
@@ -100,7 +106,8 @@ async def test_readiness_check_endpoint_not_ready_raises_503(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_readiness_check_endpoint_handles_exceptions(monkeypatch):
+async def test_readiness_check_endpoint_handles_exceptions(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=health.logger.name)
     monkeypatch.setattr(
         health,
         "get_connection",
@@ -112,4 +119,6 @@ async def test_readiness_check_endpoint_handles_exceptions(monkeypatch):
 
     assert exc.value.status_code == 503
     assert exc.value.detail["ready"] is False
-    assert exc.value.detail["reason"] == "timeout"
+    assert exc.value.detail["reason"] == "Weaviate connection not ready"
+    assert "timeout" not in str(exc.value.detail).lower()
+    assert "timeout" in caplog.text.lower()

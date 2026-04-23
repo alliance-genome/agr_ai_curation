@@ -1,10 +1,11 @@
 """Chunks API endpoints for Weaviate Control Panel."""
 
 from fastapi import APIRouter, HTTPException, Query, Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import logging
 
 from ..models.api_schemas import ChunkListResponse, PaginationInfo
+from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.weaviate_client.chunks import get_chunks
 from .auth import get_auth_dependency
 
@@ -65,8 +66,10 @@ async def get_document_chunks_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error retrieving chunks for document %s: %s', document_id, e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to retrieve chunks: {str(e)}"
+            detail="Failed to retrieve chunks",
+            log_message=f"Error retrieving chunks for document {document_id}",
+            exc=e,
         )

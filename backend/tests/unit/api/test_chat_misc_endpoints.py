@@ -1,6 +1,7 @@
 """Unit tests for chat misc/document/history endpoints and non-stream chat path."""
 
 import json
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -740,15 +741,18 @@ async def test_load_document_for_chat_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_load_document_for_chat_404_on_value_error(monkeypatch):
+async def test_load_document_for_chat_404_on_value_error(monkeypatch, caplog):
     async def _raise(*_args, **_kwargs):
         raise ValueError("missing")
 
     monkeypatch.setattr(chat, "get_document", _raise)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await chat.load_document_for_chat(chat.LoadDocumentRequest(document_id="doc-404"), {"sub": "user-1"})
     assert exc.value.status_code == 404
+    assert exc.value.detail == "Document not found"
+    assert "missing" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -985,7 +989,7 @@ async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(monkeypatch):
+async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(monkeypatch, caplog):
     commits: list[str] = []
     register_calls = []
     unregister_calls = []
@@ -1016,6 +1020,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
 
     monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
     monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     run_attempt = 0
 
@@ -1039,7 +1044,9 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
         )
 
     assert exc.value.status_code == 500
-    assert exc.value.detail == "model exploded"
+    assert exc.value.detail == "Failed to process chat request"
+    assert "model exploded" not in str(exc.value.detail)
+    assert "model exploded" in caplog.text
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
     assert "non-stream-turn:session-retry:turn-retry" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
@@ -1570,7 +1577,7 @@ async def test_chat_endpoint_raises_http_401_without_user_id():
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
+async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
@@ -1585,6 +1592,7 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
         yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
 
     monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1593,7 +1601,9 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch):
             db=_db_stub(commits=commits),
         )
     assert exc.value.status_code == 500
-    assert "model exploded" in exc.value.detail
+    assert exc.value.detail == "Failed to process chat request"
+    assert "model exploded" not in str(exc.value.detail)
+    assert "model exploded" in caplog.text
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
 
@@ -1717,7 +1727,38 @@ async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
+async def test_chat_endpoint_sanitizes_non_stream_validation_error(monkeypatch, caplog):
+    commits: list[str] = []
+    rollbacks: list[str] = []
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
+    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
+    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+
+    def _raise_value_error(**_kwargs):
+        raise ValueError("repository session invariant exploded")
+
+    repository.append_message = _raise_value_error
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        await chat.chat_endpoint(
+            chat.ChatMessage(message="hello", session_id="session-1", turn_id="turn-validation"),
+            {"sub": "user-1", "cognito:groups": []},
+            db=_db_stub(commits=commits, rollbacks=rollbacks),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Invalid chat request"
+    assert commits == []
+    assert rollbacks == ["rollback"]
+    assert "repository session invariant exploded" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
     monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
@@ -1733,6 +1774,7 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
         yield  # pragma: no cover
 
     monkeypatch.setattr(chat, "run_agent_streamed", _raise)
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1741,9 +1783,10 @@ async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch):
             db=_db_stub(commits=commits),
         )
     assert exc.value.status_code == 500
-    assert "boom" in exc.value.detail
+    assert exc.value.detail == "Failed to process chat request"
     assert commits == ["commit"]
     assert [call["role"] for call in repository.append_calls] == ["user"]
+    assert "boom" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -1791,6 +1834,40 @@ async def test_get_conversation_status_and_reset_endpoints(monkeypatch):
     assert reset.session_id is not None
     assert reset.memory_stats["conversation_id"] == reset.session_id
     assert reset.memory_stats["memory_sizes"]["short_term"]["file_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, caplog):
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    monkeypatch.setattr(
+        chat,
+        "_latest_visible_chat_session",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("conversation backend unavailable")),
+    )
+    caplog.set_level(logging.ERROR, logger=chat.logger.name)
+
+    with pytest.raises(HTTPException) as exc_status:
+        await chat.get_conversation_status(db=object(), user={"sub": "user-1"})
+
+    assert exc_status.value.status_code == 500
+    assert exc_status.value.detail == "Failed to retrieve conversation status"
+    assert "conversation backend unavailable" in caplog.text
+
+    caplog.clear()
+    monkeypatch.setattr(chat, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
+
+    def _raise_create_session(**_kwargs):
+        raise RuntimeError("conversation reset failed")
+
+    repository.create_session = _raise_create_session
+
+    with pytest.raises(HTTPException) as exc_reset:
+        await chat.reset_conversation(_db_stub(commits=[]), {"sub": "user-1"})
+
+    assert exc_reset.value.status_code == 500
+    assert exc_reset.value.detail == "Failed to reset conversation"
+    assert "conversation reset failed" in caplog.text
 
 
 def test_chat_router_omits_legacy_chat_config_route():
@@ -1989,6 +2066,53 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
     assert payload.active_document.filename == "paper.pdf"
     assert payload.messages[0].message_id == str(message_id)
     assert payload.messages[0].payload_json == {"step": "answer"}
+
+
+@pytest.mark.asyncio
+async def test_chat_history_routes_sanitize_validation_errors(monkeypatch, caplog):
+    repository = FakeChatHistoryRepository()
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
+
+    def _raise_history_error(**_kwargs):
+        raise ValueError("history cursor exploded")
+
+    repository.get_session_detail = _raise_history_error
+
+    with pytest.raises(HTTPException) as exc_history:
+        await chat.get_session_history(
+            "session-detail",
+            message_limit=50,
+            message_cursor=None,
+            db=object(),
+            user={"sub": "user-1"},
+        )
+
+    assert exc_history.value.status_code == 400
+    assert exc_history.value.detail == "Invalid chat history request"
+    assert "history cursor exploded" in caplog.text
+
+    caplog.clear()
+
+    def _raise_search_error(**_kwargs):
+        raise ValueError("search syntax exploded")
+
+    repository.search_sessions = _raise_search_error
+
+    with pytest.raises(HTTPException) as exc_list:
+        await chat.get_all_sessions_stats(
+            chat_kind="assistant_chat",
+            limit=10,
+            cursor=None,
+            query="Alpha",
+            document_id=None,
+            db=object(),
+            user={"sub": "user-1"},
+        )
+
+    assert exc_list.value.status_code == 400
+    assert exc_list.value.detail == "Invalid chat history query"
+    assert "search syntax exploded" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -2366,6 +2490,57 @@ async def test_rename_session_updates_title(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_chat_session_mutation_routes_sanitize_validation_errors(monkeypatch, caplog):
+    repository = FakeChatHistoryRepository(
+        sessions=[
+            _session_record(session_id="session-rename", user_auth_sub="user-1", title="Original"),
+            _session_record(session_id="session-delete", user_auth_sub="user-1", title="Delete me"),
+        ]
+    )
+    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    caplog.set_level(logging.WARNING, logger=chat.logger.name)
+
+    def _raise_rename_error(**_kwargs):
+        raise ValueError("title whitespace exploded")
+
+    repository.rename_session = _raise_rename_error
+    rename_rollbacks: list[str] = []
+
+    with pytest.raises(HTTPException) as exc_rename:
+        await chat.rename_session(
+            "session-rename",
+            chat.RenameSessionRequest(title="Renamed"),
+            db=SimpleNamespace(commit=lambda: None, rollback=lambda: rename_rollbacks.append("rollback")),
+            user={"sub": "user-1"},
+        )
+
+    assert exc_rename.value.status_code == 400
+    assert exc_rename.value.detail == "Invalid chat session update"
+    assert rename_rollbacks == ["rollback"]
+    assert "title whitespace exploded" in caplog.text
+
+    caplog.clear()
+
+    def _raise_delete_error(**_kwargs):
+        raise ValueError("session id malformed")
+
+    repository.soft_delete_session = _raise_delete_error
+    delete_rollbacks: list[str] = []
+
+    with pytest.raises(HTTPException) as exc_delete:
+        await chat.delete_session(
+            "session-delete",
+            db=SimpleNamespace(commit=lambda: None, rollback=lambda: delete_rollbacks.append("rollback")),
+            user={"sub": "user-1"},
+        )
+
+    assert exc_delete.value.status_code == 400
+    assert exc_delete.value.detail == "Invalid chat session request"
+    assert delete_rollbacks == ["rollback"]
+    assert "session id malformed" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_rename_session_returns_404_for_other_users_session(monkeypatch):
     repository = FakeChatHistoryRepository(
         sessions=[
@@ -2422,7 +2597,7 @@ async def test_delete_session_rejects_blank_session_id(monkeypatch):
     assert exc.value.status_code == 400
     assert exc.value.detail == "session_id is required"
     assert commits == []
-    assert rollbacks == ["rollback"]
+    assert rollbacks == []
 
 
 @pytest.mark.asyncio

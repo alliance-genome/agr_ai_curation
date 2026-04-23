@@ -1,6 +1,7 @@
 """Unit tests for the Loki-backed logs API endpoint."""
 
 from datetime import datetime, timedelta, timezone
+import logging
 
 import httpx
 import pytest
@@ -190,28 +191,31 @@ async def test_get_container_logs_returns_empty_payload_for_no_logs(
     ],
 )
 async def test_get_container_logs_formats_loki_unavailable_errors(
-    patch_loki_async_client, exc, expected_error, expected_help
+    patch_loki_async_client, exc, expected_error, expected_help, caplog
 ):
     patch_loki_async_client(logs_api.loki, exc=exc)
+    caplog.set_level(logging.ERROR, logger=logs_api.logger.name)
 
     with pytest.raises(HTTPException) as error:
         await logs_api.get_container_logs("backend", lines=200)
 
     assert error.value.status_code == 500
-    assert error.value.detail.startswith("Failed to retrieve logs from Loki: ")
-    assert expected_error in error.value.detail
-    assert expected_help in error.value.detail
+    assert error.value.detail == "Failed to retrieve logs from Loki"
+    assert expected_error in caplog.text
+    assert expected_help in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_get_container_logs_wraps_unexpected_errors(monkeypatch):
+async def test_get_container_logs_wraps_unexpected_errors(monkeypatch, caplog):
     async def _fake_query_logs(*_args, **_kwargs):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(logs_api, "_query_logs", _fake_query_logs)
+    caplog.set_level(logging.ERROR, logger=logs_api.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await logs_api.get_container_logs("backend", lines=200)
 
     assert exc.value.status_code == 500
-    assert exc.value.detail == "Unexpected error: boom"
+    assert exc.value.detail == "Failed to retrieve logs"
+    assert "boom" in caplog.text

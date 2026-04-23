@@ -78,7 +78,9 @@ class TestHealthEndpoint:
         data = response.json()["detail"]
         assert data["status"] == "unhealthy"
         assert data["checks"]["weaviate"] == "unhealthy"
-        assert "error" in data["details"]["weaviate"]
+        assert data["details"]["weaviate"]["error"] == "Weaviate health check failed"
+        assert data["details"]["weaviate"]["message"] == "Weaviate connection not ready"
+        assert "connection failed" not in response.text.lower()
 
     def test_health_check_response_schema(self, client, mock_weaviate_connection):
         mock_weaviate_connection.health_check = AsyncMock(
@@ -160,7 +162,8 @@ class TestReadinessEndpoint:
         assert response.status_code == 503
         data = response.json()["detail"]
         assert data["ready"] is False
-        assert "Connection timeout" in data["reason"]
+        assert data["reason"] == "Weaviate connection not ready"
+        assert "connection timeout" not in response.text.lower()
 
     def test_readiness_check_none_response(self, client, mock_weaviate_connection):
         mock_weaviate_connection.health_check = AsyncMock(return_value=None)

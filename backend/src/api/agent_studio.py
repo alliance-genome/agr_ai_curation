@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path as FilePath
-from typing import Any, Callable, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, NoReturn, Optional
 
 import anthropic
 import boto3
@@ -89,6 +89,7 @@ from src.lib.chat_history_repository import (
 )
 from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
+from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.openai_agents import run_agent_streamed
 from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import SessionLocal, get_db
@@ -107,6 +108,47 @@ AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
     FilePath(__file__).resolve().parents[2] / "alliance_config" / "agent_studio_system_prompt.md",
     FilePath(__file__).with_name("agent_studio_system_prompt.md"),
 ]
+
+
+def _raise_agent_studio_lookup_http_exception(
+    *,
+    exc: CustomAgentNotFoundError | CustomAgentAccessError,
+    log_message: str,
+    not_found_detail: str,
+    access_denied_detail: str,
+    not_found_error_types: tuple[type[Exception], ...] = (CustomAgentNotFoundError,),
+) -> NoReturn:
+    """Map lookup/access failures to client-safe HTTP errors with logging."""
+
+    status_code = 404 if isinstance(exc, not_found_error_types) else 403
+    detail = not_found_detail if status_code == 404 else access_denied_detail
+    raise_sanitized_http_exception(
+        logger,
+        status_code=status_code,
+        detail=detail,
+        log_message=log_message,
+        exc=exc,
+        level=logging.WARNING,
+    )
+
+
+def _raise_agent_studio_validation_http_exception(
+    *,
+    exc: Exception,
+    status_code: int,
+    detail: str,
+    log_message: str,
+) -> NoReturn:
+    """Log validation failures while returning a stable client response."""
+
+    raise_sanitized_http_exception(
+        logger,
+        status_code=status_code,
+        detail=detail,
+        log_message=log_message,
+        exc=exc,
+        level=logging.WARNING,
+    )
 
 
 def _list_anthropic_catalog_models() -> List[Any]:
@@ -644,7 +686,12 @@ async def create_tool_idea_endpoint(
         return ToolIdeaResponseItem(**tool_idea_request_to_dict(record))
     except ValueError as exc:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc))
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Tool idea request is invalid",
+            log_message="Failed to create tool idea request",
+        )
 
 
 @router.get(
@@ -689,17 +736,29 @@ async def clone_agent_endpoint(
         db.commit()
         db.refresh(custom_agent)
         return custom_agent_to_dict(custom_agent)
-    except CustomAgentNotFoundError as exc:
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        db.rollback()
-        raise HTTPException(status_code=403, detail=str(exc))
+        _raise_agent_studio_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to clone visible agent '{agent_id}'",
+            not_found_detail="Agent not found",
+            access_denied_detail="Access denied to agent",
+        )
     except ValueError as exc:
         db.rollback()
         if "already exists" in str(exc):
-            raise HTTPException(status_code=409, detail=str(exc))
-        raise HTTPException(status_code=400, detail=str(exc))
+            _raise_agent_studio_validation_http_exception(
+                exc=exc,
+                status_code=409,
+                detail="A custom agent with this name already exists",
+                log_message=f"Failed to clone visible agent '{agent_id}' because the target name already exists",
+            )
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Agent clone request is invalid",
+            log_message=f"Failed to clone visible agent '{agent_id}'",
+        )
 
 
 @router.post(
@@ -731,15 +790,22 @@ async def share_agent_endpoint(
         db.commit()
         db.refresh(custom_agent)
         return custom_agent_to_dict(custom_agent)
-    except CustomAgentNotFoundError as exc:
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         db.rollback()
-        raise HTTPException(status_code=404, detail=str(exc))
-    except CustomAgentAccessError as exc:
-        db.rollback()
-        raise HTTPException(status_code=403, detail=str(exc))
+        _raise_agent_studio_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to update visibility for agent '{agent_id}'",
+            not_found_detail="Custom agent not found",
+            access_denied_detail="Access denied to custom agent",
+        )
     except ValueError as exc:
         db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc))
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Agent visibility update is invalid",
+            log_message=f"Failed to update visibility for agent '{agent_id}'",
+        )
 
 @router.get(
     "/registry/metadata",
@@ -821,9 +887,14 @@ async def get_catalog(
         service = get_prompt_catalog()
         catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
         return CatalogResponse(catalog=catalog)
-    except Exception as e:
-        logger.error('Failed to get prompt catalog: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to load prompt catalog",
+            log_message="Failed to get prompt catalog",
+            exc=exc,
+        )
 
 
 @router.post(
@@ -842,9 +913,14 @@ async def refresh_catalog(
         service.refresh()
         catalog = _merge_custom_agents_into_catalog(service.catalog, user, db)
         return CatalogResponse(catalog=catalog)
-    except Exception as e:
-        logger.error('Failed to refresh prompt catalog: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to refresh prompt catalog",
+            log_message="Failed to refresh prompt catalog",
+            exc=exc,
+        )
 
 
 @router.post(
@@ -873,9 +949,14 @@ async def get_combined_prompt(
         )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error('Failed to get combined prompt: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to get combined prompt",
+            log_message="Failed to get combined prompt",
+            exc=exc,
+        )
 
 
 @router.get(
@@ -905,15 +986,19 @@ async def get_prompt_preview(
 
             custom_uuid = parse_custom_agent_id(agent_id)
             if not custom_uuid:
-                raise HTTPException(status_code=400, detail=f"Invalid custom agent id: {agent_id}")
+                raise HTTPException(status_code=400, detail="Invalid custom agent id")
 
             db_user = set_global_user_from_cognito(db, user)
             try:
                 custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
-            except CustomAgentNotFoundError as exc:
-                raise HTTPException(status_code=404, detail=str(exc))
-            except CustomAgentAccessError as exc:
-                raise HTTPException(status_code=403, detail=str(exc))
+            except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+                _raise_agent_studio_lookup_http_exception(
+                    exc=exc,
+                    log_message=f"Failed to load prompt preview for custom agent '{agent_id}'",
+                    not_found_detail="Custom agent not found",
+                    access_denied_detail="Access denied to custom agent",
+                    not_found_error_types=(CustomAgentNotFoundError,),
+                )
             preview = custom_agent.custom_prompt
 
             custom_group_rules_enabled = bool(
@@ -976,9 +1061,14 @@ async def get_prompt_preview(
         )
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error("Failed to get prompt preview for '%s': %s", agent_id, e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to get prompt preview",
+            log_message=f"Failed to get prompt preview for '{agent_id}'",
+            exc=exc,
+        )
 
 
 @router.post(
@@ -999,19 +1089,27 @@ async def test_agent_endpoint(
     if agent_id.startswith("ca_"):
         custom_uuid = parse_custom_agent_id(agent_id)
         if not custom_uuid:
-            raise HTTPException(status_code=400, detail=f"Invalid custom agent id: {agent_id}")
+            raise HTTPException(status_code=400, detail="Invalid custom agent id")
         try:
             custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
             resolved_agent_id = make_custom_agent_id(custom_agent.id)
-        except CustomAgentNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
-        except CustomAgentAccessError as exc:
-            raise HTTPException(status_code=403, detail=str(exc))
+        except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+            _raise_agent_studio_lookup_http_exception(
+                exc=exc,
+                log_message=f"Failed to resolve custom agent '{agent_id}' for isolated test execution",
+                not_found_detail="Custom agent not found",
+                access_denied_detail="Access denied to custom agent",
+            )
 
     try:
         metadata = get_agent_metadata(resolved_agent_id, db_user_id=db_user.id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=404,
+            detail="Agent not found",
+            log_message=f"Failed to load agent metadata for '{resolved_agent_id}'",
+        )
 
     if metadata.get("requires_document") and not request.document_id:
         raise HTTPException(
@@ -1038,7 +1136,13 @@ async def test_agent_endpoint(
             active_groups=active_groups,
         )
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to initialize agent '{agent_id}': {exc}")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Failed to initialize agent",
+            log_message=f"Failed to initialize agent '{agent_id}' for isolated test execution",
+            exc=exc,
+        )
 
     async def _stream_events():
         trace_id = None
@@ -1054,6 +1158,25 @@ async def test_agent_endpoint(
                 flat = _flatten_runner_event(event, session_id)
                 if flat.get("type") == "RUN_STARTED":
                     trace_id = flat.get("trace_id")
+                elif flat.get("type") == "RUN_ERROR":
+                    raw_message = str(flat.get("message") or "").strip()
+                    if raw_message:
+                        logger.error(
+                            "Agent test runner emitted RUN_ERROR for %s: %s",
+                            agent_id,
+                            raw_message,
+                            extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
+                        )
+                    else:
+                        logger.error(
+                            "Agent test runner emitted RUN_ERROR without message for %s",
+                            agent_id,
+                            extra={"session_id": session_id, "trace_id": trace_id or flat.get("trace_id")},
+                        )
+                    flat["message"] = "Agent test failed unexpectedly."
+                    details = flat.get("details")
+                    if isinstance(details, dict) and "error" in details:
+                        flat["details"] = {**details, "error": "Agent test failed unexpectedly."}
                 yield f"data: {json.dumps(flat, default=str)}\n\n"
 
             done_event = {
@@ -1073,10 +1196,14 @@ async def test_agent_endpoint(
             }
             yield f"data: {json.dumps(error_event)}\n\n"
         except Exception as exc:
-            logger.error('Agent test stream error for %s: %s', agent_id, exc, exc_info=True)
+            log_exception(
+                logger,
+                message=f"Agent test stream error for {agent_id}",
+                exc=exc,
+            )
             error_event = {
                 "type": "RUN_ERROR",
-                "message": f"Agent test failed: {exc}",
+                "message": "Agent test failed unexpectedly.",
                 "error_type": type(exc).__name__,
                 "trace_id": trace_id,
                 "session_id": session_id,
@@ -2244,7 +2371,7 @@ async def _handle_tool_call(
             logger.error('Diagnostic tool %s failed: %s', tool_name, e, exc_info=True)
             return {
                 "success": False,
-                "error": f"Tool execution failed: {str(e)}",
+                "error": "Tool execution failed unexpectedly.",
             }
 
     return {
@@ -2722,7 +2849,12 @@ async def chat_with_opus(
     except ChatHistorySessionNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Chat session not found") from exc
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _raise_agent_studio_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Agent Studio chat request is invalid",
+            log_message="Failed to persist Agent Studio chat request because the request was invalid",
+        )
     except Exception as exc:
         logger.error('Failed to persist Agent Studio chat request: %s', exc, exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to persist Agent Studio chat request") from exc
@@ -3088,7 +3220,12 @@ async def chat_with_opus(
                 logger.error('Chat stream error: %s', e, exc_info=True)
                 error_event_type = "ERROR"
                 error_payload = {
-                    "message": str(e),
+                    "message": (
+                        "Agent Studio ran into an unexpected problem while completing your request. "
+                        "Any tool actions started during this turn may already have completed, so "
+                        "please check the results before retrying. If needed, refresh Agent Studio "
+                        "and try again."
+                    ),
                 }
             yield _opus_sse_event(
                 session_id=prepared_turn.session_id,
@@ -3400,7 +3537,7 @@ Please review our conversation history above and submit a general suggestion usi
         return DirectSubmissionResponse(
             success=False,
             message="An error occurred",
-            error=str(e)
+            error="Failed to submit suggestion",
         )
 
 
@@ -3962,9 +4099,14 @@ async def get_all_tools_endpoint(
     try:
         tools = get_all_tools()
         return {"tools": tools}
-    except Exception as e:
-        logger.error('Failed to get tools: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to retrieve tools",
+            log_message="Failed to get tools",
+            exc=exc,
+        )
 
 
 @router.get(
@@ -4006,6 +4148,11 @@ async def get_tool_details_endpoint(
         return {"tool": tool}
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error('Failed to get tool details: %s', e, exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to retrieve tool details",
+            log_message=f"Failed to get tool details for '{tool_id}'",
+            exc=exc,
+        )

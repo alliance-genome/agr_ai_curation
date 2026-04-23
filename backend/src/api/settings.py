@@ -11,6 +11,7 @@ from ..models.api_schemas import (
     AvailableModelsResponse,
     AvailableModel
 )
+from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.weaviate_client.settings import (
     get_embedding_config_async as get_embedding_config,
     update_embedding_config_async as update_embedding_config,
@@ -65,10 +66,12 @@ async def get_settings_endpoint(user: Dict[str, Any] = get_auth_dependency()):
         )
 
     except Exception as e:
-        logger.error('Error retrieving settings: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to retrieve settings: {str(e)}"
+            detail="Failed to retrieve settings",
+            log_message="Error retrieving settings",
+            exc=e,
         )
 
 
@@ -131,8 +134,10 @@ async def update_settings_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error updating settings: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to update settings: {str(e)}"
+            detail="Failed to update settings",
+            log_message="Error updating settings",
+            exc=e,
         )

@@ -5,6 +5,7 @@ import csv
 import importlib
 import io
 import json
+import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -433,14 +434,24 @@ async def test_export_flow_evidence_route_returns_attachment_response(monkeypatc
 
 
 @pytest.mark.parametrize(
-    ("error", "expected_status"),
+    ("error", "expected_status", "expected_detail"),
     [
-        (evidence_export.FlowRunEvidenceExportNotFoundError("missing"), 404),
-        (evidence_export.FlowRunEvidenceExportPermissionError("forbidden"), 403),
-        (evidence_export.FlowRunEvidenceExportDataError("bad data"), 500),
+        (evidence_export.FlowRunEvidenceExportNotFoundError("missing"), 404, "Flow run evidence not found"),
+        (
+            evidence_export.FlowRunEvidenceExportPermissionError("forbidden"),
+            403,
+            "Not authorized to export flow run evidence",
+        ),
+        (evidence_export.FlowRunEvidenceExportDataError("bad data"), 500, "Failed to export flow run evidence"),
     ],
 )
-def test_export_flow_evidence_route_maps_service_errors(monkeypatch, error, expected_status):
+def test_export_flow_evidence_route_maps_service_errors(
+    monkeypatch,
+    caplog,
+    error,
+    expected_status,
+    expected_detail,
+):
     if isinstance(error, evidence_export.FlowRunEvidenceExportDataError):
         monkeypatch.setattr(
             flows,
@@ -458,6 +469,7 @@ def test_export_flow_evidence_route_maps_service_errors(monkeypatch, error, expe
             "resolve_authorized_flow_run_extraction_results",
             lambda **_kwargs: (_ for _ in ()).throw(error),
         )
+    caplog.set_level(logging.WARNING, logger=flows.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         asyncio.run(
@@ -470,3 +482,5 @@ def test_export_flow_evidence_route_maps_service_errors(monkeypatch, error, expe
         )
 
     assert exc.value.status_code == expected_status
+    assert exc.value.detail == expected_detail
+    assert str(error) in caplog.text

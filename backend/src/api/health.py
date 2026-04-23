@@ -7,10 +7,20 @@ import logging
 import os
 
 from ..lib.weaviate_helpers import get_connection
+from ..lib.http_errors import log_exception
 from ..config import is_cognito_configured
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/weaviate")
+
+_WEAVIATE_HEALTH_DETAIL = {
+    "error": "Weaviate health check failed",
+    "message": "Weaviate connection not ready",
+}
+_READINESS_NOT_READY_DETAIL = {
+    "ready": False,
+    "reason": "Weaviate connection not ready",
+}
 
 
 @router.get("/health")
@@ -45,20 +55,23 @@ async def health_check_endpoint() -> Dict[str, Any]:
                 "collections": weaviate_health.get("collections", 0)
             }
         else:
+            logger.warning(
+                "Weaviate health check returned unhealthy payload: %s",
+                weaviate_health,
+            )
             health_status["checks"]["weaviate"] = "unhealthy"
             health_status["status"] = "degraded"
-            health_status["details"]["weaviate"] = {
-                "error": "Failed to connect to Weaviate",
-                "message": weaviate_health.get("message", "Connection failed")
-            }
+            health_status["details"]["weaviate"] = dict(_WEAVIATE_HEALTH_DETAIL)
 
     except Exception as e:
-        logger.error('Error checking Weaviate health: %s', e)
+        log_exception(
+            logger,
+            message="Error checking Weaviate health",
+            exc=e,
+        )
         health_status["checks"]["weaviate"] = "unhealthy"
         health_status["status"] = "degraded"
-        health_status["details"]["weaviate"] = {
-            "error": str(e)
-        }
+        health_status["details"]["weaviate"] = dict(_WEAVIATE_HEALTH_DETAIL)
 
     health_status["details"]["environment"] = {
         "python_version": os.getenv("PYTHON_VERSION", "3.11+"),
@@ -95,10 +108,7 @@ async def readiness_check_endpoint() -> Dict[str, Any]:
         if not is_connected or is_connected.get("status") != "healthy":
             raise HTTPException(
                 status_code=503,
-                detail={
-                    "ready": False,
-                    "reason": "Weaviate connection not ready"
-                }
+                detail=dict(_READINESS_NOT_READY_DETAIL)
             )
 
         return {
@@ -109,11 +119,12 @@ async def readiness_check_endpoint() -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Readiness check failed: %s', e)
+        log_exception(
+            logger,
+            message="Readiness check failed",
+            exc=e,
+        )
         raise HTTPException(
             status_code=503,
-            detail={
-                "ready": False,
-                "reason": str(e)
-            }
+            detail=dict(_READINESS_NOT_READY_DETAIL)
         )

@@ -6,15 +6,18 @@ Used by Agent Studio's get_service_logs tool.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Annotated, Any
+import logging
+from typing import Annotated, Any, NoReturn
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.lib import loki_client as loki
+from src.lib.http_errors import raise_sanitized_http_exception
 
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class LogsResponse(BaseModel):
@@ -95,6 +98,17 @@ def _format_loki_error(result: dict[str, str]) -> str:
     if help_text:
         return f"{detail} {help_text}"
     return detail
+
+
+def _raise_loki_query_error(*, container: str, result: dict[str, str]) -> NoReturn:
+    """Log the full Loki failure details while returning a stable client message."""
+
+    logger.error(
+        "Loki log query failed for container %s: %s",
+        container,
+        _format_loki_error(result),
+    )
+    raise HTTPException(status_code=500, detail="Failed to retrieve logs from Loki")
 
 
 async def _query_logs(
@@ -189,10 +203,7 @@ async def get_container_logs(
         )
 
         if isinstance(result, dict) and result.get("status") == "error":
-            raise HTTPException(
-                status_code=500,
-                detail=_format_loki_error(result),
-            )
+            _raise_loki_query_error(container=container, result=result)
 
         logs_text, returned_line_count = _tail_rendered_logs(result, line_limit=lines)
 
@@ -205,7 +216,10 @@ async def get_container_logs(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Unexpected error: {str(e)}",
+            detail="Failed to retrieve logs",
+            log_message=f"Unexpected error retrieving logs for container {container}",
+            exc=e,
         )

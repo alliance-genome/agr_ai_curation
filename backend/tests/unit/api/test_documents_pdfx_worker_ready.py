@@ -1,5 +1,7 @@
 """Unit tests for PDFX worker readiness guard."""
 
+import logging
+
 import pytest
 from fastapi import HTTPException
 
@@ -232,8 +234,9 @@ async def test_require_pdfx_worker_ready_handles_non_json_status_payload(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_require_pdfx_worker_ready_handles_transport_error(monkeypatch):
+async def test_require_pdfx_worker_ready_handles_transport_error(monkeypatch, caplog):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     class _DummyClient:
         def __init__(self, **_kwargs):
@@ -259,7 +262,8 @@ async def test_require_pdfx_worker_ready_handles_transport_error(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await documents._require_pdf_extraction_worker_ready()
     assert exc.value.status_code == 503
-    assert "Unable to reach PDF extraction worker status endpoint" in str(exc.value.detail)
+    assert exc.value.detail == "Unable to reach PDF extraction worker status endpoint"
+    assert "connection reset" in caplog.text
 
 
 @pytest.mark.asyncio

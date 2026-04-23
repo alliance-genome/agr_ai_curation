@@ -1,5 +1,7 @@
 """Unit tests for chunking strategies endpoint."""
 
+import logging
+
 from fastapi import HTTPException
 
 from src.api import strategies
@@ -26,7 +28,8 @@ async def test_get_chunking_strategies_endpoint_success(monkeypatch):
     assert research["description"].startswith("Optimized for academic")
 
 
-async def test_get_chunking_strategies_endpoint_raises_http_500_on_error(monkeypatch):
+async def test_get_chunking_strategies_endpoint_raises_http_500_on_error(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=strategies.logger.name)
     monkeypatch.setattr(strategies, "CHUNKING_STRATEGIES", {"broken": {"max_chars": 1000}})
 
     try:
@@ -34,9 +37,10 @@ async def test_get_chunking_strategies_endpoint_raises_http_500_on_error(monkeyp
         raise AssertionError("Expected HTTPException")
     except HTTPException as exc:
         assert exc.status_code == 500
-        assert "Failed to retrieve chunking strategies" in exc.detail
+        assert exc.detail == "Failed to retrieve chunking strategies"
+        assert "method" not in exc.detail
+        assert "KeyError" in caplog.text
 
 
 def test_get_strategy_description_default_branch():
     assert strategies._get_strategy_description("other") == "Research chunking strategy"
-

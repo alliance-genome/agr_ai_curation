@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
 from typing import Any
 from uuid import UUID
 
@@ -24,6 +25,7 @@ from src.lib.curation_workspace.pipeline import (
     PostCurationPipelineRequest,
     run_post_curation_pipeline,
 )
+from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.curation_workspace.session_service import (
     PreparedSessionUpsertRequest,
     find_reusable_prepared_session,
@@ -46,6 +48,9 @@ from src.schemas.curation_workspace import (
     CurationSessionCreateResponse,
     CurationSessionStatus,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_manual_session(
@@ -382,10 +387,14 @@ async def _ensure_bootstrap_extraction_result(
             ),
         )
     except ValueError as exc:
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
+            detail="Bootstrap origin session could not be validated",
+            log_message="Bootstrap origin session validation failed",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
     if not _chat_prep_matches_bootstrap_request(
         document_id=document_id,
@@ -410,10 +419,14 @@ async def _ensure_bootstrap_extraction_result(
             db=db,
         )
     except ValueError as exc:
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=str(exc),
-        ) from exc
+            detail="Bootstrap curation prep could not be prepared",
+            log_message="Bootstrap curation prep failed",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
     return _select_bootstrap_extraction_result(
         db,

@@ -1,9 +1,10 @@
 """Chunking strategies API endpoints."""
 
-from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any
+from fastapi import APIRouter
+from typing import Dict, Any
 import logging
 
+from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.pdf_processing.strategies import CHUNKING_STRATEGIES
 
 logger = logging.getLogger(__name__)
@@ -40,10 +41,12 @@ async def get_chunking_strategies_endpoint() -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error('Error retrieving chunking strategies: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to retrieve chunking strategies: {str(e)}"
+            detail="Failed to retrieve chunking strategies",
+            log_message="Error retrieving chunking strategies",
+            exc=e,
         )
 
 

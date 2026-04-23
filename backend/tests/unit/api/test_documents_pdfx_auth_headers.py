@@ -1,6 +1,7 @@
 """Unit tests for PDFX service auth header construction."""
 
 import base64
+import logging
 
 import pytest
 from fastapi import HTTPException
@@ -255,12 +256,13 @@ async def test_pdfx_auth_headers_cognito_requires_access_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pdfx_auth_headers_cognito_handles_transport_error(monkeypatch):
+async def test_pdfx_auth_headers_cognito_handles_transport_error(monkeypatch, caplog):
     monkeypatch.setenv("PDF_EXTRACTION_AUTH_MODE", "cognito_client_credentials")
     monkeypatch.setenv("PDF_EXTRACTION_COGNITO_TOKEN_URL", "https://cognito.local/oauth2/token")
     monkeypatch.setenv("PDF_EXTRACTION_COGNITO_CLIENT_ID", "client-id")
     monkeypatch.setenv("PDF_EXTRACTION_COGNITO_CLIENT_SECRET", "client-secret")
     monkeypatch.setenv("PDF_EXTRACTION_COGNITO_SCOPE", "pdfx/read")
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
 
     class _DummyClient:
         def __init__(self, **_kwargs):
@@ -282,7 +284,8 @@ async def test_pdfx_auth_headers_cognito_handles_transport_error(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await documents._build_pdf_extraction_service_headers()
     assert exc.value.status_code == 502
-    assert "Failed to fetch PDF extraction service token" in str(exc.value.detail)
+    assert exc.value.detail == "Failed to fetch PDF extraction service token"
+    assert "network down" in caplog.text
 
 
 @pytest.mark.asyncio

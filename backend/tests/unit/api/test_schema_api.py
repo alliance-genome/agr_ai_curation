@@ -1,5 +1,7 @@
 """Unit tests for schema API endpoints."""
 
+import logging
+
 import pytest
 from fastapi import HTTPException
 
@@ -29,7 +31,9 @@ async def test_get_schema_endpoint_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_schema_endpoint_failure(monkeypatch):
+async def test_get_schema_endpoint_failure(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=schema.logger.name)
+
     async def _boom():
         raise RuntimeError("settings unavailable")
 
@@ -39,7 +43,9 @@ async def test_get_schema_endpoint_failure(monkeypatch):
         await schema.get_schema_endpoint({"sub": "dev-user-123"})
 
     assert exc.value.status_code == 500
-    assert "Failed to retrieve schema" in str(exc.value.detail)
+    assert exc.value.detail == "Failed to retrieve schema"
+    assert "settings unavailable" not in str(exc.value.detail)
+    assert "settings unavailable" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -94,7 +100,9 @@ async def test_update_schema_endpoint_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_schema_endpoint_handles_update_failure(monkeypatch):
+async def test_update_schema_endpoint_handles_update_failure(monkeypatch, caplog):
+    caplog.set_level(logging.ERROR, logger=schema.logger.name)
+
     async def _boom(_payload):
         raise RuntimeError("schema backend error")
 
@@ -109,4 +117,6 @@ async def test_update_schema_endpoint_handles_update_failure(monkeypatch):
         )
 
     assert exc.value.status_code == 500
-    assert "Failed to update schema" in str(exc.value.detail)
+    assert exc.value.detail == "Failed to update schema"
+    assert "schema backend error" not in str(exc.value.detail)
+    assert "schema backend error" in caplog.text

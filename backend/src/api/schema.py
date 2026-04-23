@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Body
 from typing import Dict, Any
 import logging
 
+from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.weaviate_client.settings import (
     update_schema_async as update_schema,
     get_collection_settings_async as get_collection_settings,
@@ -150,10 +151,12 @@ async def get_schema_endpoint(user: Dict[str, Any] = get_auth_dependency()) -> D
         return schema
 
     except Exception as e:
-        logger.error('Error retrieving schema: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to retrieve schema: {str(e)}"
+            detail="Failed to retrieve schema",
+            log_message="Error retrieving schema",
+            exc=e,
         )
 
 
@@ -203,8 +206,10 @@ async def update_schema_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error updating schema: %s', e)
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to update schema: {str(e)}"
+            detail="Failed to update schema",
+            log_message="Error updating schema",
+            exc=e,
         )

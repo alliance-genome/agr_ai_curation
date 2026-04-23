@@ -10,6 +10,7 @@ from ..models.api_schemas import (
     ReprocessRequest,
     ReembedRequest,
 )
+from ..lib.http_errors import raise_sanitized_http_exception
 from ..models.document import ProcessingStatus
 from ..lib.weaviate_client.documents import get_document, update_document_status, re_embed_document
 from ..lib.pipeline.tracker import PipelineTracker
@@ -195,16 +196,17 @@ async def reprocess_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error reprocessing document %s: %s', document_id, e)
-
         try:
             await update_document_status(document_id, user_id, ProcessingStatus.FAILED)
         except Exception:
             pass
 
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to initiate reprocessing: {str(e)}"
+            detail="Failed to initiate reprocessing",
+            log_message=f"Error reprocessing document {document_id}",
+            exc=e,
         )
 
 
@@ -298,14 +300,15 @@ async def reembed_document_endpoint(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error('Error re-embedding document %s: %s', document_id, e)
-
         try:
             await update_document_status(document_id, user_id, ProcessingStatus.FAILED)
         except Exception:
             pass
 
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=500,
-            detail=f"Failed to initiate re-embedding: {str(e)}"
+            detail="Failed to initiate re-embedding",
+            log_message=f"Error re-embedding document {document_id}",
+            exc=e,
         )

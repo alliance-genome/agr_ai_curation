@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
+from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.batch.service import BatchService
 from ..lib.batch.validation import validate_flow_for_batch
 from ..lib.batch.processor import process_batch_task
@@ -611,7 +612,14 @@ async def cancel_batch(
     try:
         batch = service.cancel_batch(batch_id, db_user.id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Batch cannot be cancelled",
+            log_message=f"Failed to cancel batch {batch_id}",
+            exc=e,
+            level=logging.WARNING,
+        )
 
     if not batch:
         raise HTTPException(status_code=404, detail="Batch not found")

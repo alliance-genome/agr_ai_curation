@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from .auth import get_auth_dependency
+from ..lib.http_errors import raise_sanitized_http_exception
 from ..lib.flows.evidence_export import (
     FlowEvidenceExportFormat,
     FlowRunEvidenceExportDataError,
@@ -200,11 +201,34 @@ async def export_flow_evidence(
             export_format=export_format,
         )
     except FlowRunEvidenceExportNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=404,
+            detail="Flow run evidence not found",
+            log_message=f"Flow evidence export requested for missing flow run {flow_run_id}",
+            exc=exc,
+            level=logging.WARNING,
+        )
     except FlowRunEvidenceExportPermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc)) from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=403,
+            detail="Not authorized to export flow run evidence",
+            log_message=(
+                f"Unauthorized flow evidence export attempt for flow run {flow_run_id} "
+                f"by user {auth_user_id}"
+            ),
+            exc=exc,
+            level=logging.WARNING,
+        )
     except FlowRunEvidenceExportDataError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=500,
+            detail="Failed to export flow run evidence",
+            log_message=f"Failed to build flow evidence export for flow run {flow_run_id}",
+            exc=exc,
+        )
 
     safe_filename = _safe_attachment_filename(artifact.filename)
 

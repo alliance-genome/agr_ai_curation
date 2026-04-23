@@ -2,9 +2,12 @@
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 
 import httpx
+import pytest
+from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
 from src.api import agent_studio as api_module
@@ -125,6 +128,38 @@ def _chat_request():
         messages=[api_module.ChatMessage(role="user", content="Please help")],
         context=api_module.ChatContext(trace_id="trace-123"),
     )
+
+
+def test_chat_with_opus_sanitizes_invalid_request_errors(monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger=api_module.logger.name)
+
+    def _fake_get_db():
+        yield SimpleNamespace(close=lambda: None)
+
+    monkeypatch.setattr(api_module, "get_db", _fake_get_db)
+    monkeypatch.setattr(
+        api_module,
+        "set_global_user_from_cognito",
+        lambda _db, _user: SimpleNamespace(id=1),
+    )
+    monkeypatch.setattr(
+        api_module,
+        "_prepare_agent_studio_turn",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("session context exploded")),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(
+            api_module.chat_with_opus(
+                request=_chat_request(),
+                user={"email": "curator@example.org", "sub": "auth-sub"},
+            )
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "Agent Studio chat request is invalid"
+    assert "session context exploded" not in str(exc_info.value.detail)
+    assert "session context exploded" in caplog.text
 
 
 def test_chat_with_opus_sanitizes_bad_request_errors(monkeypatch):
@@ -264,3 +299,49 @@ def test_chat_with_opus_preserves_context_overflow_branch(monkeypatch):
     assert alerts == []
     assert logger_errors == []
     assert "error_source" not in events[0]
+
+
+def test_chat_with_opus_sanitizes_unexpected_errors(monkeypatch):
+    raw_message = "stream exploded while completing Agent Studio response"
+    alerts, logger_errors = _configure_chat_endpoint(
+        monkeypatch,
+        RuntimeError(raw_message),
+    )
+
+    response = asyncio.run(
+        api_module.chat_with_opus(
+            request=_chat_request(),
+            user={"email": "curator@example.org", "sub": "auth-sub"},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+
+    assert events == [
+        {
+            "type": "ERROR",
+            "session_id": "agent-studio-session-1",
+            "turn_id": "opus-turn-1",
+            "trace_id": "trace-123",
+            "message": (
+                "Agent Studio ran into an unexpected problem while completing your request. "
+                "Any tool actions started during this turn may already have completed, so "
+                "please check the results before retrying. If needed, refresh Agent Studio "
+                "and try again."
+            ),
+        }
+    ]
+    assert raw_message not in events[0]["message"]
+    assert alerts == [
+        {
+            "error_type": "RuntimeError",
+            "error_message": raw_message,
+            "source": "infrastructure",
+            "specialist_name": "agent_studio_opus",
+            "trace_id": "trace-123",
+            "session_id": "agent-studio-session-1",
+            "curator_id": "curator@example.org",
+        }
+    ]
+    assert logger_errors[0][0][0] == "Chat stream error: %s"
+    assert logger_errors[0][1]["exc_info"] is True

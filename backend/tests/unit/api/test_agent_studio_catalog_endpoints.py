@@ -1,6 +1,7 @@
 """Unit tests for Agent Studio catalog endpoints."""
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -33,9 +34,10 @@ class TestAgentStudioCatalogEndpoints:
         assert result.catalog.total_agents == 1
         assert result.catalog.available_groups == ["WB"]
 
-    def test_get_catalog_maps_unexpected_errors_to_500(self, monkeypatch):
+    def test_get_catalog_maps_unexpected_errors_to_500(self, monkeypatch, caplog):
         import src.api.agent_studio as api_module
 
+        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
         monkeypatch.setattr(
             api_module,
             "get_prompt_catalog",
@@ -46,7 +48,9 @@ class TestAgentStudioCatalogEndpoints:
             asyncio.run(api_module.get_catalog(user={"sub": "auth-sub"}, db=SimpleNamespace()))
 
         assert exc_info.value.status_code == 500
-        assert "catalog unavailable" in str(exc_info.value.detail)
+        assert exc_info.value.detail == "Failed to load prompt catalog"
+        assert "catalog unavailable" not in str(exc_info.value.detail)
+        assert "catalog unavailable" in caplog.text
 
     def test_refresh_catalog_calls_refresh_and_returns_catalog(self, monkeypatch):
         import src.api.agent_studio as api_module
@@ -81,6 +85,33 @@ class TestAgentStudioCatalogEndpoints:
         assert observed["merge_called"] is True
         assert result.catalog.total_agents == 2
 
+    def test_refresh_catalog_maps_unexpected_errors_to_500(self, monkeypatch, caplog):
+        import src.api.agent_studio as api_module
+
+        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
+
+        def _refresh():
+            raise RuntimeError("refresh unavailable")
+
+        monkeypatch.setattr(
+            api_module,
+            "get_prompt_catalog",
+            lambda: SimpleNamespace(refresh=_refresh, catalog=SimpleNamespace()),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            asyncio.run(
+                api_module.refresh_catalog(
+                    user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+
+        assert exc_info.value.status_code == 500
+        assert exc_info.value.detail == "Failed to refresh prompt catalog"
+        assert "refresh unavailable" not in str(exc_info.value.detail)
+        assert "refresh unavailable" in caplog.text
+
     def test_get_combined_prompt_success_and_404(self, monkeypatch):
         import src.api.agent_studio as api_module
 
@@ -110,9 +141,10 @@ class TestAgentStudioCatalogEndpoints:
             )
         assert not_found_exc.value.status_code == 404
 
-    def test_get_combined_prompt_maps_unexpected_errors_to_500(self, monkeypatch):
+    def test_get_combined_prompt_maps_unexpected_errors_to_500(self, monkeypatch, caplog):
         import src.api.agent_studio as api_module
 
+        caplog.set_level(logging.ERROR, logger=api_module.logger.name)
         service = SimpleNamespace(
             get_combined_prompt=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
         )
@@ -126,7 +158,9 @@ class TestAgentStudioCatalogEndpoints:
                 )
             )
         assert exc_info.value.status_code == 500
-        assert "boom" in str(exc_info.value.detail)
+        assert exc_info.value.detail == "Failed to get combined prompt"
+        assert "boom" not in str(exc_info.value.detail)
+        assert "boom" in caplog.text
 
     def test_combined_prompt_request_accepts_legacy_mod_id_alias(self):
         import src.api.agent_studio as api_module

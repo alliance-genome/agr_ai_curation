@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Annotated
 from uuid import UUID
 
@@ -29,6 +30,7 @@ from src.lib.curation_workspace.saved_view_service import (
     delete_saved_view as delete_saved_view_record,
     list_saved_views as list_saved_view_records,
 )
+from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.curation_workspace.session_service import (
     create_manual_candidate,
     delete_candidate,
@@ -113,6 +115,7 @@ from src.schemas.curation_workspace import (
 from src.services.user_service import set_global_user_from_cognito
 
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/curation-workspace", tags=["Curation Workspace"])
 
 
@@ -473,7 +476,14 @@ async def get_chat_prep_preview(
             db=db,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Invalid curation prep preview request",
+            log_message="Curation prep preview request rejected",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
 
 @router.post("/prep", response_model=CurationPrepChatRunResponse)
@@ -492,7 +502,14 @@ async def trigger_chat_prep(
             db=db,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Invalid curation prep request",
+            log_message="Curation prep request rejected",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
 
 @router.post(

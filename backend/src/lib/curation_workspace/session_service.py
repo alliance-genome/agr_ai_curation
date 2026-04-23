@@ -21,6 +21,7 @@ from src.lib.curation_adapters.entity_tag_bridge import (
     SPECIES_FIELD_KEYS,
     TOPIC_FIELD_KEYS,
 )
+from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.curation_workspace.export_adapters import build_default_export_adapter_registry
 from src.lib.curation_workspace.evidence_quality import summarize_evidence_records
 from src.lib.curation_workspace.submission_adapters import (
@@ -345,6 +346,7 @@ EVIDENCE_COUNT_SORT_ORDER = (
 )
 
 LIKE_ESCAPE_CHAR = "\\"
+SUBMISSION_TRANSPORT_FAILURE_MESSAGE = "Submission failed unexpectedly. Please try again."
 
 
 def _viewer_url(file_path: str | None) -> str | None:
@@ -2629,10 +2631,14 @@ def _resolve_submission_transport_adapter(target_key: str) -> SubmissionTranspor
     try:
         return _submission_adapter_registry().require(target_key)
     except KeyError as exc:
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+            detail="Submission target is not configured",
+            log_message=f"Unknown submission target requested: {target_key}",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
 
 def _base_submission_payload_context(
@@ -2762,10 +2768,14 @@ def _build_submission_execute_payload(
             payload_context=payload_context,
         )
     except ValueError as exc:
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        ) from exc
+            detail="Submission payload could not be built",
+            log_message=f"Submission payload build failed for target {target_key}",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
 
 def _coerce_failed_submission_result(
@@ -2778,9 +2788,7 @@ def _coerce_failed_submission_result(
 
     return normalize_submission_transport_result(
         status=CurationSubmissionStatus.FAILED,
-        response_message=(
-            f"Submission adapter '{adapter.transport_key}' failed: {error}"
-        ),
+        response_message=SUBMISSION_TRANSPORT_FAILURE_MESSAGE,
     )
 
 
