@@ -171,6 +171,16 @@ function buildCustomAgent(overrides: Partial<CustomAgent> = {}): CustomAgent {
   }
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 function getLabeledControl(label: string): HTMLElement {
   const labelNode = screen
     .getAllByText(label)
@@ -670,6 +680,46 @@ describe('PromptWorkshop', () => {
     })
     expect(screen.getByText('Applied Claude update: Reworked structure and tightened extraction constraints.')).toBeInTheDocument()
   })
+
+  it('preserves incoming prompt updates when workshop bootstrap finishes after approval', async () => {
+    const modelOptionsDeferred = createDeferred<ModelOption[]>()
+    const toolLibraryDeferred = createDeferred<ToolLibraryItem[]>()
+    const templatesDeferred = createDeferred<AgentTemplate[]>()
+    const customAgentsDeferred = createDeferred<{ custom_agents: CustomAgent[]; total: number }>()
+
+    serviceMocks.fetchModelOptions.mockImplementation(() => modelOptionsDeferred.promise)
+    serviceMocks.fetchToolLibrary.mockImplementation(() => toolLibraryDeferred.promise)
+    serviceMocks.fetchAgentTemplates.mockImplementation(() => templatesDeferred.promise)
+    serviceMocks.listCustomAgents.mockImplementation(() => customAgentsDeferred.promise)
+
+    const { rerender } = render(<PromptWorkshop catalog={buildCatalog()} incomingPromptUpdate={null} />)
+
+    rerender(
+      <PromptWorkshop
+        catalog={buildCatalog()}
+        incomingPromptUpdate={{
+          request_id: 3,
+          prompt: 'Late-arriving update from Claude',
+          summary: 'Applied after workshop bootstrap finished.',
+          apply_mode: 'targeted_edit',
+        }}
+      />
+    )
+
+    modelOptionsDeferred.resolve(modelOptions)
+    toolLibraryDeferred.resolve(toolLibrary)
+    templatesDeferred.resolve(templates)
+    customAgentsDeferred.resolve({ custom_agents: [], total: 0 })
+
+    fireEvent.click(await screen.findByText('Main Prompt'))
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Enter the system prompt for this agent...')).toHaveValue(
+        'Late-arriving update from Claude'
+      )
+    }, { timeout: 10000 })
+    expect(screen.getByText('Applied Claude update: Applied after workshop bootstrap finished.')).toBeInTheDocument()
+  }, 15000)
 
   it('saves selected reasoning for reasoning-capable models', async () => {
     serviceMocks.listCustomAgents

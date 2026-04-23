@@ -300,6 +300,8 @@ function PromptWorkshop({
   const [cloneSourceAgentId, setCloneSourceAgentId] = useState<string>('')
   const [versions, setVersions] = useState<CustomAgentVersion[]>([])
   const [loading, setLoading] = useState(false)
+  const [workshopOptionsLoaded, setWorkshopOptionsLoaded] = useState(false)
+  const [hydrationVersion, setHydrationVersion] = useState(0)
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -344,6 +346,8 @@ function PromptWorkshop({
   const appliedInitialCustomAgentId = useRef<string | null>(null)
   const refreshAttemptedForInitialCustomAgentId = useRef<string | null>(null)
   const appliedPromptUpdateId = useRef<number | null>(null)
+  const appliedPromptUpdateHydrationVersion = useRef<number>(-1)
+  const customAgentsLoadingRef = useRef(false)
 
   const parentAgents = useMemo(() => {
     const seen = new Set<string>()
@@ -519,6 +523,7 @@ function PromptWorkshop({
 
   useEffect(() => {
     async function loadWorkshopOptions() {
+      setWorkshopOptionsLoaded(false)
       try {
         const [models, tools, templates] = await Promise.all([
           fetchModelOptions(),
@@ -533,6 +538,8 @@ function PromptWorkshop({
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load workshop options')
+      } finally {
+        setWorkshopOptionsLoaded(true)
       }
     }
     void loadWorkshopOptions()
@@ -578,6 +585,7 @@ function PromptWorkshop({
 
   const loadCustomAgents = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false
+    customAgentsLoadingRef.current = true
     if (!silent) {
       setLoading(true)
       setError(null)
@@ -612,6 +620,7 @@ function PromptWorkshop({
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load custom agents')
     } finally {
+      customAgentsLoadingRef.current = false
       if (!silent) {
         setLoading(false)
       }
@@ -672,6 +681,7 @@ function PromptWorkshop({
         setSelectedToolIds(selectedCloneSource.tool_ids || [])
         setOutputSchemaKey(selectedCloneSource.output_schema_key || '')
         setIcon(selectedCloneSource.icon || '🔧')
+        setHydrationVersion((prev) => prev + 1)
         if (selectedCloneSource.template_source) {
           setParentAgentId(selectedCloneSource.template_source)
         }
@@ -692,6 +702,7 @@ function PromptWorkshop({
         setSelectedToolIds([])
         setOutputSchemaKey('')
         setIcon('🔧')
+        setHydrationVersion((prev) => prev + 1)
         return
       }
 
@@ -710,6 +721,7 @@ function PromptWorkshop({
       setSelectedToolIds(selectedTemplate?.tool_ids || [])
       setOutputSchemaKey(selectedTemplate?.output_schema_key || '')
       setIcon('🔧')
+      setHydrationVersion((prev) => prev + 1)
       return
     }
 
@@ -729,6 +741,7 @@ function PromptWorkshop({
     setSelectedToolIds(selectedCustomAgent.tool_ids || [])
     setOutputSchemaKey(selectedCustomAgent.output_schema_key || '')
     setIcon(selectedCustomAgent.icon || '🔧')
+    setHydrationVersion((prev) => prev + 1)
     if (selectedCustomAgent.template_source) {
       setParentAgentId(selectedCustomAgent.template_source)
     }
@@ -819,8 +832,18 @@ function PromptWorkshop({
 
   useEffect(() => {
     if (!incomingPromptUpdate) return
-    if (appliedPromptUpdateId.current === incomingPromptUpdate.request_id) return
+    if (!workshopOptionsLoaded) return
+    if (loading || customAgentsLoadingRef.current) return
+    if (gettingStartedMode === 'template' && !parentAgentId && !selectedCustomAgentId) return
+    if (gettingStartedMode === 'clone' && !selectedCustomAgentId && !selectedCloneSource && !cloneSourceAgentId) return
+    if (
+      appliedPromptUpdateId.current === incomingPromptUpdate.request_id
+      && appliedPromptUpdateHydrationVersion.current === hydrationVersion
+    ) {
+      return
+    }
     appliedPromptUpdateId.current = incomingPromptUpdate.request_id
+    appliedPromptUpdateHydrationVersion.current = hydrationVersion
 
     if (
       incomingPromptUpdate.apply_mode
@@ -873,7 +896,19 @@ function PromptWorkshop({
         ? `Applied Claude update: ${incomingPromptUpdate.summary.trim()}`
         : 'Applied Claude prompt update to the draft'
     )
-  }, [incomingPromptUpdate, availableGroupIds, selectedGroupId])
+  }, [
+    incomingPromptUpdate,
+    availableGroupIds,
+    selectedGroupId,
+    workshopOptionsLoaded,
+    gettingStartedMode,
+    parentAgentId,
+    selectedCustomAgentId,
+    selectedCloneSource,
+    cloneSourceAgentId,
+    loading,
+    hydrationVersion,
+  ])
 
   const handleNew = () => {
     if (selectedCustomAgent) {
