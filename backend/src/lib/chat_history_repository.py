@@ -407,6 +407,63 @@ class ChatHistoryRepository:
             active_document_id=active_document_id,
         )
 
+    def search_sessions_ranked(
+        self,
+        *,
+        user_auth_sub: str,
+        chat_kind: str,
+        query: str,
+        limit: int = 20,
+        active_document_id: UUID | None = None,
+    ) -> ChatSessionPage:
+        """Search active sessions ordered by full-text relevance, then recent activity."""
+
+        page_size = _validate_page_size(
+            limit,
+            field_name="limit",
+            max_value=MAX_SESSION_PAGE_SIZE,
+        )
+        normalized_user_auth_sub = _normalize_required_text(
+            user_auth_sub,
+            field_name="user_auth_sub",
+        )
+        normalized_chat_kinds = _normalize_list_chat_kinds(chat_kind)
+        normalized_query = _normalize_required_text(query, field_name="query")
+        search_query = func.websearch_to_tsquery("english", normalized_query)
+        relevance_rank = func.ts_rank_cd(
+            ChatSessionModel.search_vector,
+            search_query,
+        )
+        recent_activity = func.coalesce(
+            ChatSessionModel.last_message_at,
+            ChatSessionModel.created_at,
+        )
+
+        stmt = select(ChatSessionModel).where(
+            ChatSessionModel.user_auth_sub == normalized_user_auth_sub,
+            ChatSessionModel.chat_kind.in_(normalized_chat_kinds),
+            ChatSessionModel.deleted_at.is_(None),
+            ChatSessionModel.search_vector.op("@@")(search_query),
+        )
+
+        if active_document_id is not None:
+            stmt = stmt.where(
+                ChatSessionModel.active_document_id == active_document_id,
+            )
+
+        sessions = self._db.scalars(
+            stmt.order_by(
+                relevance_rank.desc(),
+                recent_activity.desc(),
+                ChatSessionModel.session_id.desc(),
+            ).limit(page_size)
+        ).all()
+
+        return ChatSessionPage(
+            items=[_session_record(session) for session in sessions],
+            next_cursor=None,
+        )
+
     def count_sessions(
         self,
         *,

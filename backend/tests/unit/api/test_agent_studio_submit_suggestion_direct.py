@@ -18,7 +18,7 @@ def test_submit_suggestion_direct_requires_anthropic_key(monkeypatch):
                 request=api_module.DirectSubmissionRequest(),
                 background_tasks=BackgroundTasks(),
                 db=SimpleNamespace(),
-                user={"email": "curator@example.org"},
+                user={"email": "curator@example.org", "sub": "auth-sub-1"},
             )
         )
 
@@ -51,7 +51,7 @@ def test_submit_suggestion_direct_rejects_invalid_system_agent(monkeypatch):
                 request=request,
                 background_tasks=BackgroundTasks(),
                 db=SimpleNamespace(),
-                user={"email": "curator@example.org"},
+                user={"email": "curator@example.org", "sub": "auth-sub-1"},
             )
         )
 
@@ -92,7 +92,7 @@ def test_submit_suggestion_direct_enqueues_background_job(monkeypatch):
             request=request,
             background_tasks=_FakeBackgroundTasks(),
             db=SimpleNamespace(),
-            user={"email": "curator@example.org"},
+            user={"email": "curator@example.org", "sub": "auth-sub-1"},
         )
     )
 
@@ -100,6 +100,7 @@ def test_submit_suggestion_direct_enqueues_background_job(monkeypatch):
     assert response.message == "Submission sent"
     assert captured["func"] == api_module._process_suggestion_background
     assert captured["kwargs"]["user_email"] == "curator@example.org"
+    assert captured["kwargs"]["user_auth_sub"] == "auth-sub-1"
     assert captured["kwargs"]["api_key"] == "test-key"
     assert captured["kwargs"]["messages"][0]["content"] == "Please help"
     assert captured["kwargs"]["messages"][-1]["content"].startswith(
@@ -139,6 +140,7 @@ def test_process_suggestion_background_notifies_when_no_tool_use(monkeypatch):
             system_prompt="system",
             context=None,
             user_email="curator@example.org",
+            user_auth_sub="auth-sub-1",
             api_key="test-key",
         )
     )

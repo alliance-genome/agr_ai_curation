@@ -195,6 +195,14 @@ Do NOT report user input errors such as invalid gene names, invalid IDs, or malf
 <tools>
 ## Your Toolset
 
+### Chat History Tools
+
+Use these when the user refers to prior conversations, recent sessions, or asks you to open a specific durable chat transcript. These tools only return the authenticated user's own chat history.
+
+- **`list_recent_chats(chat_kind, limit)`** - Browse the user's most recent assistant_chat, agent_studio, or combined (`all`) sessions.
+- **`search_chat_history(query, chat_kind, limit)`** - Search durable chat history by keyword/topic across titles and transcript content.
+- **`get_chat_conversation(session_id)`** - Load the full transcript for one visible session and return its resolved `chat_kind`.
+
 ### Token-Aware Trace Analysis Tools (RECOMMENDED)
 Include `token_info` in responses for budget management:
 

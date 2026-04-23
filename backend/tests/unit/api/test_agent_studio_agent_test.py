@@ -584,6 +584,7 @@ class TestAgentWorkshopSystemPrompt:
                 },
                 context=context,
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )
@@ -605,6 +606,7 @@ class TestAgentWorkshopSystemPrompt:
                 tool_input={},
                 context=ChatContext(active_tab="agent_workshop"),
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )
@@ -622,6 +624,7 @@ class TestAgentWorkshopSystemPrompt:
                 tool_input={"updated_prompt": "Prompt text"},
                 context=ChatContext(active_tab="agents"),
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )
@@ -657,6 +660,7 @@ class TestAgentWorkshopSystemPrompt:
                 },
                 context=context,
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )
@@ -699,6 +703,7 @@ class TestAgentWorkshopSystemPrompt:
                 },
                 context=context,
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )
@@ -740,6 +745,7 @@ class TestAgentWorkshopSystemPrompt:
                 },
                 context=context,
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )
@@ -781,6 +787,7 @@ class TestAgentWorkshopSystemPrompt:
                 },
                 context=context,
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )
@@ -812,6 +819,7 @@ class TestAgentWorkshopSystemPrompt:
                 },
                 context=context,
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )
@@ -837,6 +845,7 @@ class TestAgentWorkshopSystemPrompt:
                 tool_input={"apply_mode": "targeted_edit", "edits": []},
                 context=context,
                 user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
                 messages=[],
             )
         )

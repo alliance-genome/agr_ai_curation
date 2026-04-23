@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path as FilePath
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import anthropic
 import boto3
@@ -78,10 +78,14 @@ from src.lib.agent_studio.tool_idea_service import (
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 from src.lib.chat_history_repository import (
+    ALL_CHAT_KINDS_SENTINEL,
+    ASSISTANT_CHAT_KIND,
     AGENT_STUDIO_CHAT_KIND,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
     ChatMessageRecord,
+    ChatSessionRecord,
+    MAX_MESSAGE_PAGE_SIZE,
 )
 from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
@@ -1219,6 +1223,94 @@ Do NOT use this for user input errors (e.g., invalid gene names, malformed IDs).
 
 ANTHROPIC_REPORT_TOOL_FAILURE_TOOL = REPORT_TOOL_FAILURE_TOOL
 
+CHAT_HISTORY_TOOL_CHAT_KINDS = [
+    ASSISTANT_CHAT_KIND,
+    AGENT_STUDIO_CHAT_KIND,
+    ALL_CHAT_KINDS_SENTINEL,
+]
+
+LIST_RECENT_CHATS_TOOL = {
+    "name": "list_recent_chats",
+    "description": (
+        "List the authenticated user's most recent durable chat sessions across "
+        "assistant_chat, agent_studio, or both. Use this when the user asks for "
+        "their last few chats or recent sessions."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "chat_kind": {
+                "type": "string",
+                "enum": CHAT_HISTORY_TOOL_CHAT_KINDS,
+                "description": (
+                    "Which durable chat kind to browse. Use 'all' to include both "
+                    "assistant_chat and agent_studio sessions."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of recent sessions to return (default: 10, max: 25).",
+                "default": 10,
+                "minimum": 1,
+                "maximum": 25,
+            },
+        },
+        "required": ["chat_kind"],
+    },
+}
+
+SEARCH_CHAT_HISTORY_TOOL = {
+    "name": "search_chat_history",
+    "description": (
+        "Search the authenticated user's durable chat history by keyword across "
+        "session titles and transcript content. Use this when the user refers to "
+        "a past conversation topic, phrase, gene, or session theme."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Full-text search query to run against durable chat history.",
+            },
+            "chat_kind": {
+                "type": "string",
+                "enum": CHAT_HISTORY_TOOL_CHAT_KINDS,
+                "description": (
+                    "Which durable chat kind to search. Use 'all' to include both "
+                    "assistant_chat and agent_studio sessions."
+                ),
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum number of matching sessions to return (default: 10, max: 25).",
+                "default": 10,
+                "minimum": 1,
+                "maximum": 25,
+            },
+        },
+        "required": ["query", "chat_kind"],
+    },
+}
+
+GET_CHAT_CONVERSATION_TOOL = {
+    "name": "get_chat_conversation",
+    "description": (
+        "Load the full durable transcript for one visible chat session by session_id. "
+        "Use this when the user asks to open a specific prior conversation."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "Durable chat session identifier returned by list_recent_chats or search_chat_history.",
+            },
+        },
+        "required": ["session_id"],
+    },
+}
+
 # =============================================================================
 # Token-Aware Trace Analysis Tools (Claude-Specific Endpoints)
 # =============================================================================
@@ -1377,6 +1469,9 @@ GET_SERVICE_LOGS_TOOL = {
 
 
 _COMMON_TOOLS = {
+    "get_chat_conversation",
+    "list_recent_chats",
+    "search_chat_history",
     "submit_prompt_suggestion",
     "report_tool_failure",
 }
@@ -1481,6 +1576,9 @@ def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
         ANTHROPIC_SUGGESTION_TOOL,
         ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
         ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
+        LIST_RECENT_CHATS_TOOL,
+        SEARCH_CHAT_HISTORY_TOOL,
+        GET_CHAT_CONVERSATION_TOOL,
         # Token-aware trace analysis tools
         GET_TRACE_SUMMARY_TOOL,
         GET_TOOL_CALLS_SUMMARY_TOOL,
@@ -1728,6 +1826,7 @@ async def _handle_tool_call(
     tool_input: dict,
     context: Optional[ChatContext],
     user_email: str,
+    user_auth_sub: str,
     messages: Optional[List[dict]] = None,
 ) -> dict:
     """
@@ -1842,6 +1941,84 @@ async def _handle_tool_call(
                 "help": "Valid view_name values: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, mod_context, trace_summary"
             }
         return await get_trace_view(trace_id=trace_id, view_name=view_name)
+
+    elif tool_name == "list_recent_chats":
+        try:
+            chat_kind = _require_tool_string(tool_input, "chat_kind")
+            limit = _resolve_chat_history_limit(tool_input)
+            return _with_chat_history_repository(
+                lambda repository: {
+                    "success": True,
+                    "chat_kind": chat_kind,
+                    "limit": limit,
+                    "total_sessions": repository.count_sessions(
+                        user_auth_sub=user_auth_sub,
+                        chat_kind=chat_kind,
+                    ),
+                    "sessions": [
+                        _serialize_chat_history_session(session)
+                        for session in repository.list_sessions(
+                            user_auth_sub=user_auth_sub,
+                            chat_kind=chat_kind,
+                            limit=limit,
+                        ).items
+                    ],
+                }
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    elif tool_name == "search_chat_history":
+        try:
+            query = _require_tool_string(tool_input, "query")
+            chat_kind = _require_tool_string(tool_input, "chat_kind")
+            limit = _resolve_chat_history_limit(tool_input)
+            return _with_chat_history_repository(
+                lambda repository: {
+                    "success": True,
+                    "query": query,
+                    "chat_kind": chat_kind,
+                    "limit": limit,
+                    "total_sessions": repository.count_sessions(
+                        user_auth_sub=user_auth_sub,
+                        chat_kind=chat_kind,
+                        query=query,
+                    ),
+                    "sessions": [
+                        _serialize_chat_history_session(session)
+                        for session in repository.search_sessions_ranked(
+                            user_auth_sub=user_auth_sub,
+                            chat_kind=chat_kind,
+                            query=query,
+                            limit=limit,
+                        ).items
+                    ],
+                }
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+            }
+
+    elif tool_name == "get_chat_conversation":
+        try:
+            session_id = _require_tool_string(tool_input, "session_id")
+            return _with_chat_history_repository(
+                lambda repository: _get_chat_conversation_payload(
+                    repository=repository,
+                    session_id=session_id,
+                    user_auth_sub=user_auth_sub,
+                )
+            )
+        except ValueError as exc:
+            return {
+                "success": False,
+                "error": str(exc),
+            }
 
     elif tool_name == "get_service_logs":
         container = tool_input.get("container", "backend")
@@ -2105,6 +2282,103 @@ def _normalize_optional_text(value: Any) -> str | None:
 
 def _json_safe(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
+
+
+def _serialize_chat_history_session(record: ChatSessionRecord) -> Dict[str, Any]:
+    return {
+        "session_id": record.session_id,
+        "chat_kind": record.chat_kind,
+        "title": record.title,
+        "generated_title": record.generated_title,
+        "effective_title": record.effective_title,
+        "active_document_id": str(record.active_document_id) if record.active_document_id else None,
+        "created_at": record.created_at.isoformat(),
+        "updated_at": record.updated_at.isoformat(),
+        "last_message_at": record.last_message_at.isoformat() if record.last_message_at else None,
+        "recent_activity_at": record.recent_activity_at.isoformat(),
+    }
+
+
+def _serialize_chat_history_message(record: ChatMessageRecord) -> Dict[str, Any]:
+    return {
+        "message_id": str(record.message_id),
+        "session_id": record.session_id,
+        "chat_kind": record.chat_kind,
+        "turn_id": record.turn_id,
+        "role": record.role,
+        "message_type": record.message_type,
+        "content": record.content,
+        "payload_json": record.payload_json,
+        "trace_id": record.trace_id,
+        "created_at": record.created_at.isoformat(),
+    }
+
+
+def _require_tool_string(tool_input: dict[str, Any], field_name: str) -> str:
+    raw_value = tool_input.get(field_name)
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        raise ValueError(f"Missing required parameter: {field_name}")
+    return raw_value.strip()
+
+
+def _resolve_chat_history_limit(tool_input: dict[str, Any]) -> int:
+    raw_limit = tool_input.get("limit", 10)
+    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
+        raise ValueError("limit must be an integer")
+    return raw_limit
+
+
+def _with_chat_history_repository(
+    callback: Callable[[ChatHistoryRepository], Dict[str, Any]],
+) -> Dict[str, Any]:
+    chat_history_db = SessionLocal()
+    try:
+        repository = ChatHistoryRepository(chat_history_db)
+        return callback(repository)
+    finally:
+        chat_history_db.close()
+
+
+def _get_chat_conversation_payload(
+    *,
+    repository: ChatHistoryRepository,
+    session_id: str,
+    user_auth_sub: str,
+) -> Dict[str, Any]:
+    detail = repository.get_session_detail(
+        session_id=session_id,
+        user_auth_sub=user_auth_sub,
+        message_limit=MAX_MESSAGE_PAGE_SIZE,
+    )
+    if detail is None:
+        return {
+            "success": False,
+            "error": "Chat session not found.",
+        }
+
+    session_chat_kind = detail.session.chat_kind
+    messages = list(detail.messages)
+    cursor = detail.next_message_cursor
+    while cursor is not None:
+        if not session_chat_kind:
+            raise ValueError("chat_kind is required to paginate the chat conversation")
+        page = repository.list_messages(
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+            chat_kind=session_chat_kind,
+            limit=MAX_MESSAGE_PAGE_SIZE,
+            cursor=cursor,
+        )
+        messages.extend(page.items)
+        cursor = page.next_cursor
+
+    return {
+        "success": True,
+        "chat_kind": session_chat_kind,
+        "session": _serialize_chat_history_session(detail.session),
+        "message_count": len(messages),
+        "messages": [_serialize_chat_history_message(message) for message in messages],
+    }
 
 
 def _extract_latest_user_message(messages: List[ChatMessage]) -> str:
@@ -2611,6 +2885,7 @@ async def chat_with_opus(
                                 tool_input=block.input,
                                 context=request.context,
                                 user_email=user_email,
+                                user_auth_sub=user_id,
                                 messages=current_messages,
                             )
                             safe_tool_result = _json_safe(tool_result)
@@ -2919,6 +3194,7 @@ async def _process_suggestion_background(
     system_prompt: str,
     context: Optional[ChatContext],
     user_email: str,
+    user_auth_sub: str,
     api_key: str,
 ) -> None:
     """
@@ -2975,6 +3251,7 @@ async def _process_suggestion_background(
             tool_input=tool_use_block.input,
             context=context,
             user_email=user_email,
+            user_auth_sub=user_auth_sub,
             messages=messages,
         )
 
@@ -3023,6 +3300,7 @@ async def submit_suggestion_direct(
     """
     try:
         user_email = user.get("email", "unknown@localhost")
+        user_auth_sub = _require_user_sub(user)
         api_key = os.getenv("ANTHROPIC_API_KEY")
 
         if not api_key:
@@ -3105,6 +3383,7 @@ Please review our conversation history above and submit a general suggestion usi
             system_prompt=system_prompt,
             context=request.context,
             user_email=user_email,
+            user_auth_sub=user_auth_sub,
             api_key=api_key,
         )
 
