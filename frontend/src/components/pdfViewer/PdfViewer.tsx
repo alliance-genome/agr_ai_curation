@@ -31,6 +31,7 @@ import {
   onPDFDocumentChanged,
   onPDFViewerNavigateEvidence,
 } from '@/components/pdfViewer/pdfEvents'
+import { normalizePdfViewerDocumentUrl } from '@/components/pdfViewer/viewerDocumentUrl'
 import {
   buildNormalizedTextSourceMap,
   normalizeTextForEvidenceMatch,
@@ -4126,9 +4127,27 @@ export function PdfViewer({
         return
       }
 
+      let normalizedViewerUrl: string
+      try {
+        normalizedViewerUrl = normalizePdfViewerDocumentUrl(
+          event.detail.viewerUrl,
+          window.location.origin,
+        )
+      } catch (error) {
+        console.warn('Rejected unsupported PDF document URL', {
+          viewerUrl: event.detail.viewerUrl,
+          error,
+        })
+        setStatus('error')
+        setError(error instanceof Error ? error.message : 'Unsupported PDF document URL.')
+        loadStartRef.current = null
+        signalLoadComplete()
+        return
+      }
+
       const sameLoadedDocument = activeDocument
         && activeDocument.documentId === event.detail.documentId
-        && activeDocument.viewerUrl === event.detail.viewerUrl
+        && activeDocument.viewerUrl === normalizedViewerUrl
         && activeDocument.pageCount === event.detail.pageCount
         && activeDocument.filename === event.detail.filename
 
@@ -4142,7 +4161,7 @@ export function PdfViewer({
 
       const nextDoc: ViewerDocument = {
         documentId: event.detail.documentId,
-        viewerUrl: event.detail.viewerUrl,
+        viewerUrl: normalizedViewerUrl,
         filename: event.detail.filename,
         pageCount: event.detail.pageCount,
         loadedAt: new Date().toISOString(),
@@ -4901,6 +4920,11 @@ export function PdfViewer({
                   Upload in progress...
                 </Typography>
               </Stack>
+            )}
+            {error && (
+              <Alert severity="error" sx={{ mb: 2, maxWidth: 640 }}>
+                {error}
+              </Alert>
             )}
             {dropError && (
               <Alert severity="error" sx={{ mb: 2, maxWidth: 640 }}>
