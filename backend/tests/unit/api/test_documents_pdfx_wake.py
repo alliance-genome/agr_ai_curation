@@ -1,5 +1,7 @@
 """Unit tests for PDFX wake endpoint behavior."""
 
+import logging
+
 import pytest
 from fastapi import HTTPException
 
@@ -31,8 +33,9 @@ async def test_wake_pdfx_requires_service_url(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_wake_pdfx_raises_on_transport_error(monkeypatch):
+async def test_wake_pdfx_raises_on_transport_error(monkeypatch, caplog):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+    caplog.set_level(logging.ERROR, logger=documents.logger.name)
 
     async def _service_headers():
         return {"Authorization": "Bearer service-token"}
@@ -58,12 +61,14 @@ async def test_wake_pdfx_raises_on_transport_error(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await documents.wake_pdf_extraction_worker({"sub": "dev-user-123"})
     assert exc.value.status_code == 502
-    assert "Failed to wake PDF extraction worker" in str(exc.value.detail)
+    assert exc.value.detail == "Failed to wake PDF extraction worker"
+    assert "network down" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_wake_pdfx_raises_on_upstream_error_status(monkeypatch):
+async def test_wake_pdfx_raises_on_upstream_error_status(monkeypatch, caplog):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     async def _service_headers():
         return {"Authorization": "Bearer service-token"}
@@ -92,7 +97,8 @@ async def test_wake_pdfx_raises_on_upstream_error_status(monkeypatch):
     with pytest.raises(HTTPException) as exc:
         await documents.wake_pdf_extraction_worker({"sub": "dev-user-123"})
     assert exc.value.status_code == 502
-    assert "Wake request failed (503)" in str(exc.value.detail)
+    assert exc.value.detail == "Wake request failed (503)"
+    assert "unavailable" in caplog.text
 
 
 @pytest.mark.asyncio

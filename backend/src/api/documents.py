@@ -46,7 +46,7 @@ from ..lib.pdf_jobs.upload_execution_service import (
     UploadExecutionService,
 )
 from ..lib.document_cleanup import cleanup_document_curation_dependencies
-from ..lib.http_errors import raise_sanitized_http_exception
+from ..lib.http_errors import log_exception, raise_sanitized_http_exception
 from ..lib.pdf_jobs.upload_intake_service import (
     UploadIntakeDuplicateError,
     UploadIntakeService,
@@ -631,10 +631,13 @@ async def _build_pdf_extraction_service_headers() -> Dict[str, str]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.post(token_url, data=body, headers=headers)
     except httpx.RequestError as exc:
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=502,
-            detail=f"Failed to fetch PDF extraction service token: {exc}",
-        ) from exc
+            detail="Failed to fetch PDF extraction service token",
+            log_message="Failed to fetch PDF extraction service token",
+            exc=exc,
+        )
 
     if response.status_code != 200:
         raise HTTPException(
@@ -679,10 +682,14 @@ async def _require_pdf_extraction_worker_ready() -> None:
             else:
                 status_response = await client.get(health_endpoint)
     except httpx.RequestError as exc:
-        raise HTTPException(
+        raise_sanitized_http_exception(
+            logger,
             status_code=503,
-            detail=f"Unable to reach PDF extraction worker status endpoint: {exc}",
-        ) from exc
+            detail="Unable to reach PDF extraction worker status endpoint",
+            log_message="Unable to reach PDF extraction worker status endpoint",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
     if status_response.status_code >= 400:
         raise HTTPException(
@@ -738,7 +745,13 @@ async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()
     try:
         service_headers = await _build_pdf_extraction_service_headers()
     except Exception as exc:
-        auth_header_error = str(getattr(exc, "detail", exc))
+        auth_header_error = "PDF extraction service authentication is unavailable"
+        log_exception(
+            logger,
+            message="Failed to build PDF extraction service auth headers for health check",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
@@ -762,11 +775,35 @@ async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()
                 if status_resp.status_code >= 400:
                     status_error = f"Status endpoint returned {status_resp.status_code}"
                 elif status_resp.content:
-                    status_payload = status_resp.json()
-                    if isinstance(status_payload, dict):
-                        worker_state = str(status_payload.get("state", "")).strip().lower() or "unknown"
+                    try:
+                        status_payload = status_resp.json()
+                    except ValueError as exc:
+                        log_exception(
+                            logger,
+                            message="PDF extraction status endpoint returned invalid JSON",
+                            exc=exc,
+                            level=logging.WARNING,
+                        )
+                        status_error = "Status endpoint returned invalid JSON"
+                    else:
+                        if isinstance(status_payload, dict):
+                            worker_state = str(status_payload.get("state", "")).strip().lower() or "unknown"
+            except httpx.RequestError as exc:
+                log_exception(
+                    logger,
+                    message="PDF extraction status endpoint request failed",
+                    exc=exc,
+                    level=logging.WARNING,
+                )
+                status_error = "Status endpoint request failed"
             except Exception as exc:
-                status_error = str(exc)
+                log_exception(
+                    logger,
+                    message="PDF extraction status endpoint check failed",
+                    exc=exc,
+                    level=logging.WARNING,
+                )
+                status_error = "Status endpoint check failed"
             if auth_header_error and not status_error:
                 status_error = auth_header_error
 
@@ -824,12 +861,17 @@ async def get_pdf_extraction_health(user: Dict[str, Any] = get_auth_dependency()
         }
 
     except httpx.RequestError as exc:
-        logger.warning("PDF extraction health check failed: %s", exc)
+        log_exception(
+            logger,
+            message="PDF extraction health check failed",
+            exc=exc,
+            level=logging.WARNING,
+        )
         return {
             "status": "unreachable",
             "service_url": service_url,
             "last_checked": checked_at,
-            "error": str(exc),
+            "error": "Unable to reach PDF extraction service",
             "worker_state": "unknown",
             "worker_available": False,
             "wake_required": False,
@@ -875,12 +917,23 @@ async def wake_pdf_extraction_worker(user: Dict[str, Any] = get_auth_dependency(
             else:
                 status_payload = {}
     except httpx.RequestError as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to wake PDF extraction worker: {exc}") from exc
+        raise_sanitized_http_exception(
+            logger,
+            status_code=502,
+            detail="Failed to wake PDF extraction worker",
+            log_message="Failed to wake PDF extraction worker",
+            exc=exc,
+        )
 
     if wake_response.status_code >= 400:
+        logger.warning(
+            "Wake request failed with status %s and payload %r",
+            wake_response.status_code,
+            wake_payload,
+        )
         raise HTTPException(
             status_code=502,
-            detail=f"Wake request failed ({wake_response.status_code}): {wake_payload}",
+            detail=f"Wake request failed ({wake_response.status_code})",
         )
 
     worker_state = str(status_payload.get("state", "")).strip().lower() if isinstance(status_payload, dict) else "unknown"

@@ -2,6 +2,7 @@
 
 import importlib
 import json
+import logging
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from http.cookies import SimpleCookie
@@ -74,6 +75,21 @@ def test_get_provider_or_503_caches_success(monkeypatch):
     assert first is provider
     assert second is provider
     assert calls["count"] == 1
+
+
+def test_get_provider_or_503_hides_initialization_error(monkeypatch, caplog):
+    def _factory():
+        raise RuntimeError("issuer metadata unavailable")
+
+    monkeypatch.setattr(auth_api, "create_auth_provider", _factory)
+    caplog.set_level(logging.ERROR, logger=auth_api.logger.name)
+
+    with pytest.raises(HTTPException) as exc:
+        auth_api._get_provider_or_503()
+
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Authentication not configured"
+    assert "issuer metadata unavailable" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -201,7 +217,7 @@ async def test_callback_success_sets_auth_cookie_and_clears_pkce(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_callback_raises_for_provider_failure(monkeypatch):
+async def test_callback_raises_for_provider_failure(monkeypatch, caplog):
     class _Provider:
         async def handle_callback(self, _code, _verifier):
             raise RuntimeError("bad exchange")
@@ -213,6 +229,7 @@ async def test_callback_raises_for_provider_failure(monkeypatch):
             return SimpleNamespace(subject="unused")
 
     monkeypatch.setattr(auth_api, "_get_provider_or_503", lambda: _Provider())
+    caplog.set_level(logging.ERROR, logger=auth_api.logger.name)
 
     with pytest.raises(HTTPException) as exc:
         await auth_api.callback(
@@ -223,6 +240,8 @@ async def test_callback_raises_for_provider_failure(monkeypatch):
             db=object(),
         )
     assert exc.value.status_code == 400
+    assert exc.value.detail == "Authentication callback failed"
+    assert "bad exchange" in caplog.text
 
 
 @pytest.mark.asyncio

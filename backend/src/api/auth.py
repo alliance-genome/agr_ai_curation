@@ -23,6 +23,7 @@ from src.auth.factory import create_auth_provider
 from src.config import get_secure_cookies, is_auth_configured, is_dev_mode
 from src.lib.config import get_group
 from src.lib.config.groups_loader import get_group_claim_key
+from src.lib.http_errors import raise_sanitized_http_exception
 from src.models.sql.database import get_db
 from src.services.user_service import provision_user
 
@@ -63,10 +64,7 @@ def _get_provider_or_503() -> AuthProvider:
                     logger.error("Failed to initialize auth provider: %s", exc)
 
     if _provider is None:
-        detail = "Authentication not configured"
-        if _provider_error:
-            detail = f"{detail}: {_provider_error}"
-        raise HTTPException(status_code=503, detail=detail)
+        raise HTTPException(status_code=503, detail="Authentication not configured")
     return _provider
 
 
@@ -142,8 +140,13 @@ async def callback(
         claims = await provider.validate_token(tokens.id_token)
         principal = provider.extract_principal(claims)
     except Exception as exc:
-        logger.error("Authentication callback failed: %s", exc)
-        raise HTTPException(status_code=400, detail=f"Authentication callback failed: {exc}")
+        raise_sanitized_http_exception(
+            logger,
+            status_code=400,
+            detail="Authentication callback failed",
+            log_message="Authentication callback failed",
+            exc=exc,
+        )
 
     if not principal.subject:
         raise HTTPException(status_code=400, detail="Authenticated principal missing subject")

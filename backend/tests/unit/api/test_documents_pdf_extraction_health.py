@@ -1,5 +1,7 @@
 """Unit tests for PDF extraction proxy health aggregation."""
 
+import logging
+
 import pytest
 from fastapi import HTTPException
 
@@ -185,8 +187,9 @@ async def test_pdf_extraction_health_keeps_healthy_when_deep_ok_even_if_proxy_fl
 
 
 @pytest.mark.asyncio
-async def test_pdf_extraction_health_captures_auth_header_builder_error(monkeypatch):
+async def test_pdf_extraction_health_captures_auth_header_builder_error(monkeypatch, caplog):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     async def _service_headers():
         raise HTTPException(status_code=500, detail="invalid auth mode")
@@ -217,13 +220,15 @@ async def test_pdf_extraction_health_captures_auth_header_builder_error(monkeypa
     result = await documents.get_pdf_extraction_health({"sub": "dev-user-123"})
     assert result["status"] == "degraded"
     assert result["worker_available"] is True
-    assert result["status_error"] == "invalid auth mode"
-    assert result["error"] == "invalid auth mode"
+    assert result["status_error"] == "PDF extraction service authentication is unavailable"
+    assert result["error"] == "PDF extraction service authentication is unavailable"
+    assert "invalid auth mode" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_pdf_extraction_health_handles_non_json_payloads(monkeypatch):
+async def test_pdf_extraction_health_handles_non_json_payloads(monkeypatch, caplog):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     async def _service_headers():
         return {"Authorization": "Bearer service-token"}
@@ -255,7 +260,8 @@ async def test_pdf_extraction_health_handles_non_json_payloads(monkeypatch):
     assert result["status"] == "degraded"
     assert result["worker_state"] == "unknown"
     assert result["worker_available"] is False
-    assert "invalid json" in result["status_error"].lower()
+    assert result["status_error"] == "Status endpoint returned invalid JSON"
+    assert "invalid json" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -307,8 +313,9 @@ async def test_pdf_extraction_health_returns_misconfigured_without_service_url(m
 
 
 @pytest.mark.asyncio
-async def test_pdf_extraction_health_surfaces_status_error_when_other_checks_healthy(monkeypatch):
+async def test_pdf_extraction_health_surfaces_status_error_when_other_checks_healthy(monkeypatch, caplog):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     async def _service_headers():
         return {}
@@ -344,13 +351,15 @@ async def test_pdf_extraction_health_surfaces_status_error_when_other_checks_hea
     assert result["status"] == "healthy"
     assert result["worker_state"] == "ready"
     assert result["worker_available"] is True
-    assert "status network error" in result["status_error"]
+    assert result["status_error"] == "Status endpoint request failed"
     assert result["error"] is None
+    assert "status network error" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_pdf_extraction_health_handles_request_error(monkeypatch):
+async def test_pdf_extraction_health_handles_request_error(monkeypatch, caplog):
     monkeypatch.setenv("PDF_EXTRACTION_SERVICE_URL", "https://pdfx.example.org")
+    caplog.set_level(logging.WARNING, logger=documents.logger.name)
 
     async def _service_headers():
         return {"Authorization": "Bearer service-token"}
@@ -377,4 +386,5 @@ async def test_pdf_extraction_health_handles_request_error(monkeypatch):
     assert result["status"] == "unreachable"
     assert result["worker_state"] == "unknown"
     assert result["worker_available"] is False
-    assert "proxy timeout" in result["error"]
+    assert result["error"] == "Unable to reach PDF extraction service"
+    assert "proxy timeout" in caplog.text
