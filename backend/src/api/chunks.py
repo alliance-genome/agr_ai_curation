@@ -1,7 +1,7 @@
 """Chunks API endpoints for Weaviate Control Panel."""
 
 from fastapi import APIRouter, HTTPException, Query, Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 import logging
 
 from ..models.api_schemas import ChunkListResponse, PaginationInfo

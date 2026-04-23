@@ -1,7 +1,7 @@
 """Chunking strategies API endpoints."""
 
-from fastapi import APIRouter, HTTPException
-from typing import List, Dict, Any
+from fastapi import APIRouter
+from typing import Dict, Any
 import logging
 
 from ..lib.http_errors import raise_sanitized_http_exception
