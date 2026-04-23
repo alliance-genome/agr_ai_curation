@@ -1,6 +1,5 @@
 import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { BrowserRouter as Router, Routes, Route, Navigate, Link, useLocation, useNavigate } from 'react-router-dom'
-import { ThemeProvider } from '@mui/material/styles'
 import { CssBaseline, Box, AppBar, Toolbar, Typography, CircularProgress, Button, Tooltip, Snackbar, Alert } from '@mui/material'
 import {
   Logout as LogoutIcon,
@@ -15,7 +14,9 @@ import { getVersionDisplay, getFullVersionInfo } from './config/version'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { AgentMetadataProvider } from './contexts/AgentMetadataContext'
+import { ThemeModeProvider } from './contexts/ThemeModeContext'
 import LogoutDialog from './components/LogoutDialog'
+import ThemeModeToggle from './components/ThemeModeToggle'
 import WeaviateNavIcon from './components/weaviate/WeaviateNavIcon'
 import WeaviateLayout from './components/weaviate/WeaviateLayout'
 import BatchNavIcon from './components/BatchNavIcon'
@@ -26,7 +27,6 @@ import { GLOBAL_TOAST_EVENT, GlobalToastEventDetail } from './lib/globalNotifica
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog'
 import ChangelogDialog from './components/ChangelogDialog'
 import { buildPdfTerminalNotification } from './features/documents/pdfTerminalNotifications'
-import theme from './theme'
 import './App.css'
 
 export const queryClient = new QueryClient()
@@ -347,7 +347,16 @@ export function AppContent() {
   }, [isAuthenticated, location.pathname]);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+    <Box
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        overflow: 'hidden',
+        bgcolor: 'background.default',
+        color: 'text.primary',
+      }}
+    >
       <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
         <Toolbar>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexGrow: 1 }}>
@@ -500,6 +509,7 @@ export function AppContent() {
             <HelpIcon fontSize="small" />
             <Typography variant="body2">Help</Typography>
           </Box>
+          <ThemeModeToggle />
 
           {/* T045: User Identity Display */}
           {user && (
@@ -543,7 +553,17 @@ export function AppContent() {
         onViewAll={handleChangelogViewAll}
       />
 
-      <Box component="main" sx={{ flex: 1, display: 'flex', minHeight: 0, overflow: 'hidden' }}>
+      <Box
+        component="main"
+        sx={{
+          flex: 1,
+          display: 'flex',
+          minHeight: 0,
+          overflow: 'hidden',
+          bgcolor: 'background.default',
+          color: 'text.primary',
+        }}
+      >
         <Routes>
           <Route path="/history" element={renderLazyRoute(<HistoryPage />)} />
           <Route path="/changelog" element={renderLazyRoute(<ChangelogPage />)} />
@@ -610,8 +630,8 @@ export function AppContent() {
 
 function App() {
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
+    <ThemeModeProvider>
+      <CssBaseline enableColorScheme />
       <ForceScrollFix />
       <MaintenanceBanner />
       <QueryClientProvider client={queryClient}>
@@ -626,7 +646,7 @@ function App() {
           </AuthProvider>
         </Router>
       </QueryClientProvider>
-    </ThemeProvider>
+    </ThemeModeProvider>
   )
 }
 
