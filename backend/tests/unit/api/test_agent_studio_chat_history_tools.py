@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import uuid4
 
 import src.api.agent_studio as api_module
 from src.lib.agent_studio.models import ChatContext

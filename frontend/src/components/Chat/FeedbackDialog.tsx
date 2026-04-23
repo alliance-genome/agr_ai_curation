@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   Dialog,
   DialogTitle,
@@ -38,21 +38,56 @@ function FeedbackDialog({
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
+  const resetTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const autoCloseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const clearResetTimeout = () => {
+    if (resetTimeoutRef.current !== null) {
+      clearTimeout(resetTimeoutRef.current)
+      resetTimeoutRef.current = null
+    }
+  }
+
+  const clearAutoCloseTimeout = () => {
+    if (autoCloseTimeoutRef.current !== null) {
+      clearTimeout(autoCloseTimeoutRef.current)
+      autoCloseTimeoutRef.current = null
+    }
+  }
 
   // Reset state when dialog opens/closes
   useEffect(() => {
-    if (!open) {
-      // Reset on close
-      setTimeout(() => {
-        setFeedbackText('')
-        setError(null)
-        setSuccess(false)
-        setIsSubmitting(false)
-      }, 300) // Wait for dialog close animation
+    if (open) {
+      clearResetTimeout()
+      return undefined
+    }
+
+    clearAutoCloseTimeout()
+    clearResetTimeout()
+
+    // Reset on close after the dialog animation completes.
+    resetTimeoutRef.current = setTimeout(() => {
+      setFeedbackText('')
+      setError(null)
+      setSuccess(false)
+      setIsSubmitting(false)
+      resetTimeoutRef.current = null
+    }, 300)
+
+    return () => {
+      clearResetTimeout()
     }
   }, [open])
 
+  useEffect(() => {
+    return () => {
+      clearResetTimeout()
+      clearAutoCloseTimeout()
+    }
+  }, [])
+
   const handleCancel = () => {
+    clearAutoCloseTimeout()
     onClose()
   }
 
@@ -85,7 +120,9 @@ function FeedbackDialog({
       setSuccess(true)
 
       // Auto-close after 2 seconds
-      setTimeout(() => {
+      clearAutoCloseTimeout()
+      autoCloseTimeoutRef.current = setTimeout(() => {
+        autoCloseTimeoutRef.current = null
         onClose()
       }, 2000)
     } catch (err) {
