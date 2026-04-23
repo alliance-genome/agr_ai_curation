@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { chatCacheKeys } from '@/lib/chatCacheKeys'
 
 import {
+  useAgentStudioSessionDetail,
   useBulkDeleteChatSessionsMutation,
   useChatHistoryDetailQuery,
   useChatHistoryListQuery,
@@ -23,6 +24,7 @@ const serviceMocks = vi.hoisted(() => ({
 }))
 
 vi.mock('@/services/chatHistoryApi', () => ({
+  AGENT_STUDIO_CHAT_HISTORY_KIND: 'agent_studio',
   fetchChatHistoryList: serviceMocks.fetchChatHistoryList,
   fetchChatHistoryDetail: serviceMocks.fetchChatHistoryDetail,
   renameChatSession: serviceMocks.renameChatSession,
@@ -331,12 +333,14 @@ describe('useChatHistoryQuery', () => {
       1,
       {
         sessionId: 'session-1',
+        chatKind: undefined,
         messageLimit: 200,
         messageCursor: null,
       },
     )
     expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenNthCalledWith(2, {
       sessionId: 'session-1',
+      chatKind: undefined,
       messageLimit: 200,
       messageCursor: 'cursor-2',
     })
@@ -407,6 +411,56 @@ describe('useChatHistoryQuery', () => {
     expect(result.current.error?.message).toBe(
       'Exceeded 50 transcript pages for session session-1',
     )
+  })
+
+  it('provides an Agent Studio detail hook that scopes reads to agent_studio sessions', async () => {
+    const queryClient = createQueryClient()
+    const response = {
+      session: {
+        session_id: 'agent-studio-session-1',
+        chat_kind: 'agent_studio',
+        title: 'Stored Agent Studio session',
+        created_at: '2026-04-20T00:00:00Z',
+        updated_at: '2026-04-20T00:00:00Z',
+        recent_activity_at: '2026-04-20T00:00:00Z',
+      },
+      active_document: null,
+      messages: [],
+      message_limit: 25,
+      next_message_cursor: null,
+    }
+
+    serviceMocks.fetchChatHistoryDetail.mockResolvedValue(response)
+
+    const { result } = renderHook(
+      () =>
+        useAgentStudioSessionDetail({
+          sessionId: 'agent-studio-session-1',
+          messageLimit: 25,
+        }),
+      {
+        wrapper: createWrapper(queryClient),
+      },
+    )
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true)
+    })
+
+    expect(serviceMocks.fetchChatHistoryDetail).toHaveBeenCalledWith({
+      sessionId: 'agent-studio-session-1',
+      chatKind: 'agent_studio',
+      messageLimit: 25,
+    })
+    expect(
+      queryClient.getQueryData(
+        chatCacheKeys.history.detail({
+          sessionId: 'agent-studio-session-1',
+          chatKind: 'agent_studio',
+          messageLimit: 25,
+        }),
+      ),
+    ).toEqual(response)
   })
 
   it('invalidates list and detail caches after rename mutations', async () => {

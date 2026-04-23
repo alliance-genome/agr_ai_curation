@@ -80,6 +80,7 @@ export interface ChatHistoryListResponse {
 
 export interface ChatHistoryDetailRequest {
   sessionId: string
+  chatKind?: ChatHistoryListKind
   messageLimit?: number
   messageCursor?: string | null
 }
@@ -406,6 +407,10 @@ export function buildChatHistoryDetailQueryParams(
   request: ChatHistoryDetailRequest,
 ): URLSearchParams {
   const params = new URLSearchParams()
+
+  if (request.chatKind) {
+    params.set('chat_kind', request.chatKind)
+  }
 
   if (typeof request.messageLimit === 'number') {
     params.set('message_limit', String(request.messageLimit))

@@ -23,9 +23,15 @@ import OpusChat from '@/components/AgentStudio/OpusChat'
 import AgentBrowser from '@/components/AgentStudio/AgentBrowser'
 import { FlowBuilder, type FlowState } from '@/components/AgentStudio/FlowBuilder'
 import PromptWorkshop from '@/components/AgentStudio/PromptWorkshop/PromptWorkshop'
-import { useChatHistoryTranscriptQuery } from '@/features/history/useChatHistoryQuery'
+import {
+  useChatHistoryDetailQuery,
+  useChatHistoryTranscriptQuery,
+} from '@/features/history/useChatHistoryQuery'
 import { cloneAgentToWorkshop, fetchPromptCatalog } from '@/services/agentStudioService'
-import { buildRestorableChatMessages } from '@/services/chatHistoryApi'
+import {
+  AGENT_STUDIO_CHAT_HISTORY_KIND,
+  buildRestorableChatMessages,
+} from '@/services/chatHistoryApi'
 import type {
   PromptCatalog,
   ChatContext,
@@ -140,7 +146,7 @@ function buildSeededOpusConversation(messages: Parameters<typeof buildRestorable
 }
 
 function AgentStudioPage() {
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // Data state
   const [catalog, setCatalog] = useState<PromptCatalog | null>(null)
@@ -175,41 +181,107 @@ function AgentStudioPage() {
   const [discussMessage, setDiscussMessage] = useState<string | null>(null)
   const [opusConversation, setOpusConversation] = useState<ToolIdeaConversationEntry[]>([])
   const [workshopPromptUpdateRequest, setWorkshopPromptUpdateRequest] = useState<WorkshopPromptUpdateRequest | null>(null)
+  const [pendingUrlSwapSessionId, setPendingUrlSwapSessionId] = useState<string | null>(null)
   const promptUpdateCounterRef = useRef(0)
-  const seededDurableSessionRef = useRef<string | null>(null)
+  const hydratedConversationSessionRef = useRef<string | null>(null)
+  const searchParamsRef = useRef(searchParams)
 
-  // ALL-273 treats `session_id` as a one-shot seed from an assistant-chat session.
-  // It is not an Agent Studio resume id; ALL-276 will later distinguish seed vs resume
-  // behavior by chat kind once Agent Studio has its own durable sessions.
-  const seedSessionId = normalizeSearchParam(searchParams.get('session_id'))
+  useEffect(() => {
+    searchParamsRef.current = searchParams
+  }, [searchParams])
+
+  // ALL-276: `session_id` is overloaded in Agent Studio. We classify it by the
+  // persisted session's `chat_kind` so assistant-chat sessions seed a new Opus
+  // conversation, while agent-studio sessions resume the same durable thread.
+  const requestedSessionId = normalizeSearchParam(searchParams.get('session_id'))
   const traceId = normalizeSearchParam(searchParams.get('trace_id'))
-  const durableTranscriptQuery = useChatHistoryTranscriptQuery(
+  const requestedSessionDetailQuery = useChatHistoryDetailQuery(
     {
-      sessionId: seedSessionId ?? '',
+      sessionId: requestedSessionId ?? '',
+      chatKind: 'all',
+      messageLimit: 1,
     },
     {
-      enabled: Boolean(seedSessionId),
+      enabled: Boolean(requestedSessionId),
+      placeholderData: undefined,
+    },
+  )
+  // ALL-276: this page uses `session_id` for both assistant-chat seeding and
+  // agent-studio resume, so stale detail data must never classify a new URL.
+  const requestedSessionDetail = requestedSessionDetailQuery.data?.session.session_id === requestedSessionId
+    ? requestedSessionDetailQuery.data
+    : null
+  const requestedSessionChatKind = requestedSessionDetail?.session.chat_kind ?? null
+  const durableTranscriptQuery = useChatHistoryTranscriptQuery(
+    {
+      sessionId: requestedSessionId ?? '',
+      chatKind: requestedSessionChatKind ?? 'all',
+    },
+    {
+      enabled: Boolean(requestedSessionId && requestedSessionChatKind),
     },
   )
   const seededConversation = useMemo(
     () => buildSeededOpusConversation(durableTranscriptQuery.data?.messages ?? []),
     [durableTranscriptQuery.data?.messages],
   )
-  const durableTranscriptLoading = Boolean(seedSessionId) && durableTranscriptQuery.isLoading
-  const seededDurableSessionId = seedSessionId && seededConversation.length > 0 ? seedSessionId : undefined
+  const isPendingInternalUrlSwap = pendingUrlSwapSessionId === requestedSessionId
+  const durableTranscriptLoading = Boolean(requestedSessionId) && !isPendingInternalUrlSwap && (
+    requestedSessionDetailQuery.isLoading
+    || (Boolean(requestedSessionChatKind) && durableTranscriptQuery.isLoading)
+  )
+  const durableTranscriptError = isPendingInternalUrlSwap
+    ? null
+    : requestedSessionDetailQuery.error ?? durableTranscriptQuery.error ?? null
+  const transcriptSourceSessionId =
+    requestedSessionId && seededConversation.length > 0 ? requestedSessionId : undefined
+  const resumedDurableSessionId =
+    requestedSessionChatKind === AGENT_STUDIO_CHAT_HISTORY_KIND
+      ? requestedSessionId
+      : null
+  const effectiveDurableSessionId = pendingUrlSwapSessionId ?? resumedDurableSessionId
 
   useEffect(() => {
-    if (!seedSessionId || !durableTranscriptQuery.isSuccess) {
+    if (!requestedSessionId || !durableTranscriptQuery.isSuccess) {
       return
     }
 
-    if (seededDurableSessionRef.current === seedSessionId) {
+    if (hydratedConversationSessionRef.current === requestedSessionId) {
       return
     }
 
-    seededDurableSessionRef.current = seedSessionId
-    setOpusConversation(seededConversation)
-  }, [seedSessionId, seededConversation, durableTranscriptQuery.isSuccess])
+    const shouldPreserveCurrentConversation = pendingUrlSwapSessionId === requestedSessionId
+
+    setOpusConversation((currentConversation) => {
+      hydratedConversationSessionRef.current = requestedSessionId
+
+      if (shouldPreserveCurrentConversation && currentConversation.length > 0) {
+        return currentConversation
+      }
+
+      return seededConversation
+    })
+    setPendingUrlSwapSessionId((currentPendingSessionId) => (
+      currentPendingSessionId === requestedSessionId ? null : currentPendingSessionId
+    ))
+  }, [requestedSessionId, seededConversation, durableTranscriptQuery.isSuccess, pendingUrlSwapSessionId])
+
+  useEffect(() => {
+    if (pendingUrlSwapSessionId !== requestedSessionId) {
+      return
+    }
+
+    if (!requestedSessionDetailQuery.error && !durableTranscriptQuery.error) {
+      return
+    }
+
+    setPendingUrlSwapSessionId(null)
+  }, [
+    pendingUrlSwapSessionId,
+    requestedSessionId,
+    requestedSessionDetailQuery.error,
+    durableTranscriptQuery.error,
+  ])
 
   // Load catalog on mount
   // Note: trace context is NOT fetched here - it's injected into Opus's prompt on the backend
@@ -252,7 +324,7 @@ function AgentStudioPage() {
     selected_group_id: effectiveSelectedGroupId,
     view_mode: effectiveViewMode,
     trace_id: traceId || undefined,
-    session_id: seedSessionId || undefined,
+    session_id: effectiveDurableSessionId || undefined,
     // Flow context (when on flows tab)
     active_tab: activeTab,
     flow_name: activeTab === 'flows' ? flowState?.flowName : undefined,
@@ -383,10 +455,23 @@ Agent ID: ${agentId}`
     setDiscussMessage(null)
   }, [])
 
-  if (error) {
+  const handleDurableSessionIdChange = useCallback((newSessionId: string) => {
+    const currentSessionId = normalizeSearchParam(searchParamsRef.current.get('session_id'))
+    if (currentSessionId === newSessionId) {
+      return
+    }
+
+    setPendingUrlSwapSessionId(newSessionId)
+    const nextSearchParams = new URLSearchParams(searchParamsRef.current)
+    nextSearchParams.set('session_id', newSessionId)
+    searchParamsRef.current = nextSearchParams
+    setSearchParams(nextSearchParams, { replace: true })
+  }, [setSearchParams])
+
+  if (error || durableTranscriptError) {
     return (
       <Box sx={{ p: 3 }}>
-        <Alert severity="error">{error}</Alert>
+        <Alert severity="error">{error ?? durableTranscriptError?.message}</Alert>
       </Box>
     )
   }
@@ -421,12 +506,14 @@ Agent ID: ${agentId}`
             <OpusChat
               context={chatContext}
               initialConversation={seededConversation}
-              seededDurableSessionId={seededDurableSessionId}
+              durableSessionId={effectiveDurableSessionId}
+              sourceSessionId={transcriptSourceSessionId}
               selectedAgent={selectedAgentForChat}
               verifyMessage={verifyMessage}
               onVerifyMessageSent={handleVerifyMessageSent}
               discussMessage={discussMessage}
               onDiscussMessageSent={handleDiscussMessageSent}
+              onDurableSessionIdChange={handleDurableSessionIdChange}
               onConversationSnapshotChange={setOpusConversation}
               onApplyWorkshopPromptUpdate={handleApplyWorkshopPromptUpdate}
             />

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  AGENT_STUDIO_CHAT_HISTORY_KIND,
   ASSISTANT_CHAT_HISTORY_KIND,
   buildChatHistoryDetailQueryParams,
   buildChatHistoryListQueryParams,
@@ -43,10 +44,12 @@ describe('chatHistoryApi', () => {
   it('serializes detail pagination into chat history detail query params', () => {
     const params = buildChatHistoryDetailQueryParams({
       sessionId: 'session-1',
+      chatKind: AGENT_STUDIO_CHAT_HISTORY_KIND,
       messageLimit: 25,
       messageCursor: ' message-cursor-2 ',
     })
 
+    expect(params.get('chat_kind')).toBe('agent_studio')
     expect(params.get('message_limit')).toBe('25')
     expect(params.get('message_cursor')).toBe('message-cursor-2')
   })
@@ -111,13 +114,14 @@ describe('chatHistoryApi', () => {
 
     await fetchChatHistoryDetail({
       sessionId: 'session alpha',
+      chatKind: AGENT_STUDIO_CHAT_HISTORY_KIND,
       messageLimit: 25,
       messageCursor: 'message-cursor-1',
     })
 
     const [url, init] = mockFetch.mock.calls[0]
     expect(String(url)).toBe(
-      '/api/chat/history/session%20alpha?message_limit=25&message_cursor=message-cursor-1',
+      '/api/chat/history/session%20alpha?chat_kind=agent_studio&message_limit=25&message_cursor=message-cursor-1',
     )
     expect(init?.credentials).toBe('include')
   })

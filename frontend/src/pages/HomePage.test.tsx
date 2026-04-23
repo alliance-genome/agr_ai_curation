@@ -67,6 +67,10 @@ function jsonResponse(payload: unknown, status: number = 200): Response {
   })
 }
 
+function buildAssistantHistoryDetailUrl(sessionId: string): string {
+  return `/api/chat/history/${sessionId}?chat_kind=assistant_chat&message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`
+}
+
 function LocationProbe() {
   const location = useLocation()
   return <div data-testid="location-search">{location.search}</div>
@@ -143,7 +147,7 @@ describe('HomePage durable session bootstrap', () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
 
-      if (url === `/api/chat/history/session-42?message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`) {
+      if (url === buildAssistantHistoryDetailUrl('session-42')) {
         return jsonResponse({
           session: {
             session_id: 'session-42',
@@ -250,7 +254,7 @@ describe('HomePage durable session bootstrap', () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
 
-      if (url === `/api/chat/history/session-rich?message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`) {
+      if (url === buildAssistantHistoryDetailUrl('session-rich')) {
         return jsonResponse({
           session: {
             session_id: 'session-rich',
@@ -405,7 +409,7 @@ describe('HomePage durable session bootstrap', () => {
       vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
 
-        if (url === `/api/chat/history/session-42?message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`) {
+        if (url === buildAssistantHistoryDetailUrl('session-42')) {
           return jsonResponse({
             session: {
               session_id: 'session-42',
@@ -513,7 +517,7 @@ describe('HomePage durable session bootstrap', () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
 
-      if (url === `/api/chat/history/session-auth?message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`) {
+      if (url === buildAssistantHistoryDetailUrl('session-auth')) {
         return jsonResponse({
           session: {
             session_id: 'session-auth',
@@ -566,7 +570,7 @@ describe('HomePage durable session bootstrap', () => {
 
     expect(
       vi.mocked(global.fetch).mock.calls.some(
-        ([url]) => String(url) === `/api/chat/history/session-auth?message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`,
+        ([url]) => String(url) === buildAssistantHistoryDetailUrl('session-auth'),
       ),
     ).toBe(true)
   })
@@ -627,7 +631,7 @@ describe('HomePage durable session bootstrap', () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
 
-      if (url === `/api/chat/history/deleted-session?message_limit=${DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT}`) {
+      if (url === buildAssistantHistoryDetailUrl('deleted-session')) {
         return jsonResponse({ detail: 'Chat session not found' }, 404)
       }
 

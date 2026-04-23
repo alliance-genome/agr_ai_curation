@@ -9,6 +9,7 @@ import {
 
 import { chatCacheKeys } from '@/lib/chatCacheKeys'
 import {
+  AGENT_STUDIO_CHAT_HISTORY_KIND,
   bulkDeleteChatSessions,
   deleteChatSession,
   fetchChatHistoryDetail,
@@ -43,6 +44,8 @@ type ChatHistoryTranscriptQueryOptions = Omit<
 const FULL_TRANSCRIPT_PAGE_SIZE = 200
 const FULL_TRANSCRIPT_MAX_PAGES = 50
 
+export type AgentStudioSessionDetailRequest = Omit<ChatHistoryDetailRequest, 'chatKind'>
+
 async function fetchChatHistoryTranscript(
   request: ChatHistoryDetailRequest,
 ): Promise<ChatHistoryDetailResponse> {
@@ -61,6 +64,7 @@ async function fetchChatHistoryTranscript(
   ) {
     const page = await fetchChatHistoryDetail({
       sessionId,
+      chatKind: request.chatKind,
       messageLimit,
       messageCursor: nextCursor,
     })
@@ -127,12 +131,28 @@ export function useChatHistoryTranscriptQuery(
     queryKey: [
       ...chatCacheKeys.history.detailSession(request.sessionId),
       'transcript',
-      { messageLimit: request.messageLimit ?? FULL_TRANSCRIPT_PAGE_SIZE },
+      {
+        chatKind: request.chatKind ?? null,
+        messageLimit: request.messageLimit ?? FULL_TRANSCRIPT_PAGE_SIZE,
+      },
     ],
     queryFn: () => fetchChatHistoryTranscript(request),
     enabled: request.sessionId.trim().length > 0,
     ...options,
   })
+}
+
+export function useAgentStudioSessionDetail(
+  request: AgentStudioSessionDetailRequest,
+  options: ChatHistoryDetailQueryOptions = {},
+) {
+  return useChatHistoryDetailQuery(
+    {
+      ...request,
+      chatKind: AGENT_STUDIO_CHAT_HISTORY_KIND,
+    },
+    options,
+  )
 }
 
 export function useRenameChatSessionMutation() {

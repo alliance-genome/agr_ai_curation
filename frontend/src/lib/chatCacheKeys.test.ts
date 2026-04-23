@@ -138,6 +138,7 @@ describe('chatCacheKeys', () => {
       'details',
       'session-123',
       {
+        chatKind: null,
         messageLimit: DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT,
         messageCursor: null,
       },
@@ -146,6 +147,7 @@ describe('chatCacheKeys', () => {
     expect(
       chatCacheKeys.history.detail({
         sessionId: 'session-123',
+        chatKind: 'agent_studio',
         messageLimit: 25,
         messageCursor: ' cursor-2 ',
       }),
@@ -155,6 +157,7 @@ describe('chatCacheKeys', () => {
       'details',
       'session-123',
       {
+        chatKind: 'agent_studio',
         messageLimit: 25,
         messageCursor: 'cursor-2',
       },

@@ -20,8 +20,27 @@ import type {
   ToolIdeaRequest,
   ToolIdeaConversationEntry,
 } from '@/types/promptExplorer'
+import { readCurationApiError } from '@/features/curation/services/api'
+import {
+  AGENT_STUDIO_CHAT_HISTORY_KIND,
+  fetchChatHistoryDetail,
+  fetchChatHistoryList,
+  type ChatHistoryDetailRequest,
+  type ChatHistoryDetailResponse,
+  type ChatHistoryListRequest,
+  type ChatHistoryListResponse,
+} from '@/services/chatHistoryApi'
+import { normalizeChatHistoryValue } from '@/lib/chatHistoryNormalization'
 
 const BASE_URL = '/api/agent-studio'
+
+export interface AgentStudioDurableSessionResponse {
+  session_id: string
+  created_at: string
+  updated_at: string
+  title?: string | null
+  active_document_id?: string | null
+}
 
 // =============================================================================
 // Agent Metadata Types
@@ -506,6 +525,52 @@ export async function fetchTraceContext(
   return data.context
 }
 
+export async function createAgentStudioSession(): Promise<AgentStudioDurableSessionResponse> {
+  const response = await fetch('/api/chat/session', {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      chat_kind: AGENT_STUDIO_CHAT_HISTORY_KIND,
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error(await readCurationApiError(response))
+  }
+
+  const data = await response.json() as AgentStudioDurableSessionResponse
+  const sessionId = normalizeChatHistoryValue(data.session_id)
+  if (!sessionId) {
+    throw new Error('Agent Studio session response did not include a session ID')
+  }
+
+  return {
+    ...data,
+    session_id: sessionId,
+  }
+}
+
+export async function fetchAgentStudioHistoryList(
+  request: Omit<ChatHistoryListRequest, 'chatKind'> = {},
+): Promise<ChatHistoryListResponse> {
+  return fetchChatHistoryList({
+    ...request,
+    chatKind: AGENT_STUDIO_CHAT_HISTORY_KIND,
+  })
+}
+
+export async function fetchAgentStudioSessionDetail(
+  request: Omit<ChatHistoryDetailRequest, 'chatKind'>,
+): Promise<ChatHistoryDetailResponse> {
+  return fetchChatHistoryDetail({
+    ...request,
+    chatKind: AGENT_STUDIO_CHAT_HISTORY_KIND,
+  })
+}
+
 /**
  * Stream chat with Opus
  * Returns an async generator that yields SSE events
@@ -514,15 +579,24 @@ export async function fetchTraceContext(
  *
  * @param messages - Chat messages to send
  * @param context - Optional context (selected agent, group, trace, etc.)
+ * @param sessionId - Durable Agent Studio session to attach to the streamed turn
  */
 export async function* streamOpusChat(
   messages: ChatMessage[],
-  context?: ChatContext
+  context?: ChatContext,
+  sessionId?: string,
 ): AsyncGenerator<OpusChatEvent> {
+  const requestContext = sessionId
+    ? {
+        ...(context ?? {}),
+        session_id: sessionId,
+      }
+    : context
+
   const response = await fetch(`${BASE_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, context }),
+    body: JSON.stringify({ messages, context: requestContext }),
   })
 
   if (!response.ok) {
