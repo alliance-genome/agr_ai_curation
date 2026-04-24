@@ -412,11 +412,11 @@ npm run type-check
 npm run type-check:all
 ```
 
-`npm run type-check` compares changed frontend TypeScript files against
-`TYPECHECK_BASE` (default: `origin/main`) and only fails for diagnostics in
-those changed files or global TypeScript configuration diagnostics. The full
-`npm run type-check:all` scan is currently a known-debt baseline and may report
-older errors outside the current ticket.
+`npm run type-check` compares changed frontend TypeScript source files and
+`frontend/tsconfig*.json` against `TYPECHECK_BASE` (default: `origin/main`) and
+only fails for diagnostics in those changed paths or global TypeScript
+configuration diagnostics. The full `npm run type-check:all` scan is currently
+a known-debt baseline and may report older errors outside the current ticket.
 
 ## Nginx Configuration
 

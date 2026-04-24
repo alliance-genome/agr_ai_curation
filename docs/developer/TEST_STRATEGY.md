@@ -50,11 +50,11 @@ npm run type-check
 
 `npm run type-check` is intentionally the same as
 `npm run type-check:changed`. It compares changed `.ts`, `.tsx`, `.mts`, and
-`.cts` files under `frontend/` against `TYPECHECK_BASE` (default:
-`origin/main`) plus staged, unstaged, and untracked files. The command still
-runs the TypeScript compiler, but it only fails when compiler diagnostics belong
-to changed frontend TypeScript files or when TypeScript emits a global
-configuration diagnostic.
+`.cts` files plus `frontend/tsconfig*.json` against `TYPECHECK_BASE`
+(default: `origin/main`) plus staged, unstaged, and untracked files. The command
+still runs the TypeScript compiler, but it only fails when compiler diagnostics
+belong to changed frontend TypeScript source/config files or when TypeScript
+emits a global configuration diagnostic.
 
 Use the full repo-wide compiler scan when you are intentionally paying down
 frontend TypeScript debt or investigating the baseline:

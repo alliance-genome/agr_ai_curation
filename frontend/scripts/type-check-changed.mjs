@@ -24,7 +24,8 @@ export function isFrontendTypeScriptPath(repoRelativePath) {
   const normalized = normalizeDiagnosticPath(repoRelativePath);
   return (
     normalized.startsWith('frontend/') &&
-    /\.(?:cts|mts|ts|tsx)$/.test(normalized)
+    (/\.(?:cts|mts|ts|tsx)$/.test(normalized) ||
+      /^frontend\/tsconfig(?:\.[^/]+)?\.json$/.test(normalized))
   );
 }
 
@@ -115,8 +116,8 @@ function printHelp() {
   npm run type-check -- [--base <git-ref>]
 
 Runs the repo-wide TypeScript compiler and fails only when diagnostics belong
-to frontend TypeScript files changed from the base ref, staged changes,
-unstaged changes, or untracked files.
+to frontend TypeScript source or config files changed from the base ref, staged
+changes, unstaged changes, or untracked files.
 
 Environment:
   TYPECHECK_BASE    Base ref for committed branch changes. Default: origin/main.
@@ -202,14 +203,14 @@ async function main() {
 
   if (changedFiles.length === 0) {
     console.log(
-      `No changed frontend TypeScript files found against ${options.baseRef}; skipped scoped type-check.`,
+      `No changed frontend TypeScript source or config files found against ${options.baseRef}; skipped scoped type-check.`,
     );
     console.log('Use npm run type-check:all to inspect the full repo-wide baseline.');
     return;
   }
 
   console.log(
-    `Checking ${changedFiles.length} changed frontend TypeScript file(s) against ${options.baseRef}:`,
+    `Checking ${changedFiles.length} changed frontend TypeScript source/config path(s) against ${options.baseRef}:`,
   );
   for (const filePath of changedFiles) {
     console.log(`- ${filePath}`);
@@ -235,14 +236,14 @@ async function main() {
   const blockingDiagnostics = [...globalDiagnostics, ...changedDiagnostics];
   if (blockingDiagnostics.length > 0) {
     console.error(
-      `TypeScript found ${blockingDiagnostics.length} diagnostic(s) in changed frontend files.`,
+      `TypeScript found ${blockingDiagnostics.length} diagnostic(s) in changed frontend TypeScript paths.`,
     );
     console.error(blockingDiagnostics.join('\n'));
     process.exit(result.status || 1);
   }
 
   console.log(
-    `TypeScript reported ${existingDiagnostics.length} existing repo-wide diagnostic(s), but none belong to changed frontend TypeScript files.`,
+    `TypeScript reported ${existingDiagnostics.length} existing repo-wide diagnostic(s), but none belong to changed frontend TypeScript paths.`,
   );
   console.log('Use npm run type-check:all to inspect the full repo-wide baseline.');
 }
