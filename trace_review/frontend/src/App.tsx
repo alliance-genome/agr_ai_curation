@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
+import { Component, useState, useEffect, useMemo } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import {
   ThemeProvider,
   CssBaseline,
@@ -52,9 +53,71 @@ const VIEWS: { name: ViewName; label: string }[] = [
   { name: 'agent_configs', label: 'Agent Prompts' },
 ];
 
+const traceReviewStartupFallbackTheme = createTraceReviewTheme('dark');
+
 interface ProtectedContentProps {
   themeMode: TraceReviewThemeMode;
   onThemeModeChange: (mode: TraceReviewThemeMode) => void;
+}
+
+interface TraceReviewAppErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface TraceReviewAppErrorBoundaryState {
+  error: Error | null;
+}
+
+class TraceReviewAppErrorBoundary extends Component<
+  TraceReviewAppErrorBoundaryProps,
+  TraceReviewAppErrorBoundaryState
+> {
+  state: TraceReviewAppErrorBoundaryState = {
+    error: null,
+  };
+
+  static getDerivedStateFromError(error: Error): TraceReviewAppErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Trace Review failed to start.', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <ThemeProvider theme={traceReviewStartupFallbackTheme}>
+          <CssBaseline enableColorScheme />
+          <Box
+            sx={{
+              minHeight: '100vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              bgcolor: 'background.default',
+              color: 'text.primary',
+              p: 3,
+            }}
+          >
+            <Alert severity="error" variant="outlined" sx={{ maxWidth: 640 }}>
+              <Typography variant="h6" component="h1" gutterBottom>
+                Trace Review could not start
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                The saved trace review theme mode could not be loaded.
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {this.state.error.message}
+              </Typography>
+            </Alert>
+          </Box>
+        </ThemeProvider>
+      );
+    }
+
+    return this.props.children;
+  }
 }
 
 /**
@@ -425,10 +488,10 @@ function ProtectedContent({ themeMode, onThemeModeChange }: ProtectedContentProp
 }
 
 /**
- * App: Root component with AuthProvider wrapper
- * Provides authentication context to all child components
+ * TraceReviewApp: Root content with ThemeProvider and AuthProvider wrappers
+ * Provides theme and authentication context to all child components
  */
-function App() {
+function TraceReviewApp() {
   const [themeMode, setThemeMode] = useState<TraceReviewThemeMode>(readTraceReviewThemeMode);
   const theme = useMemo(() => createTraceReviewTheme(themeMode), [themeMode]);
 
@@ -444,6 +507,14 @@ function App() {
         <ProtectedContent themeMode={themeMode} onThemeModeChange={handleThemeModeChange} />
       </AuthProvider>
     </ThemeProvider>
+  );
+}
+
+function App() {
+  return (
+    <TraceReviewAppErrorBoundary>
+      <TraceReviewApp />
+    </TraceReviewAppErrorBoundary>
   );
 }
 
