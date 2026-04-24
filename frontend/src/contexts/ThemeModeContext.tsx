@@ -24,12 +24,8 @@ function readStoredThemeMode(): ThemeMode {
     return DEFAULT_THEME_MODE;
   }
 
-  try {
-    const storedMode = window.localStorage.getItem(THEME_MODE_STORAGE_KEY);
-    return isThemeMode(storedMode) ? storedMode : DEFAULT_THEME_MODE;
-  } catch {
-    return DEFAULT_THEME_MODE;
-  }
+  const storedMode = window.localStorage.getItem(THEME_MODE_STORAGE_KEY);
+  return isThemeMode(storedMode) ? storedMode : DEFAULT_THEME_MODE;
 }
 
 function persistThemeMode(mode: ThemeMode) {
@@ -37,19 +33,15 @@ function persistThemeMode(mode: ThemeMode) {
     return;
   }
 
-  try {
-    window.localStorage.setItem(THEME_MODE_STORAGE_KEY, mode);
-  } catch {
-    // Ignore storage failures so restricted browser contexts still render.
-  }
+  window.localStorage.setItem(THEME_MODE_STORAGE_KEY, mode);
 }
 
 export function ThemeModeProvider({ children }: { children: React.ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>(() => readStoredThemeMode());
 
   const setMode = useCallback((nextMode: ThemeMode) => {
-    setModeState(nextMode);
     persistThemeMode(nextMode);
+    setModeState(nextMode);
   }, []);
 
   const toggleMode = useCallback(() => {
