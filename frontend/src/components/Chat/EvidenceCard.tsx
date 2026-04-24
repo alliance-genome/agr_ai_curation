@@ -127,7 +127,7 @@ export default function EvidenceCard({
           ? theme.palette.secondary.dark
           : alpha(theme.palette.secondary.main, 0.09),
         borderRadius: '0 0 18px 4px',
-        borderTop: `1px solid ${alpha(theme.palette.divider, 0.85)}`,
+        borderTop: `1px solid ${theme.palette.divider}`,
         color: theme.palette.text.primary,
         px: '1rem',
         py: '10px',

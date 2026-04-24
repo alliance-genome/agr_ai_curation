@@ -111,7 +111,7 @@ export default function EvidenceQuoteList({
               sx={{
                 mt: '8px',
                 pt: '8px',
-                borderTop: (theme) => `1px solid ${alpha(theme.palette.divider, 0.85)}`,
+                borderTop: (theme) => `1px solid ${theme.palette.divider}`,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',

@@ -161,7 +161,7 @@ function buildChatCssVariables(theme: Theme): ChatCssVariables {
     '--chat-text-primary': theme.palette.text.primary,
     '--chat-text-secondary': theme.palette.text.secondary,
     '--chat-divider': theme.palette.divider,
-    '--chat-subtle-divider': alpha(theme.palette.divider, isDark ? 0.7 : 0.9),
+    '--chat-subtle-divider': theme.palette.divider,
     '--chat-user-bg': isDark ? theme.palette.grey[800] : theme.palette.grey[100],
     '--chat-user-color': theme.palette.text.primary,
     '--chat-assistant-bg': theme.palette.secondary.main,
