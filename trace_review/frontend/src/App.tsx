@@ -53,7 +53,7 @@ const VIEWS: { name: ViewName; label: string }[] = [
   { name: 'agent_configs', label: 'Agent Prompts' },
 ];
 
-const traceReviewStartupFallbackTheme = createTraceReviewTheme('dark');
+const traceReviewStartupErrorTheme = createTraceReviewTheme('dark');
 
 interface ProtectedContentProps {
   themeMode: TraceReviewThemeMode;
@@ -87,7 +87,7 @@ class TraceReviewAppErrorBoundary extends Component<
   render() {
     if (this.state.error) {
       return (
-        <ThemeProvider theme={traceReviewStartupFallbackTheme}>
+        <ThemeProvider theme={traceReviewStartupErrorTheme}>
           <CssBaseline enableColorScheme />
           <Box
             sx={{
@@ -105,7 +105,7 @@ class TraceReviewAppErrorBoundary extends Component<
                 Trace Review could not start
               </Typography>
               <Typography variant="body2" sx={{ mb: 1 }}>
-                The saved trace review theme mode could not be loaded.
+                An unexpected startup error occurred.
               </Typography>
               <Typography variant="body2" color="text.secondary">
                 {this.state.error.message}
