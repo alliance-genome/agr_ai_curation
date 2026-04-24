@@ -1,10 +1,10 @@
 import React from 'react';
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react';
 import { MemoryRouter, Outlet } from 'react-router-dom';
-import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 import { AppContent, ProtectedRoutes, queryClient } from './App';
+import { ThemeModeProvider, THEME_MODE_STORAGE_KEY } from './contexts/ThemeModeContext';
 import { GLOBAL_TOAST_EVENT } from './lib/globalNotifications';
 import { POPUP_CHANGELOG_ENTRY } from './content/changelog';
 
@@ -59,26 +59,24 @@ vi.mock('./components/pdfViewer/PersistentPdfWorkspaceLayout', () => ({
   ),
 }));
 
-const theme = createTheme();
-
 const renderAppContent = (path = '/') =>
   render(
-    <ThemeProvider theme={theme}>
+    <ThemeModeProvider>
       <MemoryRouter initialEntries={[path]}>
         <AppContent />
       </MemoryRouter>
-    </ThemeProvider>
+    </ThemeModeProvider>
   );
 
 const renderProtectedRoutes = (path = '/') =>
   render(
-    <ThemeProvider theme={theme}>
+    <ThemeModeProvider>
       <MemoryRouter initialEntries={[path]}>
         <ProtectedRoutes>
           <div>Protected content</div>
         </ProtectedRoutes>
       </MemoryRouter>
-    </ThemeProvider>
+    </ThemeModeProvider>
   );
 
 const jsonResponse = (payload: unknown): Response =>
@@ -304,6 +302,27 @@ describe('AppContent global notifications', () => {
     expect(screen.getByText('Chat History')).toBeInTheDocument();
   });
 
+  it('renders the header theme toggle and persists changes', async () => {
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/weaviate/pdf-jobs')) {
+        return jsonResponse({ jobs: [] });
+      }
+      if (url.includes('/api/batches')) {
+        return jsonResponse({ batches: [] });
+      }
+      return jsonResponse({});
+    });
+
+    renderAppContent('/');
+
+    const toggle = await screen.findByRole('button', { name: 'Switch to light mode' });
+    fireEvent.click(toggle);
+
+    expect(localStorage.getItem(THEME_MODE_STORAGE_KEY)).toBe('light');
+    expect(screen.getByRole('button', { name: 'Switch to dark mode' })).toBeInTheDocument();
+  });
+
   it('clears the singleton react-query cache when the authenticated user changes', async () => {
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -332,11 +351,11 @@ describe('AppContent global notifications', () => {
 
     await act(async () => {
       view.rerender(
-        <ThemeProvider theme={theme}>
+        <ThemeModeProvider>
           <MemoryRouter initialEntries={['/']}>
             <AppContent />
           </MemoryRouter>
-        </ThemeProvider>
+        </ThemeModeProvider>
       );
       await Promise.resolve();
     });
@@ -383,13 +402,13 @@ describe('ProtectedRoutes logout suppression', () => {
 
     await act(async () => {
       view.rerender(
-        <ThemeProvider theme={theme}>
+        <ThemeModeProvider>
           <MemoryRouter initialEntries={['/agent-studio?tab=queued']}>
             <ProtectedRoutes>
               <div>Protected content</div>
             </ProtectedRoutes>
           </MemoryRouter>
-        </ThemeProvider>
+        </ThemeModeProvider>
       );
       await Promise.resolve();
     });
@@ -409,13 +428,13 @@ describe('ProtectedRoutes logout suppression', () => {
 
     await act(async () => {
       view.rerender(
-        <ThemeProvider theme={theme}>
+        <ThemeModeProvider>
           <MemoryRouter initialEntries={['/agent-studio?tab=queued']}>
             <ProtectedRoutes>
               <div>Protected content</div>
             </ProtectedRoutes>
           </MemoryRouter>
-        </ThemeProvider>
+        </ThemeModeProvider>
       );
       await Promise.resolve();
     });
@@ -457,13 +476,13 @@ describe('ProtectedRoutes logout suppression', () => {
 
     await act(async () => {
       view.rerender(
-        <ThemeProvider theme={theme}>
+        <ThemeModeProvider>
           <MemoryRouter initialEntries={['/agent-studio?tab=queued']}>
             <ProtectedRoutes>
               <div>Protected content</div>
             </ProtectedRoutes>
           </MemoryRouter>
-        </ThemeProvider>
+        </ThemeModeProvider>
       );
       await Promise.resolve();
     });
