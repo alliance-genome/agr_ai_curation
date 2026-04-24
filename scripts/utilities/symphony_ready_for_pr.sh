@@ -214,7 +214,7 @@ INST
     --author "${review_author}"
     --wait-seconds "${wait_for_review_seconds}"
     --poll-seconds "${review_poll_seconds}"
-    --max-rounds 3)
+    --max-rounds 5)
   if [[ -n "${disposition_file}" && -s "${disposition_file}" ]]; then
     loop_cmd+=(--disposition-file "${disposition_file}")
   fi
@@ -236,10 +236,10 @@ INST
   if [[ "${CLAUDE_STATUS}" == "detected" && -n "${CLAUDE_REPORT_FILE}" ]]; then
     echo "READY_FOR_PR_CLAUDE_REPORT_FILE=${CLAUDE_REPORT_FILE}"
     echo "READY_FOR_PR_CLAUDE_ROUND=${loop_round:-1}"
-    echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-3}"
+    echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
 
     cat <<INST
-READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${loop_round:-1}/${loop_max:-3}). YOU MUST:
+READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${loop_round:-1}/${loop_max:-5}). YOU MUST:
 1. Read the full Claude review report at: ${CLAUDE_REPORT_FILE}
 2. Check whether the review is truly clean:
    - A review is clean ONLY if it is 'Approve' with zero findings of any kind — no critical
@@ -261,7 +261,7 @@ READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${lo
 INST
   elif [[ "${CLAUDE_STATUS}" == "maxed_out" ]]; then
     cat <<INST
-READY_FOR_PR_INSTRUCTIONS=PR #${pr_num} has completed ${loop_round:-3}/${loop_max:-3} Claude review rounds. Proceed to Human Review Prep — further automated review rounds would not be productive.
+READY_FOR_PR_INSTRUCTIONS=PR #${pr_num} has completed ${loop_round:-5}/${loop_max:-5} Claude review rounds. Proceed to Human Review Prep — further automated review rounds would not be productive.
 INST
   else
     cat <<INST

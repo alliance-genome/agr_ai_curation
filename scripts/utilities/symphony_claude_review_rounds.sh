@@ -11,7 +11,7 @@ Options:
   --repo VALUE              GitHub repo in owner/name form
   --pr VALUE                Pull request number
   --author VALUE            Review author login to inspect (default: claude)
-  --max-rounds VALUE        Max automated Claude feedback rounds before stopping loops (default: 2)
+  --max-rounds VALUE        Max review rounds including initial before stopping loops (default: 5 = 1 initial + 4 re-reviews)
   --top-json-file PATH      Test fixture override for gh pr view JSON
   --inline-json-file PATH   Test fixture override for gh api inline-comment JSON
 EOF
@@ -20,7 +20,7 @@ EOF
 repo=""
 pr_number=""
 author_login="claude"
-max_rounds=2
+max_rounds=5
 top_json_file=""
 inline_json_file=""
 

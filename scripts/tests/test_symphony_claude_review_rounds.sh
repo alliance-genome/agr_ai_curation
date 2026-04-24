@@ -79,9 +79,29 @@ EOF
   echo '[]' > "${inline_json}"
 
   output="$(run_helper "${top_json}" "${inline_json}" "${temp_dir}/out.txt"; cat "${temp_dir}/out.txt")"
-  assert_contains "CLAUDE_REVIEW_STATUS=maxed" "${output}"
+  assert_contains "CLAUDE_REVIEW_STATUS=below_limit" "${output}"
   assert_contains "CLAUDE_REVIEW_ROUNDS=2" "${output}"
   assert_contains "CLAUDE_REVIEW_RESPONDED_REQUESTS=1" "${output}"
+  assert_contains "CLAUDE_REVIEW_ROUNDS_MAXED=0" "${output}"
+}
+
+test_explicit_lower_max_rounds_still_maxes() {
+  local temp_dir top_json inline_json output
+  temp_dir="$(mktemp -d)"
+  top_json="${temp_dir}/top.json"
+  inline_json="${temp_dir}/inline.json"
+
+  cat > "${top_json}" <<'EOF'
+{"url":"https://example.test/pr/42","comments":[
+  {"author":{"login":"claude"},"createdAt":"2026-03-07T16:03:54Z","updatedAt":"2026-03-07T16:03:54Z","body":"please fix x"},
+  {"author":{"login":"codex"},"createdAt":"2026-03-07T16:10:00Z","updatedAt":"2026-03-07T16:10:00Z","body":"<!-- symphony-claude-rereview:abc1234 -->\n@claude Please review these recent changes."}
+],"reviews":[{"author":{"login":"claude"},"submittedAt":"2026-03-07T16:20:00Z","url":"https://example.test/review"}]}
+EOF
+  echo '[]' > "${inline_json}"
+
+  output="$(run_helper "${top_json}" "${inline_json}" "${temp_dir}/out.txt" --max-rounds 2; cat "${temp_dir}/out.txt")"
+  assert_contains "CLAUDE_REVIEW_STATUS=maxed" "${output}"
+  assert_contains "CLAUDE_REVIEW_ROUNDS=2" "${output}"
   assert_contains "CLAUDE_REVIEW_ROUNDS_MAXED=1" "${output}"
 }
 
@@ -122,13 +142,15 @@ EOF
 EOF
 
   output="$(run_helper "${top_json}" "${inline_json}" "${temp_dir}/out.txt"; cat "${temp_dir}/out.txt")"
-  assert_contains "CLAUDE_REVIEW_STATUS=maxed" "${output}"
+  assert_contains "CLAUDE_REVIEW_STATUS=below_limit" "${output}"
   assert_contains "CLAUDE_REVIEW_ROUNDS=2" "${output}"
+  assert_contains "CLAUDE_REVIEW_ROUNDS_MAXED=0" "${output}"
 }
 
 test_reports_no_feedback
 test_counts_initial_round_only
 test_counts_feedback_after_rereview_request
+test_explicit_lower_max_rounds_still_maxes
 test_reports_pending_rereview_request_without_new_feedback
 test_counts_inline_feedback_after_rereview_request
 
