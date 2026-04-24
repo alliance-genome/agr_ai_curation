@@ -9,7 +9,7 @@ import {
   Snackbar,
   Alert
 } from '@mui/material'
-import { alpha } from '@mui/material/styles'
+import { alpha, useTheme } from '@mui/material/styles'
 import type { Theme } from '@mui/material/styles'
 import DownloadIcon from '@mui/icons-material/Download'
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile'
@@ -78,6 +78,8 @@ function FileDownloadCard({
   allowDownload = true,
   cardTestId,
 }: FileDownloadCardProps) {
+  const theme = useTheme()
+  const formatColor = getFormatColor(theme, file.format)
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadComplete, setDownloadComplete] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -166,10 +168,10 @@ function FileDownloadCard({
                 width: 40,
                 height: 40,
                 borderRadius: 1,
-                backgroundColor: (theme) => alpha(getFormatColor(theme, file.format), 0.14),
+                backgroundColor: alpha(formatColor, 0.14),
               }}
             >
-              <InsertDriveFileIcon sx={{ color: (theme) => getFormatColor(theme, file.format), fontSize: 24 }} />
+              <InsertDriveFileIcon sx={{ color: formatColor, fontSize: 24 }} />
             </Box>
 
             {/* File info */}
@@ -194,8 +196,8 @@ function FileDownloadCard({
                     px: 0.75,
                     py: 0.125,
                     borderRadius: 0.5,
-                    backgroundColor: (theme) => alpha(getFormatColor(theme, file.format), 0.18),
-                    color: (theme) => getFormatColor(theme, file.format),
+                    backgroundColor: alpha(formatColor, 0.18),
+                    color: formatColor,
                     fontWeight: 600,
                     fontSize: '0.7rem',
                   }}
