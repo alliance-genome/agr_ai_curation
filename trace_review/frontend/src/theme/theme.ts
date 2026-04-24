@@ -3,32 +3,29 @@ import { alpha, createTheme } from '@mui/material/styles';
 
 export type TraceReviewThemeMode = Extract<PaletteMode, 'light' | 'dark'>;
 
-export const DEFAULT_TRACE_REVIEW_THEME_MODE: TraceReviewThemeMode = 'dark';
-export const TRACE_REVIEW_THEME_MODE_STORAGE_KEY = 'trace-review:theme-mode';
+const DEFAULT_TRACE_REVIEW_THEME_MODE: TraceReviewThemeMode = 'dark';
+const TRACE_REVIEW_THEME_MODE_STORAGE_KEY = 'trace-review:theme-mode';
 
-export function isTraceReviewThemeMode(value: string | null): value is TraceReviewThemeMode {
+function isTraceReviewThemeMode(value: string | null): value is TraceReviewThemeMode {
   return value === 'light' || value === 'dark';
 }
 
 export function readTraceReviewThemeMode(): TraceReviewThemeMode {
-  if (typeof window === 'undefined') {
+  const storedMode = window.localStorage.getItem(TRACE_REVIEW_THEME_MODE_STORAGE_KEY);
+
+  if (storedMode === null) {
     return DEFAULT_TRACE_REVIEW_THEME_MODE;
   }
 
-  try {
-    const storedMode = window.localStorage.getItem(TRACE_REVIEW_THEME_MODE_STORAGE_KEY);
-    return isTraceReviewThemeMode(storedMode) ? storedMode : DEFAULT_TRACE_REVIEW_THEME_MODE;
-  } catch {
-    return DEFAULT_TRACE_REVIEW_THEME_MODE;
+  if (!isTraceReviewThemeMode(storedMode)) {
+    throw new Error(`Invalid trace review theme mode "${storedMode}" in localStorage.`);
   }
+
+  return storedMode;
 }
 
 export function persistTraceReviewThemeMode(mode: TraceReviewThemeMode) {
-  try {
-    window.localStorage.setItem(TRACE_REVIEW_THEME_MODE_STORAGE_KEY, mode);
-  } catch {
-    // Theme choice is nice-to-have local state; rendering should not depend on storage access.
-  }
+  window.localStorage.setItem(TRACE_REVIEW_THEME_MODE_STORAGE_KEY, mode);
 }
 
 export function createTraceReviewTheme(mode: TraceReviewThemeMode) {
