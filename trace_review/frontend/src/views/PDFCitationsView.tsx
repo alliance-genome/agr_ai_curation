@@ -3,6 +3,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DescriptionIcon from '@mui/icons-material/Description';
 import SearchIcon from '@mui/icons-material/Search';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import { alpha } from '@mui/material/styles';
 import { PDFCitationsData } from '../types';
 
 interface PDFCitationsViewProps {
@@ -78,16 +79,16 @@ export function PDFCitationsView({ data }: PDFCitationsViewProps) {
                 />
                 <Typography
                   variant="body2"
-                  sx={{
+                  sx={(theme) => ({
                     flex: 1,
                     lineHeight: 1.6,
                     color: 'text.primary',
-                    backgroundColor: 'rgba(33, 150, 243, 0.05)',
+                    backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.05),
                     p: 1.5,
                     borderRadius: 1,
                     borderLeft: '3px solid',
                     borderLeftColor: 'primary.main'
-                  }}
+                  })}
                 >
                   {query}
                 </Typography>
@@ -104,16 +105,16 @@ export function PDFCitationsView({ data }: PDFCitationsViewProps) {
             Extracted Answer
           </Typography>
           <Box
-            sx={{
+            sx={(theme) => ({
               whiteSpace: 'pre-wrap',
-              backgroundColor: 'rgba(33, 150, 243, 0.08)',
+              backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.1 : 0.08),
               p: 2,
               borderRadius: 1,
               borderLeft: '4px solid',
               borderLeftColor: 'primary.main',
               fontFamily: 'inherit',
               lineHeight: 1.7
-            }}
+            })}
           >
             <Typography variant="body1" component="div">
               {data.extracted_content}
@@ -133,17 +134,17 @@ export function PDFCitationsView({ data }: PDFCitationsViewProps) {
           {data.citations.map((citation, index) => (
             <Box key={index}>
               <Box
-                sx={{
+                sx={(theme) => ({
                   display: 'flex',
                   alignItems: 'center',
                   gap: 2,
                   flexWrap: 'wrap',
                   p: 2,
                   borderRadius: 1,
-                  backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                  backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.03 : 0.02),
                   border: '1px solid',
                   borderColor: 'divider'
-                }}
+                })}
               >
                 {/* Page number chip */}
                 <Chip
@@ -171,14 +172,14 @@ export function PDFCitationsView({ data }: PDFCitationsViewProps) {
                 {citation.chunk_id && (
                   <Typography
                     variant="caption"
-                    sx={{
+                    sx={(theme) => ({
                       color: 'text.secondary',
                       fontFamily: 'monospace',
-                      backgroundColor: 'rgba(255, 255, 255, 0.05)',
+                      backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.05 : 0.04),
                       px: 1,
                       py: 0.5,
                       borderRadius: 0.5
-                    }}
+                    })}
                   >
                     {citation.chunk_id}
                   </Typography>
@@ -204,7 +205,11 @@ export function PDFCitationsView({ data }: PDFCitationsViewProps) {
 
       {/* Tool Calls Metadata (collapsible) */}
       {data.tool_calls && data.tool_calls.length > 0 && (
-        <Accordion sx={{ backgroundColor: 'rgba(255, 255, 255, 0.02)' }}>
+        <Accordion
+          sx={(theme) => ({
+            backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.02 : 0.01),
+          })}
+        >
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>
             <Typography variant="subtitle2" color="text.secondary">
               PDF Tool Calls ({data.tool_calls.length})

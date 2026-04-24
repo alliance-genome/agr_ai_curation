@@ -4,6 +4,7 @@ import PersonIcon from '@mui/icons-material/Person';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import CheckIcon from '@mui/icons-material/Check';
 import { useState } from 'react';
+import { alpha } from '@mui/material/styles';
 import { ConversationData } from '../types';
 
 interface ConversationViewProps {
@@ -62,12 +63,13 @@ export function ConversationView({ data }: ConversationViewProps) {
 
       {/* User Input */}
       <Paper
-        sx={{
+        sx={(theme) => ({
           p: 3,
           mb: 3,
-          borderLeft: '4px solid #2196f3',
-          backgroundColor: 'rgba(33, 150, 243, 0.05)'
-        }}
+          borderLeft: '4px solid',
+          borderLeftColor: 'primary.main',
+          backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.08 : 0.05),
+        })}
       >
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -102,11 +104,12 @@ export function ConversationView({ data }: ConversationViewProps) {
 
       {/* Assistant Response */}
       <Paper
-        sx={{
+        sx={(theme) => ({
           p: 3,
-          borderLeft: '4px solid #4caf50',
-          backgroundColor: 'rgba(76, 175, 80, 0.05)'
-        }}
+          borderLeft: '4px solid',
+          borderLeftColor: 'success.main',
+          backgroundColor: alpha(theme.palette.success.main, theme.palette.mode === 'dark' ? 0.08 : 0.05),
+        })}
       >
         <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 2 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

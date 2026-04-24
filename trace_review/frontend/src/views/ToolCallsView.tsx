@@ -21,6 +21,7 @@ import InputIcon from '@mui/icons-material/Input';
 import OutputIcon from '@mui/icons-material/Output';
 import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import Tooltip from '@mui/material/Tooltip';
+import { alpha } from '@mui/material/styles';
 import { ToolCallsData, ToolResultParsed } from '../types';
 
 interface ToolCallsViewProps {
@@ -63,7 +64,7 @@ function FormattedArguments({ args }: { args: any }) {
             }}
           >
             {value === null ? (
-              <em style={{ color: '#888' }}>null</em>
+              <Box component="em" sx={{ color: 'text.secondary' }}>null</Box>
             ) : typeof value === 'object' ? (
               JSON.stringify(value, null, 2)
             ) : (
@@ -94,10 +95,10 @@ function CollapsibleJson({ data, label }: { data: any; label: string }) {
       </Button>
       <Collapse in={expanded}>
         <Box
-          sx={{
+          sx={(theme) => ({
             fontFamily: 'monospace',
             fontSize: '0.75rem',
-            backgroundColor: 'rgba(0, 0, 0, 0.2)',
+            backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.16 : 0.06),
             p: 2,
             borderRadius: 1,
             mt: 1,
@@ -106,7 +107,7 @@ function CollapsibleJson({ data, label }: { data: any; label: string }) {
             wordBreak: 'break-word',
             maxHeight: '300px',
             overflow: 'auto'
-          }}
+          })}
         >
           {typeof data === 'string' ? data : JSON.stringify(data, null, 2)}
         </Box>
@@ -122,13 +123,13 @@ function ChunkHitsList({ hits }: { hits: Array<{ chunk_id: string; section_title
       {hits.map((hit, index) => (
         <Box
           key={hit.chunk_id || index}
-          sx={{
+          sx={(theme) => ({
             p: 2,
             borderRadius: 1,
-            backgroundColor: 'rgba(255, 255, 255, 0.03)',
+            backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.03 : 0.02),
             border: '1px solid',
             borderColor: 'divider'
-          }}
+          })}
         >
           <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap', alignItems: 'center' }}>
             <Chip label={`Page ${hit.page_number}`} size="small" color="warning" />
@@ -163,13 +164,13 @@ function DataList({ data }: { data: Array<Record<string, any>> }) {
       {data.map((item, index) => (
         <Box
           key={index}
-          sx={{
+          sx={(theme) => ({
             p: 2,
             borderRadius: 1,
-            backgroundColor: 'rgba(255, 255, 255, 0.03)',
+            backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.03 : 0.02),
             border: '1px solid',
             borderColor: 'divider'
-          }}
+          })}
         >
           {Object.entries(item).map(([key, value]) => (
             <Box key={key} sx={{ display: 'flex', gap: 2, mb: 0.5 }}>
@@ -195,13 +196,13 @@ function SectionContentDisplay({ section }: { section: { section_title: string; 
 
   return (
     <Box
-      sx={{
+      sx={(theme) => ({
         p: 2,
         borderRadius: 1,
-        backgroundColor: 'rgba(255, 255, 255, 0.03)',
+        backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.03 : 0.02),
         border: '1px solid',
         borderColor: 'divider'
-      }}
+      })}
     >
       <Box sx={{ display: 'flex', gap: 1, mb: 1, flexWrap: 'wrap', alignItems: 'center' }}>
         <Typography variant="body2" sx={{ fontWeight: 600, color: 'primary.main' }}>
@@ -220,7 +221,7 @@ function SectionContentDisplay({ section }: { section: { section_title: string; 
       {content && (
         <Typography
           component="pre"
-          sx={{
+          sx={(theme) => ({
             color: 'text.secondary',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
@@ -228,12 +229,12 @@ function SectionContentDisplay({ section }: { section: { section_title: string; 
             overflow: 'auto',
             mt: 1,
             p: 2,
-            backgroundColor: 'rgba(0, 0, 0, 0.15)',
+            backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.14 : 0.05),
             borderRadius: 1,
             fontSize: '0.85rem',
             fontFamily: 'inherit',
             margin: 0
-          }}
+          })}
         >
           {content}
         </Typography>
@@ -250,13 +251,13 @@ function JsonDataDisplay({ data }: { data: Record<string, any> | any[] }) {
 
   return (
     <Box
-      sx={{
+      sx={(theme) => ({
         p: 2,
         borderRadius: 1,
-        backgroundColor: 'rgba(255, 255, 255, 0.03)',
+        backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.03 : 0.02),
         border: '1px solid',
         borderColor: 'divider'
-      }}
+      })}
     >
       {Object.entries(data).map(([key, value]) => (
         <Box key={key} sx={{ display: 'flex', gap: 2, mb: 0.5 }}>
@@ -307,14 +308,17 @@ function FormattedToolResult({ result, resultLength }: { result: ToolResultParse
     <Box>
       {/* Summary - always visible */}
       <Box
-        sx={{
-          backgroundColor: needsParsingAttention ? 'rgba(255, 152, 0, 0.08)' : 'rgba(76, 175, 80, 0.08)',
+        sx={(theme) => ({
+          backgroundColor: alpha(
+            needsParsingAttention ? theme.palette.warning.main : theme.palette.success.main,
+            theme.palette.mode === 'dark' ? 0.12 : 0.08,
+          ),
           p: 2,
           borderRadius: 1,
           borderLeft: '4px solid',
           borderLeftColor: needsParsingAttention ? 'warning.main' : 'success.main',
           mb: 1
-        }}
+        })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 500, flex: 1 }}>
@@ -374,10 +378,10 @@ function FormattedToolResult({ result, resultLength }: { result: ToolResultParse
       {/* Raw view */}
       <Collapse in={showRaw}>
         <Box
-          sx={{
+          sx={(theme) => ({
             fontFamily: 'monospace',
             fontSize: '0.75rem',
-            backgroundColor: 'rgba(0, 0, 0, 0.2)',
+            backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.16 : 0.06),
             p: 2,
             borderRadius: 1,
             mt: 2,
@@ -386,7 +390,7 @@ function FormattedToolResult({ result, resultLength }: { result: ToolResultParse
             wordBreak: 'break-word',
             maxHeight: '400px',
             overflow: 'auto'
-          }}
+          })}
         >
           {raw}
         </Box>
@@ -581,13 +585,13 @@ export function ToolCallsView({ data }: ToolCallsViewProps) {
                       </Typography>
                     </Box>
                     <Box
-                      sx={{
-                        backgroundColor: 'rgba(33, 150, 243, 0.08)',
+                      sx={(theme) => ({
+                        backgroundColor: alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.1 : 0.08),
                         p: 2,
                         borderRadius: 1,
                         borderLeft: '4px solid',
                         borderLeftColor: 'primary.main'
-                      }}
+                      })}
                     >
                       <FormattedArguments args={call.input} />
                     </Box>

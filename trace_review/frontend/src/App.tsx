@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+import { Component, useState, useEffect, useMemo } from 'react';
+import type { ErrorInfo, ReactNode } from 'react';
 import {
   ThemeProvider,
   CssBaseline,
@@ -21,9 +22,11 @@ import {
 } from '@mui/material';
 import CloudIcon from '@mui/icons-material/Cloud';
 import ComputerIcon from '@mui/icons-material/Computer';
-import { theme } from './theme/theme';
+import { createTraceReviewTheme, persistTraceReviewThemeMode, readTraceReviewThemeMode } from './theme/theme';
+import type { TraceReviewThemeMode } from './theme/theme';
 import { api } from './services/api';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeModeToggle } from './components/ThemeModeToggle';
 import { SummaryView } from './views/SummaryView';
 import { ConversationView } from './views/ConversationView';
 import { ToolCallsView } from './views/ToolCallsView';
@@ -50,11 +53,78 @@ const VIEWS: { name: ViewName; label: string }[] = [
   { name: 'agent_configs', label: 'Agent Prompts' },
 ];
 
+const traceReviewStartupErrorTheme = createTraceReviewTheme('dark');
+
+interface ProtectedContentProps {
+  themeMode: TraceReviewThemeMode;
+  onThemeModeChange: (mode: TraceReviewThemeMode) => void;
+}
+
+interface TraceReviewAppErrorBoundaryProps {
+  children: ReactNode;
+}
+
+interface TraceReviewAppErrorBoundaryState {
+  error: Error | null;
+}
+
+class TraceReviewAppErrorBoundary extends Component<
+  TraceReviewAppErrorBoundaryProps,
+  TraceReviewAppErrorBoundaryState
+> {
+  state: TraceReviewAppErrorBoundaryState = {
+    error: null,
+  };
+
+  static getDerivedStateFromError(error: Error): TraceReviewAppErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error('Trace Review failed to start.', error, errorInfo);
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <ThemeProvider theme={traceReviewStartupErrorTheme}>
+          <CssBaseline enableColorScheme />
+          <Box
+            sx={{
+              minHeight: '100vh',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              bgcolor: 'background.default',
+              color: 'text.primary',
+              p: 3,
+            }}
+          >
+            <Alert severity="error" variant="outlined" sx={{ maxWidth: 640 }}>
+              <Typography variant="h6" component="h1" gutterBottom>
+                Trace Review could not start
+              </Typography>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                An unexpected startup error occurred.
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                {this.state.error.message}
+              </Typography>
+            </Alert>
+          </Box>
+        </ThemeProvider>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
 /**
  * ProtectedContent: Main app content that requires authentication
  * This component is only rendered when user is authenticated
  */
-function ProtectedContent() {
+function ProtectedContent({ themeMode, onThemeModeChange }: ProtectedContentProps) {
   const { isAuthenticated, isLoading, login } = useAuth();
   const [traceId, setTraceId] = useState('');
   const [source, setSource] = useState<'remote' | 'local'>('remote');
@@ -262,158 +332,189 @@ function ProtectedContent() {
         : 'info';
 
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <Box sx={{ display: 'flex', minHeight: '100vh' }}>
-        {/* App Bar */}
-        <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
-          <Toolbar>
-            <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
-              🔍 Trace Review
-            </Typography>
-            {import.meta.env.VITE_DEV_MODE === 'true' && (
-              <Chip label="Dev Mode" color="secondary" size="small" />
-            )}
-          </Toolbar>
-        </AppBar>
+    <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default', color: 'text.primary' }}>
+      {/* App Bar */}
+      <AppBar position="fixed" sx={{ zIndex: (theme) => theme.zIndex.drawer + 1 }}>
+        <Toolbar sx={{ gap: 1 }}>
+          <Typography variant="h6" noWrap component="div" sx={{ flexGrow: 1 }}>
+            🔍 Trace Review
+          </Typography>
+          {import.meta.env.VITE_DEV_MODE === 'true' && (
+            <Chip label="Dev Mode" color="secondary" size="small" />
+          )}
+          <ThemeModeToggle mode={themeMode} onChange={onThemeModeChange} />
+        </Toolbar>
+      </AppBar>
 
-        {/* Left Navigation Drawer */}
-        <Drawer
-          variant="permanent"
-          sx={{
+      {/* Left Navigation Drawer */}
+      <Drawer
+        variant="permanent"
+        sx={{
+          width: DRAWER_WIDTH,
+          flexShrink: 0,
+          [`& .MuiDrawer-paper`]: {
             width: DRAWER_WIDTH,
-            flexShrink: 0,
-            [`& .MuiDrawer-paper`]: {
-              width: DRAWER_WIDTH,
-              boxSizing: 'border-box',
-              marginTop: '64px',
-            },
-          }}
-        >
-          <List>
-            {VIEWS.map((view) => (
+            boxSizing: 'border-box',
+            marginTop: '64px',
+            bgcolor: 'background.paper',
+          },
+        }}
+      >
+        <List>
+          {VIEWS.map((view) => {
+            const isSelected = currentView === view.name;
+            const isDisabled = !currentTraceId;
+
+            return (
               <ListItem key={view.name} disablePadding>
                 <ListItemButton
-                  selected={currentView === view.name}
+                  selected={isSelected}
                   onClick={() => handleViewChange(view.name)}
-                  disabled={!currentTraceId}
+                  disabled={isDisabled}
+                  sx={{
+                    '&.Mui-selected': {
+                      bgcolor: 'action.selected',
+                      '&:hover': {
+                        bgcolor: 'action.selected',
+                      },
+                    },
+                  }}
                 >
                   <ListItemText
                     primary={view.label}
-                    sx={{
-                      '& .MuiTypography-root': {
-                        color: currentView === view.name ? '#ffffff' : 'rgba(255, 255, 255, 0.9)',
-                        fontWeight: currentView === view.name ? 600 : 400
-                      }
+                    primaryTypographyProps={{
+                      sx: {
+                        color: isDisabled ? 'text.disabled' : isSelected ? 'primary.main' : 'text.secondary',
+                        fontWeight: isSelected ? 600 : 400,
+                      },
                     }}
                   />
                 </ListItemButton>
               </ListItem>
-            ))}
-          </List>
-        </Drawer>
+            );
+          })}
+        </List>
+      </Drawer>
 
-        {/* Main Content */}
-        <Box component="main" sx={{ flexGrow: 1, p: 3, marginTop: '64px' }}>
-          {/* Trace Input Section */}
-          <Box sx={{ mb: 3 }}>
-            <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
-              <ToggleButtonGroup
-                value={source}
-                exclusive
-                onChange={handleSourceChange}
-                aria-label="trace source"
-                color="primary"
-                sx={{ height: 56 }}
-              >
-                <ToggleButton value="remote" aria-label="remote source">
-                  <CloudIcon sx={{ mr: 1 }} />
-                  Remote
-                </ToggleButton>
-                <ToggleButton value="local" aria-label="local source">
-                  <ComputerIcon sx={{ mr: 1 }} />
-                  Local
-                </ToggleButton>
-              </ToggleButtonGroup>
-              
-              <TextField
-                fullWidth
-                label="Trace ID"
-                placeholder="Paste Langfuse trace ID here..."
-                value={traceId}
-                onChange={(e) => setTraceId(e.target.value)}
-                onKeyPress={(e) => {
-                  if (e.key === 'Enter') {
-                    handleAnalyze();
-                  }
-                }}
-                disabled={loading}
-              />
-              <Button
-                variant="contained"
-                onClick={handleAnalyze}
-                disabled={loading}
-                sx={{ minWidth: '120px' }}
-              >
-                {loading ? <CircularProgress size={24} /> : 'Analyze'}
-              </Button>
-              <Button
-                variant="outlined"
-                onClick={handleClearCache}
-                disabled={clearingCache || loading}
-                sx={{ minWidth: '140px' }}
-              >
-                {clearingCache ? <CircularProgress size={24} /> : '🗑️ Clear Cache'}
-              </Button>
+      {/* Main Content */}
+      <Box component="main" sx={{ flexGrow: 1, p: 3, marginTop: '64px' }}>
+        {/* Trace Input Section */}
+        <Box sx={{ mb: 3 }}>
+          <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+            <ToggleButtonGroup
+              value={source}
+              exclusive
+              onChange={handleSourceChange}
+              aria-label="trace source"
+              color="primary"
+              sx={{ height: 56 }}
+            >
+              <ToggleButton value="remote" aria-label="remote source">
+                <CloudIcon sx={{ mr: 1 }} />
+                Remote
+              </ToggleButton>
+              <ToggleButton value="local" aria-label="local source">
+                <ComputerIcon sx={{ mr: 1 }} />
+                Local
+              </ToggleButton>
+            </ToggleButtonGroup>
+
+            <TextField
+              fullWidth
+              label="Trace ID"
+              placeholder="Paste Langfuse trace ID here..."
+              value={traceId}
+              onChange={(e) => setTraceId(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter') {
+                  handleAnalyze();
+                }
+              }}
+              disabled={loading}
+            />
+            <Button
+              variant="contained"
+              onClick={handleAnalyze}
+              disabled={loading}
+              sx={{ minWidth: '120px' }}
+            >
+              {loading ? <CircularProgress size={24} /> : 'Analyze'}
+            </Button>
+            <Button
+              variant="outlined"
+              onClick={handleClearCache}
+              disabled={clearingCache || loading}
+              sx={{ minWidth: '140px' }}
+            >
+              {clearingCache ? <CircularProgress size={24} /> : '🗑️ Clear Cache'}
+            </Button>
+          </Box>
+
+          {/* Status indicators */}
+          {cacheStatus && (
+            <Chip
+              label={cacheStatusLabel}
+              color={cacheStatusColor}
+              size="small"
+            />
+          )}
+
+          {error && (
+            <Alert severity="error" sx={{ mt: 2 }}>
+              {error}
+            </Alert>
+          )}
+        </Box>
+
+        {/* View Content */}
+        <Box>
+          {loading && !viewData && (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+              <CircularProgress />
             </Box>
+          )}
 
-            {/* Status indicators */}
-            {cacheStatus && (
-              <Chip
-                label={cacheStatusLabel}
-                color={cacheStatusColor}
-                size="small"
-              />
-            )}
+          {!loading && !viewData && !error && (
+            <Alert severity="info">
+              Enter a trace ID above to begin analysis
+            </Alert>
+          )}
 
-            {error && (
-              <Alert severity="error" sx={{ mt: 2 }}>
-                {error}
-              </Alert>
-            )}
-          </Box>
-
-          {/* View Content */}
-          <Box>
-            {loading && !viewData && (
-              <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
-                <CircularProgress />
-              </Box>
-            )}
-
-            {!loading && !viewData && !error && (
-              <Alert severity="info">
-                Enter a trace ID above to begin analysis
-              </Alert>
-            )}
-
-            {renderView()}
-          </Box>
+          {renderView()}
         </Box>
       </Box>
-    </ThemeProvider>
+    </Box>
   );
 }
 
 /**
- * App: Root component with AuthProvider wrapper
- * Provides authentication context to all child components
+ * TraceReviewApp: Root content with ThemeProvider and AuthProvider wrappers
+ * Provides theme and authentication context to all child components
  */
+function TraceReviewApp() {
+  const [themeMode, setThemeMode] = useState<TraceReviewThemeMode>(readTraceReviewThemeMode);
+  const theme = useMemo(() => createTraceReviewTheme(themeMode), [themeMode]);
+
+  const handleThemeModeChange = (mode: TraceReviewThemeMode) => {
+    setThemeMode(mode);
+    persistTraceReviewThemeMode(mode);
+  };
+
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline enableColorScheme />
+      <AuthProvider>
+        <ProtectedContent themeMode={themeMode} onThemeModeChange={handleThemeModeChange} />
+      </AuthProvider>
+    </ThemeProvider>
+  );
+}
+
 function App() {
   return (
-    <AuthProvider>
-      <ProtectedContent />
-    </AuthProvider>
+    <TraceReviewAppErrorBoundary>
+      <TraceReviewApp />
+    </TraceReviewAppErrorBoundary>
   );
 }
 
