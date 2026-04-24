@@ -9,6 +9,8 @@ export interface EntityChipBarItem {
   activeBackground: string
   inactiveBackground: string
   inactiveBorder: string
+  textColor: string
+  activeTextColor: string
 }
 
 interface EntityChipBarProps {
@@ -42,6 +44,7 @@ export default function EntityChipBar({
         const border = isActive
           ? `2px solid ${item.colorHex}`
           : `1px solid ${hasActiveEntity ? item.inactiveBorder : item.chipBorder}`
+        const color = isActive ? item.activeTextColor : item.textColor
 
         return (
           <Box
@@ -59,7 +62,7 @@ export default function EntityChipBar({
               py: isActive ? '3px' : '4px',
               border,
               backgroundColor,
-              color: '#ffffff',
+              color,
               fontSize: '12px',
               fontWeight: isActive ? 600 : 400,
               lineHeight: 1.2,

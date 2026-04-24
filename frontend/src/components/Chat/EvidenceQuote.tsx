@@ -1,4 +1,5 @@
 import { Box } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 
 import EvidenceNavigationQuoteCard from '@/features/curation/evidence/EvidenceNavigationQuoteCard'
 import {
@@ -38,18 +39,20 @@ export default function EvidenceQuote({
     return (
       <Box
         data-testid={testId}
-        sx={{
-          backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        sx={(theme) => ({
+          backgroundColor: theme.palette.mode === 'dark'
+            ? alpha(theme.palette.common.white, 0.08)
+            : alpha(theme.palette.background.paper, 0.72),
           borderRadius: '8px',
           borderLeft: `3px solid ${borderColor}`,
           px: '12px',
           py: '10px',
-        }}
+        })}
       >
         <Box
           sx={{
             fontSize: '11px',
-            color: 'rgba(255, 255, 255, 0.6)',
+            color: 'text.secondary',
             mb: '4px',
           }}
         >
@@ -61,7 +64,7 @@ export default function EvidenceQuote({
             fontSize: '13px',
             fontStyle: 'italic',
             lineHeight: 1.5,
-            color: 'rgba(255, 255, 255, 0.9)',
+            color: 'text.primary',
           }}
         >
           &ldquo;{evidenceRecord.verified_quote}&rdquo;

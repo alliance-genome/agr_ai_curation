@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { Box, Collapse } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 
 import type { EvidenceRecord } from '@/features/curation/types'
 
@@ -110,7 +111,7 @@ export default function EvidenceQuoteList({
               sx={{
                 mt: '8px',
                 pt: '8px',
-                borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+                borderTop: (theme) => `1px solid ${alpha(theme.palette.divider, 0.85)}`,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
@@ -119,7 +120,7 @@ export default function EvidenceQuoteList({
               <Box
                 sx={{
                   fontSize: '11px',
-                  color: 'rgba(255, 255, 255, 0.5)',
+                  color: 'text.secondary',
                 }}
               >
                 Full evidence review with PDF highlighting →
@@ -133,7 +134,7 @@ export default function EvidenceQuoteList({
                     p: 0,
                     border: 0,
                     background: 'transparent',
-                    color: '#90caf9',
+                    color: 'primary.main',
                     cursor: 'pointer',
                     fontSize: '11px',
                   }}

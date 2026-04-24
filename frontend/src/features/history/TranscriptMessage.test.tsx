@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { ThemeProvider } from '@mui/material/styles'
 
 import { render, screen, userEvent } from '@/test/test-utils'
 import type { EvidenceRecord } from '@/features/curation/types'
+import { createAppTheme, type ThemeMode } from '@/theme'
 
 import TranscriptMessage, { type TranscriptMessageRecord } from './TranscriptMessage'
 
@@ -23,14 +25,27 @@ const EVIDENCE_RECORDS: EvidenceRecord[] = [
   },
 ]
 
-function renderTranscriptMessage(overrides: Partial<TranscriptMessageRecord> = {}) {
+function renderTranscriptMessage(
+  overrides: Partial<TranscriptMessageRecord> = {},
+  mode?: ThemeMode,
+) {
   const message: TranscriptMessageRecord = {
     role: 'assistant',
     content: 'Stored assistant answer',
     ...overrides,
   }
 
-  return render(<TranscriptMessage message={message} />)
+  const transcriptMessage = <TranscriptMessage message={message} />
+
+  if (mode) {
+    return render(
+      <ThemeProvider theme={createAppTheme(mode)}>
+        {transcriptMessage}
+      </ThemeProvider>,
+    )
+  }
+
+  return render(transcriptMessage)
 }
 
 describe('TranscriptMessage', () => {
@@ -44,6 +59,33 @@ describe('TranscriptMessage', () => {
     expect(screen.getByText('You')).toBeInTheDocument()
     expect(screen.getByText('Please summarize the findings.')).toBeInTheDocument()
     expect(screen.queryAllByRole('button')).toHaveLength(0)
+  })
+
+  it('uses palette-aware transcript bubble colors in light mode', () => {
+    const theme = createAppTheme('light')
+
+    renderTranscriptMessage({
+      role: 'user',
+      content: 'Please summarize the findings.',
+    }, 'light')
+
+    expect(screen.getByText('You').parentElement!).toHaveStyle({
+      backgroundColor: theme.palette.grey[100],
+      color: theme.palette.text.primary,
+    })
+  })
+
+  it('keeps assistant transcript bubbles on the themed assistant surface', () => {
+    const theme = createAppTheme('light')
+
+    renderTranscriptMessage({
+      content: 'Stored assistant answer',
+    }, 'light')
+
+    expect(screen.getByText('AI Assistant').parentElement!).toHaveStyle({
+      backgroundColor: theme.palette.secondary.main,
+      color: theme.palette.secondary.contrastText,
+    })
   })
 
   it('renders stored assistant rows with transcript-safe evidence previews', async () => {
