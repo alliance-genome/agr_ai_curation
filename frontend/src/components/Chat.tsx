@@ -96,15 +96,17 @@ type ChatCssVariables = React.CSSProperties & {
 }
 
 function getNoticeColor(theme: Theme, tone: ChatNoticeTone): string {
+  const contrastScale = theme.palette.mode === 'dark' ? 'light' : 'dark'
+
   switch (tone) {
     case 'success':
-      return theme.palette.success.main
+      return theme.palette.success[contrastScale]
     case 'error':
-      return theme.palette.error.main
+      return theme.palette.error[contrastScale]
     case 'warning':
-      return theme.palette.mode === 'dark' ? theme.palette.warning.light : theme.palette.warning.dark
+      return theme.palette.warning[contrastScale]
     case 'info':
-      return theme.palette.info.main
+      return theme.palette.info[contrastScale]
   }
 }
 

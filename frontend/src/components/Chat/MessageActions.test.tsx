@@ -1,5 +1,8 @@
+import type { ReactElement } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@/test/test-utils'
+import { ThemeProvider, alpha } from '@mui/material/styles'
+import { createAppTheme } from '@/theme'
 
 import MessageActions from './MessageActions'
 
@@ -21,6 +24,19 @@ describe('MessageActions', () => {
   function openAgentStudioMenu() {
     fireEvent.click(screen.getByRole('button', { name: /more actions/i }))
     fireEvent.click(screen.getByRole('menuitem', { name: /open in agent studio/i }))
+  }
+
+  function renderWithAppTheme(ui: ReactElement) {
+    const theme = createAppTheme('light')
+
+    return {
+      theme,
+      ...render(
+        <ThemeProvider theme={theme}>
+          {ui}
+        </ThemeProvider>
+      ),
+    }
   }
 
   it('navigates to Agent Studio with both durable session and trace params', () => {
@@ -64,5 +80,19 @@ describe('MessageActions', () => {
     openAgentStudioMenu()
 
     expect(mockNavigate).toHaveBeenCalledWith('/agent-studio?trace_id=trace-456')
+  })
+
+  it('keeps the debug copy action readable on assistant message chrome', () => {
+    const { theme } = renderWithAppTheme(
+      <MessageActions
+        messageContent="Investigate this assistant turn"
+        traceId="trace-456"
+        onFeedbackClick={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: /copy debug id/i })).toHaveStyle({
+      color: alpha(theme.palette.secondary.contrastText, 0.72),
+    })
   })
 })

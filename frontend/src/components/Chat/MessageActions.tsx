@@ -39,7 +39,7 @@ const actionButtonSx: SxProps<Theme> = (theme) => ({
 const traceActionButtonSx: SxProps<Theme> = (theme) => ({
   backgroundColor: alpha(theme.palette.secondary.contrastText, 0.05),
   border: `1px solid ${alpha(theme.palette.secondary.contrastText, 0.12)}`,
-  color: alpha(theme.palette.secondary.contrastText, 0.46),
+  color: alpha(theme.palette.secondary.contrastText, 0.72),
   '&:hover': {
     backgroundColor: alpha(theme.palette.secondary.contrastText, 0.2),
     color: theme.palette.secondary.contrastText,

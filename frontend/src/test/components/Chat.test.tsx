@@ -1362,6 +1362,40 @@ describe('Chat turn reconciliation', () => {
     })
   })
 
+  it.each<ThemeMode>(['light', 'dark'])(
+    'keeps limit notices readable in %s mode',
+    async (themeMode) => {
+      const theme = createAppTheme(themeMode)
+      const expectedColor = themeMode === 'dark'
+        ? theme.palette.info.light
+        : theme.palette.info.dark
+
+      renderChat(
+        {
+          sessionId: 'session-1',
+          events: [
+            {
+              type: 'DOMAIN_WARNING',
+              details: {
+                applied_limit: 50,
+                warnings: ['Filtered to mouse records.'],
+              },
+            },
+          ],
+        },
+        { themeMode },
+      )
+
+      const noticeText = await screen.findByText(
+        'Applied limit: 50 | Warnings: Filtered to mouse records.'
+      )
+
+      expect(noticeText.parentElement!).toHaveStyle({
+        color: expectedColor,
+      })
+    }
+  )
+
   it('maps RUN_ERROR to assistant failure state for the matching turn', async () => {
     renderChat({
       sessionId: 'session-1',
