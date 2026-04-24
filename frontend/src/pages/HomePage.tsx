@@ -29,12 +29,14 @@ import {
   type ChatHistoryDetailResponse,
 } from '@/services/chatHistoryApi'
 
-const Root = styled(Box)(() => ({
+const Root = styled(Box)(({ theme }) => ({
   flex: 1,
   display: 'flex',
   height: '100%',
   minHeight: 0,
   overflow: 'hidden',
+  backgroundColor: theme.palette.background.default,
+  color: theme.palette.text.primary,
 }))
 
 const PanelSection = styled(Box)(() => ({
@@ -71,7 +73,7 @@ const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
     width: 2,
     height: 32,
     borderRadius: 1,
-    backgroundColor: alpha(theme.palette.common.white, 0.45),
+    backgroundColor: alpha(theme.palette.text.primary, theme.palette.mode === 'dark' ? 0.45 : 0.36),
     pointerEvents: 'none',
   },
 }))
@@ -615,7 +617,7 @@ function HomePage() {
       {/* Loading overlay when loading a document */}
       <Backdrop
         sx={{
-          color: '#fff',
+          color: (theme) => theme.palette.common.white,
           zIndex: (theme) => theme.zIndex.drawer + 1,
           backdropFilter: 'blur(4px)',
         }}
