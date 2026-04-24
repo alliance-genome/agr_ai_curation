@@ -75,7 +75,7 @@ export function getStatusCount(
 export function getStatusChipColor(status: CurationSessionStatus): NonNullable<ChipProps['color']> {
   switch (status) {
     case 'new':
-      return 'secondary'
+      return 'primary'
     case 'in_progress':
       return 'warning'
     case 'ready_for_submission':

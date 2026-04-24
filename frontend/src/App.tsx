@@ -501,17 +501,17 @@ export function AppContent() {
               <Typography
                 variant="caption"
                 sx={{
-                  opacity: 0.7,
+                  opacity: 1,
+                  color: (theme) => theme.palette.primary.contrastText,
                   fontSize: '0.7rem',
                   fontFamily: 'monospace',
-                  backgroundColor: (theme) => alpha(theme.palette.primary.contrastText, 0.12),
+                  backgroundColor: (theme) => alpha(theme.palette.primary.contrastText, 0.1),
                   px: 0.75,
                   py: 0.25,
                   borderRadius: 0.5,
                   cursor: 'default',
                   '&:hover': {
-                    opacity: 1,
-                    backgroundColor: (theme) => alpha(theme.palette.primary.contrastText, 0.18),
+                    backgroundColor: (theme) => alpha(theme.palette.primary.contrastText, 0.16),
                   }
                 }}
               >

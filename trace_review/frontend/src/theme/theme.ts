@@ -30,7 +30,7 @@ export function persistTraceReviewThemeMode(mode: TraceReviewThemeMode) {
 
 export function createTraceReviewTheme(mode: TraceReviewThemeMode) {
   const isDark = mode === 'dark';
-  const primaryMain = isDark ? '#90caf9' : '#1976d2';
+  const primaryMain = isDark ? '#90caf9' : '#1565c0';
   const secondaryMain = isDark ? '#f48fb1' : '#ad1457';
   const backgroundDefault = isDark ? '#121212' : '#f6f8fb';
   const backgroundPaper = isDark ? '#1e1e1e' : '#ffffff';
@@ -58,7 +58,7 @@ export function createTraceReviewTheme(mode: TraceReviewThemeMode) {
       action: {
         hover: alpha(textPrimary, isDark ? 0.06 : 0.04),
         selected: alpha(primaryMain, isDark ? 0.18 : 0.12),
-        disabled: alpha(textPrimary, isDark ? 0.32 : 0.26),
+        disabled: alpha(textPrimary, isDark ? 0.42 : 0.46),
         disabledBackground: alpha(textPrimary, isDark ? 0.12 : 0.08),
       },
     },
