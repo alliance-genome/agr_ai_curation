@@ -407,6 +407,9 @@ npm run lint -- --fix
 ```bash
 # Run TypeScript compiler checks
 npm run type-check
+
+# Run a scoped branch guard that ignores existing repo-wide debt
+npm run type-check:changed -- --base origin/main
 ```
 
 ## Nginx Configuration
@@ -460,8 +463,10 @@ View network requests:
 - `npm run build` - Build for production
 - `npm run preview` - Preview production build
 - `npm test` - Run test suite
+- `npm run test:symphony` - Run the frontend suite with stable low-concurrency Vitest settings for Symphony/VM workspaces
 - `npm run lint` - Run ESLint
 - `npm run type-check` - Check TypeScript types
+- `npm run type-check:changed` - Run TypeScript and fail only on changed frontend TypeScript files or unscoped/config-level errors
 
 ## Contributing
 

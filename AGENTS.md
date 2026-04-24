@@ -34,6 +34,10 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
   - Backend contract core tests: `docker compose exec backend pytest tests/contract/ -q`
   - Frontend tests: `docker compose exec frontend npm run test -- --run`
   - Frontend build: `docker compose exec frontend npm run build`
+- Symphony/VM frontend validation:
+  - Stable frontend tests: `cd frontend && npm ci && npm run test:symphony`
+  - Scoped TypeScript guard: `cd frontend && npm run type-check:changed -- --base origin/main`
+  - `type-check:changed` still runs the full TypeScript compiler, but only fails on errors in changed frontend TypeScript files or unscoped/config-level errors. If it reports `FRONTEND_TYPECHECK_STATUS=baseline_only`, record the baseline debt and do not treat it as a ticket-local failure.
 - Symphony issue workspaces and isolated backend test runs:
   - Backend unit tests: `docker compose -f docker-compose.test.yml run --rm backend-unit-tests`
   - Backend contract tests: `docker compose -f docker-compose.test.yml run --rm backend-contract-tests`

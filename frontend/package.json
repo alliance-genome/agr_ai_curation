@@ -26,9 +26,11 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest",
+    "test:symphony": "vitest run --pool=forks --no-file-parallelism --maxWorkers=1 --sequence.hooks=list --sequence.setupFiles=list",
     "test:coverage": "vitest run --coverage",
     "lint": "eslint src --ext .ts,.tsx",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "type-check:changed": "node scripts/typecheck-changed.mjs"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.8.0",
