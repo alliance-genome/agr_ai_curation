@@ -34,6 +34,51 @@ export const queryClient = new QueryClient()
 const DEFAULT_GLOBAL_SNACKBAR_AUTO_HIDE_MS = 4000
 const DEFAULT_GLOBAL_SNACKBAR_ANCHOR = { vertical: 'bottom', horizontal: 'right' } as const
 
+const APP_THEME_GLOBAL_ALPHA = {
+  dark: {
+    textMuted: 0.6,
+    subtleDivider: 0.08,
+    headerShadow: 0.28,
+    shadowSm: 0.28,
+    focusRing: 0.24,
+    iconButtonBg: 0.1,
+    iconButtonBorder: 0.2,
+    iconButtonColor: 0.72,
+    iconButtonHoverBg: 0.2,
+    inputBg: 0.22,
+    inputBorder: 0.23,
+    inputPlaceholder: 0.5,
+    sendShadow: 0.3,
+    sendShadowHover: 0.4,
+    scrollbarTrack: 0.05,
+    scrollbarThumb: 0.15,
+    scrollbarThumbHover: 0.25,
+    linkedFieldBg: 0.12,
+    linkedFieldRing: 0.38,
+  },
+  light: {
+    textMuted: 0.56,
+    subtleDivider: 0.1,
+    headerShadow: 0.16,
+    shadowSm: 0.14,
+    focusRing: 0.18,
+    iconButtonBg: 0.08,
+    iconButtonBorder: 0.18,
+    iconButtonColor: 0.7,
+    iconButtonHoverBg: 0.14,
+    inputBg: 0.92,
+    inputBorder: 0.22,
+    inputPlaceholder: 0.48,
+    sendShadow: 0.22,
+    sendShadowHover: 0.28,
+    scrollbarTrack: 0.06,
+    scrollbarThumb: 0.18,
+    scrollbarThumbHover: 0.28,
+    linkedFieldBg: 0.1,
+    linkedFieldRing: 0.28,
+  },
+} as const
+
 const HomePage = lazy(() => import('./pages/HomePage'))
 const ViewerSettings = lazy(() => import('./pages/ViewerSettings'))
 const AgentStudioPage = lazy(() => import('./pages/AgentStudioPage'))
@@ -54,17 +99,27 @@ const ChunkingSettings = lazy(() => import('./pages/weaviate/settings/ChunkingSe
 
 function AppThemeGlobalStyles() {
   const theme = useTheme()
-  const isDark = theme.palette.mode === 'dark'
+  const tone = APP_THEME_GLOBAL_ALPHA[theme.palette.mode]
   const textPrimary = theme.palette.text.primary
   const primaryMain = theme.palette.primary.main
   const warningMain = theme.palette.warning.main
+  const userMessage = {
+    dark: {
+      background: theme.palette.grey[800],
+      text: theme.palette.common.white,
+    },
+    light: {
+      background: alpha(primaryMain, 0.12),
+      text: textPrimary,
+    },
+  }[theme.palette.mode]
   const appVariables = {
     '--app-bg': theme.palette.background.default,
     '--app-text': textPrimary,
     '--app-text-secondary': theme.palette.text.secondary,
-    '--app-text-muted': alpha(textPrimary, isDark ? 0.6 : 0.56),
+    '--app-text-muted': alpha(textPrimary, tone.textMuted),
     '--app-divider': theme.palette.divider,
-    '--app-subtle-divider': alpha(textPrimary, isDark ? 0.08 : 0.1),
+    '--app-subtle-divider': alpha(textPrimary, tone.subtleDivider),
     '--app-primary': primaryMain,
     '--app-primary-hover': theme.palette.primary.dark,
     '--app-primary-contrast': theme.palette.primary.contrastText,
@@ -73,28 +128,28 @@ function AppThemeGlobalStyles() {
     '--app-warning-contrast': theme.palette.getContrastText(warningMain),
     '--app-action-disabled-bg': theme.palette.action.disabledBackground,
     '--app-action-disabled-text': theme.palette.action.disabled,
-    '--app-header-shadow': `0 2px 4px ${alpha(theme.palette.common.black, isDark ? 0.28 : 0.16)}`,
-    '--app-shadow-sm': `0 1px 3px ${alpha(theme.palette.common.black, isDark ? 0.28 : 0.14)}`,
-    '--app-focus-ring': `0 0 0 3px ${alpha(primaryMain, isDark ? 0.24 : 0.18)}`,
-    '--app-user-message-bg': isDark ? theme.palette.grey[800] : alpha(primaryMain, 0.12),
-    '--app-user-message-text': isDark ? theme.palette.common.white : textPrimary,
+    '--app-header-shadow': `0 2px 4px ${alpha(theme.palette.common.black, tone.headerShadow)}`,
+    '--app-shadow-sm': `0 1px 3px ${alpha(theme.palette.common.black, tone.shadowSm)}`,
+    '--app-focus-ring': `0 0 0 3px ${alpha(primaryMain, tone.focusRing)}`,
+    '--app-user-message-bg': userMessage.background,
+    '--app-user-message-text': userMessage.text,
     '--app-assistant-message-bg': theme.palette.secondary.main,
     '--app-assistant-message-text': theme.palette.secondary.contrastText,
-    '--app-icon-button-bg': alpha(textPrimary, isDark ? 0.1 : 0.08),
-    '--app-icon-button-border': alpha(textPrimary, isDark ? 0.2 : 0.18),
-    '--app-icon-button-color': alpha(textPrimary, isDark ? 0.72 : 0.7),
-    '--app-icon-button-hover-bg': alpha(textPrimary, isDark ? 0.2 : 0.14),
+    '--app-icon-button-bg': alpha(textPrimary, tone.iconButtonBg),
+    '--app-icon-button-border': alpha(textPrimary, tone.iconButtonBorder),
+    '--app-icon-button-color': alpha(textPrimary, tone.iconButtonColor),
+    '--app-icon-button-hover-bg': alpha(textPrimary, tone.iconButtonHoverBg),
     '--app-icon-button-hover-color': textPrimary,
-    '--app-input-bg': alpha(theme.palette.background.paper, isDark ? 0.22 : 0.92),
-    '--app-input-border': alpha(textPrimary, isDark ? 0.23 : 0.22),
-    '--app-input-placeholder': alpha(textPrimary, isDark ? 0.5 : 0.48),
-    '--app-send-shadow': `0 2px 4px ${alpha(primaryMain, isDark ? 0.3 : 0.22)}`,
-    '--app-send-shadow-hover': `0 4px 8px ${alpha(primaryMain, isDark ? 0.4 : 0.28)}`,
-    '--app-scrollbar-track': alpha(textPrimary, isDark ? 0.05 : 0.06),
-    '--app-scrollbar-thumb': alpha(textPrimary, isDark ? 0.15 : 0.18),
-    '--app-scrollbar-thumb-hover': alpha(textPrimary, isDark ? 0.25 : 0.28),
-    '--app-linked-field-bg': alpha(primaryMain, isDark ? 0.12 : 0.1),
-    '--app-linked-field-ring': alpha(primaryMain, isDark ? 0.38 : 0.28),
+    '--app-input-bg': alpha(theme.palette.background.paper, tone.inputBg),
+    '--app-input-border': alpha(textPrimary, tone.inputBorder),
+    '--app-input-placeholder': alpha(textPrimary, tone.inputPlaceholder),
+    '--app-send-shadow': `0 2px 4px ${alpha(primaryMain, tone.sendShadow)}`,
+    '--app-send-shadow-hover': `0 4px 8px ${alpha(primaryMain, tone.sendShadowHover)}`,
+    '--app-scrollbar-track': alpha(textPrimary, tone.scrollbarTrack),
+    '--app-scrollbar-thumb': alpha(textPrimary, tone.scrollbarThumb),
+    '--app-scrollbar-thumb-hover': alpha(textPrimary, tone.scrollbarThumbHover),
+    '--app-linked-field-bg': alpha(primaryMain, tone.linkedFieldBg),
+    '--app-linked-field-ring': alpha(primaryMain, tone.linkedFieldRing),
   } as React.CSSProperties
 
   return (
