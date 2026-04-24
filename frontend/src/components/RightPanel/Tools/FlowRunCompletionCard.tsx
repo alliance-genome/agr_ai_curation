@@ -14,6 +14,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
 
 import ReviewAndCurateButton from '@/features/curation/components/ReviewAndCurateButton'
 
@@ -85,27 +86,31 @@ function parseAttachmentFilename(headerValue: string | null): string {
 }
 
 export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProps) {
+  const theme = useTheme()
   const [menuAnchorEl, setMenuAnchorEl] = useState<HTMLElement | null>(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const exportReady = run.status === 'completed' && run.totalEvidenceRecords > 0
   const reviewReady = run.status === 'completed' && Boolean(run.documentId)
+  const statusColor = run.status === 'completed'
+    ? theme.palette.success.main
+    : theme.palette.error.main
   const statusChip = useMemo(() => {
     if (run.status === 'completed') {
       return {
-        color: '#4caf50',
+        color: statusColor,
         icon: <CheckCircleOutlineRoundedIcon sx={{ fontSize: '1rem' }} />,
         label: 'Completed',
       }
     }
 
     return {
-      color: '#f44336',
+      color: statusColor,
       icon: <ErrorOutlineRoundedIcon sx={{ fontSize: '1rem' }} />,
       label: 'Failed',
     }
-  }, [run.status])
+  }, [run.status, statusColor])
 
   const handleOpenMenu = (event: React.MouseEvent<HTMLElement>) => {
     setError(null)
@@ -167,10 +172,10 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
     <Box
       sx={{
         mb: 2,
-        border: '1px solid rgba(76, 175, 80, 0.24)',
+        border: `1px solid ${alpha(statusColor, 0.24)}`,
         borderRadius: '8px',
         padding: '12px',
-        background: 'linear-gradient(180deg, rgba(76, 175, 80, 0.12), rgba(255, 255, 255, 0.02))',
+        background: `linear-gradient(180deg, ${alpha(statusColor, 0.12)}, ${alpha(theme.palette.background.paper, 0.72)})`,
       }}
     >
       <Stack direction="row" spacing={1.5} alignItems="flex-start" justifyContent="space-between">
@@ -178,7 +183,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
           <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
             <Typography
               variant="subtitle2"
-              sx={{ color: 'rgba(255, 255, 255, 0.92)', fontWeight: 600 }}
+              sx={{ color: theme.palette.text.primary, fontWeight: 600 }}
             >
               Latest flow run
             </Typography>
@@ -187,9 +192,9 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
               label={statusChip.label}
               size="small"
               sx={{
-                backgroundColor: `${statusChip.color}20`,
+                backgroundColor: alpha(statusChip.color, 0.14),
                 color: statusChip.color,
-                border: `1px solid ${statusChip.color}33`,
+                border: `1px solid ${alpha(statusChip.color, 0.2)}`,
                 '& .MuiChip-icon': {
                   color: statusChip.color,
                 },
@@ -199,14 +204,14 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
 
           <Typography
             variant="body2"
-            sx={{ color: 'rgba(255, 255, 255, 0.86)', fontWeight: 500 }}
+            sx={{ color: theme.palette.text.primary, fontWeight: 500 }}
           >
             {run.flowName}
           </Typography>
           <Typography
             variant="caption"
             sx={{
-              color: 'rgba(255, 255, 255, 0.55)',
+              color: theme.palette.text.secondary,
               display: 'block',
               mt: 0.25,
               wordBreak: 'break-all',
@@ -216,7 +221,7 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
           </Typography>
           <Typography
             variant="caption"
-            sx={{ color: 'rgba(255, 255, 255, 0.7)', display: 'block', mt: 0.5 }}
+            sx={{ color: theme.palette.text.secondary, display: 'block', mt: 0.5 }}
           >
             {run.status === 'completed'
               ? `${run.totalEvidenceRecords} evidence record${run.totalEvidenceRecords === 1 ? '' : 's'} ready from the latest completed run.`
@@ -237,15 +242,15 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
             label="Review & Curate"
             sx={{
               whiteSpace: 'nowrap',
-              borderColor: 'rgba(76, 175, 80, 0.5)',
-              color: '#8bc34a',
+              borderColor: alpha(theme.palette.success.main, 0.5),
+              color: theme.palette.success.main,
               '&:hover': {
-                borderColor: '#8bc34a',
-                backgroundColor: 'rgba(139, 195, 74, 0.12)',
+                borderColor: theme.palette.success.main,
+                backgroundColor: alpha(theme.palette.success.main, 0.12),
               },
               '&:disabled': {
-                borderColor: 'rgba(255, 255, 255, 0.12)',
-                color: 'rgba(255, 255, 255, 0.32)',
+                borderColor: alpha(theme.palette.action.disabled, 0.4),
+                color: theme.palette.action.disabled,
               },
             }}
           />
@@ -269,15 +274,15 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
               fontSize: '0.75rem',
               fontWeight: 600,
               boxShadow: 'none',
-              backgroundColor: 'rgba(33, 150, 243, 0.92)',
+              backgroundColor: theme.palette.primary.main,
               whiteSpace: 'nowrap',
               '&:hover': {
-                backgroundColor: '#2196f3',
-                boxShadow: '0 2px 8px rgba(33, 150, 243, 0.28)',
+                backgroundColor: theme.palette.primary.dark,
+                boxShadow: `0 2px 8px ${alpha(theme.palette.primary.main, 0.28)}`,
               },
               '&:disabled': {
-                backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                color: 'rgba(255, 255, 255, 0.32)',
+                backgroundColor: theme.palette.action.disabledBackground,
+                color: theme.palette.action.disabled,
               },
             }}
           >
@@ -291,10 +296,10 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
           severity="info"
           sx={{
             mt: 1.5,
-            backgroundColor: 'rgba(139, 195, 74, 0.08)',
-            color: 'rgba(255, 255, 255, 0.78)',
+            backgroundColor: alpha(theme.palette.success.main, 0.08),
+            color: theme.palette.text.primary,
             '& .MuiAlert-icon': {
-              color: '#8bc34a',
+              color: theme.palette.success.main,
             },
           }}
         >
@@ -307,8 +312,8 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
           severity="info"
           sx={{
             mt: 1.5,
-            backgroundColor: 'rgba(33, 150, 243, 0.08)',
-            color: 'rgba(255, 255, 255, 0.78)',
+            backgroundColor: alpha(theme.palette.info.main, 0.08),
+            color: theme.palette.text.primary,
           }}
         >
           This run finished without persisted evidence records to export.
@@ -320,8 +325,8 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
           severity="error"
           sx={{
             mt: 1.5,
-            backgroundColor: 'rgba(244, 67, 54, 0.12)',
-            color: 'rgba(255, 255, 255, 0.88)',
+            backgroundColor: alpha(theme.palette.error.main, 0.12),
+            color: theme.palette.text.primary,
           }}
         >
           {error}
@@ -334,8 +339,8 @@ export default function FlowRunCompletionCard({ run }: FlowRunCompletionCardProp
         onClose={handleCloseMenu}
         PaperProps={{
           sx: {
-            backgroundColor: '#171717',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
+            backgroundColor: theme.palette.background.paper,
+            border: `1px solid ${theme.palette.divider}`,
             minWidth: 220,
           },
         }}

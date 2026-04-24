@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect, useRef } from 'react'
 import { Box, Button, Typography } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import ClearIcon from '@mui/icons-material/Clear'
 import type { AuditEvent, AuditEventType } from '../types/AuditEvent'
@@ -179,6 +180,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   onStop,
   isStreaming = false
 }) => {
+  const theme = useTheme()
   const { user } = useAuth()
   const storageUserId = user?.uid ?? null
 
@@ -388,11 +390,23 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
     px: '10px',
     py: '4px',
   } as const
+  const neutralButtonSx = {
+    borderColor: alpha(theme.palette.text.secondary, 0.35),
+    color: theme.palette.text.secondary,
+    '&:hover': {
+      borderColor: alpha(theme.palette.text.secondary, 0.55),
+      backgroundColor: theme.palette.action.hover,
+    },
+    '&:disabled': {
+      borderColor: alpha(theme.palette.action.disabled, 0.4),
+      color: theme.palette.action.disabled,
+    },
+  } as const
   const legendItems = [
-    { label: 'In Progress', color: 'rgba(33, 150, 243, 0.5)' },
-    { label: 'Processing', color: 'rgba(156, 39, 176, 0.5)' },
-    { label: 'Success', color: 'rgba(76, 175, 80, 0.5)' },
-    { label: 'Error', color: 'rgba(244, 67, 54, 0.5)' }
+    { label: 'In Progress', color: alpha(theme.palette.info.main, 0.58) },
+    { label: 'Processing', color: alpha(theme.palette.secondary.main, 0.58) },
+    { label: 'Success', color: alpha(theme.palette.success.main, 0.58) },
+    { label: 'Error', color: alpha(theme.palette.error.main, 0.58) }
   ]
 
   return (
@@ -419,22 +433,22 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           padding: '1.5rem',
           paddingBottom: '60px', // Space for buttons
           scrollBehavior: 'smooth',
-          borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+          borderTop: `1px solid ${theme.palette.divider}`,
+          borderBottom: `1px solid ${theme.palette.divider}`,
           // Custom scrollbar styling to match chat panel
           '&::-webkit-scrollbar': {
             width: '8px'
           },
           '&::-webkit-scrollbar-track': {
-            background: 'rgba(255, 255, 255, 0.05)',
+            background: alpha(theme.palette.text.secondary, 0.12),
             borderRadius: '4px'
           },
           '&::-webkit-scrollbar-thumb': {
-            background: 'rgba(255, 255, 255, 0.15)',
+            background: alpha(theme.palette.text.secondary, 0.24),
             borderRadius: '4px'
           },
           '&::-webkit-scrollbar-thumb:hover': {
-            background: 'rgba(255, 255, 255, 0.25)'
+            background: alpha(theme.palette.text.secondary, 0.36)
           }
         }}
       >
@@ -443,7 +457,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
             variant="body2"
             sx={{
               textAlign: 'center',
-              color: 'rgba(255, 255, 255, 0.5)',
+              color: theme.palette.text.secondary,
               fontStyle: 'italic',
               padding: '2rem',
               display: 'flex',
@@ -492,16 +506,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           disabled={!hasEvents}
           sx={{
             ...actionButtonSx,
-            borderColor: 'rgba(255, 255, 255, 0.23)',
-            color: 'rgba(255, 255, 255, 0.7)',
-            '&:hover': {
-              borderColor: 'rgba(255, 255, 255, 0.4)',
-              backgroundColor: 'rgba(255, 255, 255, 0.08)'
-            },
-            '&:disabled': {
-              borderColor: 'rgba(255, 255, 255, 0.12)',
-              color: 'rgba(255, 255, 255, 0.3)'
-            }
+            ...neutralButtonSx,
           }}
         >
           {copied ? 'Copied!' : 'Copy'}
@@ -517,16 +522,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           disabled={!hasEvents}
           sx={{
             ...actionButtonSx,
-            borderColor: 'rgba(255, 255, 255, 0.23)',
-            color: 'rgba(255, 255, 255, 0.7)',
-            '&:hover': {
-              borderColor: 'rgba(255, 255, 255, 0.4)',
-              backgroundColor: 'rgba(255, 255, 255, 0.08)'
-            },
-            '&:disabled': {
-              borderColor: 'rgba(255, 255, 255, 0.12)',
-              color: 'rgba(255, 255, 255, 0.3)'
-            }
+            ...neutralButtonSx,
           }}
         >
           Clear
@@ -546,16 +542,16 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
           sx={{
             ...actionButtonSx,
             minWidth: '78px',
-            borderColor: 'rgba(220, 53, 69, 0.4)',
-            color: 'rgba(220, 53, 69, 0.85)',
-            backgroundColor: 'rgba(220, 53, 69, 0.08)',
+            borderColor: alpha(theme.palette.error.main, 0.4),
+            color: theme.palette.error.main,
+            backgroundColor: alpha(theme.palette.error.main, 0.08),
             '&:hover': {
-              borderColor: 'rgba(220, 53, 69, 0.6)',
-              backgroundColor: 'rgba(220, 53, 69, 0.12)'
+              borderColor: alpha(theme.palette.error.main, 0.6),
+              backgroundColor: alpha(theme.palette.error.main, 0.12)
             },
             '&:disabled': {
-              borderColor: 'rgba(220, 53, 69, 0.12)',
-              color: 'rgba(220, 53, 69, 0.3)'
+              borderColor: alpha(theme.palette.error.main, 0.18),
+              color: alpha(theme.palette.error.main, 0.36)
             }
           }}
         >
@@ -572,11 +568,11 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
                   height: 10,
                   borderRadius: '50%',
                   backgroundColor: item.color,
-                  border: '1px solid rgba(255, 255, 255, 0.3)',
+                  border: `1px solid ${alpha(theme.palette.text.primary, 0.24)}`,
                   flexShrink: 0
                 }}
               />
-              <span style={{ fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{item.label}</span>
+              <span style={{ color: theme.palette.text.secondary, fontSize: '0.75rem', whiteSpace: 'nowrap' }}>{item.label}</span>
             </Box>
           ))}
         </Box>

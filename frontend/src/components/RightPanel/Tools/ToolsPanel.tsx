@@ -7,6 +7,7 @@
 
 import React from 'react'
 import { Box, Stack } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
 import CurationFlows from './CurationFlows'
 import PdfHighlightTester from '../../pdfViewer/PdfHighlightTester'
 import type { SSEEvent } from '@/hooks/useChatStream'
@@ -44,6 +45,8 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
   isExecuting = false,
   currentDocumentId,
 }) => {
+  const theme = useTheme()
+
   return (
     <Box
       sx={{
@@ -66,15 +69,15 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
             width: '8px',
           },
           '&::-webkit-scrollbar-track': {
-            background: 'rgba(255, 255, 255, 0.05)',
+            background: alpha(theme.palette.text.secondary, 0.12),
             borderRadius: '4px',
           },
           '&::-webkit-scrollbar-thumb': {
-            background: 'rgba(255, 255, 255, 0.15)',
+            background: alpha(theme.palette.text.secondary, 0.24),
             borderRadius: '4px',
           },
           '&::-webkit-scrollbar-thumb:hover': {
-            background: 'rgba(255, 255, 255, 0.25)',
+            background: alpha(theme.palette.text.secondary, 0.36),
           },
         }}
       >
@@ -92,10 +95,10 @@ const ToolsPanel: React.FC<ToolsPanelProps> = ({
           {/* PDF Highlight Tester Section */}
           <Box
             sx={{
-              border: '1px solid rgba(255, 255, 255, 0.08)',
+              border: `1px solid ${theme.palette.divider}`,
               borderRadius: '8px',
               padding: '16px',
-              backgroundColor: 'rgba(255, 255, 255, 0.02)',
+              backgroundColor: alpha(theme.palette.background.paper, 0.52),
             }}
           >
             <PdfHighlightTester />

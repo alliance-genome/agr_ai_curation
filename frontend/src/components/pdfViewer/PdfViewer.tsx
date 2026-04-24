@@ -10,6 +10,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import { alpha, useTheme, type Theme } from '@mui/material/styles'
 import UploadProgressDialog from '@/components/weaviate/UploadProgressDialog'
 import {
   dispatchChatDocumentChanged,
@@ -31,6 +32,11 @@ import {
   onPDFDocumentChanged,
   onPDFViewerNavigateEvidence,
 } from '@/components/pdfViewer/pdfEvents'
+import {
+  getDefaultHighlightSettings,
+  loadStoredHighlightSettings,
+  type HighlightSettings,
+} from '@/components/pdfViewer/highlightSettings'
 import { normalizePdfViewerDocumentUrl } from '@/components/pdfViewer/viewerDocumentUrl'
 import {
   buildNormalizedTextSourceMap,
@@ -52,7 +58,6 @@ import {
 import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 
 const VIEWER_BASE_PATH = '/pdfjs/web/viewer.html'
-const SETTINGS_STORAGE_KEY = 'pdf-viewer-settings'
 const PDFJS_FIND_STATE_FOUND = 0
 const PDFJS_FIND_STATE_NOT_FOUND = 1
 const PDFJS_FIND_STATE_WRAPPED = 2
@@ -73,12 +78,6 @@ const EVIDENCE_SPIKE_WINDOW_FRAGMENT_MAX_COUNT = 6
 const PDF_NATIVE_SELECTION_TIMEOUT_MS = 1200
 const PDF_NATIVE_STITCHED_CONTEXT_MAX_CHARS = 1600
 const PDF_NATIVE_STITCHED_CONTEXT_MIN_CHARS = 240
-
-interface HighlightSettings {
-  highlightColor: string
-  highlightOpacity: number
-  clearOnNewQuery: boolean
-}
 
 interface ViewerDocument {
   documentId: string
@@ -202,18 +201,6 @@ export interface PdfViewerProps {
   onNavigationComplete?: () => void
   onNavigationStateChange?: (result: PdfViewerNavigationResult | null) => void
 }
-
-const DEFAULT_SETTINGS: HighlightSettings = {
-  highlightColor: '#2e7d32',
-  highlightOpacity: 0.35,
-  clearOnNewQuery: true,
-}
-
-const EVIDENCE_HIGHLIGHT_HOVER_BACKGROUND = 'rgba(46, 125, 50, 0.16)'
-const EVIDENCE_HIGHLIGHT_HOVER_BORDER = 'rgba(46, 125, 50, 0.7)'
-const EVIDENCE_HIGHLIGHT_HOVER_SHADOW = 'rgba(46, 125, 50, 0.15)'
-const EVIDENCE_HIGHLIGHT_ACTIVE_BACKGROUND = 'rgba(46, 125, 50, 0.28)'
-const EVIDENCE_HIGHLIGHT_ACTIVE_BORDER = 'rgba(46, 125, 50, 0.92)'
 
 const pdfEvidenceDebugEntries: PdfEvidenceDebugEntry[] = []
 let lastPdfEvidenceNavigationResult: PdfViewerNavigationResult | null = null
@@ -2615,31 +2602,40 @@ const formatLocatorQualityLabel = (quality: EvidenceLocatorQuality): string => {
   }
 }
 
-const getEvidenceHighlightRectStyles = (highlight: EvidenceTextLayerHighlight): Record<string, string> => {
+const getEvidenceHighlightRectStyles = (
+  highlight: EvidenceTextLayerHighlight,
+  theme: Theme,
+): Record<string, string> => {
+  const evidenceColor = theme.palette.success.main
+  const sectionColor = theme.palette.text.secondary
+  const overlayHaloColor = theme.palette.mode === 'dark'
+    ? theme.palette.common.white
+    : theme.palette.common.black
+
   if (highlight.kind === 'section') {
     return highlight.mode === 'hover'
       ? {
-          background: 'rgba(120, 144, 156, 0.12)',
-          border: '1px dashed rgba(96, 125, 139, 0.55)',
-          boxShadow: '0 0 0 1px rgba(255, 255, 255, 0.2)',
+          background: alpha(sectionColor, 0.12),
+          border: `1px dashed ${alpha(sectionColor, 0.55)}`,
+          boxShadow: `0 0 0 1px ${alpha(overlayHaloColor, 0.2)}`,
         }
       : {
-          background: 'rgba(120, 144, 156, 0.18)',
-          border: '2px solid rgba(96, 125, 139, 0.72)',
-          boxShadow: '0 0 0 1px rgba(255, 255, 255, 0.25)',
+          background: alpha(sectionColor, 0.18),
+          border: `2px solid ${alpha(sectionColor, 0.72)}`,
+          boxShadow: `0 0 0 1px ${alpha(overlayHaloColor, 0.25)}`,
         }
   }
 
   return highlight.mode === 'hover'
     ? {
-        background: EVIDENCE_HIGHLIGHT_HOVER_BACKGROUND,
-        border: `1px dashed ${EVIDENCE_HIGHLIGHT_HOVER_BORDER}`,
-        boxShadow: `0 0 0 1px ${EVIDENCE_HIGHLIGHT_HOVER_SHADOW}`,
+        background: alpha(evidenceColor, 0.16),
+        border: `1px dashed ${alpha(evidenceColor, 0.7)}`,
+        boxShadow: `0 0 0 1px ${alpha(evidenceColor, 0.15)}`,
       }
     : {
-        background: EVIDENCE_HIGHLIGHT_ACTIVE_BACKGROUND,
-        border: `2px solid ${EVIDENCE_HIGHLIGHT_ACTIVE_BORDER}`,
-        boxShadow: '0 0 0 1px rgba(255, 255, 255, 0.22)',
+        background: alpha(evidenceColor, 0.28),
+        border: `2px solid ${alpha(evidenceColor, 0.92)}`,
+        boxShadow: `0 0 0 1px ${alpha(overlayHaloColor, 0.22)}`,
       }
 }
 
@@ -2875,22 +2871,6 @@ const dispatchEvidenceSpikeFind = async (pdfApp: any, candidate: PdfEvidenceSpik
   return resultPromise
 }
 
-const loadStoredSettings = (): HighlightSettings => {
-  try {
-    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY)
-    if (!raw) return DEFAULT_SETTINGS
-    const parsed = JSON.parse(raw) as Partial<HighlightSettings>
-    return {
-      highlightColor: parsed.highlightColor ?? DEFAULT_SETTINGS.highlightColor,
-      highlightOpacity: typeof parsed.highlightOpacity === 'number' ? parsed.highlightOpacity : DEFAULT_SETTINGS.highlightOpacity,
-      clearOnNewQuery: typeof parsed.clearOnNewQuery === 'boolean' ? parsed.clearOnNewQuery : DEFAULT_SETTINGS.clearOnNewQuery,
-    }
-  } catch (error) {
-    console.warn('Failed to load viewer settings', error)
-    return DEFAULT_SETTINGS
-  }
-}
-
 const persistSession = (storageKey: string | null, doc: ViewerDocument, state: ViewerState) => {
   if (!storageKey) {
     return
@@ -2950,12 +2930,17 @@ export function PdfViewer({
   onNavigationComplete,
   onNavigationStateChange,
 }: PdfViewerProps) {
+  const theme = useTheme()
+  const defaultHighlightSettings = useMemo(
+    () => getDefaultHighlightSettings(theme),
+    [theme],
+  )
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const pdfAppRef = useRef<any>(null)
   const cleanupRefs = useRef<(() => void)[]>([])
   const uploadAbortRef = useRef<AbortController | null>(null)
   const highlightTermsRef = useRef<string[]>([])
-  const settingsRef = useRef<HighlightSettings>(DEFAULT_SETTINGS)
+  const settingsRef = useRef<HighlightSettings>(defaultHighlightSettings)
   const viewerStateRef = useRef<ViewerState>({ ...DEFAULT_STATE })
   const loadStartRef = useRef<number | null>(null)
   const handledNavigationKeyRef = useRef<string | null>(null)
@@ -2969,7 +2954,7 @@ export function PdfViewer({
   const [status, setStatus] = useState<ViewerStatus>('idle')
   const [activeDocument, setActiveDocument] = useState<ViewerDocument | null>(null)
   const [highlightTerms, setHighlightTerms] = useState<string[]>([])
-  const [_highlightSettings, setHighlightSettings] = useState<HighlightSettings>(DEFAULT_SETTINGS)
+  const [_highlightSettings, setHighlightSettings] = useState<HighlightSettings>(defaultHighlightSettings)
   const [error, setError] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
   const [_telemetry, setTelemetry] = useState<ViewerTelemetry>({
@@ -4066,16 +4051,22 @@ export function PdfViewer({
   }, [commitNavigationResult, persistViewerSession, storageUserId])
 
   useEffect(() => {
-    const storedSettings = loadStoredSettings()
+    const storedSettings = loadStoredHighlightSettings(defaultHighlightSettings)
     settingsRef.current = storedSettings
     setHighlightSettings(storedSettings)
+    if (iframeRef.current?.contentWindow?.document) {
+      ensureMarkInjected(iframeRef.current.contentWindow.document, storedSettings)
+      if (highlightTermsRef.current.length) {
+        applyHighlights()
+      }
+    }
 
     // DO NOT auto-load stored session on mount
     // The PDF viewer is passive and only loads when it receives a 'pdf-viewer-document-changed' event
     // This event is dispatched by:
     // 1. DocumentsPage when user selects a document
     // 2. Chat component on mount if backend has an active document (preserves doc across refreshes)
-  }, [])
+  }, [applyHighlights, defaultHighlightSettings])
 
   useEffect(() => {
     if (activeDocumentOwnerRef.current === activeDocumentOwnerToken) {
@@ -4716,7 +4707,7 @@ export function PdfViewer({
     highlightLayer.style.pointerEvents = 'none'
     highlightLayer.style.zIndex = '6'
 
-    const rectStyles = getEvidenceHighlightRectStyles(evidenceHighlight)
+    const rectStyles = getEvidenceHighlightRectStyles(evidenceHighlight, theme)
     const rectCleanupFns: Array<() => void> = []
     const handleAnchorSelection = () => {
       dispatchPDFViewerEvidenceAnchorSelected(evidenceHighlight.anchorId)
@@ -4766,7 +4757,7 @@ export function PdfViewer({
       rectCleanupFns.forEach((cleanup) => cleanup())
       highlightLayer.remove()
     }
-  }, [activeDocument?.documentId, evidenceHighlight, overlayRenderKey, status])
+  }, [activeDocument?.documentId, evidenceHighlight, overlayRenderKey, status, theme])
 
   useEffect(() => {
     if (!activeDocument) return
@@ -4956,7 +4947,8 @@ export function PdfViewer({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(0,0,0,0.35)',
+            backgroundColor: alpha(theme.palette.background.default, theme.palette.mode === 'dark' ? 0.72 : 0.64),
+            color: theme.palette.text.primary,
             zIndex: 1,
           }}
         >
@@ -4977,7 +4969,7 @@ export function PdfViewer({
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: 'rgba(18, 18, 18, 0.9)',
+            backgroundColor: alpha(theme.palette.background.default, 0.92),
             zIndex: 2,
             padding: 3,
           }}
@@ -5017,7 +5009,7 @@ export function PdfViewer({
             border: 'none',
             width: '100%',
             height: '100%',
-            backgroundColor: '#1d1d1d',
+            backgroundColor: theme.palette.background.default,
           }}
         />
       </Box>

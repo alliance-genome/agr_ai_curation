@@ -8,6 +8,7 @@
 
 import React, { useState } from 'react'
 import { Box, Tabs, Tab } from '@mui/material'
+import { useTheme } from '@mui/material/styles'
 import type { RightPanelProps } from '../types/ComponentProps'
 import { INITIAL_TABS } from '../types/ComponentProps'
 import AuditPanel from './AuditPanel'
@@ -81,6 +82,7 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
   activeTabIndex: controlledTabIndex,
   onTabChange,
 }) => {
+  const theme = useTheme()
   // Internal state for uncontrolled mode
   const [internalTabIndex, setInternalTabIndex] = useState<number>(0)
 
@@ -110,11 +112,11 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
         onChange={handleTabChange}
         aria-label="Right panel tabs"
         sx={{
-          borderBottom: '1px solid rgba(255, 255, 255, 0.12)',
+          borderBottom: `1px solid ${theme.palette.divider}`,
           minHeight: '48px',
           backgroundColor: 'transparent',
           '& .MuiTabs-indicator': {
-            backgroundColor: '#2196f3', // Active tab indicator color (primary blue)
+            backgroundColor: theme.palette.primary.main,
             height: '3px'
           },
           '& .MuiTabs-flexContainer': {
@@ -134,18 +136,18 @@ const RightPanel: React.FC<ExtendedRightPanelProps> = ({
               minHeight: '48px',
               fontSize: '0.875rem',
               fontWeight: 500,
-              color: 'rgba(255, 255, 255, 0.7)',
+              color: theme.palette.text.secondary,
               transition: 'all 0.2s',
               '&.Mui-selected': {
-                color: '#2196f3', // Active tab text color
+                color: theme.palette.primary.main,
                 fontWeight: 600
               },
               '&:hover': {
-                color: 'rgba(255, 255, 255, 0.9)',
-                backgroundColor: 'rgba(255, 255, 255, 0.05)'
+                color: theme.palette.text.primary,
+                backgroundColor: theme.palette.action.hover
               },
               '&.Mui-disabled': {
-                color: 'rgba(255, 255, 255, 0.3)'
+                color: theme.palette.action.disabled
               }
             }}
           />

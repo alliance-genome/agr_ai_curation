@@ -15,13 +15,13 @@ import {
   IconButton,
   Tooltip,
   Collapse,
-  alpha,
   Dialog,
   DialogTitle,
   DialogContent,
   DialogContentText,
   DialogActions,
 } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
 import PlayArrowIcon from '@mui/icons-material/PlayArrow'
 import StopIcon from '@mui/icons-material/Stop'
 import DeleteIcon from '@mui/icons-material/Delete'
@@ -72,6 +72,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
   currentDocumentId,
 }) => {
   const navigate = useNavigate()
+  const theme = useTheme()
   const [flows, setFlows] = useState<FlowSummaryResponse[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -281,7 +282,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
         flexDirection: 'column',
         backgroundColor: 'transparent',
         borderRadius: '8px',
-        border: '1px solid rgba(255, 255, 255, 0.08)',
+        border: `1px solid ${theme.palette.divider}`,
         overflow: 'hidden',
         mb: 2,
       }}
@@ -293,24 +294,24 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '12px 16px',
-          borderBottom: isCollapsed ? 'none' : '1px solid rgba(255, 255, 255, 0.08)',
-          backgroundColor: 'rgba(255, 255, 255, 0.02)',
+          borderBottom: isCollapsed ? 'none' : `1px solid ${theme.palette.divider}`,
+          backgroundColor: alpha(theme.palette.background.paper, 0.52),
           cursor: 'pointer',
           '&:hover': {
-            backgroundColor: 'rgba(255, 255, 255, 0.04)',
+            backgroundColor: theme.palette.action.hover,
           },
         }}
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
           <DescriptionOutlinedIcon
-            sx={{ fontSize: '1.1rem', color: 'rgba(255, 255, 255, 0.7)' }}
+            sx={{ fontSize: '1.1rem', color: theme.palette.text.secondary }}
           />
           <Typography
             variant="subtitle2"
             sx={{
               fontWeight: 600,
-              color: 'rgba(255, 255, 255, 0.9)',
+              color: theme.palette.text.primary,
               letterSpacing: '0.02em',
             }}
           >
@@ -320,7 +321,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
             <Typography
               variant="caption"
               sx={{
-                color: 'rgba(255, 255, 255, 0.5)',
+                color: theme.palette.text.secondary,
                 ml: 0.5,
               }}
             >
@@ -339,10 +340,10 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                 }}
                 disabled={isLoading}
                 sx={{
-                  color: 'rgba(255, 255, 255, 0.5)',
+                  color: theme.palette.text.secondary,
                   '&:hover': {
-                    color: 'rgba(255, 255, 255, 0.8)',
-                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                    color: theme.palette.text.primary,
+                    backgroundColor: theme.palette.action.hover,
                   },
                 }}
               >
@@ -353,7 +354,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
           <IconButton
             size="small"
             sx={{
-              color: 'rgba(255, 255, 255, 0.5)',
+              color: theme.palette.text.secondary,
               padding: '4px',
             }}
           >
@@ -381,12 +382,12 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
               textTransform: 'none',
               fontSize: '0.8rem',
               fontWeight: 500,
-              borderColor: 'rgba(33, 150, 243, 0.5)',
-              color: '#2196f3',
-              backgroundColor: 'rgba(33, 150, 243, 0.08)',
+              borderColor: alpha(theme.palette.primary.main, 0.5),
+              color: theme.palette.primary.main,
+              backgroundColor: alpha(theme.palette.primary.main, 0.08),
               '&:hover': {
-                borderColor: '#2196f3',
-                backgroundColor: 'rgba(33, 150, 243, 0.15)',
+                borderColor: theme.palette.primary.main,
+                backgroundColor: alpha(theme.palette.primary.main, 0.15),
               },
             }}
           >
@@ -409,7 +410,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
             >
               <CircularProgress
                 size={24}
-                sx={{ color: 'rgba(255, 255, 255, 0.5)' }}
+                sx={{ color: theme.palette.text.secondary }}
               />
             </Box>
           )}
@@ -426,7 +427,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
               <Typography
                 variant="body2"
                 sx={{
-                  color: 'rgba(244, 67, 54, 0.8)',
+                  color: theme.palette.error.main,
                   fontSize: '0.8rem',
                 }}
               >
@@ -439,7 +440,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                   mt: 1,
                   textTransform: 'none',
                   fontSize: '0.75rem',
-                  color: 'rgba(255, 255, 255, 0.6)',
+                  color: theme.palette.text.secondary,
                 }}
               >
                 Retry
@@ -458,7 +459,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
               <Typography
                 variant="body2"
                 sx={{
-                  color: 'rgba(255, 255, 255, 0.5)',
+                  color: theme.palette.text.secondary,
                   fontStyle: 'italic',
                   fontSize: '0.85rem',
                   mb: 1,
@@ -469,7 +470,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
               <Typography
                 variant="caption"
                 sx={{
-                  color: 'rgba(255, 255, 255, 0.4)',
+                  color: theme.palette.text.secondary,
                   display: 'block',
                 }}
               >
@@ -491,13 +492,13 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                   <Box
                     key={flow.id}
                     sx={{
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
+                      border: `1px solid ${theme.palette.divider}`,
                       borderRadius: '6px',
-                      backgroundColor: 'rgba(255, 255, 255, 0.02)',
+                      backgroundColor: alpha(theme.palette.background.paper, 0.48),
                       transition: 'all 0.2s ease',
                       '&:hover': {
-                        borderColor: 'rgba(33, 150, 243, 0.3)',
-                        backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                        borderColor: alpha(theme.palette.primary.main, 0.3),
+                        backgroundColor: theme.palette.action.hover,
                       },
                     }}
                   >
@@ -531,7 +532,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                             sx={{
                               fontSize: '0.85rem',
                               fontWeight: 500,
-                              color: 'rgba(255, 255, 255, 0.9)',
+                              color: theme.palette.text.primary,
                               overflow: 'hidden',
                               textOverflow: 'ellipsis',
                               whiteSpace: 'nowrap',
@@ -543,7 +544,7 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                         <Typography
                           variant="caption"
                           sx={{
-                            color: 'rgba(255, 255, 255, 0.5)',
+                            color: theme.palette.text.secondary,
                             display: 'block',
                             mt: 0.25,
                           }}
@@ -572,11 +573,11 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                                 fontSize: '0.75rem',
                                 fontWeight: 500,
                                 textTransform: 'none',
-                                borderColor: 'rgba(244, 67, 54, 0.6)',
-                                color: '#f44336',
+                                borderColor: alpha(theme.palette.error.main, 0.6),
+                                color: theme.palette.error.main,
                                 '&:hover': {
-                                  borderColor: '#f44336',
-                                  backgroundColor: 'rgba(244, 67, 54, 0.1)',
+                                  borderColor: theme.palette.error.main,
+                                  backgroundColor: alpha(theme.palette.error.main, 0.1),
                                 },
                               }}
                             >
@@ -608,16 +609,16 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                                   fontSize: '0.75rem',
                                   fontWeight: 500,
                                   textTransform: 'none',
-                                  backgroundColor: alpha('#2196f3', 0.9),
-                                  color: '#fff',
+                                  backgroundColor: theme.palette.primary.main,
+                                  color: theme.palette.primary.contrastText,
                                   boxShadow: 'none',
                                   '&:hover': {
-                                    backgroundColor: '#2196f3',
-                                    boxShadow: '0 2px 8px rgba(33, 150, 243, 0.3)',
+                                    backgroundColor: theme.palette.primary.dark,
+                                    boxShadow: `0 2px 8px ${alpha(theme.palette.primary.main, 0.3)}`,
                                   },
                                   '&:disabled': {
-                                    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-                                    color: 'rgba(255, 255, 255, 0.3)',
+                                    backgroundColor: theme.palette.action.disabledBackground,
+                                    color: theme.palette.action.disabled,
                                   },
                                 }}
                               >
@@ -645,11 +646,11 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                             size="small"
                             onClick={(e) => handleDeleteClick(flow, e)}
                             sx={{
-                              color: 'rgba(244, 67, 54, 0.7)',
+                              color: alpha(theme.palette.error.main, 0.74),
                               padding: '4px',
                               '&:hover': {
-                                color: '#f44336',
-                                backgroundColor: 'rgba(244, 67, 54, 0.1)',
+                                color: theme.palette.error.main,
+                                backgroundColor: alpha(theme.palette.error.main, 0.1),
                               },
                             }}
                           >
@@ -666,14 +667,14 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                           px: 1.5,
                           pb: 1.5,
                           pt: 0,
-                          borderTop: '1px solid rgba(255, 255, 255, 0.05)',
+                          borderTop: `1px solid ${theme.palette.divider}`,
                         }}
                       >
                         {flow.description && (
                           <Typography
                             variant="body2"
                             sx={{
-                              color: 'rgba(255, 255, 255, 0.6)',
+                              color: theme.palette.text.secondary,
                               fontSize: '0.8rem',
                               lineHeight: 1.5,
                               mt: 1,
@@ -693,14 +694,14 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
                         >
                           <Typography
                             variant="caption"
-                            sx={{ color: 'rgba(255, 255, 255, 0.4)' }}
+                            sx={{ color: theme.palette.text.secondary }}
                           >
                             Created: {formatRelativeTime(flow.created_at)}
                           </Typography>
                           {flow.last_executed_at && (
                             <Typography
                               variant="caption"
-                              sx={{ color: 'rgba(255, 255, 255, 0.4)' }}
+                              sx={{ color: theme.palette.text.secondary }}
                             >
                               Last run: {formatRelativeTime(flow.last_executed_at)}
                             </Typography>
@@ -722,17 +723,17 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
         onClose={handleDeleteCancel}
         PaperProps={{
           sx: {
-            backgroundColor: '#1e1e1e',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
+            backgroundColor: theme.palette.background.paper,
+            border: `1px solid ${theme.palette.divider}`,
             borderRadius: '8px',
           },
         }}
       >
-        <DialogTitle sx={{ color: 'rgba(255, 255, 255, 0.9)' }}>
+        <DialogTitle sx={{ color: theme.palette.text.primary }}>
           Delete Flow
         </DialogTitle>
         <DialogContent>
-          <DialogContentText sx={{ color: 'rgba(255, 255, 255, 0.7)' }}>
+          <DialogContentText sx={{ color: theme.palette.text.secondary }}>
             Are you sure you want to delete &ldquo;{flowToDelete?.name}&rdquo;? This action cannot be undone.
           </DialogContentText>
         </DialogContent>
@@ -741,9 +742,9 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
             onClick={handleDeleteCancel}
             disabled={isDeleting}
             sx={{
-              color: 'rgba(255, 255, 255, 0.7)',
+              color: theme.palette.text.secondary,
               '&:hover': {
-                backgroundColor: 'rgba(255, 255, 255, 0.08)',
+                backgroundColor: theme.palette.action.hover,
               },
             }}
           >
@@ -754,13 +755,13 @@ const CurationFlows: React.FC<CurationFlowsProps> = ({
             disabled={isDeleting}
             variant="contained"
             sx={{
-              backgroundColor: '#f44336',
-              color: '#fff',
+              backgroundColor: theme.palette.error.main,
+              color: theme.palette.error.contrastText,
               '&:hover': {
-                backgroundColor: '#d32f2f',
+                backgroundColor: theme.palette.error.dark,
               },
               '&:disabled': {
-                backgroundColor: 'rgba(244, 67, 54, 0.5)',
+                backgroundColor: alpha(theme.palette.error.main, 0.5),
               },
             }}
           >
