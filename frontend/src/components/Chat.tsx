@@ -118,6 +118,18 @@ function buildNoticeStyle(theme: Theme, tone: ChatNoticeTone): React.CSSProperti
   }
 }
 
+function buildAssistantNoticeStyle(theme: Theme, tone: ChatNoticeTone): React.CSSProperties {
+  const color = getNoticeColor(theme, tone)
+  const textColor = theme.palette.secondary.contrastText
+
+  return {
+    border: `1px solid ${alpha(textColor, 0.32)}`,
+    borderLeft: `3px solid ${alpha(color, 0.9)}`,
+    background: alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.2 : 0.18),
+    color: textColor,
+  }
+}
+
 function buildSolidButtonStyle(
   theme: Theme,
   backgroundColor: string,
@@ -2852,7 +2864,7 @@ function Chat({
                           borderRadius: '12px',
                           fontSize: '0.9rem',
                           lineHeight: 1.45,
-                          ...buildNoticeStyle(theme, assistantStatusNotice.tone),
+                          ...buildAssistantNoticeStyle(theme, assistantStatusNotice.tone),
                         }}
                       >
                         {assistantStatusNotice.text}

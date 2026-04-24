@@ -3,7 +3,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
+import { ThemeProvider } from '@mui/material/styles'
 import { getChatLocalStorageKeys, getChatRenderCacheKeys } from '@/lib/chatCacheKeys'
+import { createAppTheme, type ThemeMode } from '@/theme'
 import Chat from '../../components/Chat'
 
 const mockNavigate = vi.fn()
@@ -189,7 +191,10 @@ function createDeferredResponse() {
   }
 }
 
-function renderChat(props?: Partial<ComponentProps<typeof Chat>>) {
+function renderChat(
+  props?: Partial<ComponentProps<typeof Chat>>,
+  options?: { themeMode?: ThemeMode },
+) {
   const sendMessage = props?.sendMessage ?? vi.fn().mockResolvedValue(undefined)
   const mergedProps: ComponentProps<typeof Chat> = {
     sessionId: 'session-1',
@@ -199,13 +204,19 @@ function renderChat(props?: Partial<ComponentProps<typeof Chat>>) {
     onSessionChange: vi.fn(),
     ...props,
   }
+  const chat = (
+    <MemoryRouter>
+      <Chat {...mergedProps} />
+    </MemoryRouter>
+  )
+  const renderedChat = options?.themeMode ? (
+    <ThemeProvider theme={createAppTheme(options.themeMode)}>
+      {chat}
+    </ThemeProvider>
+  ) : chat
 
   return {
-    ...render(
-      <MemoryRouter>
-        <Chat {...mergedProps} />
-      </MemoryRouter>
-    ),
+    ...render(renderedChat),
     sendMessage,
   }
 }
@@ -1315,6 +1326,40 @@ describe('Chat turn reconciliation', () => {
     expect(
       await screen.findByText('Chat completed, but durable side effects could not be saved.'),
     ).toBeInTheDocument()
+  })
+
+  it('keeps terminal failure notices readable inside assistant bubbles in light mode', async () => {
+    const theme = createAppTheme('light')
+    renderChat(
+      {
+        sessionId: 'session-1',
+        events: [
+          {
+            type: 'TEXT_MESSAGE_CONTENT',
+            session_id: 'session-1',
+            turn_id: 'turn-failure-contrast',
+            trace_id: 'trace-failure-contrast',
+            content: 'Partial assistant reply',
+          },
+          {
+            type: 'turn_failed',
+            session_id: 'session-1',
+            turn_id: 'turn-failure-contrast',
+            trace_id: 'trace-failure-contrast',
+            message: 'Chat completed, but durable side effects could not be saved.',
+          },
+        ],
+      },
+      { themeMode: 'light' },
+    )
+
+    const notice = await screen.findByRole('alert')
+
+    expect(notice).toHaveTextContent('Chat completed, but durable side effects could not be saved.')
+    expect(notice).toHaveStyle({
+      background: 'rgba(0, 0, 0, 0.18)',
+      color: theme.palette.secondary.contrastText,
+    })
   })
 
   it('maps RUN_ERROR to assistant failure state for the matching turn', async () => {
