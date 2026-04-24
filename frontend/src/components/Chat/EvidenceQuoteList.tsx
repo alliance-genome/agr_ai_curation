@@ -131,12 +131,27 @@ export default function EvidenceQuoteList({
                   component="button"
                   onClick={onReviewAndCurateClick}
                   sx={{
-                    p: 0,
+                    px: '2px',
+                    py: '1px',
                     border: 0,
+                    borderRadius: '4px',
                     background: 'transparent',
-                    color: 'primary.main',
+                    color: 'text.primary',
                     cursor: 'pointer',
                     fontSize: '11px',
+                    fontWeight: 700,
+                    lineHeight: 1.35,
+                    textDecoration: 'underline',
+                    textDecorationColor: (theme) => alpha(theme.palette.text.primary, 0.6),
+                    textUnderlineOffset: '2px',
+                    '&:hover': {
+                      backgroundColor: (theme) => alpha(theme.palette.text.primary, 0.08),
+                      textDecorationColor: (theme) => theme.palette.text.primary,
+                    },
+                    '&:focus-visible': {
+                      outline: (theme) => `2px solid ${alpha(theme.palette.text.primary, 0.72)}`,
+                      outlineOffset: '2px',
+                    },
                   }}
                   type="button"
                 >
