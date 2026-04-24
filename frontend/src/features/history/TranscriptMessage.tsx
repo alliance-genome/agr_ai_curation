@@ -1,4 +1,6 @@
 import { Box } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
+import type { Theme } from '@mui/material/styles'
 
 import EvidenceCard from '@/components/Chat/EvidenceCard'
 import FileDownloadCard, { type FileInfo } from '@/components/Chat/FileDownloadCard'
@@ -57,33 +59,46 @@ function getRoleLabel(role: TranscriptMessageRole): string {
 function getBubbleStyles(
   role: TranscriptMessageRole,
   hasEvidenceCard: boolean,
+  theme: Theme,
 ): {
   alignSelf: 'flex-start' | 'flex-end'
   maxWidth: string
   backgroundColor: string
+  color: string
   borderRadius: string
+  boxShadow: string
 } {
+  const messageShadow = `0 1px 3px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.28 : 0.12)}`
+
   switch (role) {
     case 'user':
       return {
         alignSelf: 'flex-end',
         maxWidth: '75%',
-        backgroundColor: '#424242',
+        backgroundColor: theme.palette.mode === 'dark' ? theme.palette.grey[800] : theme.palette.grey[100],
+        color: theme.palette.text.primary,
         borderRadius: '18px 18px 4px 18px',
+        boxShadow: messageShadow,
       }
     case 'flow':
       return {
         alignSelf: 'flex-start',
         maxWidth: '85%',
-        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        backgroundColor: theme.palette.mode === 'dark'
+          ? alpha(theme.palette.common.white, 0.08)
+          : alpha(theme.palette.text.primary, 0.06),
+        color: theme.palette.text.primary,
         borderRadius: '18px 18px 18px 4px',
+        boxShadow: messageShadow,
       }
     case 'assistant':
       return {
         alignSelf: 'flex-start',
         maxWidth: '85%',
-        backgroundColor: '#1565c0',
+        backgroundColor: theme.palette.secondary.main,
+        color: theme.palette.secondary.contrastText,
         borderRadius: hasEvidenceCard ? '18px 18px 4px 4px' : '18px 18px 18px 4px',
+        boxShadow: messageShadow,
       }
   }
 
@@ -91,6 +106,8 @@ function getBubbleStyles(
 }
 
 export default function TranscriptMessage({ message }: TranscriptMessageProps) {
+  const theme = useTheme()
+
   if (message.role === 'flow' && message.flowStepEvidence) {
     return (
       <FlowStepEvidenceCard
@@ -103,7 +120,7 @@ export default function TranscriptMessage({ message }: TranscriptMessageProps) {
   }
 
   const hasEvidenceCard = (message.evidenceRecords?.length ?? 0) > 0
-  const bubbleStyles = getBubbleStyles(message.role, hasEvidenceCard)
+  const bubbleStyles = getBubbleStyles(message.role, hasEvidenceCard, theme)
   const transcriptFile =
     message.type === 'file_download' && message.fileData
       ? (() => {
@@ -126,10 +143,10 @@ export default function TranscriptMessage({ message }: TranscriptMessageProps) {
       <Box
         sx={{
           backgroundColor: bubbleStyles.backgroundColor,
-          color: '#ffffff',
+          color: bubbleStyles.color,
           padding: '1rem 1.5rem',
           borderRadius: bubbleStyles.borderRadius,
-          boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
+          boxShadow: bubbleStyles.boxShadow,
         }}
       >
         <Box

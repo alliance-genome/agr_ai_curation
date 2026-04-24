@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { Box, Collapse } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 
 import type { EvidenceRecord } from '@/features/curation/types'
 
@@ -110,7 +111,7 @@ export default function EvidenceQuoteList({
               sx={{
                 mt: '8px',
                 pt: '8px',
-                borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+                borderTop: (theme) => `1px solid ${theme.palette.divider}`,
                 display: 'flex',
                 alignItems: 'center',
                 gap: '6px',
@@ -119,7 +120,7 @@ export default function EvidenceQuoteList({
               <Box
                 sx={{
                   fontSize: '11px',
-                  color: 'rgba(255, 255, 255, 0.5)',
+                  color: 'text.secondary',
                 }}
               >
                 Full evidence review with PDF highlighting →
@@ -130,12 +131,27 @@ export default function EvidenceQuoteList({
                   component="button"
                   onClick={onReviewAndCurateClick}
                   sx={{
-                    p: 0,
+                    px: '2px',
+                    py: '1px',
                     border: 0,
+                    borderRadius: '4px',
                     background: 'transparent',
-                    color: '#90caf9',
+                    color: 'text.primary',
                     cursor: 'pointer',
                     fontSize: '11px',
+                    fontWeight: 700,
+                    lineHeight: 1.35,
+                    textDecoration: 'underline',
+                    textDecorationColor: (theme) => alpha(theme.palette.text.primary, 0.6),
+                    textUnderlineOffset: '2px',
+                    '&:hover': {
+                      backgroundColor: (theme) => alpha(theme.palette.text.primary, 0.08),
+                      textDecorationColor: (theme) => theme.palette.text.primary,
+                    },
+                    '&:focus-visible': {
+                      outline: (theme) => `2px solid ${alpha(theme.palette.text.primary, 0.72)}`,
+                      outlineOffset: '2px',
+                    },
                   }}
                   type="button"
                 >

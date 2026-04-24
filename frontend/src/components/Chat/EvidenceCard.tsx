@@ -1,6 +1,8 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 
 import { Box } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
+import type { Theme } from '@mui/material/styles'
 import type { CurationWorkspaceLaunchTarget } from '@/features/curation/navigation/openCurationWorkspace'
 
 import type { EvidenceRecord } from '@/features/curation/types'
@@ -8,72 +10,42 @@ import type { EvidenceRecord } from '@/features/curation/types'
 import EntityChipBar, { type EntityChipBarItem } from './EntityChipBar'
 import EvidenceQuoteList, { type EvidenceQuoteGroup } from './EvidenceQuoteList'
 
-const EVIDENCE_COLOR_PALETTE = [
-  {
-    colorHex: '#64b5f6',
-    chipBackground: 'rgba(100, 181, 246, 0.2)',
-    chipBorder: 'rgba(100, 181, 246, 0.4)',
-    activeBackground: 'rgba(100, 181, 246, 0.45)',
-    inactiveBackground: 'rgba(100, 181, 246, 0.15)',
-    inactiveBorder: 'rgba(100, 181, 246, 0.3)',
-  },
-  {
-    colorHex: '#81c784',
-    chipBackground: 'rgba(129, 199, 132, 0.2)',
-    chipBorder: 'rgba(129, 199, 132, 0.4)',
-    activeBackground: 'rgba(129, 199, 132, 0.45)',
-    inactiveBackground: 'rgba(129, 199, 132, 0.15)',
-    inactiveBorder: 'rgba(129, 199, 132, 0.3)',
-  },
-  {
-    colorHex: '#ffb74d',
-    chipBackground: 'rgba(255, 183, 77, 0.2)',
-    chipBorder: 'rgba(255, 183, 77, 0.4)',
-    activeBackground: 'rgba(255, 183, 77, 0.45)',
-    inactiveBackground: 'rgba(255, 183, 77, 0.15)',
-    inactiveBorder: 'rgba(255, 183, 77, 0.3)',
-  },
-  {
-    colorHex: '#ce93d8',
-    chipBackground: 'rgba(206, 147, 216, 0.2)',
-    chipBorder: 'rgba(206, 147, 216, 0.4)',
-    activeBackground: 'rgba(206, 147, 216, 0.45)',
-    inactiveBackground: 'rgba(206, 147, 216, 0.15)',
-    inactiveBorder: 'rgba(206, 147, 216, 0.3)',
-  },
-  {
-    colorHex: '#ef9a9a',
-    chipBackground: 'rgba(239, 154, 154, 0.2)',
-    chipBorder: 'rgba(239, 154, 154, 0.4)',
-    activeBackground: 'rgba(239, 154, 154, 0.45)',
-    inactiveBackground: 'rgba(239, 154, 154, 0.15)',
-    inactiveBorder: 'rgba(239, 154, 154, 0.3)',
-  },
-  {
-    colorHex: '#80cbc4',
-    chipBackground: 'rgba(128, 203, 196, 0.2)',
-    chipBorder: 'rgba(128, 203, 196, 0.4)',
-    activeBackground: 'rgba(128, 203, 196, 0.45)',
-    inactiveBackground: 'rgba(128, 203, 196, 0.15)',
-    inactiveBorder: 'rgba(128, 203, 196, 0.3)',
-  },
-  {
-    colorHex: '#f48fb1',
-    chipBackground: 'rgba(244, 143, 177, 0.2)',
-    chipBorder: 'rgba(244, 143, 177, 0.4)',
-    activeBackground: 'rgba(244, 143, 177, 0.45)',
-    inactiveBackground: 'rgba(244, 143, 177, 0.15)',
-    inactiveBorder: 'rgba(244, 143, 177, 0.3)',
-  },
-  {
-    colorHex: '#aed581',
-    chipBackground: 'rgba(174, 213, 129, 0.2)',
-    chipBorder: 'rgba(174, 213, 129, 0.4)',
-    activeBackground: 'rgba(174, 213, 129, 0.45)',
-    inactiveBackground: 'rgba(174, 213, 129, 0.15)',
-    inactiveBorder: 'rgba(174, 213, 129, 0.3)',
-  },
-] as const
+interface EvidenceColorTone {
+  colorHex: string
+  chipBackground: string
+  chipBorder: string
+  activeBackground: string
+  inactiveBackground: string
+  inactiveBorder: string
+  textColor: string
+  activeTextColor: string
+}
+
+function buildEvidenceColorPalette(theme: Theme): EvidenceColorTone[] {
+  const isDark = theme.palette.mode === 'dark'
+  const textColor = theme.palette.text.primary
+  const colors = [
+    isDark ? theme.palette.primary.light : theme.palette.primary.main,
+    isDark ? theme.palette.success.light : theme.palette.success.dark,
+    isDark ? theme.palette.warning.light : theme.palette.warning.dark,
+    isDark ? theme.palette.secondary.light : theme.palette.secondary.main,
+    isDark ? theme.palette.error.light : theme.palette.error.dark,
+    isDark ? theme.palette.info.light : theme.palette.info.dark,
+    isDark ? theme.palette.primary.main : theme.palette.primary.dark,
+    isDark ? theme.palette.success.main : theme.palette.success.dark,
+  ]
+
+  return colors.map((colorHex) => ({
+    colorHex,
+    chipBackground: alpha(colorHex, isDark ? 0.2 : 0.12),
+    chipBorder: alpha(colorHex, isDark ? 0.4 : 0.32),
+    activeBackground: alpha(colorHex, isDark ? 0.45 : 0.18),
+    inactiveBackground: alpha(colorHex, isDark ? 0.15 : 0.08),
+    inactiveBorder: alpha(colorHex, isDark ? 0.3 : 0.2),
+    textColor,
+    activeTextColor: textColor,
+  }))
+}
 
 interface EvidenceCardProps {
   evidenceRecords: EvidenceRecord[]
@@ -88,6 +60,7 @@ interface EvidenceCardProps {
 
 function buildEntityData(
   evidenceRecords: EvidenceRecord[],
+  evidenceColorPalette: EvidenceColorTone[],
 ): {
   chipItems: EntityChipBarItem[]
   quoteGroups: EvidenceQuoteGroup[]
@@ -106,7 +79,7 @@ function buildEntityData(
   const quoteGroups: EvidenceQuoteGroup[] = []
 
   Array.from(groupedRecords.entries()).forEach(([entity, records], index) => {
-    const palette = EVIDENCE_COLOR_PALETTE[index % EVIDENCE_COLOR_PALETTE.length]
+    const palette = evidenceColorPalette[index % evidenceColorPalette.length]
 
     chipItems.push({
       entity,
@@ -133,8 +106,13 @@ export default function EvidenceCard({
   headerIconTestId = 'evidence-card-header-icon',
   quoteTestId,
 }: EvidenceCardProps) {
+  const theme = useTheme()
   const [activeEntity, setActiveEntity] = useState<string | null>(null)
-  const { chipItems, quoteGroups } = buildEntityData(evidenceRecords)
+  const evidenceColorPalette = useMemo(() => buildEvidenceColorPalette(theme), [theme])
+  const { chipItems, quoteGroups } = useMemo(
+    () => buildEntityData(evidenceRecords, evidenceColorPalette),
+    [evidenceRecords, evidenceColorPalette],
+  )
   const isInteractive = interactionMode === 'interactive'
 
   const handleEntityToggle = (entity: string) => {
@@ -144,15 +122,18 @@ export default function EvidenceCard({
   return (
     <Box
       data-testid={containerTestId}
-      sx={{
-        backgroundColor: '#0d47a1',
+      sx={(theme) => ({
+        backgroundColor: theme.palette.mode === 'dark'
+          ? theme.palette.secondary.dark
+          : alpha(theme.palette.secondary.main, 0.09),
         borderRadius: '0 0 18px 4px',
-        borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+        borderTop: `1px solid ${theme.palette.divider}`,
+        color: theme.palette.text.primary,
         px: '1rem',
         py: '10px',
         maxWidth: '100%',
         boxSizing: 'border-box',
-      }}
+      })}
     >
       <Box
         sx={{
@@ -173,17 +154,18 @@ export default function EvidenceCard({
             width: '14px',
             height: '14px',
             display: 'block',
+            color: 'text.secondary',
           }}
           viewBox="0 0 24 24"
         >
           <path
             d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"
-            stroke="rgba(255,255,255,0.6)"
+            stroke="currentColor"
             strokeWidth="2"
           />
           <polyline
             points="14 2 14 8 20 8"
-            stroke="rgba(255,255,255,0.6)"
+            stroke="currentColor"
             strokeWidth="2"
           />
           <line
@@ -191,7 +173,7 @@ export default function EvidenceCard({
             x2="8"
             y1="13"
             y2="13"
-            stroke="rgba(255,255,255,0.6)"
+            stroke="currentColor"
             strokeWidth="2"
           />
           <line
@@ -199,7 +181,7 @@ export default function EvidenceCard({
             x2="8"
             y1="17"
             y2="17"
-            stroke="rgba(255,255,255,0.6)"
+            stroke="currentColor"
             strokeWidth="2"
           />
         </Box>
@@ -207,7 +189,7 @@ export default function EvidenceCard({
         <Box
           sx={{
             fontSize: '12px',
-            color: 'rgba(255, 255, 255, 0.7)',
+            color: 'text.secondary',
           }}
         >
           {headerLabel ?? `${evidenceRecords.length} evidence quotes`}

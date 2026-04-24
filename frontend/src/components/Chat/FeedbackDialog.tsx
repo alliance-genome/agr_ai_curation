@@ -10,6 +10,7 @@ import {
   CircularProgress,
   Alert
 } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 
 interface FeedbackDialogProps {
@@ -141,10 +142,11 @@ function FeedbackDialog({
       maxWidth="sm"
       fullWidth
       PaperProps={{
-        sx: {
-          backgroundColor: '#2c2c2c',
-          color: '#ffffff',
-        }
+        sx: (theme) => ({
+          backgroundColor: theme.palette.background.paper,
+          color: theme.palette.text.primary,
+          border: `1px solid ${theme.palette.divider}`,
+        })
       }}
     >
       <DialogTitle>Provide Feedback</DialogTitle>
@@ -163,7 +165,7 @@ function FeedbackDialog({
             <CheckCircleIcon
               sx={{
                 fontSize: 64,
-                color: '#4caf50',
+                color: 'success.main',
                 animation: 'fadeInScale 0.5s ease-in-out'
               }}
             />
@@ -188,27 +190,27 @@ function FeedbackDialog({
               value={feedbackText}
               onChange={(e) => setFeedbackText(e.target.value)}
               disabled={isSubmitting}
-              sx={{
+              sx={(theme) => ({
                 '& .MuiOutlinedInput-root': {
-                  color: '#ffffff',
+                  color: theme.palette.text.primary,
                   '& fieldset': {
-                    borderColor: 'rgba(255, 255, 255, 0.23)',
+                    borderColor: theme.palette.divider,
                   },
                   '&:hover fieldset': {
-                    borderColor: 'rgba(255, 255, 255, 0.4)',
+                    borderColor: alpha(theme.palette.text.primary, 0.4),
                   },
                   '&.Mui-focused fieldset': {
-                    borderColor: '#2196f3',
+                    borderColor: theme.palette.primary.main,
                   },
                 },
                 '& .MuiInputBase-input': {
-                  color: '#ffffff',
+                  color: theme.palette.text.primary,
                 },
                 '& .MuiInputBase-input::placeholder': {
-                  color: 'rgba(255, 255, 255, 0.5)',
+                  color: theme.palette.text.secondary,
                   opacity: 1,
                 }
-              }}
+              })}
             />
           </>
         )}
@@ -218,7 +220,7 @@ function FeedbackDialog({
           <Button
             onClick={handleCancel}
             disabled={isSubmitting}
-            sx={{ color: 'rgba(255, 255, 255, 0.7)' }}
+            sx={{ color: 'text.secondary' }}
           >
             Cancel
           </Button>
@@ -227,12 +229,13 @@ function FeedbackDialog({
             variant="contained"
             disabled={!isValid || isSubmitting}
             sx={{
-              backgroundColor: '#2196f3',
+              backgroundColor: 'primary.main',
               '&:hover': {
-                backgroundColor: '#1976d2',
+                backgroundColor: 'primary.dark',
               },
               '&:disabled': {
-                backgroundColor: 'rgba(255, 255, 255, 0.12)',
+                backgroundColor: 'action.disabledBackground',
+                color: 'text.disabled',
               }
             }}
           >

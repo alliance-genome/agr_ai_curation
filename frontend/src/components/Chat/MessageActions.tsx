@@ -1,6 +1,8 @@
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { IconButton, Menu, MenuItem, Tooltip, Divider } from '@mui/material'
+import { alpha } from '@mui/material/styles'
+import type { SxProps, Theme } from '@mui/material/styles'
 import MoreVertIcon from '@mui/icons-material/MoreVert'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import FingerprintIcon from '@mui/icons-material/Fingerprint'
@@ -21,18 +23,40 @@ interface MessageActionsProps {
   onReviewAndCurateOpened?: (sessionId: string) => void
 }
 
-const actionButtonSx = {
-  backgroundColor: 'rgba(255, 255, 255, 0.1)',
-  border: '1px solid rgba(255, 255, 255, 0.2)',
-  color: 'rgba(255, 255, 255, 0.7)',
+const actionButtonSx: SxProps<Theme> = (theme) => ({
+  backgroundColor: alpha(theme.palette.secondary.contrastText, 0.1),
+  border: `1px solid ${alpha(theme.palette.secondary.contrastText, 0.2)}`,
+  color: alpha(theme.palette.secondary.contrastText, 0.72),
   '&:hover': {
-    backgroundColor: 'rgba(255, 255, 255, 0.2)',
-    color: '#ffffff',
+    backgroundColor: alpha(theme.palette.secondary.contrastText, 0.2),
+    color: theme.palette.secondary.contrastText,
     transform: 'scale(1.1)'
   },
   transition: 'all 0.2s',
   padding: '0.25rem'
-} as const
+})
+
+const traceActionButtonSx: SxProps<Theme> = (theme) => ({
+  backgroundColor: alpha(theme.palette.secondary.contrastText, 0.05),
+  border: `1px solid ${alpha(theme.palette.secondary.contrastText, 0.12)}`,
+  color: alpha(theme.palette.secondary.contrastText, 0.72),
+  '&:hover': {
+    backgroundColor: alpha(theme.palette.secondary.contrastText, 0.2),
+    color: theme.palette.secondary.contrastText,
+    transform: 'scale(1.1)',
+    borderColor: alpha(theme.palette.secondary.contrastText, 0.3)
+  },
+  transition: 'all 0.2s',
+  padding: '0.25rem'
+})
+
+const menuSx: SxProps<Theme> = (theme) => ({
+  '& .MuiPaper-root': {
+    backgroundColor: theme.palette.background.paper,
+    color: theme.palette.text.primary,
+    border: `1px solid ${theme.palette.divider}`,
+  }
+})
 
 function MessageActions({
   messageContent,
@@ -150,19 +174,7 @@ function MessageActions({
             size="small"
             onClick={handleCopyTraceId}
             aria-label="copy debug id"
-            sx={{
-              backgroundColor: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              color: 'rgba(255, 255, 255, 0.4)',
-              '&:hover': {
-                backgroundColor: 'rgba(255, 255, 255, 0.2)',
-                color: '#ffffff',
-                transform: 'scale(1.1)',
-                borderColor: 'rgba(255, 255, 255, 0.3)'
-              },
-              transition: 'all 0.2s',
-              padding: '0.25rem'
-            }}
+            sx={traceActionButtonSx}
           >
             <FingerprintIcon fontSize="small" />
           </IconButton>
@@ -183,13 +195,7 @@ function MessageActions({
           vertical: 'bottom',
           horizontal: 'left',
         }}
-        sx={{
-          '& .MuiPaper-root': {
-            backgroundColor: '#2c2c2c',
-            color: '#ffffff',
-            border: '1px solid rgba(255, 255, 255, 0.12)',
-          }
-        }}
+        sx={menuSx}
       >
         <MenuItem onClick={handleProvideFeedback}>
           <RateReviewIcon fontSize="small" sx={{ mr: 1 }} />

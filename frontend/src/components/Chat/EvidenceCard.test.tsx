@@ -4,7 +4,7 @@ import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { onPDFViewerNavigateEvidence } from '@/components/pdfViewer/pdfEvents'
-import theme from '@/theme'
+import { createAppTheme, type ThemeMode } from '@/theme'
 import type { EvidenceRecord } from '@/features/curation/types'
 
 import EvidenceCard from './EvidenceCard'
@@ -35,10 +35,11 @@ const EVIDENCE_RECORDS: EvidenceRecord[] = [
   },
 ]
 
-function renderEvidenceCard() {
+function renderEvidenceCard(mode: ThemeMode = 'dark') {
   const onReviewAndCurateClick = vi.fn()
+  const theme = createAppTheme(mode)
 
-  render(
+  const rendered = render(
     <ThemeProvider theme={theme}>
       <EvidenceCard
         evidenceRecords={EVIDENCE_RECORDS}
@@ -51,7 +52,7 @@ function renderEvidenceCard() {
     </ThemeProvider>
   )
 
-  return { onReviewAndCurateClick }
+  return { onReviewAndCurateClick, rendered, theme }
 }
 
 describe('EvidenceCard', () => {
@@ -60,7 +61,8 @@ describe('EvidenceCard', () => {
 
   beforeEach(() => {
     scrollIntoViewMock = vi.fn()
-    HTMLElement.prototype.scrollIntoView = scrollIntoViewMock
+    HTMLElement.prototype.scrollIntoView =
+      scrollIntoViewMock as typeof HTMLElement.prototype.scrollIntoView
   })
 
   afterEach(() => {
@@ -97,6 +99,29 @@ describe('EvidenceCard', () => {
     await user.click(screen.getByRole('button', { name: /Review & Curate/i }))
 
     expect(onReviewAndCurateClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the inline review action readable in light and dark evidence panels', async () => {
+    const user = userEvent.setup()
+    const lightResult = renderEvidenceCard('light')
+
+    await user.click(screen.getByRole('button', { name: 'crumb 2' }))
+
+    expect(await screen.findByRole('button', { name: /Review & Curate/i })).toHaveStyle({
+      color: lightResult.theme.palette.text.primary,
+      textDecoration: 'underline',
+    })
+
+    lightResult.rendered.unmount()
+
+    const darkResult = renderEvidenceCard('dark')
+
+    await user.click(screen.getByRole('button', { name: 'crumb 2' }))
+
+    expect(await screen.findByRole('button', { name: /Review & Curate/i })).toHaveStyle({
+      color: darkResult.theme.palette.text.primary,
+      textDecoration: 'underline',
+    })
   })
 
   it('dispatches PDF evidence navigation when a quote is clicked', async () => {

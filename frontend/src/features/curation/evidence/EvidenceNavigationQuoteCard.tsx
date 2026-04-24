@@ -1,5 +1,6 @@
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import { Box, IconButton, Tooltip } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 import type { MouseEvent, ReactNode } from 'react'
 
 import type { EvidenceNavigationCommand } from './types'
@@ -40,7 +41,7 @@ export default function EvidenceNavigationQuoteCard({
   })
   const isChatAppearance = appearance === 'chat'
   const resolvedAccentColor = accentColor
-    ?? (isChatAppearance ? 'rgba(107, 208, 255, 0.72)' : '#2e7d32')
+    ?? (isChatAppearance ? null : '#2e7d32')
 
   return (
     <Box sx={{ position: 'relative' }}>
@@ -48,41 +49,50 @@ export default function EvidenceNavigationQuoteCard({
         aria-label={ariaLabel}
         component="button"
         onClick={() => dispatchEvidenceNavigationCommand(command, debugContext)}
-        sx={{
-          backgroundColor: isChatAppearance
-            ? 'rgba(255, 255, 255, 0.08)'
-            : 'rgba(46, 125, 50, 0.06)',
-          borderRadius: '8px',
-          border: 0,
-          px: '12px',
-          py: '10px',
-          pr: onCopy ? '44px' : '12px',
-          pb: footerText ? (onCopy ? '34px' : '30px') : '10px',
-          borderLeft: `3px solid ${resolvedAccentColor}`,
-          cursor: 'pointer',
-          display: 'block',
-          font: 'inherit',
-          textAlign: 'left',
-          width: '100%',
-          transition: 'background-color 140ms ease, transform 140ms ease',
-          color: isChatAppearance ? 'inherit' : 'text.primary',
-          '&:hover': {
+        sx={(theme) => {
+          const chatAccentColor = resolvedAccentColor ?? alpha(theme.palette.info.main, 0.72)
+          const visibleAccentColor = isChatAppearance ? chatAccentColor : (resolvedAccentColor ?? '#2e7d32')
+
+          return {
             backgroundColor: isChatAppearance
-              ? 'rgba(255, 255, 255, 0.12)'
-              : 'rgba(46, 125, 50, 0.1)',
-            transform: 'translateX(2px)',
-          },
-          '&:focus-visible': {
-            outline: `2px solid ${resolvedAccentColor}`,
-            outlineOffset: '2px',
-          },
+              ? theme.palette.mode === 'dark'
+                ? alpha(theme.palette.common.white, 0.08)
+                : alpha(theme.palette.background.paper, 0.72)
+              : 'rgba(46, 125, 50, 0.06)',
+            borderRadius: '8px',
+            border: 0,
+            px: '12px',
+            py: '10px',
+            pr: onCopy ? '44px' : '12px',
+            pb: footerText ? (onCopy ? '34px' : '30px') : '10px',
+            borderLeft: `3px solid ${visibleAccentColor}`,
+            cursor: 'pointer',
+            display: 'block',
+            font: 'inherit',
+            textAlign: 'left',
+            width: '100%',
+            transition: 'background-color 140ms ease, transform 140ms ease',
+            color: theme.palette.text.primary,
+            '&:hover': {
+              backgroundColor: isChatAppearance
+                ? theme.palette.mode === 'dark'
+                  ? alpha(theme.palette.common.white, 0.12)
+                  : alpha(theme.palette.background.paper, 0.9)
+                : 'rgba(46, 125, 50, 0.1)',
+              transform: 'translateX(2px)',
+            },
+            '&:focus-visible': {
+              outline: `2px solid ${visibleAccentColor}`,
+              outlineOffset: '2px',
+            },
+          }
         }}
         type="button"
       >
         <Box
           sx={{
             fontSize: '11px',
-            color: isChatAppearance ? 'rgba(255, 255, 255, 0.6)' : 'text.secondary',
+            color: 'text.secondary',
             mb: '4px',
           }}
         >
@@ -94,7 +104,7 @@ export default function EvidenceNavigationQuoteCard({
             fontSize: isChatAppearance ? '13px' : '0.82rem',
             fontStyle: 'italic',
             lineHeight: 1.5,
-            color: isChatAppearance ? 'rgba(255, 255, 255, 0.9)' : 'text.primary',
+            color: 'text.primary',
           }}
         >
           &ldquo;{quoteContent ?? quote}&rdquo;
@@ -104,7 +114,7 @@ export default function EvidenceNavigationQuoteCard({
           <Box
             sx={{
               fontSize: '11px',
-              color: isChatAppearance ? 'rgba(255, 255, 255, 0.56)' : 'text.secondary',
+              color: 'text.secondary',
               mt: '6px',
             }}
           >
@@ -119,23 +129,29 @@ export default function EvidenceNavigationQuoteCard({
             aria-label={copyButtonAriaLabel}
             onClick={onCopy}
             size="small"
-            sx={{
-              position: 'absolute',
-              right: '8px',
-              bottom: '8px',
-              backgroundColor: isChatAppearance
-                ? 'rgba(255, 255, 255, 0.08)'
-                : 'rgba(46, 125, 50, 0.08)',
-              border: isChatAppearance
-                ? '1px solid rgba(255, 255, 255, 0.12)'
-                : '1px solid rgba(46, 125, 50, 0.16)',
-              color: isChatAppearance ? 'rgba(255, 255, 255, 0.68)' : 'rgba(46, 125, 50, 0.84)',
-              '&:hover': {
+            sx={(theme) => {
+              const chatAccentColor = resolvedAccentColor ?? theme.palette.info.main
+
+              return {
+                position: 'absolute',
+                right: '8px',
+                bottom: '8px',
                 backgroundColor: isChatAppearance
-                  ? 'rgba(255, 255, 255, 0.16)'
-                  : 'rgba(46, 125, 50, 0.14)',
-                color: isChatAppearance ? '#ffffff' : '#1b5e20',
-              },
+                  ? theme.palette.mode === 'dark'
+                    ? alpha(theme.palette.common.white, 0.08)
+                    : alpha(theme.palette.background.paper, 0.76)
+                  : 'rgba(46, 125, 50, 0.08)',
+                border: isChatAppearance
+                  ? `1px solid ${alpha(chatAccentColor, 0.2)}`
+                  : '1px solid rgba(46, 125, 50, 0.16)',
+                color: isChatAppearance ? theme.palette.text.secondary : 'rgba(46, 125, 50, 0.84)',
+                '&:hover': {
+                  backgroundColor: isChatAppearance
+                    ? alpha(chatAccentColor, theme.palette.mode === 'dark' ? 0.16 : 0.12)
+                    : 'rgba(46, 125, 50, 0.14)',
+                  color: isChatAppearance ? theme.palette.text.primary : '#1b5e20',
+                },
+              }
             }}
             type="button"
           >

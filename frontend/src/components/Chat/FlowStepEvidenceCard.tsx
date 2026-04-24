@@ -1,4 +1,5 @@
 import { Box } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 
 import type { FlowStepEvidenceDetails } from '@/types/AuditEvent'
 
@@ -60,13 +61,15 @@ export default function FlowStepEvidenceCard({
       }}
     >
       <Box
-        sx={{
-          backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        sx={(theme) => ({
+          backgroundColor: theme.palette.mode === 'dark'
+            ? alpha(theme.palette.common.white, 0.08)
+            : alpha(theme.palette.text.primary, 0.06),
           borderRadius: '18px 18px 4px 4px',
-          color: '#ffffff',
+          color: theme.palette.text.primary,
           px: '1rem',
           py: '0.85rem',
-        }}
+        })}
       >
         <Box
           sx={{
@@ -125,16 +128,18 @@ export default function FlowStepEvidenceCard({
       ) : (
         <Box
           data-testid={emptyStateTestId}
-          sx={{
-            backgroundColor: '#0d47a1',
+          sx={(theme) => ({
+            backgroundColor: theme.palette.mode === 'dark'
+              ? theme.palette.secondary.dark
+              : alpha(theme.palette.secondary.main, 0.09),
             borderRadius: '0 0 18px 4px',
-            borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-            color: 'rgba(255, 255, 255, 0.8)',
+            borderTop: `1px solid ${theme.palette.divider}`,
+            color: theme.palette.text.secondary,
             fontSize: '12px',
             lineHeight: 1.45,
             px: '1rem',
             py: '10px',
-          }}
+          })}
         >
           No quote previews were attached to this step.
         </Box>

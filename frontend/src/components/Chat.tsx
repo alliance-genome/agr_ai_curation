@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import { alpha, useTheme } from '@mui/material/styles'
+import type { Theme } from '@mui/material/styles'
 
 import { debug } from '@/utils/env'
 import {
@@ -58,6 +60,136 @@ type TerminalTurnState =
   | 'turn_save_failed'
   | 'session_gone'
 type RescueState = 'pending' | 'failed' | null
+type ChatNoticeTone = 'success' | 'error' | 'info' | 'warning'
+
+type ChatCssVariables = React.CSSProperties & {
+  '--chat-text-primary': string
+  '--chat-text-secondary': string
+  '--chat-divider': string
+  '--chat-subtle-divider': string
+  '--chat-user-bg': string
+  '--chat-user-color': string
+  '--chat-assistant-bg': string
+  '--chat-assistant-color': string
+  '--chat-message-shadow': string
+  '--chat-action-bg': string
+  '--chat-action-border': string
+  '--chat-action-color': string
+  '--chat-action-hover-bg': string
+  '--chat-action-hover-color': string
+  '--chat-input-border': string
+  '--chat-input-focus-border': string
+  '--chat-input-placeholder': string
+  '--chat-send-bg': string
+  '--chat-send-hover-bg': string
+  '--chat-send-color': string
+  '--chat-send-shadow': string
+  '--chat-send-hover-shadow': string
+  '--chat-send-disabled-bg': string
+  '--chat-warning-bg': string
+  '--chat-warning-color': string
+  '--chat-warning-border': string
+  '--chat-empty-color': string
+  '--chat-scrollbar-track': string
+  '--chat-scrollbar-thumb': string
+  '--chat-scrollbar-thumb-hover': string
+}
+
+function getNoticeColor(theme: Theme, tone: ChatNoticeTone): string {
+  const contrastScale = theme.palette.mode === 'dark' ? 'light' : 'dark'
+
+  switch (tone) {
+    case 'success':
+      return theme.palette.success[contrastScale]
+    case 'error':
+      return theme.palette.error[contrastScale]
+    case 'warning':
+      return theme.palette.warning[contrastScale]
+    case 'info':
+      return theme.palette.info[contrastScale]
+  }
+}
+
+function buildNoticeStyle(theme: Theme, tone: ChatNoticeTone): React.CSSProperties {
+  const color = getNoticeColor(theme, tone)
+
+  return {
+    border: `1px solid ${alpha(color, tone === 'warning' ? 0.4 : 0.35)}`,
+    background: alpha(color, tone === 'warning' ? 0.12 : 0.08),
+    color,
+  }
+}
+
+function buildAssistantNoticeStyle(theme: Theme, tone: ChatNoticeTone): React.CSSProperties {
+  const color = getNoticeColor(theme, tone)
+  const textColor = theme.palette.secondary.contrastText
+
+  return {
+    border: `1px solid ${alpha(textColor, 0.32)}`,
+    borderLeft: `3px solid ${alpha(color, 0.9)}`,
+    background: alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.2 : 0.18),
+    color: textColor,
+  }
+}
+
+function buildSolidButtonStyle(
+  theme: Theme,
+  backgroundColor: string,
+  disabled: boolean,
+): Pick<React.CSSProperties, 'backgroundColor' | 'color' | 'cursor'> {
+  if (disabled) {
+    return {
+      backgroundColor: theme.palette.action.disabledBackground,
+      color: theme.palette.text.disabled,
+      cursor: 'not-allowed',
+    }
+  }
+
+  return {
+    backgroundColor,
+    color: theme.palette.getContrastText(backgroundColor),
+    cursor: 'pointer',
+  }
+}
+
+function buildChatCssVariables(theme: Theme): ChatCssVariables {
+  const isDark = theme.palette.mode === 'dark'
+  const actionBaseColor = isDark ? theme.palette.common.white : theme.palette.text.primary
+  const warningColor = getNoticeColor(theme, 'warning')
+
+  return {
+    '--chat-text-primary': theme.palette.text.primary,
+    '--chat-text-secondary': theme.palette.text.secondary,
+    '--chat-divider': theme.palette.divider,
+    '--chat-subtle-divider': theme.palette.divider,
+    '--chat-user-bg': isDark ? theme.palette.grey[800] : theme.palette.grey[100],
+    '--chat-user-color': theme.palette.text.primary,
+    '--chat-assistant-bg': theme.palette.secondary.main,
+    '--chat-assistant-color': theme.palette.secondary.contrastText,
+    '--chat-message-shadow': `0 1px 3px ${alpha(theme.palette.common.black, isDark ? 0.28 : 0.12)}`,
+    '--chat-action-bg': alpha(actionBaseColor, isDark ? 0.1 : 0.06),
+    '--chat-action-border': alpha(actionBaseColor, isDark ? 0.2 : 0.18),
+    '--chat-action-color': theme.palette.text.secondary,
+    '--chat-action-hover-bg': alpha(actionBaseColor, isDark ? 0.18 : 0.1),
+    '--chat-action-hover-color': theme.palette.text.primary,
+    '--chat-input-border': alpha(theme.palette.text.primary, isDark ? 0.23 : 0.28),
+    '--chat-input-focus-border': theme.palette.primary.main,
+    '--chat-input-placeholder': alpha(theme.palette.text.primary, isDark ? 0.5 : 0.45),
+    '--chat-send-bg': theme.palette.primary.main,
+    '--chat-send-hover-bg': theme.palette.primary.dark,
+    '--chat-send-color': theme.palette.primary.contrastText,
+    '--chat-send-shadow': `0 2px 4px ${alpha(theme.palette.primary.main, isDark ? 0.3 : 0.24)}`,
+    '--chat-send-hover-shadow': `0 4px 8px ${alpha(theme.palette.primary.main, isDark ? 0.4 : 0.32)}`,
+    '--chat-send-disabled-bg': theme.palette.action.disabledBackground,
+    '--chat-warning-bg': alpha(warningColor, isDark ? 0.18 : 0.16),
+    '--chat-warning-color': isDark ? theme.palette.warning.light : theme.palette.text.primary,
+    '--chat-warning-border': alpha(warningColor, 0.7),
+    '--chat-empty-color': alpha(theme.palette.text.primary, isDark ? 0.5 : 0.52),
+    '--chat-scrollbar-track': alpha(theme.palette.text.primary, isDark ? 0.05 : 0.08),
+    '--chat-scrollbar-thumb': alpha(theme.palette.text.primary, isDark ? 0.15 : 0.22),
+    '--chat-scrollbar-thumb-hover': alpha(theme.palette.text.primary, isDark ? 0.25 : 0.32),
+  }
+}
 
 interface Message {
   role: MessageRole
@@ -716,6 +848,7 @@ function Chat({
   sendMessage
 }: ChatProps) {
   const navigate = useNavigate()
+  const theme = useTheme()
   const { user } = useAuth()
   const feedbackSessionId = typeof propSessionId === 'string' && propSessionId.trim().length > 0
     ? propSessionId.trim()
@@ -725,6 +858,7 @@ function Chat({
     () => (storageUserId ? getChatLocalStorageKeys(storageUserId) : null),
     [storageUserId],
   )
+  const chatCssVariables = useMemo(() => buildChatCssVariables(theme), [theme])
   // Initialize messages from localStorage if available
   const [messages, setMessages] = useState<Message[]>(() => loadMessagesFromStorage(chatStorageKeys, propSessionId))
   const [inputMessage, setInputMessage] = useState('')
@@ -2342,27 +2476,20 @@ function Chat({
       ? 'Loading Scope...'
       : 'Prepare for Curation'
 
-  const prepStatusStyle = prepStatus?.kind === 'success'
-    ? {
-        border: '1px solid rgba(76, 175, 80, 0.35)',
-        background: 'rgba(76, 175, 80, 0.08)',
-        color: '#2e7d32',
-      }
-    : prepStatus?.kind === 'error'
-      ? {
-          border: '1px solid rgba(220, 53, 69, 0.35)',
-          background: 'rgba(220, 53, 69, 0.08)',
-          color: '#c12d3c',
-        }
-      : {
-          border: '1px solid rgba(33, 150, 243, 0.35)',
-          background: 'rgba(33, 150, 243, 0.08)',
-          color: '#0d6efd',
-        }
+  const prepStatusStyle = prepStatus ? buildNoticeStyle(theme, prepStatus.kind) : undefined
+  const resetButtonStyle = buildSolidButtonStyle(theme, theme.palette.error.main, isResetting)
+  const unloadButtonStyle = buildSolidButtonStyle(
+    theme,
+    theme.palette.mode === 'dark' ? theme.palette.grey[700] : theme.palette.grey[600],
+    isUnloadingPDF,
+  )
+  const prepButtonDisabled = isLoadingPrepPreview || isPreparingCuration || !propSessionId
+  const prepButtonStyle = buildSolidButtonStyle(theme, theme.palette.success.main, prepButtonDisabled)
 
   return (
     <div
       style={{
+        ...chatCssVariables,
         height: '100%',
         flex: '1 1 auto',
         minHeight: 0,
@@ -2386,7 +2513,7 @@ function Chat({
             )}
 
             {conversationStatus && (
-              <span style={{ fontSize: '0.9em', color: '#666' }}>
+              <span style={{ fontSize: '0.9em', color: theme.palette.text.secondary }}>
                 Memory: {
                   conversationStatus.memory_stats?.memory_sizes?.short_term?.file_count || 0
                 } items
@@ -2397,7 +2524,7 @@ function Chat({
               <span
                 style={{
                   fontSize: '0.9em',
-                  color: '#666',
+                  color: theme.palette.text.secondary,
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: '6px',
@@ -2425,7 +2552,7 @@ function Chat({
                     padding: 0,
                     border: 'none',
                     background: 'transparent',
-                    color: '#666',
+                    color: theme.palette.text.secondary,
                     cursor: 'pointer',
                     fontSize: '0.9em',
                     lineHeight: 1,
@@ -2446,11 +2573,11 @@ function Chat({
               disabled={isResetting}
               style={{
                 padding: '4px 12px',
-                backgroundColor: isResetting ? '#ccc' : '#dc3545',
-                color: 'white',
+                backgroundColor: resetButtonStyle.backgroundColor,
+                color: resetButtonStyle.color,
                 border: 'none',
                 borderRadius: '4px',
-                cursor: isResetting ? 'not-allowed' : 'pointer',
+                cursor: resetButtonStyle.cursor,
                 fontSize: '0.9em',
                 display: 'flex',
                 alignItems: 'center',
@@ -2470,11 +2597,11 @@ function Chat({
                 disabled={isUnloadingPDF}
                 style={{
                   padding: '4px 12px',
-                  backgroundColor: isUnloadingPDF ? '#ccc' : '#6c757d',
-                  color: 'white',
+                  backgroundColor: unloadButtonStyle.backgroundColor,
+                  color: unloadButtonStyle.color,
                   border: 'none',
                   borderRadius: '4px',
-                  cursor: isUnloadingPDF ? 'not-allowed' : 'pointer',
+                  cursor: unloadButtonStyle.cursor,
                   fontSize: '0.9em',
                   display: 'flex',
                   alignItems: 'center',
@@ -2494,15 +2621,11 @@ function Chat({
               disabled={!propSessionId || isLoadingPrepPreview || isPreparingCuration}
               style={{
                 padding: '4px 12px',
-                backgroundColor: (isLoadingPrepPreview || isPreparingCuration || !propSessionId)
-                  ? '#ccc'
-                  : '#2e7d32',
-                color: 'white',
+                backgroundColor: prepButtonStyle.backgroundColor,
+                color: prepButtonStyle.color,
                 border: 'none',
                 borderRadius: '4px',
-                cursor: (isLoadingPrepPreview || isPreparingCuration || !propSessionId)
-                  ? 'not-allowed'
-                  : 'pointer',
+                cursor: prepButtonStyle.cursor,
                 fontSize: '0.9em',
                 display: 'flex',
                 alignItems: 'center',
@@ -2541,13 +2664,11 @@ function Chat({
           style={{
             margin: '8px 0',
             padding: '8px 12px',
-            border: '1px solid rgba(33, 150, 243, 0.35)',
             borderRadius: '6px',
-            background: 'rgba(33, 150, 243, 0.08)',
-            color: '#0d6efd',
             display: 'flex',
             flexDirection: 'column',
             gap: '4px',
+            ...buildNoticeStyle(theme, 'info'),
           }}
         >
           {limitNotices.map((n, idx) => (
@@ -2561,13 +2682,11 @@ function Chat({
           style={{
             margin: '8px 0',
             padding: '8px 12px',
-            border: '1px solid rgba(220, 53, 69, 0.4)',
             borderRadius: '6px',
-            background: 'rgba(220, 53, 69, 0.08)',
-            color: '#c12d3c',
             display: 'flex',
             flexDirection: 'column',
             gap: '8px',
+            ...buildNoticeStyle(theme, 'error'),
           }}
         >
           <span>{refinePrompt}</span>
@@ -2580,7 +2699,9 @@ function Chat({
               style={{
                 padding: '6px 8px',
                 borderRadius: '4px',
-                border: '1px solid rgba(0,0,0,0.15)',
+                border: `1px solid ${theme.palette.divider}`,
+                background: theme.palette.background.paper,
+                color: theme.palette.text.primary,
                 minWidth: '260px',
               }}
             />
@@ -2589,9 +2710,9 @@ function Chat({
               style={{
                 padding: '6px 12px',
                 borderRadius: '4px',
-                border: '1px solid #c12d3c',
-                background: '#c12d3c',
-                color: 'white',
+                border: `1px solid ${theme.palette.error.main}`,
+                background: theme.palette.error.main,
+                color: theme.palette.error.contrastText,
                 cursor: 'pointer'
               }}
             >
@@ -2602,9 +2723,9 @@ function Chat({
               style={{
                 padding: '4px 10px',
                 borderRadius: '4px',
-                border: '1px solid #c12d3c',
-                background: '#c12d3c',
-                color: 'white',
+                border: `1px solid ${theme.palette.error.main}`,
+                background: theme.palette.error.main,
+                color: theme.palette.error.contrastText,
                 cursor: 'pointer'
               }}
             >
@@ -2615,9 +2736,9 @@ function Chat({
               style={{
                 padding: '4px 10px',
                 borderRadius: '4px',
-                border: '1px solid #c12d3c',
+                border: `1px solid ${theme.palette.error.main}`,
                 background: 'transparent',
-                color: '#c12d3c',
+                color: theme.palette.error.main,
                 cursor: 'pointer'
               }}
             >
@@ -2628,9 +2749,9 @@ function Chat({
               style={{
                 padding: '4px 10px',
                 borderRadius: '4px',
-                border: '1px solid rgba(0,0,0,0.1)',
+                border: `1px solid ${theme.palette.divider}`,
                 background: 'transparent',
-                color: '#666',
+                color: theme.palette.text.secondary,
                 cursor: 'pointer'
               }}
             >
@@ -2659,7 +2780,7 @@ function Chat({
       )}
 
 
-      <div data-testid="messages-container" style={{
+      <div className="messages-container" data-testid="messages-container" style={{
         flex: 1,
         minHeight: 0,
         overflowY: 'auto',
@@ -2670,8 +2791,8 @@ function Chat({
         gap: '1.5rem',
         backgroundColor: 'transparent',
         scrollBehavior: 'smooth',
-        borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.08)'
+        borderTop: `1px solid ${chatCssVariables['--chat-subtle-divider']}`,
+        borderBottom: `1px solid ${chatCssVariables['--chat-subtle-divider']}`
       }}>
         {messages.length === 0 ? (
           <div className="empty-state">
@@ -2745,21 +2866,7 @@ function Chat({
                           borderRadius: '12px',
                           fontSize: '0.9rem',
                           lineHeight: 1.45,
-                          border: assistantStatusNotice.tone === 'error'
-                            ? '1px solid rgba(220, 53, 69, 0.35)'
-                            : assistantStatusNotice.tone === 'warning'
-                              ? '1px solid rgba(255, 193, 7, 0.35)'
-                              : '1px solid rgba(13, 110, 253, 0.3)',
-                          background: assistantStatusNotice.tone === 'error'
-                            ? 'rgba(220, 53, 69, 0.08)'
-                            : assistantStatusNotice.tone === 'warning'
-                              ? 'rgba(255, 193, 7, 0.12)'
-                              : 'rgba(13, 110, 253, 0.08)',
-                          color: assistantStatusNotice.tone === 'error'
-                            ? '#c12d3c'
-                            : assistantStatusNotice.tone === 'warning'
-                              ? '#8a6d1d'
-                              : '#0d6efd',
+                          ...buildAssistantNoticeStyle(theme, assistantStatusNotice.tone),
                         }}
                       >
                         {assistantStatusNotice.text}

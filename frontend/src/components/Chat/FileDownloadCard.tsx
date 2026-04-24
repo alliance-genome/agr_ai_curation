@@ -9,6 +9,8 @@ import {
   Snackbar,
   Alert
 } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
+import type { Theme } from '@mui/material/styles'
 import DownloadIcon from '@mui/icons-material/Download'
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
@@ -54,13 +56,14 @@ function getFormatLabel(format: string): string {
 /**
  * Get icon color based on file format
  */
-function getFormatColor(format: string): string {
+function getFormatColor(theme: Theme, format: string): string {
+  const isDark = theme.palette.mode === 'dark'
   const colors: Record<string, string> = {
-    csv: '#4caf50',
-    tsv: '#2196f3',
-    json: '#ff9800',
+    csv: isDark ? theme.palette.success.light : theme.palette.success.dark,
+    tsv: isDark ? theme.palette.info.light : theme.palette.info.dark,
+    json: isDark ? theme.palette.warning.light : theme.palette.warning.dark,
   }
-  return colors[format.toLowerCase()] || '#9e9e9e'
+  return colors[format.toLowerCase()] || theme.palette.text.secondary
 }
 
 /**
@@ -75,6 +78,8 @@ function FileDownloadCard({
   allowDownload = true,
   cardTestId,
 }: FileDownloadCardProps) {
+  const theme = useTheme()
+  const formatColor = getFormatColor(theme, file.format)
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadComplete, setDownloadComplete] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -135,20 +140,22 @@ function FileDownloadCard({
     }
   }
 
-  const formatColor = getFormatColor(file.format)
-
   return (
     <>
       <Card
         data-testid={cardTestId}
-        sx={{
+        sx={(theme) => ({
           mt: 1,
           mb: 1,
-          backgroundColor: 'rgba(255, 255, 255, 0.05)',
-          border: '1px solid rgba(255, 255, 255, 0.12)',
+          backgroundColor: theme.palette.mode === 'dark'
+            ? alpha(theme.palette.common.white, 0.08)
+            : alpha(theme.palette.background.paper, 0.9),
+          border: `1px solid ${theme.palette.mode === 'dark'
+            ? alpha(theme.palette.common.white, 0.12)
+            : alpha(theme.palette.primary.dark, 0.16)}`,
           borderRadius: 2,
           maxWidth: 400,
-        }}
+        })}
       >
         <CardContent sx={{ py: 1.5, px: 2, '&:last-child': { pb: 1.5 } }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
@@ -161,7 +168,7 @@ function FileDownloadCard({
                 width: 40,
                 height: 40,
                 borderRadius: 1,
-                backgroundColor: `${formatColor}20`,
+                backgroundColor: alpha(formatColor, 0.14),
               }}
             >
               <InsertDriveFileIcon sx={{ color: formatColor, fontSize: 24 }} />
@@ -176,7 +183,7 @@ function FileDownloadCard({
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
-                  color: 'rgba(255, 255, 255, 0.9)',
+                  color: 'text.primary',
                 }}
                 title={file.filename}
               >
@@ -189,7 +196,7 @@ function FileDownloadCard({
                     px: 0.75,
                     py: 0.125,
                     borderRadius: 0.5,
-                    backgroundColor: `${formatColor}30`,
+                    backgroundColor: alpha(formatColor, 0.18),
                     color: formatColor,
                     fontWeight: 600,
                     fontSize: '0.7rem',
@@ -200,7 +207,7 @@ function FileDownloadCard({
                 {file.size_bytes && (
                   <Typography
                     variant="caption"
-                    sx={{ color: 'rgba(255, 255, 255, 0.5)' }}
+                    sx={{ color: 'text.secondary' }}
                   >
                     {formatFileSize(file.size_bytes)}
                   </Typography>
@@ -219,9 +226,9 @@ function FileDownloadCard({
                   minWidth: 36,
                   height: 36,
                   borderRadius: 1,
-                  backgroundColor: downloadComplete ? '#4caf50' : 'primary.main',
+                  backgroundColor: downloadComplete ? 'success.main' : 'primary.main',
                   '&:hover': {
-                    backgroundColor: downloadComplete ? '#45a049' : 'primary.dark',
+                    backgroundColor: downloadComplete ? 'success.dark' : 'primary.dark',
                   },
                 }}
               >
