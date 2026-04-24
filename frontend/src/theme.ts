@@ -6,10 +6,17 @@ export type ThemeMode = PaletteMode;
 
 export const DEFAULT_THEME_MODE: ThemeMode = 'dark';
 
-const primary = {
+const darkPrimary = {
   main: '#2196f3',
   light: '#64b5f6',
   dark: '#1976d2',
+  contrastText: '#102033',
+};
+
+const lightPrimary = {
+  main: '#1565c0',
+  light: '#42a5f5',
+  dark: '#0d47a1',
   contrastText: '#ffffff',
 };
 
@@ -21,8 +28,11 @@ const secondary = {
 };
 
 function getModeTokens(mode: ThemeMode) {
+  const primary = mode === 'light' ? lightPrimary : darkPrimary;
+
   if (mode === 'light') {
     return {
+      primary,
       backgroundDefault: '#f6f9fc',
       backgroundPaper: '#ffffff',
       dataGridHeader: '#edf5fd',
@@ -38,6 +48,7 @@ function getModeTokens(mode: ThemeMode) {
   }
 
   return {
+    primary,
     backgroundDefault: '#121212',
     backgroundPaper: '#1e1e1e',
     dataGridHeader: '#252525',
@@ -58,7 +69,7 @@ function buildThemeOptions(mode: ThemeMode): ThemeOptions {
   return {
     palette: {
       mode,
-      primary,
+      primary: tokens.primary,
       secondary,
       background: {
         default: tokens.backgroundDefault,
@@ -127,7 +138,8 @@ function buildThemeOptions(mode: ThemeMode): ThemeOptions {
       MuiAppBar: {
         styleOverrides: {
           root: {
-            backgroundColor: primary.main,
+            backgroundColor: tokens.primary.main,
+            color: tokens.primary.contrastText,
             zIndex: 1201, // Above drawer
           },
         },
@@ -139,9 +151,9 @@ function buildThemeOptions(mode: ThemeMode): ThemeOptions {
               backgroundColor: tokens.actionHover,
             },
             '&.Mui-selected': {
-              backgroundColor: alpha(primary.main, mode === 'dark' ? 0.16 : 0.14),
+              backgroundColor: alpha(tokens.primary.main, mode === 'dark' ? 0.16 : 0.14),
               '&:hover': {
-                backgroundColor: alpha(primary.main, mode === 'dark' ? 0.24 : 0.2),
+                backgroundColor: alpha(tokens.primary.main, mode === 'dark' ? 0.24 : 0.2),
               },
             },
           },

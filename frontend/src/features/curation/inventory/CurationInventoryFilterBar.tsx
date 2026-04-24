@@ -11,6 +11,8 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { alpha, useTheme } from '@mui/material/styles'
+import type { Theme } from '@mui/material/styles'
 
 import type {
   CurationSessionStats,
@@ -48,6 +50,45 @@ interface ChipGroupProps {
   selectedKeys: string[]
   onToggle: (key: string) => void
   onClear: () => void
+}
+
+type StatusChipPaletteKey = 'primary' | 'info' | 'success' | 'warning' | 'error'
+
+const LIGHT_OUTLINED_STATUS_CHIP_COLORS: Partial<Record<CurationSessionStatus, StatusChipPaletteKey>> = {
+  new: 'primary',
+  in_progress: 'warning',
+  ready_for_submission: 'info',
+  submitted: 'success',
+  rejected: 'error',
+}
+
+const LIGHT_OUTLINED_STATUS_COLOR_OVERRIDES: Partial<Record<CurationSessionStatus, string>> = {
+  in_progress: '#92400e',
+}
+
+function getLightOutlinedStatusChipSx(
+  theme: Theme,
+  status: CurationSessionStatus,
+  selected: boolean
+) {
+  if (selected || theme.palette.mode !== 'light') {
+    return undefined
+  }
+
+  const paletteKey = LIGHT_OUTLINED_STATUS_CHIP_COLORS[status]
+  if (!paletteKey) {
+    return undefined
+  }
+
+  const color = LIGHT_OUTLINED_STATUS_COLOR_OVERRIDES[status] ?? theme.palette[paletteKey].dark
+  return {
+    color,
+    borderColor: alpha(color, 0.72),
+    '&:hover': {
+      backgroundColor: alpha(color, 0.08),
+      borderColor: color,
+    },
+  }
 }
 
 function FilterChipGroup({
@@ -110,6 +151,8 @@ export default function CurationInventoryFilterBar({
   hasActiveFilters,
   queueActions,
 }: CurationInventoryFilterBarProps) {
+  const theme = useTheme()
+
   return (
     <Paper variant="outlined" sx={{ p: 2.5 }}>
       <Stack spacing={2}>
@@ -144,6 +187,7 @@ export default function CurationInventoryFilterBar({
                       label={`${getStatusLabel(status)}${typeof count === 'number' ? ` ${count}` : ''}`}
                       onClick={() => onToggleStatus(status)}
                       size="small"
+                      sx={getLightOutlinedStatusChipSx(theme, status, selected)}
                       variant={selected ? 'filled' : 'outlined'}
                     />
                   )

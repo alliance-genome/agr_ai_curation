@@ -372,6 +372,9 @@ function ProtectedContent({ themeMode, onThemeModeChange }: ProtectedContentProp
                   onClick={() => handleViewChange(view.name)}
                   disabled={isDisabled}
                   sx={{
+                    '&.Mui-disabled': {
+                      opacity: 1,
+                    },
                     '&.Mui-selected': {
                       bgcolor: 'action.selected',
                       '&:hover': {
@@ -384,7 +387,7 @@ function ProtectedContent({ themeMode, onThemeModeChange }: ProtectedContentProp
                     primary={view.label}
                     primaryTypographyProps={{
                       sx: {
-                        color: isDisabled ? 'text.disabled' : isSelected ? 'primary.main' : 'text.secondary',
+                        color: isDisabled ? 'text.secondary' : isSelected ? 'primary.main' : 'text.secondary',
                         fontWeight: isSelected ? 600 : 400,
                       },
                     }}

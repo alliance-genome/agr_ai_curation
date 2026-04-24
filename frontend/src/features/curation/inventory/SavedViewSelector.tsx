@@ -156,6 +156,7 @@ export default function SavedViewSelector({
       >
         <TextField
           select
+          InputLabelProps={{ shrink: true }}
           SelectProps={{ native: true }}
           disabled={viewsQuery.isLoading}
           inputProps={{ 'data-testid': 'saved-view-selector' }}

@@ -104,7 +104,7 @@ describe('createTraceReviewTheme', () => {
     const theme = createTraceReviewTheme('light');
 
     expect(theme.palette.mode).toBe('light');
-    expect(theme.palette.primary.main).toBe('#1976d2');
+    expect(theme.palette.primary.main).toBe('#1565c0');
     expect(theme.palette.background.default).toBe('#f6f8fb');
     expect(theme.palette.text.primary).toBe('#17212b');
   });
