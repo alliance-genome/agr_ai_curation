@@ -41,12 +41,12 @@ export default function EvidenceNavigationQuoteCard({
     subsectionTitle: command.anchor.subsection_title ?? null,
   })
   const isChatAppearance = appearance === 'chat'
-  const resolvedAccentColor = accentColor
-    ?? (isChatAppearance ? theme.palette.info.light : theme.palette.success.main)
   const chatSurfaceColor = theme.palette.secondary.main
-  const chatTextColor = theme.palette.getContrastText(chatSurfaceColor)
-  const subtleTextColor = alpha(chatTextColor, 0.6)
-  const mutedTextColor = alpha(chatTextColor, 0.56)
+  const chatSurfaceTextColor = theme.palette.getContrastText(chatSurfaceColor)
+  const chatAccentColor = accentColor ?? alpha(theme.palette.info.main, 0.72)
+  const copyChatAccentColor = accentColor ?? theme.palette.info.main
+  const workspaceAccentColor = accentColor ?? theme.palette.success.main
+  const visibleAccentColor = isChatAppearance ? chatAccentColor : workspaceAccentColor
 
   return (
     <Box sx={{ position: 'relative' }}>
@@ -56,7 +56,9 @@ export default function EvidenceNavigationQuoteCard({
         onClick={() => dispatchEvidenceNavigationCommand(command, debugContext)}
         sx={{
           backgroundColor: isChatAppearance
-            ? alpha(chatTextColor, 0.08)
+            ? theme.palette.mode === 'dark'
+              ? alpha(chatSurfaceTextColor, 0.08)
+              : alpha(theme.palette.background.paper, 0.72)
             : alpha(theme.palette.success.main, 0.06),
           borderRadius: '8px',
           border: 0,
@@ -64,22 +66,24 @@ export default function EvidenceNavigationQuoteCard({
           py: '10px',
           pr: onCopy ? '44px' : '12px',
           pb: footerText ? (onCopy ? '34px' : '30px') : '10px',
-          borderLeft: `3px solid ${resolvedAccentColor}`,
+          borderLeft: `3px solid ${visibleAccentColor}`,
           cursor: 'pointer',
           display: 'block',
           font: 'inherit',
           textAlign: 'left',
           width: '100%',
           transition: 'background-color 140ms ease, transform 140ms ease',
-          color: isChatAppearance ? chatTextColor : theme.palette.text.primary,
+          color: theme.palette.text.primary,
           '&:hover': {
             backgroundColor: isChatAppearance
-              ? alpha(chatTextColor, 0.12)
+              ? theme.palette.mode === 'dark'
+                ? alpha(chatSurfaceTextColor, 0.12)
+                : alpha(theme.palette.background.paper, 0.9)
               : alpha(theme.palette.success.main, 0.1),
             transform: 'translateX(2px)',
           },
           '&:focus-visible': {
-            outline: `2px solid ${resolvedAccentColor}`,
+            outline: `2px solid ${visibleAccentColor}`,
             outlineOffset: '2px',
           },
         }}
@@ -88,7 +92,7 @@ export default function EvidenceNavigationQuoteCard({
         <Box
           sx={{
             fontSize: '11px',
-            color: isChatAppearance ? subtleTextColor : theme.palette.text.secondary,
+            color: 'text.secondary',
             mb: '4px',
           }}
         >
@@ -100,7 +104,7 @@ export default function EvidenceNavigationQuoteCard({
             fontSize: isChatAppearance ? '13px' : '0.82rem',
             fontStyle: 'italic',
             lineHeight: 1.5,
-            color: isChatAppearance ? alpha(chatTextColor, 0.9) : theme.palette.text.primary,
+            color: 'text.primary',
           }}
         >
           &ldquo;{quoteContent ?? quote}&rdquo;
@@ -110,7 +114,7 @@ export default function EvidenceNavigationQuoteCard({
           <Box
             sx={{
               fontSize: '11px',
-              color: isChatAppearance ? mutedTextColor : theme.palette.text.secondary,
+              color: 'text.secondary',
               mt: '6px',
             }}
           >
@@ -130,19 +134,21 @@ export default function EvidenceNavigationQuoteCard({
               right: '8px',
               bottom: '8px',
               backgroundColor: isChatAppearance
-                ? alpha(chatTextColor, 0.08)
+                ? theme.palette.mode === 'dark'
+                  ? alpha(chatSurfaceTextColor, 0.08)
+                  : alpha(theme.palette.background.paper, 0.76)
                 : alpha(theme.palette.success.main, 0.08),
               border: isChatAppearance
-                ? `1px solid ${alpha(chatTextColor, 0.12)}`
+                ? `1px solid ${alpha(copyChatAccentColor, 0.2)}`
                 : `1px solid ${alpha(theme.palette.success.main, 0.16)}`,
               color: isChatAppearance
-                ? alpha(chatTextColor, 0.68)
+                ? theme.palette.text.secondary
                 : alpha(theme.palette.success.main, 0.84),
               '&:hover': {
                 backgroundColor: isChatAppearance
-                  ? alpha(chatTextColor, 0.16)
+                  ? alpha(copyChatAccentColor, theme.palette.mode === 'dark' ? 0.16 : 0.12)
                   : alpha(theme.palette.success.main, 0.14),
-                color: isChatAppearance ? chatTextColor : theme.palette.success.dark,
+                color: isChatAppearance ? theme.palette.text.primary : theme.palette.success.dark,
               },
             }}
             type="button"
