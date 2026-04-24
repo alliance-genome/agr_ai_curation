@@ -18,7 +18,7 @@ if [[ -f "${_symphony_codex_shortcuts_override_file}" ]]; then
   source "${_symphony_codex_shortcuts_override_file}"
 fi
 
-: "${SYMPHONY_CODEX_DEFAULT_MODEL:=gpt-5.4}"
+: "${SYMPHONY_CODEX_DEFAULT_MODEL:=gpt-5.5}"
 : "${SYMPHONY_CODEX_DEFAULT_REASONING_HIGH:=high}"
 : "${SYMPHONY_CODEX_DEFAULT_REASONING_XHIGH:=xhigh}"
 : "${SYMPHONY_CODEX_USE_YOLO:=1}"

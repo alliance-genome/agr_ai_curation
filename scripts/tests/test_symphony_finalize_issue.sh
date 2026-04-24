@@ -65,6 +65,48 @@ EOF
   chmod +x "${path}"
 }
 
+make_gh_stub_requires_repo() {
+  local path="$1"
+  cat > "${path}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+require_repo_arg() {
+  local saw_repo="false"
+  local previous=""
+  for arg in "$@"; do
+    if [[ "${previous}" == "--repo" && "${arg}" == "alliance-genome/agr_ai_curation" ]]; then
+      saw_repo="true"
+      break
+    fi
+    previous="${arg}"
+  done
+  if [[ "${saw_repo}" != "true" ]]; then
+    echo "Expected --repo alliance-genome/agr_ai_curation in gh invocation: $*" >&2
+    exit 1
+  fi
+}
+
+require_repo_arg "$@"
+
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  printf '%s\n' '[{"number":88,"title":"ALL-88: Ready","url":"https://example.test/pr/88","headRefName":"all-88-branch"}]'
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "merge" ]]; then
+  echo "merged"
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "view" ]]; then
+  printf '%s\n' '{"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","files":[],"headRefOid":"abc123","baseRefName":"main"}'
+  exit 0
+fi
+echo "Unexpected gh invocation: $*" >&2
+exit 1
+EOF
+  chmod +x "${path}"
+}
+
 make_gh_stub_merge_fails_conflict() {
   local path="$1"
   cat > "${path}" <<'EOF'
@@ -150,6 +192,34 @@ test_pr_dry_run_reports_merge() {
       --issue-identifier ALL-88 \
       --compose-project all-88 \
       --repo alliance-genome/agr_ai_curation \
+      --branch all-88-branch \
+      --cleanup-script "${cleanup_stub}" \
+      --dry-run
+  )"
+
+  assert_contains "FINALIZE_STATUS=dry_run" "${output}"
+  assert_contains "FINALIZE_PR_NUMBER=88" "${output}"
+  assert_contains "FINALIZE_MERGE_STATUS=dry_run" "${output}"
+}
+
+test_pr_dry_run_infers_repo_from_origin() {
+  local temp_dir cleanup_stub gh_stub workspace output
+  temp_dir="$(mktemp -d)"
+  cleanup_stub="${temp_dir}/cleanup.sh"
+  gh_stub="${temp_dir}/gh"
+  workspace="${temp_dir}/ALL-88"
+  mkdir -p "${workspace}"
+  make_cleanup_stub "${cleanup_stub}"
+  make_gh_stub_requires_repo "${gh_stub}"
+  git -C "${workspace}" init -q
+  git -C "${workspace}" remote add origin git@github.com:alliance-genome/agr_ai_curation.git
+
+  output="$(
+    PATH="${temp_dir}:${PATH}" bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --workspace-dir "${workspace}" \
+      --issue-identifier ALL-88 \
+      --compose-project all-88 \
       --branch all-88-branch \
       --cleanup-script "${cleanup_stub}" \
       --dry-run
@@ -316,6 +386,7 @@ test_non_conflict_merge_failure_blocks() {
 
 test_no_pr_finalizes_without_merge
 test_pr_dry_run_reports_merge
+test_pr_dry_run_infers_repo_from_origin
 test_pr_missing_pr_blocks
 test_merge_conflict_bounces_to_in_progress
 test_merge_conflict_exceeds_bounce_limit_blocks
