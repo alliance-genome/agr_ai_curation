@@ -70,6 +70,46 @@ After the VM is back:
 4. Restore PAT, Linear, AWS, and app-secret files.
 5. Start or restart Symphony.
 
+## Persistent Trace Volume
+
+Symphony agent trace logs are intended to survive ordinary VM restarts and
+`symphony-main` rebuilds. The runtime trace root points at a persistent Incus
+custom storage volume:
+
+- Volume: `symphony-trace-logs`
+- Pool: `default`
+- VM mount path: `/home/ctabone/.symphony/persistent/agr_ai_curation/trace_logs`
+- Issue trace root: `/home/ctabone/.symphony/persistent/agr_ai_curation/trace_logs/issues`
+
+Do not delete the `symphony-trace-logs` volume when replacing the VM. After a
+fresh rebuild, reattach the existing volume before starting Symphony:
+
+```bash
+sudo apt-get install -y virtiofsd
+
+incus --project "${SYMPHONY_INCUS_PROJECT:-user-1000}" storage volume show default symphony-trace-logs >/dev/null 2>&1 || \
+  incus --project "${SYMPHONY_INCUS_PROJECT:-user-1000}" storage volume create default symphony-trace-logs size=10GiB
+
+incus --project "${SYMPHONY_INCUS_PROJECT:-user-1000}" config device add symphony-main symphony-trace-logs disk \
+  pool=default \
+  source=symphony-trace-logs \
+  path=/home/ctabone/.symphony/persistent/agr_ai_curation/trace_logs
+
+incus --project "${SYMPHONY_INCUS_PROJECT:-user-1000}" exec symphony-main -- bash -lc \
+  'mkdir -p /home/ctabone/.symphony/persistent/agr_ai_curation/trace_logs/issues && chown -R ctabone:ctabone /home/ctabone/.symphony/persistent/agr_ai_curation/trace_logs'
+```
+
+If the device already exists on the rebuilt VM, the `config device add` command
+will fail harmlessly; verify with:
+
+```bash
+incus --project "${SYMPHONY_INCUS_PROJECT:-user-1000}" config device show symphony-main
+```
+
+The Symphony launcher refuses to start when the workflow points at this
+persistent trace root but the mounted volume is missing or unwritable. That
+guard prevents new traces from silently landing on disposable VM root storage.
+
 ## Verifying The Baseline
 
 Inside the rebuilt VM:

@@ -83,7 +83,7 @@ the same git hooks.
 
 By default the shortcuts use:
 
-- model: `gpt-5.4`
+- model: `gpt-5.5`
 - `--yolo`
 - reasoning: `high` or `xhigh` depending on the shortcut
 

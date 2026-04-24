@@ -12,7 +12,7 @@ Options:
   --workspace-dir DIR          Required: issue workspace directory
   --issue-identifier VALUE     Optional issue key for reporting
   --compose-project VALUE      Compose project name (default: basename of workspace)
-  --repo VALUE                 GitHub repo in owner/name form (required for PR merge)
+  --repo VALUE                 GitHub repo in owner/name form (default: infer from workspace origin)
   --branch VALUE               Branch to inspect (default: current git branch)
   --pr-number VALUE            Explicit PR number for merge path
   --cleanup-script PATH        Cleanup helper to run
@@ -136,6 +136,41 @@ if [[ -z "${cleanup_script}" ]]; then
   script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   cleanup_script="${script_dir}/symphony_pre_merge_cleanup.sh"
 fi
+
+infer_repo_from_origin() {
+  local remote_url repo_path
+  remote_url="$(git -C "${workspace_dir}" config --get remote.origin.url 2>/dev/null || true)"
+  if [[ -z "${remote_url}" ]]; then
+    return 1
+  fi
+
+  case "${remote_url}" in
+    git@github.com:*)
+      repo_path="${remote_url#git@github.com:}"
+      ;;
+    ssh://git@github.com/*)
+      repo_path="${remote_url#ssh://git@github.com/}"
+      ;;
+    https://github.com/*)
+      repo_path="${remote_url#https://github.com/}"
+      ;;
+    http://github.com/*)
+      repo_path="${remote_url#http://github.com/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  repo_path="${repo_path%.git}"
+  repo_path="${repo_path%/}"
+  if [[ "${repo_path}" =~ ^[^/]+/[^/]+$ ]]; then
+    printf '%s' "${repo_path}"
+    return 0
+  fi
+
+  return 1
+}
 
 pre_cleanup_status="unavailable"
 post_cleanup_status="unavailable"
@@ -290,7 +325,11 @@ pre_cleanup_status="$(extract_cleanup_status "${pre_cleanup_output}")"
 
 if [[ "${delivery_mode}" == "pr" ]]; then
   if [[ -z "${repo}" ]]; then
-    echo "Missing required argument for PR finalization: --repo" >&2
+    repo="$(infer_repo_from_origin || true)"
+  fi
+
+  if [[ -z "${repo}" ]]; then
+    echo "Missing --repo and unable to infer GitHub repo from workspace origin." >&2
     exit 2
   fi
 

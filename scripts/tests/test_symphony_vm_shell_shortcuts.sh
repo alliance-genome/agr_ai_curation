@@ -26,7 +26,7 @@ test_installer_replaces_existing_block() {
   cat > "${aliases_file}" <<'EOF'
 alias ll='ls -alF'
 # >>> symphony codex shortcuts >>>
-alias codex-high='codex -m gpt-5.4 -c model_reasoning_effort="high" --yolo'
+alias codex-high='codex -m gpt-5.5 -c model_reasoning_effort="high" --yolo'
 alias co='codex-xhigh'
 # <<< symphony codex shortcuts <<<
 EOF
