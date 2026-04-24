@@ -244,6 +244,20 @@ Required canonical sections:
 
 The workpad helper replaces a section with the same `## Heading` instead of appending duplicates. That keeps the baton compact and means the next lane reads the latest version of each section, not an ever-growing pile of stale copies.
 
+When writing markdown sections from a shell, prefer `append-section --section-stdin` with a single-quoted heredoc delimiter so inline backticks, `$variables`, and `$(commands)` remain literal:
+
+```bash
+bash scripts/utilities/symphony_linear_workpad.sh append-section \
+  --issue-identifier "ALL-123" \
+  --section-title "Review Handoff" \
+  --section-stdin <<'SECTION'
+- Outcome: Markdown with `backticks` stays literal.
+- Next state: Needs Review.
+SECTION
+```
+
+Use `--section-file` only when the section body has already been materialized safely in a file.
+
 Source:
 
 - `scripts/utilities/symphony_linear_workpad.sh`

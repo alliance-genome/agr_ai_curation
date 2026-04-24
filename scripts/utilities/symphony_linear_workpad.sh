@@ -36,6 +36,7 @@ Options:
   --body-file PATH            Markdown body to use for `upsert`.
   --section-title VALUE       Section title for `append-section`.
   --section-file PATH         File containing the section body for `append-section`.
+  --section-stdin             Read the section body for `append-section` from stdin.
   --comments-first N          Number of comments to inspect. Default: 50.
   --linear-api-key VALUE      Linear API key. Default: LINEAR_API_KEY or ~/.linear/api_key.txt.
   --context-json-file PATH    Testing/debug override: use a normalized context JSON file.
@@ -96,11 +97,21 @@ Examples:
     --section-title "Claude Feedback Disposition" \
     --section-file /tmp/disposition.md
 
+Heredoc append-section example:
+bash scripts/utilities/symphony_linear_workpad.sh append-section \
+  --issue-identifier ALL-123 \
+  --section-title "Review Handoff" \
+  --section-stdin <<'SECTION'
+- Outcome: Markdown with `backticks`, $variables, and $(commands) stays literal.
+- Next state: Needs Review.
+SECTION
+
   bash scripts/utilities/symphony_linear_workpad.sh \
     latest-human --issue-identifier ALL-123 --output-file /tmp/latest-human.md
 
 Notes:
   - The managed workpad marker is inserted automatically when missing.
+  - For shell-safe markdown handoffs, prefer `--section-stdin` with a single-quoted heredoc delimiter.
   - Duplicate workpad comments are never deleted automatically. The helper picks
     the most recently updated valid workpad comment and reports the duplicate count.
   - If you are unsure about behavior, run this helper with `--help` first.
@@ -141,6 +152,7 @@ comment_id=""
 body_file=""
 section_title=""
 section_file=""
+section_stdin=0
 comments_first=50
 linear_api_key=""
 context_json_file=""
@@ -174,6 +186,10 @@ while [[ $# -gt 0 ]]; do
     --section-file)
       section_file="${2:-}"
       shift 2
+      ;;
+    --section-stdin)
+      section_stdin=1
+      shift
       ;;
     --comments-first)
       comments_first="${2:-}"
@@ -240,8 +256,16 @@ if [[ "${subcommand}" == "upsert" && -z "${body_file}" ]]; then
 fi
 
 if [[ "${subcommand}" == "append-section" ]]; then
-  if [[ -z "${section_title}" || -z "${section_file}" ]]; then
-    echo "--section-title and --section-file are required for append-section." >&2
+  if [[ -z "${section_title}" ]]; then
+    echo "--section-title is required for append-section." >&2
+    exit 2
+  fi
+  if [[ "${section_stdin}" -eq 1 && -n "${section_file}" ]]; then
+    echo "--section-file and --section-stdin are mutually exclusive for append-section." >&2
+    exit 2
+  fi
+  if [[ "${section_stdin}" -eq 0 && -z "${section_file}" ]]; then
+    echo "One of --section-file or --section-stdin is required for append-section." >&2
     exit 2
   fi
 fi
@@ -539,7 +563,11 @@ case "${subcommand}" in
     if [[ "${subcommand}" == "upsert" ]]; then
       requested_body="$(cat "${body_file}")"
     else
-      section_body="$(cat "${section_file}")"
+      if [[ "${section_stdin}" -eq 1 ]]; then
+        section_body="$(cat)"
+      else
+        section_body="$(cat "${section_file}")"
+      fi
       if [[ -n "${selected_comment_json}" ]]; then
         current_body="$(jq -r '.body // ""' <<< "${selected_comment_json}")"
       else

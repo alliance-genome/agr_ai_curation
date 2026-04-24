@@ -269,9 +269,83 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+test_append_section_reads_stdin_without_shell_interpolation() {
+  local temp_dir context_json curl_stub curl_log output updated_body
+  temp_dir="$(mktemp -d)"
+  context_json="${temp_dir}/context.json"
+  curl_stub="${temp_dir}/curl"
+  curl_log="${temp_dir}/curl.log"
+
+  make_context_json "${context_json}" \
+    '[
+      {
+        "id": "workpad-10",
+        "body": "<!-- symphony-workpad:v1 issue:ALL-123 -->\n\n# Symphony Workpad\n",
+        "created_at": "2026-03-22T10:00:00Z",
+        "updated_at": "2026-03-22T10:05:00Z",
+        "user_name": "Codex",
+        "is_workpad": true
+      }
+    ]' \
+    'null' \
+    '[
+      {
+        "id": "workpad-10",
+        "body": "<!-- symphony-workpad:v1 issue:ALL-123 -->\n\n# Symphony Workpad\n",
+        "created_at": "2026-03-22T10:00:00Z",
+        "updated_at": "2026-03-22T10:05:00Z",
+        "user_name": "Codex",
+        "is_workpad": true
+      }
+    ]'
+
+  cat > "${curl_stub}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+payload=""
+while [[ $# -gt 0 ]]; do
+  if [[ "$1" == "--data" ]]; then
+    payload="${2:-}"
+    shift 2
+    continue
+  fi
+  shift
+done
+printf '%s\n' "${payload}" > "${CURL_STUB_LOG}"
+echo '{"data":{"commentUpdate":{"success":true,"comment":{"id":"workpad-10","body":"ignored","updatedAt":"2026-03-22T10:30:00Z"}}}}'
+EOF
+  chmod +x "${curl_stub}"
+
+  output="$(
+    PATH="${temp_dir}:${PATH}" \
+    CURL_STUB_LOG="${curl_log}" \
+    bash "${SCRIPT_PATH}" append-section \
+      --context-json-file "${context_json}" \
+      --section-title "Review Handoff" \
+      --section-stdin \
+      --linear-api-key test-key <<'EOF'
+- Outcome: kept inline `code`, `$(echo expanded)`, and `${HOME}` literal.
+- Validation: no shell interpolation occurred.
+EOF
+  )"
+
+  assert_contains "WORKPAD_STATUS=updated" "${output}"
+  assert_contains "WORKPAD_ACTION=update" "${output}"
+  updated_body="$(jq -r '.variables.body' < "${curl_log}")"
+  assert_contains "## Review Handoff" "${updated_body}"
+  assert_contains 'inline `code`, `$(echo expanded)`, and `${HOME}` literal' "${updated_body}"
+  if [[ "${updated_body}" == *"expanded literal"* ]]; then
+    echo "FAIL: Expected append-section --section-stdin to preserve literal command text" >&2
+    exit 1
+  fi
+
+  rm -rf "${temp_dir}"
+}
+
 test_show_reports_latest_workpad_and_duplicates
 test_latest_human_materializes_comment
 test_upsert_creates_marked_workpad
 test_append_section_updates_existing_workpad
+test_append_section_reads_stdin_without_shell_interpolation
 
 echo "symphony_linear_workpad tests passed"
