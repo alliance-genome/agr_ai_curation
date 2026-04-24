@@ -2,15 +2,15 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background-color: #121212;
-  color: #ffffff;
+  background-color: var(--app-bg);
+  color: var(--app-text);
   overflow: hidden; /* Prevent app-level scrolling */
 }
 
 .header {
-  background-color: #2196f3;
+  background-color: var(--app-primary);
   padding: 1rem 2rem;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  box-shadow: var(--app-header-shadow);
   z-index: 1100;
   display: flex;
   justify-content: space-between;
@@ -19,7 +19,7 @@
 }
 
 .header h1 {
-  color: white;
+  color: var(--app-primary-contrast);
   font-size: 1.5rem;
   font-weight: 500;
   margin: 0;
@@ -28,7 +28,7 @@
 .nav-icons {
   display: flex;
   align-items: center;
-  color: white;
+  color: var(--app-primary-contrast);
 }
 
 .main-container {
@@ -37,7 +37,7 @@
   justify-content: center;
   align-items: center;
   padding: 0;
-  background-color: #121212;
+  background-color: var(--app-bg);
   overflow: hidden; /* Critical: prevent main container from scrolling */
   min-height: 0; /* Critical for nested flexbox */
 }
@@ -65,34 +65,34 @@
 
 .chat-header {
   padding: 2rem;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+  border-bottom: 1px solid var(--app-divider);
   text-align: left;
   background-color: transparent;
   flex-shrink: 0; /* Never shrink */
 }
 
 .chat-header h2 {
-  color: #ffffff;
+  color: var(--app-text);
   font-size: 1.2rem;
   font-weight: 500;
 }
 
 .chat-status {
   margin-top: 0.35rem;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--app-text-secondary);
   font-size: 0.85rem;
 }
 
 .weaviate-warning {
-  background-color: #ff9800;
-  color: #212121;
+  background-color: var(--app-warning-bg);
+  color: var(--app-warning-contrast);
   padding: 0.75rem 1rem;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 0.9rem;
   font-weight: 500;
-  border-bottom: 2px solid #f57c00;
+  border-bottom: 2px solid var(--app-warning-border);
   flex-shrink: 0; /* Never shrink */
 }
 
@@ -104,8 +104,8 @@
   gap: 1.5rem;
   background-color: transparent;
   scroll-behavior: smooth;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-top: 1px solid var(--app-subtle-divider);
+  border-bottom: 1px solid var(--app-subtle-divider);
 }
 
 .message {
@@ -137,24 +137,24 @@
 }
 
 .user-message {
-  background-color: #424242;
-  color: white;
+  background-color: var(--app-user-message-bg);
+  color: var(--app-user-message-text);
   align-self: flex-end;
   margin-left: auto;
   max-width: 75%;
   padding: 1rem 1.5rem;
   border-radius: 18px 18px 4px 18px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  box-shadow: var(--app-shadow-sm);
 }
 
 .assistant-message {
-  background-color: #1565c0;
-  color: #ffffff;
+  background-color: var(--app-assistant-message-bg);
+  color: var(--app-assistant-message-text);
   align-self: flex-start;
   max-width: 85%;
   padding: 1rem 1.5rem;
   border-radius: 18px 18px 18px 4px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  box-shadow: var(--app-shadow-sm);
 }
 
 .message-role {
@@ -177,8 +177,8 @@
   position: absolute;
   bottom: 0.5rem;
   right: 0.5rem;
-  background-color: rgba(255, 255, 255, 0.1);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  background-color: var(--app-icon-button-bg);
+  border: 1px solid var(--app-icon-button-border);
   border-radius: 4px;
   padding: 0.25rem;
   cursor: pointer;
@@ -187,7 +187,7 @@
   justify-content: center;
   transition: all 0.2s;
   opacity: 0;
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--app-icon-button-color);
 }
 
 .message:hover .copy-button {
@@ -199,8 +199,8 @@
 }
 
 .copy-button:hover {
-  background-color: rgba(255, 255, 255, 0.2);
-  color: #ffffff;
+  background-color: var(--app-icon-button-hover-bg);
+  color: var(--app-icon-button-hover-color);
   transform: scale(1.1);
 }
 
@@ -212,7 +212,7 @@
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  color: rgba(255, 255, 255, 0.6);
+  color: var(--app-text-muted);
   font-style: italic;
   padding: 1rem 2rem;
   align-self: flex-start;
@@ -221,7 +221,7 @@
 
 .input-container {
   padding: 1.5rem 2rem;
-  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  border-top: 1px solid var(--app-divider);
   display: flex;
   gap: 1rem;
   align-items: flex-end;
@@ -231,9 +231,9 @@
 
 .message-input {
   flex: 1;
-  background-color: transparent;
-  color: #ffffff;
-  border: 1px solid rgba(255, 255, 255, 0.23);
+  background-color: var(--app-input-bg);
+  color: var(--app-text);
+  border: 1px solid var(--app-input-border);
   border-radius: 8px;
   padding: 0.75rem 1rem;
   resize: none;
@@ -248,18 +248,19 @@
 
 .message-input:focus {
   outline: none;
-  border-color: #2196f3;
+  border-color: var(--app-primary);
   border-width: 2px;
+  box-shadow: var(--app-focus-ring);
   padding: calc(0.75rem - 1px) calc(1rem - 1px);
 }
 
 .message-input::placeholder {
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--app-input-placeholder);
 }
 
 .send-button {
-  background-color: #2196f3;
-  color: white;
+  background-color: var(--app-primary);
+  color: var(--app-primary-contrast);
   border: none;
   border-radius: 50%;
   width: 44px;
@@ -269,14 +270,14 @@
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
-  box-shadow: 0 2px 4px rgba(33, 150, 243, 0.3);
+  box-shadow: var(--app-send-shadow);
   flex-shrink: 0; /* Button doesn't shrink */
 }
 
 .send-button:hover:not(:disabled) {
-  background-color: #1976d2;
+  background-color: var(--app-primary-hover);
   transform: scale(1.05);
-  box-shadow: 0 4px 8px rgba(33, 150, 243, 0.4);
+  box-shadow: var(--app-send-shadow-hover);
 }
 
 .send-button:active:not(:disabled) {
@@ -284,7 +285,8 @@
 }
 
 .send-button:disabled {
-  background-color: rgba(255, 255, 255, 0.12);
+  background-color: var(--app-action-disabled-bg);
+  color: var(--app-action-disabled-text);
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -296,7 +298,7 @@
 
 .empty-state {
   text-align: center;
-  color: rgba(255, 255, 255, 0.5);
+  color: var(--app-text-muted);
   font-style: italic;
   padding: 2rem;
   display: flex;
@@ -311,17 +313,17 @@
 }
 
 .messages-container::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--app-scrollbar-track);
   border-radius: 4px;
 }
 
 .messages-container::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--app-scrollbar-thumb);
   border-radius: 4px;
 }
 
 .messages-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: var(--app-scrollbar-thumb-hover);
 }
 
 /* Weaviate Layout Styles */

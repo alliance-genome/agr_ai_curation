@@ -1,8 +1,14 @@
 import React, { useState, useEffect } from 'react';
+import { Box, IconButton, Stack, Typography } from '@mui/material';
+import {
+  Close as CloseIcon,
+  ErrorOutline as ErrorIcon,
+  WarningAmber as WarningIcon,
+} from '@mui/icons-material';
+import { alpha, useTheme } from '@mui/material/styles';
 import {
   useConnectionsHealth,
   getUnhealthyServices,
-  ServiceHealthStatus,
 } from '../services/adminService';
 
 type HealthStatusLevel = 'healthy' | 'degraded' | 'unhealthy';
@@ -22,9 +28,10 @@ type HealthStatusLevel = 'healthy' | 'degraded' | 'unhealthy';
  * - Lists affected services with error messages
  */
 const ConnectionsHealthBanner: React.FC = () => {
+  const theme = useTheme();
   // Track which status level was dismissed (null = not dismissed)
   const [dismissedLevel, setDismissedLevel] = useState<HealthStatusLevel | null>(null);
-  const { data: health, isLoading, error } = useConnectionsHealth();
+  const { data: health, isLoading } = useConnectionsHealth();
 
   const currentStatus = health?.status as HealthStatusLevel | undefined;
 
@@ -62,8 +69,9 @@ const ConnectionsHealthBanner: React.FC = () => {
 
   // Choose styling based on severity
   const isError = health.status === 'unhealthy';
-  const backgroundColor = isError ? '#f44336' : '#ff9800';
-  const borderColor = isError ? '#d32f2f' : '#f57c00';
+  const backgroundColor = isError ? theme.palette.error.main : theme.palette.warning.main;
+  const borderColor = isError ? theme.palette.error.dark : theme.palette.warning.dark;
+  const contrastColor = theme.palette.getContrastText(backgroundColor);
   const title = isError
     ? 'Service Unavailable'
     : 'Service Degraded';
@@ -72,91 +80,84 @@ const ConnectionsHealthBanner: React.FC = () => {
     : 'Some optional services are unavailable. Core features still work.';
 
   return (
-    <div
-      style={{
+    <Box
+      role="status"
+      sx={{
         position: 'fixed',
         bottom: 80, // Above MaintenanceBanner if both showing
         left: 20,
         zIndex: 9999,
         backgroundColor,
-        color: '#fff',
+        color: contrastColor,
         padding: '1rem',
-        borderRadius: '8px',
-        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.25)',
+        borderRadius: 1,
+        boxShadow: `0 4px 12px ${alpha(theme.palette.common.black, theme.palette.mode === 'dark' ? 0.35 : 0.18)}`,
         maxWidth: '400px',
         border: `2px solid ${borderColor}`,
       }}
     >
-      {/* Close button */}
-      <button
+      <IconButton
         onClick={() => setDismissedLevel(currentStatus || null)}
-        style={{
+        size="small"
+        sx={{
           position: 'absolute',
           top: 8,
           right: 8,
-          background: 'none',
-          border: 'none',
-          cursor: 'pointer',
-          padding: 4,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          borderRadius: '4px',
-          color: '#fff',
+          color: contrastColor,
+          backgroundColor: alpha(contrastColor, 0.08),
+          '&:hover': {
+            backgroundColor: alpha(contrastColor, 0.16),
+          },
+          '&:focus-visible': {
+            outline: `2px solid ${alpha(contrastColor, 0.75)}`,
+            outlineOffset: 2,
+          },
         }}
         aria-label="Dismiss"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
-        </svg>
-      </button>
+        <CloseIcon fontSize="small" />
+      </IconButton>
 
-      {/* Content */}
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', paddingRight: '1.5rem' }}>
-        {/* Warning/Error icon */}
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" style={{ flexShrink: 0, marginTop: 2 }}>
-          {isError ? (
-            // Error icon
-            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" />
-          ) : (
-            // Warning icon
-            <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z" />
-          )}
-        </svg>
+      <Stack direction="row" alignItems="flex-start" spacing={1.5} sx={{ pr: 3 }}>
+        {isError ? (
+          <ErrorIcon sx={{ flexShrink: 0, mt: 0.25 }} />
+        ) : (
+          <WarningIcon sx={{ flexShrink: 0, mt: 0.25 }} />
+        )}
 
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600, marginBottom: '0.25rem', fontSize: '0.95rem' }}>
+        <Box sx={{ flex: 1 }}>
+          <Typography component="div" sx={{ fontWeight: 600, mb: 0.25, fontSize: '0.95rem' }}>
             {title}
-          </div>
-          <div style={{ fontSize: '0.875rem', lineHeight: 1.4, marginBottom: '0.5rem' }}>
+          </Typography>
+          <Typography component="div" sx={{ fontSize: '0.875rem', lineHeight: 1.4, mb: 0.5 }}>
             {message}
-          </div>
+          </Typography>
 
           {/* List unhealthy services */}
           {unhealthyServices.length > 0 && (
-            <div style={{ fontSize: '0.8rem', opacity: 0.9 }}>
-              <div style={{ marginBottom: '0.25rem', fontWeight: 500 }}>
+            <Box sx={{ fontSize: '0.8rem', opacity: 0.9 }}>
+              <Typography component="div" sx={{ mb: 0.25, fontWeight: 500, fontSize: 'inherit' }}>
                 Affected services:
-              </div>
-              <ul style={{ margin: 0, paddingLeft: '1.25rem' }}>
+              </Typography>
+              <Box component="ul" sx={{ m: 0, pl: '1.25rem' }}>
                 {unhealthyServices.slice(0, 4).map((service) => (
                   <li key={service.service_id}>
                     {service.service_id}
                     {service.required && ' (required)'}
                     {service.last_error && (
-                      <span style={{ opacity: 0.8 }}> - {service.last_error}</span>
+                      <Box component="span" sx={{ opacity: 0.8 }}> - {service.last_error}</Box>
                     )}
                   </li>
                 ))}
                 {unhealthyServices.length > 4 && (
                   <li>...and {unhealthyServices.length - 4} more</li>
                 )}
-              </ul>
-            </div>
+              </Box>
+            </Box>
           )}
-        </div>
-      </div>
-    </div>
+        </Box>
+      </Stack>
+    </Box>
   );
 };
 

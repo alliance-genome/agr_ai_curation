@@ -19,7 +19,8 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #f5f5f5;
+  background: var(--app-bg);
+  color: var(--app-text);
 }
 
 code {
@@ -32,10 +33,12 @@ code {
   overflow: hidden !important;
   display: flex;
   flex-direction: column;
+  background: var(--app-bg);
+  color: var(--app-text);
 }
 
 .pdf-to-form-linked-field {
-  background-color: rgba(21, 101, 192, 0.12);
-  box-shadow: 0 0 0 3px rgba(21, 101, 192, 0.38);
+  background-color: var(--app-linked-field-bg);
+  box-shadow: 0 0 0 3px var(--app-linked-field-ring);
   transition: background-color 180ms ease, box-shadow 180ms ease;
 }
