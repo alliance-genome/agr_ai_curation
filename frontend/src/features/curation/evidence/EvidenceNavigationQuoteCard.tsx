@@ -43,7 +43,8 @@ export default function EvidenceNavigationQuoteCard({
   const isChatAppearance = appearance === 'chat'
   const resolvedAccentColor = accentColor
     ?? (isChatAppearance ? theme.palette.info.light : theme.palette.success.main)
-  const chatTextColor = theme.palette.common.white
+  const chatSurfaceColor = theme.palette.secondary.main
+  const chatTextColor = theme.palette.getContrastText(chatSurfaceColor)
   const subtleTextColor = alpha(chatTextColor, 0.6)
   const mutedTextColor = alpha(chatTextColor, 0.56)
 

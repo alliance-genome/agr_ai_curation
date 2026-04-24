@@ -33,7 +33,7 @@ import {
   onPDFViewerNavigateEvidence,
 } from '@/components/pdfViewer/pdfEvents'
 import {
-  getDefaultHighlightSettings,
+  buildDefaultHighlightSettings,
   loadStoredHighlightSettings,
   type HighlightSettings,
 } from '@/components/pdfViewer/highlightSettings'
@@ -2931,9 +2931,10 @@ export function PdfViewer({
   onNavigationStateChange,
 }: PdfViewerProps) {
   const theme = useTheme()
+  const defaultHighlightColor = theme.palette.success.main
   const defaultHighlightSettings = useMemo(
-    () => getDefaultHighlightSettings(theme),
-    [theme],
+    () => buildDefaultHighlightSettings(defaultHighlightColor),
+    [defaultHighlightColor],
   )
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const pdfAppRef = useRef<any>(null)

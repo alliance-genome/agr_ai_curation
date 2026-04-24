@@ -11,12 +11,16 @@ export const PDF_VIEWER_SETTINGS_STORAGE_KEY = 'pdf-viewer-settings'
 const DEFAULT_HIGHLIGHT_OPACITY = 0.35
 const DEFAULT_CLEAR_ON_NEW_QUERY = true
 
-export function getDefaultHighlightSettings(theme: Theme): HighlightSettings {
+export function buildDefaultHighlightSettings(highlightColor: string): HighlightSettings {
   return {
-    highlightColor: theme.palette.success.main,
+    highlightColor,
     highlightOpacity: DEFAULT_HIGHLIGHT_OPACITY,
     clearOnNewQuery: DEFAULT_CLEAR_ON_NEW_QUERY,
   }
+}
+
+export function getDefaultHighlightSettings(theme: Theme): HighlightSettings {
+  return buildDefaultHighlightSettings(theme.palette.success.main)
 }
 
 export function normalizeHighlightSettings(
