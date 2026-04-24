@@ -6,6 +6,7 @@
  */
 
 import React from 'react'
+import { alpha, useTheme } from '@mui/material/styles'
 import type { AuditEvent } from '../types/AuditEvent'
 import { formatAuditEvent, getEventSeverity } from '../utils/auditHelpers'
 
@@ -77,34 +78,35 @@ export interface AuditEventItemProps {
  * ```
  */
 const AuditEventItem: React.FC<AuditEventItemProps> = ({ event, isLatest = false }) => {
+  const theme = useTheme()
   const severity = getEventSeverity(event.type, event.details)
   const formattedText = formatAuditEvent(event)
 
   const severityColors = {
     info: {
-      bg: 'rgba(33, 150, 243, 0.20)',
-      border: 'rgba(33, 150, 243, 0.2)',
-      shadow: '0 1px 2px rgba(0, 0, 0, 0.1)'
+      main: theme.palette.info.main,
+      backgroundOpacity: 0.14,
+      borderOpacity: 0.24,
     },
     success: {
-      bg: 'rgba(76, 175, 80, 0.25)',
-      border: 'rgba(76, 175, 80, 0.3)',
-      shadow: '0 1px 3px rgba(76, 175, 80, 0.2)'
+      main: theme.palette.success.main,
+      backgroundOpacity: 0.16,
+      borderOpacity: 0.3,
     },
     warning: {
-      bg: 'rgba(255, 152, 0, 0.25)',
-      border: 'rgba(255, 152, 0, 0.3)',
-      shadow: '0 1px 3px rgba(255, 152, 0, 0.2)'
+      main: theme.palette.warning.main,
+      backgroundOpacity: 0.16,
+      borderOpacity: 0.3,
     },
     error: {
-      bg: 'rgba(244, 67, 54, 0.25)',
-      border: 'rgba(244, 67, 54, 0.3)',
-      shadow: '0 1px 3px rgba(244, 67, 54, 0.2)'
+      main: theme.palette.error.main,
+      backgroundOpacity: 0.16,
+      borderOpacity: 0.3,
     },
     processing: {
-      bg: 'rgba(156, 39, 176, 0.25)',  // Purple for processing
-      border: 'rgba(156, 39, 176, 0.3)',
-      shadow: '0 1px 3px rgba(156, 39, 176, 0.2)'
+      main: theme.palette.secondary.main,
+      backgroundOpacity: 0.16,
+      borderOpacity: 0.3,
     }
   } as const
 
@@ -113,13 +115,13 @@ const AuditEventItem: React.FC<AuditEventItemProps> = ({ event, isLatest = false
   const palette = severityColors[severity]
 
   const severityStyles: React.CSSProperties = {
-    color: '#ffffff',
+    color: theme.palette.text.primary,
     padding: '10px 14px',
     marginBottom: '6px',
     borderRadius: '6px',
-    backgroundColor: palette.bg,
-    border: `1px solid ${palette.border}`,
-    boxShadow: palette.shadow,
+    backgroundColor: alpha(palette.main, palette.backgroundOpacity),
+    border: `1px solid ${alpha(palette.main, palette.borderOpacity)}`,
+    boxShadow: `0 1px 3px ${alpha(palette.main, 0.18)}`,
     fontSize: '0.875rem',
     fontFamily: 'monospace',
     lineHeight: '1.6',

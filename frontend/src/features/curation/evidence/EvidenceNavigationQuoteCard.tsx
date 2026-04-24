@@ -1,6 +1,6 @@
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import { Box, IconButton, Tooltip } from '@mui/material'
-import { alpha } from '@mui/material/styles'
+import { alpha, useTheme } from '@mui/material/styles'
 import type { MouseEvent, ReactNode } from 'react'
 
 import type { EvidenceNavigationCommand } from './types'
@@ -34,14 +34,19 @@ export default function EvidenceNavigationQuoteCard({
   copyButtonAriaLabel = null,
   onCopy = null,
 }: EvidenceNavigationQuoteCardProps) {
+  const theme = useTheme()
   const locationLabel = buildEvidenceLocationLabel({
     pageNumber: command.pageNumber ?? command.anchor.page_number ?? null,
     sectionTitle: command.sectionTitle ?? command.anchor.section_title ?? null,
     subsectionTitle: command.anchor.subsection_title ?? null,
   })
   const isChatAppearance = appearance === 'chat'
-  const resolvedAccentColor = accentColor
-    ?? (isChatAppearance ? null : '#2e7d32')
+  const chatSurfaceColor = theme.palette.secondary.main
+  const chatSurfaceTextColor = theme.palette.getContrastText(chatSurfaceColor)
+  const chatAccentColor = accentColor ?? alpha(theme.palette.info.main, 0.72)
+  const copyChatAccentColor = accentColor ?? theme.palette.info.main
+  const workspaceAccentColor = accentColor ?? theme.palette.success.main
+  const visibleAccentColor = isChatAppearance ? chatAccentColor : workspaceAccentColor
 
   return (
     <Box sx={{ position: 'relative' }}>
@@ -49,43 +54,38 @@ export default function EvidenceNavigationQuoteCard({
         aria-label={ariaLabel}
         component="button"
         onClick={() => dispatchEvidenceNavigationCommand(command, debugContext)}
-        sx={(theme) => {
-          const chatAccentColor = resolvedAccentColor ?? alpha(theme.palette.info.main, 0.72)
-          const visibleAccentColor = isChatAppearance ? chatAccentColor : (resolvedAccentColor ?? '#2e7d32')
-
-          return {
+        sx={{
+          backgroundColor: isChatAppearance
+            ? theme.palette.mode === 'dark'
+              ? alpha(chatSurfaceTextColor, 0.08)
+              : alpha(theme.palette.background.paper, 0.72)
+            : alpha(theme.palette.success.main, 0.06),
+          borderRadius: '8px',
+          border: 0,
+          px: '12px',
+          py: '10px',
+          pr: onCopy ? '44px' : '12px',
+          pb: footerText ? (onCopy ? '34px' : '30px') : '10px',
+          borderLeft: `3px solid ${visibleAccentColor}`,
+          cursor: 'pointer',
+          display: 'block',
+          font: 'inherit',
+          textAlign: 'left',
+          width: '100%',
+          transition: 'background-color 140ms ease, transform 140ms ease',
+          color: theme.palette.text.primary,
+          '&:hover': {
             backgroundColor: isChatAppearance
               ? theme.palette.mode === 'dark'
-                ? alpha(theme.palette.common.white, 0.08)
-                : alpha(theme.palette.background.paper, 0.72)
-              : 'rgba(46, 125, 50, 0.06)',
-            borderRadius: '8px',
-            border: 0,
-            px: '12px',
-            py: '10px',
-            pr: onCopy ? '44px' : '12px',
-            pb: footerText ? (onCopy ? '34px' : '30px') : '10px',
-            borderLeft: `3px solid ${visibleAccentColor}`,
-            cursor: 'pointer',
-            display: 'block',
-            font: 'inherit',
-            textAlign: 'left',
-            width: '100%',
-            transition: 'background-color 140ms ease, transform 140ms ease',
-            color: theme.palette.text.primary,
-            '&:hover': {
-              backgroundColor: isChatAppearance
-                ? theme.palette.mode === 'dark'
-                  ? alpha(theme.palette.common.white, 0.12)
-                  : alpha(theme.palette.background.paper, 0.9)
-                : 'rgba(46, 125, 50, 0.1)',
-              transform: 'translateX(2px)',
-            },
-            '&:focus-visible': {
-              outline: `2px solid ${visibleAccentColor}`,
-              outlineOffset: '2px',
-            },
-          }
+                ? alpha(chatSurfaceTextColor, 0.12)
+                : alpha(theme.palette.background.paper, 0.9)
+              : alpha(theme.palette.success.main, 0.1),
+            transform: 'translateX(2px)',
+          },
+          '&:focus-visible': {
+            outline: `2px solid ${visibleAccentColor}`,
+            outlineOffset: '2px',
+          },
         }}
         type="button"
       >
@@ -129,29 +129,27 @@ export default function EvidenceNavigationQuoteCard({
             aria-label={copyButtonAriaLabel}
             onClick={onCopy}
             size="small"
-            sx={(theme) => {
-              const chatAccentColor = resolvedAccentColor ?? theme.palette.info.main
-
-              return {
-                position: 'absolute',
-                right: '8px',
-                bottom: '8px',
+            sx={{
+              position: 'absolute',
+              right: '8px',
+              bottom: '8px',
+              backgroundColor: isChatAppearance
+                ? theme.palette.mode === 'dark'
+                  ? alpha(chatSurfaceTextColor, 0.08)
+                  : alpha(theme.palette.background.paper, 0.76)
+                : alpha(theme.palette.success.main, 0.08),
+              border: isChatAppearance
+                ? `1px solid ${alpha(copyChatAccentColor, 0.2)}`
+                : `1px solid ${alpha(theme.palette.success.main, 0.16)}`,
+              color: isChatAppearance
+                ? theme.palette.text.secondary
+                : alpha(theme.palette.success.main, 0.84),
+              '&:hover': {
                 backgroundColor: isChatAppearance
-                  ? theme.palette.mode === 'dark'
-                    ? alpha(theme.palette.common.white, 0.08)
-                    : alpha(theme.palette.background.paper, 0.76)
-                  : 'rgba(46, 125, 50, 0.08)',
-                border: isChatAppearance
-                  ? `1px solid ${alpha(chatAccentColor, 0.2)}`
-                  : '1px solid rgba(46, 125, 50, 0.16)',
-                color: isChatAppearance ? theme.palette.text.secondary : 'rgba(46, 125, 50, 0.84)',
-                '&:hover': {
-                  backgroundColor: isChatAppearance
-                    ? alpha(chatAccentColor, theme.palette.mode === 'dark' ? 0.16 : 0.12)
-                    : 'rgba(46, 125, 50, 0.14)',
-                  color: isChatAppearance ? theme.palette.text.primary : '#1b5e20',
-                },
-              }
+                  ? alpha(copyChatAccentColor, theme.palette.mode === 'dark' ? 0.16 : 0.12)
+                  : alpha(theme.palette.success.main, 0.14),
+                color: isChatAppearance ? theme.palette.text.primary : theme.palette.success.dark,
+              },
             }}
             type="button"
           >

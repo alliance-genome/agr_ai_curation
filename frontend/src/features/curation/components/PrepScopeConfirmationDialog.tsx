@@ -9,6 +9,7 @@ import {
   DialogTitle,
   Typography,
 } from '@mui/material'
+import { alpha } from '@mui/material/styles'
 
 import type { CurationPrepPreview } from '@/features/curation/services/curationPrepService'
 
@@ -36,6 +37,8 @@ function displayScopeValues(values: string[]) {
     .map(humanizeScopeValue)
 }
 
+const metricLabelSx = { fontSize: '0.75rem', color: 'text.secondary' } as const
+
 function ScopePill({ label, values }: { label: string; values: string[] }) {
   const displayValues = displayScopeValues(values)
 
@@ -52,9 +55,9 @@ function ScopePill({ label, values }: { label: string; values: string[] }) {
         px: 1.5,
         py: 0.75,
         borderRadius: 999,
-        bgcolor: 'rgba(33, 150, 243, 0.12)',
-        color: '#90caf9',
-        border: '1px solid rgba(144, 202, 249, 0.28)',
+        bgcolor: (theme) => alpha(theme.palette.primary.main, 0.12),
+        color: 'primary.main',
+        border: (theme) => `1px solid ${alpha(theme.palette.primary.main, 0.28)}`,
       }}
     >
       <Typography component="span" sx={{ fontWeight: 600, fontSize: '0.8rem' }}>
@@ -101,8 +104,8 @@ function PrepScopeConfirmationDialog({
       fullWidth
       PaperProps={{
         sx: {
-          backgroundColor: '#1f1f1f',
-          color: '#ffffff',
+          backgroundColor: 'background.paper',
+          color: 'text.primary',
         },
       }}
     >
@@ -128,7 +131,7 @@ function PrepScopeConfirmationDialog({
                 }}
               >
                 <Box>
-                  <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
+                  <Typography sx={metricLabelSx}>
                     {showsPartialPrepScope ? 'Ready candidates' : 'Candidates'}
                   </Typography>
                   <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
@@ -137,7 +140,7 @@ function PrepScopeConfirmationDialog({
                 </Box>
                 {showsPartialPrepScope && (
                   <Box>
-                    <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
+                    <Typography sx={metricLabelSx}>
                       Discussed
                     </Typography>
                     <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
@@ -147,7 +150,7 @@ function PrepScopeConfirmationDialog({
                 )}
                 {preview.unscoped_candidate_count > 0 && (
                   <Box>
-                    <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
+                    <Typography sx={metricLabelSx}>
                       Unscoped
                     </Typography>
                     <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
@@ -156,7 +159,7 @@ function PrepScopeConfirmationDialog({
                   </Box>
                 )}
                 <Box>
-                  <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
+                  <Typography sx={metricLabelSx}>
                     Extraction runs
                   </Typography>
                   <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
@@ -164,7 +167,7 @@ function PrepScopeConfirmationDialog({
                   </Typography>
                 </Box>
                 <Box>
-                  <Typography sx={{ fontSize: '0.75rem', color: 'rgba(255,255,255,0.6)' }}>
+                  <Typography sx={metricLabelSx}>
                     Messages
                   </Typography>
                   <Typography sx={{ fontSize: '1.1rem', fontWeight: 600 }}>
@@ -199,7 +202,16 @@ function PrepScopeConfirmationDialog({
         </Box>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={onClose} disabled={submitting} sx={{ color: 'rgba(255, 255, 255, 0.7)' }}>
+        <Button
+          onClick={onClose}
+          disabled={submitting}
+          sx={{
+            color: 'text.secondary',
+            '&:hover': {
+              backgroundColor: 'action.hover',
+            },
+          }}
+        >
           Cancel
         </Button>
         <Button
@@ -207,12 +219,12 @@ function PrepScopeConfirmationDialog({
           variant="contained"
           disabled={confirmDisabled}
           sx={{
-            backgroundColor: '#2e7d32',
+            backgroundColor: 'success.main',
             '&:hover': {
-              backgroundColor: '#1b5e20',
+              backgroundColor: 'success.dark',
             },
             '&:disabled': {
-              backgroundColor: 'rgba(255, 255, 255, 0.12)',
+              backgroundColor: 'action.disabledBackground',
             },
           }}
         >

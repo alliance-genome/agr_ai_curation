@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Box,
   Button,
@@ -12,50 +12,43 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { useTheme } from '@mui/material/styles'
 
 import { dispatchHighlightSettingsChanged } from '@/components/pdfViewer/pdfEvents'
+import {
+  getDefaultHighlightSettings,
+  loadStoredHighlightSettings,
+  PDF_VIEWER_SETTINGS_STORAGE_KEY,
+  type HighlightSettings,
+} from '@/components/pdfViewer/highlightSettings'
 
-interface ViewerSettingsState {
-  highlightColor: string
-  highlightOpacity: number
-  clearOnNewQuery: boolean
-}
-
-const STORAGE_KEY = 'pdf-viewer-settings'
-
-const DEFAULT_SETTINGS: ViewerSettingsState = {
-  highlightColor: '#2e7d32',
-  highlightOpacity: 0.35,
-  clearOnNewQuery: true,
+function dispatchViewerSettings(settings: HighlightSettings) {
+  dispatchHighlightSettingsChanged({
+    color: settings.highlightColor,
+    opacity: settings.highlightOpacity,
+    clearOnNewQuery: settings.clearOnNewQuery,
+  })
 }
 
 export default function ViewerSettings() {
-  const [settings, setSettings] = useState<ViewerSettingsState>(DEFAULT_SETTINGS)
+  const theme = useTheme()
+  const defaultSettings = useMemo(() => getDefaultHighlightSettings(theme), [theme])
+  const [settings, setSettings] = useState<HighlightSettings>(() => defaultSettings)
 
-  const applySettings = (next: ViewerSettingsState | ((prev: ViewerSettingsState) => ViewerSettingsState)) => {
+  const applySettings = useCallback((next: HighlightSettings | ((prev: HighlightSettings) => HighlightSettings)) => {
     setSettings((prev) => {
-      const resolved = typeof next === 'function' ? (next as (prev: ViewerSettingsState) => ViewerSettingsState)(prev) : next
-      dispatchHighlightSettingsChanged(resolved)
+      const resolved = typeof next === 'function' ? (next as (prev: HighlightSettings) => HighlightSettings)(prev) : next
+      dispatchViewerSettings(resolved)
       return resolved
     })
-  }
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY)
-      if (stored) {
-        const parsed = JSON.parse(stored) as ViewerSettingsState
-        applySettings({ ...DEFAULT_SETTINGS, ...parsed })
-        return
-      }
-    } catch (error) {
-      console.warn('Failed to load viewer settings', error)
-    }
-    dispatchHighlightSettingsChanged(DEFAULT_SETTINGS)
   }, [])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+    applySettings(loadStoredHighlightSettings(defaultSettings))
+  }, [applySettings, defaultSettings])
+
+  useEffect(() => {
+    localStorage.setItem(PDF_VIEWER_SETTINGS_STORAGE_KEY, JSON.stringify(settings))
   }, [settings])
 
   const opacityLabel = useMemo(() => `${Math.round(settings.highlightOpacity * 100)}%`, [settings.highlightOpacity])
@@ -121,7 +114,7 @@ export default function ViewerSettings() {
             <Box>
               <Button
                 variant="outlined"
-                onClick={() => applySettings(DEFAULT_SETTINGS)}
+                onClick={() => applySettings(defaultSettings)}
               >
                 Restore Defaults
               </Button>
