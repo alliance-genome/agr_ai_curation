@@ -29,7 +29,7 @@ Options:
   --pr VALUE                Pull request number
   --since VALUE             Floor timestamp — only consider feedback after this (typically PR creation time)
   --author VALUE            Review author login to watch (default: claude)
-  --max-rounds VALUE        Max review rounds including initial (default: 3 = 1 initial + 2 re-reviews)
+  --max-rounds VALUE        Max review rounds including initial (default: 5 = 1 initial + 4 re-reviews)
   --wait-seconds VALUE      Poll timeout per round in seconds (default: 300)
   --poll-seconds VALUE      Poll interval in seconds (default: 30)
   --head-sha VALUE          Current PR head SHA for re-review marker dedup (optional; auto-detected from PR if omitted)
@@ -44,7 +44,7 @@ repo=""
 pr_number=""
 since=""
 author_login="claude"
-max_rounds=3
+max_rounds=5
 wait_seconds=300
 poll_seconds=30
 head_sha=""
