@@ -27,8 +27,11 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:type-check-changed": "node --test scripts/type-check-changed.test.mjs",
     "lint": "eslint src --ext .ts,.tsx",
-    "type-check": "tsc --noEmit"
+    "type-check": "node scripts/type-check-changed.mjs",
+    "type-check:changed": "node scripts/type-check-changed.mjs",
+    "type-check:all": "tsc --noEmit --pretty false"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.8.0",

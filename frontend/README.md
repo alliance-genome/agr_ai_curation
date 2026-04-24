@@ -405,9 +405,18 @@ npm run lint -- --fix
 
 ### Type Checking
 ```bash
-# Run TypeScript compiler checks
+# Run the actionable changed-file TypeScript guard
 npm run type-check
+
+# Inspect the full repo-wide TypeScript baseline
+npm run type-check:all
 ```
+
+`npm run type-check` compares changed frontend TypeScript files against
+`TYPECHECK_BASE` (default: `origin/main`) and only fails for diagnostics in
+those changed files or global TypeScript configuration diagnostics. The full
+`npm run type-check:all` scan is currently a known-debt baseline and may report
+older errors outside the current ticket.
 
 ## Nginx Configuration
 
@@ -442,7 +451,7 @@ Key features:
 1. **API connection failed**: Check backend is running on port 8000
 2. **Blank page**: Check browser console for errors
 3. **Styles not loading**: Clear browser cache
-4. **TypeScript errors**: Run `npm run type-check`
+4. **TypeScript errors**: Run `npm run type-check`; use `npm run type-check:all` only when you need the full known-debt baseline
 
 ### Debug Mode
 
@@ -461,7 +470,9 @@ View network requests:
 - `npm run preview` - Preview production build
 - `npm test` - Run test suite
 - `npm run lint` - Run ESLint
-- `npm run type-check` - Check TypeScript types
+- `npm run type-check` - Run the changed-file TypeScript guard
+- `npm run type-check:changed` - Alias for the changed-file TypeScript guard
+- `npm run type-check:all` - Run the full repo-wide TypeScript check
 
 ## Contributing
 

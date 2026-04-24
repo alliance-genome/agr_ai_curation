@@ -34,6 +34,12 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
   - Backend contract core tests: `docker compose exec backend pytest tests/contract/ -q`
   - Frontend tests: `docker compose exec frontend npm run test -- --run`
   - Frontend build: `docker compose exec frontend npm run build`
+- Frontend issue-workspace validation:
+  - Install dependencies: `cd frontend && npm ci`
+  - Frontend tests: `cd frontend && npm run test -- --run`
+  - Actionable frontend type-check guard: `cd frontend && npm run type-check`
+  - Full known-debt TypeScript baseline: `cd frontend && npm run type-check:all`
+  - Interpret `type-check:all` failures as baseline debt unless diagnostics point at files changed by the current ticket.
 - Symphony issue workspaces and isolated backend test runs:
   - Backend unit tests: `docker compose -f docker-compose.test.yml run --rm backend-unit-tests`
   - Backend contract tests: `docker compose -f docker-compose.test.yml run --rm backend-contract-tests`
