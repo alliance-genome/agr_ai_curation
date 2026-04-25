@@ -340,7 +340,7 @@ def test_ask_streaming_chat_question_can_validate_runtime_default_model_without_
     checks: list[dict] = []
     captured = {}
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-runtime","model":"gpt-5.4"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-runtime","model":"gpt-5.5"}\n'
         "\n"
         'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
         "\n"
@@ -367,7 +367,7 @@ def test_ask_streaming_chat_question_can_validate_runtime_default_model_without_
         message="What genes are the focus of the publication?",
         chat_model=None,
         specialist_model=None,
-        expected_model="gpt-5.4",
+        expected_model="gpt-5.5",
         chat_timeout_seconds=5.0,
         checks=checks,
     )
@@ -377,7 +377,7 @@ def test_ask_streaming_chat_question_can_validate_runtime_default_model_without_
         "session_id": "session-stream-runtime-defaults",
     }
     assert summary["trace_id"] == "trace-runtime"
-    assert summary["model"] == "gpt-5.4"
+    assert summary["model"] == "gpt-5.5"
     assert "crb" in summary["response_preview"].lower()
 
 
@@ -412,7 +412,7 @@ def test_require_model_looks_expected_rejects_generic_litellm_repr():
     with pytest.raises(smoke.SmokeFailure, match="did not match"):
         smoke.require_model_looks_expected(
             "<agents.extensions.models.litellm_model.LitellmModel object at 0x1234>",
-            expected_model="gpt-5.4",
+            expected_model="gpt-5.5",
             context="Streaming chat RUN_STARTED",
         )
 

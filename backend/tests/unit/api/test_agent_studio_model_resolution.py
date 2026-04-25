@@ -12,7 +12,7 @@ def test_list_anthropic_catalog_models_filters_and_sorts(monkeypatch):
         api_module,
         "list_model_definitions",
         lambda: [
-            SimpleNamespace(model_id="gpt-5.4", name="GPT-5.4", provider="openai", default=True),
+            SimpleNamespace(model_id="gpt-5.5", name="GPT-5.5", provider="openai", default=True),
             SimpleNamespace(model_id="claude-z", name="Claude Z", provider="anthropic", default=False),
             SimpleNamespace(model_id="claude-a", name="Claude A", provider="anthropic", default=True),
         ],

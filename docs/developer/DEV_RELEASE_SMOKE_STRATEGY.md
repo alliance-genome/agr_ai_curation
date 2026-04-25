@@ -4,7 +4,7 @@ Date: 2026-04-13
 Status: Implemented on dev, still pending manual/browser sign-off and release-tag work  
 Audience: release owners, backend/frontend maintainers, future handoff sessions  
 Primary script target: `scripts/testing/dev_release_smoke.py`
-Execution cadence: implement one slice at a time, validate it, run a GPT-5.4
+Execution cadence: implement one slice at a time, validate it, run a GPT-5.5
 xhigh code-review pass, then move to the next slice
 
 ## 1) Why this document exists
@@ -202,8 +202,8 @@ Historical note:
    - a valid streaming `trace_id` plus `CHUNK_PROVENANCE`
    - `chat_stream_model = gpt-5.4`
    - `crb / crumbs` in both non-streaming and streaming previews
-   - explicit evidence that the smoke expects `gpt-5.4` for the runtime-default
-     supervisor path
+   - explicit evidence that the smoke expected `gpt-5.4` for the
+     runtime-default supervisor path before the ALL-290 model upgrade
    - explicit evidence that the expected runtime-default specialist model is
      `gpt-5.4-nano`, while also recording that this exact specialist model id is
      not yet directly observable via the current SSE contract
@@ -867,7 +867,7 @@ After each implementation slice:
 
 1. Run targeted validation for that slice locally and, when appropriate, on the
    deployed dev stack.
-2. Run a GPT-5.4 xhigh code-review subagent pass focused on the slice's changed
+2. Run a GPT-5.5 xhigh code-review subagent pass focused on the slice's changed
    files and behaviors.
 3. Address any review findings before starting the next slice.
 
@@ -929,7 +929,7 @@ If you are picking this work up in a fresh session, do this next:
    - finalize changelog/version/tag for the next patch release
 5. If more smoke work is still needed later, continue using the same cadence:
    - targeted validation
-   - GPT-5.4 xhigh review pass
+   - GPT-5.5 xhigh review pass
    - then only move forward after findings are addressed
 
 That should be enough to resume the work without needing the earlier context.
