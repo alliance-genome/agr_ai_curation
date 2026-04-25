@@ -1,6 +1,8 @@
+import json
 import unittest
 
 from src.analyzers.conversation import ConversationAnalyzer
+from src.analyzers.pdf_citations import PDFCitationsAnalyzer
 from src.analyzers.tool_calls import ToolCallAnalyzer
 from src.analyzers.trace_summary import TraceSummaryAnalyzer
 from src.utils.trace_output import extract_trace_response_text, is_trace_output_cacheable
@@ -78,6 +80,32 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
                 ],
                 "output": {},
             },
+        ]
+
+    def _make_pdf_observation(self, payload):
+        return [
+            {
+                "id": "gen-pdf",
+                "type": "GENERATION",
+                "name": "OpenAI-generation",
+                "startTime": "2026-03-26T00:00:03Z",
+                "model": "gpt-4o",
+                "input": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call-pdf",
+                        "name": "ask_pdf_extraction_specialist",
+                        "arguments": "{\"query\":\"methods citations\"}",
+                        "status": "completed",
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call-pdf",
+                        "output": json.dumps(payload),
+                    },
+                ],
+                "output": {},
+            }
         ]
 
     def test_tool_calls_extract_from_generation_inputs_and_dedupe_repeated_calls(self):
@@ -273,6 +301,137 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         )
 
         self.assertEqual(conversation["assistant_response"], "N/A")
+
+    def test_pdf_citations_detects_numeric_and_superscript_markers_with_mapped_bibliography(self):
+        observations = self._make_pdf_observation(
+            {
+                "answer": "The methods cite prior protocols¹ and antibody prep [2,3].",
+                "citations": [
+                    {
+                        "chunk_id": "methods-1",
+                        "section_title": "Methods",
+                        "page_number": 4,
+                        "source": "pdf",
+                        "text": "Larvae were staged as described<sup>1</sup> and stained [2,3].",
+                    },
+                    {
+                        "chunk_id": "refs-1",
+                        "section_title": "References",
+                        "page_number": 9,
+                        "source": "pdf",
+                        "text": (
+                            "References\n"
+                            "1. Brand AH and Perrimon N. Targeted gene expression.\n"
+                            "2. Smith J. Antibody preparation.\n"
+                            "3. Jones K. Imaging protocol."
+                        ),
+                    },
+                ],
+            }
+        )
+
+        data = PDFCitationsAnalyzer.analyze(observations)
+        diagnostics = data["citation_number_diagnostics"]
+
+        self.assertTrue(data["found"])
+        self.assertEqual(diagnostics["marker_numbers"], [1, 2, 3])
+        self.assertEqual(diagnostics["bibliography_entry_numbers"], [1, 2, 3])
+        self.assertEqual(diagnostics["mapping_status"], "mapped")
+        self.assertCountEqual(
+            diagnostics["marker_styles"],
+            ["bracketed", "html_superscript", "unicode_superscript"],
+        )
+
+    def test_pdf_citations_reports_missing_bibliography_for_numeric_markers(self):
+        observations = self._make_pdf_observation(
+            {
+                "answer": "The methods cite a previous protocol [4].",
+                "citations": [
+                    {
+                        "chunk_id": "methods-1",
+                        "section_title": "Methods",
+                        "page_number": 4,
+                        "source": "pdf",
+                        "text": "The protocol follows a published staining method [4].",
+                    }
+                ],
+            }
+        )
+
+        diagnostics = PDFCitationsAnalyzer.analyze(observations)["citation_number_diagnostics"]
+
+        self.assertTrue(diagnostics["markers_found"])
+        self.assertFalse(diagnostics["bibliography_found"])
+        self.assertEqual(diagnostics["marker_numbers"], [4])
+        self.assertEqual(diagnostics["missing_marker_numbers"], [4])
+        self.assertEqual(diagnostics["mapping_status"], "missing_bibliography")
+
+    def test_pdf_citations_reports_ambiguous_bibliography_status(self):
+        observations = self._make_pdf_observation(
+            {
+                "answer": "The methods cite prior work [2].",
+                "citations": [
+                    {
+                        "chunk_id": "methods-1",
+                        "section_title": "Methods",
+                        "page_number": 3,
+                        "source": "pdf",
+                        "text": "The strain construction followed prior work [2].",
+                    },
+                    {
+                        "chunk_id": "refs-1",
+                        "section_title": "References",
+                        "page_number": 8,
+                        "source": "pdf",
+                        "text": (
+                            "References\n"
+                            "2. Smith J. Strain construction.\n"
+                            "2. Smyth J. Similar numbered entry."
+                        ),
+                    },
+                ],
+            }
+        )
+
+        diagnostics = PDFCitationsAnalyzer.analyze(observations)["citation_number_diagnostics"]
+
+        self.assertTrue(diagnostics["bibliography_found"])
+        self.assertEqual(diagnostics["marker_numbers"], [2])
+        self.assertEqual(diagnostics["ambiguous_marker_numbers"], [2])
+        self.assertEqual(diagnostics["mapping_status"], "ambiguous")
+
+    def test_pdf_citations_keeps_empty_diagnostics_for_traces_without_citation_data(self):
+        data = PDFCitationsAnalyzer.analyze([])
+
+        self.assertFalse(data["found"])
+        self.assertEqual(data["total_citations"], 0)
+        self.assertEqual(
+            data["citation_number_diagnostics"]["mapping_status"],
+            "no_markers",
+        )
+
+    def test_pdf_citations_does_not_count_bibliography_entries_as_markers(self):
+        observations = self._make_pdf_observation(
+            {
+                "answer": "The PDF specialist found the reference list.",
+                "citations": [
+                    {
+                        "chunk_id": "refs-1",
+                        "section_title": "References",
+                        "page_number": 8,
+                        "source": "pdf",
+                        "text": "References\n[1] Smith J. A numbered bibliography entry.",
+                    }
+                ],
+            }
+        )
+
+        diagnostics = PDFCitationsAnalyzer.analyze(observations)["citation_number_diagnostics"]
+
+        self.assertFalse(diagnostics["markers_found"])
+        self.assertTrue(diagnostics["bibliography_found"])
+        self.assertEqual(diagnostics["bibliography_entry_numbers"], [1])
+        self.assertEqual(diagnostics["mapping_status"], "no_markers")
 
 
 if __name__ == "__main__":

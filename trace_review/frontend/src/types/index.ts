@@ -141,6 +141,27 @@ export interface Citation {
   source?: string;
 }
 
+export type CitationMappingStatus =
+  | 'mapped'
+  | 'missing_bibliography'
+  | 'missing_entries'
+  | 'ambiguous'
+  | 'no_markers';
+
+export interface CitationNumberDiagnostics {
+  markers_found: boolean;
+  marker_numbers: number[];
+  marker_count: number;
+  marker_styles: string[];
+  bibliography_found: boolean;
+  bibliography_entry_numbers: number[];
+  bibliography_entry_count: number;
+  mapping_status: CitationMappingStatus;
+  mapped_numbers: number[];
+  missing_marker_numbers: number[];
+  ambiguous_marker_numbers: number[];
+}
+
 export interface ToolCallMetadata {
   tool_name: string;
   query: string;
@@ -156,6 +177,7 @@ export interface PDFCitationsData {
   citations: Citation[];
   total_chunks_found: number;
   tool_calls: ToolCallMetadata[];
+  citation_number_diagnostics?: CitationNumberDiagnostics;
 }
 
 // Token Analysis Types
