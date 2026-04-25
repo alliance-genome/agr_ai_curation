@@ -183,6 +183,50 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
 
         self.assertEqual(conversation["assistant_response"], "N/A")
 
+    def test_conversation_uses_chat_output_observation_after_placeholder_trace_output(self):
+        observations = self._make_observations() + [
+            {
+                "id": "span-chat-output",
+                "type": "SPAN",
+                "name": "Chat Output",
+                "startTime": "2026-03-26T00:00:03Z",
+                "output": {"answer": "Final Chat Output answer"},
+            }
+        ]
+
+        conversation = ConversationAnalyzer.extract_conversation(
+            self._make_trace({"assistant_response": "N/A", "response_length": 24}),
+            observations,
+        )
+
+        self.assertEqual(conversation["assistant_response"], "Final Chat Output answer")
+
+        summary = TraceSummaryAnalyzer.analyze(
+            {"raw_trace": self._make_trace({"assistant_response": "N/A", "response_length": 24})},
+            observations,
+        )
+
+        self.assertEqual(summary["response_preview"], "Final Chat Output answer")
+        self.assertEqual(summary["response_length"], len("Final Chat Output answer"))
+
+    def test_conversation_ignores_unlabeled_observation_answer_as_final_output(self):
+        observations = self._make_observations() + [
+            {
+                "id": "tool-pdf-answer",
+                "type": "TOOL",
+                "name": "PDF citation extraction",
+                "startTime": "2026-03-26T00:00:03Z",
+                "output": {"answer": "Internal specialist answer"},
+            }
+        ]
+
+        conversation = ConversationAnalyzer.extract_conversation(
+            self._make_trace({"response_length": 26}),
+            observations,
+        )
+
+        self.assertEqual(conversation["assistant_response"], "N/A")
+
     def test_conversation_prefers_generation_output_over_partial_input_without_trace_output(self):
         observations = [
             {
@@ -222,6 +266,8 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertTrue(is_trace_output_cacheable({"response": "final answer"}))
         self.assertTrue(is_trace_output_cacheable({"error": "boom"}))
         self.assertFalse(is_trace_output_cacheable({"response_length": 100, "tool_calls": 1}))
+        self.assertFalse(is_trace_output_cacheable({"assistant_response": "N/A", "response_length": 3}))
+        self.assertFalse(is_trace_output_cacheable({"response": "No final user-visible output was emitted."}))
 
     def test_trace_output_parses_stringified_json_payloads(self):
         payload = '{"response":"Final grounded answer","response_length":22}'
@@ -241,6 +287,20 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         }
 
         self.assertEqual(extract_trace_response_text(payload), "Final grounded answer")
+
+    def test_trace_output_extracts_answer_and_nested_final_output_values(self):
+        payload = {
+            "output": {
+                "final_output": {
+                    "answer": "Nested final Chat Output answer",
+                    "citations": [],
+                    "sources": [],
+                }
+            },
+            "assistant_response": "N/A",
+        }
+
+        self.assertEqual(extract_trace_response_text(payload), "Nested final Chat Output answer")
 
     def test_conversation_does_not_treat_history_assistant_turn_as_final_output(self):
         observations = [

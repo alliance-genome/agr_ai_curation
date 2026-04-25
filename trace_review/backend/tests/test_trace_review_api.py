@@ -88,6 +88,76 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
     @patch("src.api.traces.TokenAnalysisAnalyzer.analyze", return_value={})
     @patch("src.api.traces.PDFCitationsAnalyzer.analyze", return_value={})
     @patch("src.api.traces.ToolCallAnalyzer.extract_tool_calls", return_value={"total_count": 0, "unique_tools": [], "tool_calls": []})
+    @patch("src.api.traces.ConversationAnalyzer.extract_conversation", return_value={"user_input": "Question", "assistant_response": "Final answer"})
+    @patch("src.api.traces.TraceExtractor")
+    async def test_analyze_trace_caches_nested_final_output_as_stable(
+        self,
+        extractor_cls: Mock,
+        _conversation: Mock,
+        _tool_calls: Mock,
+        _pdf_citations: Mock,
+        _token_analysis: Mock,
+        _agent_context: Mock,
+        _trace_summary: Mock,
+        _document_hierarchy: Mock,
+        _agent_configs: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.return_value = self._make_trace_data(
+            {"output": {"final_output": {"answer": "Final answer"}}}
+        )
+
+        response = await traces.analyze_trace(
+            AnalyzeTraceRequest(trace_id="trace-inflight-1234", source="local"),
+            request,
+        )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["cache_status"], "miss")
+        self.assertEqual(request.app.state.cache_manager.get_status("trace-inflight-1234"), "stable")
+
+    @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
+    @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value={"has_errors": False})
+    @patch("src.api.traces.AgentContextAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.TokenAnalysisAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.PDFCitationsAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.ToolCallAnalyzer.extract_tool_calls", return_value={"total_count": 0, "unique_tools": [], "tool_calls": []})
+    @patch("src.api.traces.ConversationAnalyzer.extract_conversation", return_value={"user_input": "Question", "assistant_response": "N/A"})
+    @patch("src.api.traces.TraceExtractor")
+    async def test_analyze_trace_keeps_placeholder_output_transient(
+        self,
+        extractor_cls: Mock,
+        _conversation: Mock,
+        _tool_calls: Mock,
+        _pdf_citations: Mock,
+        _token_analysis: Mock,
+        _agent_context: Mock,
+        _trace_summary: Mock,
+        _document_hierarchy: Mock,
+        _agent_configs: Mock,
+    ):
+        request = self._make_request()
+        extractor_cls.return_value.extract_complete_trace.return_value = self._make_trace_data(
+            {"assistant_response": "N/A", "response_length": 3}
+        )
+
+        response = await traces.analyze_trace(
+            AnalyzeTraceRequest(trace_id="trace-inflight-1234", source="local"),
+            request,
+        )
+
+        self.assertEqual(response["status"], "success")
+        self.assertEqual(response["cache_status"], "transient")
+        self.assertEqual(request.app.state.cache_manager.get_status("trace-inflight-1234"), "transient")
+
+    @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
+    @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value={"has_errors": False})
+    @patch("src.api.traces.AgentContextAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.TokenAnalysisAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.PDFCitationsAnalyzer.analyze", return_value={})
+    @patch("src.api.traces.ToolCallAnalyzer.extract_tool_calls", return_value={"total_count": 0, "unique_tools": [], "tool_calls": []})
     @patch("src.api.traces.ConversationAnalyzer.extract_conversation", return_value={"user_input": "Question", "assistant_response": "N/A"})
     @patch("src.api.traces.TraceExtractor")
     async def test_analyze_trace_preserves_transient_status_on_cached_hit(
