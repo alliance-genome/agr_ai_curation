@@ -476,6 +476,30 @@ def test_process_feedback_report_handles_notifier_failure(monkeypatch):
     assert db.commit.call_count == 2
 
 
+def test_process_feedback_report_appends_notification_error_to_trace_capture_error(monkeypatch):
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = _feedback_service_module().FeedbackService(db=db)
+    service.notifier = MagicMock()
+    service.notifier.send_feedback_notification.side_effect = RuntimeError("smtp down")
+    service._capture_feedback_trace_snapshot = MagicMock(
+        side_effect=RuntimeError("langfuse down")
+    )
+
+    service.process_feedback_report(report.id)
+
+    assert _status_value(report.processing_status) == "completed"
+    assert report.trace_data["capture_status"] == "error"
+    assert report.email_sent_at is None
+    assert report.error_details == (
+        "Trace capture failed: RuntimeError: langfuse down; "
+        "Notification error: smtp down"
+    )
+    assert db.commit.call_count == 2
+
+
 def test_process_feedback_report_marks_failed_on_unexpected_error(monkeypatch):
     report = _report()
     db = MagicMock()

@@ -116,7 +116,7 @@ class FeedbackService:
             trace_ids=trace_ids,
             conversation_transcript=conversation_transcript,
             processing_status=ProcessingStatus.PENDING,
-            created_at=datetime.utcnow(),
+            created_at=datetime.now(timezone.utc),
         )
 
         self.db.add(report)
@@ -150,7 +150,7 @@ class FeedbackService:
         try:
             # Mark as processing
             report.processing_status = ProcessingStatus.PROCESSING
-            report.processing_started_at = datetime.utcnow()
+            report.processing_started_at = datetime.now(timezone.utc)
             self.db.commit()
 
             logger.info('Starting background processing for feedback %s', feedback_id)
@@ -181,7 +181,7 @@ class FeedbackService:
             # Send notification (SNS or email)
             try:
                 self.notifier.send_feedback_notification(report)
-                report.email_sent_at = datetime.utcnow()
+                report.email_sent_at = datetime.now(timezone.utc)
                 logger.info('Sent notification for feedback %s', feedback_id)
             except Exception as e:
                 logger.error('Notification failed for %s: %s', feedback_id, str(e), exc_info=True)
@@ -193,7 +193,7 @@ class FeedbackService:
 
             # Mark as completed
             report.processing_status = ProcessingStatus.COMPLETED
-            report.processing_completed_at = datetime.utcnow()
+            report.processing_completed_at = datetime.now(timezone.utc)
             self.db.commit()
 
             logger.info('Completed background processing for feedback %s', feedback_id)
