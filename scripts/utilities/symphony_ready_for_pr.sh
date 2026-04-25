@@ -198,7 +198,7 @@ auto_bounce_to_in_progress_for_claude() {
 - Head SHA: ${PR_HEAD_SHA:-}
 - Claude review round: ${loop_round}/${loop_max}
 - Claude report: ${report_file}
-- Implementation focus: address the latest Claude feedback first. After the fix is pushed, check the PR on GitHub for older Claude feedback only to confirm previously fixed items did not regress.
+- Implementation focus: triage the latest Claude feedback first. If it is actionable, fix it, push, and move to Needs Review. If it is an approval, confirmation, or otherwise has no actionable work, write that disposition and move directly to Human Review Prep without editing code.
 EOF
 
   set +e

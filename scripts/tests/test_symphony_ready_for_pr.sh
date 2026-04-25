@@ -297,7 +297,8 @@ EOF
   assert_contains "append-section --issue-identifier ALL-293 --section-title PR Handoff" "$(cat "${workpad_log}")"
   assert_contains "--state In Progress --from-state Ready for PR" "$(cat "${state_log}")"
   assert_contains "Claude report: ${report_file}" "$(cat "${section_log}")"
-  assert_contains "address the latest Claude feedback first" "$(cat "${section_log}")"
+  assert_contains "triage the latest Claude feedback first" "$(cat "${section_log}")"
+  assert_contains "move directly to Human Review Prep without editing code" "$(cat "${section_log}")"
 }
 
 test_claude_maxed_out_without_report_does_not_abort() {
