@@ -149,7 +149,11 @@ run_runtime_sync() {
 
   local output rc
   set +e
-  output="$(bash "${helper}" "${helper_args[@]}" 2>&1)"
+  if [[ -n "${source_root}" ]]; then
+    output="$(SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" bash "${helper}" "${helper_args[@]}" 2>&1)"
+  else
+    output="$(bash "${helper}" "${helper_args[@]}" 2>&1)"
+  fi
   rc=$?
   set -e
 

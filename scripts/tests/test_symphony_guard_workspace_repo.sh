@@ -59,6 +59,7 @@ done
 echo "SYNC_ENV_STATUS=ready"
 echo "SYNC_ENV_SOURCE=origin-main"
 echo "SYNC_ENV_REFRESH_FLAG=${refresh_seen}"
+echo "SYNC_ENV_LOCAL_SOURCE_ROOT=${SYMPHONY_LOCAL_SOURCE_ROOT:-missing}"
 exit 0
 EOF
   chmod +x "${repo_dir}/scripts/utilities/symphony_ensure_workspace_runtime.sh"
@@ -141,6 +142,7 @@ EOF
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
   assert_contains "SYNC_ENV_SOURCE=origin-main" "${output}"
   assert_contains "SYNC_ENV_REFRESH_FLAG=yes" "${output}"
+  assert_contains "SYNC_ENV_LOCAL_SOURCE_ROOT=${source_root}" "${output}"
   assert_contains "GUARD_REPO_STATUS=ok" "${output}"
   assert_contains "GUARD_REPO_REASON=match" "${output}"
 
