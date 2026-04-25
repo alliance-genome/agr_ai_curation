@@ -685,6 +685,55 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+test_report_shows_latest_feedback_only() {
+  local temp_dir top_json inline_json output_file rc output report_file report_content
+  temp_dir="$(mktemp -d)"
+  top_json="${temp_dir}/top.json"
+  inline_json="${temp_dir}/inline.json"
+  output_file="${temp_dir}/output.txt"
+
+  cat > "${top_json}" <<'EOF'
+{
+  "comments": [
+    {
+      "author": {"login": "claude"},
+      "createdAt": "2026-03-21T14:04:00Z",
+      "url": "https://github.com/test/repo/pull/99#issuecomment-1",
+      "body": "Old feedback that was already fixed."
+    },
+    {
+      "author": {"login": "claude"},
+      "createdAt": "2026-03-21T14:08:00Z",
+      "url": "https://github.com/test/repo/pull/99#issuecomment-2",
+      "body": "Latest feedback to fix now."
+    }
+  ],
+  "reviews": [],
+  "url": "https://github.com/test/repo/pull/99",
+  "headRefOid": "abc123",
+  "commits": [
+    {"oid": "abc123", "committedDate": "2026-03-21T14:01:47Z"}
+  ]
+}
+EOF
+  echo '[]' > "${inline_json}"
+
+  rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}")"
+  output="$(cat "${output_file}")"
+
+  assert_exit_code "10" "${rc}"
+  report_file="$(echo "${output}" | grep CLAUDE_LOOP_REPORT_FILE= | cut -d= -f2)"
+  report_content="$(cat "${report_file}")"
+
+  assert_contains "2 comment(s) found since 2026-03-21T14:00:00Z; showing latest only." "${report_content}"
+  assert_contains "Latest feedback to fix now." "${report_content}"
+  assert_not_contains "Old feedback that was already fixed." "${report_content}"
+  rm -f "${report_file}"
+
+  echo "  PASS: test_report_shows_latest_feedback_only"
+  rm -rf "${temp_dir}"
+}
+
 # ── Test: The exact PR #109 scenario that exposed the bug ────────────
 
 test_pr109_scenario_head_after_review() {
@@ -846,6 +895,7 @@ test_pr_review_detected
 test_custom_author
 test_already_requested_sha_does_not_repost
 test_report_excludes_rereview_markers
+test_report_shows_latest_feedback_only
 test_pr109_scenario_head_after_review
 test_disposition_file_accepted
 

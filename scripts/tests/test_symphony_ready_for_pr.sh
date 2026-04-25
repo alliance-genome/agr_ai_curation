@@ -222,6 +222,135 @@ EOF
   assert_contains "READY_FOR_PR_PR_URL=https://example.test/alliance-genome/agr_ai_curation/pull/52" "${output}"
 }
 
+test_claude_detected_auto_bounces_to_in_progress() {
+  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub report_file workpad_log state_log section_log output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  report_file="${temp_dir}/claude-report.md"
+  workpad_log="${temp_dir}/workpad.log"
+  state_log="${temp_dir}/state.log"
+  section_log="${temp_dir}/section.log"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":269,"title":"ALL-293: Existing PR","url":"https://example.test/pr/269","headRefName":"all-293"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":269,"title":"ALL-293: Existing PR","url":"https://example.test/pr/269","headRefName":"all-293","baseRefName":"main","headRefOid":"abc293","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T16:45:00Z"}
+EOF
+
+  printf 'latest feedback\n' > "${report_file}"
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=2
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  chmod +x "${loop_stub}"
+
+  cat > "${workpad_stub}" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "${workpad_log}"
+while [[ \$# -gt 0 ]]; do
+  if [[ "\$1" == "--section-file" ]]; then
+    cat "\$2" > "${section_log}"
+    break
+  fi
+  shift
+done
+echo WORKPAD_STATUS=updated
+EOF
+  chmod +x "${workpad_stub}"
+
+  cat > "${state_stub}" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "${state_log}"
+echo LINEAR_STATE_STATUS=ok
+EOF
+  chmod +x "${state_stub}"
+
+  output="$(
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-293 \
+      --branch all-293 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-review-seconds 1 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}"
+  )"
+
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
+  assert_contains "READY_FOR_PR_NEXT_STATE=In Progress" "${output}"
+  assert_contains "append-section --issue-identifier ALL-293 --section-title PR Handoff" "$(cat "${workpad_log}")"
+  assert_contains "--state In Progress --from-state Ready for PR" "$(cat "${state_log}")"
+  assert_contains "Claude report: ${report_file}" "$(cat "${section_log}")"
+  assert_contains "address the latest Claude feedback first" "$(cat "${section_log}")"
+}
+
+test_claude_maxed_out_without_report_does_not_abort() {
+  local temp_dir pr_json pr_view_json loop_stub output_file output rc
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  output_file="${temp_dir}/out.txt"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":270,"title":"ALL-270: Existing PR","url":"https://example.test/pr/270","headRefName":"all-270"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":270,"title":"ALL-270: Existing PR","url":"https://example.test/pr/270","headRefName":"all-270","baseRefName":"main","headRefOid":"abc270","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T16:45:00Z"}
+EOF
+
+  cat > "${loop_stub}" <<'EOF'
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=maxed_out
+CLAUDE_LOOP_ROUND=5
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+EOF
+  chmod +x "${loop_stub}"
+
+  set +e
+  SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-270 \
+      --branch all-270 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-review-seconds 1 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}" \
+      > "${output_file}"
+  rc=$?
+  set -e
+  output="$(cat "${output_file}")"
+
+  [[ "${rc}" == "0" ]] || {
+    echo "Expected exit code 0, got ${rc}" >&2
+    printf 'Actual output:\n%s\n' "${output}" >&2
+    exit 1
+  }
+
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=maxed_out" "${output}"
+  assert_contains "READY_FOR_PR_INSTRUCTIONS=PR #270 has completed 5/5 Claude review rounds" "${output}"
+}
+
 test_no_pr_skips_lane
 test_existing_pr_is_reported
 test_conflicted_pr_routes_back_to_in_progress
@@ -229,5 +358,7 @@ test_missing_pr_reports_nonzero
 test_base_branch_is_rejected
 test_dry_run_create_reports_title
 test_create_pr_uses_plain_cli_output_and_view_json
+test_claude_detected_auto_bounces_to_in_progress
+test_claude_maxed_out_without_report_does_not_abort
 
 echo "symphony_ready_for_pr tests passed"

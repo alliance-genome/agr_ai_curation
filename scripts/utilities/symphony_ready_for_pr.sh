@@ -19,6 +19,8 @@ Options:
   --review-poll-seconds N        Poll interval during Claude wait (default: 30)
   --review-author VALUE          GitHub login to watch for reviews (default: claude)
   --disposition-file PATH        File with feedback disposition context (passed to Claude review loop)
+  --auto-bounce-claude-feedback  Move to In Progress when Claude feedback is detected (default)
+  --no-auto-bounce-claude-feedback
   --dry-run                      Do not create a PR; report intended action only
   --pr-json-file PATH            Test fixture override for `gh pr list` JSON
   --pr-view-json-file PATH       Test fixture override for `gh pr view` JSON
@@ -36,6 +38,7 @@ wait_for_review_seconds=0
 review_poll_seconds=30
 review_author="claude"
 disposition_file=""
+auto_bounce_claude_feedback=1
 dry_run=0
 pr_json_file=""
 pr_view_json_file=""
@@ -85,6 +88,14 @@ while [[ $# -gt 0 ]]; do
     --disposition-file)
       disposition_file="${2:-}"
       shift 2
+      ;;
+    --auto-bounce-claude-feedback)
+      auto_bounce_claude_feedback=1
+      shift
+      ;;
+    --no-auto-bounce-claude-feedback)
+      auto_bounce_claude_feedback=0
+      shift
       ;;
     --dry-run)
       dry_run=1
@@ -138,6 +149,9 @@ if [[ -z "${branch}" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLAUDE_LOOP_HELPER="${SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER:-${SCRIPT_DIR}/symphony_claude_review_loop.sh}"
+WORKPAD_HELPER="${SYMPHONY_READY_FOR_PR_WORKPAD_HELPER:-${SCRIPT_DIR}/symphony_linear_workpad.sh}"
+STATE_HELPER="${SYMPHONY_READY_FOR_PR_STATE_HELPER:-${SCRIPT_DIR}/symphony_linear_issue_state.sh}"
 
 is_base_like_branch() {
   local branch_name="$1"
@@ -150,6 +164,74 @@ is_base_like_branch() {
       return 1
       ;;
   esac
+}
+
+extract_kv() {
+  local key="$1"
+  local text="$2"
+
+  printf '%s\n' "${text}" | awk -F= -v key="${key}" '
+    $1 == key {
+      sub(/^[^=]*=/, "")
+      value = $0
+    }
+    END {
+      if (value != "") {
+        print value
+      }
+    }
+  '
+}
+
+auto_bounce_to_in_progress_for_claude() {
+  local pr_num="$1"
+  local report_file="$2"
+  local loop_round="${3:-1}"
+  local loop_max="${4:-5}"
+  local section_file workpad_output workpad_rc state_output state_rc
+
+  section_file="$(mktemp /tmp/ready-for-pr-claude-handoff-XXXXXX.md)"
+  cat > "${section_file}" <<EOF
+- Outcome: Claude Code left PR feedback on PR #${pr_num}; Ready for PR moved this issue back to In Progress automatically.
+- PR: ${PR_URL:-}
+- Branch: ${branch}
+- Head SHA: ${PR_HEAD_SHA:-}
+- Claude review round: ${loop_round}/${loop_max}
+- Claude report: ${report_file}
+- Implementation focus: address the latest Claude feedback first. After the fix is pushed, check the PR on GitHub for older Claude feedback only to confirm previously fixed items did not regress.
+EOF
+
+  set +e
+  workpad_output="$(bash "${WORKPAD_HELPER}" append-section \
+    --issue-identifier "${issue_identifier}" \
+    --section-title "PR Handoff" \
+    --section-file "${section_file}" 2>&1)"
+  workpad_rc=$?
+  set -e
+  rm -f "${section_file}"
+
+  if (( workpad_rc != 0 )); then
+    echo "READY_FOR_PR_CLAUDE_ACTION=bounce_failed"
+    echo "READY_FOR_PR_CLAUDE_BOUNCE_ERROR=Failed to append PR Handoff: ${workpad_output//$'\n'/ }"
+    return 30
+  fi
+
+  set +e
+  state_output="$(bash "${STATE_HELPER}" \
+    --issue-identifier "${issue_identifier}" \
+    --state "In Progress" \
+    --from-state "Ready for PR" 2>&1)"
+  state_rc=$?
+  set -e
+
+  if (( state_rc != 0 )); then
+    echo "READY_FOR_PR_CLAUDE_ACTION=bounce_failed"
+    echo "READY_FOR_PR_CLAUDE_BOUNCE_ERROR=Failed to move issue to In Progress: ${state_output//$'\n'/ }"
+    return 31
+  fi
+
+  echo "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress"
+  echo "READY_FOR_PR_NEXT_STATE=In Progress"
 }
 
 # ── Claude review check via unified loop script ─────────────────────
@@ -186,7 +268,7 @@ INST
     return 0
   fi
 
-  local loop_script="${SCRIPT_DIR}/symphony_claude_review_loop.sh"
+  local loop_script="${CLAUDE_LOOP_HELPER}"
   if [[ ! -x "${loop_script}" ]]; then
     echo "READY_FOR_PR_CLAUDE_WARNING=symphony_claude_review_loop.sh not found; skipping Claude wait" >&2
     echo "READY_FOR_PR_CLAUDE_STATUS=${CLAUDE_STATUS}"
@@ -219,14 +301,24 @@ INST
     loop_cmd+=(--disposition-file "${disposition_file}")
   fi
   loop_output="$("${loop_cmd[@]}")"
+  local loop_rc=$?
   set -e
 
   # Extract variables from loop output
   local loop_status loop_report loop_round loop_max
-  loop_status="$(echo "${loop_output}" | grep '^CLAUDE_LOOP_STATUS=' | cut -d= -f2)"
-  loop_report="$(echo "${loop_output}" | grep '^CLAUDE_LOOP_REPORT_FILE=' | cut -d= -f2)"
-  loop_round="$(echo "${loop_output}" | grep '^CLAUDE_LOOP_ROUND=' | cut -d= -f2)"
-  loop_max="$(echo "${loop_output}" | grep '^CLAUDE_LOOP_MAX_ROUNDS=' | cut -d= -f2)"
+  loop_status="$(extract_kv "CLAUDE_LOOP_STATUS" "${loop_output}")"
+  loop_report="$(extract_kv "CLAUDE_LOOP_REPORT_FILE" "${loop_output}")"
+  loop_round="$(extract_kv "CLAUDE_LOOP_ROUND" "${loop_output}")"
+  loop_max="$(extract_kv "CLAUDE_LOOP_MAX_ROUNDS" "${loop_output}")"
+
+  if (( loop_rc != 0 && loop_rc != 10 )); then
+    echo "READY_FOR_PR_CLAUDE_STATUS=error"
+    echo "READY_FOR_PR_CLAUDE_ERROR=Claude review loop failed with exit code ${loop_rc}"
+    cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Claude review loop failed before PR gating could complete. Write the error into PR Handoff, move to Blocked or In Progress based on whether the failure is infrastructure or implementation-related, and stop this run.
+INST
+    return "${loop_rc}"
+  fi
 
   CLAUDE_STATUS="${loop_status:-quiet}"
   CLAUDE_REPORT_FILE="${loop_report:-}"
@@ -238,9 +330,22 @@ INST
     echo "READY_FOR_PR_CLAUDE_ROUND=${loop_round:-1}"
     echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
 
+    if (( auto_bounce_claude_feedback == 1 )); then
+      if ! auto_bounce_to_in_progress_for_claude "${pr_num}" "${CLAUDE_REPORT_FILE}" "${loop_round:-1}" "${loop_max:-5}"; then
+        cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Claude Code left feedback on PR #${pr_num}, but the helper could not move the issue back to In Progress automatically. Do not edit, commit, amend, push, or rerun review from Ready for PR. Record the failure and move the issue manually.
+INST
+        return 30
+      fi
+      cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Claude Code left feedback on PR #${pr_num}. The helper already wrote PR Handoff, moved the issue to In Progress, and stopped this PR lane. Do not edit, commit, amend, push, or rerun review from Ready for PR.
+INST
+      return 0
+    fi
+
     cat <<INST
 READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${loop_round:-1}/${loop_max:-5}). YOU MUST:
-1. Read the full Claude review report at: ${CLAUDE_REPORT_FILE}
+1. Read the latest Claude feedback report at: ${CLAUDE_REPORT_FILE}
 2. Check whether the review is truly clean:
    - A review is clean ONLY if it is 'Approve' with zero findings of any kind — no critical
      issues, no warnings, no suggestions, no improvement ideas. Pure approval with no comments.
@@ -257,7 +362,7 @@ READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${lo
       - For each finding: one line with 'will fix' or 'not taken: <concrete reason>'.
       - Do not use 'deferred' — either fix it now or explain why it is wrong/out of scope.
    c. Move the issue to In Progress and stop this run.
-   d. The next In Progress agent will read the workpad and the PR comments, then implement.
+   d. The next In Progress agent will address the latest feedback first, then check GitHub only to confirm older fixed feedback did not regress.
 INST
   elif [[ "${CLAUDE_STATUS}" == "maxed_out" ]]; then
     cat <<INST
@@ -426,6 +531,9 @@ pr_view_json="$(fetch_pr_view_json "${PR_NUMBER}")"
 PR_NUMBER="$(printf '%s' "${pr_view_json}" | jq -r '.number // $fallback' --arg fallback "${PR_NUMBER}")"
 PR_TITLE="$(printf '%s' "${pr_view_json}" | jq -r '.title // $fallback' --arg fallback "${title}")"
 PR_URL="$(printf '%s' "${pr_view_json}" | jq -r '.url // $fallback' --arg fallback "${PR_URL}")"
+PR_HEAD_REF_NAME="$(printf '%s' "${pr_view_json}" | jq -r '.headRefName // ""')"
+PR_BASE_REF_NAME="$(printf '%s' "${pr_view_json}" | jq -r '.baseRefName // ""')"
+PR_HEAD_SHA="$(printf '%s' "${pr_view_json}" | jq -r '.headRefOid // ""')"
 PR_CREATED_AT="$(printf '%s' "${pr_view_json}" | jq -r '.createdAt // ""')"
 
 echo "READY_FOR_PR_STATUS=created_pr"

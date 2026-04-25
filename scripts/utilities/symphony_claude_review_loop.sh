@@ -549,13 +549,22 @@ for c in inline:
     })
 
 items.sort(key=lambda x: x["at"])
+visible_items = items[-1:] if items else []
+omitted_count = max(len(items) - len(visible_items), 0)
 
 print(f"# Claude Code Review Report — PR #{pr_num}")
 print()
-print(f"**{len(items)} comment(s) found since {since_raw}**")
+print(f"**{len(items)} comment(s) found since {since_raw}; showing latest only.**")
+if omitted_count:
+    print()
+    print(
+        "Older Claude feedback is intentionally omitted from this report. "
+        "Fix the latest item first, then check GitHub directly if you need "
+        "to confirm older fixed feedback did not regress."
+    )
 print()
 
-for i, item in enumerate(items, 1):
+for i, item in enumerate(visible_items, 1):
     print(f"## {i}. {item['type']}")
     if item["url"]:
         print(f"URL: {item['url']}")

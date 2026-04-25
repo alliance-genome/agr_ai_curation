@@ -448,8 +448,10 @@ build_brief() {
         echo "6. **Fix the failing CI checks**: ${failing_checks}"
         echo "   Then push and move to Needs Review."
       else
-        echo "6. **Address the feedback** from the Ready for PR lane, push, and"
-        echo "   move to Needs Review."
+        echo "6. **Address the latest feedback** from the Ready for PR lane first."
+        echo "   After pushing the fix, check the PR on GitHub for older Claude"
+        echo "   feedback only to confirm previously fixed items did not regress,"
+        echo "   then move to Needs Review."
       fi
       ;;
     "Human Review")
