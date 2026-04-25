@@ -20,7 +20,7 @@ _BRACKETED_MARKER_RE = re.compile(
     r"(?<![\w])\[(\d{1,4}(?:\s*(?:,|;|-|–|—)\s*\d{1,4})*)\]"
 )
 _PARENTHETICAL_MARKER_RE = re.compile(
-    r"(?<![\w])\((\d{1,4}(?:\s*(?:,|;|-|–|—)\s*\d{1,4})*)\)"
+    r"(?<![\w])\((\d{1,3}(?:\s*(?:,|;|-|–|—)\s*\d{1,3})*)\)"
 )
 _HTML_SUP_MARKER_RE = re.compile(r"<sup[^>]*>\s*([^<]+?)\s*</sup>", re.IGNORECASE)
 _SUPERSCRIPT_DIGITS = "⁰¹²³⁴⁵⁶⁷⁸⁹"
@@ -141,7 +141,7 @@ class PDFCitationsAnalyzer:
                     # Extract citations
                     citations = output_data.get("citations", [])
                     if not isinstance(citations, list):
-                        citations = []
+                        raise TypeError("PDF citation output field 'citations' must be a list")
                     if citations:
                         all_citations.extend(citations)
 
@@ -184,7 +184,7 @@ class PDFCitationsAnalyzer:
                 unique_citations.append(cit)
 
         # Sort by page number
-        unique_citations.sort(key=lambda c: c.get("page_number") or 0)
+        unique_citations.sort(key=lambda c: c.get("page_number", 0))
 
         # Collect unique queries
         unique_queries = []
@@ -234,7 +234,7 @@ class PDFCitationsAnalyzer:
 
     @classmethod
     def _is_pdf_related_tool(cls, tool_name: str) -> bool:
-        normalized_name = str(tool_name or "").lower()
+        normalized_name = tool_name.lower()
         return "pdf" in normalized_name or normalized_name in _PDF_EVIDENCE_TOOL_NAMES
 
     @classmethod
@@ -302,16 +302,21 @@ class PDFCitationsAnalyzer:
         if not isinstance(section, dict):
             return
 
-        content = section.get("content") or section.get("full_content") or section.get("content_preview")
-
         section_title = section.get("section_title")
         subsection = section.get("subsection")
+        section_texts = [
+            section[key]
+            for key in ("content", "full_content", "content_preview")
+            if isinstance(section.get(key), str) and section[key].strip()
+        ]
         if cls._is_reference_section(section_title) or cls._is_reference_section(subsection):
             cls._append_text(bibliography_texts, section_title)
             cls._append_text(bibliography_texts, subsection)
-            cls._append_text(bibliography_texts, content)
+            for text in section_texts:
+                cls._append_text(bibliography_texts, text)
         else:
-            cls._append_text(diagnostic_texts, content)
+            for text in section_texts:
+                cls._append_text(diagnostic_texts, text)
 
     @classmethod
     def _build_citation_number_diagnostics(
@@ -450,7 +455,7 @@ class PDFCitationsAnalyzer:
 
     @classmethod
     def _expand_number_expression(cls, raw_value: str) -> List[int]:
-        normalized = str(raw_value or "").translate(_SUPERSCRIPT_TRANSLATION)
+        normalized = raw_value.translate(_SUPERSCRIPT_TRANSLATION)
         normalized = normalized.replace("–", "-").replace("—", "-").replace(";", ",")
         numbers: List[int] = []
 
@@ -466,8 +471,6 @@ class PDFCitationsAnalyzer:
                     end = int(end_raw)
                     if 0 < start <= end and end - start <= 50:
                         numbers.extend(range(start, end + 1))
-                    elif start > 0:
-                        numbers.append(start)
                 continue
 
             if token.isdigit():

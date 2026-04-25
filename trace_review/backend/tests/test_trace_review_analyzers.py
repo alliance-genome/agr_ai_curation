@@ -366,6 +366,77 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(diagnostics["missing_marker_numbers"], [4])
         self.assertEqual(diagnostics["mapping_status"], "missing_bibliography")
 
+    def test_pdf_citations_rejects_malformed_citations_payload(self):
+        observations = self._make_pdf_observation(
+            {
+                "answer": "The PDF specialist returned malformed citation data [1].",
+                "citations": "not-a-list",
+            }
+        )
+
+        with self.assertRaisesRegex(TypeError, "citations.*list"):
+            PDFCitationsAnalyzer.analyze(observations)
+
+    def test_pdf_citations_ignores_parenthetical_years(self):
+        observations = self._make_pdf_observation(
+            {
+                "answer": "The strain was curated in 2024 (2024) using protocol (12).",
+                "citations": [
+                    {
+                        "chunk_id": "methods-1",
+                        "section_title": "Methods",
+                        "page_number": 4,
+                        "source": "pdf",
+                        "text": "The revised workflow was published in 2024 (2024) and reused protocol (12).",
+                    },
+                    {
+                        "chunk_id": "refs-1",
+                        "section_title": "References",
+                        "page_number": 9,
+                        "source": "pdf",
+                        "text": "References\n12. Smith J. Protocol details.",
+                    },
+                ],
+            }
+        )
+
+        diagnostics = PDFCitationsAnalyzer.analyze(observations)["citation_number_diagnostics"]
+
+        self.assertEqual(diagnostics["marker_numbers"], [12])
+        self.assertEqual(diagnostics["mapping_status"], "mapped")
+
+    def test_pdf_citations_rejects_invalid_marker_ranges(self):
+        observations = self._make_pdf_observation(
+            {
+                "answer": "The methods include an invalid marker range [5-3] and valid range [6-7].",
+                "citations": [
+                    {
+                        "chunk_id": "methods-1",
+                        "section_title": "Methods",
+                        "page_number": 4,
+                        "source": "pdf",
+                        "text": "The invalid marker [5-3] should not map, but [6-7] should.",
+                    },
+                    {
+                        "chunk_id": "refs-1",
+                        "section_title": "References",
+                        "page_number": 9,
+                        "source": "pdf",
+                        "text": (
+                            "References\n"
+                            "6. Chen L. Valid protocol.\n"
+                            "7. Patel R. Valid imaging."
+                        ),
+                    },
+                ],
+            }
+        )
+
+        diagnostics = PDFCitationsAnalyzer.analyze(observations)["citation_number_diagnostics"]
+
+        self.assertEqual(diagnostics["marker_numbers"], [6, 7])
+        self.assertEqual(diagnostics["mapping_status"], "mapped")
+
     def test_pdf_citations_reports_ambiguous_bibliography_status(self):
         observations = self._make_pdf_observation(
             {

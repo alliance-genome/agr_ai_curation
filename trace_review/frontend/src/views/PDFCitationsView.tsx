@@ -31,7 +31,7 @@ function formatMappingStatus(status: CitationMappingStatus) {
     ambiguous: 'Ambiguous',
     no_markers: 'No markers',
   };
-  return labels[status] ?? status;
+  return labels[status];
 }
 
 function mappingStatusColor(status: CitationMappingStatus): ChipProps['color'] {
