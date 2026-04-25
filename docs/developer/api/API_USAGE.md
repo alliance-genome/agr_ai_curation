@@ -474,7 +474,22 @@ Immediate response (<500 ms):
   "message": "Feedback submitted successfully. Report will be processed in background."
 }
 ```
-A FastAPI `BackgroundTask` then enriches the payload with Langfuse traces, stores it in PostgreSQL, and (when SMTP is configured) emails the developer alias. *_Always pass the `trace_id` from `/api/chat/stream` to guarantee we correlate the right run._*
+Background processing then stores a compact, redacted Langfuse trace snapshot in `feedback_reports.trace_data` and (when SMTP is configured) emails the developer alias. Trace capture failures do not fail the feedback submission; rows with `trace_ids` receive non-secret error metadata in `trace_data` instead. *_Always pass the `trace_id` from `/api/chat/stream` to guarantee we correlate the right run._*
+
+Read-only deployment verification:
+```sql
+SELECT
+  id,
+  session_id,
+  trace_ids,
+  trace_data IS NOT NULL AS has_trace_data,
+  trace_data->>'capture_status' AS capture_status
+FROM feedback_reports
+WHERE processing_status = 'completed'
+  AND jsonb_array_length(trace_ids::jsonb) > 0
+ORDER BY created_at DESC
+LIMIT 20;
+```
 
 ---
 

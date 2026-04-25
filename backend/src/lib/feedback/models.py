@@ -64,7 +64,7 @@ class FeedbackReport(Base):
     )
 
     # Extracted data (populated by background task)
-    trace_data = Column(JSON, nullable=True)  # Full trace extraction from Langfuse
+    trace_data = Column(JSON, nullable=True)  # Compact redacted Langfuse trace snapshot
     conversation_transcript = Column(JSONB, nullable=True)
 
     # Error tracking
