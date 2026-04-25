@@ -1,13 +1,47 @@
 import { Box, Typography, Paper, Chip, Alert, Divider, Accordion, AccordionSummary, AccordionDetails } from '@mui/material';
+import type { ChipProps } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import DescriptionIcon from '@mui/icons-material/Description';
 import SearchIcon from '@mui/icons-material/Search';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import NumbersIcon from '@mui/icons-material/Numbers';
+import RuleIcon from '@mui/icons-material/Rule';
 import { alpha } from '@mui/material/styles';
-import { PDFCitationsData } from '../types';
+import type { CitationMappingStatus, PDFCitationsData } from '../types';
 
 interface PDFCitationsViewProps {
   data: PDFCitationsData;
+}
+
+function formatNumberList(numbers: number[], emptyLabel: string) {
+  if (numbers.length === 0) {
+    return emptyLabel;
+  }
+
+  const visible = numbers.slice(0, 8).join(', ');
+  const hiddenCount = numbers.length - 8;
+  return hiddenCount > 0 ? `${visible}, +${hiddenCount}` : visible;
+}
+
+function formatMappingStatus(status: CitationMappingStatus) {
+  const labels: Record<CitationMappingStatus, string> = {
+    mapped: 'Mapped',
+    missing_bibliography: 'Missing bibliography',
+    missing_entries: 'Missing entries',
+    ambiguous: 'Ambiguous',
+    no_markers: 'No markers',
+  };
+  return labels[status];
+}
+
+function mappingStatusColor(status: CitationMappingStatus): ChipProps['color'] {
+  if (status === 'mapped') {
+    return 'success';
+  }
+  if (status === 'missing_bibliography' || status === 'missing_entries' || status === 'ambiguous') {
+    return 'warning';
+  }
+  return 'default';
 }
 
 export function PDFCitationsView({ data }: PDFCitationsViewProps) {
@@ -53,6 +87,59 @@ export function PDFCitationsView({ data }: PDFCitationsViewProps) {
           />
         )}
       </Box>
+
+      {/* Citation-number diagnostics */}
+      {data.citation_number_diagnostics && (
+        <Paper sx={{ p: 3, mb: 3 }}>
+          <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <RuleIcon color="primary" fontSize="small" />
+            Citation Number Diagnostics
+          </Typography>
+          <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap' }}>
+            <Chip
+              icon={<NumbersIcon />}
+              label={data.citation_number_diagnostics.markers_found
+                ? `Markers: ${formatNumberList(data.citation_number_diagnostics.marker_numbers, 'none')}`
+                : 'No citation-number markers'}
+              color={data.citation_number_diagnostics.markers_found ? 'info' : 'default'}
+              variant={data.citation_number_diagnostics.markers_found ? 'filled' : 'outlined'}
+            />
+            <Chip
+              icon={<MenuBookIcon />}
+              label={data.citation_number_diagnostics.bibliography_found
+                ? `Bibliography found (${data.citation_number_diagnostics.bibliography_entry_count} numeric entries)`
+                : 'Bibliography not found'}
+              color={data.citation_number_diagnostics.bibliography_found ? 'success' : 'warning'}
+              variant={data.citation_number_diagnostics.bibliography_found ? 'filled' : 'outlined'}
+            />
+            <Chip
+              label={formatMappingStatus(data.citation_number_diagnostics.mapping_status)}
+              color={mappingStatusColor(data.citation_number_diagnostics.mapping_status)}
+              variant={data.citation_number_diagnostics.mapping_status === 'no_markers' ? 'outlined' : 'filled'}
+            />
+            {data.citation_number_diagnostics.missing_marker_numbers.length > 0 && (
+              <Chip
+                label={`Missing: ${formatNumberList(data.citation_number_diagnostics.missing_marker_numbers, 'none')}`}
+                color="warning"
+                variant="outlined"
+              />
+            )}
+            {data.citation_number_diagnostics.ambiguous_marker_numbers.length > 0 && (
+              <Chip
+                label={`Ambiguous: ${formatNumberList(data.citation_number_diagnostics.ambiguous_marker_numbers, 'none')}`}
+                color="warning"
+                variant="outlined"
+              />
+            )}
+            {data.citation_number_diagnostics.marker_styles.length > 0 && (
+              <Chip
+                label={`Styles: ${data.citation_number_diagnostics.marker_styles.join(', ')}`}
+                variant="outlined"
+              />
+            )}
+          </Box>
+        </Paper>
+      )}
 
       {/* Search Queries Used */}
       {data.search_queries.length > 0 && (
