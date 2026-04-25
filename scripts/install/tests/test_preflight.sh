@@ -183,6 +183,49 @@ EOF
   assert_contains "PREFLIGHT_RESULT exit_code=0" "$output_file"
 }
 
+test_trace_review_checks_host_port_override() {
+  local stub_dir
+  local output_file
+  stub_dir="$(mktemp -d)"
+  output_file="$(mktemp)"
+  trap 'rm -rf "$stub_dir" "$output_file"' RETURN
+
+  make_common_stubs "$stub_dir"
+  cat >"${stub_dir}/lsof" <<'EOF'
+#!/usr/bin/env bash
+if [[ "$*" == *"-iTCP:8001"* ]]; then
+  echo "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME"
+  echo "node 2222 codex 11u IPv4 0t0 TCP *:8001 (LISTEN)"
+  exit 0
+fi
+exit 1
+EOF
+  chmod +x "${stub_dir}/lsof"
+
+  local rc
+  rc="$(
+    run_and_capture "$output_file" env \
+      PATH="${stub_dir}:${PATH}" \
+      PREFLIGHT_DOCKER_CMD="docker" \
+      PREFLIGHT_GIT_CMD="git" \
+      PREFLIGHT_LSOF_CMD="lsof" \
+      PREFLIGHT_MEMORY_BYTES_OVERRIDE="$((16 * 1024 * 1024 * 1024))" \
+      PREFLIGHT_DISK_BYTES_OVERRIDE="$((20 * 1024 * 1024 * 1024))" \
+      TRACE_REVIEW_BACKEND_HOST_PORT="8901" \
+      bash "$preflight_script"
+  )"
+
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Expected TraceReview host port override to avoid default 8001 conflict, got $rc" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "Port 8901 available (TraceReview backend; env TRACE_REVIEW_BACKEND_HOST_PORT)." "$output_file"
+  assert_not_contains "Port 8001 in use" "$output_file"
+  assert_contains "PREFLIGHT_RESULT exit_code=0" "$output_file"
+}
+
 test_warnings_do_not_block_installation() {
   local stub_dir
   local output_file
@@ -306,6 +349,7 @@ EOF
 test_detects_missing_docker
 test_detects_port_conflict
 test_passes_on_clean_system
+test_trace_review_checks_host_port_override
 test_warnings_do_not_block_installation
 test_local_transformers_override_mentions_reranker_memory_warning
 test_existing_env_keeps_bedrock_warning_provider_neutral

@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from .logging_config import configure_logging, create_request_context_middleware
 from .services.cache_manager import CacheManager
+from .config import get_trace_review_preflight_diagnostics, validate_trace_source
 
 configure_logging()
 
@@ -42,6 +43,41 @@ def _health_payload(app: FastAPI) -> tuple[dict, int]:
             "ttl_hours": cache_manager.ttl_hours
         }
     }, 200
+
+
+def _preflight_payload(app: FastAPI, source: str) -> tuple[dict, int]:
+    health_payload, health_status = _health_payload(app)
+    diagnostics = get_trace_review_preflight_diagnostics(selected_source=source)
+    source_selection = diagnostics["source_selection"]
+
+    status = "ok"
+    status_code = health_status
+    next_actions = []
+
+    if not source_selection["valid"]:
+        status = "config_error"
+        status_code = 400
+        next_actions.append("Choose one of the supported source values: remote or local.")
+    elif not source_selection["selected_ready"]:
+        status = "config_error"
+        status_code = 503
+        selected = source_selection["selected"]
+        missing = diagnostics["langfuse_sources"][selected]["missing_env"]
+        next_actions.append(f"Set required Langfuse configuration for source '{selected}': {', '.join(missing)}.")
+
+    if health_status != 200:
+        if status == "ok":
+            status = "starting"
+        next_actions.append("Wait for TraceReview backend startup to complete, then retry the preflight.")
+
+    return {
+        "status": status,
+        "service": "trace_review_backend",
+        "message": "TraceReview preflight diagnostics are report-only; no services or production resources were mutated.",
+        "backend": health_payload,
+        "diagnostics": diagnostics,
+        "next_actions": next_actions,
+    }, status_code
 
 
 def _health_response(app: FastAPI) -> JSONResponse:
@@ -97,67 +133,66 @@ async def health():
     return _health_response(app)
 
 
+@app.get("/health/preflight")
+async def preflight_health(source: str = "remote"):
+    """Report TraceReview preflight diagnostics without mutating services."""
+    payload, status_code = _preflight_payload(app, source)
+    return JSONResponse(content=payload, status_code=status_code)
+
+
 @app.get("/health/langfuse")
-async def langfuse_health():
+async def langfuse_health(source: str = "remote"):
     """
     Check Langfuse connectivity for both remote and local sources.
 
     Use this to diagnose networking issues with Langfuse.
     """
     import requests
-    from .config import (
-        get_langfuse_host, get_langfuse_public_key, get_langfuse_secret_key,
-        get_langfuse_local_host, get_langfuse_local_public_key, get_langfuse_local_secret_key
-    )
+    from .config import get_trace_source_diagnostic, get_trace_source_runtime_config
+
+    try:
+        validate_trace_source(source)
+    except ValueError as exc:
+        return JSONResponse(
+            content={
+                "status": "config_error",
+                "message": str(exc),
+                "valid_sources": ["remote", "local"],
+            },
+            status_code=400,
+        )
 
     results = {}
 
-    # Check remote (EC2 via VPN)
-    remote_host = get_langfuse_host()
-    remote_pk = get_langfuse_public_key()
-    remote_sk = get_langfuse_secret_key()
+    for trace_source in ("remote", "local"):
+        source_diagnostic = get_trace_source_diagnostic(trace_source)
+        host = get_trace_source_runtime_config(trace_source)["host"] or ""
+        results[trace_source] = {
+            "host": source_diagnostic["host"],
+            "credentials": source_diagnostic["credentials"],
+            "ready": source_diagnostic["ready"],
+            "missing_env": source_diagnostic["missing_env"],
+        }
 
-    results["remote"] = {
-        "host": remote_host,
-        "public_key": f"{remote_pk[:20]}..." if remote_pk else "NOT_SET",
-        "secret_key": "***" if remote_sk else "NOT_SET",
-    }
+        if not host:
+            results[trace_source]["health_check"] = "NOT_CONFIGURED"
+            results[trace_source]["reachable"] = False
+            continue
 
-    try:
-        resp = requests.get(f"{remote_host}/api/public/health", timeout=5)
-        results["remote"]["health_check"] = "OK" if resp.status_code == 200 else f"ERROR: {resp.status_code}"
-        results["remote"]["reachable"] = True
-    except requests.exceptions.Timeout:
-        results["remote"]["health_check"] = "TIMEOUT"
-        results["remote"]["reachable"] = False
-    except Exception as e:
-        results["remote"]["health_check"] = f"ERROR: {str(e)}"
-        results["remote"]["reachable"] = False
-
-    # Check local (localhost)
-    local_host = get_langfuse_local_host()
-    local_pk = get_langfuse_local_public_key()
-    local_sk = get_langfuse_local_secret_key()
-
-    results["local"] = {
-        "host": local_host,
-        "public_key": f"{local_pk[:20]}..." if local_pk else "NOT_SET",
-        "secret_key": "***" if local_sk else "NOT_SET",
-    }
-
-    try:
-        resp = requests.get(f"{local_host}/api/public/health", timeout=5)
-        results["local"]["health_check"] = "OK" if resp.status_code == 200 else f"ERROR: {resp.status_code}"
-        results["local"]["reachable"] = True
-    except requests.exceptions.Timeout:
-        results["local"]["health_check"] = "TIMEOUT"
-        results["local"]["reachable"] = False
-    except Exception as e:
-        results["local"]["health_check"] = f"ERROR: {str(e)}"
-        results["local"]["reachable"] = False
+        try:
+            resp = requests.get(f"{host.rstrip('/')}/api/public/health", timeout=5)
+            results[trace_source]["health_check"] = "OK" if resp.status_code == 200 else f"ERROR: {resp.status_code}"
+            results[trace_source]["reachable"] = True
+        except requests.exceptions.Timeout:
+            results[trace_source]["health_check"] = "TIMEOUT"
+            results[trace_source]["reachable"] = False
+        except Exception as e:
+            results[trace_source]["health_check"] = f"ERROR: {str(e)}"
+            results[trace_source]["reachable"] = False
 
     return {
-        "status": "ok",
+        "status": "ok" if results[source]["reachable"] and results[source]["ready"] else "degraded",
+        "selected_source": source,
         "langfuse": results,
         "troubleshooting": {
             "remote_unreachable": "Check VPN connection to EC2",

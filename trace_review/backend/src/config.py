@@ -6,7 +6,8 @@ Loads environment variables and provides config helpers.
 import os
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
+from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -36,6 +37,8 @@ def _load_env_file() -> Optional[str]:
 _env_loaded_from = _load_env_file()
 
 logger = logging.getLogger(__name__)
+
+TRACE_SOURCES = ("remote", "local")
 
 # Warn if .env not found in required location
 if not _env_loaded_from:
@@ -158,6 +161,153 @@ def get_langfuse_local_public_key() -> Optional[str]:
 def get_langfuse_local_secret_key() -> Optional[str]:
     """Get Local Langfuse secret key from environment."""
     return os.getenv("LANGFUSE_LOCAL_SECRET_KEY")
+
+
+def sanitize_url_for_diagnostics(url: Optional[str]) -> str:
+    """Return a URL that is safe to include in health responses."""
+    if not url:
+        return ""
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+
+    if not parts.netloc or "@" not in parts.netloc:
+        return url
+
+    hostname = parts.hostname or ""
+    port = f":{parts.port}" if parts.port else ""
+    redacted_netloc = f"[redacted]@{hostname}{port}"
+    return urlunsplit((parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment))
+
+
+def validate_trace_source(source: str) -> str:
+    """Validate a TraceReview Langfuse source selection."""
+    if source in TRACE_SOURCES:
+        return source
+
+    expected = ", ".join(TRACE_SOURCES)
+    raise ValueError(f"Unsupported trace source '{source}'. Expected one of: {expected}")
+
+
+def get_trace_source_runtime_config(source: str) -> Dict[str, Optional[str]]:
+    """Return raw runtime connection settings for a valid trace source."""
+    validate_trace_source(source)
+
+    if source == "local":
+        return {
+            "source": source,
+            "host": get_langfuse_local_host(),
+            "public_key": get_langfuse_local_public_key(),
+            "secret_key": get_langfuse_local_secret_key(),
+        }
+
+    return {
+        "source": source,
+        "host": get_langfuse_host(),
+        "public_key": get_langfuse_public_key(),
+        "secret_key": get_langfuse_secret_key(),
+    }
+
+
+def get_trace_source_diagnostic(source: str) -> Dict[str, Any]:
+    """Return non-secret diagnostic details for a TraceReview source."""
+    runtime_config = get_trace_source_runtime_config(source)
+    public_key = runtime_config.get("public_key")
+    secret_key = runtime_config.get("secret_key")
+    host = runtime_config.get("host") or ""
+
+    if source == "local":
+        required_env = [
+            "LANGFUSE_LOCAL_HOST",
+            "LANGFUSE_LOCAL_PUBLIC_KEY",
+            "LANGFUSE_LOCAL_SECRET_KEY",
+        ]
+        description = "Local Langfuse source"
+    else:
+        required_env = [
+            "LANGFUSE_HOST",
+            "LANGFUSE_PUBLIC_KEY",
+            "LANGFUSE_SECRET_KEY",
+        ]
+        description = "Remote Langfuse source"
+
+    missing = []
+    if not host:
+        missing.append(required_env[0])
+    if not public_key:
+        missing.append(required_env[1])
+    if not secret_key:
+        missing.append(required_env[2])
+
+    safe_host = sanitize_url_for_diagnostics(host)
+
+    return {
+        "source": source,
+        "description": description,
+        "host": safe_host,
+        "health_url": f"{safe_host.rstrip('/')}/api/public/health" if safe_host else "",
+        "credentials": {
+            "public_key_present": bool(public_key),
+            "secret_key_present": bool(secret_key),
+        },
+        "ready": not missing,
+        "missing_env": missing,
+        "required_env": required_env,
+    }
+
+
+def get_trace_review_preflight_diagnostics(selected_source: str = "remote") -> Dict[str, Any]:
+    """Return report-only TraceReview preflight configuration diagnostics."""
+    source_error = None
+    try:
+        selected = validate_trace_source(selected_source)
+    except ValueError as exc:
+        selected = selected_source
+        source_error = str(exc)
+
+    source_diagnostics: Dict[str, Any] = {}
+    for source in TRACE_SOURCES:
+        source_diagnostics[source] = get_trace_source_diagnostic(source)
+
+    selected_ready = False
+    if source_error is None:
+        selected_ready = bool(source_diagnostics[selected]["ready"])
+
+    ssh_key_file = os.getenv("TRACE_REVIEW_PRODUCTION_SSH_KEY_FILE")
+    return {
+        "env_file_loaded": get_env_source(),
+        "source_selection": {
+            "selected": selected,
+            "valid": source_error is None,
+            "error": source_error,
+            "valid_sources": list(TRACE_SOURCES),
+            "selected_ready": selected_ready,
+        },
+        "langfuse_sources": source_diagnostics,
+        "production_readiness": {
+            "mode": "report_only",
+            "vpn_route_hint": {
+                "remote_langfuse_host": source_diagnostics["remote"]["host"],
+                "note": "Use scripts/testing/trace_review_preflight.sh for host route and TCP checks.",
+            },
+            "ssh_tcp": {
+                "host_configured": bool(os.getenv("TRACE_REVIEW_PRODUCTION_SSH_HOST")),
+                "port": os.getenv("TRACE_REVIEW_PRODUCTION_SSH_PORT", "22"),
+                "user_configured": bool(os.getenv("TRACE_REVIEW_PRODUCTION_SSH_USER")),
+                "key_file_configured": bool(ssh_key_file),
+                "key_file_readable": bool(ssh_key_file and Path(ssh_key_file).is_file()),
+            },
+            "environment": {
+                "curation_db_url_present": bool(os.getenv("CURATION_DB_URL")),
+                "curation_db_credentials_source": os.getenv("CURATION_DB_CREDENTIALS_SOURCE", ""),
+                "curation_db_aws_secret_id_present": bool(os.getenv("CURATION_DB_AWS_SECRET_ID")),
+                "aws_region_present": bool(os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")),
+                "aws_profile_present": bool(os.getenv("AWS_PROFILE")),
+            },
+        },
+    }
 
 
 # ===========================

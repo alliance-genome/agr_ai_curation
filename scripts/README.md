@@ -485,6 +485,39 @@ Checks:
 Outputs:
 - `file_outputs/temp/rerank_provider_smoke_local_<timestamp>.json`
 
+### testing/trace_review_preflight.sh
+
+Runs report-only TraceReview diagnostics before a trace review starts. It does
+not start, stop, restart, SSH into, or mutate services.
+
+What it checks:
+- local TraceReview backend `/health` identity and `/health/preflight` availability
+- selected Langfuse source (`remote` or `local`), credential presence, and health
+- port/listener hints for the common `8001` TraceReview vs. review-proxy confusion
+- production-readiness hints: VPN route to remote Langfuse, optional SSH TCP
+  reachability, and non-secret environment presence
+
+```bash
+./scripts/testing/trace_review_preflight.sh --source remote
+
+# If TraceReview is running on an issue-local port:
+./scripts/testing/trace_review_preflight.sh \
+  --backend-url http://127.0.0.1:8901 \
+  --source local
+```
+
+Optional flags:
+- `--backend-url <url>` to target a non-default TraceReview backend URL
+- `--source remote|local` to match the TraceReview source selection
+- `--ssh-host <host>` and `--ssh-port <port>` to TCP-probe production SSH reachability
+
+Useful environment:
+- `TRACE_REVIEW_PREFLIGHT_TIMEOUT_SECONDS=2` to shorten network probes
+- `TRACE_REVIEW_PREFLIGHT_REQUIRE_PRODUCTION=true` to make production-readiness
+  warnings hard failures
+- `TRACE_REVIEW_PRODUCTION_SSH_HOST`, `TRACE_REVIEW_PRODUCTION_SSH_PORT`, and
+  `TRACE_REVIEW_PRODUCTION_SSH_KEY_FILE` for production fallback readiness checks
+
 ### testing/file_output_storage_preflight.sh
 
 Runs a deployment-safe export-storage probe against the live backend container.

@@ -227,6 +227,8 @@ EOF
   assert_contains 'Application: http://localhost:3002' "$output_path"
   assert_contains 'API Docs: http://localhost:8000/docs' "$output_path"
   assert_contains 'Langfuse: http://localhost:3000' "$output_path"
+  assert_contains 'TraceReview API: http://localhost:8001' "$output_path"
+  assert_contains 'TraceReview health: http://localhost:8001/health' "$output_path"
   assert_contains 'Health: http://localhost:8000/health' "$output_path"
   assert_contains 'Restart command: docker compose --env-file' "$output_path"
   assert_contains 'trace_review_backend' "$output_path"
