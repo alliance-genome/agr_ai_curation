@@ -40,7 +40,7 @@ test_existing_pr_is_reported() {
 EOF
 
   cat > "${pr_view_json}" <<'EOF'
-{"headRefName":"all-42-branch","baseRefName":"main","headRefOid":"abc123","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}
+{"headRefName":"all-42-branch","baseRefName":"main","headRefOid":"abc123","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
 EOF
 
   output="$(
@@ -217,7 +217,7 @@ if [[ "${1:-}" == "pr" && "${2:-}" == "create" ]]; then
 fi
 
 if [[ "${1:-}" == "pr" && "${2:-}" == "view" ]]; then
-  echo '{"number":52,"title":"ALL-52: Example","url":"https://example.test/alliance-genome/agr_ai_curation/pull/52","headRefName":"all-52-branch","baseRefName":"main","headRefOid":"feedface","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}'
+  echo '{"number":52,"title":"ALL-52: Example","url":"https://example.test/alliance-genome/agr_ai_curation/pull/52","headRefName":"all-52-branch","baseRefName":"main","headRefOid":"feedface","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}'
   exit 0
 fi
 
@@ -229,6 +229,7 @@ EOF
   output="$(
     PATH="${temp_dir}:${PATH}" \
     GH_STUB_LOG="${log_file}" \
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${temp_dir}/missing-claude-loop" \
     bash "${SCRIPT_PATH}" \
       --delivery-mode pr \
       --issue-identifier ALL-52 \
@@ -323,6 +324,143 @@ EOF
   assert_contains "move directly to Human Review Prep without editing code" "$(cat "${section_log}")"
 }
 
+test_claude_wait_zero_still_scans_existing_feedback() {
+  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub report_file output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  report_file="${temp_dir}/claude-report.md"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":301,"title":"ALL-301: Existing PR","url":"https://example.test/pr/301","headRefName":"all-301"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":301,"title":"ALL-301: Existing PR","url":"https://example.test/pr/301","headRefName":"all-301","baseRefName":"main","headRefOid":"abc301","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T18:53:14Z"}
+EOF
+
+  printf 'latest feedback\n' > "${report_file}"
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+if [[ " \$* " != *" --wait-seconds 0 "* ]]; then
+  echo "expected zero-second scan" >&2
+  exit 98
+fi
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=1
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  chmod +x "${loop_stub}"
+
+  cat > "${workpad_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo WORKPAD_STATUS=updated
+EOF
+  chmod +x "${workpad_stub}"
+
+  cat > "${state_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo LINEAR_STATE_STATUS=ok
+EOF
+  chmod +x "${state_stub}"
+
+  output="$(
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-301 \
+      --branch all-301 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-review-seconds 0 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}"
+  )"
+
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
+}
+
+test_failed_github_check_auto_bounces_to_in_progress() {
+  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub workpad_log state_log section_log output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  workpad_log="${temp_dir}/workpad.log"
+  state_log="${temp_dir}/state.log"
+  section_log="${temp_dir}/section.log"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":271,"title":"ALL-301: Existing PR","url":"https://example.test/pr/271","headRefName":"all-301"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":271,"title":"ALL-301: Existing PR","url":"https://example.test/pr/271","headRefName":"all-301","baseRefName":"main","headRefOid":"abc301","mergeable":"MERGEABLE","mergeStateStatus":"UNSTABLE","createdAt":"2026-04-25T18:53:14Z","statusCheckRollup":[{"__typename":"CheckRun","name":"GitGuardian Security Checks","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://dashboard.gitguardian.com"},{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
+EOF
+
+  cat > "${loop_stub}" <<'EOF'
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=quiet
+CLAUDE_LOOP_ROUND=1
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+EOF
+  chmod +x "${loop_stub}"
+
+  cat > "${workpad_stub}" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "${workpad_log}"
+while [[ \$# -gt 0 ]]; do
+  if [[ "\$1" == "--section-file" ]]; then
+    cat "\$2" > "${section_log}"
+    break
+  fi
+  shift
+done
+echo WORKPAD_STATUS=updated
+EOF
+  chmod +x "${workpad_stub}"
+
+  cat > "${state_stub}" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "${state_log}"
+echo LINEAR_STATE_STATUS=ok
+EOF
+  chmod +x "${state_stub}"
+
+  output="$(
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-301 \
+      --branch all-301 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-review-seconds 0 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}"
+  )"
+
+  assert_contains "READY_FOR_PR_CHECK_STATUS=failed" "${output}"
+  assert_contains "READY_FOR_PR_CHECK_ACTION=bounced_to_in_progress" "${output}"
+  assert_contains "--state In Progress --from-state Ready for PR" "$(cat "${state_log}")"
+  assert_contains "GitGuardian Security Checks: FAILURE" "$(cat "${section_log}")"
+  assert_contains "address the failed PR checks first" "$(cat "${section_log}")"
+}
+
 test_claude_maxed_out_without_report_does_not_abort() {
   local temp_dir pr_json pr_view_json loop_stub output_file output rc
   temp_dir="$(mktemp -d)"
@@ -336,7 +474,7 @@ test_claude_maxed_out_without_report_does_not_abort() {
 EOF
 
   cat > "${pr_view_json}" <<'EOF'
-{"number":270,"title":"ALL-270: Existing PR","url":"https://example.test/pr/270","headRefName":"all-270","baseRefName":"main","headRefOid":"abc270","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T16:45:00Z"}
+{"number":270,"title":"ALL-270: Existing PR","url":"https://example.test/pr/270","headRefName":"all-270","baseRefName":"main","headRefOid":"abc270","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T16:45:00Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
 EOF
 
   cat > "${loop_stub}" <<'EOF'
@@ -371,7 +509,7 @@ EOF
   }
 
   assert_contains "READY_FOR_PR_CLAUDE_STATUS=maxed_out" "${output}"
-  assert_contains "READY_FOR_PR_INSTRUCTIONS=PR #270 has completed 5/5 Claude review rounds" "${output}"
+  assert_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
 }
 
 test_no_pr_skips_lane
@@ -383,6 +521,8 @@ test_dry_run_create_reports_title
 test_dry_run_create_infers_title
 test_create_pr_uses_plain_cli_output_and_view_json
 test_claude_detected_auto_bounces_to_in_progress
+test_claude_wait_zero_still_scans_existing_feedback
+test_failed_github_check_auto_bounces_to_in_progress
 test_claude_maxed_out_without_report_does_not_abort
 
 echo "symphony_ready_for_pr tests passed"
