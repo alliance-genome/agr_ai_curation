@@ -1,21 +1,37 @@
 """FeedbackService: Orchestrate user feedback processing workflow."""
 
+import asyncio
 import logging
 import os
+import re
 import uuid
-from datetime import datetime
-from typing import List
+from datetime import datetime, timezone
+from typing import Any, List
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from src.lib.agent_studio.trace_context_service import get_trace_context_for_explorer
 from src.lib.feedback.email_notifier import EmailNotifier
 from src.lib.chat_history_repository import ChatHistoryRepository, ChatHistorySessionNotFoundError
 from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.sns_notifier import SNSNotifier
 from src.lib.feedback.transcript import capture_feedback_conversation_transcript
+from src.lib.agent_studio.models import TraceContext
 
 logger = logging.getLogger(__name__)
+
+MAX_TRACE_SNAPSHOT_TRACES = 5
+MAX_TRACE_SNAPSHOT_ITEMS = 20
+MAX_TRACE_PREVIEW_CHARS = 500
+MAX_TRACE_ERROR_CHARS = 300
+
+_EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE)
+_URL_RE = re.compile(r"https?://[^\s\"'<>]+")
+_BEARER_TOKEN_RE = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]{12,}")
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|authorization|password|secret|token)\b\s*[:=]\s*([^\s,;]+)"
+)
 
 
 class FeedbackService:
@@ -23,7 +39,7 @@ class FeedbackService:
 
     This service coordinates:
     1. Lightweight payload creation (immediate, < 100ms)
-    2. Background notification via SNS or email
+    2. Background trace snapshot capture and notification via SNS or email
 
     The two-phase approach ensures curators get immediate feedback
     while notifications happen asynchronously.
@@ -110,11 +126,12 @@ class FeedbackService:
         return feedback_id
 
     def process_feedback_report(self, feedback_id: str) -> None:
-        """Process feedback report in background (send notification).
+        """Process feedback report in background.
 
         This method:
         1. Fetches the feedback report from database
-        2. Sends notification via SNS or email
+        2. Captures compact trace review metadata when trace IDs are available
+        3. Sends notification via SNS or email
 
         Args:
             feedback_id: UUID of feedback report to process
@@ -138,6 +155,29 @@ class FeedbackService:
 
             logger.info('Starting background processing for feedback %s', feedback_id)
 
+            try:
+                trace_snapshot = self._capture_feedback_trace_snapshot(report)
+                if trace_snapshot is not None:
+                    report.trace_data = trace_snapshot
+                    if trace_snapshot.get("capture_status") != "success":
+                        report.error_details = (
+                            "Trace capture completed with errors. "
+                            "See trace_data.error_summary for details."
+                        )
+                    logger.info('Captured trace snapshot for feedback %s', feedback_id)
+            except Exception as e:
+                logger.warning(
+                    'Trace snapshot capture failed for feedback %s: %s',
+                    feedback_id,
+                    str(e),
+                    exc_info=True,
+                )
+                report.trace_data = self._trace_capture_failure_snapshot(report, e)
+                capture_error = self._trace_capture_error(e)
+                report.error_details = (
+                    f"Trace capture failed: {capture_error['type']}: {capture_error['message']}"
+                )
+
             # Send notification (SNS or email)
             try:
                 self.notifier.send_feedback_notification(report)
@@ -145,7 +185,11 @@ class FeedbackService:
                 logger.info('Sent notification for feedback %s', feedback_id)
             except Exception as e:
                 logger.error('Notification failed for %s: %s', feedback_id, str(e), exc_info=True)
-                report.error_details = f"Notification error: {str(e)}"
+                notification_error = f"Notification error: {str(e)}"
+                if report.error_details:
+                    report.error_details = f"{report.error_details}; {notification_error}"
+                else:
+                    report.error_details = notification_error
 
             # Mark as completed
             report.processing_status = ProcessingStatus.COMPLETED
@@ -253,6 +297,242 @@ class FeedbackService:
         )
 
         return transcript
+
+    def _capture_feedback_trace_snapshot(self, report: FeedbackReport) -> dict | None:
+        """Capture a compact, redacted trace snapshot for later feedback review."""
+
+        trace_ids = self._normalize_trace_ids(report.trace_ids)
+        if not trace_ids:
+            return None
+
+        captured_at = self._utc_timestamp()
+        traces = []
+        error_count = 0
+
+        for trace_id in trace_ids[:MAX_TRACE_SNAPSHOT_TRACES]:
+            try:
+                trace_context = asyncio.run(get_trace_context_for_explorer(trace_id))
+                traces.append(
+                    self._trace_context_snapshot(
+                        trace_context=trace_context,
+                        feedback_session_id=report.session_id,
+                    )
+                )
+            except Exception as exc:
+                error_count += 1
+                traces.append(
+                    {
+                        "trace_id": trace_id,
+                        "capture_status": "error",
+                        "error": self._trace_capture_error(exc),
+                    }
+                )
+
+        if error_count == 0:
+            capture_status = "success"
+        elif error_count == len(traces):
+            capture_status = "error"
+        else:
+            capture_status = "partial"
+
+        snapshot = {
+            "schema_version": 1,
+            "capture_status": capture_status,
+            "captured_at": captured_at,
+            "source": {
+                "kind": "langfuse",
+                "extractor": (
+                    "src.lib.agent_studio.trace_context_service."
+                    "get_trace_context_for_explorer"
+                ),
+            },
+            "feedback": {
+                "session_id": report.session_id,
+                "trace_ids": trace_ids,
+            },
+            "traces": traces,
+        }
+
+        omitted_count = len(trace_ids) - MAX_TRACE_SNAPSHOT_TRACES
+        if omitted_count > 0:
+            snapshot["omitted_trace_id_count"] = omitted_count
+
+        if error_count > 0:
+            snapshot["error_summary"] = {
+                "trace_error_count": error_count,
+                "message": "One or more trace snapshots could not be captured.",
+            }
+
+        return snapshot
+
+    def _trace_context_snapshot(
+        self,
+        *,
+        trace_context: TraceContext,
+        feedback_session_id: str,
+    ) -> dict:
+        trace_session_id = trace_context.session_id
+        prompts_executed = list(trace_context.prompts_executed)
+        routing_decisions = list(trace_context.routing_decisions)
+        tool_calls = list(trace_context.tool_calls)
+
+        snapshot = {
+            "trace_id": trace_context.trace_id,
+            "capture_status": "success",
+            "session_id": trace_session_id,
+            "session_matches_feedback": trace_session_id == feedback_session_id,
+            "timestamp": self._json_timestamp(trace_context.timestamp),
+            "metrics": {
+                "total_duration_ms": trace_context.total_duration_ms,
+                "total_tokens": trace_context.total_tokens,
+                "agent_count": trace_context.agent_count,
+                "prompt_execution_count": len(prompts_executed),
+                "routing_decision_count": len(routing_decisions),
+                "tool_call_count": len(tool_calls),
+            },
+            "previews": {
+                "user_query": self._compact_redacted_text(
+                    trace_context.user_query,
+                    max_chars=MAX_TRACE_PREVIEW_CHARS,
+                ),
+                "final_response": self._compact_redacted_text(
+                    trace_context.final_response_preview,
+                    max_chars=MAX_TRACE_PREVIEW_CHARS,
+                ),
+            },
+            "prompts_executed": [
+                {
+                    "agent_id": prompt.agent_id,
+                    "agent_name": prompt.agent_name,
+                    "group_applied": prompt.group_applied,
+                    "model": prompt.model,
+                    "tokens_used": prompt.tokens_used,
+                }
+                for prompt in prompts_executed[:MAX_TRACE_SNAPSHOT_ITEMS]
+            ],
+            "routing_decisions": [
+                {
+                    "from_agent": decision.from_agent,
+                    "to_agent": decision.to_agent,
+                    "timestamp": self._json_timestamp(decision.timestamp),
+                }
+                for decision in routing_decisions[:MAX_TRACE_SNAPSHOT_ITEMS]
+            ],
+            "tool_calls": [
+                {
+                    "name": tool_call.name,
+                    "duration_ms": tool_call.duration_ms,
+                    "status": tool_call.status,
+                }
+                for tool_call in tool_calls[:MAX_TRACE_SNAPSHOT_ITEMS]
+            ],
+        }
+
+        if len(prompts_executed) > MAX_TRACE_SNAPSHOT_ITEMS:
+            snapshot["omitted_prompt_execution_count"] = (
+                len(prompts_executed) - MAX_TRACE_SNAPSHOT_ITEMS
+            )
+        if len(routing_decisions) > MAX_TRACE_SNAPSHOT_ITEMS:
+            snapshot["omitted_routing_decision_count"] = (
+                len(routing_decisions) - MAX_TRACE_SNAPSHOT_ITEMS
+            )
+        if len(tool_calls) > MAX_TRACE_SNAPSHOT_ITEMS:
+            snapshot["omitted_tool_call_count"] = len(tool_calls) - MAX_TRACE_SNAPSHOT_ITEMS
+
+        return snapshot
+
+    def _trace_capture_failure_snapshot(
+        self,
+        report: FeedbackReport,
+        error: Exception,
+    ) -> dict:
+        trace_ids = self._normalize_trace_ids(report.trace_ids)
+        return {
+            "schema_version": 1,
+            "capture_status": "error",
+            "captured_at": self._utc_timestamp(),
+            "source": {
+                "kind": "langfuse",
+                "extractor": (
+                    "src.lib.agent_studio.trace_context_service."
+                    "get_trace_context_for_explorer"
+                ),
+            },
+            "feedback": {
+                "session_id": report.session_id,
+                "trace_ids": trace_ids,
+            },
+            "traces": [
+                {
+                    "trace_id": trace_id,
+                    "capture_status": "error",
+                    "error": self._trace_capture_error(error),
+                }
+                for trace_id in trace_ids[:MAX_TRACE_SNAPSHOT_TRACES]
+            ],
+            "error_summary": {
+                "trace_error_count": min(len(trace_ids), MAX_TRACE_SNAPSHOT_TRACES),
+                "message": "Trace snapshot capture failed before trace extraction completed.",
+            },
+        }
+
+    @classmethod
+    def _trace_capture_error(cls, error: Exception) -> dict:
+        message = cls._compact_redacted_text(str(error), max_chars=MAX_TRACE_ERROR_CHARS)
+        return {
+            "type": error.__class__.__name__,
+            "message": message,
+        }
+
+    @staticmethod
+    def _normalize_trace_ids(raw_trace_ids: Any) -> list[str]:
+        if not isinstance(raw_trace_ids, list):
+            return []
+
+        normalized_trace_ids = []
+        seen = set()
+        for raw_trace_id in raw_trace_ids:
+            if not isinstance(raw_trace_id, str):
+                continue
+            trace_id = raw_trace_id.strip()
+            if not trace_id or trace_id in seen:
+                continue
+            normalized_trace_ids.append(trace_id)
+            seen.add(trace_id)
+
+        return normalized_trace_ids
+
+    @staticmethod
+    def _utc_timestamp() -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    @staticmethod
+    def _json_timestamp(value: Any) -> str | None:
+        if value is None:
+            return None
+        if isinstance(value, datetime):
+            return value.isoformat()
+        return str(value)
+
+    @classmethod
+    def _compact_redacted_text(cls, value: Any, *, max_chars: int) -> str | None:
+        if value is None:
+            return None
+
+        text = str(value).replace("\r", " ").replace("\n", " ")
+        text = re.sub(r"\s+", " ", text).strip()
+        text = _EMAIL_RE.sub("[redacted-email]", text)
+        text = _URL_RE.sub("[redacted-url]", text)
+        text = _BEARER_TOKEN_RE.sub("Bearer [redacted-token]", text)
+        text = _SECRET_ASSIGNMENT_RE.sub(
+            lambda match: f"{match.group(1)}=[redacted]",
+            text,
+        )
+
+        if len(text) <= max_chars:
+            return text
+
+        return f"{text[:max_chars].rstrip()}...[truncated]"
 
     @staticmethod
     def _curator_matches_authenticated_user(

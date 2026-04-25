@@ -1,5 +1,6 @@
 """Unit tests for FeedbackService orchestration logic."""
 
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 import importlib
@@ -38,6 +39,7 @@ def _report(report_id="feedback-1"):
         curator_id="curator@example.org",
         feedback_text="feedback text",
         trace_ids=["trace-1"],
+        trace_data=None,
         conversation_transcript=None,
         processing_status="pending",
         processing_started_at=None,
@@ -312,16 +314,144 @@ def test_process_feedback_report_marks_completed_on_success(monkeypatch):
     monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
     service = _feedback_service_module().FeedbackService(db=db)
     service.notifier = MagicMock()
+    service._capture_feedback_trace_snapshot = MagicMock(return_value=None)
+
+    service.process_feedback_report(report.id)
+
+    service.notifier.send_feedback_notification.assert_called_once_with(report)
+    service._capture_feedback_trace_snapshot.assert_called_once_with(report)
+    assert _status_value(report.processing_status) == "completed"
+    assert report.processing_started_at is not None
+    assert report.email_sent_at is not None
+    assert report.processing_completed_at is not None
+    assert report.trace_data is None
+    assert report.error_details is None
+    assert db.commit.call_count == 2
+
+
+def test_process_feedback_report_persists_redacted_trace_snapshot(monkeypatch):
+    now = datetime(2026, 4, 25, 12, 0, 0)
+    trace_context = SimpleNamespace(
+        trace_id="trace-1",
+        session_id="session-1",
+        timestamp=now,
+        user_query="Please help curator@example.org with token=super-secret",
+        final_response_preview="See https://example.org/private?token=secret for details",
+        prompts_executed=[
+            SimpleNamespace(
+                agent_id="gene_extractor",
+                agent_name="Gene Extractor",
+                prompt_preview="system prompt secret=do-not-store",
+                group_applied="WB",
+                model="gpt-test",
+                tokens_used=123,
+            )
+        ],
+        routing_decisions=[
+            SimpleNamespace(
+                from_agent="supervisor",
+                to_agent="gene_extractor",
+                reason="not stored",
+                timestamp=now + timedelta(seconds=1),
+            )
+        ],
+        tool_calls=[
+            SimpleNamespace(
+                name="search_document",
+                input={"api_key": "do-not-store"},
+                output_preview="secret output",
+                duration_ms=42,
+                status="completed",
+            )
+        ],
+        total_duration_ms=1000,
+        total_tokens=456,
+        agent_count=1,
+    )
+
+    async def _get_trace_context(_trace_id):
+        return trace_context
+
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    monkeypatch.setattr(
+        "src.lib.feedback.service.get_trace_context_for_explorer",
+        _get_trace_context,
+    )
+    service = _feedback_service_module().FeedbackService(db=db)
+    service.notifier = MagicMock()
+
+    service.process_feedback_report(report.id)
+
+    assert _status_value(report.processing_status) == "completed"
+    assert report.trace_data["capture_status"] == "success"
+    assert report.trace_data["feedback"] == {
+        "session_id": "session-1",
+        "trace_ids": ["trace-1"],
+    }
+    trace_snapshot = report.trace_data["traces"][0]
+    assert trace_snapshot["session_matches_feedback"] is True
+    assert trace_snapshot["metrics"]["tool_call_count"] == 1
+    assert trace_snapshot["previews"]["user_query"] == (
+        "Please help [redacted-email] with token=[redacted]"
+    )
+    assert trace_snapshot["previews"]["final_response"] == "See [redacted-url] for details"
+    assert trace_snapshot["prompts_executed"] == [
+        {
+            "agent_id": "gene_extractor",
+            "agent_name": "Gene Extractor",
+            "group_applied": "WB",
+            "model": "gpt-test",
+            "tokens_used": 123,
+        }
+    ]
+    assert trace_snapshot["tool_calls"] == [
+        {
+            "name": "search_document",
+            "duration_ms": 42,
+            "status": "completed",
+        }
+    ]
+    assert "prompt_preview" not in trace_snapshot["prompts_executed"][0]
+    assert "input" not in trace_snapshot["tool_calls"][0]
+    assert "output_preview" not in trace_snapshot["tool_calls"][0]
+
+
+def test_process_feedback_report_persists_trace_capture_failure_metadata(monkeypatch):
+    async def _raise_trace_context(_trace_id):
+        raise RuntimeError(
+            "Langfuse unavailable for curator@example.org with api_key=super-secret"
+        )
+
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    monkeypatch.setattr(
+        "src.lib.feedback.service.get_trace_context_for_explorer",
+        _raise_trace_context,
+    )
+    service = _feedback_service_module().FeedbackService(db=db)
+    service.notifier = MagicMock()
 
     service.process_feedback_report(report.id)
 
     service.notifier.send_feedback_notification.assert_called_once_with(report)
     assert _status_value(report.processing_status) == "completed"
-    assert report.processing_started_at is not None
-    assert report.email_sent_at is not None
-    assert report.processing_completed_at is not None
-    assert report.error_details is None
-    assert db.commit.call_count == 2
+    assert report.error_details == (
+        "Trace capture completed with errors. See trace_data.error_summary for details."
+    )
+    assert report.trace_data["capture_status"] == "error"
+    assert report.trace_data["error_summary"]["trace_error_count"] == 1
+    trace_error = report.trace_data["traces"][0]["error"]
+    assert trace_error["type"] == "RuntimeError"
+    assert trace_error["message"] == (
+        "Langfuse unavailable for [redacted-email] with api_key=[redacted]"
+    )
+    assert "super-secret" not in str(report.trace_data)
+    assert "curator@example.org" not in str(report.trace_data)
 
 
 def test_process_feedback_report_handles_notifier_failure(monkeypatch):
@@ -332,10 +462,14 @@ def test_process_feedback_report_handles_notifier_failure(monkeypatch):
     service = _feedback_service_module().FeedbackService(db=db)
     service.notifier = MagicMock()
     service.notifier.send_feedback_notification.side_effect = RuntimeError("smtp down")
+    service._capture_feedback_trace_snapshot = MagicMock(
+        return_value={"schema_version": 1, "capture_status": "success"}
+    )
 
     service.process_feedback_report(report.id)
 
     assert _status_value(report.processing_status) == "completed"
+    assert report.trace_data == {"schema_version": 1, "capture_status": "success"}
     assert report.email_sent_at is None
     assert report.processing_completed_at is not None
     assert "Notification error: smtp down" in report.error_details
