@@ -73,8 +73,12 @@ langfuse_health_url() {
   printf '%s/api/public/health\n' "$(langfuse_url)"
 }
 
+trace_review_url() {
+  printf 'http://localhost:%s\n' "${TRACE_REVIEW_BACKEND_HOST_PORT:-8001}"
+}
+
 trace_review_health_url() {
-  printf 'http://localhost:%s/health\n' "${TRACE_REVIEW_BACKEND_HOST_PORT:-8001}"
+  printf '%s/health\n' "$(trace_review_url)"
 }
 
 service_port_label() {
@@ -289,6 +293,8 @@ print_summary() {
   echo "Application: $(frontend_url)"
   echo "API Docs: $(backend_docs_url)"
   echo "Langfuse: $(langfuse_url)"
+  echo "TraceReview API: $(trace_review_url)"
+  echo "TraceReview health: $(trace_review_health_url)"
   echo "Health: $(backend_health_url)"
   echo "Compose file: ${main_compose_file}"
   echo "Runtime config: ${AGR_RUNTIME_CONFIG_HOST_DIR}"
@@ -386,6 +392,7 @@ main() {
     echo "  Troubleshooting:"
     echo "    - Check container logs:    docker compose --env-file ${env_output_path} -f ${main_compose_file} logs <service>"
     echo "    - Restart a single service: docker compose --env-file ${env_output_path} -f ${main_compose_file} restart <service>"
+    echo "    - TraceReview diagnostics: scripts/testing/trace_review_preflight.sh --backend-url $(trace_review_url)"
     echo "    - Re-run this stage:        scripts/install/install.sh --from-stage 6"
     echo
     log_error "One or more services failed verification"

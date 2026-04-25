@@ -5,10 +5,7 @@ Fetches and processes trace data from Langfuse API
 import logging
 from typing import Any, Dict, List, Optional
 from langfuse import Langfuse
-from ..config import (
-    get_langfuse_host, get_langfuse_public_key, get_langfuse_secret_key,
-    get_langfuse_local_host, get_langfuse_local_public_key, get_langfuse_local_secret_key
-)
+from ..config import get_trace_source_runtime_config
 
 logger = logging.getLogger(__name__)
 OBSERVATION_FIELDS = "core,basic,time,io,metadata,model,usage,prompt,metrics"
@@ -24,21 +21,18 @@ class TraceExtractor:
         Args:
             source: "remote" (default) or "local"
         """
-        if source == "local":
-            self.host = get_langfuse_local_host()
-            self.public_key = get_langfuse_local_public_key()
-            self.secret_key = get_langfuse_local_secret_key()
+        source_config = get_trace_source_runtime_config(source)
+        self.host = source_config["host"]
+        self.public_key = source_config["public_key"]
+        self.secret_key = source_config["secret_key"]
 
-            if not self.public_key or not self.secret_key:
+        if not self.host:
+            raise ValueError(f"Langfuse host must be set for {source} source")
+
+        if not self.public_key or not self.secret_key:
+            if source == "local":
                 raise ValueError("LANGFUSE_LOCAL_PUBLIC_KEY and LANGFUSE_LOCAL_SECRET_KEY must be set for local source")
-        else:
-            # Default to remote
-            self.host = get_langfuse_host()
-            self.public_key = get_langfuse_public_key()
-            self.secret_key = get_langfuse_secret_key()
-
-            if not self.public_key or not self.secret_key:
-                raise ValueError("LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must be set for remote source")
+            raise ValueError("LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY must be set for remote source")
 
         # Log configuration for troubleshooting
         logger.debug("TraceExtractor initialized: source=%s, host=%s, pk=%s...", source, self.host, self.public_key[:20] if self.public_key else "None")

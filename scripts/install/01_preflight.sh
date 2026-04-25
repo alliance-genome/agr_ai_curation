@@ -245,7 +245,7 @@ check_required_ports() {
     "MINIO_API_HOST_PORT:9090:MinIO API"
     "MINIO_CONSOLE_HOST_PORT:9091:MinIO Console"
     "LOKI_HOST_PORT:3100:Loki"
-    "TRACE_REVIEW_BACKEND_PORT:8001:trace-review"
+    "TRACE_REVIEW_BACKEND_HOST_PORT:8001:TraceReview backend"
   )
 
   if ! command_exists "$LSOF_CMD" && ! command_exists "$SS_CMD"; then
@@ -271,7 +271,11 @@ check_required_ports() {
 
     owner="$(find_port_owner "$port" || true)"
     if [[ -n "$owner" ]]; then
-      record_port_conflict "Port ${port} in use by ${owner} (${service}; env ${env_var})"
+      if [[ "$env_var" == "TRACE_REVIEW_BACKEND_HOST_PORT" ]]; then
+        record_port_conflict "Port ${port} in use by ${owner} (${service}; env ${env_var}). If this is a Symphony review proxy or another local service, choose a free TraceReview host port."
+      else
+        record_port_conflict "Port ${port} in use by ${owner} (${service}; env ${env_var})"
+      fi
     else
       log_success "Port ${port} available (${service}; env ${env_var})."
     fi
