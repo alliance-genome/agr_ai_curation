@@ -382,6 +382,10 @@ async def lifespan(app: FastAPI):
                 logger.info("Reranker startup health check is enforced by current connection requirements")
             elif any(service.service_id == "reranker" for service in optional_services):
                 logger.info("Reranker startup health check is advisory under current connection requirements")
+            if any(service.service_id == "bedrock_reranker" for service in required_services):
+                logger.info("Bedrock reranker startup health check is enforced by current connection requirements")
+            elif any(service.service_id == "bedrock_reranker" for service in optional_services):
+                logger.info("Bedrock reranker startup health check is advisory under current connection requirements")
 
             if strict_mode and required_services:
                 logger.info("Checking required service health (HEALTH_CHECK_STRICT_MODE=true)...")

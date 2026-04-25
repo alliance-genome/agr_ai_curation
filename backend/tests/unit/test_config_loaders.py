@@ -1465,16 +1465,19 @@ class TestConnectionsLoader:
         load_connections(connections_yaml, force_reload=True)
         required_ids = [c.service_id for c in get_required_connections()]
         assert "reranker" in required_ids
+        assert "bedrock_reranker" not in required_ids
 
         monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
         load_connections(connections_yaml, force_reload=True)
         required_ids = [c.service_id for c in get_required_connections()]
         assert "reranker" not in required_ids
+        assert "bedrock_reranker" in required_ids
 
         monkeypatch.setenv("RERANK_PROVIDER", "none")
         load_connections(connections_yaml, force_reload=True)
         required_ids = [c.service_id for c in get_required_connections()]
         assert "reranker" not in required_ids
+        assert "bedrock_reranker" not in required_ids
 
     def test_get_optional_connections(self):
         """Test getting only optional connections."""

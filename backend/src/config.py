@@ -19,6 +19,7 @@ from src.lib.packages.paths import (
     get_pdfx_json_storage_dir,
     get_processed_json_storage_dir,
 )
+from src.lib.aws_env import without_blank_aws_profile_env_vars
 
 # Load .env file from secure home directory location ONLY.
 # This prevents accidental commits of secrets to the repository.
@@ -461,22 +462,6 @@ def _get_ec2_instance_metadata() -> tuple[str | None, str | None]:
         return None, None
 
 
-def _pop_blank_aws_profile_env_vars() -> Dict[str, str]:
-    """Temporarily remove blank AWS profile env vars that break boto3 session init.
-
-    Docker Compose frequently injects `AWS_PROFILE=` when the host shell leaves the
-    variable unset. Botocore treats that empty value as a real profile name and
-    raises ``ProfileNotFound`` before it can fall back to the EC2 instance role.
-    """
-    cleared: Dict[str, str] = {}
-    for key in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE"):
-        value = os.getenv(key)
-        if value is not None and not value.strip():
-            cleared[key] = value
-            os.environ.pop(key, None)
-    return cleared
-
-
 def _check_ec2_tag(tag_key: str, expected_value: str) -> bool:
     """Check if the current EC2 instance has a specific tag value.
 
@@ -494,10 +479,10 @@ def _check_ec2_tag(tag_key: str, expected_value: str) -> bool:
     if not instance_id or not region:
         return False
 
-    cleared_profile_env = _pop_blank_aws_profile_env_vars()
     try:
         import boto3
-        ec2 = boto3.session.Session().client('ec2', region_name=region)
+        with without_blank_aws_profile_env_vars():
+            ec2 = boto3.session.Session().client('ec2', region_name=region)
         response = ec2.describe_tags(
             Filters=[
                 {'Name': 'resource-id', 'Values': [instance_id]},
@@ -509,8 +494,6 @@ def _check_ec2_tag(tag_key: str, expected_value: str) -> bool:
                 return True
     except Exception as e:
         logger.debug("Failed to check EC2 tag %s: %s", tag_key, e)
-    finally:
-        os.environ.update(cleared_profile_env)
     return False
 
 

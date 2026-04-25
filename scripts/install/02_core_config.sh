@@ -459,6 +459,7 @@ main() {
 
   case "$rerank_provider" in
     bedrock_cohere)
+      log_info "bedrock_cohere reranking requires AWS Bedrock credentials via an IAM role, environment credentials, or a valid AWS_PROFILE. Leave AWS_PROFILE unset when using an instance/task role." >&2
       bedrock_rerank_model_arn="$(resolve_bedrock_rerank_model_arn "$default_bedrock_rerank_model_arn")"
       ;;
     local_transformers)

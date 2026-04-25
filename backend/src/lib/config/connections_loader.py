@@ -548,6 +548,9 @@ async def check_service_health(service_id: str) -> Optional[bool]:
         elif health.method == "CONNECT":
             # Database connection check
             is_healthy, error_message = await _check_postgres_health(conn)
+        elif health.method == "BEDROCK_RERANKER":
+            # Bedrock reranker provider config and credential readiness check
+            is_healthy, error_message = await _check_bedrock_reranker_health(conn)
         elif health.endpoint:
             # HTTP endpoint check
             is_healthy, error_message = await _check_http_health(conn)
@@ -691,6 +694,26 @@ async def _check_postgres_health(conn: ConnectionDefinition) -> tuple[Optional[b
             return False, "Neither asyncpg nor psycopg2 installed"
         except Exception as e:
             return False, str(e)
+
+
+async def _check_bedrock_reranker_health(
+    _conn: ConnectionDefinition,
+) -> tuple[Optional[bool], Optional[str]]:
+    """Check Bedrock reranker provider configuration readiness."""
+    try:
+        from src.lib.bedrock_reranker import get_bedrock_reranker_status
+    except ImportError as exc:
+        return False, f"Bedrock reranker module unavailable: {exc}"
+
+    status = get_bedrock_reranker_status(check_credentials=True)
+    provider = str(status.get("provider") or "").strip().lower()
+    if provider in {"", "none", "local_transformers"}:
+        return None, None
+
+    if status.get("is_healthy") is True:
+        return True, None
+
+    return False, str(status.get("reason") or "Bedrock reranker is not ready")
 
 
 async def check_all_health() -> Dict[str, Dict[str, Any]]:

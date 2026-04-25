@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from weaviate.classes.query import Filter, HybridFusion, MetadataQuery
 
-from ..bedrock_reranker import get_rerank_provider, rerank_chunks
+from ..bedrock_reranker import get_effective_rerank_provider, rerank_chunks
 from .connection import get_connection
 
 logger = logging.getLogger(__name__)
@@ -516,10 +516,14 @@ async def hybrid_search_chunks(
                         logger.debug("BM25 boost not available (v%s): %s", weaviate_version, e)
 
                 # Add reranking if available
-                if rerank_override if rerank_override is not None else apply_reranking:
+                should_rerank = (
+                    rerank_override if rerank_override is not None else apply_reranking
+                )
+                effective_rerank_provider = get_effective_rerank_provider()
+                if should_rerank and effective_rerank_provider not in {"", "none"}:
                     logger.info(
                         "V5: Post-search reranking enabled via provider=%s",
-                        get_rerank_provider(),
+                        effective_rerank_provider,
                     )
                 else:
                     logger.info("V5: Reranking disabled")
@@ -602,8 +606,12 @@ async def hybrid_search_chunks(
 
                     chunks.append(chunk)
 
-                if rerank_override if rerank_override is not None else apply_reranking:
-                    logger.info("V5: Applying Bedrock reranking to %s chunks", len(chunks))
+                if should_rerank and effective_rerank_provider not in {"", "none"}:
+                    logger.info(
+                        "V5: Applying post-search reranking via provider=%s to %s chunks",
+                        effective_rerank_provider,
+                        len(chunks),
+                    )
                     chunks = rerank_chunks(query, chunks, top_n=len(chunks))
                 else:
                     for chunk in chunks:

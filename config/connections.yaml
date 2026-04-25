@@ -124,6 +124,20 @@ services:
       default: bedrock_cohere
     timeout_seconds: 10
 
+  bedrock_reranker:
+    description: "Amazon Bedrock Cohere reranking provider"
+    url: "aws://${AWS_REGION:-us-east-1}/bedrock-agent-runtime"
+    health_check:
+      endpoint: null
+      method: BEDROCK_RERANKER
+      expected_status: null
+    required: false
+    required_when:
+      env: RERANK_PROVIDER
+      equals: bedrock_cohere
+      default: bedrock_cohere
+    timeout_seconds: 10
+
   # ---------------------------------------------------------------------------
   # AGR Curation Database (Direct PostgreSQL Connection - Optional)
   # ---------------------------------------------------------------------------

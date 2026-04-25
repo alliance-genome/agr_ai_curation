@@ -1,32 +1,15 @@
 """SNS notification service for feedback reports."""
 import logging
-import os
 from datetime import datetime
 from typing import Any
 
 import boto3
 from botocore.exceptions import ClientError
 
+from src.lib.aws_env import without_blank_aws_profile_env_vars
 from src.lib.feedback.transcript import format_feedback_transcript_section
 
 logger = logging.getLogger(__name__)
-
-
-def _pop_blank_aws_profile_env_vars() -> dict[str, str]:
-    """Temporarily remove blank AWS profile env vars that break boto3 resolution.
-
-    Docker Compose often injects `AWS_PROFILE=` / `AWS_DEFAULT_PROFILE=` when the
-    source shell leaves them unset. Botocore treats that empty value as a real
-    profile name and raises `ProfileNotFound` before it can fall back to the EC2
-    instance role.
-    """
-    cleared: dict[str, str] = {}
-    for key in ("AWS_PROFILE", "AWS_DEFAULT_PROFILE"):
-        value = os.getenv(key)
-        if value is not None and not value.strip():
-            cleared[key] = value
-            os.environ.pop(key, None)
-    return cleared
 
 
 class SNSNotifier:
@@ -48,11 +31,8 @@ class SNSNotifier:
         if self._sns_client is not None:
             return self._sns_client
 
-        cleared_profile_env = _pop_blank_aws_profile_env_vars()
-        try:
+        with without_blank_aws_profile_env_vars():
             self._sns_client = boto3.client("sns", region_name=self.region)
-        finally:
-            os.environ.update(cleared_profile_env)
 
         return self._sns_client
 
