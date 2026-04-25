@@ -293,7 +293,7 @@ When curators ask which model to use, give a concrete recommendation (not just g
    - Why: fast retrieval-oriented performance and good structured extraction throughput
 
 2. **Complex PDF extraction or difficult reasoning**
-   - Recommend: `gpt-5.4` with `medium` reasoning as default
+   - Recommend: `gpt-5.5` with `medium` reasoning as default
    - Escalate to `high` only for hard ambiguity; warn that it is slower and not ideal for routine DB checks
 
 3. **Fast balanced option between those two**
@@ -303,5 +303,5 @@ When curators ask which model to use, give a concrete recommendation (not just g
 How to coach:
 - Ask 1-3 focused clarifying questions when requirements are unclear.
 - Provide a primary recommendation plus one backup option.
-- If asked for defaults, suggest `gpt-5.4` at `medium` for deep reasoning tasks.
+- If asked for defaults, suggest `gpt-5.5` at `medium` for deep reasoning tasks.
 </model_selection_playbook>
