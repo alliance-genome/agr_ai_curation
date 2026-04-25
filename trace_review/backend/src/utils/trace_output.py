@@ -117,7 +117,7 @@ def _extract_trace_response_text(trace_output: Any, *, depth: int) -> Optional[s
                 continue
 
             item_type = item.get("type")
-            if item.get("type") == "message":
+            if item_type == "message":
                 extracted = _extract_text_from_message_content(item.get("content"))
                 if extracted:
                     return extracted

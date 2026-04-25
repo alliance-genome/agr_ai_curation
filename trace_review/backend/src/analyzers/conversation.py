@@ -155,7 +155,7 @@ class ConversationAnalyzer:
         if extracted:
             final_response = extracted
 
-        # Fall back to observations only if the trace itself does not yet expose a final response.
+        # Check observations only if the trace itself does not yet expose a final response.
         if final_response == "N/A":
             # Look for synthesis/final response in observations (reversed)
             for obs in reversed(sorted_observations):
