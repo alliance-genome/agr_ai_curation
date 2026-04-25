@@ -12,8 +12,8 @@ Options:
   --issue-identifier VALUE       Required: issue key such as ALL-46
   --branch VALUE                 Branch to inspect (default: current git branch)
   --repo VALUE                   GitHub repo in owner/name form
-  --create-if-missing            Create a PR when none exists (requires --repo and --title)
-  --title VALUE                  PR title to use when creating
+  --create-if-missing            Create a PR when none exists (requires --repo)
+  --title VALUE                  PR title to use when creating (default: inferred)
   --body-file PATH               PR body file to use when creating
   --wait-for-review-seconds N    Wait N seconds for Claude Code review after PR success (default: 0)
   --review-poll-seconds N        Poll interval during Claude wait (default: 30)
@@ -181,6 +181,21 @@ extract_kv() {
       }
     }
   '
+}
+
+infer_pr_title() {
+  local subject
+
+  subject="$(git log -1 --format=%s 2>/dev/null || true)"
+  if [[ -z "${subject}" ]]; then
+    subject="${branch}"
+  fi
+
+  if [[ "${subject}" == *"${issue_identifier}"* ]]; then
+    printf '%s\n' "${subject}"
+  else
+    printf '%s: %s\n' "${issue_identifier}" "${subject}"
+  fi
 }
 
 auto_bounce_to_in_progress_for_claude() {
@@ -486,9 +501,13 @@ INST
   exit 20
 fi
 
-if [[ -z "${repo}" || -z "${title}" ]]; then
-  echo "Missing required arguments for PR creation (--repo and --title)." >&2
+if [[ -z "${repo}" ]]; then
+  echo "Missing required argument for PR creation: --repo." >&2
   exit 2
+fi
+
+if [[ -z "${title}" ]]; then
+  title="$(infer_pr_title)"
 fi
 
 if (( dry_run == 1 )); then

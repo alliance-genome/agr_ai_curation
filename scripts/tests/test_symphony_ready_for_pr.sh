@@ -165,6 +165,28 @@ test_dry_run_create_reports_title() {
   assert_contains "READY_FOR_PR_PR_TITLE=ALL-51: Example" "${output}"
 }
 
+test_dry_run_create_infers_title() {
+  local temp_dir pr_json output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+
+  echo '[]' > "${pr_json}"
+
+  output="$(
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-54 \
+      --branch all-54-branch \
+      --repo alliance-genome/agr_ai_curation \
+      --create-if-missing \
+      --pr-json-file "${pr_json}" \
+      --dry-run
+  )"
+
+  assert_contains "READY_FOR_PR_STATUS=dry_run_create" "${output}"
+  assert_contains "READY_FOR_PR_PR_TITLE=ALL-54:" "${output}"
+}
+
 test_create_pr_uses_plain_cli_output_and_view_json() {
   local temp_dir gh_stub log_file output
   temp_dir="$(mktemp -d)"
@@ -358,6 +380,7 @@ test_conflicted_pr_routes_back_to_in_progress
 test_missing_pr_reports_nonzero
 test_base_branch_is_rejected
 test_dry_run_create_reports_title
+test_dry_run_create_infers_title
 test_create_pr_uses_plain_cli_output_and_view_json
 test_claude_detected_auto_bounces_to_in_progress
 test_claude_maxed_out_without_report_does_not_abort
