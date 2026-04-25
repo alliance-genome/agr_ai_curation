@@ -6,7 +6,7 @@ interactions with Claude/Opus in the workflow analysis feature.
 """
 
 from pydantic import BaseModel, Field
-from typing import Any, Optional, List, Dict
+from typing import Any, Optional, List, Dict, Literal
 
 
 class TokenInfo(BaseModel):
@@ -116,3 +116,34 @@ class ConversationResponse(BaseModel):
     status: str = Field(default="success")
     data: ConversationData
     token_info: TokenInfo
+
+
+class SessionTraceError(BaseModel):
+    """Per-trace failure captured during session export."""
+    trace_id: Optional[str] = Field(default=None, description="Langfuse trace ID when known")
+    trace_id_short: Optional[str] = Field(default=None, description="Short trace ID when known")
+    trace_name: Optional[str] = Field(default=None, description="Trace name from the session listing")
+    timestamp: Optional[str] = Field(default=None, description="Trace timestamp from the session listing")
+    source: str = Field(..., description="Trace source used for the session export")
+    message: str = Field(..., description="Non-secret error summary")
+
+
+class SessionTraceBundleItem(BaseModel):
+    """One trace entry in a session-level export bundle."""
+    status: Literal["success", "error"]
+    trace_id: str
+    trace_id_short: Optional[str] = None
+    listed_trace: Optional[Dict[str, Any]] = None
+    summary: Optional[Dict[str, Any]] = None
+    conversation: Optional[Dict[str, Any]] = None
+    tool_summary: Optional[Dict[str, Any]] = None
+    analyzer_outputs: Optional[Dict[str, Any]] = None
+    error: Optional[SessionTraceError] = None
+
+
+class SessionTraceExportResponse(BaseModel):
+    """Compact JSON export for every trace in a Langfuse session."""
+    status: str = Field(default="success")
+    session: Dict[str, Any]
+    traces: List[SessionTraceBundleItem]
+    errors: List[SessionTraceError] = Field(default_factory=list)
