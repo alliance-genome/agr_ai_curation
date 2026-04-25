@@ -58,19 +58,19 @@ EOF
 
   cat >"${stub_dir}/lsof" <<'EOF'
 #!/usr/bin/env bash
-set -euo pipefail
-
-if [[ "$*" == *"-iTCP:8001"* ]]; then
-  echo "COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME"
-  echo "node 2222 codex 11u IPv4 0t0 TCP *:8001 (LISTEN)"
-  exit 0
-fi
-
 exit 1
 EOF
 
   cat >"${stub_dir}/ss" <<'EOF'
 #!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$*" == *"sport = :8001"* ]]; then
+  echo "State Recv-Q Send-Q Local Address:Port Peer Address:Port Process"
+  echo 'LISTEN 0 4096 0.0.0.0:8001 0.0.0.0:* users:(("node",pid=2222,fd=11))'
+  exit 0
+fi
+
 exit 1
 EOF
 
@@ -113,18 +113,129 @@ run_preflight() {
     HOME="$temp_home" \
     PATH="${stub_dir}:${PATH}" \
     NO_COLOR=1 \
-    TRACE_REVIEW_PREFLIGHT_CURL_CMD="curl" \
-    TRACE_REVIEW_PREFLIGHT_LSOF_CMD="lsof" \
-    TRACE_REVIEW_PREFLIGHT_SS_CMD="ss" \
-    TRACE_REVIEW_PREFLIGHT_GETENT_CMD="getent" \
-    TRACE_REVIEW_PREFLIGHT_IP_CMD="ip" \
-    TRACE_REVIEW_PREFLIGHT_NC_CMD="nc" \
+    TRACE_REVIEW_PREFLIGHT_CURL_CMD="${TRACE_REVIEW_PREFLIGHT_CURL_CMD:-curl}" \
+    TRACE_REVIEW_PREFLIGHT_SS_CMD="${TRACE_REVIEW_PREFLIGHT_SS_CMD:-ss}" \
+    TRACE_REVIEW_PREFLIGHT_GETENT_CMD="${TRACE_REVIEW_PREFLIGHT_GETENT_CMD:-getent}" \
+    TRACE_REVIEW_PREFLIGHT_IP_CMD="${TRACE_REVIEW_PREFLIGHT_IP_CMD:-ip}" \
+    TRACE_REVIEW_PREFLIGHT_NC_CMD="${TRACE_REVIEW_PREFLIGHT_NC_CMD:-nc}" \
     TRACE_REVIEW_PREFLIGHT_TIMEOUT_SECONDS="1" \
     "$preflight_script" "$@" >"$output_file" 2>&1
   local rc=$?
   set -e
 
   echo "$rc"
+}
+
+test_required_tool_failures_are_explicit() {
+  local temp_root temp_home stub_dir output_file stub_log rc
+  temp_root="$(mktemp -d)"
+  temp_home="${temp_root}/home"
+  stub_dir="${temp_root}/stubbin"
+  output_file="${temp_root}/output.log"
+  stub_log="${temp_root}/stub.log"
+  mkdir -p "$temp_home"
+  trap 'rm -rf "$temp_root"' RETURN
+
+  make_stub_tools "$stub_dir"
+
+  rc="$(
+    TRACE_REVIEW_CURL_STUB_MODE="healthy" \
+    TRACE_REVIEW_STUB_LOG="$stub_log" \
+    LANGFUSE_HOST="http://remote.example:3000" \
+    LANGFUSE_PUBLIC_KEY="pk-lf-test" \
+    LANGFUSE_SECRET_KEY="sk-lf-test" \
+    LANGFUSE_LOCAL_HOST="http://local.example:3000" \
+    LANGFUSE_LOCAL_PUBLIC_KEY="pk-lf-local" \
+    LANGFUSE_LOCAL_SECRET_KEY="sk-lf-local" \
+    TRACE_REVIEW_PREFLIGHT_PYTHON_CMD="missing-python3" \
+    TRACE_REVIEW_PREFLIGHT_SS_CMD="missing-ss" \
+    TRACE_REVIEW_PREFLIGHT_NC_CMD="missing-nc" \
+    run_preflight "$temp_home" "$stub_dir" "$output_file" --backend-url http://127.0.0.1:8001 --source remote
+  )"
+
+  if [[ "$rc" -ne 21 ]]; then
+    echo "Expected missing required tools to exit 21, got $rc" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "Required command not available: missing-python3" "$output_file"
+  assert_contains "Required command not available: missing-ss" "$output_file"
+  assert_contains "Required command not available: missing-nc" "$output_file"
+  assert_contains "TRACE_REVIEW_PREFLIGHT_RESULT exit_code=21" "$output_file"
+}
+
+test_default_backend_url_uses_trace_review_host_port_only() {
+  local temp_root temp_home stub_dir output_file stub_log rc
+  temp_root="$(mktemp -d)"
+  temp_home="${temp_root}/home"
+  stub_dir="${temp_root}/stubbin"
+  output_file="${temp_root}/output.log"
+  stub_log="${temp_root}/stub.log"
+  mkdir -p "$temp_home"
+  trap 'rm -rf "$temp_root"' RETURN
+
+  make_stub_tools "$stub_dir"
+
+  rc="$(
+    TRACE_REVIEW_CURL_STUB_MODE="healthy" \
+    TRACE_REVIEW_STUB_LOG="$stub_log" \
+    BACKEND_HOST_PORT="9999" \
+    TRACE_REVIEW_BACKEND_PORT="7777" \
+    LANGFUSE_HOST="http://remote.example:3000" \
+    LANGFUSE_PUBLIC_KEY="pk-lf-test" \
+    LANGFUSE_SECRET_KEY="sk-lf-test" \
+    LANGFUSE_LOCAL_HOST="http://local.example:3000" \
+    LANGFUSE_LOCAL_PUBLIC_KEY="pk-lf-local" \
+    LANGFUSE_LOCAL_SECRET_KEY="sk-lf-local" \
+    run_preflight "$temp_home" "$stub_dir" "$output_file" --source remote --ssh-host prod.example
+  )"
+
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Expected default backend URL selection to pass, got $rc" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "Port 8001 listener: node/2222" "$output_file"
+  assert_contains "curl_args=-fsS --max-time 1 http://127.0.0.1:8001/health" "$stub_log"
+  assert_contains "TRACE_REVIEW_PREFLIGHT_RESULT exit_code=0" "$output_file"
+}
+
+test_default_backend_url_uses_canonical_trace_review_host_port() {
+  local temp_root temp_home stub_dir output_file stub_log rc
+  temp_root="$(mktemp -d)"
+  temp_home="${temp_root}/home"
+  stub_dir="${temp_root}/stubbin"
+  output_file="${temp_root}/output.log"
+  stub_log="${temp_root}/stub.log"
+  mkdir -p "$temp_home"
+  trap 'rm -rf "$temp_root"' RETURN
+
+  make_stub_tools "$stub_dir"
+
+  rc="$(
+    TRACE_REVIEW_CURL_STUB_MODE="healthy" \
+    TRACE_REVIEW_STUB_LOG="$stub_log" \
+    TRACE_REVIEW_BACKEND_HOST_PORT="8901" \
+    LANGFUSE_HOST="http://remote.example:3000" \
+    LANGFUSE_PUBLIC_KEY="pk-lf-test" \
+    LANGFUSE_SECRET_KEY="sk-lf-test" \
+    LANGFUSE_LOCAL_HOST="http://local.example:3000" \
+    LANGFUSE_LOCAL_PUBLIC_KEY="pk-lf-local" \
+    LANGFUSE_LOCAL_SECRET_KEY="sk-lf-local" \
+    run_preflight "$temp_home" "$stub_dir" "$output_file" --source remote --ssh-host prod.example
+  )"
+
+  if [[ "$rc" -ne 0 ]]; then
+    echo "Expected canonical TraceReview host port selection to pass, got $rc" >&2
+    cat "$output_file" >&2
+    exit 1
+  fi
+
+  assert_contains "Port 8901 listener: none detected before HTTP probe" "$output_file"
+  assert_contains "curl_args=-fsS --max-time 1 http://127.0.0.1:8901/health" "$stub_log"
+  assert_contains "TRACE_REVIEW_PREFLIGHT_RESULT exit_code=0" "$output_file"
 }
 
 test_distinguishes_backend_down_and_missing_langfuse_config() {
@@ -274,6 +385,9 @@ test_rejects_invalid_source() {
   assert_contains "TRACE_REVIEW_PREFLIGHT_RESULT exit_code=21" "$output_file"
 }
 
+test_required_tool_failures_are_explicit
+test_default_backend_url_uses_trace_review_host_port_only
+test_default_backend_url_uses_canonical_trace_review_host_port
 test_distinguishes_backend_down_and_missing_langfuse_config
 test_detects_port_proxy_confusion
 test_healthy_preflight_reports_selected_source_and_ssh_tcp

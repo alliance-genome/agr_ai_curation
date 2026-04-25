@@ -1,10 +1,11 @@
 import os
 import unittest
 from types import SimpleNamespace
+from typing import get_args, get_type_hints
 from unittest.mock import patch
 
 from src import config
-from src.main import _preflight_payload
+from src.main import _preflight_payload, preflight_health
 from src.services.cache_manager import CacheManager
 from src.services.trace_extractor import TraceExtractor
 
@@ -36,6 +37,21 @@ class TraceReviewPreflightTests(unittest.TestCase):
         self.assertTrue(remote["credentials"]["public_key_present"])
         self.assertTrue(remote["credentials"]["secret_key_present"])
         self.assertNotIn("diagnostic-token", str(diagnostics))
+
+    def test_unparseable_diagnostic_url_does_not_echo_credentials(self):
+        langfuse_url = "https://{}@langfuse.example.org:not-a-port".format(
+            "diagnostic-user:diagnostic-token"
+        )
+
+        safe_url = config.sanitize_url_for_diagnostics(langfuse_url)
+
+        self.assertEqual(safe_url, "[unparseable-url]")
+        self.assertNotIn("diagnostic-token", safe_url)
+
+    def test_preflight_health_query_source_uses_literal_validation(self):
+        source_hint = get_type_hints(preflight_health)["source"]
+
+        self.assertEqual(get_args(source_hint), ("remote", "local"))
 
     def test_preflight_payload_reports_missing_selected_source_config(self):
         env = {

@@ -5,6 +5,8 @@ Main application entry point
 import logging
 import os
 from contextlib import asynccontextmanager
+from typing import Literal
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -134,7 +136,7 @@ async def health():
 
 
 @app.get("/health/preflight")
-async def preflight_health(source: str = "remote"):
+async def preflight_health(source: Literal["remote", "local"] = "remote"):
     """Report TraceReview preflight diagnostics without mutating services."""
     payload, status_code = _preflight_payload(app, source)
     return JSONResponse(content=payload, status_code=status_code)

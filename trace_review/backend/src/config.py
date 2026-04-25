@@ -170,15 +170,16 @@ def sanitize_url_for_diagnostics(url: Optional[str]) -> str:
 
     try:
         parts = urlsplit(url)
+        port = parts.port
+        hostname = parts.hostname or ""
     except ValueError:
-        return url
+        return "[unparseable-url]"
 
     if not parts.netloc or "@" not in parts.netloc:
         return url
 
-    hostname = parts.hostname or ""
-    port = f":{parts.port}" if parts.port else ""
-    redacted_netloc = f"[redacted]@{hostname}{port}"
+    port_text = f":{port}" if port else ""
+    redacted_netloc = f"[redacted]@{hostname}{port_text}"
     return urlunsplit((parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment))
 
 

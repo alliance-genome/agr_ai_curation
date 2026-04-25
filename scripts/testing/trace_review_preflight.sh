@@ -12,7 +12,6 @@ EXIT_CONFIG_FAILURE=21
 EXIT_MULTIPLE_FAILURES=22
 
 curl_cmd="${TRACE_REVIEW_PREFLIGHT_CURL_CMD:-curl}"
-lsof_cmd="${TRACE_REVIEW_PREFLIGHT_LSOF_CMD:-lsof}"
 ss_cmd="${TRACE_REVIEW_PREFLIGHT_SS_CMD:-ss}"
 nc_cmd="${TRACE_REVIEW_PREFLIGHT_NC_CMD:-nc}"
 ip_cmd="${TRACE_REVIEW_PREFLIGHT_IP_CMD:-ip}"
@@ -44,6 +43,7 @@ Environment:
   TRACE_REVIEW_PREFLIGHT_SOURCE              Default trace source when --source is omitted
   TRACE_REVIEW_PREFLIGHT_TIMEOUT_SECONDS     curl/TCP timeout in seconds
   TRACE_REVIEW_PREFLIGHT_REQUIRE_PRODUCTION  true to make production-readiness warnings hard failures
+  TRACE_REVIEW_BACKEND_HOST_PORT             TraceReview backend host port when --backend-url is omitted
   TRACE_REVIEW_PRODUCTION_SSH_HOST           Optional production SSH host to TCP-probe on port 22
   TRACE_REVIEW_PRODUCTION_SSH_PORT           Optional production SSH port, default 22
 EOF
@@ -144,17 +144,18 @@ env_value() {
   printf '%s' "$default_value"
 }
 
-trace_env_value() {
-  local key="$1"
-  local default_value="${2:-}"
-  local trace_key="TRACE_REVIEW_${key}"
+check_required_tools() {
+  local missing=0
+  local required_cmd
 
-  if [[ -n "${!trace_key+x}" ]]; then
-    printf '%s' "${!trace_key}"
-    return 0
-  fi
+  for required_cmd in "$curl_cmd" "$python_cmd" "$ss_cmd" "$nc_cmd"; do
+    if ! command_exists "$required_cmd"; then
+      record_config_failure "Required command not available: ${required_cmd}"
+      missing=1
+    fi
+  done
 
-  env_value "$key" "$default_value"
+  return "$missing"
 }
 
 sanitize_url() {
@@ -165,91 +166,87 @@ sanitize_url() {
     return 0
   fi
 
-  if command_exists "$python_cmd"; then
-    "$python_cmd" - "$url" <<'PY'
+  "$python_cmd" - "$url" <<'PY'
 import sys
 from urllib.parse import urlsplit, urlunsplit
 
 url = sys.argv[1]
 try:
     parts = urlsplit(url)
+    port = parts.port
+    host = parts.hostname or ""
 except ValueError:
-    print(url)
+    print("[unparseable-url]")
     raise SystemExit(0)
 
 if "@" not in parts.netloc:
     print(url)
     raise SystemExit(0)
 
-host = parts.hostname or ""
-port = f":{parts.port}" if parts.port else ""
-print(urlunsplit((parts.scheme, f"[redacted]@{host}{port}", parts.path, parts.query, parts.fragment)))
+port_text = f":{port}" if port else ""
+print(urlunsplit((parts.scheme, f"[redacted]@{host}{port_text}", parts.path, parts.query, parts.fragment)))
 PY
-    return 0
-  fi
-
-  printf '%s\n' "$url" | sed -E 's#(https?://)[^/@]+@#\1[redacted]@#'
 }
 
 url_host() {
   local url="$1"
 
-  if command_exists "$python_cmd"; then
-    "$python_cmd" - "$url" <<'PY'
+  "$python_cmd" - "$url" <<'PY'
 import sys
 from urllib.parse import urlsplit
 
-parts = urlsplit(sys.argv[1])
-print(parts.hostname or "")
+try:
+    parts = urlsplit(sys.argv[1])
+    host = parts.hostname or ""
+except ValueError:
+    print("")
+else:
+    print(host)
 PY
-    return 0
-  fi
-
-  printf '%s\n' "$url" | sed -E 's#^[a-zA-Z][a-zA-Z0-9+.-]*://([^/:]+).*#\1#'
 }
 
 url_port() {
   local url="$1"
 
-  if command_exists "$python_cmd"; then
-    "$python_cmd" - "$url" <<'PY'
+  "$python_cmd" - "$url" <<'PY'
 import sys
 from urllib.parse import urlsplit
 
-parts = urlsplit(sys.argv[1])
-if parts.port:
-    print(parts.port)
-elif parts.scheme == "https":
-    print(443)
-elif parts.scheme == "http":
-    print(80)
-else:
+try:
+    parts = urlsplit(sys.argv[1])
+    port = parts.port
+except ValueError:
     print("")
+else:
+    if port:
+        print(port)
+    elif parts.scheme == "https":
+        print(443)
+    elif parts.scheme == "http":
+        print(80)
+    else:
+        print("")
 PY
-    return 0
-  fi
-
-  printf '%s\n' "$url" | sed -nE 's#^[a-zA-Z][a-zA-Z0-9+.-]*://[^/:]+:([0-9]+).*#\1#p'
 }
 
 source_host() {
   case "$1" in
-    local) trace_env_value "LANGFUSE_LOCAL_HOST" "http://host.docker.internal:3000" ;;
-    remote) trace_env_value "LANGFUSE_HOST" "https://cloud.langfuse.com" ;;
+    local) env_value "LANGFUSE_LOCAL_HOST" "http://host.docker.internal:3000" ;;
+    remote) env_value "LANGFUSE_HOST" "https://cloud.langfuse.com" ;;
   esac
 }
 
 source_public_key() {
   case "$1" in
-    local) trace_env_value "LANGFUSE_LOCAL_PUBLIC_KEY" "" ;;
-    remote) trace_env_value "LANGFUSE_PUBLIC_KEY" "" ;;
+    local) env_value "LANGFUSE_LOCAL_PUBLIC_KEY" "" ;;
+    remote) env_value "LANGFUSE_PUBLIC_KEY" "" ;;
   esac
 }
 
 source_secret_key() {
   case "$1" in
-    local) trace_env_value "LANGFUSE_LOCAL_SECRET_KEY" "" ;;
-    remote) trace_env_value "LANGFUSE_SECRET_KEY" "" ;;
+    local) env_value "LANGFUSE_LOCAL_SECRET_KEY" "" ;;
+    remote) env_value "LANGFUSE_SECRET_KEY" "" ;;
   esac
 }
 
@@ -263,26 +260,30 @@ source_required_env() {
 find_port_owner() {
   local port="$1"
   local owner=""
+  local ss_output
 
-  if command_exists "$lsof_cmd"; then
-    owner="$("$lsof_cmd" -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR==2 { print $1 "/" $2; exit }')"
-    if [[ -n "$owner" ]]; then
-      printf '%s\n' "$owner"
-      return 0
-    fi
-  fi
+  ss_output="$("$ss_cmd" -ltnp "sport = :${port}" 2>/dev/null || true)"
+  owner="$("$python_cmd" - "$ss_output" <<'PY'
+import re
+import sys
 
-  if command_exists "$ss_cmd"; then
-    local ss_line
-    ss_line="$("$ss_cmd" -ltnp "( sport = :${port} )" 2>/dev/null | awk 'NR>1 && $1=="LISTEN" { print; exit }')"
-    if [[ -n "$ss_line" ]]; then
-      owner="$(printf '%s\n' "$ss_line" | sed -n 's/.*users:(("\([^"]*\)".*pid=\([0-9]*\).*/\1\/\2/p')"
-      if [[ -z "$owner" ]]; then
-        owner="unknown process"
-      fi
-      printf '%s\n' "$owner"
-      return 0
-    fi
+for line in sys.argv[1].splitlines():
+    if "LISTEN" not in line:
+        continue
+
+    match = re.search(r'users:\(\("([^"]+)".*?pid=([0-9]+)', line)
+    if match:
+        print(f"{match.group(1)}/{match.group(2)}")
+    else:
+        print("unknown process")
+    raise SystemExit(0)
+
+raise SystemExit(0)
+PY
+)"
+  if [[ -n "$owner" ]]; then
+    printf '%s\n' "$owner"
+    return 0
   fi
 
   return 1
@@ -298,8 +299,7 @@ http_get() {
 payload_is_trace_review_health() {
   local payload_file="$1"
 
-  if command_exists "$python_cmd"; then
-    "$python_cmd" - "$payload_file" <<'PY'
+  "$python_cmd" - "$payload_file" <<'PY'
 import json
 import sys
 
@@ -315,10 +315,6 @@ if status in {"ok", "starting"} and "Trace Review API" in message:
     raise SystemExit(0)
 raise SystemExit(1)
 PY
-    return $?
-  fi
-
-  grep -q "Trace Review API" "$payload_file"
 }
 
 check_trace_review_backend() {
@@ -444,17 +440,7 @@ tcp_check() {
   local host="$1"
   local port="$2"
 
-  if command_exists "$nc_cmd"; then
-    "$nc_cmd" -z -w "$timeout_seconds" "$host" "$port" >/dev/null 2>&1
-    return $?
-  fi
-
-  if command_exists "timeout"; then
-    timeout "$timeout_seconds" bash -c "</dev/tcp/${host}/${port}" >/dev/null 2>&1
-    return $?
-  fi
-
-  return 2
+  "$nc_cmd" -z -w "$timeout_seconds" "$host" "$port" >/dev/null 2>&1
 }
 
 production_readiness_warning() {
@@ -484,7 +470,7 @@ check_production_readiness() {
 
   ssh_key_file="${TRACE_REVIEW_PRODUCTION_SSH_KEY_FILE:-}"
   if [[ -z "$ssh_key_file" ]]; then
-    record_warning "TRACE_REVIEW_PRODUCTION_SSH_KEY_FILE is not set; PDF/log fallback over SSH may need an explicit key."
+    record_warning "TRACE_REVIEW_PRODUCTION_SSH_KEY_FILE is not set; PDF/log retrieval over SSH may need an explicit key."
   elif [[ -r "$ssh_key_file" ]]; then
     log_success "Production SSH key file is configured and readable."
   else
@@ -527,7 +513,7 @@ main() {
   load_env_defaults "${repo_root}/trace_review/backend/.env"
 
   if [[ -z "$backend_url" ]]; then
-    backend_port="$(trace_env_value "BACKEND_HOST_PORT" "$(trace_env_value "BACKEND_PORT" "8001")")"
+    backend_port="$(env_value "TRACE_REVIEW_BACKEND_HOST_PORT" "8001")"
     backend_url="http://127.0.0.1:${backend_port}"
   fi
 
@@ -539,8 +525,7 @@ main() {
   echo "  This command does not start, stop, restart, or mutate services."
   echo
 
-  if ! command_exists "$curl_cmd"; then
-    record_config_failure "Required command not available: ${curl_cmd}"
+  if ! check_required_tools; then
     emit_summary_and_exit
   fi
   check_source_selection

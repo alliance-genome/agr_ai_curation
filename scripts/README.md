@@ -515,8 +515,10 @@ Useful environment:
 - `TRACE_REVIEW_PREFLIGHT_TIMEOUT_SECONDS=2` to shorten network probes
 - `TRACE_REVIEW_PREFLIGHT_REQUIRE_PRODUCTION=true` to make production-readiness
   warnings hard failures
+- `TRACE_REVIEW_BACKEND_HOST_PORT=8901` to select the TraceReview backend port
+  when `--backend-url` is omitted
 - `TRACE_REVIEW_PRODUCTION_SSH_HOST`, `TRACE_REVIEW_PRODUCTION_SSH_PORT`, and
-  `TRACE_REVIEW_PRODUCTION_SSH_KEY_FILE` for production fallback readiness checks
+  `TRACE_REVIEW_PRODUCTION_SSH_KEY_FILE` for production SSH readiness checks
 
 ### testing/file_output_storage_preflight.sh
 
