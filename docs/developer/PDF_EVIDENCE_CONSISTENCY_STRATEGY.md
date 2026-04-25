@@ -317,7 +317,7 @@ Acceptance:
 
 Review:
 
-- run one `gpt-5.4 xhigh` architecture review on the plan before code changes
+- run one `gpt-5.5 xhigh` architecture review on the plan before code changes
 
 ### Slice 1: Introduce The Persistent Layout Route
 
@@ -370,7 +370,7 @@ Tests:
 
 Review:
 
-- run `gpt-5.4 xhigh` review on the slice
+- run `gpt-5.5 xhigh` review on the slice
 
 ### Slice 2: Migrate Home Onto The Shared Host
 
@@ -401,7 +401,7 @@ Tests:
 
 Review:
 
-- run `gpt-5.4 xhigh` review on the slice
+- run `gpt-5.5 xhigh` review on the slice
 
 Status:
 
@@ -442,7 +442,7 @@ Tests:
 
 Review:
 
-- run `gpt-5.4 xhigh` review on the slice
+- run `gpt-5.5 xhigh` review on the slice
 
 Status:
 
@@ -484,7 +484,7 @@ Tests:
 
 Review:
 
-- run `gpt-5.4 xhigh` review on the completed route-parity slice
+- run `gpt-5.5 xhigh` review on the completed route-parity slice
 
 Status:
 
@@ -555,7 +555,7 @@ Tests:
 
 Review:
 
-- run `gpt-5.4 xhigh` review on the slice
+- run `gpt-5.5 xhigh` review on the slice
 
 Status:
 
@@ -635,7 +635,7 @@ Required manual checks:
 
 After each significant slice:
 
-- run a `gpt-5.4 xhigh` review
+- run a `gpt-5.5 xhigh` review
 - treat findings as part of the slice completion criteria
 
 ## Acceptance Criteria

@@ -503,7 +503,7 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
         mod_prompt_overrides={},
         group_rules_enabled=False,
         template_source=None,
-        model_id="gpt-5.4",
+        model_id="gpt-5.5",
         model_temperature=0.3,
         model_reasoning="medium",
         output_schema_key=None,

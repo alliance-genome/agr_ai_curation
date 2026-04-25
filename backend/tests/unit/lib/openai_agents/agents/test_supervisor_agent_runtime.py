@@ -619,7 +619,7 @@ def test_create_supervisor_agent_applies_model_overrides(monkeypatch):
 
     monkeypatch.setattr(
         "src.lib.openai_agents.config.get_agent_config",
-        lambda _name: SimpleNamespace(model="gpt-5.4", temperature=0.1, reasoning="medium"),
+        lambda _name: SimpleNamespace(model="gpt-5.5", temperature=0.1, reasoning="medium"),
     )
     monkeypatch.setattr("src.lib.openai_agents.config.log_agent_config", lambda *_a, **_k: None)
     monkeypatch.setattr("src.lib.openai_agents.config.resolve_model_provider", lambda _model: "openai")

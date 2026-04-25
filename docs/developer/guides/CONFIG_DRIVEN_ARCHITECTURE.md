@@ -324,8 +324,8 @@ models:
     avoid_for:
       - Deep multi-step adjudication with conflicting evidence
 
-  - model_id: gpt-5.4
-    name: GPT-5.4
+  - model_id: gpt-5.5
+    name: GPT-5.5
     provider: openai
     description: Highest-quality model for complex reasoning.
     default: true

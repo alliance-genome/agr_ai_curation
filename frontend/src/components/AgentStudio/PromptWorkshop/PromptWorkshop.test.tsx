@@ -244,8 +244,8 @@ describe('PromptWorkshop', () => {
       avoid_for: [],
     },
     {
-      model_id: 'gpt-5.4',
-      name: 'GPT-5.4',
+      model_id: 'gpt-5.5',
+      name: 'GPT-5.5',
       provider: 'openai',
       description: 'reasoning model',
       guidance: 'Use medium by default',
@@ -724,7 +724,7 @@ describe('PromptWorkshop', () => {
   it('saves selected reasoning for reasoning-capable models', async () => {
     serviceMocks.listCustomAgents
       .mockResolvedValueOnce({ custom_agents: [], total: 0 })
-      .mockResolvedValueOnce({ custom_agents: [buildCustomAgent({ model_id: 'gpt-5.4', model_reasoning: 'high' })], total: 1 })
+      .mockResolvedValueOnce({ custom_agents: [buildCustomAgent({ model_id: 'gpt-5.5', model_reasoning: 'high' })], total: 1 })
 
     render(<PromptWorkshop catalog={buildCatalog()} />)
 
@@ -739,7 +739,7 @@ describe('PromptWorkshop', () => {
     const modelControl = modelLabel!.closest('.MuiFormControl-root') as HTMLElement | null
     expect(modelControl).toBeTruthy()
     fireEvent.mouseDown(within(modelControl!).getByRole('combobox'))
-    fireEvent.click(await screen.findByRole('option', { name: 'GPT-5.4' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'GPT-5.5' }))
 
     const [reasoningLabel] = await screen.findAllByText('Reasoning', { selector: 'label' })
     const reasoningControl = reasoningLabel.closest('.MuiFormControl-root') as HTMLElement | null

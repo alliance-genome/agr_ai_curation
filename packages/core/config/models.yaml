@@ -3,7 +3,7 @@ models:
     name: GPT-5.4 Nano
     provider: openai
     description: Faster, lower-cost model for quick drafting and lightweight extraction.
-    guidance: Use when speed matters more than peak accuracy. GPT-5.4 is generally more reliable for nuanced or high-stakes curation decisions.
+    guidance: Use when speed matters more than peak accuracy. GPT-5.5 is generally more reliable for nuanced or high-stakes curation decisions.
     default: false
     supports_reasoning: false
     supports_temperature: false
@@ -14,8 +14,8 @@ models:
     avoid_for:
       - Deep multi-step adjudication with conflicting evidence
 
-  - model_id: gpt-5.4
-    name: GPT-5.4
+  - model_id: gpt-5.5
+    name: GPT-5.5
     provider: openai
     description: Highest-quality model for complex curation reasoning and nuanced judgment calls.
     guidance: Start here for most tasks. Use medium reasoning by default; low is faster, and high is slower but best for truly difficult reasoning.
@@ -28,7 +28,7 @@ models:
       - high
     default_reasoning: medium
     reasoning_descriptions:
-      low: Fastest GPT-5.4 mode. Good for quick checks and straightforward extraction.
+      low: Fastest GPT-5.5 mode. Good for quick checks and straightforward extraction.
       medium: Recommended default for curation. Strong balance of depth, reliability, and speed.
       high: Deepest reasoning but slowest. Use sparingly for hard ambiguity, not routine DB lookups.
     recommended_for:
@@ -51,13 +51,13 @@ models:
       - Structured summaries over many retrieved passages
       - Fast iterative analysis loops
     avoid_for:
-      - The most difficult long-chain reasoning tasks where GPT-5.4 is preferred
+      - The most difficult long-chain reasoning tasks where GPT-5.5 is preferred
 
   - model_id: gpt-4o
     name: GPT-4o
     provider: openai
     description: Runtime compatibility model for legacy system agent defaults.
-    guidance: Internal compatibility model; prefer GPT-5.4 Nano or GPT-5.4 for new curator workflows.
+    guidance: Internal compatibility model; prefer GPT-5.4 Nano or GPT-5.5 for new curator workflows.
     default: false
     curator_visible: false
     supports_reasoning: false

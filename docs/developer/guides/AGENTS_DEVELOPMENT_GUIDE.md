@@ -391,8 +391,8 @@ Set environment variables to override an agent's default model:
 
 ```bash
 AGENT_GENE_MODEL=gpt-5.4-nano
-AGENT_SUPERVISOR_MODEL=gpt-5.4
-AGENT_PDF_MODEL=gpt-5.4
+AGENT_SUPERVISOR_MODEL=gpt-5.5
+AGENT_PDF_MODEL=gpt-5.5
 ```
 
 ---

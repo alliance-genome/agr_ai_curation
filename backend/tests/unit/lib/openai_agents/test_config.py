@@ -69,7 +69,7 @@ def test_get_agent_config_prefers_registry_model_over_global_fallback(monkeypatc
         {"gene_extractor": {"config_defaults": {"model": "gpt-4o"}}},
         raising=False,
     )
-    monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.4")
+    monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.5")
 
     with patch.dict(os.environ, {}, clear=True):
         config = get_agent_config("gene_extractor")
@@ -83,7 +83,7 @@ def test_get_agent_config_env_override_beats_registry_model(monkeypatch):
         {"gene_extractor": {"config_defaults": {"model": "gpt-4o"}}},
         raising=False,
     )
-    monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.4")
+    monkeypatch.setattr("src.lib.openai_agents.config.get_default_model", lambda: "gpt-5.5")
 
     with patch.dict(os.environ, {"AGENT_GENE_EXTRACTOR_MODEL": "gpt-5.4-nano"}, clear=True):
         config = get_agent_config("gene_extractor")
