@@ -5,7 +5,10 @@ Extracts user input and assistant response from traces
 import json
 from typing import Dict, List, Optional
 
-from ..utils.trace_output import extract_trace_response_text
+from ..utils.trace_output import (
+    extract_observation_response_text,
+    extract_trace_response_text,
+)
 
 
 class ConversationAnalyzer:
@@ -152,10 +155,15 @@ class ConversationAnalyzer:
         if extracted:
             final_response = extracted
 
-        # Fall back to observations only if the trace itself does not yet expose a final response.
+        # Check observations only if the trace itself does not yet expose a final response.
         if final_response == "N/A":
             # Look for synthesis/final response in observations (reversed)
             for obs in reversed(sorted_observations):
+                extracted = extract_observation_response_text(obs)
+                if extracted:
+                    final_response = extracted
+                    break
+
                 if obs.get("type") == "GENERATION":
                     output = obs.get("output")
                     if output:
