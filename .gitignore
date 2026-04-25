@@ -78,6 +78,7 @@ CLAUDE.local.md
 .codex
 .codex/
 .playwright-mcp/
+.symphony-docker-config/
 
 # Local plans/designs (not committed)
 .plans/

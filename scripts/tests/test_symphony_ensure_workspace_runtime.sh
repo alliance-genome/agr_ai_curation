@@ -69,6 +69,7 @@ EOF
     symphony_pre_merge_cleanup.sh \
     symphony_prepare_docker_config.sh \
     symphony_guard_workspace_repo.sh \
+    symphony_guard_no_code_changes.sh \
     symphony_human_review_prep.sh \
     symphony_main_sandbox.sh \
     symphony_ready_for_pr.sh \
