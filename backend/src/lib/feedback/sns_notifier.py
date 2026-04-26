@@ -7,6 +7,10 @@ import boto3
 from botocore.exceptions import ClientError
 
 from src.lib.aws_env import without_blank_aws_profile_env_vars
+from src.lib.feedback.debug_links import (
+    build_feedback_debug_url,
+    build_trace_review_session_bundle_url,
+)
 from src.lib.feedback.transcript import format_feedback_transcript_section
 
 logger = logging.getLogger(__name__)
@@ -54,6 +58,11 @@ class SNSNotifier:
             f"Curator: {curator_id}",
             f"Session ID: {session_id}",
             f"Submitted: {self._get_timestamp()}",
+            f"AI Curation feedback debug: {build_feedback_debug_url(feedback_id)}",
+            (
+                "TraceReview session bundle: "
+                f"{build_trace_review_session_bundle_url(session_id)}"
+            ),
             "",
             "Feedback:",
             "-" * 50,

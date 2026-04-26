@@ -11,6 +11,10 @@ import time
 from email.message import EmailMessage
 from typing import Any
 
+from src.lib.feedback.debug_links import (
+    build_feedback_debug_url,
+    build_trace_review_session_bundle_url,
+)
 from src.lib.feedback.transcript import format_feedback_transcript_section
 
 logger = logging.getLogger(__name__)
@@ -95,6 +99,10 @@ class EmailNotifier:
 
         # Build Langfuse link
         langfuse_link = f"{self.langfuse_host}/sessions/{feedback_report.session_id}"
+        feedback_debug_url = build_feedback_debug_url(str(feedback_report.id))
+        trace_review_session_url = build_trace_review_session_bundle_url(
+            str(feedback_report.session_id)
+        )
         transcript_section = format_feedback_transcript_section(
             transcript=feedback_report.conversation_transcript,
             feedback_id=str(feedback_report.id),
@@ -112,6 +120,12 @@ class EmailNotifier:
             "",
             "View in Langfuse:",
             langfuse_link,
+            "",
+            "AI Curation feedback debug:",
+            feedback_debug_url,
+            "",
+            "TraceReview session bundle:",
+            trace_review_session_url,
         ]
         if transcript_section:
             body_lines.extend(["", transcript_section])

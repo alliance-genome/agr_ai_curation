@@ -76,6 +76,11 @@ def test_build_email_body_includes_trace_ids(monkeypatch):
     assert "Feedback ID: feedback-1" in body
     assert "Curator: curator@example.org" in body
     assert "Submitted: 2026-02-27 10:00:00 UTC" in body
+    assert "AI Curation feedback debug: /api/feedback/feedback-1/debug" in body
+    assert (
+        "TraceReview session bundle: /api/traces/sessions/session-1/export?source=remote"
+        in body
+    )
     assert "Associated Trace IDs:" in body
     assert "trace-a" in body and "trace-b" in body
 

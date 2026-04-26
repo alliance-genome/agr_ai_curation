@@ -265,6 +265,13 @@ class TestProtectedEndpoints:
         data = response.json()
         assert "detail" in data
 
+        debug_response = unauthenticated_client.get("/api/feedback/fake-feedback/debug")
+
+        assert debug_response.status_code == 401, \
+            "Feedback debug endpoint MUST require auth (FR-025). " \
+            f"Got {debug_response.status_code}."
+        assert "detail" in debug_response.json()
+
     def test_health_endpoint_remains_public(self, unauthenticated_client):
         """Test that health endpoint is accessible without authentication.
 
@@ -369,6 +376,7 @@ class TestProtectedEndpoints:
 
             # Feedback endpoints (should be protected)
             ("POST", "/api/feedback/submit"),
+            ("GET", "/api/feedback/{id}/debug"),
         ]
 
         failures = []

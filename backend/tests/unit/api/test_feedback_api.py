@@ -234,3 +234,88 @@ def test_submit_feedback_uses_authenticated_sub_for_authorization(monkeypatch):
     assert response.status == "success"
     assert calls["kwargs"]["user_auth_sub"] == "user-123"
     assert calls["kwargs"]["authenticated_curator_email"] == "curator@example.org"
+
+
+def test_get_feedback_debug_detail_returns_service_payload(monkeypatch):
+    class _FakeService:
+        def __init__(self, _db):
+            pass
+
+        def get_feedback_debug_detail(self, feedback_id):
+            assert feedback_id == "feedback-123"
+            return {
+                "feedback_id": "feedback-123",
+                "session_id": "session-123",
+                "curator_id": "curator@example.org",
+                "feedback_text": "Please inspect this answer.",
+                "trace_ids": ["trace-1"],
+                "processing_status": "completed",
+                "created_at": "2026-04-25T12:00:00",
+                "processing_started_at": None,
+                "processing_completed_at": None,
+                "email_sent_at": None,
+                "processing_error": None,
+                "feedback_debug_url": "/api/feedback/feedback-123/debug",
+                "trace_review_session_url": (
+                    "/api/traces/sessions/session-123/export?source=remote"
+                ),
+                "transcript": {
+                    "available": False,
+                    "message_count": None,
+                    "captured_at": None,
+                    "session_id": None,
+                    "chat_kind": None,
+                    "title": None,
+                    "effective_title": None,
+                    "session_matches_feedback": None,
+                },
+                "trace_data": {
+                    "available": False,
+                    "status": "missing",
+                    "stale": False,
+                    "capture_status": None,
+                    "captured_at": None,
+                    "schema_version": None,
+                    "source_kind": None,
+                    "source_extractor": None,
+                    "expected_trace_ids": ["trace-1"],
+                    "stored_trace_ids": [],
+                    "trace_count": 0,
+                    "omitted_trace_id_count": None,
+                    "error_summary": None,
+                    "errors": [],
+                },
+            }
+
+    monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+
+    response = feedback_api.get_feedback_debug_detail(
+        feedback_id="feedback-123",
+        db=object(),
+        user={"sub": "user-123"},
+    )
+
+    assert response.feedback_id == "feedback-123"
+    assert response.trace_data.status == "missing"
+    assert response.feedback_debug_url == "/api/feedback/feedback-123/debug"
+
+
+def test_get_feedback_debug_detail_returns_404_when_missing(monkeypatch):
+    class _FakeService:
+        def __init__(self, _db):
+            pass
+
+        def get_feedback_debug_detail(self, _feedback_id):
+            return None
+
+    monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+
+    response = feedback_api.get_feedback_debug_detail(
+        feedback_id="missing-feedback",
+        db=object(),
+        user={"sub": "user-123"},
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 404
+    assert b"Feedback report not found" in response.body

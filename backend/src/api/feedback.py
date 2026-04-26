@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 from src.api.auth import get_auth_dependency
 from src.lib.feedback.service import FeedbackService
 from src.models.sql.database import get_feedback_db
-from src.schemas.feedback import ErrorResponse, FeedbackResponse, FeedbackSubmission
+from src.schemas.feedback import (
+    ErrorResponse,
+    FeedbackDebugDetailResponse,
+    FeedbackResponse,
+    FeedbackSubmission,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -171,3 +176,59 @@ def submit_feedback(
         feedback_id=feedback_id,
         message="Feedback submitted successfully. Report will be processed in background.",
     )
+
+
+@router.get(
+    "/{feedback_id}/debug",
+    response_model=FeedbackDebugDetailResponse,
+    responses={
+        404: {"model": ErrorResponse, "description": "Feedback report not found"},
+        500: {"model": ErrorResponse, "description": "Server error loading debug detail"},
+    },
+    summary="Get feedback debug detail",
+    description="""
+    Returns read-only debug metadata for a feedback report. The response includes
+    non-secret feedback metadata, transcript availability, trace IDs, trace-data
+    capture status, redacted trace-data error metadata, and canonical links for
+    the feedback debug endpoint and TraceReview session bundle export.
+
+    This endpoint intentionally does not expose raw trace payloads, auth headers,
+    cookies, or full persisted trace data.
+    """,
+)
+def get_feedback_debug_detail(
+    feedback_id: str,
+    db: Annotated[Session, Depends(get_feedback_db)],
+    user: Dict[str, Any] = get_auth_dependency(),
+) -> FeedbackDebugDetailResponse:
+    """Return read-only feedback debug details for an authenticated user."""
+
+    _require_user_sub(user)
+
+    try:
+        detail = FeedbackService(db).get_feedback_debug_detail(feedback_id)
+    except Exception as exc:
+        logger.error(
+            "Failed to load feedback debug detail for %s: %s",
+            feedback_id,
+            exc,
+            exc_info=True,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": "Failed to load feedback debug detail",
+            },
+        )
+
+    if detail is None:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "status": "error",
+                "error": "Feedback report not found",
+            },
+        )
+
+    return FeedbackDebugDetailResponse.model_validate(detail)

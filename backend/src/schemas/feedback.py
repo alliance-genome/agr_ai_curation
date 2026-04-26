@@ -4,7 +4,7 @@ Defines request and response schemas for the user feedback submission endpoint.
 """
 
 from pydantic import BaseModel, Field, field_validator
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 class FeedbackSubmission(BaseModel):
@@ -100,6 +100,214 @@ class FeedbackResponse(BaseModel):
                     "status": "success",
                     "feedback_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
                     "message": "Feedback submitted successfully. Report will be processed in background.",
+                }
+            ]
+        }
+    }
+
+
+class FeedbackTranscriptDebug(BaseModel):
+    """Transcript availability metadata for feedback debug detail responses."""
+
+    available: bool = Field(..., description="Whether a durable transcript snapshot exists")
+    message_count: Optional[int] = Field(
+        default=None,
+        description="Number of transcript messages captured when available",
+    )
+    captured_at: Optional[str] = Field(
+        default=None,
+        description="Timestamp when the transcript snapshot was captured",
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Transcript session identifier when stored",
+    )
+    chat_kind: Optional[str] = Field(
+        default=None,
+        description="Transcript chat kind when stored",
+    )
+    title: Optional[str] = Field(
+        default=None,
+        description="Stored transcript title when present",
+    )
+    effective_title: Optional[str] = Field(
+        default=None,
+        description="Stored transcript effective title when present",
+    )
+    session_matches_feedback: Optional[bool] = Field(
+        default=None,
+        description="Whether the stored transcript session matches the feedback session",
+    )
+
+
+class FeedbackTraceDataError(BaseModel):
+    """Redacted trace-data error metadata for one trace capture attempt."""
+
+    trace_id: Optional[str] = Field(default=None, description="Trace ID for the failed capture")
+    type: Optional[str] = Field(default=None, description="Exception or error type")
+    message: Optional[str] = Field(default=None, description="Redacted error message")
+
+
+class FeedbackTraceDataDebug(BaseModel):
+    """Trace-data capture status summary for feedback debug detail responses."""
+
+    available: bool = Field(..., description="Whether persisted trace_data exists")
+    status: str = Field(
+        ...,
+        description=(
+            "Explicit trace-data status: not_requested, missing, stale, success, partial, "
+            "error, or capture_status_missing"
+        ),
+    )
+    stale: bool = Field(
+        ...,
+        description="Whether persisted trace_data no longer matches feedback identifiers",
+    )
+    capture_status: Optional[str] = Field(
+        default=None,
+        description="Stored trace_data capture_status when available",
+    )
+    captured_at: Optional[str] = Field(
+        default=None,
+        description="Stored trace_data captured_at timestamp when available",
+    )
+    schema_version: Optional[int] = Field(
+        default=None,
+        description="Stored trace_data schema version when available",
+    )
+    source_kind: Optional[str] = Field(
+        default=None,
+        description="Trace-data source kind when available",
+    )
+    source_extractor: Optional[str] = Field(
+        default=None,
+        description="Trace-data extractor identifier when available",
+    )
+    expected_trace_ids: List[str] = Field(
+        default_factory=list,
+        description="Trace IDs currently stored on the feedback report",
+    )
+    stored_trace_ids: List[str] = Field(
+        default_factory=list,
+        description="Trace IDs recorded inside persisted trace_data",
+    )
+    trace_count: int = Field(
+        ...,
+        description="Number of per-trace status records in persisted trace_data",
+    )
+    omitted_trace_id_count: Optional[int] = Field(
+        default=None,
+        description=(
+            "Number of trace IDs omitted from persisted trace_data summary when stored"
+        ),
+    )
+    error_summary: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Redacted trace-data error summary metadata",
+    )
+    errors: List[FeedbackTraceDataError] = Field(
+        default_factory=list,
+        description="Redacted per-trace error metadata",
+    )
+
+
+class FeedbackDebugDetailResponse(BaseModel):
+    """Read-only feedback debug detail response for authorized users."""
+
+    feedback_id: str = Field(..., description="Feedback report identifier")
+    session_id: str = Field(..., description="Chat session identifier")
+    curator_id: str = Field(..., description="Curator identifier stored with feedback")
+    feedback_text: str = Field(..., description="Curator feedback comments")
+    trace_ids: List[str] = Field(
+        default_factory=list,
+        description="Trace IDs stored with the feedback report",
+    )
+    processing_status: str = Field(..., description="Feedback background processing status")
+    created_at: Optional[str] = Field(default=None, description="Feedback creation timestamp")
+    processing_started_at: Optional[str] = Field(
+        default=None,
+        description="Background processing start timestamp",
+    )
+    processing_completed_at: Optional[str] = Field(
+        default=None,
+        description="Background processing completion timestamp",
+    )
+    email_sent_at: Optional[str] = Field(
+        default=None,
+        description="Notification sent timestamp when available",
+    )
+    processing_error: Optional[str] = Field(
+        default=None,
+        description="Redacted processing error summary when available",
+    )
+    feedback_debug_url: str = Field(
+        ...,
+        description="Canonical AI Curation feedback debug detail URL",
+    )
+    trace_review_session_url: str = Field(
+        ...,
+        description="Canonical TraceReview session bundle export URL",
+    )
+    transcript: FeedbackTranscriptDebug = Field(
+        ...,
+        description="Stored transcript availability metadata",
+    )
+    trace_data: FeedbackTraceDataDebug = Field(
+        ...,
+        description="Persisted trace-data capture summary",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "feedback_id": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+                    "session_id": "chat_session_20251021_143000",
+                    "curator_id": "curator@example.com",
+                    "feedback_text": "The AI recommended the wrong gene annotation.",
+                    "trace_ids": ["fdeac438c90617c73497d298490b6db1"],
+                    "processing_status": "completed",
+                    "created_at": "2026-04-25T12:00:00+00:00",
+                    "processing_started_at": "2026-04-25T12:00:01+00:00",
+                    "processing_completed_at": "2026-04-25T12:00:02+00:00",
+                    "email_sent_at": "2026-04-25T12:00:02+00:00",
+                    "processing_error": None,
+                    "feedback_debug_url": (
+                        "/api/feedback/f47ac10b-58cc-4372-a567-0e02b2c3d479/debug"
+                    ),
+                    "trace_review_session_url": (
+                        "/api/traces/sessions/chat_session_20251021_143000/export"
+                        "?source=remote"
+                    ),
+                    "transcript": {
+                        "available": True,
+                        "message_count": 8,
+                        "captured_at": "2026-04-25T12:00:00+00:00",
+                        "session_id": "chat_session_20251021_143000",
+                        "chat_kind": "assistant_chat",
+                        "title": "Saved title",
+                        "effective_title": "Saved title",
+                        "session_matches_feedback": True,
+                    },
+                    "trace_data": {
+                        "available": True,
+                        "status": "success",
+                        "stale": False,
+                        "capture_status": "success",
+                        "captured_at": "2026-04-25T12:00:01Z",
+                        "schema_version": 1,
+                        "source_kind": "langfuse",
+                        "source_extractor": (
+                            "src.lib.agent_studio.trace_context_service."
+                            "get_trace_context_for_explorer"
+                        ),
+                        "expected_trace_ids": ["fdeac438c90617c73497d298490b6db1"],
+                        "stored_trace_ids": ["fdeac438c90617c73497d298490b6db1"],
+                        "trace_count": 1,
+                        "omitted_trace_id_count": 0,
+                        "error_summary": None,
+                        "errors": [],
+                    },
                 }
             ]
         }

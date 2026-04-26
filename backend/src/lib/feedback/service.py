@@ -12,6 +12,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.lib.agent_studio.trace_context_service import get_trace_context_for_explorer
+from src.lib.feedback.debug_links import (
+    build_feedback_debug_url,
+    build_trace_review_session_bundle_url,
+)
 from src.lib.feedback.email_notifier import EmailNotifier
 from src.lib.chat_history_repository import ChatHistoryRepository, ChatHistorySessionNotFoundError
 from src.lib.feedback.models import FeedbackReport, ProcessingStatus
@@ -206,6 +210,36 @@ class FeedbackService:
             report.processing_status = ProcessingStatus.FAILED
             report.error_details = f"Unexpected error: {str(e)}"
             self.db.commit()
+
+    def get_feedback_debug_detail(self, feedback_id: str) -> dict[str, Any] | None:
+        """Return read-only feedback debug details without raw trace payloads."""
+
+        report = (
+            self.db.query(FeedbackReport)
+            .filter(FeedbackReport.id == feedback_id)
+            .first()
+        )
+        if report is None:
+            return None
+
+        trace_ids = self._normalize_trace_ids(report.trace_ids)
+        return {
+            "feedback_id": str(report.id),
+            "session_id": report.session_id,
+            "curator_id": report.curator_id,
+            "feedback_text": report.feedback_text,
+            "trace_ids": trace_ids,
+            "processing_status": self._processing_status_value(report.processing_status),
+            "created_at": self._json_timestamp(report.created_at),
+            "processing_started_at": self._json_timestamp(report.processing_started_at),
+            "processing_completed_at": self._json_timestamp(report.processing_completed_at),
+            "email_sent_at": self._json_timestamp(report.email_sent_at),
+            "processing_error": self._redacted_optional_text(report.error_details),
+            "feedback_debug_url": build_feedback_debug_url(str(report.id)),
+            "trace_review_session_url": build_trace_review_session_bundle_url(report.session_id),
+            "transcript": self._feedback_transcript_debug(report),
+            "trace_data": self._feedback_trace_data_debug(report, trace_ids),
+        }
 
     def _maybe_capture_conversation_transcript(
         self,
@@ -483,6 +517,178 @@ class FeedbackService:
             "type": error.__class__.__name__,
             "message": message,
         }
+
+    @classmethod
+    def _feedback_transcript_debug(cls, report: FeedbackReport) -> dict:
+        transcript = report.conversation_transcript
+        if transcript is None:
+            return {
+                "available": False,
+                "message_count": None,
+                "captured_at": None,
+                "session_id": None,
+                "chat_kind": None,
+                "title": None,
+                "effective_title": None,
+                "session_matches_feedback": None,
+            }
+        if not isinstance(transcript, dict):
+            raise TypeError("feedback conversation_transcript must be an object")
+
+        session_payload = cls._optional_mapping(transcript, "session")
+
+        transcript_session_id = cls._string_or_none(session_payload.get("session_id"))
+        session_matches_feedback = (
+            transcript_session_id == report.session_id
+            if transcript_session_id is not None
+            else None
+        )
+
+        return {
+            "available": True,
+            "message_count": cls._int_or_none(transcript.get("message_count")),
+            "captured_at": cls._string_or_none(transcript.get("captured_at")),
+            "session_id": transcript_session_id,
+            "chat_kind": cls._string_or_none(session_payload.get("chat_kind")),
+            "title": cls._string_or_none(session_payload.get("title")),
+            "effective_title": cls._string_or_none(session_payload.get("effective_title")),
+            "session_matches_feedback": session_matches_feedback,
+        }
+
+    @classmethod
+    def _feedback_trace_data_debug(
+        cls,
+        report: FeedbackReport,
+        trace_ids: list[str],
+    ) -> dict:
+        trace_data = report.trace_data
+        if trace_data is None:
+            return {
+                "available": False,
+                "status": "missing" if trace_ids else "not_requested",
+                "stale": False,
+                "capture_status": None,
+                "captured_at": None,
+                "schema_version": None,
+                "source_kind": None,
+                "source_extractor": None,
+                "expected_trace_ids": trace_ids,
+                "stored_trace_ids": [],
+                "trace_count": 0,
+                "omitted_trace_id_count": None,
+                "error_summary": None,
+                "errors": [],
+            }
+        if not isinstance(trace_data, dict):
+            raise TypeError("feedback trace_data must be an object")
+
+        feedback_payload = cls._optional_mapping(trace_data, "feedback")
+        source_payload = cls._optional_mapping(trace_data, "source")
+        trace_payloads = cls._optional_list(trace_data, "traces")
+
+        stored_session_id = cls._string_or_none(feedback_payload.get("session_id"))
+        stored_trace_ids = cls._normalize_trace_ids(feedback_payload.get("trace_ids"))
+        stale = stored_session_id != report.session_id or stored_trace_ids != trace_ids
+        capture_status = cls._string_or_none(trace_data.get("capture_status"))
+        status = "stale" if stale else capture_status or "capture_status_missing"
+
+        return {
+            "available": True,
+            "status": status,
+            "stale": stale,
+            "capture_status": capture_status,
+            "captured_at": cls._string_or_none(trace_data.get("captured_at")),
+            "schema_version": cls._int_or_none(trace_data.get("schema_version")),
+            "source_kind": cls._string_or_none(source_payload.get("kind")),
+            "source_extractor": cls._string_or_none(source_payload.get("extractor")),
+            "expected_trace_ids": trace_ids,
+            "stored_trace_ids": stored_trace_ids,
+            "trace_count": len(trace_payloads),
+            "omitted_trace_id_count": cls._int_or_none(
+                trace_data.get("omitted_trace_id_count")
+            ),
+            "error_summary": cls._trace_data_error_summary(trace_data.get("error_summary")),
+            "errors": cls._trace_data_errors(trace_payloads),
+        }
+
+    @classmethod
+    def _trace_data_error_summary(cls, error_summary: Any) -> dict | None:
+        if error_summary is None:
+            return None
+        if not isinstance(error_summary, dict):
+            raise TypeError("error_summary must be an object")
+
+        summary: dict[str, Any] = {}
+        if "trace_error_count" in error_summary:
+            summary["trace_error_count"] = cls._int_or_none(
+                error_summary.get("trace_error_count")
+            )
+        if "message" in error_summary:
+            summary["message"] = cls._redacted_optional_text(error_summary.get("message"))
+
+        return {key: value for key, value in summary.items() if value is not None} or None
+
+    @classmethod
+    def _trace_data_errors(cls, trace_payloads: list[Any]) -> list[dict]:
+        errors = []
+        for trace_payload in trace_payloads:
+            if not isinstance(trace_payload, dict):
+                raise TypeError("trace payload entries must be objects")
+            error_payload = trace_payload.get("error")
+            if error_payload is None:
+                continue
+            if not isinstance(error_payload, dict):
+                raise TypeError("trace payload error must be an object")
+            errors.append(
+                {
+                    "trace_id": cls._string_or_none(trace_payload.get("trace_id")),
+                    "type": cls._redacted_optional_text(error_payload.get("type")),
+                    "message": cls._redacted_optional_text(error_payload.get("message")),
+                }
+            )
+        return errors
+
+    @staticmethod
+    def _processing_status_value(status: Any) -> str:
+        value = getattr(status, "value", status)
+        return str(value)
+
+    @staticmethod
+    def _int_or_none(value: Any) -> int | None:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            raise TypeError("boolean values are not valid integers")
+        return int(value)
+
+    @staticmethod
+    def _optional_mapping(payload: dict, key: str) -> dict:
+        value = payload.get(key)
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise TypeError(f"{key} must be an object")
+        return value
+
+    @staticmethod
+    def _optional_list(payload: dict, key: str) -> list[Any]:
+        value = payload.get(key)
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise TypeError(f"{key} must be an array")
+        return value
+
+    @staticmethod
+    def _string_or_none(value: Any) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    @classmethod
+    def _redacted_optional_text(cls, value: Any) -> str | None:
+        return cls._compact_redacted_text(value, max_chars=MAX_TRACE_ERROR_CHARS)
 
     @staticmethod
     def _normalize_trace_ids(raw_trace_ids: Any) -> list[str]:
