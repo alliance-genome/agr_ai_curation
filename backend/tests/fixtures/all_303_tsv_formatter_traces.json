@@ -1,0 +1,487 @@
+{
+  "schema_version": 1,
+  "ticket": "ALL-303",
+  "title": "Fix TSV formatter flow step ignoring provided row data",
+  "source": {
+    "kind": "trace_review_production_export",
+    "analysis_file": "/tmp/trace-review/all-303/traces/failed_trace_analysis.json",
+    "failed_trace_ids": [
+      "21a3ba5f516fcece029392b0b2f0189b",
+      "70d2b2766d5c099568ab65957360615e"
+    ]
+  },
+  "purpose": "Regression fixture for flow TSV formatter failures where structured row data was provided to ask_tsv_formatter_specialist but the formatter requested the data again instead of saving a TSV file.",
+  "implementation_hint": "A passing fix should make a flow formatter step with these provided rows create a TSV file output through save_tsv_file/export_to_file-equivalent deterministic behavior and return a download link. The original PDFs are not required for this regression because extraction already succeeded before this handoff.",
+  "expected_columns": [
+    "synonym",
+    "source",
+    "source_identifier",
+    "count"
+  ],
+  "expected_behavior": {
+    "file_output_created": true,
+    "file_type": "tsv",
+    "download_link_returned": true,
+    "formatter_must_not_request_input_again": true
+  },
+  "traces": [
+    {
+      "trace_id": "21a3ba5f516fcece029392b0b2f0189b",
+      "session_id": "ebf86a5f-08c0-4634-99aa-506f9acdb008",
+      "formatter_tool": "ask_tsv_formatter_specialist",
+      "formatter_query": "Format the following extracted genetic reagent data into a TSV with exactly these columns in order: synonym, source, source_identifier, count. Preserve multi-valued synonyms/source identifiers using | when appropriate. Output only TSV content.\n\nData:\nsynonym\tsource\tsource_identifier\tcount\n\u2206TH-D'-GAL4\tBloomington Drosophila Stock Center\tBDSC_93704\t1\nTH-GAL4\tBloomington Drosophila Stock Center\tBDSC_8848\t2\nnSyb-GAL4\tGift from Julie Simpson\tunknown\t1\nR13F02-LexA\tBloomington Drosophila Stock Center\tBDSC_52460\t1\nControl (KK library control)\tVienna Drosophila Resource Center\t60100\t1\nStromalin RNAi KK|UAS-Stromalin RNAi|SA KK RNAi KD\tVienna Drosophila Resource Center\t106046\t3\nSMC1 RNAi KK\tVienna Drosophila Resource Center\t108922\t2\nNep1 RNAi KK|Nep1 KD|Nep1 KK RNAi|Nep1 KK RNAi KD\tVienna Drosophila Resource Center\t108660\t5\nCG42336 RNAi KK|CG42336 KD\tVienna Drosophila Resource Center\t104546\t3\nAP1-\u03c3 RNAi KK|AP1-\u03c3 KD\tVienna Drosophila Resource Center\t107322\t3\natms RNAi KK|atms KD\tVienna Drosophila Resource Center\t108826\t3\nCG17698 RNAi KK|CG17698 KD\tVienna Drosophila Resource Center\t105884\t3\nttm2 RNAi KK|ttm2 KD\tVienna Drosophila Resource Center\t100361\t3\nCG2278 RNAi KK|CG2278 KD\tVienna Drosophila Resource Center\t100549\t3\nElp1 RNAi KK|Elp1 KD\tVienna Drosophila Resource Center\t109402\t3\nCOX7C RNAi KK|COX7C KD\tVienna Drosophila Resource Center\t104970\t3\nLkR RNAi KK\tVienna Drosophila Resource Center\t105155\t1\nOct\u03b21R RNAi KK\tVienna Drosophila Resource Center\t110537\t1\nControl (GD library control)\tVienna Drosophila Resource Center\t60000\t1\nSu(z)12 RNAi GD|Su(z)12 KD|Su(z)12 GD RNAi\tVienna Drosophila Resource Center\t42423\t3\nControl (TRiP library control, 2nd chr.)\tBloomington Drosophila Stock Center\tBDSC_36304\t1\nNep1 RNAi TRiP|Nep1 TRiP RNAi KD\tBloomington Drosophila Stock Center\tBDSC_64911\t5\nNep1 OE|Nep1 EY21255|Nep1 overexpression\tBloomington Drosophila Stock Center\tBDSC_22465\t5\nControl (TRiP library control, 3rd chr.)\tBloomington Drosophila Stock Center\tBDSC_36303\t1\nunc-104 RNAi TRiP\tBloomington Drosophila Stock Center\tBDSC_43264\t1\nUAS-mCD8::GFP|mCD8:GFP\tpublication (ref. 1)\tunknown\t2\nSyt:eGFP|UAS-Syt:eGFP\tBloomington Drosophila Stock Center\tBDSC_6925|BDSC_6926\t8\nGRAB DA\tBloomington Drosophila Stock Center\tBDSC_90880\t1\nUAS-dicer2\tVienna Drosophila Resource Center\t60008|60009\t2\ntub>GAL80 ts\tpublication (ref. 2)\tunknown\t1\nNep1CR00415-TG4.1\tunknown\tNep1CR00415-TG4.1\t2",
+      "columns": [
+        "synonym",
+        "source",
+        "source_identifier",
+        "count"
+      ],
+      "rows": [
+        {
+          "row_number": 1,
+          "synonym": "\u2206TH-D'-GAL4",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_93704",
+          "count": "1"
+        },
+        {
+          "row_number": 2,
+          "synonym": "TH-GAL4",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_8848",
+          "count": "2"
+        },
+        {
+          "row_number": 3,
+          "synonym": "nSyb-GAL4",
+          "source": "Gift from Julie Simpson",
+          "source_identifier": "unknown",
+          "count": "1"
+        },
+        {
+          "row_number": 4,
+          "synonym": "R13F02-LexA",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_52460",
+          "count": "1"
+        },
+        {
+          "row_number": 5,
+          "synonym": "Control (KK library control)",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "60100",
+          "count": "1"
+        },
+        {
+          "row_number": 6,
+          "synonym": "Stromalin RNAi KK|UAS-Stromalin RNAi|SA KK RNAi KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "106046",
+          "count": "3"
+        },
+        {
+          "row_number": 7,
+          "synonym": "SMC1 RNAi KK",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "108922",
+          "count": "2"
+        },
+        {
+          "row_number": 8,
+          "synonym": "Nep1 RNAi KK|Nep1 KD|Nep1 KK RNAi|Nep1 KK RNAi KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "108660",
+          "count": "5"
+        },
+        {
+          "row_number": 9,
+          "synonym": "CG42336 RNAi KK|CG42336 KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "104546",
+          "count": "3"
+        },
+        {
+          "row_number": 10,
+          "synonym": "AP1-\u03c3 RNAi KK|AP1-\u03c3 KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "107322",
+          "count": "3"
+        },
+        {
+          "row_number": 11,
+          "synonym": "atms RNAi KK|atms KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "108826",
+          "count": "3"
+        },
+        {
+          "row_number": 12,
+          "synonym": "CG17698 RNAi KK|CG17698 KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "105884",
+          "count": "3"
+        },
+        {
+          "row_number": 13,
+          "synonym": "ttm2 RNAi KK|ttm2 KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "100361",
+          "count": "3"
+        },
+        {
+          "row_number": 14,
+          "synonym": "CG2278 RNAi KK|CG2278 KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "100549",
+          "count": "3"
+        },
+        {
+          "row_number": 15,
+          "synonym": "Elp1 RNAi KK|Elp1 KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "109402",
+          "count": "3"
+        },
+        {
+          "row_number": 16,
+          "synonym": "COX7C RNAi KK|COX7C KD",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "104970",
+          "count": "3"
+        },
+        {
+          "row_number": 17,
+          "synonym": "LkR RNAi KK",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "105155",
+          "count": "1"
+        },
+        {
+          "row_number": 18,
+          "synonym": "Oct\u03b21R RNAi KK",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "110537",
+          "count": "1"
+        },
+        {
+          "row_number": 19,
+          "synonym": "Control (GD library control)",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "60000",
+          "count": "1"
+        },
+        {
+          "row_number": 20,
+          "synonym": "Su(z)12 RNAi GD|Su(z)12 KD|Su(z)12 GD RNAi",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "42423",
+          "count": "3"
+        },
+        {
+          "row_number": 21,
+          "synonym": "Control (TRiP library control, 2nd chr.)",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_36304",
+          "count": "1"
+        },
+        {
+          "row_number": 22,
+          "synonym": "Nep1 RNAi TRiP|Nep1 TRiP RNAi KD",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_64911",
+          "count": "5"
+        },
+        {
+          "row_number": 23,
+          "synonym": "Nep1 OE|Nep1 EY21255|Nep1 overexpression",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_22465",
+          "count": "5"
+        },
+        {
+          "row_number": 24,
+          "synonym": "Control (TRiP library control, 3rd chr.)",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_36303",
+          "count": "1"
+        },
+        {
+          "row_number": 25,
+          "synonym": "unc-104 RNAi TRiP",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_43264",
+          "count": "1"
+        },
+        {
+          "row_number": 26,
+          "synonym": "UAS-mCD8::GFP|mCD8:GFP",
+          "source": "publication (ref. 1)",
+          "source_identifier": "unknown",
+          "count": "2"
+        },
+        {
+          "row_number": 27,
+          "synonym": "Syt:eGFP|UAS-Syt:eGFP",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_6925|BDSC_6926",
+          "count": "8"
+        },
+        {
+          "row_number": 28,
+          "synonym": "GRAB DA",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC_90880",
+          "count": "1"
+        },
+        {
+          "row_number": 29,
+          "synonym": "UAS-dicer2",
+          "source": "Vienna Drosophila Resource Center",
+          "source_identifier": "60008|60009",
+          "count": "2"
+        },
+        {
+          "row_number": 30,
+          "synonym": "tub>GAL80 ts",
+          "source": "publication (ref. 2)",
+          "source_identifier": "unknown",
+          "count": "1"
+        },
+        {
+          "row_number": 31,
+          "synonym": "Nep1CR00415-TG4.1",
+          "source": "unknown",
+          "source_identifier": "Nep1CR00415-TG4.1",
+          "count": "2"
+        }
+      ],
+      "row_count": 31,
+      "observed_formatter_result": "Please provide the data you would like to format into a TSV file.",
+      "observed_formatter_parse_status": "unparsed",
+      "save_or_export_tool_called_after_formatter": false,
+      "save_or_export_tool_call_names": []
+    },
+    {
+      "trace_id": "70d2b2766d5c099568ab65957360615e",
+      "session_id": "f715ef75-7bed-4b7f-a5df-7cf7f4bf1276",
+      "formatter_tool": "ask_tsv_formatter_specialist",
+      "formatter_query": "Format the following extracted genetic reagent data as TSV with exactly these columns in this order: synonym, source, source_identifier, count. Preserve multi-valued synonyms with | as separator where appropriate, and do not add extra columns.\n\nData:\nR57C10-GAL4\tBloomington Drosophila Stock Center\tBDSC#39171\t5\nR13F02-GAL4\tBloomington Drosophila Stock Center\tBDSC#48571\t6\nR58E02-GAL4\tBloomington Drosophila Stock Center\tBDSC#41347\t3\nMef2-GAL4\tBloomington Drosophila Stock Center\tBDSC#27390\t3\nap-GAL4\tBloomington Drosophila Stock Center\tBDSC#3041\t4\npdf-GAL4\tBloomington Drosophila Stock Center\tBDSC#6899\t3\nVT001606-AD\tBloomington Drosophila Stock Center\tBDSC#72441\t3\nVT033008-DBD\tBloomington Drosophila Stock Center\tBDSC#71768\t3\nUAS-FLP\tBloomington Drosophila Stock Center\tBDSC#4539\t9\nhs-FLP|hsFLP\tNot specified in paper\tNot specified in paper\t7\nUAS-mCD8GFP|UAS-mcd8GFP\tBloomington Drosophila Stock Center\tBDSC#44408\t2\nBrpM102987|Brp MI02987|Brp^MI02987\tBloomington Drosophila Stock Center\tBDSC#37043\t5\nBrpM102987-GFSTF|Brp MI02987-GFSTF\tBloomington Drosophila Stock Center\tBDSC#59292\t3\nDlg1M106353|Dlg1^MI06353|Dlg1^M106353\tBloomington Drosophila Stock Center\tBDSC#41521\t3\nDpr12M101695|Dpr12 MI01695|Dpr12MI01695\tBloomington Drosophila Stock Center\tBDSC#34237\t2\nDpr12M101695-GFSTF|Dpr12 MI01695-GFSTF\tBloomington Drosophila Stock Center\tBDSC#60171\t2\nMCFO-131|MCFO-1\tNot specified in paper\tNot specified in paper\t2\npFlpStop-attB-UAS-2.1-tdTom\tAddgene\tAddgene 88910\t1\npBS-KS-attB1-2-PT-SA-SD-0(1,2)-EGFP-FIAsH-StrepII-TEV-3xFlag\tPreviously published plasmid/template\tNot specified in paper\t4\npdFlpTag-attB-SA-SD-0(1,2)-GFSTF constructs\tNew in paper\tNew in paper\t2\npdFlpTag-attB-SA-SD-0(1,2)-smGFP::HA constructs\tNew in paper\tNew in paper\t1\nphiC31 integrase flies\tNot specified in paper\tNot specified in paper\t1\nBrp dFlpTag-GFSTF(cons.)\tNew in paper (in-house)\tNew in paper\t1\nBrp dFlpTag-smGFP::HA(cons.)\tNew in paper (in-house)\tNew in paper\t2\nBrp dFlpTag-GFSTF(cond.)\tNew in paper (in-house)\tNew in paper\t1\nBrp dFlpTag-smGFP::HA(cond.)\tNew in paper (in-house)\tNew in paper\t2\nDlg1 dFlpTag-smGFP::HA(cond.)|conditional Dlg1 strain\tNew in paper (in-house)\tNew in paper\t2\nDpr12 dFlpTag-GFSTF(cond.)\tNew in paper (dpr12 line generated by UniHuaii.com)\tNew in paper\t1\nDpr12 constitutive and conditional GFSTF and smGFP::HA tagging strains\tNew in paper (dpr12 line generated by UniHuaii.com)\tNew in paper\t2",
+      "columns": [
+        "synonym",
+        "source",
+        "source_identifier",
+        "count"
+      ],
+      "rows": [
+        {
+          "row_number": 1,
+          "synonym": "R57C10-GAL4",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#39171",
+          "count": "5"
+        },
+        {
+          "row_number": 2,
+          "synonym": "R13F02-GAL4",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#48571",
+          "count": "6"
+        },
+        {
+          "row_number": 3,
+          "synonym": "R58E02-GAL4",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#41347",
+          "count": "3"
+        },
+        {
+          "row_number": 4,
+          "synonym": "Mef2-GAL4",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#27390",
+          "count": "3"
+        },
+        {
+          "row_number": 5,
+          "synonym": "ap-GAL4",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#3041",
+          "count": "4"
+        },
+        {
+          "row_number": 6,
+          "synonym": "pdf-GAL4",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#6899",
+          "count": "3"
+        },
+        {
+          "row_number": 7,
+          "synonym": "VT001606-AD",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#72441",
+          "count": "3"
+        },
+        {
+          "row_number": 8,
+          "synonym": "VT033008-DBD",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#71768",
+          "count": "3"
+        },
+        {
+          "row_number": 9,
+          "synonym": "UAS-FLP",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#4539",
+          "count": "9"
+        },
+        {
+          "row_number": 10,
+          "synonym": "hs-FLP|hsFLP",
+          "source": "Not specified in paper",
+          "source_identifier": "Not specified in paper",
+          "count": "7"
+        },
+        {
+          "row_number": 11,
+          "synonym": "UAS-mCD8GFP|UAS-mcd8GFP",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#44408",
+          "count": "2"
+        },
+        {
+          "row_number": 12,
+          "synonym": "BrpM102987|Brp MI02987|Brp^MI02987",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#37043",
+          "count": "5"
+        },
+        {
+          "row_number": 13,
+          "synonym": "BrpM102987-GFSTF|Brp MI02987-GFSTF",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#59292",
+          "count": "3"
+        },
+        {
+          "row_number": 14,
+          "synonym": "Dlg1M106353|Dlg1^MI06353|Dlg1^M106353",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#41521",
+          "count": "3"
+        },
+        {
+          "row_number": 15,
+          "synonym": "Dpr12M101695|Dpr12 MI01695|Dpr12MI01695",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#34237",
+          "count": "2"
+        },
+        {
+          "row_number": 16,
+          "synonym": "Dpr12M101695-GFSTF|Dpr12 MI01695-GFSTF",
+          "source": "Bloomington Drosophila Stock Center",
+          "source_identifier": "BDSC#60171",
+          "count": "2"
+        },
+        {
+          "row_number": 17,
+          "synonym": "MCFO-131|MCFO-1",
+          "source": "Not specified in paper",
+          "source_identifier": "Not specified in paper",
+          "count": "2"
+        },
+        {
+          "row_number": 18,
+          "synonym": "pFlpStop-attB-UAS-2.1-tdTom",
+          "source": "Addgene",
+          "source_identifier": "Addgene 88910",
+          "count": "1"
+        },
+        {
+          "row_number": 19,
+          "synonym": "pBS-KS-attB1-2-PT-SA-SD-0(1,2)-EGFP-FIAsH-StrepII-TEV-3xFlag",
+          "source": "Previously published plasmid/template",
+          "source_identifier": "Not specified in paper",
+          "count": "4"
+        },
+        {
+          "row_number": 20,
+          "synonym": "pdFlpTag-attB-SA-SD-0(1,2)-GFSTF constructs",
+          "source": "New in paper",
+          "source_identifier": "New in paper",
+          "count": "2"
+        },
+        {
+          "row_number": 21,
+          "synonym": "pdFlpTag-attB-SA-SD-0(1,2)-smGFP::HA constructs",
+          "source": "New in paper",
+          "source_identifier": "New in paper",
+          "count": "1"
+        },
+        {
+          "row_number": 22,
+          "synonym": "phiC31 integrase flies",
+          "source": "Not specified in paper",
+          "source_identifier": "Not specified in paper",
+          "count": "1"
+        },
+        {
+          "row_number": 23,
+          "synonym": "Brp dFlpTag-GFSTF(cons.)",
+          "source": "New in paper (in-house)",
+          "source_identifier": "New in paper",
+          "count": "1"
+        },
+        {
+          "row_number": 24,
+          "synonym": "Brp dFlpTag-smGFP::HA(cons.)",
+          "source": "New in paper (in-house)",
+          "source_identifier": "New in paper",
+          "count": "2"
+        },
+        {
+          "row_number": 25,
+          "synonym": "Brp dFlpTag-GFSTF(cond.)",
+          "source": "New in paper (in-house)",
+          "source_identifier": "New in paper",
+          "count": "1"
+        },
+        {
+          "row_number": 26,
+          "synonym": "Brp dFlpTag-smGFP::HA(cond.)",
+          "source": "New in paper (in-house)",
+          "source_identifier": "New in paper",
+          "count": "2"
+        },
+        {
+          "row_number": 27,
+          "synonym": "Dlg1 dFlpTag-smGFP::HA(cond.)|conditional Dlg1 strain",
+          "source": "New in paper (in-house)",
+          "source_identifier": "New in paper",
+          "count": "2"
+        },
+        {
+          "row_number": 28,
+          "synonym": "Dpr12 dFlpTag-GFSTF(cond.)",
+          "source": "New in paper (dpr12 line generated by UniHuaii.com)",
+          "source_identifier": "New in paper",
+          "count": "1"
+        },
+        {
+          "row_number": 29,
+          "synonym": "Dpr12 constitutive and conditional GFSTF and smGFP::HA tagging strains",
+          "source": "New in paper (dpr12 line generated by UniHuaii.com)",
+          "source_identifier": "New in paper",
+          "count": "2"
+        }
+      ],
+      "row_count": 29,
+      "observed_formatter_result": "Please provide the data you would like formatted into the TSV file.",
+      "observed_formatter_parse_status": "unparsed",
+      "save_or_export_tool_called_after_formatter": false,
+      "save_or_export_tool_call_names": []
+    }
+  ]
+}

@@ -18,6 +18,7 @@ Architecture:
     to capture internal tool calls (read_section, search_document, etc.) and emit
     events for the audit panel and PDF highlighting.
 """
+import csv
 import json
 import logging
 from datetime import datetime, timezone
@@ -74,6 +75,7 @@ _FLOW_STEP_EVIDENCE_PREVIEW_LIMIT = 10
 _FLOW_TEMPLATE_VARIABLE_PATTERN = re.compile(r"{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}")
 _FLOW_TEMPLATE_DEFAULT_INPUT_FILENAME = "input"
 _FLOW_TEMPLATE_DEFAULT_TRACE_ID = "trace"
+_FLOW_TSV_FORMATTER_AGENT_IDS = {"tsv_formatter", "tsv_output_formatter"}
 
 
 class FlowTemplateConfigurationError(ValueError):
@@ -364,6 +366,136 @@ def _resolve_output_filename_descriptor(
         )
 
     return sanitize_output_descriptor(rendered)
+
+
+def _extract_tsv_formatter_requested_columns(query: str) -> List[str]:
+    """Extract explicit formatter column order from a flow handoff query."""
+
+    for line in str(query or "").splitlines():
+        if "columns" not in line.lower() or ":" not in line:
+            continue
+
+        candidate = line.split(":", 1)[1].split(".", 1)[0]
+        columns = [
+            token.strip().strip("`\"'")
+            for token in candidate.split(",")
+            if token.strip()
+        ]
+        if len(columns) > 1:
+            return columns
+
+    return []
+
+
+def _extract_tsv_formatter_data_lines(query: str) -> List[str]:
+    """Return the tab-delimited data block from a formatter handoff query."""
+
+    lines = str(query or "").splitlines()
+    start_index = 0
+    for index, line in enumerate(lines):
+        if line.strip().lower() in {"data:", "data"}:
+            start_index = index + 1
+            break
+
+    data_lines: List[str] = []
+    started = False
+    for line in lines[start_index:]:
+        if not line.strip():
+            if started:
+                continue
+            continue
+        if "\t" not in line:
+            if started:
+                break
+            continue
+
+        started = True
+        data_lines.append(line)
+
+    return data_lines
+
+
+def _row_matches_columns(row: List[str], columns: List[str]) -> bool:
+    """Return whether a parsed TSV row is the explicit header row."""
+
+    if len(row) != len(columns):
+        return False
+    return [cell.strip().lower() for cell in row] == [
+        column.strip().lower() for column in columns
+    ]
+
+
+def _parse_tsv_formatter_query_rows(
+    query: str,
+) -> Optional[tuple[List[str], List[Dict[str, str]]]]:
+    """Parse provided TSV rows from a formatter flow handoff query."""
+
+    requested_columns = _extract_tsv_formatter_requested_columns(query)
+    data_lines = _extract_tsv_formatter_data_lines(query)
+    if not data_lines:
+        return None
+
+    parsed_rows = [
+        [cell.strip() for cell in row]
+        for row in csv.reader(data_lines, delimiter="\t")
+        if any(cell.strip() for cell in row)
+    ]
+    if not parsed_rows:
+        return None
+
+    if requested_columns:
+        columns = requested_columns
+        value_rows = (
+            parsed_rows[1:]
+            if _row_matches_columns(parsed_rows[0], columns)
+            else parsed_rows
+        )
+    else:
+        columns = parsed_rows[0]
+        value_rows = parsed_rows[1:]
+
+    if not columns or not value_rows:
+        return None
+
+    rows: List[Dict[str, str]] = []
+    for values in value_rows:
+        if len(values) != len(columns):
+            return None
+        rows.append(dict(zip(columns, values)))
+
+    return columns, rows
+
+
+async def _try_save_tsv_formatter_flow_output(
+    *,
+    agent_id: str,
+    resolved_query: str,
+    flow_name: str,
+) -> Optional[str]:
+    """Deterministically save TSV flow formatter handoffs that already contain rows."""
+
+    if agent_id not in _FLOW_TSV_FORMATTER_AGENT_IDS:
+        return None
+
+    parsed = _parse_tsv_formatter_query_rows(resolved_query)
+    if parsed is None:
+        return None
+
+    columns, rows = parsed
+    from src.lib.openai_agents.tools.file_output_tools import _save_tsv_impl
+
+    descriptor = sanitize_output_descriptor(f"{flow_name}_tsv_export")
+    result = await _save_tsv_impl(
+        data_json=json.dumps(rows, ensure_ascii=False),
+        filename=descriptor,
+        columns=json.dumps(columns, ensure_ascii=False),
+    )
+    logger.info(
+        "[Flow Executor] Saved TSV formatter flow output directly for '%s' (%s rows)",
+        agent_id,
+        len(rows),
+    )
+    return json.dumps(result)
 
 
 def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) -> Optional[str]:
@@ -888,7 +1020,14 @@ def get_all_agent_tools(
             # Invoke via on_invoke_tool() so we execute the underlying specialist wrapper.
             output_filename_token = set_current_output_filename_stem(output_filename_descriptor)
             try:
-                if hasattr(tool_callable, "on_invoke_tool"):
+                direct_formatter_result = await _try_save_tsv_formatter_flow_output(
+                    agent_id=agent_id,
+                    resolved_query=resolved_query,
+                    flow_name=flow.name,
+                )
+                if direct_formatter_result is not None:
+                    result = direct_formatter_result
+                elif hasattr(tool_callable, "on_invoke_tool"):
                     # Newer openai-agents tool invokers may dereference ctx.tool_name.
                     tool_ctx = SimpleNamespace(tool_name=tool_name)
                     result = await tool_callable.on_invoke_tool(
