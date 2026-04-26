@@ -409,11 +409,14 @@ else
   merge_message="No PR merge required for delivery mode no_pr."
 fi
 
+# Keep the issue workspace in place until the Linear transition to a terminal
+# state is durable. Symphony's terminal-state cleanup hook owns final removal.
 set +e
-post_cleanup_output="$(run_cleanup "--remove-workspace" 1)"
+post_cleanup_output="$(run_cleanup "" 1)"
 post_cleanup_rc=$?
 set -e
 post_cleanup_status="$(extract_cleanup_status "${post_cleanup_output}")"
+workspace_removal="deferred_to_terminal_cleanup"
 
 if (( dry_run == 1 )); then
   final_status="dry_run"
@@ -434,5 +437,6 @@ echo "FINALIZE_PR_NUMBER=${resolved_pr_number}"
 echo "FINALIZE_PR_URL=${resolved_pr_url}"
 echo "FINALIZE_PRE_CLEANUP_STATUS=${pre_cleanup_status}"
 echo "FINALIZE_POST_CLEANUP_STATUS=${post_cleanup_status}"
+echo "FINALIZE_WORKSPACE_REMOVAL=${workspace_removal}"
 echo "FINALIZE_MERGE_STATUS=${merge_status}"
 echo "FINALIZE_MESSAGE=${merge_message}"

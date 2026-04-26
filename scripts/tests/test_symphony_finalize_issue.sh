@@ -16,6 +16,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local unexpected="$1"
+  local actual="$2"
+  if [[ "${actual}" == *"${unexpected}"* ]]; then
+    echo "Expected output not to contain '${unexpected}'" >&2
+    printf 'Actual output:\n%s\n' "${actual}" >&2
+    exit 1
+  fi
+}
+
 make_cleanup_stub() {
   local path="$1"
   cat > "${path}" <<'EOF'
@@ -27,6 +37,9 @@ for arg in "$@"; do
     remove_workspace="true"
   fi
 done
+if [[ -n "${CLEANUP_INVOCATION_LOG:-}" ]]; then
+  printf 'remove_workspace=%s args=%s\n' "${remove_workspace}" "$*" >> "${CLEANUP_INVOCATION_LOG}"
+fi
 echo "CLEANUP_STATUS=success"
 echo "CLEANUP_ATTEMPTS=1"
 echo "CLEANUP_PROJECT=test-project"
@@ -173,6 +186,7 @@ test_no_pr_finalizes_without_merge() {
   assert_contains "FINALIZE_STATUS=finalized_no_pr" "${output}"
   assert_contains "FINALIZE_MERGE_STATUS=skipped_no_pr" "${output}"
   assert_contains "FINALIZE_NEXT_STATE=Done" "${output}"
+  assert_contains "FINALIZE_WORKSPACE_REMOVAL=deferred_to_terminal_cleanup" "${output}"
 }
 
 test_pr_dry_run_reports_merge() {
@@ -200,6 +214,36 @@ test_pr_dry_run_reports_merge() {
   assert_contains "FINALIZE_STATUS=dry_run" "${output}"
   assert_contains "FINALIZE_PR_NUMBER=88" "${output}"
   assert_contains "FINALIZE_MERGE_STATUS=dry_run" "${output}"
+}
+
+test_successful_pr_finalization_defers_workspace_removal() {
+  local temp_dir cleanup_stub gh_stub workspace cleanup_log output cleanup_invocations
+  temp_dir="$(mktemp -d)"
+  cleanup_stub="${temp_dir}/cleanup.sh"
+  gh_stub="${temp_dir}/gh"
+  workspace="${temp_dir}/ALL-88"
+  cleanup_log="${temp_dir}/cleanup.log"
+  mkdir -p "${workspace}"
+  make_cleanup_stub "${cleanup_stub}"
+  make_gh_stub "${gh_stub}"
+
+  output="$(
+    CLEANUP_INVOCATION_LOG="${cleanup_log}" PATH="${temp_dir}:${PATH}" bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --workspace-dir "${workspace}" \
+      --issue-identifier ALL-88 \
+      --compose-project all-88 \
+      --repo alliance-genome/agr_ai_curation \
+      --branch all-88-branch \
+      --cleanup-script "${cleanup_stub}"
+  )"
+
+  cleanup_invocations="$(cat "${cleanup_log}")"
+
+  assert_contains "FINALIZE_STATUS=merged" "${output}"
+  assert_contains "FINALIZE_NEXT_STATE=Done" "${output}"
+  assert_contains "FINALIZE_WORKSPACE_REMOVAL=deferred_to_terminal_cleanup" "${output}"
+  assert_not_contains "remove_workspace=true" "${cleanup_invocations}"
 }
 
 test_pr_dry_run_infers_repo_from_origin() {
@@ -386,6 +430,7 @@ test_non_conflict_merge_failure_blocks() {
 
 test_no_pr_finalizes_without_merge
 test_pr_dry_run_reports_merge
+test_successful_pr_finalization_defers_workspace_removal
 test_pr_dry_run_infers_repo_from_origin
 test_pr_missing_pr_blocks
 test_merge_conflict_bounces_to_in_progress
