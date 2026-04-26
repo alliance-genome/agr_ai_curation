@@ -30,7 +30,7 @@ describe('chatProgress', () => {
     expect(getFriendlyProgressMessage(alreadyCompleteEvent)).toBe('Search PubMed complete')
   })
 
-  it('falls back to action-required copy for refinement events', () => {
+  it('uses action-required copy for refinement events', () => {
     expect(getFriendlyProgressMessage({ type: 'PENDING_USER_INPUT' })).toBe(
       'Action required: please refine the query (limit/filter).',
     )

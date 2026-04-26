@@ -5,7 +5,7 @@ import type { Theme } from '@mui/material/styles'
 
 import type { ChatCssVariables, ChatNoticeTone } from './types'
 
-export function getNoticeColor(theme: Theme, tone: ChatNoticeTone): string {
+function getNoticeColor(theme: Theme, tone: ChatNoticeTone): string {
   const contrastScale = theme.palette.mode === 'dark' ? 'light' : 'dark'
 
   switch (tone) {

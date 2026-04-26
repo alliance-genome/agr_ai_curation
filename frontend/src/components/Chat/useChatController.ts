@@ -476,7 +476,7 @@ export function useChatController({
     newEvents.forEach((parsed: ChatStreamEvent) => {
       const eventSessionId = getStreamEventSessionId(parsed)
       if (eventSessionId && propSessionId && eventSessionId !== propSessionId) {
-        debug.log('🔍 [SSE] Ignoring event for stale session:', {
+        debug.log('[SSE] Ignoring event for stale session:', {
           eventType: parsed.type,
           eventSessionId,
           activeSessionId: propSessionId,
@@ -486,7 +486,7 @@ export function useChatController({
 
       const turnId = getEventTurnId(parsed) ?? activeTurnIdRef.current
       const messageTimestamp = extractEventTimestamp(parsed) ?? new Date()
-      debug.log('🔍 [SSE] Processing event:', parsed.type, parsed)
+      debug.log('[SSE] Processing event:', parsed.type, parsed)
 
       // RUN_STARTED
       if (parsed.type === 'RUN_STARTED') {
@@ -496,7 +496,7 @@ export function useChatController({
         updateProgressMessage('Starting...')
         // Capture trace_id early so it's available for STOP_CONFIRMED
         if (parsed.trace_id && !sessionTraceIds.current.includes(parsed.trace_id)) {
-          debug.log('🔍 [TRACE] Captured trace ID from RUN_STARTED:', parsed.trace_id)
+          debug.log('[TRACE] Captured trace ID from RUN_STARTED:', parsed.trace_id)
           sessionTraceIds.current.push(parsed.trace_id)
         }
         return
@@ -506,7 +506,7 @@ export function useChatController({
       if (parsed.trace_id) {
         // Add to session-wide trace IDs
         if (!sessionTraceIds.current.includes(parsed.trace_id)) {
-          debug.log('🔍 [TRACE] Captured trace ID:', parsed.trace_id)
+          debug.log('[TRACE] Captured trace ID:', parsed.trace_id)
           sessionTraceIds.current.push(parsed.trace_id)
         }
 
@@ -706,7 +706,7 @@ export function useChatController({
       // T026: Filter audit events for chat progress display
       if (shouldShowInChat(parsed.type)) {
         const friendlyMessage = getFriendlyProgressMessage(parsed)
-        debug.log('🔍 [AUDIT→CHAT] Showing filtered audit event in chat progress:', parsed.type, friendlyMessage)
+        debug.log('[AUDIT->CHAT] Showing filtered audit event in chat progress:', parsed.type, friendlyMessage)
         updateProgressMessage(friendlyMessage)
 
         if (
@@ -728,13 +728,13 @@ export function useChatController({
       }
 
       if (parsed.type === 'PROGRESS') {
-        debug.log('🔍 [PROGRESS] Received progress event:', parsed.message)
+        debug.log('[PROGRESS] Received progress event:', parsed.message)
         updateProgressMessage(parsed.message || 'Processing...')
         return
       }
 
       if (parsed.type === 'CHUNK_PROVENANCE') {
-        debug.log('🔍 [CHAT DEBUG] Ignoring legacy CHUNK_PROVENANCE overlay event', {
+        debug.log('[CHAT DEBUG] Ignoring legacy CHUNK_PROVENANCE overlay event', {
           chunk_id: parsed.chunk_id,
           document_id: parsed.document_id,
           active_document_id: activeDocument?.id,
@@ -835,7 +835,7 @@ export function useChatController({
           download_url: parsed.details.download_url,
           created_at: parsed.details.created_at,
         }
-        debug.log('🔍 [FILE_READY] File ready for download:', fileData.filename)
+        debug.log('[FILE_READY] File ready for download:', fileData.filename)
 
         setMessages(prev => [
           ...prev,
@@ -1166,12 +1166,12 @@ export function useChatController({
       return
     }
 
-    // Use specific message trace IDs if available, otherwise fallback to session IDs
+    // Use specific message trace IDs when available; otherwise use session IDs.
     const traceIdsToUse = (messageTraceIds && messageTraceIds.length > 0)
       ? messageTraceIds
       : sessionTraceIds.current
 
-    debug.log('🔍 [FEEDBACK] Submitting feedback with trace IDs:', traceIdsToUse)
+    debug.log('[FEEDBACK] Submitting feedback with trace IDs:', traceIdsToUse)
     setFeedbackMessageData({
       content: messageContent,
       traceIds: traceIdsToUse
@@ -1397,7 +1397,7 @@ export function useChatController({
         invalidateTurnRuntimeState()
 
         if (onSessionChange) {
-          debug.log('🔄 [Session Reset] Propagating new session ID to HomePage:', nextSessionId)
+          debug.log('[Session Reset] Propagating new session ID to HomePage:', nextSessionId)
           onSessionChange(nextSessionId)
         }
 
