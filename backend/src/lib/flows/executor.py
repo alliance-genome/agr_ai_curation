@@ -371,7 +371,7 @@ def _resolve_output_filename_descriptor(
 def _extract_tsv_formatter_requested_columns(query: str) -> List[str]:
     """Extract explicit formatter column order from a flow handoff query."""
 
-    for line in str(query or "").splitlines():
+    for line in query.splitlines():
         if "columns" not in line.lower() or ":" not in line:
             continue
 
@@ -390,7 +390,7 @@ def _extract_tsv_formatter_requested_columns(query: str) -> List[str]:
 def _extract_tsv_formatter_data_lines(query: str) -> List[str]:
     """Return the tab-delimited data block from a formatter handoff query."""
 
-    lines = str(query or "").splitlines()
+    lines = query.splitlines()
     start_index = 0
     for index, line in enumerate(lines):
         if line.strip().lower() in {"data:", "data"}:
@@ -401,8 +401,6 @@ def _extract_tsv_formatter_data_lines(query: str) -> List[str]:
     started = False
     for line in lines[start_index:]:
         if not line.strip():
-            if started:
-                continue
             continue
         if "\t" not in line:
             if started:

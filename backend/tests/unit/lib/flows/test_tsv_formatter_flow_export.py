@@ -1,4 +1,3 @@
-import asyncio
 import importlib
 import json
 from pathlib import Path
@@ -70,10 +69,11 @@ def test_all_303_fixture_queries_parse_to_expected_tsv_rows(trace):
 
 
 @pytest.mark.parametrize("trace", _load_traces(), ids=lambda trace: trace["trace_id"])
+@pytest.mark.asyncio
 @patch("src.lib.flows.executor._resolve_flow_agent_entry")
 @patch("src.lib.flows.executor._create_streaming_tool")
 @patch("src.lib.flows.executor.get_agent_by_id")
-def test_all_303_tsv_formatter_flow_step_saves_rows_without_model_round_trip(
+async def test_all_303_tsv_formatter_flow_step_saves_rows_without_model_round_trip(
     mock_get_agent,
     mock_create_streaming_tool,
     mock_resolve_flow_agent_entry,
@@ -135,11 +135,9 @@ def test_all_303_tsv_formatter_flow_step_saves_rows_without_model_round_trip(
     tools, created_names = executor.get_all_agent_tools(_make_flow())
 
     assert created_names == {"ask_tsv_formatter_specialist"}
-    result_text = asyncio.run(
-        tools[0].on_invoke_tool(
-            SimpleNamespace(tool_name="ask_tsv_formatter_specialist"),
-            json.dumps({"query": trace["formatter_query"]}),
-        )
+    result_text = await tools[0].on_invoke_tool(
+        SimpleNamespace(tool_name="ask_tsv_formatter_specialist"),
+        json.dumps({"query": trace["formatter_query"]}),
     )
     result = json.loads(result_text)
 
