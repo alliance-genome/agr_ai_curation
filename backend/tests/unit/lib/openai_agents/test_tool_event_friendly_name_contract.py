@@ -1559,6 +1559,102 @@ async def test_specialist_fails_fast_when_live_evidence_exists_but_item_refs_are
 
 
 @pytest.mark.asyncio
+async def test_allele_specialist_rejects_empty_evidence_after_section_label_record_evidence_failure(monkeypatch):
+    claimed_quote = (
+        "Trp53 fl/fl ;Wwox fl/fl (18, 41) mice were bred with K14-Cre mice (JAX) "
+        "to generate double conditional KO (DKO) mice: K14-Cre; Wwox fl/fl "
+        "Trp53 fl/fl and the other genotypes."
+    )
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [
+                _tool_call_stream_event(
+                    "record_evidence",
+                    arguments=json.dumps(
+                        {
+                            "entity": "Trp53 fl/fl ;Wwox fl/fl",
+                            "chunk_id": "Methods_1",
+                            "claimed_quote": claimed_quote,
+                        }
+                    ),
+                ),
+                _tool_output_stream_event(
+                    json.dumps(
+                        {
+                            "status": "not_found",
+                            "entity": "Trp53 fl/fl ;Wwox fl/fl",
+                            "chunk_id": "Methods_1",
+                            "claimed_quote": claimed_quote,
+                            "chunk_content_preview": "",
+                            "message": (
+                                "chunk_id 'Methods_1' looks like a section label, "
+                                "not a valid chunk UUID. Retry with search_document."
+                            ),
+                            "retry_tool": "search_document",
+                        }
+                    )
+                ),
+            ],
+            final_output=_FakeStructuredOutput(
+                {
+                    "summary": "Found plausible alleles but evidence verification failed.",
+                    "alleles": [
+                        {
+                            "mention": "Trp53 fl/fl",
+                            "normalized_symbol": "Trp53<sup>tm1Brn</sup>",
+                            "normalized_id": "MGI:1931011",
+                            "associated_gene": "Trp53",
+                            "confidence": "medium",
+                            "evidence_record_ids": [],
+                        },
+                        {
+                            "mention": "Wwox fl/fl",
+                            "normalized_symbol": "Wwox<sup>tm1Ria</sup>",
+                            "normalized_id": "MGI:3704944",
+                            "associated_gene": "Wwox",
+                            "confidence": "medium",
+                            "evidence_record_ids": [],
+                        },
+                    ],
+                    "items": [],
+                    "evidence_records": [],
+                    "run_summary": {"kept_count": 2},
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Allele/Variant Extraction Agent",
+        tools=[],
+        output_type=AlleleExtractionResultEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract alleles",
+            specialist_name="Allele/Variant Extraction Agent",
+            max_turns=3,
+            tool_name="ask_allele_extractor_specialist",
+        )
+
+    specialist_errors = [event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"]
+    assert len(specialist_errors) == 1
+    assert specialist_errors[0]["details"]["reason"] == "missing_evidence_records"
+    assert not any(event.get("type") == "evidence_summary" for event in captured_events)
+
+
+@pytest.mark.asyncio
 async def test_specialist_accepts_schema_defined_retained_collection_without_items(monkeypatch):
     verified_quote = "Actin 5C was the focal allele examined in the study."
     expected_record = _build_expected_evidence_record(

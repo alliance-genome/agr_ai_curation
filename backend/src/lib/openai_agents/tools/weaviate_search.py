@@ -126,17 +126,47 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
     return search_document
 
 
+class SectionChunkSource(BaseModel):
+    chunk_id: str
+    page_number: Optional[int] = None
+    section_title: Optional[str] = None
+    subsection: Optional[str] = None
+    content_preview: str
+
+
 class SectionContent(BaseModel):
     section_title: str
     page_numbers: List[int]
     content: str
     chunk_count: int
+    source_chunks: Optional[List[SectionChunkSource]] = None
     doc_items: Optional[List[dict]] = None  # Combined bounding boxes from all chunks
 
 
 class SectionReadResult(BaseModel):
     summary: str
     section: Optional[SectionContent]
+
+
+def _content_preview(text: str, *, max_chars: int = 300) -> str:
+    stripped = text.strip()
+    if len(stripped) <= max_chars:
+        return stripped
+    return stripped[:max_chars].rstrip(" ,;:") + "..."
+
+
+def _source_chunk_id(chunk: dict, metadata: dict) -> str | None:
+    for value in (
+        chunk.get("id"),
+        chunk.get("chunk_id"),
+        chunk.get("chunkId"),
+        metadata.get("chunk_id"),
+        metadata.get("chunkId"),
+    ):
+        normalized = str(value or "").strip()
+        if normalized:
+            return normalized
+    return None
 
 
 def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
@@ -196,9 +226,11 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             page_numbers = set()
             actual_section_title = None
             all_doc_items = []
+            source_chunks: List[SectionChunkSource] = []
 
             for chunk in chunks:
-                # get_chunks_by_parent_section returns: text, chunk_index, section_title, parent_section, subsection, is_top_level, page_number, metadata, doc_items
+                # get_chunks_by_parent_section returns text, locator fields,
+                # hierarchy fields, metadata, and optional doc_items.
                 text = chunk.get("text") or chunk.get("content") or ""
                 if text:
                     content_parts.append(text)
@@ -220,6 +252,23 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                         metadata = json.loads(metadata)
                     except (json.JSONDecodeError, TypeError):
                         metadata = {}
+                elif not isinstance(metadata, dict):
+                    metadata = {}
+
+                chunk_id = _source_chunk_id(chunk, metadata)
+                if chunk_id and text:
+                    source_chunks.append(
+                        SectionChunkSource(
+                            chunk_id=chunk_id,
+                            page_number=page,
+                            section_title=chunk.get("section_title")
+                            or chunk.get("sectionTitle")
+                            or actual_section_title,
+                            subsection=chunk.get("subsection"),
+                            content_preview=_content_preview(text),
+                        )
+                    )
+
                 chunk_doc_items = metadata.get("doc_items") or chunk.get("doc_items") or []
                 if chunk_doc_items:
                     all_doc_items.extend(chunk_doc_items)
@@ -236,12 +285,16 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
             )
 
             return SectionReadResult(
-                summary=f"Read {len(chunks)} chunks from '{actual_section_title}'",
+                summary=(
+                    f"Read {len(chunks)} chunks from '{actual_section_title}'. "
+                    "Use section.source_chunks[].chunk_id with record_evidence."
+                ),
                 section=SectionContent(
                     section_title=actual_section_title,
                     page_numbers=sorted_pages,
                     content=full_content,
                     chunk_count=len(chunks),
+                    source_chunks=source_chunks if source_chunks else None,
                     doc_items=all_doc_items if all_doc_items else None,
                 )
             )

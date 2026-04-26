@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any, Optional
+from uuid import UUID
 
 from agents import function_tool
 
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
-from src.lib.weaviate_client.chunks import get_chunk_by_id
+from src.lib.weaviate_client.chunks import fetch_document_chunks_for_resolution, get_chunk_by_id
 
 if TYPE_CHECKING:
     from ..guardrails import ToolCallTracker
@@ -32,7 +34,30 @@ _TABLE_REFERENCE_PATTERN = re.compile(
 _NOT_FOUND_MESSAGE = (
     "Quote not found in this chunk. Retry with text from the chunk or drop this evidence."
 )
+_INVALID_CHUNK_LOAD_MESSAGE = (
+    "Chunk could not be loaded. Retry with a valid chunk_id from search_document "
+    "or read_section source_chunks, or drop this evidence."
+)
+_MISSING_CHUNK_MESSAGE = (
+    "Chunk not found in the active document. Retry with a valid chunk_id from search_document "
+    "or read_section source_chunks, or drop this evidence."
+)
 _PREVIEW_CHARS = 300
+_COMMON_SECTION_TOKENS = frozenset({
+    "abstract",
+    "acknowledgements",
+    "acknowledgments",
+    "appendix",
+    "discussion",
+    "introduction",
+    "materials",
+    "method",
+    "methods",
+    "references",
+    "results",
+    "supplementary",
+})
+_TRAILING_SECTION_INDEX_PATTERN = re.compile(r"(?:[_\s-]+(?:chunk)?\d+)$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -47,6 +72,12 @@ class _TokenSpan:
     token: str
     start: int
     end: int
+
+
+@dataclass(frozen=True)
+class _ResolvedSectionLabelChunk:
+    chunk: dict[str, Any]
+    chunk_id: str
 
 
 def _canonicalize_character(value: str) -> str | None:
@@ -271,6 +302,135 @@ def _resolve_doc_item_page(item: dict[str, Any]) -> int | None:
     )
 
 
+def _resolve_chunk_text(chunk: dict[str, Any]) -> str:
+    return str(chunk.get("text") or chunk.get("content") or chunk.get("content_preview") or "").strip()
+
+
+def _is_uuid_like(value: str) -> bool:
+    try:
+        UUID(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _normalize_section_label(value: Any) -> str:
+    label = str(value or "").strip()
+    label = _TRAILING_SECTION_INDEX_PATTERN.sub("", label)
+    label = label.replace("_", " ")
+    label = re.sub(r"[^a-z0-9]+", " ", label.lower())
+    return re.sub(r"\s+", " ", label).strip()
+
+
+def _section_label_from_chunk_id(chunk_id: str) -> str | None:
+    raw_label = str(chunk_id or "").strip()
+    if not raw_label or _is_uuid_like(raw_label):
+        return None
+
+    normalized_label = _normalize_section_label(raw_label)
+    if not normalized_label:
+        return None
+
+    label_tokens = set(normalized_label.split())
+    if not label_tokens & _COMMON_SECTION_TOKENS:
+        return None
+
+    return _TRAILING_SECTION_INDEX_PATTERN.sub("", raw_label).replace("_", " ").strip()
+
+
+def _section_labels_match(candidate: str, actual: Any) -> bool:
+    candidate_label = _normalize_section_label(candidate)
+    actual_label = _normalize_section_label(actual)
+    if not candidate_label or not actual_label:
+        return False
+    return candidate_label in actual_label or actual_label in candidate_label
+
+
+def _chunk_matches_section_label(chunk: dict[str, Any], section_label: str) -> bool:
+    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    section_candidates = [
+        chunk.get("parent_section"),
+        chunk.get("section_title"),
+        chunk.get("subsection"),
+        metadata.get("parent_section"),
+        metadata.get("parentSection"),
+        metadata.get("section_title"),
+        metadata.get("sectionTitle"),
+        metadata.get("subsection"),
+    ]
+    return any(_section_labels_match(section_label, candidate) for candidate in section_candidates)
+
+
+def _resolve_chunk_identifier(chunk: dict[str, Any]) -> str | None:
+    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+    return _first_non_empty(
+        chunk.get("id"),
+        chunk.get("chunk_id"),
+        chunk.get("chunkId"),
+        metadata.get("chunk_id"),
+        metadata.get("chunkId"),
+    )
+
+
+async def _resolve_section_label_chunk(
+    *,
+    document_id: str,
+    user_id: str,
+    chunk_id: str,
+    claimed_quote: str,
+) -> _ResolvedSectionLabelChunk | None:
+    section_label = _section_label_from_chunk_id(chunk_id)
+    if not section_label or not claimed_quote:
+        return None
+
+    try:
+        chunks = await asyncio.to_thread(
+            fetch_document_chunks_for_resolution,
+            document_id,
+            user_id,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to resolve section-label chunk_id %s for record_evidence: %s",
+            chunk_id,
+            exc,
+            exc_info=True,
+        )
+        return None
+
+    matches: list[_ResolvedSectionLabelChunk] = []
+    for chunk in chunks:
+        if not isinstance(chunk, dict) or not _chunk_matches_section_label(chunk, section_label):
+            continue
+
+        resolved_chunk_id = _resolve_chunk_identifier(chunk)
+        chunk_text = _resolve_chunk_text(chunk)
+        if not resolved_chunk_id or not chunk_text:
+            continue
+
+        verified_quote, match = _find_verified_quote(claimed_quote, chunk_text)
+        if verified_quote is None or match is None:
+            continue
+
+        matches.append(
+            _ResolvedSectionLabelChunk(
+                chunk=chunk,
+                chunk_id=resolved_chunk_id,
+            )
+        )
+
+    if len(matches) == 1:
+        return matches[0]
+
+    if len(matches) > 1:
+        logger.info(
+            "Section-label chunk_id %s matched %s chunks for record_evidence; requiring explicit chunk_id",
+            chunk_id,
+            len(matches),
+        )
+    return None
+
+
 def _resolve_chunk_page(chunk: dict[str, Any]) -> int | None:
     metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
     page = (
@@ -346,6 +506,7 @@ def _build_not_found_result(
     subsection: str | None,
     best_match: _QuoteMatch | None = None,
     message: str = _NOT_FOUND_MESSAGE,
+    extra_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": "not_found",
@@ -361,7 +522,31 @@ def _build_not_found_result(
         payload["section"] = section
     if subsection:
         payload["subsection"] = subsection
+    if extra_fields:
+        payload.update(extra_fields)
     return payload
+
+
+def _build_section_label_retry_fields(chunk_id: str, claimed_quote: str) -> dict[str, Any]:
+    return {
+        "invalid_chunk_id": chunk_id,
+        "invalid_chunk_id_reason": "section_label_not_chunk_uuid",
+        "retry_tool": "search_document",
+        "retry_query": claimed_quote[:240],
+        "retry_instructions": (
+            "Call search_document with the evidence quote or entity, then pass the returned "
+            "hit.chunk_id to record_evidence. Only keep evidence after record_evidence returns verified."
+        ),
+    }
+
+
+def _section_label_not_found_message(chunk_id: str) -> str:
+    return (
+        f"chunk_id '{chunk_id}' looks like a section label, not a valid chunk UUID. "
+        "record_evidence requires a chunk_id from search_document results or read_section source_chunks. "
+        "Retry with search_document using the evidence quote or entity and pass the returned hit.chunk_id, "
+        "or drop this evidence."
+    )
 
 
 def create_record_evidence_tool(
@@ -388,24 +573,57 @@ def create_record_evidence_tool(
             document_id[:8],
         )
 
-        try:
-            chunk = await get_chunk_by_id(
-                chunk_id=chunk_id,
-                user_id=user_id,
+        resolved_from_chunk_id: str | None = None
+        section_label = _section_label_from_chunk_id(normalized_chunk_id)
+        if section_label:
+            resolved = await _resolve_section_label_chunk(
                 document_id=document_id,
-            )
-        except Exception as exc:
-            logger.error("Failed to load chunk %s for record_evidence: %s", chunk_id, exc, exc_info=True)
-            return _build_not_found_result(
-                "",
-                entity=normalized_entity,
+                user_id=user_id,
                 chunk_id=normalized_chunk_id,
                 claimed_quote=normalized_claimed_quote,
-                page=None,
-                section=None,
-                subsection=None,
-                message="Chunk could not be loaded. Retry with a valid chunk_id or drop this evidence.",
             )
+            if resolved is None:
+                return _build_not_found_result(
+                    "",
+                    entity=normalized_entity,
+                    chunk_id=normalized_chunk_id,
+                    claimed_quote=normalized_claimed_quote,
+                    page=None,
+                    section=section_label,
+                    subsection=None,
+                    message=_section_label_not_found_message(normalized_chunk_id),
+                    extra_fields=_build_section_label_retry_fields(
+                        normalized_chunk_id,
+                        normalized_claimed_quote,
+                    ),
+                )
+            chunk = resolved.chunk
+            resolved_from_chunk_id = normalized_chunk_id
+            normalized_chunk_id = resolved.chunk_id
+            logger.info(
+                "Resolved section-label chunk_id %s to chunk %s for record_evidence",
+                resolved_from_chunk_id,
+                normalized_chunk_id,
+            )
+        else:
+            try:
+                chunk = await get_chunk_by_id(
+                    chunk_id=normalized_chunk_id,
+                    user_id=user_id,
+                    document_id=document_id,
+                )
+            except Exception as exc:
+                logger.error("Failed to load chunk %s for record_evidence: %s", chunk_id, exc, exc_info=True)
+                return _build_not_found_result(
+                    "",
+                    entity=normalized_entity,
+                    chunk_id=normalized_chunk_id,
+                    claimed_quote=normalized_claimed_quote,
+                    page=None,
+                    section=None,
+                    subsection=None,
+                    message=_INVALID_CHUNK_LOAD_MESSAGE,
+                )
 
         if chunk is None:
             return _build_not_found_result(
@@ -416,10 +634,10 @@ def create_record_evidence_tool(
                 page=None,
                 section=None,
                 subsection=None,
-                message="Chunk not found in the active document. Retry with a valid chunk_id or drop this evidence.",
+                message=_MISSING_CHUNK_MESSAGE,
             )
 
-        chunk_text = str(chunk.get("text") or chunk.get("content_preview") or "").strip()
+        chunk_text = _resolve_chunk_text(chunk)
         page = _resolve_chunk_page(chunk)
         section = _resolve_chunk_section(chunk)
         subsection = _resolve_chunk_subsection(chunk)
@@ -456,6 +674,9 @@ def create_record_evidence_tool(
             "claimed_quote": normalized_claimed_quote,
             "verified_quote": verified_quote,
         }
+        if resolved_from_chunk_id:
+            payload["input_chunk_id"] = resolved_from_chunk_id
+            payload["resolution"] = "section_label_quote_match"
         if page is not None:
             payload["page"] = page
         if section:

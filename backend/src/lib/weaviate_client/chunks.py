@@ -799,6 +799,7 @@ async def get_chunks_by_section(
                 # It is better to over-fetch and let the LLM filter than to miss content.
                 
                 chunks.append({
+                    "id": str(obj.uuid),
                     "text": props.get("content"),
                     "chunk_index": props.get("chunkIndex"),
                     "section_title": props.get("sectionTitle"),
@@ -1249,6 +1250,7 @@ async def get_chunks_by_parent_section(
                         pass
 
                 chunks.append({
+                    "id": str(obj.uuid),
                     "text": props.get("content"),
                     "chunk_index": props.get("chunkIndex"),
                     "section_title": props.get("sectionTitle"),

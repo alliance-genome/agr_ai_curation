@@ -56,8 +56,11 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- Use multiple evidence records when one quote alone does not fully support the retained item or claim.\n"
     "- Prefer complementary quotes when different passages establish different parts of the support (for example identity, condition, effect, or scope).\n"
     "- Each claimed quote should be a single contiguous excerpt. A short multi-sentence passage is fine when that is the tightest support, but do not stitch together disconnected text.\n"
-    "- Pass the entity label, the exact `chunk_id` from prior document search/read results, and the quote you believe appears in that chunk.\n"
-    "- If the tool returns `not_found`, inspect the returned chunk preview, retry once with corrected text from that chunk when appropriate, and drop the evidence if it still does not verify.\n"
+    "- Pass the entity label, the exact `chunk_id` from prior `search_document` hits "
+    "or `read_section` source_chunks, and the quote you believe appears in that chunk.\n"
+    "- If the tool returns `not_found`, inspect the returned chunk preview or retry "
+    "instructions, use `search_document` to get a valid chunk_id when requested, "
+    "and drop the evidence if it still does not verify.\n"
     "- Only persist evidence records that came back `verified`.\n"
 )
 _INLINE_PACKAGE_TOOL_IDS = frozenset({
@@ -522,7 +525,10 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "name": "chunk_id",
                     "type": "string",
                     "required": True,
-                    "description": "Chunk identifier returned by search_document or read-section tools.",
+                    "description": (
+                        "Chunk identifier returned by search_document hits or read_section "
+                        "source_chunks. Do not pass section labels such as Methods or Results."
+                    ),
                 },
                 {
                     "name": "claimed_quote",

@@ -1,6 +1,7 @@
 """Unit tests for evidence registry canonicalization helpers."""
 
 from src.lib.openai_agents.evidence_summary import (
+    build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
@@ -125,3 +126,26 @@ def test_schema_defined_auxiliary_lists_do_not_satisfy_retained_evidence_guard()
         payload,
         expected_output_type=AlleleExtractionResultEnvelope,
     ) is True
+
+
+def test_record_evidence_summary_uses_resolved_output_chunk_id():
+    resolved_chunk_id = "1b3651f8-7745-51a0-80f3-b3eafb70a558"
+
+    record = build_record_evidence_summary_record(
+        tool_name="record_evidence",
+        tool_input={
+            "entity": "Trp53 fl/fl ;Wwox fl/fl",
+            "chunk_id": "Methods",
+            "claimed_quote": "The strains were bred in the Methods section.",
+        },
+        tool_output={
+            "status": "verified",
+            "chunk_id": resolved_chunk_id,
+            "verified_quote": "The strains were bred in the Methods section.",
+            "page": 11,
+            "section": "Materials and Methods",
+        },
+    )
+
+    assert record is not None
+    assert record["chunk_id"] == resolved_chunk_id

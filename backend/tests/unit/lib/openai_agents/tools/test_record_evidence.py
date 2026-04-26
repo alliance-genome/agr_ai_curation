@@ -1,5 +1,8 @@
 """Unit tests for the record_evidence document tool."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 import src.lib.openai_agents.tools.record_evidence as record_evidence
@@ -9,6 +12,14 @@ from tests.fixtures.evidence.harness import chunk_map, load_evidence_fixture, to
 
 FIXTURE = load_evidence_fixture()
 TOOL_CASES = tool_case_map(FIXTURE)
+ALL_292_FIXTURE = json.loads(
+    (
+        Path(__file__).parents[4]
+        / "fixtures"
+        / "evidence"
+        / "all_292_section_label_chunk_ids.json"
+    ).read_text()
+)
 
 
 def _expected_verified_result(
@@ -119,6 +130,92 @@ async def test_record_evidence_fixture_cases(monkeypatch, case_id):
         "user_id": "user-1",
         "document_id": "doc-123",
     }
+
+
+@pytest.mark.parametrize(
+    "trace_case",
+    ALL_292_FIXTURE["record_evidence_calls"],
+    ids=lambda trace_case: trace_case["trace_id"][:8],
+)
+@pytest.mark.asyncio
+async def test_record_evidence_resolves_section_label_chunk_id_from_trace_fixture(monkeypatch, trace_case):
+    resolved_chunk_id = "1b3651f8-7745-51a0-80f3-b3eafb70a558"
+    tool_input = trace_case["tool_input"]
+
+    async def _unexpected_get_chunk_by_id(**_kwargs):
+        pytest.fail("section-label chunk IDs should resolve before direct chunk-id lookup")
+
+    def _fake_fetch_document_chunks_for_resolution(document_id, user_id):
+        assert document_id == "doc-8325599"
+        assert user_id == "user-1"
+        return [
+            {
+                "id": resolved_chunk_id,
+                "content": (
+                    "Animals and breeding. "
+                    f"{tool_input['claimed_quote']} "
+                    "Mice were maintained in accordance with institutional protocols."
+                ),
+                "page_number": 11,
+                "parent_section": "Materials and Methods",
+                "section_title": "Mouse strains",
+                "subsection": "Animals",
+                "metadata": {},
+                "doc_items": [{"page": 11}],
+            }
+        ]
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
+    monkeypatch.setattr(
+        record_evidence,
+        "fetch_document_chunks_for_resolution",
+        _fake_fetch_document_chunks_for_resolution,
+    )
+    tool = record_evidence.create_record_evidence_tool("doc-8325599", "user-1")
+
+    result = await tool(**tool_input)
+
+    assert result["status"] == "verified"
+    assert result["chunk_id"] == resolved_chunk_id
+    assert result["input_chunk_id"] == tool_input["chunk_id"]
+    assert result["resolution"] == "section_label_quote_match"
+    assert result["verified_quote"] == tool_input["claimed_quote"]
+    assert result["page"] == 11
+    assert result["section"] == "Materials and Methods"
+    assert result["subsection"] == "Animals"
+    assert result["evidence_record_id"] == build_evidence_record_id(
+        evidence_record={
+            "entity": tool_input["entity"],
+            "verified_quote": tool_input["claimed_quote"],
+            "page": 11,
+            "section": "Materials and Methods",
+            "chunk_id": resolved_chunk_id,
+            "subsection": "Animals",
+            "figure_reference": None,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_section_label_chunk_id_returns_actionable_retry_when_unresolved(monkeypatch):
+    trace_case = ALL_292_FIXTURE["record_evidence_calls"][1]
+
+    def _no_resolution_chunks(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(record_evidence, "fetch_document_chunks_for_resolution", _no_resolution_chunks)
+    tool = record_evidence.create_record_evidence_tool("doc-8325599", "user-1")
+
+    result = await tool(**trace_case["tool_input"])
+
+    assert result["status"] == "not_found"
+    assert result["chunk_id"] == "Methods_1"
+    assert result["invalid_chunk_id_reason"] == "section_label_not_chunk_uuid"
+    assert result["retry_tool"] == "search_document"
+    assert "section label" in result["message"]
+    assert "search_document" in result["message"]
+    assert "hit.chunk_id" in result["retry_instructions"]
+    assert "evidence_record_id" not in result
 
 
 @pytest.mark.asyncio
