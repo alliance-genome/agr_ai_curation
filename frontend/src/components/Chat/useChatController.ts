@@ -65,6 +65,10 @@ import type {
 } from './types'
 import type { FileInfo } from './FileDownloadCard'
 
+type ChatStreamEvent = SSEEvent & {
+  session_id?: unknown
+}
+
 export function useChatController({
   sessionId: propSessionId,
   onSessionChange,
@@ -469,8 +473,8 @@ export function useChatController({
     // Process only new events (track by array index)
     const newEvents = events.slice(processedEventIdsRef.current.size)
 
-    newEvents.forEach((parsed: SSEEvent) => {
-      const eventSessionId = getStreamEventSessionId(parsed as { session_id?: unknown })
+    newEvents.forEach((parsed: ChatStreamEvent) => {
+      const eventSessionId = getStreamEventSessionId(parsed)
       if (eventSessionId && propSessionId && eventSessionId !== propSessionId) {
         debug.log('🔍 [SSE] Ignoring event for stale session:', {
           eventType: parsed.type,
@@ -1163,8 +1167,8 @@ export function useChatController({
     }
 
     // Use specific message trace IDs if available, otherwise fallback to session IDs
-    const traceIdsToUse = (messageTraceIds && messageTraceIds.length > 0) 
-      ? messageTraceIds 
+    const traceIdsToUse = (messageTraceIds && messageTraceIds.length > 0)
+      ? messageTraceIds
       : sessionTraceIds.current
 
     debug.log('🔍 [FEEDBACK] Submitting feedback with trace IDs:', traceIdsToUse)
