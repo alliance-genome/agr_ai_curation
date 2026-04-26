@@ -219,6 +219,7 @@ def test_feedback_submission_captures_transcript_and_includes_email_excerpt(
 
     assert response.status_code == 200
     payload = response.json()
+    assert set(payload.keys()) == {"status", "feedback_id", "message"}
     report = _load_feedback_report(payload["feedback_id"])
 
     assert report.processing_status == ProcessingStatus.COMPLETED
@@ -250,12 +251,42 @@ def test_feedback_submission_captures_transcript_and_includes_email_excerpt(
 
     assert len(captured_email_messages) == 1
     body = str(captured_email_messages[0].get_payload())
-    normalized_body = body.replace("=\n", "")
+    normalized_body = body.replace("=\n", "").replace("=3D", "=")
+    assert "AI Curation feedback debug:" in normalized_body
+    assert f"/api/feedback/{report.id}/debug" in normalized_body
+    assert "TraceReview session bundle:" in normalized_body
+    assert f"/api/traces/sessions/{session_id}/export?source=remote" in normalized_body
     assert "Conversation transcript excerpt:" in normalized_body
     assert f"Full durable transcript stored on feedback report {report.id}." in normalized_body
     assert "1. User: First question" in normalized_body
     assert "... 2 middle turns omitted ..." in normalized_body
     assert "8. Assistant: Fourth answer" in normalized_body
+
+    debug_response = client.get(f"/api/feedback/{report.id}/debug")
+    assert debug_response.status_code == 200
+    debug_payload = debug_response.json()
+    assert debug_payload["feedback_id"] == report.id
+    assert debug_payload["feedback_debug_url"] == f"/api/feedback/{report.id}/debug"
+    assert debug_payload["trace_review_session_url"] == (
+        f"/api/traces/sessions/{session_id}/export?source=remote"
+    )
+    assert debug_payload["transcript"] == {
+        "available": True,
+        "message_count": len(TRANSCRIPT_MESSAGES),
+        "captured_at": report.conversation_transcript["captured_at"],
+        "session_id": session_id,
+        "chat_kind": "assistant_chat",
+        "title": "Saved title",
+        "effective_title": "Saved title",
+        "session_matches_feedback": True,
+    }
+    assert debug_payload["trace_data"]["available"] is True
+    assert debug_payload["trace_data"]["status"] == "success"
+    assert debug_payload["trace_data"]["expected_trace_ids"] == ["trace-happy-1"]
+    assert debug_payload["trace_data"]["stored_trace_ids"] == ["trace-happy-1"]
+    assert "traces" not in debug_payload["trace_data"]
+    assert "prompt_preview" not in str(debug_payload)
+    assert "super-secret" not in str(debug_payload)
 
 
 def test_feedback_submission_logs_lookup_failure_but_still_succeeds(
@@ -366,6 +397,22 @@ def test_feedback_submission_persists_trace_capture_failure_metadata(
     assert trace_error["type"] == "RuntimeError"
     assert trace_error["message"] == "Langfuse disabled in feedback integration test"
     assert len(captured_email_messages) == 1
+
+    debug_response = client.get(f"/api/feedback/{report.id}/debug")
+    assert debug_response.status_code == 200
+    debug_payload = debug_response.json()
+    assert debug_payload["trace_data"]["status"] == "error"
+    assert debug_payload["trace_data"]["error_summary"] == {
+        "trace_error_count": 1,
+        "message": "One or more trace snapshots could not be captured.",
+    }
+    assert debug_payload["trace_data"]["errors"] == [
+        {
+            "trace_id": "trace-capture-failure-1",
+            "type": "RuntimeError",
+            "message": "Langfuse disabled in feedback integration test",
+        }
+    ]
 
 
 def test_feedback_submission_skips_transcript_for_cross_user_session(

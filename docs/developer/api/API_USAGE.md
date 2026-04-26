@@ -476,6 +476,14 @@ Immediate response (<500 ms):
 ```
 Background processing then stores a compact, redacted Langfuse trace snapshot in `feedback_reports.trace_data` and (when SMTP is configured) emails the developer alias. Trace capture failures do not fail the feedback submission; rows with `trace_ids` receive non-secret error metadata in `trace_data` instead. *_Always pass the `trace_id` from `/api/chat/stream` to guarantee we correlate the right run._*
 
+`GET /api/feedback/{feedback_id}/debug` (auth required) returns read-only debug detail for one feedback report. The response includes feedback metadata, transcript availability, trace IDs, explicit trace-data status (`not_requested`, `missing`, `stale`, `success`, `partial`, `error`, or `capture_status_missing`), redacted trace-data error metadata, and the canonical TraceReview session bundle path:
+
+```text
+/api/traces/sessions/{session_id}/export?source=remote
+```
+
+The debug response intentionally omits raw trace payloads and full transcript messages.
+
 Read-only deployment verification:
 ```sql
 SELECT

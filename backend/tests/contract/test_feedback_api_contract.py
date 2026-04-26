@@ -26,14 +26,35 @@ def client(monkeypatch):
     )
     from main import app
     from src.api import feedback as feedback_api
+    from src.lib.feedback.models import FeedbackReport
+    from src.models.sql.database import SessionLocal
 
     monkeypatch.setattr(
         feedback_api,
-        "_run_feedback_processing_in_background",
-        lambda feedback_id: time.sleep(1),
+        "dispatch_feedback_report_processing",
+        lambda feedback_id: None,
     )
 
-    return TestClient(app)
+    def _cleanup_feedback_reports() -> None:
+        from sqlalchemy import delete
+
+        db = SessionLocal()
+        try:
+            FeedbackReport.__table__.create(bind=db.get_bind(), checkfirst=True)
+            db.execute(
+                delete(FeedbackReport).where(
+                    FeedbackReport.session_id.like("test_session_%")
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+
+    _cleanup_feedback_reports()
+    try:
+        yield TestClient(app)
+    finally:
+        _cleanup_feedback_reports()
 
 
 @pytest.fixture
@@ -283,3 +304,103 @@ class TestFeedbackSubmitEndpoint:
 
         assert response.status_code == 200
         assert response.json()["status"] == "success"
+
+    def test_feedback_debug_detail_response_schema(
+        self, client, monkeypatch, chat_contract_auth_headers
+    ):
+        """Test feedback debug detail exposes summary fields without raw trace payloads."""
+        from src.api import feedback as feedback_api
+
+        class _FakeService:
+            def __init__(self, _db):
+                pass
+
+            def get_feedback_debug_detail(self, feedback_id):
+                assert feedback_id == "feedback-123"
+                return {
+                    "feedback_id": "feedback-123",
+                    "session_id": "session-123",
+                    "curator_id": "curator@example.org",
+                    "feedback_text": "Wrong ontology term.",
+                    "trace_ids": ["trace-1"],
+                    "processing_status": "completed",
+                    "created_at": "2026-04-25T12:00:00",
+                    "processing_started_at": "2026-04-25T12:00:01",
+                    "processing_completed_at": "2026-04-25T12:00:02",
+                    "email_sent_at": "2026-04-25T12:00:02",
+                    "processing_error": None,
+                    "feedback_debug_url": "/api/feedback/feedback-123/debug",
+                    "trace_review_session_url": (
+                        "/api/traces/sessions/session-123/export?source=remote"
+                    ),
+                    "transcript": {
+                        "available": True,
+                        "message_count": 2,
+                        "captured_at": "2026-04-25T12:00:00+00:00",
+                        "session_id": "session-123",
+                        "chat_kind": "assistant_chat",
+                        "title": "Saved title",
+                        "effective_title": "Saved title",
+                        "session_matches_feedback": True,
+                    },
+                    "trace_data": {
+                        "available": True,
+                        "status": "partial",
+                        "stale": False,
+                        "capture_status": "partial",
+                        "captured_at": "2026-04-25T12:00:01Z",
+                        "schema_version": 1,
+                        "source_kind": "langfuse",
+                        "source_extractor": "trace_context_service",
+                        "expected_trace_ids": ["trace-1"],
+                        "stored_trace_ids": ["trace-1"],
+                        "trace_count": 1,
+                        "omitted_trace_id_count": 0,
+                        "error_summary": {
+                            "trace_error_count": 1,
+                            "message": "One trace failed.",
+                        },
+                        "errors": [
+                            {
+                                "trace_id": "trace-1",
+                                "type": "RuntimeError",
+                                "message": "Langfuse unavailable.",
+                            }
+                        ],
+                    },
+                }
+
+        monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+
+        response = client.get(
+            "/api/feedback/feedback-123/debug",
+            headers=chat_contract_auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert set(data.keys()) == {
+            "feedback_id",
+            "session_id",
+            "curator_id",
+            "feedback_text",
+            "trace_ids",
+            "processing_status",
+            "created_at",
+            "processing_started_at",
+            "processing_completed_at",
+            "email_sent_at",
+            "processing_error",
+            "feedback_debug_url",
+            "trace_review_session_url",
+            "transcript",
+            "trace_data",
+        }
+        assert data["feedback_debug_url"] == "/api/feedback/feedback-123/debug"
+        assert data["trace_review_session_url"] == (
+            "/api/traces/sessions/session-123/export?source=remote"
+        )
+        assert data["transcript"]["available"] is True
+        assert data["trace_data"]["status"] == "partial"
+        assert "traces" not in data["trace_data"]
+        assert "raw_trace" not in str(data)

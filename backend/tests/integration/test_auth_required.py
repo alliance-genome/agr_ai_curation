@@ -340,6 +340,11 @@ class TestAuthenticationRequired:
                "not authenticated" in data["detail"].lower(), \
                f"Expected auth error message, got: {data['detail']}"
 
+        debug_response = client.get("/api/feedback/fake-feedback/debug")
+        assert debug_response.status_code == 401, \
+            f"Feedback debug endpoint MUST require auth. Got {debug_response.status_code}."
+        assert "detail" in debug_response.json()
+
     def test_settings_get_requires_auth(self, client):
         """Test that GET /weaviate/settings requires authentication.
 

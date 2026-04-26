@@ -260,6 +260,23 @@ class TestEmailNotifierSendNotification:
         assert "localhost:3000" in body
         assert "session_456" in body or "traces" in body.lower()
 
+    def test_send_feedback_notification_includes_debug_and_trace_review_links(
+        self, mock_smtp, mock_config, sample_feedback_report
+    ):
+        """Test that email includes canonical debug and TraceReview bundle links."""
+        from src.lib.feedback.email_notifier import EmailNotifier
+
+        notifier = EmailNotifier()
+        notifier.send_feedback_notification(sample_feedback_report)
+
+        sent_message = mock_smtp.send_message.call_args[0][0]
+        body = str(sent_message.get_payload())
+
+        assert "AI Curation feedback debug:" in body
+        assert "/api/feedback/feedback_123/debug" in body
+        assert "TraceReview session bundle:" in body
+        assert "/api/traces/sessions/session_456/export?source=remote" in body
+
     def test_send_feedback_notification_includes_transcript_excerpt_when_available(
         self, mock_smtp, mock_config, sample_feedback_report
     ):

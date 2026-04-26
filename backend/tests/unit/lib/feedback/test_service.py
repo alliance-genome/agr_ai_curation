@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 import importlib
 
+import pytest
 from sqlalchemy.exc import SQLAlchemyError
 
 # Import sql.database first to avoid the package init circular path when importing service directly.
@@ -42,6 +43,7 @@ def _report(report_id="feedback-1"):
         trace_data=None,
         conversation_transcript=None,
         processing_status="pending",
+        created_at=datetime(2026, 4, 25, 12, 0, 0),
         processing_started_at=None,
         processing_completed_at=None,
         email_sent_at=None,
@@ -335,13 +337,13 @@ def test_process_feedback_report_persists_redacted_trace_snapshot(monkeypatch):
         trace_id="trace-1",
         session_id="session-1",
         timestamp=now,
-        user_query="Please help curator@example.org with token=super-secret",
-        final_response_preview="See https://example.org/private?token=secret for details",
+        user_query="Please help curator@example.org with token=fixture-value",
+        final_response_preview="See https://example.org/private?debug=fixture for details",
         prompts_executed=[
             SimpleNamespace(
                 agent_id="gene_extractor",
                 agent_name="Gene Extractor",
-                prompt_preview="system prompt secret=do-not-store",
+                prompt_preview="system prompt preview not stored",
                 group_applied="WB",
                 model="gpt-test",
                 tokens_used=123,
@@ -359,7 +361,7 @@ def test_process_feedback_report_persists_redacted_trace_snapshot(monkeypatch):
             SimpleNamespace(
                 name="search_document",
                 input={"api_key": "do-not-store"},
-                output_preview="secret output",
+                output_preview="private output",
                 duration_ms=42,
                 status="completed",
             )
@@ -422,7 +424,7 @@ def test_process_feedback_report_persists_redacted_trace_snapshot(monkeypatch):
 def test_process_feedback_report_persists_trace_capture_failure_metadata(monkeypatch):
     async def _raise_trace_context(_trace_id):
         raise RuntimeError(
-            "Langfuse unavailable for curator@example.org with api_key=super-secret"
+            "Langfuse unavailable for curator@example.org with api_key=fixture-value"
         )
 
     report = _report()
@@ -450,7 +452,7 @@ def test_process_feedback_report_persists_trace_capture_failure_metadata(monkeyp
     assert trace_error["message"] == (
         "Langfuse unavailable for [redacted-email] with api_key=[redacted]"
     )
-    assert "super-secret" not in str(report.trace_data)
+    assert "fixture-value" not in str(report.trace_data)
     assert "curator@example.org" not in str(report.trace_data)
 
 
@@ -514,3 +516,194 @@ def test_process_feedback_report_marks_failed_on_unexpected_error(monkeypatch):
     assert _status_value(report.processing_status) == "failed"
     assert "Unexpected error: db unavailable" in report.error_details
     assert db.commit.call_count == 2
+
+
+def test_get_feedback_debug_detail_returns_redacted_summary(monkeypatch):
+    report = _report()
+    report.processing_status = "completed"
+    report.processing_started_at = datetime(2026, 4, 25, 12, 0, 1)
+    report.processing_completed_at = datetime(2026, 4, 25, 12, 0, 2)
+    report.email_sent_at = datetime(2026, 4, 25, 12, 0, 2)
+    report.error_details = "Notification error for curator@example.org token=fixture-value"
+    report.conversation_transcript = {
+        "captured_at": "2026-04-25T12:00:00+00:00",
+        "message_count": 2,
+        "session": {
+            "session_id": "session-1",
+            "chat_kind": "assistant_chat",
+            "title": "Stored title",
+            "effective_title": "Stored title",
+        },
+        "messages": [
+            {"role": "user", "content": "raw transcript is not returned"},
+            {"role": "assistant", "content": "raw transcript is not returned"},
+        ],
+    }
+    report.trace_data = {
+        "schema_version": 1,
+        "capture_status": "partial",
+        "captured_at": "2026-04-25T12:00:01Z",
+        "source": {
+            "kind": "langfuse",
+            "extractor": "src.lib.agent_studio.trace_context_service.get_trace_context_for_explorer",
+        },
+        "feedback": {
+            "session_id": "session-1",
+            "trace_ids": ["trace-1"],
+        },
+        "traces": [
+            {
+                "trace_id": "trace-1",
+                "capture_status": "error",
+                "error": {
+                    "type": "RuntimeError",
+                    "message": "Langfuse failed for curator@example.org api_key=fixture-value",
+                },
+                "raw_trace": {
+                    "authorization": "redacted authorization fixture",
+                },
+            },
+        ],
+        "error_summary": {
+            "trace_error_count": 1,
+            "message": "Trace failed for curator@example.org token=fixture-value",
+            "raw_payload": "not returned",
+        },
+    }
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+
+    service = _feedback_service_module().FeedbackService(db=db)
+    detail = service.get_feedback_debug_detail(report.id)
+
+    assert detail["feedback_id"] == "feedback-1"
+    assert detail["feedback_debug_url"] == "/api/feedback/feedback-1/debug"
+    assert detail["trace_review_session_url"] == (
+        "/api/traces/sessions/session-1/export?source=remote"
+    )
+    assert detail["processing_error"] == (
+        "Notification error for [redacted-email] token=[redacted]"
+    )
+    assert detail["transcript"] == {
+        "available": True,
+        "message_count": 2,
+        "captured_at": "2026-04-25T12:00:00+00:00",
+        "session_id": "session-1",
+        "chat_kind": "assistant_chat",
+        "title": "Stored title",
+        "effective_title": "Stored title",
+        "session_matches_feedback": True,
+    }
+    assert detail["trace_data"]["status"] == "partial"
+    assert detail["trace_data"]["stale"] is False
+    assert detail["trace_data"]["omitted_trace_id_count"] is None
+    assert detail["trace_data"]["error_summary"] == {
+        "trace_error_count": 1,
+        "message": "Trace failed for [redacted-email] token=[redacted]",
+    }
+    assert detail["trace_data"]["errors"] == [
+        {
+            "trace_id": "trace-1",
+            "type": "RuntimeError",
+            "message": "Langfuse failed for [redacted-email] api_key=[redacted]",
+        }
+    ]
+    assert "raw_trace" not in str(detail)
+    assert "raw transcript is not returned" not in str(detail)
+    assert "fixture-value" not in str(detail)
+    assert "curator@example.org" not in detail["processing_error"]
+    assert "curator@example.org" not in str(detail["trace_data"])
+
+
+def test_get_feedback_debug_detail_marks_missing_and_stale_trace_data(monkeypatch):
+    db = MagicMock()
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = _feedback_service_module().FeedbackService(db=db)
+
+    missing_report = _report("missing-feedback")
+    db.query.return_value = _QueryChain(missing_report)
+    missing_detail = service.get_feedback_debug_detail("missing-feedback")
+
+    assert missing_detail["trace_data"]["available"] is False
+    assert missing_detail["trace_data"]["status"] == "missing"
+    assert missing_detail["trace_data"]["expected_trace_ids"] == ["trace-1"]
+    assert missing_detail["trace_data"]["omitted_trace_id_count"] is None
+
+    stale_report = _report("stale-feedback")
+    stale_report.trace_data = {
+        "schema_version": 1,
+        "capture_status": "success",
+        "feedback": {
+            "session_id": "old-session",
+            "trace_ids": ["old-trace"],
+        },
+        "traces": [],
+    }
+    db.query.return_value = _QueryChain(stale_report)
+    stale_detail = service.get_feedback_debug_detail("stale-feedback")
+
+    assert stale_detail["trace_data"]["available"] is True
+    assert stale_detail["trace_data"]["status"] == "stale"
+    assert stale_detail["trace_data"]["stale"] is True
+    assert stale_detail["trace_data"]["capture_status"] == "success"
+    assert stale_detail["trace_data"]["stored_trace_ids"] == ["old-trace"]
+
+
+def test_get_feedback_debug_detail_marks_missing_capture_status(monkeypatch):
+    report = _report()
+    report.trace_data = {
+        "schema_version": 1,
+        "feedback": {
+            "session_id": "session-1",
+            "trace_ids": ["trace-1"],
+        },
+        "traces": [],
+    }
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = _feedback_service_module().FeedbackService(db=db)
+
+    detail = service.get_feedback_debug_detail(report.id)
+
+    assert detail["trace_data"]["available"] is True
+    assert detail["trace_data"]["status"] == "capture_status_missing"
+    assert detail["trace_data"]["capture_status"] is None
+
+
+def test_get_feedback_debug_detail_surfaces_corrupt_numeric_metadata(monkeypatch):
+    report = _report()
+    report.trace_data = {
+        "schema_version": "not-an-integer",
+        "capture_status": "success",
+        "feedback": {
+            "session_id": "session-1",
+            "trace_ids": ["trace-1"],
+        },
+        "traces": [],
+    }
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = _feedback_service_module().FeedbackService(db=db)
+
+    with pytest.raises(ValueError):
+        service.get_feedback_debug_detail(report.id)
+
+
+def test_get_feedback_debug_detail_surfaces_wrong_trace_data_shapes(monkeypatch):
+    report = _report()
+    report.trace_data = {
+        "schema_version": 1,
+        "capture_status": "success",
+        "feedback": "not-an-object",
+        "traces": [],
+    }
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = _feedback_service_module().FeedbackService(db=db)
+
+    with pytest.raises(TypeError):
+        service.get_feedback_debug_detail(report.id)
