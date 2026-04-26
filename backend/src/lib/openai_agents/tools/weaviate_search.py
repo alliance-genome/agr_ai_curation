@@ -14,9 +14,9 @@ from typing import Optional, List, TYPE_CHECKING
 from pydantic import BaseModel
 from agents import function_tool
 
+from src.lib.openai_agents.tools.chunk_identity import resolve_chunk_identifier
 from src.lib.weaviate_client.chunks import (
     hybrid_search_chunks,
-    get_document_sections,
     get_chunks_by_parent_section,  # Uses LLM-resolved parentSection for accurate boundaries
     get_chunks_by_subsection,
 )
@@ -155,20 +155,6 @@ def _content_preview(text: str, *, max_chars: int = 300) -> str:
     return stripped[:max_chars].rstrip(" ,;:") + "..."
 
 
-def _source_chunk_id(chunk: dict, metadata: dict) -> str | None:
-    for value in (
-        chunk.get("id"),
-        chunk.get("chunk_id"),
-        chunk.get("chunkId"),
-        metadata.get("chunk_id"),
-        metadata.get("chunkId"),
-    ):
-        normalized = str(value or "").strip()
-        if normalized:
-            return normalized
-    return None
-
-
 def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["ToolCallTracker"] = None):
     """
     Create a read_section tool bound to a specific document and user.
@@ -255,7 +241,7 @@ def create_read_section_tool(document_id: str, user_id: str, tracker: Optional["
                 elif not isinstance(metadata, dict):
                     metadata = {}
 
-                chunk_id = _source_chunk_id(chunk, metadata)
+                chunk_id = resolve_chunk_identifier(chunk, metadata)
                 if chunk_id and text:
                     source_chunks.append(
                         SectionChunkSource(

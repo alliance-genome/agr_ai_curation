@@ -1,7 +1,5 @@
 """Unit tests for Weaviate search tools used by OpenAI agents."""
 
-import asyncio
-
 import pytest
 
 import src.lib.openai_agents.tools.weaviate_search as weaviate_search

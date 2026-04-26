@@ -14,6 +14,7 @@ from uuid import UUID
 from agents import function_tool
 
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
+from src.lib.openai_agents.tools.chunk_identity import resolve_chunk_identifier
 from src.lib.weaviate_client.chunks import fetch_document_chunks_for_resolution, get_chunk_by_id
 
 if TYPE_CHECKING:
@@ -361,17 +362,6 @@ def _chunk_matches_section_label(chunk: dict[str, Any], section_label: str) -> b
     return any(_section_labels_match(section_label, candidate) for candidate in section_candidates)
 
 
-def _resolve_chunk_identifier(chunk: dict[str, Any]) -> str | None:
-    metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
-    return _first_non_empty(
-        chunk.get("id"),
-        chunk.get("chunk_id"),
-        chunk.get("chunkId"),
-        metadata.get("chunk_id"),
-        metadata.get("chunkId"),
-    )
-
-
 async def _resolve_section_label_chunk(
     *,
     document_id: str,
@@ -403,7 +393,7 @@ async def _resolve_section_label_chunk(
         if not isinstance(chunk, dict) or not _chunk_matches_section_label(chunk, section_label):
             continue
 
-        resolved_chunk_id = _resolve_chunk_identifier(chunk)
+        resolved_chunk_id = resolve_chunk_identifier(chunk)
         chunk_text = _resolve_chunk_text(chunk)
         if not resolved_chunk_id or not chunk_text:
             continue
