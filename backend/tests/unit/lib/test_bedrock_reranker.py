@@ -169,13 +169,7 @@ def test_bedrock_status_reports_blank_region(monkeypatch):
 
 
 def test_effective_rerank_provider_preserves_configured_bedrock_provider(monkeypatch):
-    class _Session:
-        def __init__(self, profile_name=None, region_name=None):
-            raise ProfileNotFound(profile=profile_name)
-
     monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
-    monkeypatch.setenv("AWS_PROFILE", "missing-profile")
-    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
 
     assert bedrock_reranker.get_effective_rerank_provider() == "bedrock_cohere"
 

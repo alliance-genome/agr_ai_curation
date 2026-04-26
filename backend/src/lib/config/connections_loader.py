@@ -703,7 +703,7 @@ async def _check_bedrock_reranker_health(
     from src.lib.bedrock_reranker import get_bedrock_reranker_status
 
     status = get_bedrock_reranker_status(check_credentials=True)
-    provider = str(status.get("provider") or "").strip().lower()
+    provider = str(status["provider"]).strip().lower()
     if provider in {"", "none", "local_transformers"}:
         return None, None
 
