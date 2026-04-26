@@ -278,7 +278,99 @@ curl "http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/export?s
 
 ---
 
-### 3. Get Specific View
+### 3. Export Session Bundle
+
+**GET** `/api/traces/sessions/{session_id}/export?source=remote`
+
+Export a compact JSON bundle for every trace Langfuse associates with a session. The endpoint lists trace IDs through the configured TraceReview Langfuse source, analyzes each trace with the same analyzer stack used by single-trace export, and keeps per-trace failures in the response instead of failing the whole session.
+
+#### Request
+
+```bash
+curl "http://localhost:8001/api/traces/sessions/ef55be6a-a67a-4258-9430-bf31f42b2662/export?source=remote" \
+  | jq > session_export.json
+```
+
+**Query Parameters**:
+- `source`: `"remote"` (default) or `"local"`
+
+#### Response Structure
+
+```json
+{
+  "status": "success",
+  "session": {
+    "session_id": "ef55be6a-a67a-4258-9430-bf31f42b2662",
+    "source": "remote",
+    "trace_count": 14,
+    "listed_trace_count": 14,
+    "successful_trace_count": 13,
+    "failed_trace_count": 1,
+    "trace_ids": [
+      "ca37e2ff4ad9c0ed3e2cca060cacccf8",
+      "d6006a2407ddeabac11bde2e645d6ef8"
+    ],
+    "first_timestamp": "2025-12-10T15:01:42.956Z",
+    "last_timestamp": "2025-12-10T16:39:04.804Z",
+    "langfuse_meta": { "page": 1, "limit": 100, "totalItems": 14, "totalPages": 1 },
+    "exported_at": "2026-04-25T18:50:00Z"
+  },
+  "traces": [
+    {
+      "status": "success",
+      "trace_id": "ca37e2ff4ad9c0ed3e2cca060cacccf8",
+      "trace_id_short": "ca37e2ff",
+      "listed_trace": {
+        "trace_name": "query_supervisor_config",
+        "timestamp": "2025-12-10T16:37:59.067Z",
+        "session_id": "ef55be6a-a67a-4258-9430-bf31f42b2662"
+      },
+      "summary": { /* TraceReview summary view */ },
+      "conversation": { /* User input and assistant response */ },
+      "tool_summary": {
+        "total_count": 4,
+        "unique_tools": ["search_document"],
+        "tool_calls": [ /* Lightweight call summaries without full raw results */ ]
+      },
+      "analyzer_outputs": {
+        "pdf_citations": { /* Existing PDF citation analyzer output */ },
+        "token_analysis": { /* Existing token analyzer output */ },
+        "agent_context": { /* Existing agent context analyzer output */ },
+        "trace_summary": { /* Existing trace summary analyzer output */ },
+        "document_hierarchy": { /* Existing document hierarchy analyzer output */ },
+        "agent_configs": { /* Existing agent config analyzer output */ },
+        "group_context": { /* Active group metadata */ }
+      }
+    },
+    {
+      "status": "error",
+      "trace_id": "d6006a2407ddeabac11bde2e645d6ef8",
+      "trace_id_short": "d6006a24",
+      "listed_trace": { "trace_name": "ontology_mapping_specialist_config" },
+      "error": {
+        "trace_id": "d6006a2407ddeabac11bde2e645d6ef8",
+        "trace_id_short": "d6006a24",
+        "trace_name": "ontology_mapping_specialist_config",
+        "source": "remote",
+        "message": "Trace fetch or analysis error summary"
+      }
+    }
+  ],
+  "errors": [
+    {
+      "trace_id": "d6006a2407ddeabac11bde2e645d6ef8",
+      "source": "remote",
+      "message": "Trace fetch or analysis error summary"
+    }
+  ]
+}
+```
+
+Use this endpoint for reproducible curator feedback debugging when you need session context across multiple traces without manual Langfuse API stitching. Credentials remain inside TraceReview configuration and are not returned in the bundle or error entries.
+
+---
+
+### 4. Get Specific View
 
 **GET** `/api/traces/{trace_id}/views/{view_name}`
 
@@ -360,7 +452,7 @@ curl http://localhost:8001/api/traces/70a0a9be91eb4962af80bc4f9972c9b1/views/gro
 
 ---
 
-### 4. Clear Cache
+### 5. Clear Cache
 
 **POST** `/api/traces/cache/clear`
 
@@ -639,6 +731,7 @@ lsof -i :3001
 |----------|--------|---------|----------------|
 | `/api/traces/analyze` | POST | Analyze trace and populate cache | No |
 | `/api/traces/{id}/export` | GET | Export full trace analysis | No (auto-populates) |
+| `/api/traces/sessions/{session_id}/export` | GET | Export compact session bundle | No (auto-populates per trace) |
 | `/api/traces/{id}/views/{view}` | GET | Get specific analysis view | Yes |
 | `/api/traces/cache/clear` | POST | Clear all cached traces | N/A |
 
@@ -908,71 +1001,31 @@ curl -s "http://localhost:8001/api/traces/c2d8d2174f9eb474181bb0d9e7a9930b/expor
 # Output: ef55be6a-a67a-4258-9430-bf31f42b2662
 ```
 
-### Step 2: Query Langfuse for All Session Traces
+### Step 2: Export the Session Bundle
 
-**Important**: Query Langfuse directly from EC2 (not through trace_review) to list all traces in a session:
-
-```bash
-# SSH to EC2 and query Langfuse API
-SESSION_ID="ef55be6a-a67a-4258-9430-bf31f42b2662"
-
-ssh <ec2-instance> \
-  "curl -s 'http://localhost:3000/api/public/traces?sessionId=$SESSION_ID&limit=50' \
-    -u '$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY' \
-    | jq '.data | length'"
-# Output: 14  (number of traces in session)
-```
-
-### Step 3: List All Traces with Timestamps
-
-Get a chronological view of all traces in the session:
+Use TraceReview's session export endpoint to list the Langfuse session traces and analyze each one in a single request:
 
 ```bash
 SESSION_ID="ef55be6a-a67a-4258-9430-bf31f42b2662"
 
-ssh <ec2-instance> \
-  "curl -s 'http://localhost:3000/api/public/traces?sessionId=$SESSION_ID&limit=50' \
-    -u '$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY' \
-    | jq '.data[] | {id, name, timestamp}'"
+curl -s "http://localhost:8001/api/traces/sessions/$SESSION_ID/export?source=remote" \
+  | jq > session_bundle.json
 ```
 
-**Example Output**:
-```json
-{"id": "d6006a2407ddeabac11bde2e645d6ef8", "name": "ontology_mapping_specialist_config", "timestamp": "2025-12-10T16:39:04.804Z"}
-{"id": "ca37e2ff4ad9c0ed3e2cca060cacccf8", "name": "query_supervisor_config", "timestamp": "2025-12-10T16:37:59.067Z"}
-{"id": "c2d8d2174f9eb474181bb0d9e7a9930b", "name": "ontology_mapping_specialist_config", "timestamp": "2025-12-10T15:01:42.956Z"}
-...
-```
+### Step 3: Inspect Conversation Flow
 
-### Step 4: Analyze Conversation Flow
-
-Filter for `query_supervisor_config` traces (these contain user queries) and analyze each one:
+The bundle is chronological by Langfuse trace timestamp. Query supervisor traces usually contain user-facing turns:
 
 ```bash
-SESSION_ID="ef55be6a-a67a-4258-9430-bf31f42b2662"
-
-# Get list of supervisor traces (user queries)
-SUPERVISOR_TRACES=$(ssh <ec2-instance> \
-  "curl -s 'http://localhost:3000/api/public/traces?sessionId=$SESSION_ID&limit=50' \
-    -u '$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY' \
-    | jq -r '.data[] | select(.name == \"query_supervisor_config\") | .id'")
-
-# Analyze each trace and get conversation
-for trace_id in $SUPERVISOR_TRACES; do
-  echo "=== Trace: $trace_id ==="
-
-  # Analyze trace
-  curl -s -X POST http://localhost:8001/api/traces/analyze \
-    -H 'Content-Type: application/json' \
-    -d "{\"trace_id\": \"$trace_id\", \"source\": \"remote\"}" > /dev/null
-
-  # Get conversation
-  curl -s "http://localhost:8001/api/traces/$trace_id/views/conversation" \
-    | jq -r '.data | "User: " + .user_input + "\n\nAssistant: " + (.assistant_response | .[0:500]) + "..."'
-
-  echo -e "\n"
-done
+jq -r '
+  .traces[]
+  | select(.status == "success")
+  | select(.listed_trace.trace_name == "query_supervisor_config")
+  | "=== \(.trace_id_short) \(.listed_trace.timestamp) ===\nUser: \(.conversation.user_input)\n\nAssistant: \(.conversation.assistant_response[:500])...\n"
+' session_bundle.json
 ```
+
+If a single trace cannot be fetched or analyzed, it appears as a `status: "error"` entry and is also listed in the top-level `errors` array.
 
 ### Understanding Trace Types
 
@@ -996,18 +1049,17 @@ SESSION_ID=$(curl -s "http://localhost:8001/api/traces/$TRACE_ID/export?source=r
   | jq -r '.raw_trace.sessionId')
 echo "Session ID: $SESSION_ID"
 
-# 3. Count traces in session
-ssh <ec2-instance> \
-  "curl -s 'http://localhost:3000/api/public/traces?sessionId=$SESSION_ID&limit=50' \
-    -u '$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY' \
-    | jq '.data | length'"
+# 3. Export the full session bundle
+curl -s "http://localhost:8001/api/traces/sessions/$SESSION_ID/export?source=remote" \
+  > session_bundle.json
 
-# 4. List all queries chronologically
-ssh <ec2-instance> \
-  "curl -s 'http://localhost:3000/api/public/traces?sessionId=$SESSION_ID&limit=50' \
-    -u '$LANGFUSE_PUBLIC_KEY:$LANGFUSE_SECRET_KEY' \
-    | jq -r '.data[] | select(.name == \"query_supervisor_config\") | \"\(.timestamp) | \(.id[:8])\"'" \
-  | sort
+# 4. List all query traces chronologically
+jq -r '
+  .traces[]
+  | select(.status == "success")
+  | select(.listed_trace.trace_name == "query_supervisor_config")
+  | "\(.listed_trace.timestamp) | \(.trace_id_short)"
+' session_bundle.json
 ```
 
 ### Use Cases
@@ -1019,10 +1071,10 @@ ssh <ec2-instance> \
 
 ### Notes
 
-- Langfuse credentials are stored in `trace_review/backend/.env`
-- VPN connection required to query EC2 Langfuse directly
-- Session queries must be run from EC2 (localhost:3000) not through VPN tunnel
-- The trace_review service doesn't have a session listing endpoint (yet)
+- Langfuse credentials are stored in the TraceReview runtime environment and are never returned by the session bundle endpoint.
+- Use `source=remote` for EC2 Langfuse and `source=local` for the local Docker Langfuse instance.
+- The session bundle endpoint calls Langfuse's public trace list API with `sessionId`, then reuses TraceReview single-trace analysis for each listed trace.
+- Partial trace failures are non-fatal and are represented in each trace item plus the top-level `errors` array.
 
 ---
 
@@ -1035,3 +1087,4 @@ ssh <ec2-instance> \
 | 1.2 | 2025-11-26 | Removed supervisor_routing (deprecated). Added token_analysis, agent_context, trace_summary views. Updated response format documentation. |
 | 1.3 | 2025-12-10 | Added "Retrieving All Traces in a Session" section for analyzing full conversation context from a single trace ID. |
 | 1.4 | 2025-12-11 | Added document_hierarchy, agent_configs, and mod_context views to Available Views table and examples. |
+| 1.5 | 2026-04-25 | Added session-level TraceReview bundle export endpoint with per-trace partial failure reporting. |

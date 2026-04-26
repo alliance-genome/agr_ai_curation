@@ -5,10 +5,14 @@ Fetches and processes trace data from Langfuse API
 import logging
 from typing import Any, Dict, List, Optional
 from langfuse import Langfuse
+import requests
+from requests.auth import HTTPBasicAuth
 from ..config import get_trace_source_runtime_config
 
 logger = logging.getLogger(__name__)
 OBSERVATION_FIELDS = "core,basic,time,io,metadata,model,usage,prompt,metrics"
+SESSION_TRACE_LIST_LIMIT = 100
+SESSION_TRACE_LIST_TIMEOUT_SECONDS = 30
 
 
 class TraceExtractor:
@@ -22,6 +26,7 @@ class TraceExtractor:
             source: "remote" (default) or "local"
         """
         source_config = get_trace_source_runtime_config(source)
+        self.source = source
         self.host = source_config["host"]
         self.public_key = source_config["public_key"]
         self.secret_key = source_config["secret_key"]
@@ -61,6 +66,60 @@ class TraceExtractor:
         """Get detailed trace information with all fields"""
         trace = self.client.api.trace.get(trace_id)
         return self._normalize_item(trace)
+
+    def list_session_traces(self, session_id: str, limit: int = SESSION_TRACE_LIST_LIMIT) -> Dict[str, Any]:
+        """List Langfuse traces for a session without exposing credentials."""
+        traces: List[Dict[str, Any]] = []
+        page = 1
+        meta: Dict[str, Any] = {}
+        endpoint = f"{self.host.rstrip('/')}/api/public/traces"
+        auth = HTTPBasicAuth(self.public_key, self.secret_key)
+
+        while True:
+            params = {
+                "sessionId": session_id,
+                "limit": limit,
+                "page": page,
+                "orderBy": "timestamp.asc",
+            }
+
+            try:
+                response = requests.get(
+                    endpoint,
+                    params=params,
+                    auth=auth,
+                    timeout=SESSION_TRACE_LIST_TIMEOUT_SECONDS,
+                )
+                response.raise_for_status()
+                payload = response.json()
+            except requests.RequestException as exc:
+                raise RuntimeError(
+                    f"Unable to list Langfuse traces for session {session_id} "
+                    f"from {self.source}: {exc.__class__.__name__}"
+                ) from exc
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Langfuse returned invalid JSON while listing session {session_id} "
+                    f"from {self.source}"
+                ) from exc
+
+            page_traces = payload.get("data") or []
+            traces.extend(self._normalize_item(trace) for trace in page_traces)
+            meta = payload.get("meta") or {}
+
+            total_pages = meta.get("totalPages")
+            if total_pages is None:
+                total_pages = page
+            if page >= total_pages:
+                break
+            page += 1
+
+        return {
+            "session_id": session_id,
+            "source": self.source,
+            "traces": traces,
+            "meta": meta,
+        }
 
     def get_observations(self, trace_id: str, trace: Optional[Dict] = None) -> List[Dict]:
         """Get all observations for a trace."""
