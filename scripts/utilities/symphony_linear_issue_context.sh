@@ -64,7 +64,7 @@ Output contract:
   The normalized JSON artifact contains:
     - issue metadata
     - labels
-    - attachments with Linear API-key download hints
+    - newest-first attachments with Linear API-key download hints for Linear upload URLs
     - comments with workpad classification
     - latest workpad comment
     - latest non-workpad comment
@@ -272,7 +272,7 @@ query SymphonyIssueContext(
         }
       }
     }
-    attachments(first: $attachmentsFirst) {
+    attachments(first: $attachmentsFirst, orderBy: createdAt) {
       nodes {
         id
         title

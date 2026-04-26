@@ -154,22 +154,34 @@ symphony_linear_normalize_context() {
         position: (.position // null)
       } end;
 
+    def is_linear_upload_url:
+      (. // "") | test("^https://uploads[.]linear[.]app(/|$)");
+
     def normalize_attachment:
-      {
+      (.url // "") as $url
+      | ($url | is_linear_upload_url) as $requires_linear_api_key
+      | (
+        if $requires_linear_api_key then
+          "Use the Linear API key as the raw Authorization header, for example: curl -H \"Authorization: $LINEAR_API_KEY\" <url>"
+        else
+          "Do not send the Linear API key to this URL. Use the target service auth only if needed."
+        end
+      ) as $download_auth_hint
+      | {
         id: (.id // ""),
         title: (.title // ""),
         subtitle: (.subtitle // ""),
-        url: (.url // ""),
+        url: $url,
         source_type: (.sourceType // ""),
-        download_requires_linear_api_key: true,
-        download_auth_hint: "Use the Linear API key as the raw Authorization header, for example: curl -H \"Authorization: $LINEAR_API_KEY\" <url>",
+        download_requires_linear_api_key: $requires_linear_api_key,
+        download_auth_hint: $download_auth_hint,
         created_at: (.createdAt // ""),
         updated_at: (.updatedAt // .createdAt // "")
       };
 
     .data.issue as $issue
     | ($issue.comments.nodes // [] | map(normalize_comment) | sort_by(.created_at, .updated_at)) as $comments
-    | ($issue.attachments.nodes // [] | map(normalize_attachment) | sort_by(.created_at, .updated_at)) as $attachments
+    | ($issue.attachments.nodes // [] | map(normalize_attachment) | sort_by(.created_at, .updated_at) | reverse) as $attachments
     | ($comments | map(select(.is_workpad))) as $workpad_comments
     | ($workpad_comments | sort_by(.updated_at, .created_at) | last // null) as $workpad_comment
     | ($comments | map(select(.is_workpad | not)) | sort_by(.updated_at, .created_at) | last // null) as $latest_non_workpad
@@ -252,7 +264,11 @@ symphony_linear_pretty_context() {
           "Attachment details:",
           (
             .attachments[]
-            | "  - \(.title // "untitled")\n    URL: \(.url // "")\n    Download: use Linear API-key auth, e.g. curl -H \"Authorization: $LINEAR_API_KEY\" \"\(.url // "")\""
+            | if .download_requires_linear_api_key then
+                "  - \(.title // "untitled")\n    URL: \(.url // "")\n    Download: use Linear API-key auth, e.g. curl -H \"Authorization: $LINEAR_API_KEY\" \"\(.url // "")\""
+              else
+                "  - \(.title // "untitled")\n    URL: \(.url // "")\n    Download: do not send the Linear API key to this URL; use target service auth only if needed."
+              end
           )
         ]
       end

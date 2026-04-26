@@ -81,6 +81,28 @@ test_context_normalizes_workpad_and_history() {
           }
         ]
       },
+      "attachments": {
+        "nodes": [
+          {
+            "id": "attachment-old",
+            "title": "External analysis",
+            "subtitle": "External JSON",
+            "url": "https://example.org/analysis.json",
+            "sourceType": "unknown",
+            "createdAt": "2026-03-22T10:30:00Z",
+            "updatedAt": "2026-03-22T10:30:00Z"
+          },
+          {
+            "id": "attachment-new",
+            "title": "Trace fixture",
+            "subtitle": "Linear JSON",
+            "url": "https://uploads.linear.app/org/upload/fixture.json",
+            "sourceType": "unknown",
+            "createdAt": "2026-03-22T10:40:00Z",
+            "updatedAt": "2026-03-22T10:41:00Z"
+          }
+        ]
+      },
       "history": {
         "nodes": [
           {
@@ -115,6 +137,7 @@ EOF
   assert_contains "LINEAR_CONTEXT_WORKPAD_COMMENT_ID=comment-3" "${output}"
   assert_contains "LINEAR_CONTEXT_LATEST_NON_WORKPAD_COMMENT_ID=comment-2" "${output}"
   assert_contains "LINEAR_CONTEXT_WORKPAD_DUPLICATE_COUNT=1" "${output}"
+  assert_contains "LINEAR_CONTEXT_ATTACHMENTS_COUNT=2" "${output}"
 
   json_file="$(echo "${output}" | awk -F= '/^LINEAR_CONTEXT_JSON_FILE=/{print $2}')"
   assert_equals "comment-3" "$(jq -r '.workpad_comment.id' "${json_file}")"
@@ -122,6 +145,27 @@ EOF
   assert_equals "1" "$(jq -r '.duplicate_workpad_count' "${json_file}")"
   assert_equals "Todo" "$(jq -r '.history[0].from_state.name' "${json_file}")"
   assert_equals "In Progress" "$(jq -r '.issue.state.name' "${json_file}")"
+  assert_equals "attachment-new" "$(jq -r '.attachments[0].id' "${json_file}")"
+  assert_equals "true" "$(jq -r '.attachments[0].download_requires_linear_api_key' "${json_file}")"
+  assert_equals "attachment-old" "$(jq -r '.attachments[1].id' "${json_file}")"
+  assert_equals "false" "$(jq -r '.attachments[1].download_requires_linear_api_key' "${json_file}")"
+
+  output="$(bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-123 \
+    --linear-json-file "${raw_json}" \
+    --format pretty)"
+
+  assert_contains "Attachment details:" "${output}"
+  assert_contains "Download: use Linear API-key auth" "${output}"
+  assert_contains "Download: do not send the Linear API key" "${output}"
+
+  if bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-123 \
+    --linear-json-file "${raw_json}" \
+    --attachments-first nope >/dev/null 2>&1; then
+    echo "FAIL: --attachments-first should reject non-numeric values" >&2
+    exit 1
+  fi
 
   rm -rf "${temp_dir}"
 }
