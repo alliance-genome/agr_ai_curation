@@ -272,6 +272,30 @@ Starts the SSM tunnel and `socat` forwarder in the background, writes
 ./scripts/utilities/symphony_local_db_tunnel_stop.sh
 ```
 
+### utilities/symphony_curation_db_psql.sh
+
+Thin launcher for real `psql` against the read-only AGR curation database from
+a Symphony workspace. It starts or reuses the Symphony DB tunnel, sources the
+workspace-local `scripts/local_db_tunnel_env.sh`, and runs `psql` with the
+read-only credentials from `ai-curation/db/curation-readonly`.
+
+```bash
+# Probe the connection
+./scripts/utilities/symphony_curation_db_psql.sh -- \
+  -c "select current_database(), current_user;"
+
+# Use normal psql flags for focused investigation
+./scripts/utilities/symphony_curation_db_psql.sh -- \
+  -c "select table_schema, table_name from information_schema.tables where table_schema not in ('pg_catalog','information_schema') order by 1,2 limit 50;"
+
+# Check the tunnel without running psql
+./scripts/utilities/symphony_curation_db_psql.sh --status
+```
+
+The helper does not parse or rewrite SQL. Keep curator-feedback investigations
+focused, prefer `SELECT`/schema-inspection queries with `LIMIT`, and never print
+or paste the generated tunnel env file because it contains credentials.
+
 ### utilities/symphony_human_review_prep.sh
 
 One-command Human Review Prep for a Symphony workspace. It derives issue-specific

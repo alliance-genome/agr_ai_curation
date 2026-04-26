@@ -97,6 +97,7 @@ EOF
     symphony_local_db_tunnel_start.sh \
     symphony_local_db_tunnel_status.sh \
     symphony_local_db_tunnel_stop.sh \
+    symphony_curation_db_psql.sh \
     symphony_microvm_worker_run.sh
   do
     cat > "${source_root}/scripts/utilities/${helper}" <<EOF
