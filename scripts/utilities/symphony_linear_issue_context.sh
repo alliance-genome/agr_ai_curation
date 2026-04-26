@@ -64,7 +64,7 @@ Output contract:
   The normalized JSON artifact contains:
     - issue metadata
     - labels
-    - attachments
+    - attachments with Linear API-key download hints
     - comments with workpad classification
     - latest workpad comment
     - latest non-workpad comment

@@ -161,6 +161,8 @@ symphony_linear_normalize_context() {
         subtitle: (.subtitle // ""),
         url: (.url // ""),
         source_type: (.sourceType // ""),
+        download_requires_linear_api_key: true,
+        download_auth_hint: "Use the Linear API key as the raw Authorization header, for example: curl -H \"Authorization: $LINEAR_API_KEY\" <url>",
         created_at: (.createdAt // ""),
         updated_at: (.updatedAt // .createdAt // "")
       };
@@ -240,7 +242,22 @@ symphony_linear_pretty_context() {
       "Labels: " + (
         if (.labels | length) == 0 then "none" else (.labels | map(.name) | join(", ")) end
       )
-    ] | join("\n")
+    ]
+    + (
+      if ((.attachments // []) | length) == 0 then
+        []
+      else
+        [
+          "",
+          "Attachment details:",
+          (
+            .attachments[]
+            | "  - \(.title // "untitled")\n    URL: \(.url // "")\n    Download: use Linear API-key auth, e.g. curl -H \"Authorization: $LINEAR_API_KEY\" \"\(.url // "")\""
+          )
+        ]
+      end
+    )
+    | join("\n")
   ' <<< "${normalized_json}"
 }
 
