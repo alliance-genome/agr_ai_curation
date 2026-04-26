@@ -485,6 +485,20 @@ class TestCheckBedrockRerankerHealth:
         assert is_healthy is False
         assert "AWS credentials were not found" in error
 
+    @pytest.mark.asyncio
+    async def test_returns_false_when_bedrock_region_is_blank(
+        self,
+        bedrock_connection,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+        monkeypatch.setenv("AWS_REGION", " ")
+
+        is_healthy, error = await _check_bedrock_reranker_health(bedrock_connection)
+
+        assert is_healthy is False
+        assert error == "AWS_REGION must not be blank for Bedrock reranking"
+
 
 class TestCheckAllHealth:
     """Tests for check_all_health function."""

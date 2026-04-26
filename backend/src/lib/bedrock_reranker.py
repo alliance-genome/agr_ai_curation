@@ -6,8 +6,8 @@ import json
 import logging
 import os
 import time
-from urllib import error, request
 from typing import Any, Dict, List, Sequence
+from urllib import error, request
 
 import boto3
 from botocore.exceptions import (
@@ -28,8 +28,6 @@ DEFAULT_BEDROCK_RERANK_MODEL_ARN = (
 MAX_BEDROCK_RERANK_SOURCES = 100
 _DEFAULT_LOCAL_TRANSFORMERS_URL = "http://reranker-transformers:8080"
 LOCAL_TRANSFORMERS_TIMEOUT_SECONDS = 5
-_BEDROCK_CONFIG_FAILURE_REASON: str | None = None
-_BEDROCK_CONFIG_FAILURE_LOGGED = False
 
 
 def get_rerank_provider() -> str:
@@ -39,36 +37,19 @@ def get_rerank_provider() -> str:
 
 def get_effective_rerank_provider() -> str:
     """Return the provider that should be used for request-time reranking."""
-    provider = get_rerank_provider()
-    if provider != "bedrock_cohere":
-        return provider
-
-    is_ready, _reason = validate_bedrock_reranker_configuration(
-        check_credentials=False
-    )
-    if not is_ready or _BEDROCK_CONFIG_FAILURE_REASON:
-        return "none"
-    return provider
-
-
-def reset_bedrock_reranker_config_state() -> None:
-    """Reset cached Bedrock config failure state for tests."""
-    global _BEDROCK_CONFIG_FAILURE_REASON, _BEDROCK_CONFIG_FAILURE_LOGGED
-    _BEDROCK_CONFIG_FAILURE_REASON = None
-    _BEDROCK_CONFIG_FAILURE_LOGGED = False
+    return get_rerank_provider()
 
 
 def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, Any]:
     """Return sanitized readiness details for the Bedrock reranker provider."""
     provider = get_rerank_provider()
-    region = _get_aws_region()
     aws_profile = os.getenv("AWS_PROFILE")
     aws_default_profile = os.getenv("AWS_DEFAULT_PROFILE")
     model_arn = _get_bedrock_rerank_model_arn()
 
     status: Dict[str, Any] = {
         "provider": provider,
-        "region": region,
+        "region": None,
         "model_arn_configured": bool(model_arn),
         "aws_profile_configured": bool(aws_profile and aws_profile.strip()),
         "aws_default_profile_configured": bool(
@@ -86,6 +67,14 @@ def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, 
         status["is_healthy"] = False
         status["reason"] = f"Unsupported RERANK_PROVIDER={provider}"
         return status
+
+    try:
+        region = _get_aws_region()
+    except ValueError as exc:
+        status["is_healthy"] = False
+        status["reason"] = str(exc)
+        return status
+    status["region"] = region
 
     if not model_arn:
         status["is_healthy"] = False
@@ -130,11 +119,20 @@ def validate_bedrock_reranker_configuration(
         return True, None
     if is_healthy is None:
         return True, None
-    return False, str(status.get("reason") or "Bedrock reranker is not configured")
+    reason = status["reason"]
+    assert isinstance(reason, str)
+    return False, reason
 
 
 def _get_aws_region() -> str:
-    return os.getenv("AWS_REGION", "us-east-1").strip() or "us-east-1"
+    raw_region = os.getenv("AWS_REGION")
+    if raw_region is None:
+        return "us-east-1"
+
+    region = raw_region.strip()
+    if not region:
+        raise ValueError("AWS_REGION must not be blank for Bedrock reranking")
+    return region
 
 
 def _get_bedrock_rerank_model_arn() -> str:
@@ -208,23 +206,6 @@ def _log_rerank_no_results(provider: str, query: str) -> None:
     )
 
 
-def _record_bedrock_config_failure(reason: str | None) -> None:
-    global _BEDROCK_CONFIG_FAILURE_REASON
-    _BEDROCK_CONFIG_FAILURE_REASON = reason or "Bedrock reranker configuration is unusable"
-    _log_bedrock_config_failure_once(_BEDROCK_CONFIG_FAILURE_REASON)
-
-
-def _log_bedrock_config_failure_once(reason: str) -> None:
-    global _BEDROCK_CONFIG_FAILURE_LOGGED
-    if _BEDROCK_CONFIG_FAILURE_LOGGED:
-        return
-    _BEDROCK_CONFIG_FAILURE_LOGGED = True
-    logger.warning(
-        "Bedrock reranking disabled due to configuration error; preserving original retrieval order. reason=%s",
-        reason,
-    )
-
-
 def rerank_chunks(
     query: str,
     chunks: Sequence[Dict[str, Any]],
@@ -241,18 +222,13 @@ def rerank_chunks(
             check_credentials=False
         )
         if not is_ready:
-            _record_bedrock_config_failure(reason)
-            return list(chunks)
-        if _BEDROCK_CONFIG_FAILURE_REASON:
-            _log_bedrock_config_failure_once(_BEDROCK_CONFIG_FAILURE_REASON)
-            return list(chunks)
+            raise RuntimeError(f"Bedrock reranker configuration is not ready: {reason}")
         try:
             ranked_chunks = _rerank_chunks_with_bedrock(query, chunks, top_n=top_n)
         except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
-            _record_bedrock_config_failure(
+            raise RuntimeError(
                 f"AWS credential/profile resolution failed for Bedrock reranking: {exc}"
-            )
-            return list(chunks)
+            ) from exc
         except Exception:
             logger.exception(
                 "Bedrock reranking failed; preserving original retrieval order for query=%r",

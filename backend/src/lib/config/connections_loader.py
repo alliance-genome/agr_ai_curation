@@ -700,10 +700,7 @@ async def _check_bedrock_reranker_health(
     _conn: ConnectionDefinition,
 ) -> tuple[Optional[bool], Optional[str]]:
     """Check Bedrock reranker provider configuration readiness."""
-    try:
-        from src.lib.bedrock_reranker import get_bedrock_reranker_status
-    except ImportError as exc:
-        return False, f"Bedrock reranker module unavailable: {exc}"
+    from src.lib.bedrock_reranker import get_bedrock_reranker_status
 
     status = get_bedrock_reranker_status(check_credentials=True)
     provider = str(status.get("provider") or "").strip().lower()
@@ -713,7 +710,9 @@ async def _check_bedrock_reranker_health(
     if status.get("is_healthy") is True:
         return True, None
 
-    return False, str(status.get("reason") or "Bedrock reranker is not ready")
+    reason = status["reason"]
+    assert isinstance(reason, str)
+    return False, reason
 
 
 async def check_all_health() -> Dict[str, Dict[str, Any]]:
