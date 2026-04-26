@@ -122,6 +122,11 @@ if [[ "${status_only}" -eq 1 ]]; then
   exec bash "${status_helper}" --workspace-dir "${workspace_dir}"
 fi
 
+if ! command -v psql >/dev/null 2>&1; then
+  echo "psql is required but was not found in PATH" >&2
+  exit 2
+fi
+
 if [[ "${start_tunnel}" -eq 1 ]]; then
   if [[ -z "${start_helper}" ]]; then
     echo "Missing symphony_local_db_tunnel_start.sh" >&2
@@ -159,15 +164,10 @@ if [[ "${#missing[@]}" -gt 0 ]]; then
   exit 3
 fi
 
-if ! command -v psql >/dev/null 2>&1; then
-  echo "psql is required but was not found in PATH" >&2
-  exit 2
-fi
-
 export PGPASSWORD="${PERSISTENT_STORE_DB_PASSWORD}"
 export PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-10}"
 export PGAPPNAME="${PGAPPNAME:-symphony-codex-readonly}"
-export PGOPTIONS="${PGOPTIONS:--c default_transaction_read_only=on -c statement_timeout=30000 -c lock_timeout=5000}"
+export PGOPTIONS="${PGOPTIONS:+${PGOPTIONS} }-c default_transaction_read_only=on -c statement_timeout=30000 -c lock_timeout=5000"
 
 if [[ "${print_connection}" -eq 1 ]]; then
   echo "curation_db_host=${PERSISTENT_STORE_DB_HOST}"

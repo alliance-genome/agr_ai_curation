@@ -211,7 +211,10 @@ verify_one "scripts/utilities/symphony_claude_review_rounds.sh" "optional"
 verify_one "scripts/utilities/symphony_local_db_tunnel_start.sh" "required"
 verify_one "scripts/utilities/symphony_local_db_tunnel_status.sh" "required"
 verify_one "scripts/utilities/symphony_local_db_tunnel_stop.sh" "required"
-verify_one "scripts/utilities/symphony_curation_db_psql.sh" "required"
+# Existing workspaces may be on branches created before this helper was added.
+# Agents can run the source-root copy with --workspace-dir when needed, so do
+# not block those workspaces at guard time.
+verify_one "scripts/utilities/symphony_curation_db_psql.sh" "optional"
 verify_one "scripts/utilities/symphony_microvm_worker_run.sh" "required"
 verify_one "scripts/lib/local_db_tunnel_common.sh" "required"
 verify_one "scripts/lib/symphony_linear_common.sh" "required"

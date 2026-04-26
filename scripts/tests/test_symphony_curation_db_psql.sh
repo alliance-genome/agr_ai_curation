@@ -32,6 +32,16 @@ assert_contains() {
   fi
 }
 
+assert_not_contains() {
+  local unexpected="$1"
+  local actual="$2"
+  if [[ "${actual}" == *"${unexpected}"* ]]; then
+    echo "Expected output not to contain '${unexpected}'" >&2
+    printf 'Actual output:\n%s\n' "${actual}" >&2
+    exit 1
+  fi
+}
+
 assert_equals() {
   local expected="$1"
   local actual="$2"
@@ -115,11 +125,12 @@ test_runs_real_psql_with_readonly_tunnel_env() {
       --workspace-dir "${workspace}" \
       --print-connection \
       -- \
-      -c "select 1;"
+      -c "select 1;" 2>&1
   )"
 
   assert_file_exists "${workspace}/start-called"
   assert_contains "curation_db_readonly=true" "${output}"
+  assert_not_contains "fixture pass!" "${output}"
   assert_contains "psql-stub-ran" "${output}"
 
   local call
@@ -166,18 +177,41 @@ test_status_delegates_to_tunnel_status_helper() {
 }
 
 test_missing_env_file_fails_without_starting() {
-  local temp_dir workspace output status
+  local temp_dir workspace output status stub_dir capture
   temp_dir="$(mktemp -d)"
   workspace="${temp_dir}/workspace"
+  stub_dir="${temp_dir}/bin"
+  capture="${temp_dir}/capture"
   mkdir -p "${workspace}/scripts"
+  write_stub_psql "${stub_dir}" "${capture}"
 
   set +e
-  output="$(bash "${HELPER}" --workspace-dir "${workspace}" --no-start-tunnel -- -c "select 1;" 2>&1)"
+  output="$(CAPTURE_DIR="${capture}" PATH="${stub_dir}:${PATH}" bash "${HELPER}" --workspace-dir "${workspace}" --no-start-tunnel -- -c "select 1;" 2>&1)"
   status=$?
   set -e
 
   assert_equals "3" "${status}"
   assert_contains "Missing tunnel env file" "${output}"
+}
+
+test_missing_psql_fails_before_starting_tunnel() {
+  local temp_dir workspace limited_bin output status
+  temp_dir="$(mktemp -d)"
+  workspace="${temp_dir}/workspace"
+  limited_bin="${temp_dir}/limited-bin"
+  mkdir -p "${limited_bin}"
+  ln -s /usr/bin/basename "${limited_bin}/basename"
+  ln -s /usr/bin/dirname "${limited_bin}/dirname"
+  write_fixture_workspace "${workspace}"
+
+  set +e
+  output="$(PATH="${limited_bin}" /bin/bash "${HELPER}" --workspace-dir "${workspace}" -- -c "select 1;" 2>&1)"
+  status=$?
+  set -e
+
+  assert_equals "2" "${status}"
+  assert_contains "psql is required" "${output}"
+  assert_file_missing "${workspace}/start-called"
 }
 
 test_no_psql_args_non_tty_runs_probe() {
@@ -195,10 +229,33 @@ test_no_psql_args_non_tty_runs_probe() {
   assert_contains "select current_database(), current_user;" "$(cat "${capture}/psql-call.txt")"
 }
 
+test_existing_pgoptions_are_preserved_with_readonly_settings_appended() {
+  local temp_dir workspace stub_dir capture
+  temp_dir="$(mktemp -d)"
+  workspace="${temp_dir}/workspace"
+  stub_dir="${temp_dir}/bin"
+  capture="${temp_dir}/capture"
+  write_fixture_workspace "${workspace}"
+  write_stub_psql "${stub_dir}" "${capture}"
+
+  CAPTURE_DIR="${capture}" PATH="${stub_dir}:${PATH}" PGOPTIONS="-c search_path=public" bash "${HELPER}" \
+    --workspace-dir "${workspace}" \
+    -- \
+    -c "select 3;" >/dev/null
+
+  local call
+  call="$(cat "${capture}/psql-call.txt")"
+  assert_contains "PGOPTIONS=-c search_path=public -c default_transaction_read_only=on" "${call}"
+  assert_contains "statement_timeout=30000" "${call}"
+  assert_contains "lock_timeout=5000" "${call}"
+}
+
 test_runs_real_psql_with_readonly_tunnel_env
 test_no_start_tunnel_uses_existing_env_file
 test_status_delegates_to_tunnel_status_helper
 test_missing_env_file_fails_without_starting
+test_missing_psql_fails_before_starting_tunnel
 test_no_psql_args_non_tty_runs_probe
+test_existing_pgoptions_are_preserved_with_readonly_settings_appended
 
 echo "symphony_curation_db_psql tests passed"
