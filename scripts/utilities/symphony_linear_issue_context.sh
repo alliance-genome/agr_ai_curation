@@ -28,6 +28,7 @@ Options:
   --issue-id VALUE            Linear issue id; accepted as an alternative lookup key.
   --comments-first N          Number of comments to fetch. Default: 50.
   --history-first N           Number of history events to fetch. Default: 50.
+  --attachments-first N       Number of Linear attachments to fetch. Default: 20.
   --include-history           Include issue history in the response and JSON artifact.
   --include-team-states       Include the issue team and available workflow states.
   --linear-api-key VALUE      Linear API key. Default: LINEAR_API_KEY or ~/.linear/api_key.txt.
@@ -54,6 +55,7 @@ Output contract:
     LINEAR_CONTEXT_STATE=...
     LINEAR_CONTEXT_URL=...
     LINEAR_CONTEXT_COMMENTS_COUNT=...
+    LINEAR_CONTEXT_ATTACHMENTS_COUNT=...
     LINEAR_CONTEXT_WORKPAD_COMMENT_ID=...
     LINEAR_CONTEXT_LATEST_NON_WORKPAD_COMMENT_ID=...
     LINEAR_CONTEXT_JSON_FILE=...
@@ -62,6 +64,7 @@ Output contract:
   The normalized JSON artifact contains:
     - issue metadata
     - labels
+    - attachments
     - comments with workpad classification
     - latest workpad comment
     - latest non-workpad comment
@@ -106,6 +109,7 @@ issue_identifier=""
 issue_id=""
 comments_first=50
 history_first=50
+attachments_first=20
 include_history=0
 include_team_states=0
 linear_api_key=""
@@ -130,6 +134,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --history-first)
       history_first="${2:-}"
+      shift 2
+      ;;
+    --attachments-first)
+      attachments_first="${2:-}"
       shift 2
       ;;
     --include-history)
@@ -188,6 +196,11 @@ if ! [[ "${history_first}" =~ ^[0-9]+$ ]]; then
   exit 2
 fi
 
+if ! [[ "${attachments_first}" =~ ^[0-9]+$ ]]; then
+  echo "--attachments-first must be a non-negative integer." >&2
+  exit 2
+fi
+
 case "${format}" in
   env|json|pretty)
     ;;
@@ -221,6 +234,7 @@ query SymphonyIssueContext(
   $issueId: String!,
   $commentsFirst: Int!,
   $historyFirst: Int!,
+  $attachmentsFirst: Int!,
   $includeHistory: Boolean!,
   $includeTeamStates: Boolean!
 ) {
@@ -256,6 +270,17 @@ query SymphonyIssueContext(
           name
           displayName
         }
+      }
+    }
+    attachments(first: $attachmentsFirst) {
+      nodes {
+        id
+        title
+        subtitle
+        url
+        sourceType
+        createdAt
+        updatedAt
       }
     }
     history(first: $historyFirst) @include(if: $includeHistory) {
@@ -297,12 +322,14 @@ else
     --arg issueId "${issue_lookup}" \
     --argjson commentsFirst "${comments_first}" \
     --argjson historyFirst "${history_first}" \
+    --argjson attachmentsFirst "${attachments_first}" \
     --argjson includeHistory "${include_history_json}" \
     --argjson includeTeamStates "${include_team_states_json}" \
     '{
       issueId: $issueId,
       commentsFirst: $commentsFirst,
       historyFirst: $historyFirst,
+      attachmentsFirst: $attachmentsFirst,
       includeHistory: $includeHistory,
       includeTeamStates: $includeTeamStates
     }')"
@@ -363,6 +390,8 @@ env_output="$(
       "$(jq -r '.issue.url // ""' <<< "${normalized_json}")"
     symphony_linear_emit_env "LINEAR_CONTEXT_COMMENTS_COUNT" \
       "$(jq -r '.comments_count // 0' <<< "${normalized_json}")"
+    symphony_linear_emit_env "LINEAR_CONTEXT_ATTACHMENTS_COUNT" \
+      "$(jq -r '.attachments_count // 0' <<< "${normalized_json}")"
     symphony_linear_emit_env "LINEAR_CONTEXT_WORKPAD_COMMENT_ID" \
       "$(jq -r '.workpad_comment.id // ""' <<< "${normalized_json}")"
     symphony_linear_emit_env "LINEAR_CONTEXT_LATEST_NON_WORKPAD_COMMENT_ID" \

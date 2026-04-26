@@ -154,8 +154,20 @@ symphony_linear_normalize_context() {
         position: (.position // null)
       } end;
 
+    def normalize_attachment:
+      {
+        id: (.id // ""),
+        title: (.title // ""),
+        subtitle: (.subtitle // ""),
+        url: (.url // ""),
+        source_type: (.sourceType // ""),
+        created_at: (.createdAt // ""),
+        updated_at: (.updatedAt // .createdAt // "")
+      };
+
     .data.issue as $issue
     | ($issue.comments.nodes // [] | map(normalize_comment) | sort_by(.created_at, .updated_at)) as $comments
+    | ($issue.attachments.nodes // [] | map(normalize_attachment) | sort_by(.created_at, .updated_at)) as $attachments
     | ($comments | map(select(.is_workpad))) as $workpad_comments
     | ($workpad_comments | sort_by(.updated_at, .created_at) | last // null) as $workpad_comment
     | ($comments | map(select(.is_workpad | not)) | sort_by(.updated_at, .created_at) | last // null) as $latest_non_workpad
@@ -177,6 +189,8 @@ symphony_linear_normalize_context() {
           name: (.name // ""),
           color: (.color // "")
         })),
+        attachments: $attachments,
+        attachments_count: ($attachments | length),
         team: (
           if ($issue.team // null) == null then null else {
             id: ($issue.team.id // ""),
@@ -219,6 +233,7 @@ symphony_linear_pretty_context() {
       "State: \(.issue.state.name // "unknown")",
       "URL: \(.issue.url)",
       "Comments: \(.comments_count)",
+      "Attachments: \(.attachments_count // 0)",
       "Workpad comment: \(.workpad_comment.id // "none")",
       "Latest non-workpad comment: \(.latest_non_workpad_comment.id // "none")",
       "",
