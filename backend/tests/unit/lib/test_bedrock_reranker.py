@@ -2,10 +2,12 @@
 
 import json
 import logging
+import os
 import urllib.error
 from typing import Any
 
 import pytest
+from botocore.exceptions import NoCredentialsError, ProfileNotFound
 
 import src.lib.bedrock_reranker as bedrock_reranker
 
@@ -93,6 +95,127 @@ def test_rerank_chunks_uses_profile_and_reorders_results(monkeypatch):
         captured["kwargs"]["sources"][0]["inlineDocumentSource"]["textDocument"]["text"]
         == "Methods section text"
     )
+
+
+def test_bedrock_status_ignores_blank_aws_profile_env(monkeypatch):
+    captured = {}
+
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            captured["profile_name"] = profile_name
+            captured["region_name"] = region_name
+            captured["aws_profile"] = os.environ.get("AWS_PROFILE")
+            captured["aws_default_profile"] = os.environ.get("AWS_DEFAULT_PROFILE")
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setenv("AWS_PROFILE", "")
+    monkeypatch.setenv("AWS_DEFAULT_PROFILE", " ")
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    status = bedrock_reranker.get_bedrock_reranker_status(check_credentials=False)
+
+    assert status["is_healthy"] is True
+    assert captured == {
+        "profile_name": None,
+        "region_name": "us-east-1",
+        "aws_profile": None,
+        "aws_default_profile": None,
+    }
+    assert os.environ["AWS_PROFILE"] == ""
+    assert os.environ["AWS_DEFAULT_PROFILE"] == " "
+
+
+def test_bedrock_status_reports_missing_profile(monkeypatch):
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            raise ProfileNotFound(profile=profile_name)
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setenv("AWS_PROFILE", "missing-profile")
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    status = bedrock_reranker.get_bedrock_reranker_status(check_credentials=False)
+
+    assert status["is_healthy"] is False
+    assert "missing-profile" in status["reason"]
+
+
+def test_bedrock_status_reports_missing_credentials(monkeypatch):
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            pass
+
+        def get_credentials(self):
+            return None
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.delenv("AWS_PROFILE", raising=False)
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    status = bedrock_reranker.get_bedrock_reranker_status(check_credentials=True)
+
+    assert status["is_healthy"] is False
+    assert "AWS credentials were not found" in status["reason"]
+
+
+def test_bedrock_status_reports_blank_region(monkeypatch):
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setenv("AWS_REGION", " ")
+
+    status = bedrock_reranker.get_bedrock_reranker_status(check_credentials=False)
+
+    assert status["is_healthy"] is False
+    assert status["reason"] == "AWS_REGION must not be blank for Bedrock reranking"
+
+
+def test_effective_rerank_provider_preserves_configured_bedrock_provider(monkeypatch):
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+
+    assert bedrock_reranker.get_effective_rerank_provider() == "bedrock_cohere"
+
+
+def test_rerank_chunks_raises_when_bedrock_profile_is_missing(monkeypatch):
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            raise ProfileNotFound(profile=profile_name)
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setenv("AWS_PROFILE", "missing-profile")
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    chunks = [{"id": "chunk-1", "score": 0.8}]
+
+    with pytest.raises(
+        RuntimeError,
+        match="Bedrock reranker configuration is not ready",
+    ):
+        bedrock_reranker.rerank_chunks("query", chunks, top_n=1)
+
+
+def test_rerank_chunks_raises_when_bedrock_credentials_are_missing(
+    monkeypatch,
+):
+    class _Client:
+        def rerank(self, **kwargs):
+            raise NoCredentialsError()
+
+    class _Session:
+        def __init__(self, profile_name=None, region_name=None):
+            pass
+
+        def client(self, service_name, region_name=None):
+            return _Client()
+
+    monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+    monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+    chunks = [{"id": "chunk-1", "score": 0.8}]
+
+    with pytest.raises(
+        RuntimeError,
+        match="AWS credential/profile resolution failed for Bedrock reranking",
+    ):
+        bedrock_reranker.rerank_chunks("query", chunks, top_n=1)
 
 
 def test_rerank_chunks_preserves_original_order_when_bedrock_errors(monkeypatch):

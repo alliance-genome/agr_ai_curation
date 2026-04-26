@@ -12,6 +12,7 @@ from src.lib.config.connections_loader import (
     ConnectionDefinition,
     CredentialsConfig,
     HealthCheck,
+    _check_bedrock_reranker_health,
     _check_http_health,
     _check_redis_health,
     _check_postgres_health,
@@ -404,6 +405,99 @@ class TestCheckServiceHealth:
         assert conn is not None
         assert conn.is_healthy is None
         assert conn.last_error is None
+
+
+class TestCheckBedrockRerankerHealth:
+    """Tests for Bedrock reranker provider health checks."""
+
+    @pytest.fixture
+    def bedrock_connection(self):
+        return ConnectionDefinition(
+            service_id="bedrock_reranker",
+            description="Bedrock reranker",
+            url="aws://us-east-1/bedrock-agent-runtime",
+            required=True,
+            timeout_seconds=5.0,
+            health_check=HealthCheck(
+                endpoint=None,
+                method="BEDROCK_RERANKER",
+                expected_status=None,
+                headers={},
+            ),
+        )
+
+    @pytest.mark.asyncio
+    async def test_returns_none_when_bedrock_provider_is_not_selected(
+        self,
+        bedrock_connection,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("RERANK_PROVIDER", "none")
+
+        is_healthy, error = await _check_bedrock_reranker_health(bedrock_connection)
+
+        assert is_healthy is None
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_returns_true_when_bedrock_configuration_is_ready(
+        self,
+        bedrock_connection,
+        monkeypatch,
+    ):
+        class _Session:
+            def __init__(self, profile_name=None, region_name=None):
+                pass
+
+            def get_credentials(self):
+                return object()
+
+        import src.lib.bedrock_reranker as bedrock_reranker
+
+        monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+        monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+        is_healthy, error = await _check_bedrock_reranker_health(bedrock_connection)
+
+        assert is_healthy is True
+        assert error is None
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_bedrock_credentials_are_missing(
+        self,
+        bedrock_connection,
+        monkeypatch,
+    ):
+        class _Session:
+            def __init__(self, profile_name=None, region_name=None):
+                pass
+
+            def get_credentials(self):
+                return None
+
+        import src.lib.bedrock_reranker as bedrock_reranker
+
+        monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+        monkeypatch.setattr(bedrock_reranker.boto3, "Session", _Session)
+
+        is_healthy, error = await _check_bedrock_reranker_health(bedrock_connection)
+
+        assert is_healthy is False
+        assert "AWS credentials were not found" in error
+
+    @pytest.mark.asyncio
+    async def test_returns_false_when_bedrock_region_is_blank(
+        self,
+        bedrock_connection,
+        monkeypatch,
+    ):
+        monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+        monkeypatch.setenv("AWS_REGION", " ")
+
+        is_healthy, error = await _check_bedrock_reranker_health(bedrock_connection)
+
+        assert is_healthy is False
+        assert error == "AWS_REGION must not be blank for Bedrock reranking"
 
 
 class TestCheckAllHealth:

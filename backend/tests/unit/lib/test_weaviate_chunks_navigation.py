@@ -158,6 +158,7 @@ async def test_hybrid_search_chunks_applies_backend_reranking(monkeypatch):
         assert rows[0]["content_preview"] == "Preview one"
         return list(reversed(rows))
 
+    monkeypatch.setattr(chunks, "get_effective_rerank_provider", lambda: "bedrock_cohere")
     monkeypatch.setattr(chunks, "rerank_chunks", _rerank)
 
     with patch("src.lib.weaviate_client.chunks.get_connection", return_value=connection), patch(

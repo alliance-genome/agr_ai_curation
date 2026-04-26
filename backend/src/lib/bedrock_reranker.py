@@ -6,10 +6,18 @@ import json
 import logging
 import os
 import time
-from urllib import error, request
 from typing import Any, Dict, List, Sequence
+from urllib import error, request
 
 import boto3
+from botocore.exceptions import (
+    BotoCoreError,
+    NoCredentialsError,
+    PartialCredentialsError,
+    ProfileNotFound,
+)
+
+from src.lib.aws_env import without_blank_aws_profile_env_vars
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +35,125 @@ def get_rerank_provider() -> str:
     return os.getenv("RERANK_PROVIDER", DEFAULT_RERANK_PROVIDER).strip().lower()
 
 
-def _bedrock_agent_runtime_client():
-    region = os.getenv("AWS_REGION", "us-east-1")
+def get_effective_rerank_provider() -> str:
+    """Return the provider that should be used for request-time reranking."""
+    return get_rerank_provider()
+
+
+def get_bedrock_reranker_status(*, check_credentials: bool = True) -> Dict[str, Any]:
+    """Return sanitized readiness details for the Bedrock reranker provider."""
+    provider = get_rerank_provider()
+    aws_profile = os.getenv("AWS_PROFILE")
+    aws_default_profile = os.getenv("AWS_DEFAULT_PROFILE")
+    model_arn = _get_bedrock_rerank_model_arn()
+
+    status: Dict[str, Any] = {
+        "provider": provider,
+        "region": None,
+        "model_arn_configured": bool(model_arn),
+        "aws_profile_configured": bool(aws_profile and aws_profile.strip()),
+        "aws_default_profile_configured": bool(
+            aws_default_profile and aws_default_profile.strip()
+        ),
+        "is_healthy": None,
+        "reason": None,
+    }
+
+    if provider in {"", "none"}:
+        status["reason"] = "RERANK_PROVIDER disables post-retrieval reranking"
+        return status
+
+    if provider != "bedrock_cohere":
+        status["is_healthy"] = False
+        status["reason"] = f"Unsupported RERANK_PROVIDER={provider}"
+        return status
+
+    try:
+        region = _get_aws_region()
+    except ValueError as exc:
+        status["is_healthy"] = False
+        status["reason"] = str(exc)
+        return status
+    status["region"] = region
+
+    if not model_arn:
+        status["is_healthy"] = False
+        status["reason"] = "BEDROCK_RERANK_MODEL_ARN is required for bedrock_cohere"
+        return status
+
+    try:
+        with without_blank_aws_profile_env_vars():
+            session = _bedrock_session(region)
+            if check_credentials and session.get_credentials() is None:
+                status["is_healthy"] = False
+                status["reason"] = (
+                    "AWS credentials were not found for Bedrock reranking; "
+                    "configure an IAM role, environment credentials, or a valid "
+                    "AWS_PROFILE, or set RERANK_PROVIDER=none"
+                )
+                return status
+    except ProfileNotFound as exc:
+        status["is_healthy"] = False
+        status["reason"] = (
+            f"AWS profile configured for Bedrock reranking was not found: {exc}"
+        )
+        return status
+    except (BotoCoreError, NoCredentialsError, PartialCredentialsError) as exc:
+        status["is_healthy"] = False
+        status["reason"] = f"AWS credential resolution failed for Bedrock reranking: {exc}"
+        return status
+
+    status["is_healthy"] = True
+    status["reason"] = "Bedrock reranker configuration is usable"
+    return status
+
+
+def validate_bedrock_reranker_configuration(
+    *,
+    check_credentials: bool = True,
+) -> tuple[bool, str | None]:
+    """Validate Bedrock reranker config without leaking credential values."""
+    status = get_bedrock_reranker_status(check_credentials=check_credentials)
+    is_healthy = status.get("is_healthy")
+    if is_healthy is True:
+        return True, None
+    if is_healthy is None:
+        return True, None
+    reason = status["reason"]
+    assert isinstance(reason, str)
+    return False, reason
+
+
+def _get_aws_region() -> str:
+    raw_region = os.getenv("AWS_REGION")
+    if raw_region is None:
+        return "us-east-1"
+
+    region = raw_region.strip()
+    if not region:
+        raise ValueError("AWS_REGION must not be blank for Bedrock reranking")
+    return region
+
+
+def _get_bedrock_rerank_model_arn() -> str:
+    return os.getenv(
+        "BEDROCK_RERANK_MODEL_ARN",
+        DEFAULT_BEDROCK_RERANK_MODEL_ARN,
+    ).strip()
+
+
+def _bedrock_session(region: str):
     aws_profile = os.getenv("AWS_PROFILE", "").strip()
     if aws_profile:
-        session = boto3.Session(profile_name=aws_profile, region_name=region)
-    else:
-        session = boto3.Session(region_name=region)
-    return session.client("bedrock-agent-runtime", region_name=region)
+        return boto3.Session(profile_name=aws_profile, region_name=region)
+    return boto3.Session(region_name=region)
+
+
+def _bedrock_agent_runtime_client():
+    region = _get_aws_region()
+    with without_blank_aws_profile_env_vars():
+        session = _bedrock_session(region)
+        return session.client("bedrock-agent-runtime", region_name=region)
 
 
 def _get_local_transformers_url() -> str:
@@ -99,8 +218,17 @@ def rerank_chunks(
         return list(chunks)
 
     if provider == "bedrock_cohere":
+        is_ready, reason = validate_bedrock_reranker_configuration(
+            check_credentials=False
+        )
+        if not is_ready:
+            raise RuntimeError(f"Bedrock reranker configuration is not ready: {reason}")
         try:
             ranked_chunks = _rerank_chunks_with_bedrock(query, chunks, top_n=top_n)
+        except (NoCredentialsError, PartialCredentialsError, ProfileNotFound) as exc:
+            raise RuntimeError(
+                f"AWS credential/profile resolution failed for Bedrock reranking: {exc}"
+            ) from exc
         except Exception:
             logger.exception(
                 "Bedrock reranking failed; preserving original retrieval order for query=%r",
@@ -260,10 +388,7 @@ def _rerank_chunks_with_bedrock(
         )
 
     requested_results = min(top_n or len(candidate_chunks), len(candidate_chunks))
-    model_arn = os.getenv(
-        "BEDROCK_RERANK_MODEL_ARN",
-        DEFAULT_BEDROCK_RERANK_MODEL_ARN,
-    )
+    model_arn = _get_bedrock_rerank_model_arn()
     rerank_start = time.monotonic()
     _log_rerank_request(
         "bedrock_cohere",

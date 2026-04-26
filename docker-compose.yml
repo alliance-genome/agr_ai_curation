@@ -202,7 +202,7 @@ services:
       - SNS_TOPIC_ARN=${SNS_TOPIC_ARN:-}
       - SNS_REGION=${SNS_REGION:-us-east-1}
       - AWS_REGION=${AWS_REGION:-us-east-1}
-      - AWS_PROFILE=${AWS_PROFILE:-}
+      - AWS_PROFILE
       - RERANK_PROVIDER=${RERANK_PROVIDER:-none}
       - BEDROCK_RERANK_MODEL_ARN=${BEDROCK_RERANK_MODEL_ARN:-arn:aws:bedrock:us-east-1::foundation-model/cohere.rerank-v3-5:0}
       - FEEDBACK_USE_SNS=${FEEDBACK_USE_SNS:-false}
