@@ -574,7 +574,7 @@ INST
 # requests, round counting, and report generation in one place.
 #
 # Sets these variables for the caller:
-#   CLAUDE_STATUS       quiet | detected | maxed_out | error
+#   CLAUDE_STATUS       quiet | pending | detected | maxed_out | error
 #   CLAUDE_REPORT_FILE  path to the report file (empty if quiet)
 
 emit_pr_success_with_claude_check() {
@@ -627,11 +627,13 @@ emit_pr_success_with_claude_check() {
       set -e
 
       # Extract variables from loop output
-      local loop_status loop_report
+      local loop_status loop_report loop_latest loop_wait_since
       loop_status="$(extract_kv "CLAUDE_LOOP_STATUS" "${loop_output}")"
       loop_report="$(extract_kv "CLAUDE_LOOP_REPORT_FILE" "${loop_output}")"
       loop_round="$(extract_kv "CLAUDE_LOOP_ROUND" "${loop_output}")"
       loop_max="$(extract_kv "CLAUDE_LOOP_MAX_ROUNDS" "${loop_output}")"
+      loop_latest="$(extract_kv "CLAUDE_LOOP_LATEST_AT" "${loop_output}")"
+      loop_wait_since="$(extract_kv "CLAUDE_LOOP_WAIT_SINCE" "${loop_output}")"
 
       if (( loop_rc != 0 && loop_rc != 10 )); then
         echo "READY_FOR_PR_CLAUDE_STATUS=error"
@@ -646,6 +648,17 @@ INST
       CLAUDE_REPORT_FILE="${loop_report:-}"
 
       echo "READY_FOR_PR_CLAUDE_STATUS=${CLAUDE_STATUS}"
+
+      if [[ "${CLAUDE_STATUS}" == "pending" ]]; then
+        echo "READY_FOR_PR_CLAUDE_ROUND=${loop_round:-1}"
+        echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
+        echo "READY_FOR_PR_CLAUDE_LATEST_AT=${loop_latest:-}"
+        echo "READY_FOR_PR_CLAUDE_WAIT_SINCE=${loop_wait_since:-}"
+        cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Claude Code re-review is pending for PR #${pr_num}. Do not move to Human Review Prep or gate GitHub checks as final yet. Write the pending Claude review status into PR Handoff, keep the issue in Ready for PR, and rerun this helper after Claude responds or the review wait can be extended.
+INST
+        return 11
+      fi
 
       if [[ "${CLAUDE_STATUS}" == "detected" && -n "${CLAUDE_REPORT_FILE}" ]]; then
         echo "READY_FOR_PR_CLAUDE_REPORT_FILE=${CLAUDE_REPORT_FILE}"

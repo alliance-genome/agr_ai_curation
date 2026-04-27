@@ -230,12 +230,13 @@ EOF
   echo '[]' > "${inline_json}"
 
   # --dry-run prevents the gh pr comment call; wait-seconds=0 means the
-  # poll times out immediately → quiet (no new Claude response yet).
+  # poll returns immediately, but the outstanding re-review is still pending.
   rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --dry-run)"
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
 
   echo "  PASS: test_head_newer_no_markers_advances_round"
   rm -rf "${temp_dir}"
@@ -282,12 +283,13 @@ test_head_newer_with_markers_triggers_rereview() {
 EOF
   echo '[]' > "${inline_json}"
 
-  # dry-run + wait-seconds=0: should try request_and_wait but timeout → quiet
+  # dry-run + wait-seconds=0: should try request_and_wait and report pending.
   rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --dry-run)"
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
 
   echo "  PASS: test_head_newer_with_markers_triggers_rereview"
   rm -rf "${temp_dir}"
@@ -439,7 +441,8 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
   assert_not_contains "maxed_out" "${output}"
 
   echo "  PASS: test_under_limit_head_newer_advances"
@@ -620,12 +623,14 @@ test_already_requested_sha_does_not_repost() {
 EOF
   echo '[]' > "${inline_json}"
 
-  # With wait-seconds=0, it should just return quiet (waiting for Claude's response to already-posted request)
+  # With wait-seconds=0, it should not re-post, but the already-requested
+  # re-review is still pending.
   rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --head-sha def456)"
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=wait" "${output}"
 
   echo "  PASS: test_already_requested_sha_does_not_repost"
   rm -rf "${temp_dir}"
@@ -751,7 +756,7 @@ test_pr109_scenario_head_after_review() {
   #
   # With the fix, head newer than feedback + no markers → request_and_wait
   # (posts re-review marker so round counter advances).  With wait-seconds=0
-  # the poll times out immediately → quiet.
+  # the poll returns immediately, but the re-review is pending.
 
   cat > "${top_json}" <<'EOF'
 {
@@ -779,7 +784,8 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
 
   echo "  PASS: test_pr109_scenario_head_after_review"
   rm -rf "${temp_dir}"
@@ -872,7 +878,8 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
 
   echo "  PASS: test_disposition_file_accepted"
   rm -rf "${temp_dir}"

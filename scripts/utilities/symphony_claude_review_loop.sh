@@ -14,7 +14,7 @@ set -euo pipefail
 # re-review request, or report maxed-out), and returns a status.
 #
 # Exit codes:
-#   0  — quiet (no feedback within wait window) or maxed_out
+#   0  — quiet, pending (awaiting re-review response), or maxed_out
 #  10  — detected (feedback found, report file written)
 #   2  — error
 # =============================================================================
@@ -636,6 +636,7 @@ case "${LOOP_ACTION}" in
 
   maxed_out)
     echo "CLAUDE_LOOP_STATUS=maxed_out"
+    echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
     echo "CLAUDE_LOOP_ROUND=${LOOP_ROUNDS_COMPLETED}"
     echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
     echo "CLAUDE_LOOP_LATEST_AT=${LOOP_LATEST_FEEDBACK_AT}"
@@ -647,6 +648,7 @@ case "${LOOP_ACTION}" in
     report_file="$(mktemp /tmp/claude-review-report-XXXXXX.md)"
     generate_report "${report_file}"
     echo "CLAUDE_LOOP_STATUS=detected"
+    echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
     echo "CLAUDE_LOOP_ROUND=${LOOP_ROUNDS_COMPLETED}"
     echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
     echo "CLAUDE_LOOP_REPORT_FILE=${report_file}"
@@ -679,6 +681,7 @@ case "${LOOP_ACTION}" in
       eval "${updated_analysis}"
 
       echo "CLAUDE_LOOP_STATUS=detected"
+      echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
       echo "CLAUDE_LOOP_ROUND=${LOOP_ROUNDS_COMPLETED}"
       echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
       echo "CLAUDE_LOOP_REPORT_FILE=${report_file}"
@@ -692,7 +695,19 @@ case "${LOOP_ACTION}" in
       exit 2
     fi
 
+    if [[ "${LOOP_ACTION}" == "request_and_wait" || ( "${LOOP_ACTION}" == "wait" && -n "${LOOP_LATEST_FEEDBACK_AT}" ) ]]; then
+      echo "CLAUDE_LOOP_STATUS=pending"
+      echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
+      echo "CLAUDE_LOOP_ROUND=${LOOP_ROUND}"
+      echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
+      echo "CLAUDE_LOOP_LATEST_AT=${LOOP_LATEST_FEEDBACK_AT}"
+      echo "CLAUDE_LOOP_WAIT_SINCE=${LOOP_WAIT_SINCE}"
+      echo "CLAUDE_LOOP_PR_URL=${LOOP_PR_URL}"
+      exit 0
+    fi
+
     echo "CLAUDE_LOOP_STATUS=quiet"
+    echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
     echo "CLAUDE_LOOP_ROUND=${LOOP_ROUND}"
     echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
     echo "CLAUDE_LOOP_LATEST_AT=${LOOP_LATEST_FEEDBACK_AT}"
