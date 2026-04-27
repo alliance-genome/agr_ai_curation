@@ -1,7 +1,5 @@
 """Unit tests for Weaviate search tools used by OpenAI agents."""
 
-import asyncio
-
 import pytest
 
 import src.lib.openai_agents.tools.weaviate_search as weaviate_search
@@ -123,12 +121,15 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
     async def _chunks(**_kwargs):
         return [
             {
+                "id": "chunk-methods-1",
                 "text": "Paragraph one",
                 "page_number": 2,
                 "section_title": "Materials and Methods",
+                "subsection": "Animals",
                 "metadata": '{"doc_items":[{"id":"bbox-1"}]}',
             },
             {
+                "id": "chunk-methods-2",
                 "content": "Paragraph two",
                 "pageNumber": 3,
                 "sectionTitle": "Materials and Methods",
@@ -145,6 +146,12 @@ async def test_read_section_tool_combines_content_pages_and_doc_items(monkeypatc
     assert result.section.page_numbers == [2, 3]
     assert result.section.chunk_count == 2
     assert result.section.content == "Paragraph one\n\nParagraph two"
+    assert result.section.source_chunks is not None
+    assert [source.chunk_id for source in result.section.source_chunks] == [
+        "chunk-methods-1",
+        "chunk-methods-2",
+    ]
+    assert result.section.source_chunks[0].subsection == "Animals"
     assert result.section.doc_items == [{"id": "bbox-1"}, {"id": "bbox-2"}]
 
 

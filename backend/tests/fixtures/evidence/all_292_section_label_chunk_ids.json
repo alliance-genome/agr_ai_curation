@@ -1,0 +1,25 @@
+{
+  "ticket": "ALL-292",
+  "trace_ids": [
+    "9d02f0a22d16818a45270799ee059e3e",
+    "7687d85df4b849a61d5a8a59083b640a"
+  ],
+  "record_evidence_calls": [
+    {
+      "trace_id": "9d02f0a22d16818a45270799ee059e3e",
+      "tool_input": {
+        "entity": "Trp53 fl/fl ;Wwox fl/fl",
+        "chunk_id": "Methods",
+        "claimed_quote": "Trp53 fl/fl ;Wwox fl/fl (18, 41) mice were bred with K14-Cre mice (JAX) to generate double conditional KO (DKO) mice: K14-Cre; Wwox fl/fl Trp53 fl/fl and the other genotypes."
+      }
+    },
+    {
+      "trace_id": "7687d85df4b849a61d5a8a59083b640a",
+      "tool_input": {
+        "entity": "Trp53 fl/fl ;Wwox fl/fl",
+        "chunk_id": "Methods_1",
+        "claimed_quote": "Trp53 fl/fl ;Wwox fl/fl (18, 41) mice were bred with K14-Cre mice (JAX) to generate double conditional KO (DKO) mice: K14-Cre; Wwox fl/fl Trp53 fl/fl and the other genotypes."
+      }
+    }
+  ]
+}

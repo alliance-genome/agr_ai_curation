@@ -89,7 +89,7 @@
       "expected_tool_result": {
         "status": "not_found",
         "chunk_content_preview": "",
-        "message": "Chunk not found in the active document. Retry with a valid chunk_id or drop this evidence."
+        "message": "Chunk not found in the active document. Retry with a chunk_id returned by search_document or read_section source_chunks, or drop this evidence."
       }
     }
   ],

@@ -8,6 +8,7 @@ import unicodedata
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any, Optional
+from uuid import UUID
 
 from agents import function_tool
 
@@ -32,7 +33,17 @@ _TABLE_REFERENCE_PATTERN = re.compile(
 _NOT_FOUND_MESSAGE = (
     "Quote not found in this chunk. Retry with text from the chunk or drop this evidence."
 )
+_INVALID_CHUNK_LOAD_MESSAGE = (
+    "Chunk could not be loaded. Retry with a chunk_id returned by search_document "
+    "or read_section source_chunks, or drop this evidence."
+)
+_MISSING_CHUNK_MESSAGE = (
+    "Chunk not found in the active document. Retry with a chunk_id returned by search_document "
+    "or read_section source_chunks, or drop this evidence."
+)
 _PREVIEW_CHARS = 300
+_LEGACY_SYMBOLIC_CHUNK_ID_PATTERN = re.compile(r"^chunk-", re.IGNORECASE)
+_TRAILING_SECTION_INDEX_PATTERN = re.compile(r"(?:[_\s-]+(?:chunk)?\d+)$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -271,6 +282,40 @@ def _resolve_doc_item_page(item: dict[str, Any]) -> int | None:
     )
 
 
+def _resolve_chunk_text(chunk: dict[str, Any]) -> str:
+    return str(chunk.get("text") or chunk.get("content") or chunk.get("content_preview") or "").strip()
+
+
+def _is_uuid_like(value: str) -> bool:
+    try:
+        UUID(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _normalize_section_label(value: Any) -> str:
+    label = str(value or "").strip()
+    label = _TRAILING_SECTION_INDEX_PATTERN.sub("", label)
+    label = label.replace("_", " ")
+    label = re.sub(r"[^a-z0-9]+", " ", label.lower())
+    return re.sub(r"\s+", " ", label).strip()
+
+
+def _section_label_from_chunk_id(chunk_id: str) -> str | None:
+    raw_label = str(chunk_id or "").strip()
+    if not raw_label or _is_uuid_like(raw_label):
+        return None
+    if _LEGACY_SYMBOLIC_CHUNK_ID_PATTERN.match(raw_label):
+        return None
+
+    normalized_label = _normalize_section_label(raw_label)
+    if not normalized_label:
+        return None
+
+    return _TRAILING_SECTION_INDEX_PATTERN.sub("", raw_label).replace("_", " ").strip()
+
+
 def _resolve_chunk_page(chunk: dict[str, Any]) -> int | None:
     metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
     page = (
@@ -346,6 +391,7 @@ def _build_not_found_result(
     subsection: str | None,
     best_match: _QuoteMatch | None = None,
     message: str = _NOT_FOUND_MESSAGE,
+    extra_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "status": "not_found",
@@ -361,7 +407,33 @@ def _build_not_found_result(
         payload["section"] = section
     if subsection:
         payload["subsection"] = subsection
+    if extra_fields:
+        payload.update(extra_fields)
     return payload
+
+
+def _build_section_label_retry_fields(chunk_id: str, claimed_quote: str) -> dict[str, Any]:
+    return {
+        "invalid_chunk_id": chunk_id,
+        "invalid_chunk_id_reason": "not_a_tool_returned_chunk_id",
+        "retry_tool": "search_document",
+        "retry_query": claimed_quote[:240],
+        "retry_instructions": (
+            "Call search_document with the evidence quote or entity, then pass the returned "
+            "hit.chunk_id to record_evidence. If you already used read_section, pass a value from "
+            "section.source_chunks[].chunk_id. Only keep evidence after record_evidence returns verified."
+        ),
+    }
+
+
+def _section_label_not_found_message(chunk_id: str) -> str:
+    return (
+        f"chunk_id '{chunk_id}' is not a chunk identifier returned by the document tools. "
+        "record_evidence requires a chunk_id from search_document hits or read_section "
+        "source_chunks. Retry with search_document using the evidence quote or entity and "
+        "pass the returned hit.chunk_id, use section.source_chunks[].chunk_id from read_section, "
+        "or drop this evidence."
+    )
 
 
 def create_record_evidence_tool(
@@ -388,24 +460,41 @@ def create_record_evidence_tool(
             document_id[:8],
         )
 
-        try:
-            chunk = await get_chunk_by_id(
-                chunk_id=chunk_id,
-                user_id=user_id,
-                document_id=document_id,
-            )
-        except Exception as exc:
-            logger.error("Failed to load chunk %s for record_evidence: %s", chunk_id, exc, exc_info=True)
+        section_label = _section_label_from_chunk_id(normalized_chunk_id)
+        if section_label:
             return _build_not_found_result(
                 "",
                 entity=normalized_entity,
                 chunk_id=normalized_chunk_id,
                 claimed_quote=normalized_claimed_quote,
                 page=None,
-                section=None,
+                section=section_label,
                 subsection=None,
-                message="Chunk could not be loaded. Retry with a valid chunk_id or drop this evidence.",
+                message=_section_label_not_found_message(normalized_chunk_id),
+                extra_fields=_build_section_label_retry_fields(
+                    normalized_chunk_id,
+                    normalized_claimed_quote,
+                ),
             )
+        else:
+            try:
+                chunk = await get_chunk_by_id(
+                    chunk_id=normalized_chunk_id,
+                    user_id=user_id,
+                    document_id=document_id,
+                )
+            except Exception as exc:
+                logger.error("Failed to load chunk %s for record_evidence: %s", chunk_id, exc, exc_info=True)
+                return _build_not_found_result(
+                    "",
+                    entity=normalized_entity,
+                    chunk_id=normalized_chunk_id,
+                    claimed_quote=normalized_claimed_quote,
+                    page=None,
+                    section=None,
+                    subsection=None,
+                    message=_INVALID_CHUNK_LOAD_MESSAGE,
+                )
 
         if chunk is None:
             return _build_not_found_result(
@@ -416,10 +505,10 @@ def create_record_evidence_tool(
                 page=None,
                 section=None,
                 subsection=None,
-                message="Chunk not found in the active document. Retry with a valid chunk_id or drop this evidence.",
+                message=_MISSING_CHUNK_MESSAGE,
             )
 
-        chunk_text = str(chunk.get("text") or chunk.get("content_preview") or "").strip()
+        chunk_text = _resolve_chunk_text(chunk)
         page = _resolve_chunk_page(chunk)
         section = _resolve_chunk_section(chunk)
         subsection = _resolve_chunk_subsection(chunk)

@@ -552,7 +552,7 @@ def build_record_evidence_summary_record(
         return None
 
     entity = str(input_payload.get("entity") or "").strip()
-    chunk_id = str(input_payload.get("chunk_id") or "").strip()
+    chunk_id = str(output_payload.get("chunk_id") or input_payload.get("chunk_id") or "").strip()
     verified_quote = str(output_payload.get("verified_quote") or "").strip()
     section = str(output_payload.get("section") or "").strip()
     page = output_payload.get("page")

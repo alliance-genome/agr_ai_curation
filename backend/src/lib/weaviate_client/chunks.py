@@ -17,6 +17,16 @@ from .connection import get_connection
 logger = logging.getLogger(__name__)
 
 
+def _weaviate_object_uuid(obj: Any) -> str | None:
+    """Return a Weaviate object's UUID when the response shape exposes one."""
+    raw_uuid = getattr(obj, "uuid", None)
+    if raw_uuid is None:
+        return None
+
+    normalized = str(raw_uuid).strip()
+    return normalized or None
+
+
 def _run_sync_in_package_tool_subprocess() -> bool:
     """Package tool workers can execute blocking Weaviate calls inline."""
     return os.getenv("AGR_AI_CURATION_PACKAGE_TOOL_SUBPROCESS") == "1"
@@ -798,13 +808,19 @@ async def get_chunks_by_section(
                 # that don't contain the main section name ("Materials and Methods").
                 # It is better to over-fetch and let the LLM filter than to miss content.
                 
-                chunks.append({
+                chunk = {
                     "text": props.get("content"),
                     "chunk_index": props.get("chunkIndex"),
                     "section_title": props.get("sectionTitle"),
                     "page_number": props.get("pageNumber"),
                     "metadata": props.get("metadata")
-                })
+                }
+
+                chunk_id = _weaviate_object_uuid(obj)
+                if chunk_id:
+                    chunk["id"] = chunk_id
+
+                chunks.append(chunk)
                 
                 if len(chunks) >= max_chunks:
                     break
@@ -1248,7 +1264,7 @@ async def get_chunks_by_parent_section(
                     except json.JSONDecodeError:
                         pass
 
-                chunks.append({
+                chunk = {
                     "text": props.get("content"),
                     "chunk_index": props.get("chunkIndex"),
                     "section_title": props.get("sectionTitle"),
@@ -1258,7 +1274,13 @@ async def get_chunks_by_parent_section(
                     "page_number": props.get("pageNumber"),
                     "metadata": props.get("metadata"),
                     "doc_items": doc_items
-                })
+                }
+
+                chunk_id = _weaviate_object_uuid(obj)
+                if chunk_id:
+                    chunk["id"] = chunk_id
+
+                chunks.append(chunk)
 
             return chunks
 
