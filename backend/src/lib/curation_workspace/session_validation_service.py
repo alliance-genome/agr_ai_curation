@@ -15,7 +15,7 @@ from src.lib.curation_workspace.models import (
     CurationReviewSession as ReviewSessionModel,
 )
 from src.lib.curation_workspace.session_common import _latest_snapshot_record, _normalize_uuid
-from src.lib.curation_workspace.session_loading import CANDIDATE_DETAIL_LOAD_OPTIONS, DETAIL_LOAD_OPTIONS
+from src.lib.curation_workspace.session_loading import DETAIL_LOAD_OPTIONS
 from src.lib.curation_workspace.session_persistence import _validation_snapshot_row
 from src.lib.curation_workspace.session_queries import _session_context_maps
 from src.lib.curation_workspace.session_serializers import (

@@ -30,7 +30,6 @@ from src.schemas.curation_workspace import (
     CurationActorType,
     CurationCandidateSource,
     CurationCandidateStatus,
-    CurationValidationScope,
     FieldValidationResult,
 )
 

@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
-    CurationCandidate,
     CurationReviewSession as ReviewSessionModel,
 )
 from src.lib.curation_workspace.session_common import _normalize_uuid
@@ -28,7 +27,6 @@ from src.lib.curation_workspace.session_types import (
 )
 from src.schemas.curation_workspace import (
     CurationActionType,
-    CurationActorType,
     CurationSessionStatus,
 )
 

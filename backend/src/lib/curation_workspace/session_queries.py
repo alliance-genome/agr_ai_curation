@@ -44,6 +44,7 @@ from src.lib.curation_workspace.session_serializers import (
 from src.models.sql.pdf_document import PDFDocument
 from src.models.sql.user import User
 from src.schemas.curation_workspace import (
+    CurationCandidate as CurationCandidatePayload,
     CurationFlowRunListRequest,
     CurationFlowRunListResponse,
     CurationFlowRunSessionsRequest,

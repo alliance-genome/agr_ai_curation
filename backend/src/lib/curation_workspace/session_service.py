@@ -1,32 +1,83 @@
-"""Compatibility facade for curation workspace session services."""
+"""Thin re-export facade for curation workspace session services."""
 
 from __future__ import annotations
 
-from importlib import import_module as _import_module
+from fastapi import HTTPException
 
-_IMPLEMENTATION_MODULES = (
-    "session_types",
-    "session_loading",
-    "session_common",
-    "session_serializers",
-    "session_queries",
-    "session_persistence",
-    "prepared_session_service",
-    "session_validation_service",
-    "session_submission_service",
-    "session_mutation_service",
+from src.lib.curation_workspace.models import (
+    CurationActionLogEntry as SessionActionLogModel,
+)
+from src.lib.curation_workspace.prepared_session_service import (
+    find_reusable_prepared_session,
+    upsert_prepared_session,
+)
+from src.lib.curation_workspace.session_common import (
+    build_actor_claims_payload,
+    normalize_uuid,
+)
+from src.lib.curation_workspace.session_mutation_service import (
+    create_manual_candidate,
+    decide_candidate,
+    delete_candidate,
+    update_candidate_draft,
+    update_session,
+)
+from src.lib.curation_workspace.session_queries import (
+    _list_session_summaries,
+    get_candidate_detail,
+    get_next_session,
+    get_session_detail,
+    get_session_stats,
+    get_session_workspace,
+    list_flow_run_sessions,
+    list_flow_runs,
+    list_sessions,
+)
+from src.lib.curation_workspace.session_serializers import (
+    _serialize_submission_payload_contract,
+    _submission_record,
+    build_action_log_entry,
+    build_evidence_record,
+)
+from src.lib.curation_workspace.session_submission_service import (
+    SUBMISSION_TRANSPORT_FAILURE_MESSAGE,
+    _build_submission_execute_payload,
+    _resolve_submission_transport_adapter,
+    _submission_adapter_registry,
+    _submission_validation_blocking_reason,
+    execute_submission,
+    get_submission,
+    logger,
+    retry_submission,
+    submission_preview,
+)
+from src.lib.curation_workspace.session_types import (
+    PreparedCandidateInput,
+    PreparedDraftFieldInput,
+    PreparedEvidenceRecordInput,
+    PreparedSessionUpsertRequest,
+    PreparedSessionUpsertResult,
+    PreparedValidationSnapshotInput,
+    ReusablePreparedSessionContext,
+)
+from src.lib.curation_workspace.session_validation_service import (
+    CurationDraftFieldSchema,
+    validate_candidate,
+    validate_session,
 )
 
-for _module_name in _IMPLEMENTATION_MODULES:
-    _module = _import_module(f"{__package__}.{_module_name}")
-    for _name in dir(_module):
-        if _name.startswith("__"):
-            continue
-        globals()[_name] = getattr(_module, _name)
-
-del _import_module, _module, _module_name
-
 __all__ = [
+    "HTTPException",
+    "SUBMISSION_TRANSPORT_FAILURE_MESSAGE",
+    "CurationDraftFieldSchema",
+    "SessionActionLogModel",
+    "_build_submission_execute_payload",
+    "_list_session_summaries",
+    "_resolve_submission_transport_adapter",
+    "_serialize_submission_payload_contract",
+    "_submission_adapter_registry",
+    "_submission_record",
+    "_submission_validation_blocking_reason",
     "build_action_log_entry",
     "build_actor_claims_payload",
     "build_evidence_record",
@@ -41,6 +92,7 @@ __all__ = [
     "get_session_detail",
     "get_session_workspace",
     "get_session_stats",
+    "logger",
     "list_flow_run_sessions",
     "list_flow_runs",
     "list_sessions",
