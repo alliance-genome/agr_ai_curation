@@ -4,6 +4,7 @@ import type { SSEEvent } from '@/hooks/useChatStream'
 
 import {
   getFriendlyProgressMessage,
+  isNonRenderedMetadataEvent,
   shouldShowInChat,
 } from './chatProgress'
 
@@ -14,6 +15,11 @@ describe('chatProgress', () => {
     expect(shouldShowInChat('PENDING_USER_INPUT')).toBe(true)
     expect(shouldShowInChat('CHUNK_PROVENANCE')).toBe(false)
     expect(shouldShowInChat('RUN_STARTED')).toBe(false)
+  })
+
+  it('identifies stream metadata events that are not chat-rendered', () => {
+    expect(isNonRenderedMetadataEvent('CHUNK_PROVENANCE')).toBe(true)
+    expect(isNonRenderedMetadataEvent('TEXT_MESSAGE_CONTENT')).toBe(false)
   })
 
   it('uses friendly tool labels without duplicating completion text', () => {

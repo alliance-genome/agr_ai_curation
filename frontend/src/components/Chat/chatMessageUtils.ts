@@ -436,6 +436,19 @@ export function sanitizeStoredMessage(message: SerializedMessage): Message {
   }
 }
 
+function isStoredChatData(value: unknown): value is StoredChatData {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const data = value as Partial<StoredChatData>
+  return (
+    'session_id' in data
+    && (typeof data.session_id === 'string' || data.session_id === null)
+    && Array.isArray(data.messages)
+  )
+}
+
 function withEvidenceReviewAndCurateTarget(
   message: Message,
   reviewAndCurateTarget?: CurationWorkspaceLaunchTarget | null,
@@ -549,10 +562,10 @@ export function loadMessagesFromStorage(
     })
 
     if (stored) {
-      const data = JSON.parse(stored) as StoredChatData | SerializedMessage[]
+      const data = JSON.parse(stored) as unknown
 
-      if ('session_id' in data && 'messages' in data) {
-        debug.log('[Chat] Found new format with session_id:', {
+      if (isStoredChatData(data)) {
+        debug.log('[Chat] Found session-scoped stored messages:', {
           storedSessionId: data.session_id,
           currentSessionId,
           match: data.session_id === currentSessionId,
@@ -567,10 +580,7 @@ export function loadMessagesFromStorage(
         return []
       }
 
-      if (Array.isArray(data)) {
-        debug.log('[Chat] Found legacy format (no session_id), restoring', data.length, 'messages')
-        return data.map(sanitizeStoredMessage)
-      }
+      debug.log('[Chat] Stored messages are missing session scope - skipping restore')
     }
   } catch (error) {
     console.warn('Failed to load messages from localStorage:', error)

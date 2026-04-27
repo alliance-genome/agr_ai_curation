@@ -66,6 +66,19 @@ describe('chatMessageUtils', () => {
     expect(mismatchedMessages).toEqual([])
   })
 
+  it('skips stored message arrays without session scope', () => {
+    const storageKeys = getChatLocalStorageKeys('user-1')
+    localStorage.setItem(storageKeys.messages, JSON.stringify([
+      {
+        role: 'user',
+        content: 'Unscoped message',
+        timestamp: '2026-02-03T04:05:06.000Z',
+      },
+    ] satisfies SerializedMessage[]))
+
+    expect(loadMessagesFromStorage(storageKeys, 'session-1')).toEqual([])
+  })
+
   it('backfills missing Review & Curate targets for supported evidence messages', () => {
     const messages: Message[] = [
       {

@@ -32,7 +32,11 @@ import {
   MIXED_CURATION_PREP_WARNING_MESSAGE,
   UNSUPPORTED_CURATION_REVIEW_MESSAGE,
 } from './constants'
-import { getFriendlyProgressMessage, shouldShowInChat } from './chatProgress'
+import {
+  getFriendlyProgressMessage,
+  isNonRenderedMetadataEvent,
+  shouldShowInChat,
+} from './chatProgress'
 import {
   buildEvidenceReviewAndCurateTarget,
   buildTurnId,
@@ -733,8 +737,9 @@ export function useChatController({
         return
       }
 
-      if (parsed.type === 'CHUNK_PROVENANCE') {
-        debug.log('[CHAT DEBUG] Ignoring legacy CHUNK_PROVENANCE overlay event', {
+      if (isNonRenderedMetadataEvent(parsed.type)) {
+        debug.log('[CHAT DEBUG] Received non-rendered chat metadata event', {
+          type: parsed.type,
           chunk_id: parsed.chunk_id,
           document_id: parsed.document_id,
           active_document_id: activeDocument?.id,

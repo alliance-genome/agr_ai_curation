@@ -1,5 +1,9 @@
 import type { SSEEvent } from '@/hooks/useChatStream'
 
+const NON_RENDERED_METADATA_EVENTS = [
+  'CHUNK_PROVENANCE',
+] as const
+
 /**
  * Filter function to determine which audit events should show in chat progress.
  * Chat shows: SUPERVISOR_START, CREW_START, TOOL_START, TOOL_COMPLETE,
@@ -20,6 +24,12 @@ export function shouldShowInChat(eventType: string): boolean {
     'STOP_CONFIRMED',
   ]
   return chatEvents.includes(eventType)
+}
+
+export function isNonRenderedMetadataEvent(eventType: string): boolean {
+  return NON_RENDERED_METADATA_EVENTS.includes(
+    eventType as (typeof NON_RENDERED_METADATA_EVENTS)[number],
+  )
 }
 
 /**
