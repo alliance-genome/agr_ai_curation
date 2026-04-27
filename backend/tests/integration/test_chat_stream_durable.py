@@ -12,19 +12,10 @@ from src.lib.curation_workspace.models import (
 )
 from src.models.sql.chat_message import ChatMessage as ChatMessageModel
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
+from tests.chat_api_test_support import patch_chat_impl
 from tests.integration.evidence_test_support import collect_sse_events
 
 pytest_plugins = ["tests.integration.evidence_test_support"]
-
-
-def _patch_chat_impl(monkeypatch, modules, name: str, value) -> None:
-    patched = False
-    for module in modules:
-        if hasattr(module, name):
-            monkeypatch.setattr(module, name, value)
-            patched = True
-    if not patched:
-        raise AttributeError(name)
 
 
 def _configure_stream_mocks(
@@ -39,16 +30,16 @@ def _configure_stream_mocks(
 
     chat_modules = (chat_common, chat_stream)
 
-    _patch_chat_impl(monkeypatch, chat_modules, "set_current_session_id", lambda _session_id: None)
-    _patch_chat_impl(monkeypatch, chat_modules, "set_current_user_id", lambda _user_id: None)
-    _patch_chat_impl(
+    patch_chat_impl(monkeypatch, chat_modules, "set_current_session_id", lambda _session_id: None)
+    patch_chat_impl(monkeypatch, chat_modules, "set_current_user_id", lambda _user_id: None)
+    patch_chat_impl(
         monkeypatch,
         chat_modules,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: document_state_payload),
     )
-    _patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_cognito", lambda _groups: [])
-    _patch_chat_impl(monkeypatch, chat_modules, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map or {}))
+    patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_cognito", lambda _groups: [])
+    patch_chat_impl(monkeypatch, chat_modules, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map or {}))
 
     async def _register_active_stream(
         session_id: str,
@@ -70,16 +61,16 @@ def _configure_stream_mocks(
     async def _default_check_cancel_signal(_session_id: str) -> bool:
         return False
 
-    _patch_chat_impl(monkeypatch, chat_modules, "register_active_stream", _register_active_stream)
-    _patch_chat_impl(monkeypatch, chat_modules, "unregister_active_stream", _unregister_active_stream)
-    _patch_chat_impl(monkeypatch, chat_modules, "clear_cancel_signal", _clear_cancel_signal)
-    _patch_chat_impl(
+    patch_chat_impl(monkeypatch, chat_modules, "register_active_stream", _register_active_stream)
+    patch_chat_impl(monkeypatch, chat_modules, "unregister_active_stream", _unregister_active_stream)
+    patch_chat_impl(monkeypatch, chat_modules, "clear_cancel_signal", _clear_cancel_signal)
+    patch_chat_impl(
         monkeypatch,
         chat_modules,
         "check_cancel_signal",
         check_cancel_signal or _default_check_cancel_signal,
     )
-    _patch_chat_impl(monkeypatch, chat_modules, "run_agent_streamed", run_agent_streamed)
+    patch_chat_impl(monkeypatch, chat_modules, "run_agent_streamed", run_agent_streamed)
 
 
 def test_chat_stream_persists_durable_rows_and_emits_turn_completed(client, monkeypatch, test_db):
@@ -223,7 +214,7 @@ def test_chat_stream_extraction_persistence_failure_emits_turn_failed(client, mo
         "src.lib.curation_workspace.extraction_results._get_agent_curation_metadata",
         lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
     )
-    _patch_chat_impl(
+    patch_chat_impl(
         monkeypatch,
         chat_modules,
         "persist_extraction_results",
@@ -339,7 +330,7 @@ def test_chat_stream_turn_save_failed_then_assistant_rescue_is_idempotent(
         "src.lib.curation_workspace.extraction_results._get_agent_curation_metadata",
         lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
     )
-    _patch_chat_impl(monkeypatch, chat_modules, "_get_chat_history_repository", _get_repository)
+    patch_chat_impl(monkeypatch, chat_modules, "_get_chat_history_repository", _get_repository)
 
     with client.stream(
         "POST",

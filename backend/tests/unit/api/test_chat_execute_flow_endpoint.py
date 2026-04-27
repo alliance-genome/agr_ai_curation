@@ -12,20 +12,13 @@ from uuid import uuid4
 from fastapi.responses import StreamingResponse
 import pytest
 
+from tests.chat_api_test_support import patch_chat_impl_for
+
 chat = importlib.import_module("src.api.chat_execute_flow")
 chat_common = importlib.import_module("src.api.chat_common")
 
 _CHAT_IMPLEMENTATION_MODULES = (chat_common, chat)
-
-
-def _patch_chat_impl(monkeypatch, name: str, value) -> None:
-    patched = False
-    for module in _CHAT_IMPLEMENTATION_MODULES:
-        if hasattr(module, name):
-            monkeypatch.setattr(module, name, value)
-            patched = True
-    if not patched:
-        raise AttributeError(name)
+_patch_chat_impl = patch_chat_impl_for(_CHAT_IMPLEMENTATION_MODULES)
 
 
 @pytest.fixture(autouse=True)

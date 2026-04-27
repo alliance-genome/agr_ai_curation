@@ -22,19 +22,11 @@ from src.lib.chat_history_repository import (
     ChatMessageRecord,
 )
 from src.lib.curation_workspace import extraction_results as extraction_results_module
+from tests.chat_api_test_support import patch_chat_impl_for
 
 
 _CHAT_IMPLEMENTATION_MODULES = (chat_common, chat_documents, chat_sessions, chat_stream)
-
-
-def _patch_chat_impl(monkeypatch, name: str, value) -> None:
-    patched = False
-    for module in _CHAT_IMPLEMENTATION_MODULES:
-        if hasattr(module, name):
-            monkeypatch.setattr(module, name, value)
-            patched = True
-    if not patched:
-        raise AttributeError(name)
+_patch_chat_impl = patch_chat_impl_for(_CHAT_IMPLEMENTATION_MODULES)
 
 
 def _ts(hour: int, minute: int = 0) -> datetime:

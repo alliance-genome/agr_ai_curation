@@ -14,19 +14,11 @@ import pytest
 from src.api import chat, chat_common, chat_stream
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
+from tests.chat_api_test_support import patch_chat_impl_for
 
 
 _CHAT_IMPLEMENTATION_MODULES = (chat_common, chat_stream)
-
-
-def _patch_chat_impl(monkeypatch, name: str, value) -> None:
-    patched = False
-    for module in _CHAT_IMPLEMENTATION_MODULES:
-        if hasattr(module, name):
-            monkeypatch.setattr(module, name, value)
-            patched = True
-    if not patched:
-        raise AttributeError(name)
+_patch_chat_impl = patch_chat_impl_for(_CHAT_IMPLEMENTATION_MODULES)
 
 
 async def _consume_stream(response: StreamingResponse) -> list[dict]:
