@@ -14,7 +14,7 @@ set -euo pipefail
 # re-review request, or report maxed-out), and returns a status.
 #
 # Exit codes:
-#   0  — quiet (no feedback within wait window) or maxed_out
+#   0  — quiet, pending (awaiting re-review response), or maxed_out
 #  10  — detected (feedback found, report file written)
 #   2  — error
 # =============================================================================
@@ -34,8 +34,11 @@ Options:
   --poll-seconds VALUE      Poll interval in seconds (default: 30)
   --head-sha VALUE          Current PR head SHA for re-review marker dedup (optional; auto-detected from PR if omitted)
   --disposition-file PATH   File containing feedback disposition context (items intentionally not addressed and why)
+  --workflow-name VALUE     GitHub Actions workflow to watch while waiting (default: Claude Code Review; empty disables)
   --top-json-file PATH      Test fixture override for gh pr view JSON
   --inline-json-file PATH   Test fixture override for gh api inline-comment JSON
+  --workflow-runs-json-file PATH
+                           Test fixture override for gh run list JSON
   --dry-run                 Do not post re-review requests; report what would happen
 EOF
 }
@@ -49,8 +52,10 @@ wait_seconds=300
 poll_seconds=30
 head_sha=""
 disposition_file=""
+workflow_name="Claude Code Review"
 top_json_file=""
 inline_json_file=""
+workflow_runs_json_file=""
 dry_run=0
 
 while [[ $# -gt 0 ]]; do
@@ -91,12 +96,20 @@ while [[ $# -gt 0 ]]; do
       disposition_file="${2:-}"
       shift 2
       ;;
+    --workflow-name)
+      workflow_name="${2:-}"
+      shift 2
+      ;;
     --top-json-file)
       top_json_file="${2:-}"
       shift 2
       ;;
     --inline-json-file)
       inline_json_file="${2:-}"
+      shift 2
+      ;;
+    --workflow-runs-json-file)
+      workflow_runs_json_file="${2:-}"
       shift 2
       ;;
     --dry-run)
@@ -137,7 +150,7 @@ fetch_top_json() {
     cat "${top_json_file}"
   else
     gh pr view "${pr_number}" --repo "${repo}" \
-      --json comments,reviews,url,headRefOid,commits
+      --json comments,reviews,url,title,headRefOid,headRefName,commits
   fi
 }
 
@@ -146,6 +159,17 @@ fetch_inline_json() {
     cat "${inline_json_file}"
   else
     gh api "repos/${repo}/pulls/${pr_number}/comments?per_page=100"
+  fi
+}
+
+fetch_workflow_runs_json() {
+  if [[ -n "${workflow_runs_json_file}" ]]; then
+    cat "${workflow_runs_json_file}"
+  elif [[ -z "${workflow_name}" ]]; then
+    echo '[]'
+  else
+    gh run list --repo "${repo}" --workflow "${workflow_name}" --limit 30 \
+      --json databaseId,workflowName,displayTitle,status,conclusion,event,createdAt,updatedAt,headSha,headBranch,url
   fi
 }
 
@@ -353,6 +377,124 @@ print(f"LOOP_PR_URL={pr_url}")
 PY
 }
 
+analyze_workflow_runs() {
+  local runs_json="$1"
+  local wait_since="$2"
+  local pr_title="$3"
+
+  WORKFLOW_RUNS_JSON="${runs_json}" \
+    python3 - "${wait_since}" "${pr_title}" <<'PY'
+import json
+import os
+import sys
+from datetime import datetime, timezone
+
+since_raw = sys.argv[1].strip()
+pr_title = sys.argv[2].strip()
+
+
+def parse_ts(value):
+    if not value:
+        return None
+    candidate = value.strip()
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+    dt = datetime.fromisoformat(candidate)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def emit(status, run=None):
+    print(f"POLL_WORKFLOW_STATUS={status}")
+    if not run:
+        return
+    print(f"POLL_WORKFLOW_RUN_ID={run.get('databaseId') or ''}")
+    print(f"POLL_WORKFLOW_RUN_URL={run.get('url') or ''}")
+    print(f"POLL_WORKFLOW_RUN_EVENT={run.get('event') or ''}")
+    print(f"POLL_WORKFLOW_RUN_CONCLUSION={run.get('conclusion') or ''}")
+    print(f"POLL_WORKFLOW_RUN_CREATED_AT={run.get('createdAt') or ''}")
+    print(f"POLL_WORKFLOW_RUN_UPDATED_AT={run.get('updatedAt') or ''}")
+
+
+if not pr_title:
+    emit("unknown_pr_title")
+    sys.exit(0)
+
+try:
+    runs = json.loads(os.environ.get("WORKFLOW_RUNS_JSON", "[]") or "[]")
+except Exception as exc:
+    print("POLL_WORKFLOW_STATUS=error")
+    print(f"POLL_WORKFLOW_ERROR={type(exc).__name__}: {exc}")
+    sys.exit(2)
+
+if not isinstance(runs, list):
+    emit("no_match")
+    sys.exit(0)
+
+since_dt = parse_ts(since_raw)
+matches = []
+for run in runs:
+    if not isinstance(run, dict):
+        continue
+    if (run.get("displayTitle") or "").strip() != pr_title:
+        continue
+    if (run.get("event") or "").strip() not in {"pull_request", "issue_comment"}:
+        continue
+    created_at = parse_ts(run.get("createdAt") or "")
+    if since_dt is not None and created_at is not None and created_at < since_dt:
+        continue
+    run["_created_dt"] = created_at or datetime.min.replace(tzinfo=timezone.utc)
+    matches.append(run)
+
+if not matches:
+    emit("no_match")
+    sys.exit(0)
+
+pending = [
+    run for run in matches
+    if (run.get("status") or "").strip().lower() != "completed"
+]
+if pending:
+    emit("pending", max(pending, key=lambda r: r["_created_dt"]))
+    sys.exit(0)
+
+# Claude's own PR comment also creates an issue_comment workflow run, which
+# is expected to be skipped by the workflow-level if condition. Ignore those
+# skipped runs when deciding whether the actual Claude run succeeded or failed.
+non_skipped = [
+    run for run in matches
+    if (run.get("conclusion") or "").strip().lower() not in {"", "skipped"}
+]
+if not non_skipped:
+    emit("skipped_only", max(matches, key=lambda r: r["_created_dt"]))
+    sys.exit(0)
+
+latest = max(non_skipped, key=lambda r: r["_created_dt"])
+conclusion = (latest.get("conclusion") or "").strip().lower()
+
+if conclusion in {"success", "neutral"}:
+    emit("completed", latest)
+elif conclusion in {"failure", "timed_out", "action_required", "startup_failure"}:
+    emit("failed", latest)
+elif conclusion == "cancelled":
+    emit("cancelled", latest)
+else:
+    emit("completed_unknown", latest)
+PY
+}
+
+emit_poll_workflow_fields() {
+  local poll_output="$1"
+
+  printf '%s\n' "${poll_output}" | awk '
+    /^POLL_WORKFLOW_/ {
+      sub(/^POLL_/, "CLAUDE_LOOP_")
+      print
+    }
+  '
+}
+
 # ── Poll for new Claude feedback ──────────────────────────────────────
 
 poll_for_feedback() {
@@ -443,9 +585,40 @@ PY
       return 2
     fi
 
+    local workflow_output workflow_rc workflow_status
+    workflow_output=""
+    workflow_status=""
+    if (( wait_seconds > 0 )); then
+      local pr_title workflow_runs_json
+      pr_title="$(printf '%s' "${top_json}" | jq -r '.title // ""')"
+      workflow_runs_json="$(fetch_workflow_runs_json)"
+
+      set +e
+      workflow_output="$(analyze_workflow_runs "${workflow_runs_json}" "${wait_since}" "${pr_title}")"
+      workflow_rc=$?
+      set -e
+
+      if (( workflow_rc == 2 )); then
+        printf '%s\n' "${workflow_output}"
+        return 2
+      fi
+
+      workflow_status="$(printf '%s\n' "${workflow_output}" | awk -F= '$1 == "POLL_WORKFLOW_STATUS" {print $2; exit}')"
+      case "${workflow_status}" in
+        failed|cancelled)
+          printf '%s\n' "${workflow_output}"
+          return 20
+          ;;
+      esac
+    fi
+
     local now
     now="$(date +%s)"
     if (( now >= deadline || wait_seconds == 0 )); then
+      if [[ "${workflow_status}" == "pending" ]]; then
+        printf '%s\n' "${workflow_output}"
+        return 12
+      fi
       printf '%s\n' "${check_output}"
       return 0
     fi
@@ -636,6 +809,7 @@ case "${LOOP_ACTION}" in
 
   maxed_out)
     echo "CLAUDE_LOOP_STATUS=maxed_out"
+    echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
     echo "CLAUDE_LOOP_ROUND=${LOOP_ROUNDS_COMPLETED}"
     echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
     echo "CLAUDE_LOOP_LATEST_AT=${LOOP_LATEST_FEEDBACK_AT}"
@@ -647,6 +821,7 @@ case "${LOOP_ACTION}" in
     report_file="$(mktemp /tmp/claude-review-report-XXXXXX.md)"
     generate_report "${report_file}"
     echo "CLAUDE_LOOP_STATUS=detected"
+    echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
     echo "CLAUDE_LOOP_ROUND=${LOOP_ROUNDS_COMPLETED}"
     echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
     echo "CLAUDE_LOOP_REPORT_FILE=${report_file}"
@@ -679,6 +854,7 @@ case "${LOOP_ACTION}" in
       eval "${updated_analysis}"
 
       echo "CLAUDE_LOOP_STATUS=detected"
+      echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
       echo "CLAUDE_LOOP_ROUND=${LOOP_ROUNDS_COMPLETED}"
       echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
       echo "CLAUDE_LOOP_REPORT_FILE=${report_file}"
@@ -692,7 +868,27 @@ case "${LOOP_ACTION}" in
       exit 2
     fi
 
+    if (( poll_rc == 20 )); then
+      echo "CLAUDE_LOOP_STATUS=error"
+      echo "CLAUDE_LOOP_ERROR=Claude workflow did not complete successfully"
+      emit_poll_workflow_fields "${poll_output}"
+      exit 2
+    fi
+
+    if (( poll_rc == 12 )) || [[ "${LOOP_ACTION}" == "request_and_wait" || ( "${LOOP_ACTION}" == "wait" && -n "${LOOP_LATEST_FEEDBACK_AT}" ) ]]; then
+      echo "CLAUDE_LOOP_STATUS=pending"
+      echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
+      echo "CLAUDE_LOOP_ROUND=${LOOP_ROUND}"
+      echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
+      echo "CLAUDE_LOOP_LATEST_AT=${LOOP_LATEST_FEEDBACK_AT}"
+      echo "CLAUDE_LOOP_WAIT_SINCE=${LOOP_WAIT_SINCE}"
+      echo "CLAUDE_LOOP_PR_URL=${LOOP_PR_URL}"
+      emit_poll_workflow_fields "${poll_output}"
+      exit 0
+    fi
+
     echo "CLAUDE_LOOP_STATUS=quiet"
+    echo "CLAUDE_LOOP_ACTION=${LOOP_ACTION}"
     echo "CLAUDE_LOOP_ROUND=${LOOP_ROUND}"
     echo "CLAUDE_LOOP_MAX_ROUNDS=${LOOP_MAX_ROUNDS}"
     echo "CLAUDE_LOOP_LATEST_AT=${LOOP_LATEST_FEEDBACK_AT}"
