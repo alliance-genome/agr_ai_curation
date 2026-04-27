@@ -548,7 +548,7 @@ describe('Chat persistence', () => {
     }
   })
 
-  it('does not dispatch legacy pdf overlay updates for chunk provenance events', async () => {
+  it('does not dispatch pdf overlay updates for chunk provenance metadata', async () => {
     const listener = vi.fn()
     window.addEventListener('pdf-overlay-update', listener as EventListener)
 
