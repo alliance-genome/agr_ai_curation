@@ -11,25 +11,44 @@ import logging
 import os
 import re
 import asyncio
-import hashlib
 import uuid
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path as FilePath
-from typing import Any, Callable, Dict, List, Literal, NoReturn, Optional
+from typing import Any, Callable, Dict, List, NoReturn, Optional
 
 import anthropic
 import boto3
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .auth import get_auth_dependency
-from .logs import (
-    ALLOWED_CONTAINERS as LOGS_API_ALLOWED_CONTAINERS,
-    ALLOWED_LOG_LEVELS as LOGS_API_ALLOWED_LOG_LEVELS,
+from . import agent_studio_opus_tools as opus_tools
+from .agent_studio_schemas import (
+    AgentMetadata,
+    AgentTemplateItem,
+    AgentTemplatesResponse,
+    AgentTestRequest,
+    CatalogResponse,
+    ChatRequest,
+    CloneAgentRequest,
+    CombinedPromptRequest,
+    CombinedPromptResponse,
+    DirectSubmissionRequest,
+    DirectSubmissionResponse,
+    ManualSuggestionRequest,
+    ModelOption,
+    ModelsResponse,
+    PromptPreviewResponse,
+    RegistryMetadataResponse,
+    ShareAgentRequest,
+    SuggestionResponse,
+    ToolIdeaConversationEntry,
+    ToolIdeaCreateRequest,
+    ToolIdeaListResponse,
+    ToolIdeaResponseItem,
+    ToolLibraryItem,
+    ToolLibraryResponse,
 )
 from src.lib.agent_studio import (
     PromptCatalog,
@@ -44,11 +63,11 @@ from src.lib.agent_studio import (
     PromptSuggestion,
     SuggestionType,
     submit_suggestion_sns,
-    SUBMIT_SUGGESTION_TOOL,
 )
 from src.lib.agent_studio.catalog_service import get_prompt_catalog
+import src.lib.agent_studio.chat_session as agent_studio_chat_session
+import src.lib.agent_studio.prompt_builder as prompt_builder
 from src.lib.agent_studio.flow_tools import (
-    register_flow_tools,
     set_workflow_user_context,
     clear_workflow_user_context,
     set_current_flow_context,
@@ -78,14 +97,10 @@ from src.lib.agent_studio.tool_idea_service import (
 from src.lib.agent_studio.streaming import flatten_runner_event as _flatten_runner_event
 from src.lib.alerts.tool_failure_notifier import notify_tool_failure
 from src.lib.chat_history_repository import (
-    ALL_CHAT_KINDS_SENTINEL,
-    ASSISTANT_CHAT_KIND,
-    AGENT_STUDIO_CHAT_KIND,
     ChatHistoryRepository,
     ChatHistorySessionNotFoundError,
     ChatMessageRecord,
     ChatSessionRecord,
-    MAX_MESSAGE_PAGE_SIZE,
 )
 from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
@@ -100,7 +115,7 @@ logger = logging.getLogger(__name__)
 
 PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
 LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR = "ANTHROPIC_OPUS_MODEL"
-AGENT_STUDIO_SEEDED_SESSION_PREFIX = "agent-studio-seed:"
+AGENT_STUDIO_SEEDED_SESSION_PREFIX = agent_studio_chat_session.AGENT_STUDIO_SEEDED_SESSION_PREFIX
 AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES = [
     # Prefer the canonical config copy when it exists; packaged files are
     # retained as fallbacks for test containers and backend-only packaging.
@@ -153,24 +168,10 @@ def _raise_agent_studio_validation_http_exception(
 
 def _list_anthropic_catalog_models() -> List[Any]:
     """Return Anthropic models from catalog, sorted with defaults first."""
-    try:
-        models = list_model_definitions()
-    except Exception as exc:
-        logger.warning("Failed to load model catalog while resolving prompt explorer model: %s", exc)
-        return []
-
-    anthropic_models = [
-        model
-        for model in models
-        if str(getattr(model, "provider", "") or "").strip().lower() == "anthropic"
-    ]
-    anthropic_models.sort(
-        key=lambda model: (
-            not bool(getattr(model, "default", False)),
-            str(getattr(model, "name", "") or "").lower(),
-        )
+    return prompt_builder.list_anthropic_catalog_models(
+        list_model_definitions=list_model_definitions,
+        logger=logger,
     )
-    return anthropic_models
 
 
 def _resolve_prompt_explorer_model() -> tuple[str, str]:
@@ -187,44 +188,17 @@ def _resolve_prompt_explorer_model() -> tuple[str, str]:
         or os.getenv(LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR)
         or ""
     ).strip()
-
-    catalog_models = _list_anthropic_catalog_models()
-    catalog_name_by_id = {
-        str(getattr(model, "model_id", "")).strip(): str(getattr(model, "name", "")).strip()
-        for model in catalog_models
-        if str(getattr(model, "model_id", "")).strip()
-    }
-
-    if configured_model_id:
-        configured_name = catalog_name_by_id.get(configured_model_id) or configured_model_id
-        return configured_model_id, configured_name
-
-    if catalog_models:
-        selected = catalog_models[0]
-        selected_id = str(getattr(selected, "model_id", "")).strip()
-        selected_name = str(getattr(selected, "name", "")).strip() or selected_id
-        if selected_id:
-            return selected_id, selected_name
-
-    raise ValueError(
-        "No Agent Studio Anthropic model configured. Set PROMPT_EXPLORER_MODEL_ID "
-        "(or legacy ANTHROPIC_OPUS_MODEL), or add an anthropic model to config/models.yaml."
+    return prompt_builder.resolve_prompt_explorer_model(
+        configured_model_id=configured_model_id,
+        catalog_models=_list_anthropic_catalog_models(),
     )
 
 
 def _load_agent_studio_system_prompt_template() -> str:
     """Load the shared Agent Studio system prompt template from alliance_config."""
-    for candidate in AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES:
-        try:
-            if candidate.exists():
-                return candidate.read_text(encoding="utf-8")
-        except OSError:
-            logger.debug("Failed to read Agent Studio system prompt template candidate: %s", candidate)
-
-    candidate_list = ", ".join(str(path) for path in AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES)
-    raise RuntimeError(
-        "Failed to load Agent Studio system prompt template from any candidate path: "
-        f"{candidate_list}"
+    return prompt_builder.load_agent_studio_system_prompt_template(
+        candidates=AGENT_STUDIO_SYSTEM_PROMPT_TEMPLATE_CANDIDATES,
+        logger=logger,
     )
 
 
@@ -236,219 +210,6 @@ def _normalize_suggestion_type(value: Any) -> Any:
 
 # Create router with prefix
 router = APIRouter(prefix="/api/agent-studio")
-
-
-# ============================================================================
-# Request/Response Models
-# ============================================================================
-
-class ChatRequest(BaseModel):
-    """Request to send a message to Opus."""
-    messages: List[ChatMessage]
-    context: Optional[ChatContext] = None
-
-
-class CatalogResponse(BaseModel):
-    """Response for prompt catalog."""
-    catalog: PromptCatalog
-
-
-class CombinedPromptRequest(BaseModel):
-    """Request for a combined prompt (base + group rules)."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    agent_id: str
-    group_id: str = Field(
-        ...,
-        validation_alias=AliasChoices("group_id", "mod_id"),
-    )
-
-
-class CombinedPromptResponse(BaseModel):
-    """Response with combined prompt."""
-    agent_id: str
-    group_id: str
-    combined_prompt: str
-
-
-class PromptPreviewResponse(BaseModel):
-    """Response with resolved prompt text for preview/testing."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    agent_id: str
-    prompt: str
-    group_id: Optional[str] = None
-    source: str
-    parent_agent_key: Optional[str] = None
-    include_group_rules: Optional[bool] = None
-
-
-class AgentTestRequest(BaseModel):
-    """Request for isolated agent test streaming."""
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    input: str
-    group_id: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("group_id", "mod_id"),
-    )
-    document_id: Optional[str] = None
-    session_id: Optional[str] = None
-
-
-class ManualSuggestionRequest(BaseModel):
-    """Request to manually submit a prompt suggestion."""
-
-    model_config = ConfigDict(populate_by_name=True)
-    agent_id: Optional[str] = None  # Optional for trace-based/general feedback
-    suggestion_type: str  # Will be validated against SuggestionType
-    summary: str
-    detailed_reasoning: str
-    proposed_change: Optional[str] = None
-    group_id: Optional[str] = Field(
-        None,
-        validation_alias=AliasChoices("group_id", "mod_id"),
-    )
-    trace_id: Optional[str] = None  # When provided without agent_id, this is conversation-based feedback
-
-
-class SuggestionResponse(BaseModel):
-    """Response after submitting a suggestion."""
-    status: str
-    suggestion_id: Optional[str] = None
-    message: str
-
-
-class AgentMetadata(BaseModel):
-    """Metadata for a single agent."""
-    name: str
-    icon: str
-    category: str
-    subcategory: Optional[str] = None
-    supervisor_tool: Optional[str] = None
-
-
-class RegistryMetadataResponse(BaseModel):
-    """Response for registry metadata endpoint."""
-    agents: Dict[str, AgentMetadata]
-
-
-class ModelOption(BaseModel):
-    """Curator-selectable model option."""
-
-    model_id: str
-    name: str
-    provider: str
-    description: str = ""
-    guidance: str = ""
-    default: bool = False
-    supports_reasoning: bool = True
-    supports_temperature: bool = True
-    reasoning_options: List[str] = Field(default_factory=list)
-    default_reasoning: Optional[str] = None
-    reasoning_descriptions: Dict[str, str] = Field(default_factory=dict)
-    recommended_for: List[str] = Field(default_factory=list)
-    avoid_for: List[str] = Field(default_factory=list)
-
-
-class ModelsResponse(BaseModel):
-    """Response for available model options."""
-
-    models: List[ModelOption]
-
-
-class ToolLibraryItem(BaseModel):
-    """Single tool entry from tool library policy table."""
-
-    tool_key: str
-    display_name: str
-    description: str
-    category: str
-    curator_visible: bool
-    allow_attach: bool
-    allow_execute: bool
-    config: Dict[str, Any] = Field(default_factory=dict)
-
-
-class ToolLibraryResponse(BaseModel):
-    """Response for tool library."""
-
-    tools: List[ToolLibraryItem]
-
-
-class AgentTemplateItem(BaseModel):
-    """System agent template option for Agent Workshop."""
-
-    agent_id: str
-    name: str
-    description: Optional[str] = None
-    icon: str
-    category: Optional[str] = None
-    model_id: str
-    tool_ids: List[str]
-    output_schema_key: Optional[str] = None
-
-
-class AgentTemplatesResponse(BaseModel):
-    """Response for available system templates."""
-
-    templates: List[AgentTemplateItem]
-
-
-class CloneAgentRequest(BaseModel):
-    """Optional clone parameters."""
-
-    name: Optional[str] = Field(None, min_length=1, max_length=100)
-
-
-class ShareAgentRequest(BaseModel):
-    """Visibility update payload for sharing toggle."""
-
-    visibility: Literal["private", "project"]
-
-
-class ToolIdeaConversationEntry(BaseModel):
-    """Single Opus ideation conversation turn."""
-
-    role: Literal["user", "assistant", "system"]
-    content: str = Field(..., min_length=1)
-    timestamp: Optional[str] = None
-
-
-class ToolIdeaCreateRequest(BaseModel):
-    """Payload for submitting a new tool idea request."""
-
-    title: str = Field(..., min_length=1, max_length=255)
-    description: str = Field(..., min_length=1)
-    opus_conversation: Optional[List[ToolIdeaConversationEntry]] = None
-
-    model_config = ConfigDict(extra="forbid")
-
-
-class ToolIdeaResponseItem(BaseModel):
-    """Tool idea request row returned to curators."""
-
-    id: str
-    user_id: int
-    project_id: Optional[str] = None
-    title: str
-    description: str
-    opus_conversation: List[Dict[str, Any]]
-    status: Literal["submitted", "reviewed", "in_progress", "completed", "declined"]
-    developer_notes: Optional[str] = None
-    resulting_tool_key: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-
-
-class ToolIdeaListResponse(BaseModel):
-    """Response payload for current user's tool idea requests."""
-
-    tool_ideas: List[ToolIdeaResponseItem]
-    total: int
 
 
 def _merge_custom_agents_into_catalog(
@@ -1225,610 +986,74 @@ async def test_agent_endpoint(
 # Chat Endpoints (Configured Anthropic Model)
 # ============================================================================
 
-# Convert tool definition to Anthropic format
-ANTHROPIC_SUGGESTION_TOOL = {
-    "name": SUBMIT_SUGGESTION_TOOL["name"],
-    "description": SUBMIT_SUGGESTION_TOOL["description"],
-    "input_schema": SUBMIT_SUGGESTION_TOOL["input_schema"],
-}
-
-UPDATE_WORKSHOP_PROMPT_TOOL = {
-    "name": "update_workshop_prompt_draft",
-    "description": """Propose a prompt update for the current Agent Workshop draft.
-
-Use this when the curator asks you to rewrite, replace, or significantly refactor
-their current workshop prompt (main prompt or selected group prompt). This tool does
-NOT auto-apply or auto-save changes.
-The UI will show the proposal and require explicit curator approval before applying.
-""",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "target_prompt": {
-                "type": "string",
-                "enum": ["main", "group", "mod"],
-                "description": "Which workshop prompt to update. Use 'main' for the base system prompt and 'group' for the selected group prompt override. Legacy 'mod' is accepted during migration.",
-                "default": "main",
-            },
-            "target_group_id": {
-                "type": "string",
-                "description": "Optional group ID when target_prompt='group' (for example 'WB'). Must match the currently selected group in Agent Workshop. Legacy 'target_mod_id' is accepted during migration.",
-            },
-            "updated_prompt": {
-                "type": "string",
-                "description": "Complete replacement prompt text (required when apply_mode='replace').",
-            },
-            "edits": {
-                "type": "array",
-                "description": "Targeted edit operations (required when apply_mode='targeted_edit').",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "operation": {
-                            "type": "string",
-                            "enum": ["replace_text", "replace_section"],
-                            "description": "Edit operation type.",
-                        },
-                        "find_text": {
-                            "type": "string",
-                            "description": "Text to find when operation='replace_text'.",
-                        },
-                        "replacement_text": {
-                            "type": "string",
-                            "description": "Replacement text for the operation.",
-                        },
-                        "occurrence": {
-                            "type": "string",
-                            "enum": ["first", "last", "all"],
-                            "description": "Which occurrence to replace for replace_text (default: first).",
-                        },
-                        "section_heading": {
-                            "type": "string",
-                            "description": "Markdown section heading text to replace when operation='replace_section'.",
-                        },
-                    },
-                    "required": ["operation"],
-                },
-            },
-            "change_summary": {
-                "type": "string",
-                "description": "Optional short summary of what changed and why.",
-            },
-            "apply_mode": {
-                "type": "string",
-                "enum": ["replace", "targeted_edit"],
-                "description": "How to build the proposed update.",
-                "default": "replace",
-            },
-        },
-        "required": [],
-    },
-}
-
-ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = UPDATE_WORKSHOP_PROMPT_TOOL
-
-REPORT_TOOL_FAILURE_TOOL = {
-    "name": "report_tool_failure",
-    "description": """Report a tool failure to the development team.
-
-Use this tool immediately when any tool call returns an infrastructure or service
-failure (error status, timeout, connection failure, service unavailable, or
-unexpected empty response that indicates a system issue).
-
-Do NOT use this for user input errors (e.g., invalid gene names, malformed IDs).""",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "tool_name": {
-                "type": "string",
-                "description": "Name of the tool that failed",
-            },
-            "error_message": {
-                "type": "string",
-                "description": "Error message or concise description of the failure",
-            },
-            "error_type": {
-                "type": "string",
-                "enum": [
-                    "timeout",
-                    "connection_error",
-                    "service_unavailable",
-                    "unexpected_error",
-                    "empty_response",
-                    "api_error",
-                ],
-                "description": "Category of the tool failure",
-            },
-            "context": {
-                "type": "string",
-                "description": "Optional brief context describing what you were trying to do",
-            },
-        },
-        "required": ["tool_name", "error_message", "error_type"],
-    },
-}
-
-ANTHROPIC_REPORT_TOOL_FAILURE_TOOL = REPORT_TOOL_FAILURE_TOOL
-
-CHAT_HISTORY_TOOL_CHAT_KINDS = [
-    ASSISTANT_CHAT_KIND,
-    AGENT_STUDIO_CHAT_KIND,
-    ALL_CHAT_KINDS_SENTINEL,
-]
-
-LIST_RECENT_CHATS_TOOL = {
-    "name": "list_recent_chats",
-    "description": (
-        "List the authenticated user's most recent durable chat sessions across "
-        "assistant_chat, agent_studio, or both. Use this when the user asks for "
-        "their last few chats or recent sessions."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "chat_kind": {
-                "type": "string",
-                "enum": CHAT_HISTORY_TOOL_CHAT_KINDS,
-                "description": (
-                    "Which durable chat kind to browse. Use 'all' to include both "
-                    "assistant_chat and agent_studio sessions."
-                ),
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of recent sessions to return (default: 10, max: 25).",
-                "default": 10,
-                "minimum": 1,
-                "maximum": 25,
-            },
-        },
-        "required": ["chat_kind"],
-    },
-}
-
-SEARCH_CHAT_HISTORY_TOOL = {
-    "name": "search_chat_history",
-    "description": (
-        "Search the authenticated user's durable chat history by keyword across "
-        "session titles and transcript content. Use this when the user refers to "
-        "a past conversation topic, phrase, gene, or session theme."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "query": {
-                "type": "string",
-                "description": "Full-text search query to run against durable chat history.",
-            },
-            "chat_kind": {
-                "type": "string",
-                "enum": CHAT_HISTORY_TOOL_CHAT_KINDS,
-                "description": (
-                    "Which durable chat kind to search. Use 'all' to include both "
-                    "assistant_chat and agent_studio sessions."
-                ),
-            },
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of matching sessions to return (default: 10, max: 25).",
-                "default": 10,
-                "minimum": 1,
-                "maximum": 25,
-            },
-        },
-        "required": ["query", "chat_kind"],
-    },
-}
-
-GET_CHAT_CONVERSATION_TOOL = {
-    "name": "get_chat_conversation",
-    "description": (
-        "Load the full durable transcript for one visible chat session by session_id. "
-        "Use this when the user asks to open a specific prior conversation."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "session_id": {
-                "type": "string",
-                "description": "Durable chat session identifier returned by list_recent_chats or search_chat_history.",
-            },
-        },
-        "required": ["session_id"],
-    },
-}
-
-# =============================================================================
-# Token-Aware Trace Analysis Tools (Claude-Specific Endpoints)
-# =============================================================================
-# These tools use the new /api/claude/traces/ endpoints that include token
-# metadata and automatic truncation to stay within budget.
-
-GET_TRACE_SUMMARY_TOOL = {
-    "name": "get_trace_summary",
-    "description": "Get lightweight trace summary (~500 tokens). ALWAYS CALL THIS FIRST when analyzing a trace. Returns: trace name, duration, cost, token counts, tool call count, unique tools, error status, context overflow detection.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "trace_id": {
-                "type": "string",
-                "description": "Langfuse trace ID (UUID with hyphens or 32-char hex string)"
-            }
-        },
-        "required": ["trace_id"]
-    }
-}
-
-GET_TOOL_CALLS_SUMMARY_TOOL = {
-    "name": "get_tool_calls_summary",
-    "description": "Get lightweight summary of ALL tool calls without full results (~100 tokens/call). Use this to see what tools were called before drilling into details. Returns: total count, unique tools, and list of summaries (call_id, name, time, duration, status, input_summary, result_summary).",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "trace_id": {
-                "type": "string",
-                "description": "Langfuse trace ID"
-            }
-        },
-        "required": ["trace_id"]
-    }
-}
-
-GET_TOOL_CALLS_PAGE_TOOL = {
-    "name": "get_tool_calls_page",
-    "description": "Get paginated tool calls with full details. Use for detailed analysis of specific calls. Results are automatically truncated to fit within token budget. Supports filtering by tool name.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "trace_id": {
-                "type": "string",
-                "description": "Langfuse trace ID"
-            },
-            "page": {
-                "type": "integer",
-                "description": "Page number (1-indexed, default: 1)",
-                "default": 1,
-                "minimum": 1
-            },
-            "page_size": {
-                "type": "integer",
-                "description": "Items per page (default: 10, max: 20)",
-                "default": 10,
-                "minimum": 1,
-                "maximum": 20
-            },
-            "tool_name": {
-                "type": "string",
-                "description": "Optional filter by tool name (e.g., 'search_document')"
-            }
-        },
-        "required": ["trace_id"]
-    }
-}
-
-GET_TOOL_CALL_DETAIL_TOOL = {
-    "name": "get_tool_call_detail",
-    "description": "Get full details for a single tool call. Use when you need complete input/output for a specific call identified from get_tool_calls_summary. Token cost: ~1-5K tokens depending on result size.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "trace_id": {
-                "type": "string",
-                "description": "Langfuse trace ID"
-            },
-            "call_id": {
-                "type": "string",
-                "description": "Tool call ID from get_tool_calls_summary response"
-            }
-        },
-        "required": ["trace_id", "call_id"]
-    }
-}
-
-GET_TRACE_CONVERSATION_TOOL = {
-    "name": "get_trace_conversation",
-    "description": "Get the user's query and assistant's final response. Use when you need to see what the curator asked and what the AI answered. Token cost varies by response length.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "trace_id": {
-                "type": "string",
-                "description": "Langfuse trace ID"
-            }
-        },
-        "required": ["trace_id"]
-    }
-}
-
-GET_TRACE_VIEW_TOOL = {
-    "name": "get_trace_view",
-    "description": "Get a specific analysis view with token metadata. Use for specialized views not covered by the primary tools. Available views: token_analysis, agent_context, pdf_citations, document_hierarchy, agent_configs, group_context, trace_summary.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "trace_id": {
-                "type": "string",
-                "description": "Langfuse trace ID"
-            },
-            "view_name": {
-                "type": "string",
-                "enum": ["token_analysis", "agent_context", "pdf_citations", "document_hierarchy", "agent_configs", "group_context", "mod_context", "trace_summary"],
-                "description": "Which view to fetch"
-            }
-        },
-        "required": ["trace_id", "view_name"]
-    }
-}
-
-GET_SERVICE_LOGS_TOOL = {
-    "name": "get_service_logs",
-    "description": "Retrieve Loki-backed service logs for troubleshooting. Use this when curators report errors or unexpected behavior; optional level and time filters can narrow the results.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "container": {
-                "type": "string",
-                "enum": sorted(LOGS_API_ALLOWED_CONTAINERS),
-                "description": "Service/container name (default: backend)",
-                "default": "backend"
-            },
-            "lines": {
-                "type": "integer",
-                "description": "Number of recent log lines (default: 2000, min: 100, max: 5000)",
-                "default": 2000,
-                "minimum": 100,
-                "maximum": 5000
-            },
-            "level": {
-                "type": "string",
-                "enum": sorted(LOGS_API_ALLOWED_LOG_LEVELS),
-                "description": "Optional log level filter"
-            },
-            "since": {
-                "type": "integer",
-                "description": "Optional time filter in minutes ago (for example: 15 for the last 15 minutes)",
-                "minimum": 1
-            }
-        },
-        "required": []
-    }
-}
-
-
-_COMMON_TOOLS = {
-    "get_chat_conversation",
-    "list_recent_chats",
-    "search_chat_history",
-    "submit_prompt_suggestion",
-    "report_tool_failure",
-}
-_TRACE_TOOLS = {
-    "get_trace_summary",
-    "get_tool_calls_summary",
-    "get_tool_calls_page",
-    "get_tool_call_detail",
-    "get_trace_conversation",
-    "get_trace_view",
-    "get_service_logs",
-}
-_FLOW_TOOLS = {
-    "create_flow",
-    "validate_flow",
-    "get_flow_templates",
-    "get_current_flow",
-    "get_available_agents",
-}
-_AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
-    "agr_curation_query",
-    "curation_db_sql",
-    "chebi_api_call",
-    "quickgo_api_call",
-    "go_api_call",
-    "search_codebase",
-    "read_source_file",
-}
+# Tool definitions are kept in a focused helper module and re-exported here so
+# existing Agent Studio tests and imports can continue to patch this module path.
+ANTHROPIC_SUGGESTION_TOOL = opus_tools.ANTHROPIC_SUGGESTION_TOOL
+UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.UPDATE_WORKSHOP_PROMPT_TOOL
+ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL
+REPORT_TOOL_FAILURE_TOOL = opus_tools.REPORT_TOOL_FAILURE_TOOL
+ANTHROPIC_REPORT_TOOL_FAILURE_TOOL = opus_tools.ANTHROPIC_REPORT_TOOL_FAILURE_TOOL
+CHAT_HISTORY_TOOL_CHAT_KINDS = opus_tools.CHAT_HISTORY_TOOL_CHAT_KINDS
+LIST_RECENT_CHATS_TOOL = opus_tools.LIST_RECENT_CHATS_TOOL
+SEARCH_CHAT_HISTORY_TOOL = opus_tools.SEARCH_CHAT_HISTORY_TOOL
+GET_CHAT_CONVERSATION_TOOL = opus_tools.GET_CHAT_CONVERSATION_TOOL
+GET_TRACE_SUMMARY_TOOL = opus_tools.GET_TRACE_SUMMARY_TOOL
+GET_TOOL_CALLS_SUMMARY_TOOL = opus_tools.GET_TOOL_CALLS_SUMMARY_TOOL
+GET_TOOL_CALLS_PAGE_TOOL = opus_tools.GET_TOOL_CALLS_PAGE_TOOL
+GET_TOOL_CALL_DETAIL_TOOL = opus_tools.GET_TOOL_CALL_DETAIL_TOOL
+GET_TRACE_CONVERSATION_TOOL = opus_tools.GET_TRACE_CONVERSATION_TOOL
+GET_TRACE_VIEW_TOOL = opus_tools.GET_TRACE_VIEW_TOOL
+GET_SERVICE_LOGS_TOOL = opus_tools.GET_SERVICE_LOGS_TOOL
+_COMMON_TOOLS = opus_tools.COMMON_TOOLS
+_TRACE_TOOLS = opus_tools.TRACE_TOOLS
+_FLOW_TOOLS = opus_tools.FLOW_TOOLS
+_AGENTS_ONLY_DIAGNOSTIC_TOOLS = opus_tools.AGENTS_ONLY_DIAGNOSTIC_TOOLS
 
 
 def _get_active_tab(context: Optional[ChatContext]) -> str:
     """Resolve active tab from chat context with a safe default."""
-    if context and context.active_tab in {"agents", "flows", "agent_workshop"}:
-        return context.active_tab
-    return "agents"
+    return opus_tools.get_active_tab(context)
 
 
 def _ensure_flow_tools_registered(registry: Any) -> None:
     """Ensure flow tools are present even if the diagnostic registry was reset."""
-    if all(registry.has_tool(name) for name in _FLOW_TOOLS):
-        return
-    try:
-        register_flow_tools()
-    except Exception:
-        logger.exception("Failed to ensure flow tool registration for Agent Studio tools")
+    return opus_tools.ensure_flow_tools_registered(registry, logger=logger)
 
 
 def _is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) -> bool:
     """Check whether a tool is allowed for the current tab/context."""
-    active_tab = _get_active_tab(context)
-    has_trace = bool(context and context.trace_id)
-
-    if tool_name in _COMMON_TOOLS:
-        return True
-
-    if tool_name == "update_workshop_prompt_draft":
-        return active_tab == "agent_workshop" and bool(context and context.agent_workshop)
-
-    if tool_name in _FLOW_TOOLS:
-        return active_tab == "flows"
-
-    if tool_name in _AGENTS_ONLY_DIAGNOSTIC_TOOLS:
-        return active_tab == "agents"
-
-    if tool_name == "get_prompt":
-        return active_tab in {"agents", "flows", "agent_workshop"}
-
-    if tool_name in _TRACE_TOOLS:
-        return active_tab == "agents" or has_trace
-
-    # Unknown/legacy tools are left to existing handlers and validation paths.
-    return True
+    return opus_tools.is_tool_allowed_for_context(tool_name, context)
 
 
 def _tool_scope_error(tool_name: str, context: Optional[ChatContext]) -> Dict[str, Any]:
     """Build a curator-friendly error for disallowed tool usage."""
-    active_tab = _get_active_tab(context)
-    return {
-        "success": False,
-        "error": (
-            f"Tool '{tool_name}' is not available on the {active_tab} tab. "
-            "Use the matching screen for that tool type."
-        ),
-    }
+    return opus_tools.tool_scope_error(tool_name, context)
 
 
 def _get_all_opus_tools(context: Optional[ChatContext] = None) -> List[dict]:
-    """
-    Get all tools available to Opus in Anthropic format.
-
-    Combines the suggestion tool, workflow analysis tools, and diagnostic tools.
-
-    Token-Aware Tools (recommended for trace analysis):
-    - get_trace_summary: Lightweight overview (~500 tokens)
-    - get_tool_calls_summary: All tool calls with summaries (~100 tokens/call)
-    - get_tool_calls_page: Paginated full tool calls with filtering
-    - get_tool_call_detail: Single tool call detail
-    - get_trace_conversation: User query and assistant response
-    - get_trace_view: Generic view access with token metadata
-    """
-    candidate_tools = [
-        ANTHROPIC_SUGGESTION_TOOL,
-        ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
-        ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
-        LIST_RECENT_CHATS_TOOL,
-        SEARCH_CHAT_HISTORY_TOOL,
-        GET_CHAT_CONVERSATION_TOOL,
-        # Token-aware trace analysis tools
-        GET_TRACE_SUMMARY_TOOL,
-        GET_TOOL_CALLS_SUMMARY_TOOL,
-        GET_TOOL_CALLS_PAGE_TOOL,
-        GET_TOOL_CALL_DETAIL_TOOL,
-        GET_TRACE_CONVERSATION_TOOL,
-        GET_TRACE_VIEW_TOOL,
-        GET_SERVICE_LOGS_TOOL,
-    ]
-
-    tools = [
-        tool
-        for tool in candidate_tools
-        if _is_tool_allowed_for_context(str(tool.get("name", "")), context)
-    ]
-
-    # Add diagnostic tools from registry using the same context-aware gate.
-    registry = get_diagnostic_tools_registry()
-    _ensure_flow_tools_registered(registry)
-    diagnostic_tools = []
-    for tool in registry.get_all_tools():
-        if not _is_tool_allowed_for_context(tool.name, context):
-            continue
-        diagnostic_tools.append(
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "input_schema": tool.input_schema,
-            }
-        )
-    tools.extend(diagnostic_tools)
-    logger.debug('Loaded %s diagnostic tools for Opus', len(diagnostic_tools))
-
-    return tools
+    """Get all tools available to Opus in Anthropic format."""
+    return opus_tools.get_all_opus_tools(
+        context,
+        diagnostic_registry_factory=get_diagnostic_tools_registry,
+        ensure_registered=_ensure_flow_tools_registered,
+        logger=logger,
+        is_allowed=_is_tool_allowed_for_context,
+    )
 
 
 def _format_conversation_context(messages: Optional[List[dict]]) -> Optional[str]:
-    """
-    Format the entire conversation history as a readable string.
-
-    Args:
-        messages: List of message dicts with 'role' and 'content' keys
-
-    Returns:
-        Formatted conversation string, or None if no messages
-    """
-    if not messages:
-        return None
-
-    lines = []
-    for msg in messages:
-        role = msg.get("role", "unknown")
-        content = msg.get("content", "")
-
-        # Handle content that's a list (tool results)
-        if isinstance(content, list):
-            # Skip tool result messages - they're not part of the user conversation
-            continue
-
-        # Format role label
-        role_label = {
-            "user": "Curator",
-            "assistant": "Opus"
-        }.get(role, role.title())
-
-        lines.append(f"{role_label}: {content}")
-
-    return "\n\n".join(lines) if lines else None
+    """Format the entire conversation history as a readable string."""
+    return prompt_builder.format_conversation_context(messages)
 
 
 def _parse_markdown_heading(line: str) -> Optional[Dict[str, Any]]:
     """Parse a markdown heading line into level/text metadata."""
-    match = re.match(r"^\s*(#{1,6})\s+(.+?)\s*$", line)
-    if not match:
-        return None
-    return {
-        "level": len(match.group(1)),
-        "text": match.group(2).strip(),
-    }
+    return prompt_builder.parse_markdown_heading(line)
 
 
 def _find_section_bounds(prompt: str, section_heading: str) -> Optional[Dict[str, Any]]:
     """Find byte-range bounds for a markdown section by heading text."""
-    target = section_heading.strip().lower()
-    if not target:
-        return None
-
-    lines = prompt.splitlines(keepends=True)
-    if not lines:
-        return None
-
-    start_line_idx = None
-    start_level = None
-    heading_line = ""
-
-    for idx, line in enumerate(lines):
-        heading = _parse_markdown_heading(line)
-        if not heading:
-            continue
-        if heading["text"].strip().lower() == target:
-            start_line_idx = idx
-            start_level = heading["level"]
-            heading_line = line if line.endswith("\n") else f"{line}\n"
-            break
-
-    if start_line_idx is None or start_level is None:
-        return None
-
-    end_line_idx = len(lines)
-    for idx in range(start_line_idx + 1, len(lines)):
-        heading = _parse_markdown_heading(lines[idx])
-        if heading and heading["level"] <= start_level:
-            end_line_idx = idx
-            break
-
-    start_char = sum(len(line) for line in lines[:start_line_idx])
-    end_char = sum(len(line) for line in lines[:end_line_idx])
-
-    return {
-        "start_char": start_char,
-        "end_char": end_char,
-        "heading_line": heading_line,
-    }
+    return prompt_builder.find_section_bounds(prompt, section_heading)
 
 
 def _apply_targeted_workshop_edits(
@@ -1836,116 +1061,7 @@ def _apply_targeted_workshop_edits(
     edits: List[Any],
 ) -> Dict[str, Any]:
     """Apply targeted edit operations against a workshop prompt draft."""
-    working_prompt = base_prompt
-    applied_edits: List[str] = []
-
-    for idx, raw_edit in enumerate(edits, start=1):
-        if not isinstance(raw_edit, dict):
-            return {
-                "success": False,
-                "error": f"Edit #{idx} must be an object.",
-            }
-
-        operation = str(raw_edit.get("operation", "")).strip()
-        if operation not in {"replace_text", "replace_section"}:
-            return {
-                "success": False,
-                "error": f"Edit #{idx} has unsupported operation: {operation or 'missing operation'}",
-            }
-
-        replacement_text = raw_edit.get("replacement_text")
-        if replacement_text is None:
-            replacement_text = ""
-        if not isinstance(replacement_text, str):
-            return {
-                "success": False,
-                "error": f"Edit #{idx} replacement_text must be a string.",
-            }
-
-        if operation == "replace_text":
-            find_text = raw_edit.get("find_text")
-            if not isinstance(find_text, str) or not find_text:
-                return {
-                    "success": False,
-                    "error": f"Edit #{idx} requires non-empty find_text for replace_text.",
-                }
-
-            occurrence = str(raw_edit.get("occurrence", "first")).strip().lower()
-            if occurrence not in {"first", "last", "all"}:
-                return {
-                    "success": False,
-                    "error": f"Edit #{idx} occurrence must be one of: first, last, all.",
-                }
-
-            if occurrence == "all":
-                count = working_prompt.count(find_text)
-                if count == 0:
-                    return {
-                        "success": False,
-                        "error": f"Edit #{idx} could not find text to replace.",
-                    }
-                working_prompt = working_prompt.replace(find_text, replacement_text)
-                applied_edits.append(
-                    f"replace_text all occurrences ({count} replacements)"
-                )
-            else:
-                pos = working_prompt.find(find_text) if occurrence == "first" else working_prompt.rfind(find_text)
-                if pos < 0:
-                    return {
-                        "success": False,
-                        "error": f"Edit #{idx} could not find text to replace.",
-                    }
-                working_prompt = (
-                    working_prompt[:pos]
-                    + replacement_text
-                    + working_prompt[pos + len(find_text):]
-                )
-                applied_edits.append(f"replace_text {occurrence} occurrence")
-
-        elif operation == "replace_section":
-            section_heading = raw_edit.get("section_heading")
-            if not isinstance(section_heading, str) or not section_heading.strip():
-                return {
-                    "success": False,
-                    "error": f"Edit #{idx} requires section_heading for replace_section.",
-                }
-
-            bounds = _find_section_bounds(working_prompt, section_heading)
-            if not bounds:
-                return {
-                    "success": False,
-                    "error": f"Edit #{idx} could not find section heading '{section_heading}'.",
-                }
-
-            replacement_block = replacement_text
-            if not replacement_block.strip():
-                return {
-                    "success": False,
-                    "error": f"Edit #{idx} replacement_text cannot be empty for replace_section.",
-                }
-
-            if not _parse_markdown_heading(replacement_block.splitlines()[0] if replacement_block.splitlines() else ""):
-                replacement_block = f"{bounds['heading_line']}{replacement_block.lstrip()}"
-
-            if not replacement_block.endswith("\n"):
-                replacement_block += "\n"
-
-            start_char = bounds["start_char"]
-            end_char = bounds["end_char"]
-            working_prompt = (
-                working_prompt[:start_char]
-                + replacement_block
-                + working_prompt[end_char:]
-            )
-            applied_edits.append(f"replace_section '{section_heading.strip()}'")
-
-    summary = "; ".join(applied_edits) if applied_edits else "No edits applied."
-    return {
-        "success": True,
-        "prompt": working_prompt,
-        "applied_edits": applied_edits,
-        "summary": summary,
-    }
+    return prompt_builder.apply_targeted_workshop_edits(base_prompt, edits)
 
 
 async def _handle_tool_call(
@@ -2380,15 +1496,7 @@ async def _handle_tool_call(
     }
 
 
-@dataclass(frozen=True)
-class PreparedAgentStudioTurn:
-    """Persisted Agent Studio turn metadata used by the Opus streaming path."""
-
-    session_id: str
-    turn_id: str
-    user_message: str
-    requested_context_session_id: str | None
-    replay_assistant_turn: ChatMessageRecord | None = None
+PreparedAgentStudioTurn = agent_studio_chat_session.PreparedAgentStudioTurn
 
 
 def _require_user_sub(user: Dict[str, Any]) -> str:
@@ -2401,69 +1509,37 @@ def _require_user_sub(user: Dict[str, Any]) -> str:
 
 
 def _normalize_optional_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    return normalized or None
+    return agent_studio_chat_session.normalize_optional_text(value)
 
 
 def _json_safe(value: Any) -> Any:
-    return json.loads(json.dumps(value, default=str))
+    return agent_studio_chat_session.json_safe(value)
 
 
 def _serialize_chat_history_session(record: ChatSessionRecord) -> Dict[str, Any]:
-    return {
-        "session_id": record.session_id,
-        "chat_kind": record.chat_kind,
-        "title": record.title,
-        "generated_title": record.generated_title,
-        "effective_title": record.effective_title,
-        "active_document_id": str(record.active_document_id) if record.active_document_id else None,
-        "created_at": record.created_at.isoformat(),
-        "updated_at": record.updated_at.isoformat(),
-        "last_message_at": record.last_message_at.isoformat() if record.last_message_at else None,
-        "recent_activity_at": record.recent_activity_at.isoformat(),
-    }
+    return agent_studio_chat_session.serialize_chat_history_session(record)
 
 
 def _serialize_chat_history_message(record: ChatMessageRecord) -> Dict[str, Any]:
-    return {
-        "message_id": str(record.message_id),
-        "session_id": record.session_id,
-        "chat_kind": record.chat_kind,
-        "turn_id": record.turn_id,
-        "role": record.role,
-        "message_type": record.message_type,
-        "content": record.content,
-        "payload_json": record.payload_json,
-        "trace_id": record.trace_id,
-        "created_at": record.created_at.isoformat(),
-    }
+    return agent_studio_chat_session.serialize_chat_history_message(record)
 
 
 def _require_tool_string(tool_input: dict[str, Any], field_name: str) -> str:
-    raw_value = tool_input.get(field_name)
-    if not isinstance(raw_value, str) or not raw_value.strip():
-        raise ValueError(f"Missing required parameter: {field_name}")
-    return raw_value.strip()
+    return agent_studio_chat_session.require_tool_string(tool_input, field_name)
 
 
 def _resolve_chat_history_limit(tool_input: dict[str, Any]) -> int:
-    raw_limit = tool_input.get("limit", 10)
-    if isinstance(raw_limit, bool) or not isinstance(raw_limit, int):
-        raise ValueError("limit must be an integer")
-    return raw_limit
+    return agent_studio_chat_session.resolve_chat_history_limit(tool_input)
 
 
 def _with_chat_history_repository(
     callback: Callable[[ChatHistoryRepository], Dict[str, Any]],
 ) -> Dict[str, Any]:
-    chat_history_db = SessionLocal()
-    try:
-        repository = ChatHistoryRepository(chat_history_db)
-        return callback(repository)
-    finally:
-        chat_history_db.close()
+    return agent_studio_chat_session.with_chat_history_repository(
+        callback,
+        session_factory=SessionLocal,
+        repository_cls=ChatHistoryRepository,
+    )
 
 
 def _get_chat_conversation_payload(
@@ -2472,90 +1548,32 @@ def _get_chat_conversation_payload(
     session_id: str,
     user_auth_sub: str,
 ) -> Dict[str, Any]:
-    detail = repository.get_session_detail(
+    return agent_studio_chat_session.get_chat_conversation_payload(
+        repository=repository,
         session_id=session_id,
         user_auth_sub=user_auth_sub,
-        message_limit=MAX_MESSAGE_PAGE_SIZE,
+        serialize_session=_serialize_chat_history_session,
+        serialize_message=_serialize_chat_history_message,
     )
-    if detail is None:
-        return {
-            "success": False,
-            "error": "Chat session not found.",
-        }
-
-    session_chat_kind = detail.session.chat_kind
-    messages = list(detail.messages)
-    cursor = detail.next_message_cursor
-    while cursor is not None:
-        if not session_chat_kind:
-            raise ValueError("chat_kind is required to paginate the chat conversation")
-        page = repository.list_messages(
-            session_id=session_id,
-            user_auth_sub=user_auth_sub,
-            chat_kind=session_chat_kind,
-            limit=MAX_MESSAGE_PAGE_SIZE,
-            cursor=cursor,
-        )
-        messages.extend(page.items)
-        cursor = page.next_cursor
-
-    return {
-        "success": True,
-        "chat_kind": session_chat_kind,
-        "session": _serialize_chat_history_session(detail.session),
-        "message_count": len(messages),
-        "messages": [_serialize_chat_history_message(message) for message in messages],
-    }
 
 
 def _extract_latest_user_message(messages: List[ChatMessage]) -> str:
-    if not messages:
-        raise ValueError("messages must include at least one user turn")
-    latest_message = messages[-1]
-    if str(latest_message.role).strip() != "user":
-        raise ValueError("messages must end with a user turn")
-    if not latest_message.content.strip():
-        raise ValueError("messages[-1].content is required")
-    return latest_message.content
+    return agent_studio_chat_session.extract_latest_user_message(messages)
 
 
 def _build_agent_studio_turn_id(messages: List[ChatMessage]) -> str:
-    user_turn_count = sum(1 for message in messages if str(message.role).strip() == "user")
-    if user_turn_count < 1:
-        raise ValueError("messages must include at least one user turn")
-
-    digest_source = [
-        {
-            "role": str(message.role),
-            "content": message.content,
-        }
-        for message in messages
-    ]
-    digest = hashlib.sha256(
-        json.dumps(digest_source, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-    ).hexdigest()[:16]
-    return f"opus-turn-{user_turn_count}-{digest}"
+    return agent_studio_chat_session.build_agent_studio_turn_id(messages)
 
 
 def _derive_seeded_agent_studio_session_id(requested_session_id: str) -> str:
-    derived_session_id = f"{AGENT_STUDIO_SEEDED_SESSION_PREFIX}{requested_session_id}"
-    if len(derived_session_id) <= 255:
-        return derived_session_id
-
-    hashed_seed = hashlib.sha256(requested_session_id.encode("utf-8")).hexdigest()
-    return f"{AGENT_STUDIO_SEEDED_SESSION_PREFIX}{hashed_seed}"
+    return agent_studio_chat_session.derive_seeded_agent_studio_session_id(requested_session_id)
 
 
 def _get_active_chat_session_row(db: Session, session_id: str) -> ChatSessionModel | None:
-    normalized_session_id = _normalize_optional_text(session_id)
-    if normalized_session_id is None:
-        return None
-
-    return db.scalar(
-        select(ChatSessionModel).where(
-            ChatSessionModel.session_id == normalized_session_id,
-            ChatSessionModel.deleted_at.is_(None),
-        )
+    return agent_studio_chat_session.get_active_chat_session_row(
+        db,
+        session_id,
+        chat_session_model=ChatSessionModel,
     )
 
 
@@ -2565,25 +1583,12 @@ def _resolve_agent_studio_session_id(
     user_id: str,
     requested_session_id: str | None,
 ) -> str:
-    normalized_requested_session_id = _normalize_optional_text(requested_session_id)
-    if normalized_requested_session_id is None:
-        return str(uuid.uuid4())
-
-    existing_session = _get_active_chat_session_row(db, normalized_requested_session_id)
-    if existing_session is None:
-        return normalized_requested_session_id
-    if existing_session.user_auth_sub != user_id:
-        raise ChatHistorySessionNotFoundError("Chat session not found")
-    if existing_session.chat_kind == AGENT_STUDIO_CHAT_KIND:
-        return normalized_requested_session_id
-
-    derived_session_id = _derive_seeded_agent_studio_session_id(normalized_requested_session_id)
-    derived_session = _get_active_chat_session_row(db, derived_session_id)
-    if derived_session is None:
-        return derived_session_id
-    if derived_session.user_auth_sub != user_id or derived_session.chat_kind != AGENT_STUDIO_CHAT_KIND:
-        raise ChatHistorySessionNotFoundError("Chat session not found")
-    return derived_session_id
+    return agent_studio_chat_session.resolve_agent_studio_session_id(
+        db=db,
+        user_id=user_id,
+        requested_session_id=requested_session_id,
+        chat_session_model=ChatSessionModel,
+    )
 
 
 def _prepare_agent_studio_turn(
@@ -2592,79 +1597,21 @@ def _prepare_agent_studio_turn(
     user_id: str,
     request: ChatRequest,
 ) -> PreparedAgentStudioTurn:
-    repository = ChatHistoryRepository(db)
-    requested_context_session_id = (
-        _normalize_optional_text(request.context.session_id) if request.context else None
-    )
-    session_id = _resolve_agent_studio_session_id(
+    return agent_studio_chat_session.prepare_agent_studio_turn(
         db=db,
         user_id=user_id,
-        requested_session_id=requested_context_session_id,
-    )
-    turn_id = _build_agent_studio_turn_id(request.messages)
-    user_message = _extract_latest_user_message(request.messages)
-
-    repository.get_or_create_session(
-        session_id=session_id,
-        user_auth_sub=user_id,
-        chat_kind=AGENT_STUDIO_CHAT_KIND,
-    )
-    user_turn = repository.append_message(
-        session_id=session_id,
-        user_auth_sub=user_id,
-        chat_kind=AGENT_STUDIO_CHAT_KIND,
-        role="user",
-        content=user_message,
-        turn_id=turn_id,
-    )
-    db.commit()
-
-    replay_assistant_turn = None
-    if not user_turn.created:
-        replay_assistant_turn = repository.get_message_by_turn_id(
-            session_id=session_id,
-            user_auth_sub=user_id,
-            turn_id=turn_id,
-            role="assistant",
-        )
-
-    return PreparedAgentStudioTurn(
-        session_id=session_id,
-        turn_id=turn_id,
-        user_message=user_turn.message.content,
-        requested_context_session_id=requested_context_session_id,
-        replay_assistant_turn=replay_assistant_turn,
+        request=request,
+        repository_cls=ChatHistoryRepository,
+        chat_session_model=ChatSessionModel,
     )
 
 
 def _assistant_tool_calls_from_payload(payload_json: Any) -> List[Dict[str, Any]]:
-    if not isinstance(payload_json, dict):
-        return []
-
-    raw_tool_calls = payload_json.get("tool_calls")
-    if not isinstance(raw_tool_calls, list):
-        return []
-
-    tool_calls: List[Dict[str, Any]] = []
-    for tool_call in raw_tool_calls:
-        if not isinstance(tool_call, dict):
-            continue
-        tool_name = _normalize_optional_text(tool_call.get("tool_name"))
-        if tool_name is None:
-            continue
-        tool_calls.append(dict(tool_call))
-    return tool_calls
+    return agent_studio_chat_session.assistant_tool_calls_from_payload(payload_json)
 
 
 def _extract_opus_text_content(content_blocks: List[Any]) -> str:
-    text_parts: List[str] = []
-    for block in content_blocks:
-        if getattr(block, "type", None) != "text":
-            continue
-        text_value = getattr(block, "text", None)
-        if isinstance(text_value, str):
-            text_parts.append(text_value)
-    return "".join(text_parts)
+    return agent_studio_chat_session.extract_opus_text_content(content_blocks)
 
 
 def _build_agent_studio_assistant_payload(
@@ -2673,15 +1620,11 @@ def _build_agent_studio_assistant_payload(
     requested_context_session_id: str | None,
     session_id: str,
 ) -> Dict[str, Any] | None:
-    payload: Dict[str, Any] = {}
-    if tool_calls:
-        payload["tool_calls"] = tool_calls
-    if (
-        requested_context_session_id is not None
-        and requested_context_session_id != session_id
-    ):
-        payload["seed_session_id"] = requested_context_session_id
-    return payload or None
+    return agent_studio_chat_session.build_agent_studio_assistant_payload(
+        tool_calls=tool_calls,
+        requested_context_session_id=requested_context_session_id,
+        session_id=session_id,
+    )
 
 
 def _persist_completed_agent_studio_turn(
@@ -2693,42 +1636,16 @@ def _persist_completed_agent_studio_turn(
     trace_id: str | None,
     payload_json: Dict[str, Any] | None,
 ) -> ChatMessageRecord:
-    completion_db = SessionLocal()
-    try:
-        repository = ChatHistoryRepository(completion_db)
-        session = repository.get_session(
-            session_id=session_id,
-            user_auth_sub=user_id,
-        )
-        if session is None or session.chat_kind != AGENT_STUDIO_CHAT_KIND:
-            raise ChatHistorySessionNotFoundError("Chat session not found")
-
-        existing_assistant_turn = repository.get_message_by_turn_id(
-            session_id=session_id,
-            user_auth_sub=user_id,
-            turn_id=turn_id,
-            role="assistant",
-        )
-        if existing_assistant_turn is not None:
-            return existing_assistant_turn
-
-        assistant_turn = repository.append_message(
-            session_id=session_id,
-            user_auth_sub=user_id,
-            chat_kind=AGENT_STUDIO_CHAT_KIND,
-            role="assistant",
-            content=assistant_message,
-            turn_id=turn_id,
-            trace_id=trace_id,
-            payload_json=payload_json,
-        )
-        completion_db.commit()
-        return assistant_turn.message
-    except Exception:
-        completion_db.rollback()
-        raise
-    finally:
-        completion_db.close()
+    return agent_studio_chat_session.persist_completed_agent_studio_turn(
+        session_id=session_id,
+        user_id=user_id,
+        turn_id=turn_id,
+        assistant_message=assistant_message,
+        trace_id=trace_id,
+        payload_json=payload_json,
+        session_factory=SessionLocal,
+        repository_cls=ChatHistoryRepository,
+    )
 
 
 def _opus_sse_event(
@@ -2738,13 +1655,12 @@ def _opus_sse_event(
     event_type: str,
     **payload: Any,
 ) -> str:
-    event_payload: Dict[str, Any] = {
-        "type": event_type,
-        "session_id": session_id,
-        "turn_id": turn_id,
-    }
-    event_payload.update(payload)
-    return f"data: {json.dumps(event_payload, default=str)}\n\n"
+    return agent_studio_chat_session.opus_sse_event(
+        session_id=session_id,
+        turn_id=turn_id,
+        event_type=event_type,
+        **payload,
+    )
 
 
 def _build_agent_studio_replay_events(
@@ -2753,47 +1669,11 @@ def _build_agent_studio_replay_events(
     turn_id: str,
     assistant_turn: ChatMessageRecord,
 ) -> List[str]:
-    replay_events: List[str] = []
-    for tool_call in _assistant_tool_calls_from_payload(assistant_turn.payload_json):
-        replay_events.append(
-            _opus_sse_event(
-                session_id=session_id,
-                turn_id=turn_id,
-                event_type="TOOL_USE",
-                tool_name=tool_call.get("tool_name"),
-                tool_input=tool_call.get("tool_input"),
-            )
-        )
-        if "result" in tool_call:
-            replay_events.append(
-                _opus_sse_event(
-                    session_id=session_id,
-                    turn_id=turn_id,
-                    event_type="TOOL_RESULT",
-                    tool_name=tool_call.get("tool_name"),
-                    result=tool_call.get("result"),
-                )
-            )
-
-    if assistant_turn.content:
-        replay_events.append(
-            _opus_sse_event(
-                session_id=session_id,
-                turn_id=turn_id,
-                event_type="TEXT_DELTA",
-                delta=assistant_turn.content,
-                trace_id=assistant_turn.trace_id,
-            )
-        )
-    replay_events.append(
-        _opus_sse_event(
-            session_id=session_id,
-            turn_id=turn_id,
-            event_type="DONE",
-            trace_id=assistant_turn.trace_id,
-        )
+    return agent_studio_chat_session.build_agent_studio_replay_events(
+        session_id=session_id,
+        turn_id=turn_id,
+        assistant_turn=assistant_turn,
     )
-    return replay_events
 
 
 @router.post(
@@ -3252,20 +2132,6 @@ async def chat_with_opus(
     )
 
 
-class DirectSubmissionRequest(BaseModel):
-    """Request to directly trigger suggestion submission via Opus (bypassing chat UI)."""
-    context: Optional[ChatContext] = None
-    messages: Optional[List[ChatMessage]] = None
-
-
-class DirectSubmissionResponse(BaseModel):
-    """Response from direct suggestion submission."""
-    success: bool
-    suggestion_id: Optional[str] = None
-    message: str
-    error: Optional[str] = None
-
-
 def _send_error_notification_sns(user_email: str, error_message: str, context: Optional[ChatContext] = None) -> None:
     """
     Send an error notification via SNS when background suggestion processing fails.
@@ -3542,113 +2408,8 @@ Please review our conversation history above and submit a general suggestion usi
 
 
 def _fetch_trace_for_opus(trace_id: str) -> Optional[str]:
-    """
-    Fetch trace data from Langfuse and format it for Opus's context.
-
-    Returns a formatted string with the trace summary, or None if fetch fails.
-    """
-    try:
-        from langfuse import Langfuse
-
-        client = Langfuse()
-
-        # Fetch trace details
-        trace = client.api.trace.get(trace_id)
-        if not trace:
-            logger.warning('Trace not found: %s', trace_id)
-            return None
-
-        # Fetch observations
-        obs_response = client.api.observations.get_many(trace_id=trace_id)
-        observations = list(obs_response.data) if hasattr(obs_response, 'data') else []
-
-        # Build the trace summary
-        lines = []
-
-        # Basic info
-        lines.append(f"**Trace ID:** {trace_id}")
-        if hasattr(trace, 'input') and trace.input:
-            user_input = trace.input
-            if isinstance(user_input, dict):
-                user_input = user_input.get('message', user_input.get('query', str(user_input)))
-            lines.append(f"**User Query:** {user_input}")
-
-        if hasattr(trace, 'output') and trace.output:
-            output = trace.output
-            if isinstance(output, dict):
-                output = output.get('response', output.get('content', str(output)))
-            # Truncate very long outputs
-            if len(str(output)) > 2000:
-                output = str(output)[:2000] + "... [truncated]"
-            lines.append(f"**Final Response:** {output}")
-
-        # Extract agents used and tool calls
-        agents_used = set()
-        tool_calls = []
-
-        for obs in observations:
-            obs_type = getattr(obs, 'type', None)
-            obs_name = getattr(obs, 'name', '')
-
-            # Identify agents from generation observations
-            if obs_type == 'GENERATION':
-                # Try to identify the agent
-                for agent_pattern in ['supervisor', 'gene_extraction', 'gene_extractor', 'ask_gene_extractor_', 'gene_expression', 'allele_variant_extraction', 'allele_extractor', 'ask_allele_extractor_', 'disease_extraction', 'disease_extractor', 'ask_disease_extractor_', 'chemical_extraction', 'chemical_extractor', 'ask_chemical_extractor_', 'phenotype_extraction', 'phenotype_extractor', 'phenotype_specialist', 'ask_phenotype_extractor_', 'ask_phenotype_', 'pdf_specialist', 'gene', 'allele',
-                                     'disease', 'chemical', 'gene_ontology', 'go_annotations',
-                                     'orthologs', 'ontology_mapping', 'chat_output',
-                                     'csv_formatter', 'tsv_formatter', 'json_formatter']:
-                    if agent_pattern in obs_name.lower():
-                        agents_used.add(agent_pattern)
-                        break
-
-            # Capture tool calls from spans
-            if obs_type == 'SPAN' and not obs_name.startswith('transfer_to_'):
-                if obs_name not in ['supervisor', 'agent_run', '']:
-                    tool_input = getattr(obs, 'input', None)
-                    tool_output = getattr(obs, 'output', None)
-
-                    # Format input
-                    input_str = ""
-                    if tool_input:
-                        if isinstance(tool_input, dict):
-                            input_str = json.dumps(tool_input, indent=2)[:500]
-                        else:
-                            input_str = str(tool_input)[:500]
-
-                    # Format output (truncate)
-                    output_str = ""
-                    if tool_output:
-                        if isinstance(tool_output, str):
-                            output_str = tool_output[:300]
-                        else:
-                            output_str = str(tool_output)[:300]
-
-                    tool_calls.append({
-                        'name': obs_name,
-                        'input': input_str,
-                        'output': output_str + ("..." if len(str(tool_output or "")) > 300 else "")
-                    })
-
-        if agents_used:
-            lines.append(f"**Agents Involved:** {', '.join(sorted(agents_used))}")
-
-        if tool_calls:
-            lines.append("\n**Tool Calls:**")
-            for i, tc in enumerate(tool_calls[:15], 1):  # Limit to 15 tool calls
-                lines.append(f"\n{i}. **{tc['name']}**")
-                if tc['input']:
-                    lines.append(f"   Input: {tc['input']}")
-                if tc['output']:
-                    lines.append(f"   Output: {tc['output']}")
-
-            if len(tool_calls) > 15:
-                lines.append(f"\n... and {len(tool_calls) - 15} more tool calls")
-
-        return "\n".join(lines)
-
-    except Exception as e:
-        logger.error('Failed to fetch trace for Opus: %s', e, exc_info=True)
-        return None
+    """Fetch trace data from Langfuse and format it for Opus's context."""
+    return prompt_builder.fetch_trace_for_opus(trace_id, logger=logger)
 
 
 def _build_opus_system_prompt(
@@ -3657,288 +2418,17 @@ def _build_opus_system_prompt(
     user_email: Optional[str] = None,
 ) -> str:
     """Build the system prompt for Opus based on UI context and user identity."""
+    from src.lib.agent_studio.context import prepare_trace_context
 
-    # Check if this user is a developer (configured in .env for security)
-    developer_emails = os.getenv("PROMPT_EXPLORER_DEVELOPER_EMAILS", "").lower().split(",")
-    developer_emails = [e.strip() for e in developer_emails if e.strip()]
-    is_developer = user_email and user_email.lower() in developer_emails
-
-    # User greeting - inject for everyone
-    user_greeting = ""
-    if user_name:
-        user_greeting = f"\n\n**You are speaking with: {user_name}**\n"
-        if is_developer:
-            # Developer-specific prompt (content from .env for security)
-            dev_prompt = os.getenv(
-                "PROMPT_EXPLORER_DEVELOPER_PROMPT",
-                "This user is a developer on the AI curation project. They may ask you to help with testing, debugging, or technical tasks beyond standard curator support. You can assist with these requests while maintaining your helpful assistant demeanor."
-            )
-            user_greeting += f"\n{dev_prompt}\n"
-
-    base_prompt = _load_agent_studio_system_prompt_template().replace(
-        "{{USER_GREETING}}",
-        user_greeting,
+    return prompt_builder.build_opus_system_prompt(
+        context=context,
+        user_name=user_name,
+        user_email=user_email,
+        load_template=_load_agent_studio_system_prompt_template,
+        list_model_definitions=list_model_definitions,
+        get_prompt_catalog=get_prompt_catalog,
+        prepare_trace_context=prepare_trace_context,
     )
-
-    if context:
-        additions = []
-        workshop_draft_tools: Optional[List[str]] = None
-
-        if context.active_tab == "agent_workshop" and context.agent_workshop:
-            workshop = context.agent_workshop
-            workshop_draft_tools = workshop.draft_tool_ids or []
-            draft_prompt = workshop.prompt_draft or ""
-            selected_group_prompt = workshop.selected_group_prompt_draft or ""
-            truncated = ""
-            group_truncated = ""
-            max_prompt_chars = 12000
-            max_group_prompt_chars = 6000
-            if len(draft_prompt) > max_prompt_chars:
-                draft_prompt = draft_prompt[:max_prompt_chars]
-                truncated = f"\n\n[Truncated to first {max_prompt_chars} chars for context.]"
-            if len(selected_group_prompt) > max_group_prompt_chars:
-                selected_group_prompt = selected_group_prompt[:max_group_prompt_chars]
-                group_truncated = f"\n\n[Truncated to first {max_group_prompt_chars} chars for context.]"
-
-            selected_group_prompt_block = ""
-            if workshop.selected_group_id and selected_group_prompt:
-                selected_group_prompt_block = f"""
-
-<workshop_selected_group_prompt group="{workshop.selected_group_id}">
-{selected_group_prompt}
-</workshop_selected_group_prompt>{group_truncated}"""
-
-            model_catalog_lines: List[str] = []
-            try:
-                for model in sorted(
-                    [
-                        model
-                        for model in list_model_definitions()
-                        if bool(getattr(model, "curator_visible", True))
-                    ],
-                    key=lambda model: (not bool(model.default), model.name.lower()),
-                ):
-                    reasoning_label = (
-                        f"{', '.join(model.reasoning_options)} (default: {model.default_reasoning or 'none'})"
-                        if model.reasoning_options
-                        else "n/a"
-                    )
-                    model_catalog_lines.append(
-                        f"- {model.name} [{model.model_id}]: "
-                        f"{(model.guidance or model.description or '').strip() or 'No guidance configured.'} "
-                        f"(reasoning: {reasoning_label})"
-                    )
-            except Exception:
-                model_catalog_lines = []
-
-            model_catalog_text = "\n".join(model_catalog_lines) if model_catalog_lines else "- Model catalog unavailable."
-
-            additions.append(f"""
-<agent_workshop_context>
-## Current Context: Agent Workshop
-
-The curator is actively iterating an agent draft in Agent Workshop.
-
-- Template source: {workshop.template_name or workshop.template_source or 'Unknown'}
-- Custom agent: {workshop.custom_agent_name or workshop.custom_agent_id or 'Unsaved draft'}
-- Include group rules: {"Yes" if workshop.include_group_rules else "No"}
-- Selected group: {workshop.selected_group_id or "None"}
-- Has group prompt overrides: {"Yes" if workshop.has_group_prompt_overrides else "No"}
-- Group override count: {workshop.group_prompt_override_count or 0}
-- Template prompt stale: {"Yes" if workshop.template_prompt_stale else "No"}
-- Template exists: {"Yes" if workshop.template_exists is not False else "No"}
-- Draft attached tools: {", ".join(workshop_draft_tools) if workshop_draft_tools else "None"}
-- Draft model: {workshop.draft_model_id or "Not set"}
-- Draft reasoning: {workshop.draft_model_reasoning or "Not set"}
-
-Agent Workshop model recommendation defaults:
-- Use `openai/gpt-oss-120b` for fast database lookup and validation workflows.
-- Use `gpt-5.5` with `medium` reasoning for difficult PDF extraction and deep reasoning.
-- Use `gpt-5.4-nano` for fast iterative drafting and balanced quality/speed.
-
-Configured model options:
-{model_catalog_text}
-
-Use this workshop context to give concrete prompt-engineering feedback, especially:
-1. how to improve the draft prompt structure and specificity,
-2. what to test next in flow execution (and when to compare with the template-source prompt),
-3. how group rules may interact with the current draft.
-4. proactively identify concrete prompt improvements during normal conversation and suggest them.
-5. before making any draft update call, ask for permission in plain language (e.g., "Want me to apply this as a targeted edit?").
-6. after clear approval, call `update_workshop_prompt_draft`:
-   - set `target_prompt="main"` for general/global draft behavior changes,
-   - set `target_prompt="group"` for group-specific wording/rules and include `target_group_id`,
-   - full rewrite: `apply_mode="replace"` and provide `updated_prompt`,
-   - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.
-7. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
-8. after a curator applies a prompt update, verify the current `<workshop_prompt_draft>` contains the intended change and provide a quick quality review.
-9. when proposing or applying prompt edits, use this distilled OpenAI-style prompt playbook:
-   - put core instructions first, then separate context/examples with clear delimiters (`###` sections or triple quotes),
-   - make directions specific and measurable (length, format, required fields, decision rules),
-   - prefer explicit output schemas and short examples over vague prose,
-   - replace vague wording ("brief", "not too much") with concrete bounds,
-   - avoid "don't do X" alone; add the preferred behavior ("do Y instead"),
-   - start with minimal/targeted edits first; escalate to larger rewrites only when needed,
-   - for extraction/factual behavior, prioritize deterministic wording over creative language.
-10. in reviews, explicitly check whether the updated prompt follows the playbook above and call out any misses.
-11. choose the right target for edits:
-   - use main prompt updates for behavior that should apply across all groups,
-   - use group prompt updates only for organism/group-specific exceptions or conventions.
-
-<workshop_prompt_draft>
-{draft_prompt}
-</workshop_prompt_draft>{truncated}
-{selected_group_prompt_block}
-
-Prompt injection note:
-- Structured output instructions are inserted near the first `## ` heading.
-- If the draft lacks `## ` headings, insertion happens at the top.
-</agent_workshop_context>""")
-
-        if context.selected_agent_id:
-            # Get the agent info to provide context
-            service = get_prompt_catalog()
-            agent = service.get_agent(context.selected_agent_id)
-            if agent:
-                tools_label = "Tools this agent can use"
-                tools_for_context = agent.tools
-                # In Agent Workshop, prefer the live draft tool attachments from UI context.
-                if context.active_tab == "agent_workshop" and workshop_draft_tools is not None:
-                    tools_label = "Tools attached to current workshop draft"
-                    tools_for_context = workshop_draft_tools
-
-                additions.append(f"""
-## Current Context
-
-The curator is viewing the **{agent.agent_name}** agent.
-
-**Agent Description:** {agent.description}
-
-**{tools_label}:** {', '.join(tools_for_context) if tools_for_context else 'None'}
-
-**Has group-specific rules:** {'Yes' if agent.has_group_rules else 'No'}""")
-
-                # Include the prompt content based on view mode
-                if context.selected_group_id and context.selected_group_id in agent.group_rules:
-                    group_rule = agent.group_rules[context.selected_group_id]
-                    additions.append(f"""
-### Currently Viewing: {context.selected_group_id}-Specific Rules
-
-The curator is looking at the group-specific rules for {context.selected_group_id}. Here are those rules:
-
-<group_rules group="{context.selected_group_id}">
-{group_rule.content}
-</group_rules>
-
-And here is the base prompt that these rules extend:
-
-<base_prompt agent="{agent.agent_id}">
-{agent.base_prompt}
-</base_prompt>""")
-                else:
-                    # Just viewing the base prompt
-                    additions.append(f"""
-### Currently Viewing: Base Prompt
-
-<base_prompt agent="{agent.agent_id}">
-{agent.base_prompt}
-</base_prompt>""")
-
-                    if agent.has_group_rules:
-                        available_groups = list(agent.group_rules.keys())
-                        additions.append(f"""
-This agent has group-specific rules available for: {', '.join(available_groups)}. The curator can select a group to see how the base prompt is customized.""")
-
-        if context.trace_id:
-            # Provide lightweight trace context with tool usage instructions
-            from src.lib.agent_studio.context import prepare_trace_context
-            trace_context = prepare_trace_context(context.trace_id)
-            if trace_context:
-                additions.append(trace_context)
-
-        # Add flow context when user is on the Flows tab
-        if context.active_tab == 'flows':
-            flow_context = """
-<flow_context>
-## Current Context: Flow Builder
-
-The curator is designing a curation flow - a visual pipeline that chains agents together to process documents.
-
-<critical_instruction>
-**MANDATORY: ALWAYS call `get_current_flow` tool FIRST before any flow discussion.**
-
-This tool returns:
-- Flow in **execution order** (following edges from entry node, not canvas placement order)
-- Accurate step numbering based on actual execution sequence
-- Disconnected nodes flagged as warnings
-- Clean markdown representation
-
-**NEVER** reference flow structure without calling this tool first.
-</critical_instruction>
-
-<responsibilities>
-**Your role:**
-1. **Verify** - Check flow structure against validation checklist
-2. **Suggest** - Recommend better ordering, missing steps, optimizations
-3. **Explain** - Help curators understand what each agent does
-4. **Debug** - Identify problems in flow structure or configuration
-</responsibilities>
-
-<validation_checklist>
-**When asked to verify, check for:**
-1. **Initial Instructions MUST Be First** - Every flow MUST start with the Initial Instructions node (task_input). This is the entry point that defines what the curator wants to accomplish.
-2. **All Nodes Connected** - Disconnected nodes = steps that won't execute
-3. **Logical Data Flow** - Each agent's output feeds appropriately to the next
-4. **Custom Instructions Redundancy** - For EACH node with custom instructions:
-   - Call `get_prompt(agent_id)` to fetch the base prompt
-   - Compare custom instructions to base prompt content
-   - Flag any duplication (phrases, instructions, or concepts already in base)
-5. **Missing Agents** - Any important processing steps absent?
-6. **Redundant Steps** - Any agents called unnecessarily?
-
-**CRITICAL for item 4:** You MUST actually call `get_prompt` for each agent with custom instructions to perform the comparison. Do NOT skip this step or guess based on agent name alone.
-</validation_checklist>
-
-<flow_design_guidance>
-## Flow Design Best Practices
-
-**Every flow follows this pattern:**
-1. **Initial Instructions** (REQUIRED FIRST STEP) - Define the curation task
-2. **Extraction/Verification agents** - Process the document
-3. **Output agent** (if exporting data) - Format results as CSV, TSV, or JSON
-
-**Initial Instructions should specify:**
-- What to extract (e.g., "Extract all alleles mentioned in this paper")
-- What data categories to capture (e.g., "For each allele, capture: parent gene symbol, allele identifier, phenotype description")
-- Any validation requirements (e.g., "Verify allele IDs against the Alliance database")
-
-**When exporting to file (CSV/TSV/JSON):**
-- The Initial Instructions should define WHAT data to collect
-- The formatter agent (csv_formatter, tsv_formatter, json_formatter) should define HOW to format it
-- Formatter custom instructions should specify column headers matching the data defined in Initial Instructions
-
-**Example flow for allele extraction:**
-1. **Initial Instructions**: "Extract alleles from this paper. For each allele, capture: parent gene symbol, allele identifier, and phenotype. Verify identifiers against the database."
-2. **PDF Extraction**: Extract relevant sections
-3. **Allele Verification**: Validate allele data against Alliance database
-4. **CSV Formatter**: "Export with columns: parent_gene, allele_id, phenotype"
-</flow_design_guidance>
-
-<output_format>
-**Structure your verification feedback as:**
-- ✅ [What's correct] - Brief explanation
-- ⚠️ [Warning] - Issue that may cause problems
-- ❌ [Problem] - Must be fixed before flow will work correctly
-- 💡 [Suggestion] - Optional improvement
-</output_format>
-</flow_context>"""
-
-            additions.append(flow_context)
-
-        if additions:
-            base_prompt += "\n" + "\n".join(additions)
-
-    return base_prompt
 
 
 # ============================================================================
