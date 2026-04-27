@@ -149,6 +149,72 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+# ── Test: In-progress workflow keeps initial review pending ──────────
+
+test_running_workflow_keeps_initial_review_pending() {
+  local temp_dir top_json inline_json workflow_json output_file rc output
+  temp_dir="$(mktemp -d)"
+  top_json="${temp_dir}/top.json"
+  inline_json="${temp_dir}/inline.json"
+  workflow_json="${temp_dir}/workflow-runs.json"
+  output_file="${temp_dir}/output.txt"
+
+  cat > "${top_json}" <<'EOF'
+{
+  "comments": [],
+  "reviews": [],
+  "url": "https://github.com/test/repo/pull/500",
+  "title": "ALL-500: Pending Claude run",
+  "headRefOid": "abc500",
+  "commits": [
+    {"oid": "abc500", "committedDate": "2026-04-27T16:00:00Z"}
+  ]
+}
+EOF
+  echo '[]' > "${inline_json}"
+
+  cat > "${workflow_json}" <<'EOF'
+[
+  {
+    "databaseId": 25006064832,
+    "workflowName": "Claude Code Review",
+    "displayTitle": "ALL-500: Pending Claude run",
+    "status": "in_progress",
+    "conclusion": "",
+    "event": "issue_comment",
+    "createdAt": "2026-04-27T16:07:43Z",
+    "updatedAt": "2026-04-27T16:07:49Z",
+    "headBranch": "main",
+    "headSha": "21a9e7d74d0a48d150d4549dbca546ce1d7edbf2",
+    "url": "https://github.com/test/repo/actions/runs/25006064832"
+  }
+]
+EOF
+
+  set +e
+  bash "${SCRIPT_PATH}" \
+    --repo alliance-genome/agr_ai_curation \
+    --pr 500 \
+    --since "2026-04-27T16:00:00Z" \
+    --wait-seconds 1 \
+    --poll-seconds 1 \
+    --top-json-file "${top_json}" \
+    --inline-json-file "${inline_json}" \
+    --workflow-runs-json-file "${workflow_json}" \
+    > "${output_file}"
+  rc=$?
+  set -e
+  output="$(cat "${output_file}")"
+
+  assert_exit_code "0" "${rc}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_WORKFLOW_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_WORKFLOW_RUN_ID=25006064832" "${output}"
+
+  echo "  PASS: test_running_workflow_keeps_initial_review_pending"
+  rm -rf "${temp_dir}"
+}
+
 # ── Test: Old feedback before since — quiet ──────────────────────────
 
 test_old_feedback_before_since_is_quiet() {
@@ -890,6 +956,7 @@ EOF
 echo "Running symphony_claude_review_loop tests..."
 test_initial_review_detected
 test_no_feedback_quiet
+test_running_workflow_keeps_initial_review_pending
 test_old_feedback_before_since_is_quiet
 test_head_newer_no_markers_advances_round
 test_head_newer_with_markers_triggers_rereview
@@ -906,4 +973,4 @@ test_report_shows_latest_feedback_only
 test_pr109_scenario_head_after_review
 test_disposition_file_accepted
 
-echo "symphony_claude_review_loop tests passed (16/16)"
+echo "symphony_claude_review_loop tests passed (18/18)"

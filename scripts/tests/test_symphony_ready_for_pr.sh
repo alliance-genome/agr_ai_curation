@@ -273,7 +273,7 @@ test_claude_detected_auto_bounces_to_in_progress() {
 EOF
 
   cat > "${pr_view_json}" <<'EOF'
-{"number":269,"title":"ALL-293: Existing PR","url":"https://example.test/pr/269","headRefName":"all-293","baseRefName":"main","headRefOid":"abc293","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T16:45:00Z"}
+{"number":269,"title":"ALL-293: Existing PR","url":"https://example.test/pr/269","headRefName":"all-293","baseRefName":"main","headRefOid":"abc293","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T16:45:00Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
 EOF
 
   printf 'latest feedback\n' > "${report_file}"
@@ -349,7 +349,7 @@ test_claude_wait_zero_still_scans_existing_feedback() {
 EOF
 
   cat > "${pr_view_json}" <<'EOF'
-{"number":301,"title":"ALL-301: Existing PR","url":"https://example.test/pr/301","headRefName":"all-301","baseRefName":"main","headRefOid":"abc301","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T18:53:14Z"}
+{"number":301,"title":"ALL-301: Existing PR","url":"https://example.test/pr/301","headRefName":"all-301","baseRefName":"main","headRefOid":"abc301","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-04-25T18:53:14Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
 EOF
 
   printf 'latest feedback\n' > "${report_file}"
@@ -399,7 +399,7 @@ EOF
   assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
 }
 
-test_claude_pending_stops_before_check_gate() {
+test_claude_pending_after_clean_checks_stops_before_human_review() {
   local temp_dir pr_json pr_view_json loop_stub output_file output rc
   temp_dir="$(mktemp -d)"
   pr_json="${temp_dir}/prs.json"
@@ -423,6 +423,9 @@ CLAUDE_LOOP_ROUND=2
 CLAUDE_LOOP_MAX_ROUNDS=5
 CLAUDE_LOOP_LATEST_AT=2026-04-25T18:55:00Z
 CLAUDE_LOOP_WAIT_SINCE=2026-04-25T18:55:00Z
+CLAUDE_LOOP_WORKFLOW_STATUS=pending
+CLAUDE_LOOP_WORKFLOW_RUN_ID=25006064832
+CLAUDE_LOOP_WORKFLOW_RUN_URL=https://example.test/actions/runs/25006064832
 OUT
 EOF
   chmod +x "${loop_stub}"
@@ -451,8 +454,10 @@ EOF
   assert_contains "READY_FOR_PR_CLAUDE_STATUS=pending" "${output}"
   assert_contains "READY_FOR_PR_CLAUDE_ROUND=2" "${output}"
   assert_contains "READY_FOR_PR_CLAUDE_WAIT_SINCE=2026-04-25T18:55:00Z" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_WORKFLOW_STATUS=pending" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_WORKFLOW_RUN_URL=https://example.test/actions/runs/25006064832" "${output}"
+  assert_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
   assert_contains "Do not move to Human Review Prep" "${output}"
-  assert_not_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
 }
 
 test_failed_github_check_auto_bounces_to_in_progress() {
@@ -477,11 +482,8 @@ EOF
 
   cat > "${loop_stub}" <<'EOF'
 #!/usr/bin/env bash
-cat <<'OUT'
-CLAUDE_LOOP_STATUS=quiet
-CLAUDE_LOOP_ROUND=1
-CLAUDE_LOOP_MAX_ROUNDS=5
-OUT
+echo "Claude loop should not run while GitHub checks are failing" >&2
+exit 97
 EOF
   chmod +x "${loop_stub}"
 
@@ -588,7 +590,7 @@ test_dry_run_create_infers_title
 test_create_pr_uses_plain_cli_output_and_view_json
 test_claude_detected_auto_bounces_to_in_progress
 test_claude_wait_zero_still_scans_existing_feedback
-test_claude_pending_stops_before_check_gate
+test_claude_pending_after_clean_checks_stops_before_human_review
 test_failed_github_check_auto_bounces_to_in_progress
 test_claude_maxed_out_without_report_does_not_abort
 

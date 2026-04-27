@@ -485,6 +485,7 @@ PY
 gate_github_checks() {
   local pr_num="$1"
   local current_json="${2:-}"
+  local clean_instruction_mode="${3:-final}"
   local deadline failures_file pending_file check_output check_rc status total failed_count pending_count now
   local first_fetch=1
 
@@ -522,9 +523,11 @@ gate_github_checks() {
         rm -f "${failures_file}" "${pending_file}"
         echo "READY_FOR_PR_CHECK_STATUS=clean"
         echo "READY_FOR_PR_CHECK_TOTAL=${total:-0}"
-        cat <<INST
-READY_FOR_PR_INSTRUCTIONS=PR #${pr_num} is open, Claude feedback does not require another implementation pass, and GitHub checks are clean. Write PR Handoff, move to Human Review Prep, and stop this run.
+        if [[ "${clean_instruction_mode}" == "final" ]]; then
+          cat <<INST
+READY_FOR_PR_INSTRUCTIONS=PR #${pr_num} is open and GitHub checks are clean. Write PR Handoff, move to Human Review Prep, and stop this run.
 INST
+        fi
         return 0
         ;;
       failed)
@@ -582,9 +585,42 @@ emit_pr_success_with_claude_check() {
   local pr_created_at="${2:-}"
   local loop_round=""
   local loop_max=""
+  local gate_output check_rc check_report
 
   CLAUDE_STATUS="quiet"
   CLAUDE_REPORT_FILE=""
+
+  set +e
+  gate_output="$(gate_github_checks "${pr_num}" "${pr_view_json:-}" "defer_clean_instruction")"
+  check_rc=$?
+  set -e
+  printf '%s\n' "${gate_output}"
+
+  if (( check_rc == 10 )); then
+    check_report="$(extract_kv "READY_FOR_PR_CHECK_FAILURES_FILE" "${gate_output}")"
+
+    if (( auto_bounce_failing_checks == 1 )); then
+      if ! auto_bounce_to_in_progress_for_checks "${pr_num}" "${check_report}"; then
+        cat <<INST
+READY_FOR_PR_INSTRUCTIONS=GitHub checks failed on PR #${pr_num}, but the helper could not move the issue back to In Progress automatically. Record the failed checks and move the issue manually.
+INST
+        return 32
+      fi
+      cat <<INST
+READY_FOR_PR_INSTRUCTIONS=GitHub checks failed on PR #${pr_num}. The helper already wrote PR Handoff, moved the issue to In Progress, and stopped this PR lane. Do not request Claude review or move to Human Review Prep until checks are clean.
+INST
+      return 0
+    fi
+
+    cat <<INST
+READY_FOR_PR_INSTRUCTIONS=GitHub checks failed on PR #${pr_num}. Read ${check_report}, write PR Handoff, move to In Progress, and stop this run before requesting Claude review.
+INST
+    return 0
+  fi
+
+  if (( check_rc != 0 )); then
+    return "${check_rc}"
+  fi
 
   if [[ -z "${repo}" ]]; then
     echo "READY_FOR_PR_CLAUDE_WARNING=Could not infer --repo; skipping Claude feedback scan" >&2
@@ -627,13 +663,16 @@ emit_pr_success_with_claude_check() {
       set -e
 
       # Extract variables from loop output
-      local loop_status loop_report loop_latest loop_wait_since
+      local loop_status loop_report loop_latest loop_wait_since loop_workflow_status loop_workflow_run_id loop_workflow_run_url
       loop_status="$(extract_kv "CLAUDE_LOOP_STATUS" "${loop_output}")"
       loop_report="$(extract_kv "CLAUDE_LOOP_REPORT_FILE" "${loop_output}")"
       loop_round="$(extract_kv "CLAUDE_LOOP_ROUND" "${loop_output}")"
       loop_max="$(extract_kv "CLAUDE_LOOP_MAX_ROUNDS" "${loop_output}")"
       loop_latest="$(extract_kv "CLAUDE_LOOP_LATEST_AT" "${loop_output}")"
       loop_wait_since="$(extract_kv "CLAUDE_LOOP_WAIT_SINCE" "${loop_output}")"
+      loop_workflow_status="$(extract_kv "CLAUDE_LOOP_WORKFLOW_STATUS" "${loop_output}")"
+      loop_workflow_run_id="$(extract_kv "CLAUDE_LOOP_WORKFLOW_RUN_ID" "${loop_output}")"
+      loop_workflow_run_url="$(extract_kv "CLAUDE_LOOP_WORKFLOW_RUN_URL" "${loop_output}")"
 
       if (( loop_rc != 0 && loop_rc != 10 )); then
         echo "READY_FOR_PR_CLAUDE_STATUS=error"
@@ -654,8 +693,17 @@ INST
         echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
         echo "READY_FOR_PR_CLAUDE_LATEST_AT=${loop_latest:-}"
         echo "READY_FOR_PR_CLAUDE_WAIT_SINCE=${loop_wait_since:-}"
+        if [[ -n "${loop_workflow_status}" ]]; then
+          echo "READY_FOR_PR_CLAUDE_WORKFLOW_STATUS=${loop_workflow_status}"
+        fi
+        if [[ -n "${loop_workflow_run_id}" ]]; then
+          echo "READY_FOR_PR_CLAUDE_WORKFLOW_RUN_ID=${loop_workflow_run_id}"
+        fi
+        if [[ -n "${loop_workflow_run_url}" ]]; then
+          echo "READY_FOR_PR_CLAUDE_WORKFLOW_RUN_URL=${loop_workflow_run_url}"
+        fi
         cat <<INST
-READY_FOR_PR_INSTRUCTIONS=Claude Code re-review is pending for PR #${pr_num}. Do not move to Human Review Prep or gate GitHub checks as final yet. Write the pending Claude review status into PR Handoff, keep the issue in Ready for PR, and rerun this helper after Claude responds or the review wait can be extended.
+READY_FOR_PR_INSTRUCTIONS=GitHub checks are clean, but Claude Code re-review is pending for PR #${pr_num}. Do not move to Human Review Prep yet. Write the pending Claude review status into PR Handoff, keep the issue in Ready for PR, and rerun this helper after Claude responds or the review wait can be extended.
 INST
         return 11
       fi
@@ -704,36 +752,17 @@ INST
     fi
   fi
 
-  local gate_output check_rc check_report
-  set +e
-  gate_output="$(gate_github_checks "${pr_num}" "${pr_view_json:-}")"
-  check_rc=$?
-  set -e
-  printf '%s\n' "${gate_output}"
-
-  if (( check_rc == 10 )); then
-    check_report="$(extract_kv "READY_FOR_PR_CHECK_FAILURES_FILE" "${gate_output}")"
-
-    if (( auto_bounce_failing_checks == 1 )); then
-      if ! auto_bounce_to_in_progress_for_checks "${pr_num}" "${check_report}"; then
-        cat <<INST
-READY_FOR_PR_INSTRUCTIONS=GitHub checks failed on PR #${pr_num}, but the helper could not move the issue back to In Progress automatically. Record the failed checks and move the issue manually.
-INST
-        return 32
-      fi
-      cat <<INST
-READY_FOR_PR_INSTRUCTIONS=GitHub checks failed on PR #${pr_num}. The helper already wrote PR Handoff, moved the issue to In Progress, and stopped this PR lane. Do not move to Human Review Prep.
-INST
-      return 0
-    fi
-
+  if [[ "${CLAUDE_STATUS}" == "maxed_out" ]]; then
     cat <<INST
-READY_FOR_PR_INSTRUCTIONS=GitHub checks failed on PR #${pr_num}. Read ${check_report}, write PR Handoff, move to In Progress, and stop this run.
+READY_FOR_PR_INSTRUCTIONS=PR #${pr_num} is open, GitHub checks are clean, and the Claude review loop is maxed out. Write a short Claude Loop Decision note in PR Handoff, move to Human Review Prep, and stop this run.
 INST
     return 0
   fi
 
-  return "${check_rc}"
+  cat <<INST
+READY_FOR_PR_INSTRUCTIONS=PR #${pr_num} is open, GitHub checks are clean, and Claude feedback does not require another implementation pass. Write PR Handoff, move to Human Review Prep, and stop this run.
+INST
+  return 0
 }
 
 if [[ "${delivery_mode}" == "no_pr" ]]; then
