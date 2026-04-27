@@ -20,7 +20,7 @@ NOTE: All tests MUST fail until T027 implements the contract.
 
 import pytest
 import json
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 
 @pytest.fixture
@@ -365,7 +365,7 @@ class TestChatTenantIsolation:
         from main import app
         from src.api.auth import auth
         from dataclasses import dataclass
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
 
         @dataclass
         class MockCognitoUser:
@@ -384,7 +384,7 @@ class TestChatTenantIsolation:
         app.dependency_overrides[auth.get_user] = lambda: mock_user
 
         # Mock the chat flow to verify tenant parameter is passed
-        with patch("src.api.chat.generate_chat_response") as mock_generate:
+        with patch("src.api.chat_stream.generate_chat_response") as mock_generate:
             # Mock returns SSE stream
             async def mock_sse_generator():
                 yield 'data: {"type": "token", "content": "test"}\n\n'
@@ -450,7 +450,7 @@ class TestChatTenantIsolation:
         user_a = UserA()
         app.dependency_overrides[auth.get_user] = lambda: user_a
 
-        with patch("src.api.chat.generate_chat_response") as mock_generate_a:
+        with patch("src.api.chat_stream.generate_chat_response") as mock_generate_a:
             async def mock_sse_a():
                 yield 'data: {"type": "token", "content": "User A result"}\n\n'
                 yield 'data: {"type": "done", "session_id": "session_a"}\n\n'
@@ -491,7 +491,7 @@ class TestChatTenantIsolation:
         user_b = UserB()
         app.dependency_overrides[auth.get_user] = lambda: user_b
 
-        with patch("src.api.chat.generate_chat_response") as mock_generate_b:
+        with patch("src.api.chat_stream.generate_chat_response") as mock_generate_b:
             async def mock_sse_b():
                 yield 'data: {"type": "token", "content": "User B result"}\n\n'
                 yield 'data: {"type": "done", "session_id": "session_b"}\n\n'
