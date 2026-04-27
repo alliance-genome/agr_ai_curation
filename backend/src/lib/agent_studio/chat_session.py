@@ -189,7 +189,7 @@ def get_active_chat_session_row(
     db: Session,
     session_id: str,
     *,
-    chat_session_model: type[ChatSessionModel] = ChatSessionModel,
+    chat_session_model: type[ChatSessionModel],
 ) -> ChatSessionModel | None:
     normalized_session_id = normalize_optional_text(session_id)
     if normalized_session_id is None:
@@ -208,7 +208,7 @@ def resolve_agent_studio_session_id(
     db: Session,
     user_id: str,
     requested_session_id: str | None,
-    chat_session_model: type[ChatSessionModel] = ChatSessionModel,
+    chat_session_model: type[ChatSessionModel],
 ) -> str:
     normalized_requested_session_id = normalize_optional_text(requested_session_id)
     if normalized_requested_session_id is None:
@@ -244,8 +244,8 @@ def prepare_agent_studio_turn(
     db: Session,
     user_id: str,
     request: Any,
+    chat_session_model: type[ChatSessionModel],
     repository_cls: type[ChatHistoryRepository] = ChatHistoryRepository,
-    chat_session_model: type[ChatSessionModel] = ChatSessionModel,
 ) -> PreparedAgentStudioTurn:
     repository = repository_cls(db)
     requested_context_session_id = (

@@ -12,7 +12,7 @@ import os
 import re
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime  # noqa: F401 - Agent Studio module API surface.
 from pathlib import Path as FilePath
 from typing import Any, Callable, Dict, List, NoReturn, Optional
 
@@ -43,7 +43,7 @@ from .agent_studio_schemas import (
     RegistryMetadataResponse,
     ShareAgentRequest,
     SuggestionResponse,
-    ToolIdeaConversationEntry,
+    ToolIdeaConversationEntry,  # noqa: F401 - Agent Studio schema API surface.
     ToolIdeaCreateRequest,
     ToolIdeaListResponse,
     ToolIdeaResponseItem,
@@ -986,8 +986,7 @@ async def test_agent_endpoint(
 # Chat Endpoints (Configured Anthropic Model)
 # ============================================================================
 
-# Tool definitions are kept in a focused helper module and re-exported here so
-# existing Agent Studio tests and imports can continue to patch this module path.
+# Public Agent Studio tool definitions exposed from the focused helper module.
 ANTHROPIC_SUGGESTION_TOOL = opus_tools.ANTHROPIC_SUGGESTION_TOOL
 UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.UPDATE_WORKSHOP_PROMPT_TOOL
 ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL

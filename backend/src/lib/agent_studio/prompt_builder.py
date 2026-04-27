@@ -8,9 +8,6 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 from src.lib.agent_studio.models import ChatContext
 
-PROMPT_EXPLORER_MODEL_ENV_VAR = "PROMPT_EXPLORER_MODEL_ID"
-LEGACY_PROMPT_EXPLORER_MODEL_ENV_VAR = "ANTHROPIC_OPUS_MODEL"
-
 
 def list_anthropic_catalog_models(
     *,
