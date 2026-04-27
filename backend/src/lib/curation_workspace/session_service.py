@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from fastapi import HTTPException
-
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
 )
@@ -47,7 +45,6 @@ from src.lib.curation_workspace.session_submission_service import (
     _submission_validation_blocking_reason,
     execute_submission,
     get_submission,
-    logger,
     retry_submission,
     submission_preview,
 )
@@ -67,7 +64,6 @@ from src.lib.curation_workspace.session_validation_service import (
 )
 
 __all__ = [
-    "HTTPException",
     "SUBMISSION_TRANSPORT_FAILURE_MESSAGE",
     "CurationDraftFieldSchema",
     "SessionActionLogModel",
@@ -92,7 +88,6 @@ __all__ = [
     "get_session_detail",
     "get_session_workspace",
     "get_session_stats",
-    "logger",
     "list_flow_run_sessions",
     "list_flow_runs",
     "list_sessions",

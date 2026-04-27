@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
@@ -644,7 +645,7 @@ def test_create_manual_candidate_rejects_non_manual_source(db_session):
         extraction_result_id=extraction_result.id,
     )
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.create_manual_candidate(
             db_session,
             str(session_row.id),
@@ -879,7 +880,7 @@ def test_get_session_workspace_rejects_entity_tag_candidates_missing_entity_type
     session_row.current_candidate_id = candidate.id
     db_session.commit()
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.get_session_workspace(db_session, str(session_row.id))
 
     assert exc.value.status_code == 500
@@ -1153,7 +1154,7 @@ def test_list_flow_run_sessions_raises_not_found_for_unknown_group(db_session):
         pending_candidates=1,
     )
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.list_flow_run_sessions(
             db_session,
             CurationFlowRunSessionsRequest(flow_run_id="flow-missing"),
@@ -1700,7 +1701,7 @@ def test_submission_preview_rejects_unknown_candidate_ids(db_session):
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
     )
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.submission_preview(
             db_session,
             seeded["session_id"],
@@ -1757,7 +1758,7 @@ def test_resolve_submission_transport_adapter_sanitizes_missing_target(monkeypat
     )
 
     try:
-        with pytest.raises(module.HTTPException) as exc:
+        with pytest.raises(HTTPException) as exc:
             submission_module._resolve_submission_transport_adapter("missing_target")
     finally:
         submission_module._submission_adapter_registry.cache_clear()
@@ -1784,7 +1785,7 @@ def test_build_submission_execute_payload_sanitizes_adapter_errors(caplog, monke
 
     monkeypatch.setattr(submission_module, "_resolve_export_adapter", lambda _adapter_key: StubExportAdapter())
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         submission_module._build_submission_execute_payload(
             db=db,
             session_row=session_row,
@@ -2199,7 +2200,7 @@ def test_retry_submission_rejects_non_failed_original_submission(db_session):
     db_session.add(original_submission)
     db_session.commit()
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.retry_submission(
             db_session,
             seeded["session_id"],
