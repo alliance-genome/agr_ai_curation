@@ -17,6 +17,16 @@ from tests.integration.evidence_test_support import collect_sse_events
 pytest_plugins = ["tests.integration.evidence_test_support"]
 
 
+def _patch_chat_impl(monkeypatch, modules, name: str, value) -> None:
+    patched = False
+    for module in modules:
+        if hasattr(module, name):
+            monkeypatch.setattr(module, name, value)
+            patched = True
+    if not patched:
+        raise AttributeError(name)
+
+
 def _configure_stream_mocks(
     monkeypatch,
     *,
@@ -25,17 +35,20 @@ def _configure_stream_mocks(
     tool_agent_map: dict[str, str] | None = None,
     check_cancel_signal=None,
 ) -> None:
-    from src.api import chat
+    from src.api import chat_common, chat_stream
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(
-        chat,
+    chat_modules = (chat_common, chat_stream)
+
+    _patch_chat_impl(monkeypatch, chat_modules, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, chat_modules, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(
+        monkeypatch,
+        chat_modules,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: document_state_payload),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map or {}))
+    _patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, chat_modules, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map or {}))
 
     async def _register_active_stream(
         session_id: str,
@@ -57,15 +70,16 @@ def _configure_stream_mocks(
     async def _default_check_cancel_signal(_session_id: str) -> bool:
         return False
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, chat_modules, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, chat_modules, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, chat_modules, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(
+        monkeypatch,
+        chat_modules,
         "check_cancel_signal",
         check_cancel_signal or _default_check_cancel_signal,
     )
-    monkeypatch.setattr(chat, "run_agent_streamed", run_agent_streamed)
+    _patch_chat_impl(monkeypatch, chat_modules, "run_agent_streamed", run_agent_streamed)
 
 
 def test_chat_stream_persists_durable_rows_and_emits_turn_completed(client, monkeypatch, test_db):
@@ -159,7 +173,9 @@ def test_chat_stream_emits_turn_interrupted_and_leaves_only_user_row(client, mon
 
 
 def test_chat_stream_extraction_persistence_failure_emits_turn_failed(client, monkeypatch, test_db, evidence_integration_context):
-    from src.api import chat
+    from src.api import chat_common, chat_stream as chat
+
+    chat_modules = (chat_common, chat)
 
     session_id = "chat-stream-extraction-failed-session"
     turn_id = "chat-stream-extraction-failed-turn"
@@ -207,8 +223,9 @@ def test_chat_stream_extraction_persistence_failure_emits_turn_failed(client, mo
         "src.lib.curation_workspace.extraction_results._get_agent_curation_metadata",
         lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
     )
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
+        chat_modules,
         "persist_extraction_results",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("db unavailable")),
     )
@@ -252,7 +269,9 @@ def test_chat_stream_turn_save_failed_then_assistant_rescue_is_idempotent(
     test_db,
     evidence_integration_context,
 ):
-    from src.api import chat
+    from src.api import chat_common, chat_stream as chat
+
+    chat_modules = (chat_common, chat)
 
     session_id = "chat-stream-save-failed-session"
     turn_id = "chat-stream-save-failed-turn"
@@ -320,7 +339,7 @@ def test_chat_stream_turn_save_failed_then_assistant_rescue_is_idempotent(
         "src.lib.curation_workspace.extraction_results._get_agent_curation_metadata",
         lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", _get_repository)
+    _patch_chat_impl(monkeypatch, chat_modules, "_get_chat_history_repository", _get_repository)
 
     with client.stream(
         "POST",

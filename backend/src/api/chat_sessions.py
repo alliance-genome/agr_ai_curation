@@ -1,3 +1,4 @@
+# ruff: noqa: F403,F405
 """Durable chat session and conversation endpoints."""
 
 from .chat_common import *

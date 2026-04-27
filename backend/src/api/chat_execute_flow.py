@@ -1,3 +1,4 @@
+# ruff: noqa: F403,F405
 """Execute-flow chat streaming endpoint."""
 
 from .chat_common import *

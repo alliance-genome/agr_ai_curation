@@ -1,3 +1,4 @@
+# ruff: noqa: F403,F405
 """Document selection endpoints for chat."""
 
 from .chat_common import *

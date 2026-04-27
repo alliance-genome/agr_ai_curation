@@ -1,6 +1,9 @@
+# ruff: noqa: F403,F405
 """Chat response, streaming, cancellation, and assistant rescue endpoints."""
 
 from .chat_common import *
+
+_LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
 
 
 @router.post("/chat", response_model=ChatResponse)

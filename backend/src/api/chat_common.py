@@ -1,3 +1,4 @@
+# ruff: noqa: F401,F403,F405
 """Chat API endpoints using OpenAI Agents SDK.
 
 This module provides chat endpoints for the AI Curation Prototype,
@@ -379,11 +380,10 @@ def _assistant_rescue_conflicting_fields(
     return conflicting_fields
 
 
-# Local fallback for cancel events (used alongside Redis for immediate in-process cancellation)
-# Redis provides cross-worker cancellation; this provides immediate same-worker cancellation
+# Local cancel events for immediate in-process cancellation.
+# Redis handles cross-worker cancellation coordination.
 _LOCAL_CANCEL_EVENTS: Dict[str, asyncio.Event] = {}
 _LOCAL_SESSION_OWNERS: Dict[str, str] = {}
-_LOCAL_NON_STREAM_TURN_OWNERS: Dict[str, str] = {}
 _TITLE_BACKFILL_MESSAGE_LIMIT = 20
 
 

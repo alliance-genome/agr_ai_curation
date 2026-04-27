@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
-from src.api import chat
+from src.api import chat, chat_common, chat_documents, chat_sessions, chat_stream
 from src.lib.chat_history_repository import (
     ASSISTANT_CHAT_KIND,
     AppendMessageResult,
@@ -22,6 +22,19 @@ from src.lib.chat_history_repository import (
     ChatMessageRecord,
 )
 from src.lib.curation_workspace import extraction_results as extraction_results_module
+
+
+_CHAT_IMPLEMENTATION_MODULES = (chat_common, chat_documents, chat_sessions, chat_stream)
+
+
+def _patch_chat_impl(monkeypatch, name: str, value) -> None:
+    patched = False
+    for module in _CHAT_IMPLEMENTATION_MODULES:
+        if hasattr(module, name):
+            monkeypatch.setattr(module, name, value)
+            patched = True
+    if not patched:
+        raise AttributeError(name)
 
 
 def _ts(hour: int, minute: int = 0) -> datetime:
@@ -46,8 +59,8 @@ def _stub_non_stream_turn_claims(monkeypatch):
     ) -> None:
         return None
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
     yield
     chat._LOCAL_NON_STREAM_TURN_OWNERS.clear()
 
@@ -729,8 +742,8 @@ async def test_load_document_for_chat_success(monkeypatch):
     async def _get_document(_user_sub, _doc_id):
         return {"document": doc_payload}
 
-    monkeypatch.setattr(chat, "get_document", _get_document)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(set_document=lambda user, doc: captured.setdefault(user, doc)))
+    _patch_chat_impl(monkeypatch, "get_document", _get_document)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(set_document=lambda user, doc: captured.setdefault(user, doc)))
     monkeypatch.setattr("src.lib.document_cache.invalidate_cache", lambda user, doc_id: captured.setdefault("cache", (user, doc_id)))
 
     result = await chat.load_document_for_chat(chat.LoadDocumentRequest(document_id="doc-1"), {"sub": "user-1"})
@@ -745,7 +758,7 @@ async def test_load_document_for_chat_404_on_value_error(monkeypatch, caplog):
     async def _raise(*_args, **_kwargs):
         raise ValueError("missing")
 
-    monkeypatch.setattr(chat, "get_document", _raise)
+    _patch_chat_impl(monkeypatch, "get_document", _raise)
     caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     with pytest.raises(HTTPException) as exc:
@@ -757,7 +770,7 @@ async def test_load_document_for_chat_404_on_value_error(monkeypatch, caplog):
 
 @pytest.mark.asyncio
 async def test_load_document_for_chat_500_when_summary_missing(monkeypatch):
-    monkeypatch.setattr(chat, "get_document", lambda *_args, **_kwargs: _async_value({"not_document": {}}))
+    _patch_chat_impl(monkeypatch, "get_document", lambda *_args, **_kwargs: _async_value({"not_document": {}}))
 
     with pytest.raises(HTTPException) as exc:
         await chat.load_document_for_chat(chat.LoadDocumentRequest(document_id="doc-1"), {"sub": "user-1"})
@@ -768,8 +781,8 @@ async def test_load_document_for_chat_500_when_summary_missing(monkeypatch):
 async def test_get_loaded_document_and_clear_document(monkeypatch):
     stored = {"id": "doc-1", "filename": "paper.pdf"}
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(
             get_document=lambda _uid: stored,
@@ -788,7 +801,7 @@ async def test_get_loaded_document_and_clear_document(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_clear_loaded_document_when_none(monkeypatch):
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
     payload = await chat.clear_loaded_document({"sub": "user-1"})
     assert payload.active is False
     assert "No document was loaded" in payload.message
@@ -798,9 +811,9 @@ async def test_clear_loaded_document_when_none(monkeypatch):
 async def test_create_session_returns_uuid_and_persists_active_document(monkeypatch):
     repository = FakeChatHistoryRepository()
     commits: list[str] = []
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(
             get_document=lambda _uid: {
@@ -836,9 +849,9 @@ async def test_create_session_drops_unavailable_active_document(monkeypatch):
     stale_document_id = UUID("8b7be2ce-2f34-4c30-8f47-26a8cb5cd1a8")
     repository = FakeChatHistoryRepository(visible_document_ids=set())
     commits: list[str] = []
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(
             get_document=lambda _uid: {
@@ -873,9 +886,9 @@ async def test_create_session_drops_unavailable_active_document(monkeypatch):
 async def test_create_session_drops_invalid_active_document_uuid(monkeypatch):
     repository = FakeChatHistoryRepository()
     commits: list[str] = []
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(
             get_document=lambda _uid: {
@@ -917,13 +930,13 @@ def test_fake_chat_history_repository_turn_lookup_requires_existing_session():
 async def test_chat_endpoint_success(monkeypatch):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _stream(**_kwargs):
         assert [(call["role"], call["content"]) for call in repository.append_calls] == [
@@ -932,7 +945,7 @@ async def test_chat_endpoint_success(monkeypatch):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "final answer"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     result = await chat.chat_endpoint(
         chat.ChatMessage(message="hello", session_id="session-1", turn_id="turn-1"),
@@ -962,20 +975,20 @@ async def test_chat_endpoint_success(monkeypatch):
 async def test_chat_endpoint_uses_last_run_finished_response(monkeypatch):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "intermediate answer"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "final stabilized answer"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     result = await chat.chat_endpoint(
         chat.ChatMessage(message="hello", session_id="session-2", turn_id="turn-2"),
@@ -995,13 +1008,13 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     unregister_calls = []
     streamed_context_messages = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -1018,8 +1031,8 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
     ) -> None:
         unregister_calls.append((session_id, user_id, stream_token))
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     run_attempt = 0
@@ -1034,7 +1047,7 @@ async def test_chat_endpoint_retries_failed_turn_once_prior_claim_is_released(mo
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-retry"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "recovered answer"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1083,12 +1096,12 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     unregister_calls = []
     streamed_context_messages = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -1105,20 +1118,20 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     ) -> None:
         unregister_calls.append((session_id, user_id, stream_token))
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
 
     def _raise_tool_map():
         raise RuntimeError("agent registry unavailable")
 
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", _raise_tool_map)
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", _raise_tool_map)
 
     async def _stream(**kwargs):
         streamed_context_messages.append(kwargs["context_messages"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-tool-map"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "recovered answer"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1133,7 +1146,7 @@ async def test_chat_endpoint_retries_after_tool_map_failure_releases_same_turn_c
     assert [call["role"] for call in repository.append_calls] == ["user"]
     assert "non-stream-turn:session-tool-map:turn-tool-map" not in chat._LOCAL_NON_STREAM_TURN_OWNERS
 
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     result = await chat.chat_endpoint(
         chat.ChatMessage(
@@ -1189,19 +1202,19 @@ async def test_chat_endpoint_omits_unfinished_prior_user_turn_from_context_messa
             ]
         },
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _stream(**kwargs):
         captured_context_messages.append(kwargs["context_messages"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-current"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "fresh answer"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     result = await chat.chat_endpoint(
         chat.ChatMessage(message="current question", session_id="session-context", turn_id="turn-current"),
@@ -1227,11 +1240,11 @@ async def test_chat_endpoint_rejects_same_turn_while_claim_is_still_active(monke
     chat._LOCAL_NON_STREAM_TURN_OWNERS[claim_key] = "existing-claim"
 
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1270,13 +1283,13 @@ async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatc
             ]
         },
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
         "get_supervisor_tool_agent_map",
         lambda: pytest.fail("tool map should not resolve for a completed replayed turn"),
     )
@@ -1285,7 +1298,7 @@ async def test_chat_endpoint_replays_completed_turn_without_rerunning(monkeypatc
         pytest.fail("run_agent_streamed should not run for a completed replayed turn")
         yield  # pragma: no cover
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     result = await chat.chat_endpoint(
         chat.ChatMessage(message="hello", session_id="session-replay", turn_id="turn-replay"),
@@ -1340,13 +1353,13 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
             ]
         },
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
         "get_supervisor_tool_agent_map",
         lambda: pytest.fail("tool map should not resolve for a completed replayed turn"),
     )
@@ -1355,7 +1368,7 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
         pytest.fail("run_agent_streamed should not run for a completed replayed turn")
         yield  # pragma: no cover
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _unexpected_stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _unexpected_stream)
 
     replay_result = await chat.chat_endpoint(
         chat.ChatMessage(message="replayed question", session_id="session-replay", turn_id="turn-replay"),
@@ -1377,14 +1390,14 @@ async def test_chat_endpoint_replay_reseeds_prompt_history_for_the_next_turn(mon
         {"role": "user", "content": ""},
     ]
 
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _stream(**kwargs):
         captured_context_messages.append(kwargs["context_messages"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-next"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "next answer"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     result = await chat.chat_endpoint(
         chat.ChatMessage(message="follow-up question", session_id="session-replay", turn_id="turn-next"),
@@ -1445,19 +1458,19 @@ async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stal
             ]
         },
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _stream(**kwargs):
         captured_context_messages.append(kwargs["context_messages"])
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-next"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "next answer"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     result = await chat.chat_endpoint(
         chat.ChatMessage(message="follow-up question", session_id="session-replay", turn_id="turn-next"),
@@ -1496,20 +1509,20 @@ async def test_chat_endpoint_follow_up_turn_rehydrates_replayed_exchange_on_stal
 async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
     captured = {}
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _stream(**kwargs):
         captured.update(kwargs)
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "final answer from overrides"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     await chat.chat_endpoint(
         chat.ChatMessage(
@@ -1539,20 +1552,20 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
 async def test_chat_endpoint_leaves_model_overrides_unset_when_omitted(monkeypatch):
     captured = {}
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _stream(**kwargs):
         captured.update(kwargs)
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-defaults"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "final answer from config defaults"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
 
     await chat.chat_endpoint(
         chat.ChatMessage(message="hello", session_id="session-defaults"),
@@ -1580,18 +1593,18 @@ async def test_chat_endpoint_raises_http_401_without_user_id():
 async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _stream(**_kwargs):
         yield {"type": "RUN_ERROR", "data": {"message": "model exploded"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     with pytest.raises(HTTPException) as exc:
@@ -1612,18 +1625,18 @@ async def test_chat_endpoint_raises_500_on_run_error_event(monkeypatch, caplog):
 async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkeypatch):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(
+        monkeypatch,
         "get_supervisor_tool_agent_map",
         lambda: {"ask_gene_expression_specialist": "gene-expression"},
     )
@@ -1662,9 +1675,9 @@ async def test_chat_endpoint_raises_500_when_extraction_persistence_fails(monkey
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "final answer"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream)
+    _patch_chat_impl(
+        monkeypatch,
         "persist_extraction_results",
         lambda _requests, db=None: (_ for _ in ()).throw(RuntimeError("db unavailable")),
     )
@@ -1687,17 +1700,17 @@ async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypat
     """Regression: ALL-137 — tool-map resolution failure must fail closed, not silently disable extraction."""
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(
+        monkeypatch,
         "get_supervisor_tool_agent_map",
         lambda: (_ for _ in ()).throw(RuntimeError("agent registry unavailable")),
     )
@@ -1710,7 +1723,7 @@ async def test_chat_endpoint_raises_500_when_tool_map_resolution_fails(monkeypat
         stream_called = True
         yield {"type": "RUN_FINISHED", "data": {"response": "should not reach"}}
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _stream_sentinel)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _stream_sentinel)
 
     with pytest.raises(HTTPException) as exc:
         await chat.chat_endpoint(
@@ -1731,11 +1744,11 @@ async def test_chat_endpoint_sanitizes_non_stream_validation_error(monkeypatch, 
     commits: list[str] = []
     rollbacks: list[str] = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
 
     def _raise_value_error(**_kwargs):
         raise ValueError("repository session invariant exploded")
@@ -1761,19 +1774,19 @@ async def test_chat_endpoint_sanitizes_non_stream_validation_error(monkeypatch, 
 async def test_chat_endpoint_wraps_unexpected_exceptions(monkeypatch, caplog):
     commits: list[str] = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _sid: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _uid: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _sid: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _uid: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _raise(**_kwargs):
         raise RuntimeError("boom")
         yield  # pragma: no cover
 
-    monkeypatch.setattr(chat, "run_agent_streamed", _raise)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _raise)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     with pytest.raises(HTTPException) as exc:
@@ -1822,8 +1835,8 @@ async def test_get_conversation_status_and_reset_endpoints(monkeypatch):
             ],
         },
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
     status = await chat.get_conversation_status(db=object(), user={"sub": "user-1"})
     assert status.is_active is True
     assert status.conversation_id == "session-current"
@@ -1839,9 +1852,9 @@ async def test_get_conversation_status_and_reset_endpoints(monkeypatch):
 @pytest.mark.asyncio
 async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, caplog):
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(
+        monkeypatch,
         "_latest_visible_chat_session",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("conversation backend unavailable")),
     )
@@ -1855,7 +1868,7 @@ async def test_conversation_endpoints_sanitize_internal_errors(monkeypatch, capl
     assert "conversation backend unavailable" in caplog.text
 
     caplog.clear()
-    monkeypatch.setattr(chat, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
+    _patch_chat_impl(monkeypatch, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
 
     def _raise_create_session(**_kwargs):
         raise RuntimeError("conversation reset failed")
@@ -1927,7 +1940,7 @@ async def test_get_all_sessions_stats_returns_filtered_search_results(monkeypatc
             ),
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     filtered = await chat.get_all_sessions_stats(
         chat_kind="assistant_chat",
@@ -1959,7 +1972,7 @@ async def test_get_all_sessions_stats_returns_filtered_search_results(monkeypatc
 @pytest.mark.asyncio
 async def test_get_all_sessions_stats_returns_empty_state(monkeypatch):
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     payload = await chat.get_all_sessions_stats(
         chat_kind="assistant_chat",
@@ -1994,7 +2007,7 @@ async def test_get_all_sessions_stats_uses_generated_titles_and_schedules_lazy_b
         ]
     )
     background_tasks = BackgroundTasks()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     payload = await chat.get_all_sessions_stats(
         chat_kind="assistant_chat",
@@ -2045,9 +2058,9 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
             ]
         },
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(
+        monkeypatch,
         "get_document",
         lambda _user_id, _document_id: _async_value(
             {"document": {"id": str(active_document_id), "filename": "paper.pdf", "chunk_count": 5}}
@@ -2071,7 +2084,7 @@ async def test_get_session_history_returns_durable_detail_with_active_document(m
 @pytest.mark.asyncio
 async def test_chat_history_routes_sanitize_validation_errors(monkeypatch, caplog):
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     def _raise_history_error(**_kwargs):
@@ -2143,8 +2156,8 @@ async def test_get_session_history_uses_generated_title_from_first_page_and_queu
         },
     )
     background_tasks = BackgroundTasks()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "get_document", lambda *_args, **_kwargs: _async_value({"document": None}))
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "get_document", lambda *_args, **_kwargs: _async_value({"document": None}))
 
     payload = await chat.get_session_history(
         "session-generated-detail",
@@ -2186,8 +2199,8 @@ def test_backfill_chat_session_generated_title_uses_transcript_when_user_title_i
         rollback=lambda: rollbacks.append("rollback"),
         close=lambda: None,
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
 
     chat._backfill_chat_session_generated_title("session-backfill", "user-1")
 
@@ -2212,8 +2225,8 @@ def test_backfill_chat_session_generated_title_does_not_overwrite_user_title(mon
         rollback=lambda: None,
         close=lambda: None,
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
 
     chat._backfill_chat_session_generated_title(
         "session-user-title",
@@ -2253,8 +2266,8 @@ def test_backfill_chat_session_generated_title_skips_when_session_disappears_bef
         rollback=lambda: rollbacks.append("rollback"),
         close=lambda: None,
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
 
     chat._backfill_chat_session_generated_title("session-race", "user-1")
 
@@ -2278,8 +2291,8 @@ def test_backfill_chat_session_generated_title_logs_and_rolls_back_when_chat_kin
         rollback=lambda: rollbacks.append("rollback"),
         close=lambda: None,
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
 
     with caplog.at_level("WARNING"):
         chat._backfill_chat_session_generated_title("session-missing-kind", "user-1")
@@ -2330,7 +2343,7 @@ def test_serialize_message_omits_internal_flow_summary_payload_keys():
 @pytest.mark.asyncio
 async def test_get_session_history_rejects_blank_session_id(monkeypatch):
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     with pytest.raises(HTTPException) as exc:
         await chat.get_session_history(
@@ -2357,12 +2370,12 @@ async def test_get_session_history_returns_null_active_document_when_document_is
             )
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     async def _raise_missing_document(*_args, **_kwargs):
         raise ValueError(f"Document {active_document_id} not found")
 
-    monkeypatch.setattr(chat, "get_document", _raise_missing_document)
+    _patch_chat_impl(monkeypatch, "get_document", _raise_missing_document)
 
     payload = await chat.get_session_history(
         "session-detail",
@@ -2388,12 +2401,12 @@ async def test_get_session_history_returns_null_active_document_when_document_is
             )
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     async def _raise_not_found(*_args, **_kwargs):
         raise HTTPException(status_code=404, detail="Document not found")
 
-    monkeypatch.setattr(chat, "get_document", _raise_not_found)
+    _patch_chat_impl(monkeypatch, "get_document", _raise_not_found)
 
     payload = await chat.get_session_history(
         "session-detail",
@@ -2419,12 +2432,12 @@ async def test_get_session_history_propagates_unexpected_document_lookup_value_e
             )
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     async def _raise_unexpected_value_error(*_args, **_kwargs):
         raise ValueError("User with auth_sub user-1 not found")
 
-    monkeypatch.setattr(chat, "get_document", _raise_unexpected_value_error)
+    _patch_chat_impl(monkeypatch, "get_document", _raise_unexpected_value_error)
 
     with pytest.raises(ValueError, match="User with auth_sub user-1 not found"):
         await chat.get_session_history(
@@ -2448,12 +2461,12 @@ async def test_get_session_history_propagates_unexpected_document_lookup_failure
             )
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     async def _raise_server_error(*_args, **_kwargs):
         raise HTTPException(status_code=500, detail="Document service failure")
 
-    monkeypatch.setattr(chat, "get_document", _raise_server_error)
+    _patch_chat_impl(monkeypatch, "get_document", _raise_server_error)
 
     with pytest.raises(HTTPException) as exc:
         await chat.get_session_history(
@@ -2476,7 +2489,7 @@ async def test_rename_session_updates_title(monkeypatch):
             _session_record(session_id="session-rename", user_auth_sub="user-1", title="Original"),
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     payload = await chat.rename_session(
         "session-rename",
@@ -2497,7 +2510,7 @@ async def test_chat_session_mutation_routes_sanitize_validation_errors(monkeypat
             _session_record(session_id="session-delete", user_auth_sub="user-1", title="Delete me"),
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     def _raise_rename_error(**_kwargs):
@@ -2547,7 +2560,7 @@ async def test_rename_session_returns_404_for_other_users_session(monkeypatch):
             _session_record(session_id="session-foreign", user_auth_sub="user-2", title="Private"),
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     with pytest.raises(HTTPException) as exc:
         await chat.rename_session(
@@ -2566,7 +2579,7 @@ async def test_delete_session_returns_404_for_other_users_session(monkeypatch):
             _session_record(session_id="session-foreign", user_auth_sub="user-2", title="Private"),
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     with pytest.raises(HTTPException) as exc:
         await chat.delete_session(
@@ -2582,7 +2595,7 @@ async def test_delete_session_rejects_blank_session_id(monkeypatch):
     commits: list[str] = []
     rollbacks: list[str] = []
     repository = FakeChatHistoryRepository()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     with pytest.raises(HTTPException) as exc:
         await chat.delete_session(
@@ -2610,7 +2623,7 @@ async def test_bulk_delete_sessions_only_deletes_visible_sessions(monkeypatch):
             _session_record(session_id="session-c", user_auth_sub="user-2", title="Private"),
         ]
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     payload = await chat.bulk_delete_sessions(
         chat.BulkDeleteSessionsRequest(

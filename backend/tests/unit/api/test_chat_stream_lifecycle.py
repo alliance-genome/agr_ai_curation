@@ -6,7 +6,7 @@ from unittest.mock import ANY
 
 import pytest
 
-chat = importlib.import_module("src.api.chat")
+chat = importlib.import_module("src.api.chat_common")
 
 
 @pytest.fixture(autouse=True)

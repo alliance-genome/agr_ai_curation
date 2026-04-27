@@ -158,8 +158,8 @@ class TestChatIsolation:
         test_db.commit()
 
         # Mock chat flow execution to avoid complex setup
-        with patch("src.api.chat.get_supervisor_tool_agent_map", return_value={}), \
-             patch("src.api.chat.run_agent_streamed") as mock_execute:
+        with patch("src.api.chat_stream.get_supervisor_tool_agent_map", return_value={}), \
+             patch("src.api.chat_stream.run_agent_streamed") as mock_execute:
             # Mock successful chat response
             async def mock_chat_generator():
                 yield {"type": "RUN_FINISHED", "data": {"response": "Test response"}}
@@ -249,8 +249,8 @@ class TestChatIsolation:
         test_db.commit()
 
         # Mock chat flow to track tenant usage
-        with patch("src.api.chat.get_supervisor_tool_agent_map", return_value={}), \
-             patch("src.api.chat.run_agent_streamed") as mock_execute:
+        with patch("src.api.chat_stream.get_supervisor_tool_agent_map", return_value={}), \
+             patch("src.api.chat_stream.run_agent_streamed") as mock_execute:
             async def mock_chat_generator():
                 yield {"type": "RUN_FINISHED", "data": {"response": "Test"}}
 
@@ -580,8 +580,8 @@ class TestChatIsolation:
         test_db.commit()
 
         # Verify the chat endpoint forwards an authenticated user_id into runtime.
-        with patch("src.api.chat.get_supervisor_tool_agent_map", return_value={}), \
-             patch("src.api.chat.run_agent_streamed") as mock_execute:
+        with patch("src.api.chat_stream.get_supervisor_tool_agent_map", return_value={}), \
+             patch("src.api.chat_stream.run_agent_streamed") as mock_execute:
             async def mock_chat_generator():
                 yield {"type": "RUN_FINISHED", "data": {"response": "Test response"}}
 
