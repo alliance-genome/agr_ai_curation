@@ -135,15 +135,15 @@ def test_record_evidence_summary_uses_resolved_output_chunk_id():
         tool_name="record_evidence",
         tool_input={
             "entity": "Trp53 fl/fl ;Wwox fl/fl",
-            "chunk_id": "Methods",
-            "claimed_quote": "The strains were bred in the Methods section.",
+            "chunk_id": "stale-input-id",
+            "claimed_quote": "The strains were bred in the source passage.",
         },
         tool_output={
             "status": "verified",
             "chunk_id": resolved_chunk_id,
-            "verified_quote": "The strains were bred in the Methods section.",
+            "verified_quote": "The strains were bred in the source passage.",
             "page": 11,
-            "section": "Materials and Methods",
+            "section": "Source Passage",
         },
     )
 

@@ -1594,8 +1594,8 @@ async def test_allele_specialist_rejects_empty_evidence_after_section_label_reco
                             "claimed_quote": claimed_quote,
                             "chunk_content_preview": "",
                             "message": (
-                                "chunk_id 'Methods_1' looks like a section label, "
-                                "not a valid chunk UUID. Retry with search_document."
+                                "chunk_id 'Methods_1' is not a chunk identifier returned by "
+                                "the document tools. Retry with search_document."
                             ),
                             "retry_tool": "search_document",
                         }

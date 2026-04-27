@@ -138,82 +138,72 @@ async def test_record_evidence_fixture_cases(monkeypatch, case_id):
     ids=lambda trace_case: trace_case["trace_id"][:8],
 )
 @pytest.mark.asyncio
-async def test_record_evidence_resolves_section_label_chunk_id_from_trace_fixture(monkeypatch, trace_case):
-    resolved_chunk_id = "1b3651f8-7745-51a0-80f3-b3eafb70a558"
+async def test_record_evidence_rejects_section_label_chunk_id_from_trace_fixture(monkeypatch, trace_case):
     tool_input = trace_case["tool_input"]
 
     async def _unexpected_get_chunk_by_id(**_kwargs):
-        pytest.fail("section-label chunk IDs should resolve before direct chunk-id lookup")
-
-    def _fake_fetch_document_chunks_for_resolution(document_id, user_id):
-        assert document_id == "doc-8325599"
-        assert user_id == "user-1"
-        return [
-            {
-                "id": resolved_chunk_id,
-                "content": (
-                    "Animals and breeding. "
-                    f"{tool_input['claimed_quote']} "
-                    "Mice were maintained in accordance with institutional protocols."
-                ),
-                "page_number": 11,
-                "parent_section": "Materials and Methods",
-                "section_title": "Mouse strains",
-                "subsection": "Animals",
-                "metadata": {},
-                "doc_items": [{"page": 11}],
-            }
-        ]
+        pytest.fail("section-label chunk IDs should be rejected before direct chunk-id lookup")
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
-    monkeypatch.setattr(
-        record_evidence,
-        "fetch_document_chunks_for_resolution",
-        _fake_fetch_document_chunks_for_resolution,
-    )
     tool = record_evidence.create_record_evidence_tool("doc-8325599", "user-1")
 
     result = await tool(**tool_input)
 
-    assert result["status"] == "verified"
-    assert result["chunk_id"] == resolved_chunk_id
-    assert result["input_chunk_id"] == tool_input["chunk_id"]
-    assert result["resolution"] == "section_label_quote_match"
-    assert result["verified_quote"] == tool_input["claimed_quote"]
-    assert result["page"] == 11
-    assert result["section"] == "Materials and Methods"
-    assert result["subsection"] == "Animals"
-    assert result["evidence_record_id"] == build_evidence_record_id(
-        evidence_record={
-            "entity": tool_input["entity"],
-            "verified_quote": tool_input["claimed_quote"],
-            "page": 11,
-            "section": "Materials and Methods",
-            "chunk_id": resolved_chunk_id,
-            "subsection": "Animals",
-            "figure_reference": None,
-        }
-    )
+    assert result["status"] == "not_found"
+    assert result["chunk_id"] == tool_input["chunk_id"]
+    assert result["invalid_chunk_id"] == tool_input["chunk_id"]
+    assert result["invalid_chunk_id_reason"] == "not_a_tool_returned_chunk_id"
+    assert result["retry_tool"] == "search_document"
+    assert "search_document" in result["message"]
+    assert "section.source_chunks[].chunk_id" in result["message"]
+    assert "hit.chunk_id" in result["retry_instructions"]
+    assert "section.source_chunks[].chunk_id" in result["retry_instructions"]
+    assert "evidence_record_id" not in result
 
 
 @pytest.mark.asyncio
-async def test_record_evidence_section_label_chunk_id_returns_actionable_retry_when_unresolved(monkeypatch):
-    trace_case = ALL_292_FIXTURE["record_evidence_calls"][1]
+async def test_record_evidence_rejects_uncommon_section_label_without_auto_resolution(monkeypatch):
+    tool_input = {
+        "entity": "example allele",
+        "chunk_id": "Experimental_Procedures_2",
+        "claimed_quote": "The allele was generated with a two-step targeting protocol.",
+    }
 
-    def _no_resolution_chunks(*_args, **_kwargs):
-        return []
+    async def _unexpected_get_chunk_by_id(**_kwargs):
+        pytest.fail("non-tool-returned section labels should be rejected before direct chunk-id lookup")
 
-    monkeypatch.setattr(record_evidence, "fetch_document_chunks_for_resolution", _no_resolution_chunks)
-    tool = record_evidence.create_record_evidence_tool("doc-8325599", "user-1")
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-uncommon-section", "user-1")
 
-    result = await tool(**trace_case["tool_input"])
+    result = await tool(**tool_input)
 
     assert result["status"] == "not_found"
-    assert result["chunk_id"] == "Methods_1"
-    assert result["invalid_chunk_id_reason"] == "section_label_not_chunk_uuid"
+    assert result["chunk_id"] == "Experimental_Procedures_2"
+    assert result["invalid_chunk_id_reason"] == "not_a_tool_returned_chunk_id"
     assert result["retry_tool"] == "search_document"
-    assert "section label" in result["message"]
     assert "search_document" in result["message"]
+    assert "evidence_record_id" not in result
+
+
+@pytest.mark.parametrize("bad_chunk_id", ["chunk_1", "chunk_id_placeholder"])
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_model_generated_chunk_placeholders(monkeypatch, bad_chunk_id):
+    async def _unexpected_get_chunk_by_id(**_kwargs):
+        pytest.fail("model-generated placeholder chunk IDs should be rejected before lookup")
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _unexpected_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-8325599", "user-1")
+
+    result = await tool(
+        entity="example allele",
+        chunk_id=bad_chunk_id,
+        claimed_quote="The allele was generated with a two-step targeting protocol.",
+    )
+
+    assert result["status"] == "not_found"
+    assert result["chunk_id"] == bad_chunk_id
+    assert result["invalid_chunk_id_reason"] == "not_a_tool_returned_chunk_id"
+    assert result["retry_tool"] == "search_document"
     assert "hit.chunk_id" in result["retry_instructions"]
     assert "evidence_record_id" not in result
 

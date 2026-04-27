@@ -59,7 +59,7 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- Pass the entity label, the exact `chunk_id` from prior `search_document` hits "
     "or `read_section` source_chunks, and the quote you believe appears in that chunk.\n"
     "- If the tool returns `not_found`, inspect the returned chunk preview or retry "
-    "instructions, use `search_document` to get a valid chunk_id when requested, "
+    "instructions, use `search_document` to get a chunk_id from tool results when requested, "
     "and drop the evidence if it still does not verify.\n"
     "- Only persist evidence records that came back `verified`.\n"
 )
@@ -527,7 +527,7 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "required": True,
                     "description": (
                         "Chunk identifier returned by search_document hits or read_section "
-                        "source_chunks. Do not pass section labels such as Methods or Results."
+                        "source_chunks. Do not pass section names, generated labels, or placeholders."
                     ),
                 },
                 {
