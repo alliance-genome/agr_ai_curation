@@ -149,6 +149,72 @@ EOF
   rm -rf "${temp_dir}"
 }
 
+# ── Test: In-progress workflow keeps initial review pending ──────────
+
+test_running_workflow_keeps_initial_review_pending() {
+  local temp_dir top_json inline_json workflow_json output_file rc output
+  temp_dir="$(mktemp -d)"
+  top_json="${temp_dir}/top.json"
+  inline_json="${temp_dir}/inline.json"
+  workflow_json="${temp_dir}/workflow-runs.json"
+  output_file="${temp_dir}/output.txt"
+
+  cat > "${top_json}" <<'EOF'
+{
+  "comments": [],
+  "reviews": [],
+  "url": "https://github.com/test/repo/pull/500",
+  "title": "ALL-500: Pending Claude run",
+  "headRefOid": "abc500",
+  "commits": [
+    {"oid": "abc500", "committedDate": "2026-04-27T16:00:00Z"}
+  ]
+}
+EOF
+  echo '[]' > "${inline_json}"
+
+  cat > "${workflow_json}" <<'EOF'
+[
+  {
+    "databaseId": 25006064832,
+    "workflowName": "Claude Code Review",
+    "displayTitle": "ALL-500: Pending Claude run",
+    "status": "in_progress",
+    "conclusion": "",
+    "event": "issue_comment",
+    "createdAt": "2026-04-27T16:07:43Z",
+    "updatedAt": "2026-04-27T16:07:49Z",
+    "headBranch": "main",
+    "headSha": "21a9e7d74d0a48d150d4549dbca546ce1d7edbf2",
+    "url": "https://github.com/test/repo/actions/runs/25006064832"
+  }
+]
+EOF
+
+  set +e
+  bash "${SCRIPT_PATH}" \
+    --repo alliance-genome/agr_ai_curation \
+    --pr 500 \
+    --since "2026-04-27T16:00:00Z" \
+    --wait-seconds 1 \
+    --poll-seconds 1 \
+    --top-json-file "${top_json}" \
+    --inline-json-file "${inline_json}" \
+    --workflow-runs-json-file "${workflow_json}" \
+    > "${output_file}"
+  rc=$?
+  set -e
+  output="$(cat "${output_file}")"
+
+  assert_exit_code "0" "${rc}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_WORKFLOW_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_WORKFLOW_RUN_ID=25006064832" "${output}"
+
+  echo "  PASS: test_running_workflow_keeps_initial_review_pending"
+  rm -rf "${temp_dir}"
+}
+
 # ── Test: Old feedback before since — quiet ──────────────────────────
 
 test_old_feedback_before_since_is_quiet() {
@@ -230,12 +296,13 @@ EOF
   echo '[]' > "${inline_json}"
 
   # --dry-run prevents the gh pr comment call; wait-seconds=0 means the
-  # poll times out immediately → quiet (no new Claude response yet).
+  # poll returns immediately, but the outstanding re-review is still pending.
   rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --dry-run)"
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
 
   echo "  PASS: test_head_newer_no_markers_advances_round"
   rm -rf "${temp_dir}"
@@ -282,12 +349,13 @@ test_head_newer_with_markers_triggers_rereview() {
 EOF
   echo '[]' > "${inline_json}"
 
-  # dry-run + wait-seconds=0: should try request_and_wait but timeout → quiet
+  # dry-run + wait-seconds=0: should try request_and_wait and report pending.
   rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --dry-run)"
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
 
   echo "  PASS: test_head_newer_with_markers_triggers_rereview"
   rm -rf "${temp_dir}"
@@ -439,7 +507,8 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
   assert_not_contains "maxed_out" "${output}"
 
   echo "  PASS: test_under_limit_head_newer_advances"
@@ -620,12 +689,14 @@ test_already_requested_sha_does_not_repost() {
 EOF
   echo '[]' > "${inline_json}"
 
-  # With wait-seconds=0, it should just return quiet (waiting for Claude's response to already-posted request)
+  # With wait-seconds=0, it should not re-post, but the already-requested
+  # re-review is still pending.
   rc="$(run_loop "${top_json}" "${inline_json}" "2026-03-21T14:00:00Z" "${output_file}" --head-sha def456)"
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=wait" "${output}"
 
   echo "  PASS: test_already_requested_sha_does_not_repost"
   rm -rf "${temp_dir}"
@@ -751,7 +822,7 @@ test_pr109_scenario_head_after_review() {
   #
   # With the fix, head newer than feedback + no markers → request_and_wait
   # (posts re-review marker so round counter advances).  With wait-seconds=0
-  # the poll times out immediately → quiet.
+  # the poll returns immediately, but the re-review is pending.
 
   cat > "${top_json}" <<'EOF'
 {
@@ -779,7 +850,8 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
 
   echo "  PASS: test_pr109_scenario_head_after_review"
   rm -rf "${temp_dir}"
@@ -872,7 +944,8 @@ EOF
   output="$(cat "${output_file}")"
 
   assert_exit_code "0" "${rc}"
-  assert_contains "CLAUDE_LOOP_STATUS=quiet" "${output}"
+  assert_contains "CLAUDE_LOOP_STATUS=pending" "${output}"
+  assert_contains "CLAUDE_LOOP_ACTION=request_and_wait" "${output}"
 
   echo "  PASS: test_disposition_file_accepted"
   rm -rf "${temp_dir}"
@@ -883,6 +956,7 @@ EOF
 echo "Running symphony_claude_review_loop tests..."
 test_initial_review_detected
 test_no_feedback_quiet
+test_running_workflow_keeps_initial_review_pending
 test_old_feedback_before_since_is_quiet
 test_head_newer_no_markers_advances_round
 test_head_newer_with_markers_triggers_rereview
@@ -899,4 +973,4 @@ test_report_shows_latest_feedback_only
 test_pr109_scenario_head_after_review
 test_disposition_file_accepted
 
-echo "symphony_claude_review_loop tests passed (16/16)"
+echo "symphony_claude_review_loop tests passed (18/18)"
