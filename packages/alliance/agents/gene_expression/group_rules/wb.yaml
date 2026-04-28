@@ -29,18 +29,14 @@ content: |
     Example pattern: TIAM-1::GFP observation only in dma-1(DPDZ) mutant context.
 
   ### Reagent/genotype capture
-  - Capture full reagent genotype strings exactly as written when reporting retained findings.
-    Example: include full genotype details for constructs such as qyIs369.
+  - Capture full reagent genotype strings exactly as written when reporting retained findings, without inferring, normalizing, or modifying them.
+  - Include full genotype details for constructs such as qyIs369 when present in the evidence.
+  - C. elegans transgene arrays follow the format: xxIs### (integrated) or xxEx### (extrachromosomal).
 
   ### Positive inclusion reminder
   - Retain directly supported experimental positives with complete evidence.
   - Example: hpo-30 expression findings directly demonstrated in this paper should be retained.
   - Gene names like hpo-30 follow C. elegans nomenclature (lowercase, 3-letter code + hyphen + number).
-
-  ### Reagent genotype capture
-  - Capture reagent genotype strings exactly as written (e.g., qyIs369 for integrated transgene arrays).
-  - C. elegans transgene arrays follow the format: xxIs### (integrated) or xxEx### (extrachromosomal).
-  - Do not infer or modify reagent genotype strings — capture verbatim from the paper.
 
   ### Output discipline
   - Every excluded candidate must land in `exclusions[]` with canonical reason_code and evidence.
@@ -64,7 +60,7 @@ content: |
   - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
     - Still capture the annotation with null anatomy_label and/or life_stage_label.
     - Add an ambiguities[] entry noting which fields are incomplete and may require curator review of figures.
-    - Example: "Expression pattern of the acox-1.1 gene." → capture with gene but null anatomy.
+    - Example: "Expression pattern of the acox-1.1 gene." -> capture with gene but null anatomy.
   - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):
     - Capture the annotation with the tentative identities.
     - Include the uncertainty qualifier in evidence_text verbatim.
@@ -72,7 +68,7 @@ content: |
 
   ### Negative expression results (C. elegans)
   - Experimentally demonstrated absence of expression is a valid annotation with is_negative: true.
-    Example: "no GFP signal was observed in the pharynx" → annotation with anatomy_label=pharynx, is_negative=true.
+    Example: "no GFP signal was observed in the pharynx" -> annotation with anatomy_label=pharynx, is_negative=true.
   - Expression unchanged in perturbation background (e.g., "expression of RAB-11 in acs-1(RNAi) embryos was not different from wild type") is generally NOT a new expression annotation.
     - If wild-type expression is established elsewhere in the paper, do not duplicate it.
     - If this is the ONLY evidence of the expression pattern, capture it with context.

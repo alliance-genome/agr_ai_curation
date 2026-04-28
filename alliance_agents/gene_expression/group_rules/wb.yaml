@@ -1,100 +1,81 @@
-# =============================================================================
-# GROUP RULES: WB
-# =============================================================================
-# Exported from database on 2026-01-29 22:12:03
-# Original version: 1
-# Created: 2025-12-29
-#
-# These rules are injected into the gene_expression agent's prompt when users
-# belong to the WB group.
-# =============================================================================
-
-content: '
-
-  ## WB-SPECIFIC RULES (Caenorhabditis elegans)
-
-
-  ## WormBase Gene Expression Curation Guidelines (C. elegans)
-
-
-  ### Anatomy Term Specificity (CRITICAL)
-
-
-  WormBase curators prefer the MOST SPECIFIC anatomy term available:
-
-
-  - **Always use child anatomy terms** when the paper mentions them
-
-  - If the paper says "pharyngeal muscle", use that instead of "pharynx"
-
-  - If the paper says "body wall muscle", use that instead of "muscle"
-
-  - If the paper says "intestinal cells", use that instead of "intestine"
-
-
-  **Examples of preferred specificity:**
-
-  - "pharyngeal m4" or "pharyngeal muscle" > "pharynx"
-
-  - "seam cells" > "hypodermis"
-
-  - "vulval precursor cells" > "vulva"
-
-  - "distal tip cell" > "gonad"
-
-  - "anchor cell" > "uterus"
-
-
-  **Exception:** If the paper only mentions the general term (e.g., just "pharynx"),
-
-  use what the paper says - don''t assume specificity.
-
-
-  ### C. elegans Transgenic Markers (EXCLUDE from annotation)
-
-
-  Common strain identification markers to EXCLUDE:
-
-  - `rol-6(su1006)` - roller phenotype marker
-
-  - `myo-2::GFP` or `myo-2::mCherry` - pharyngeal muscle marker for identification
-
-  - `unc-119(+)` - rescue marker
-
-  - `sur-5::GFP` - nuclear marker
-
-  - `ttx-3::GFP` - AIY neuron marker (when used as co-injection marker)
-
-
-  **Only annotate expression if it''s the SUBJECT of study**, not an identification tool.
-
-
-  ### WormBase Nomenclature
-
-
-  - Gene names: lowercase with hyphen + number (e.g., `daf-16`, `unc-54`, `lin-12`)
-
-  - Transgene syntax: `fsIs2 [dmd-3::YFP, cc::GFP]` - array name + contents
-
-  - Allele syntax: `e1370`, `tm1243` - lowercase letters + numbers
-
-  - Strain names: 2-letter lab code + number (e.g., `DF268`, `OH15732`)
-
-
-
-  ### Interpreting WB Results:
-
-  ### Interpreting WormBase Gene Expression Results
-
-
-  - Verify anatomy terms match WormBase anatomy ontology (WBbt)
-
-  - Life stages should use WormBase life stage ontology (WBls)
-
-  - Common life stages: embryo, L1-L4 larval stages, young adult, adult
-
-  - Sex-specific: hermaphrodite, male (C. elegans is hermaphrodite with rare males)
-
-
-  '
 group_id: WB
+content: |
+  ## WB-SPECIFIC RULES (C. elegans Gene Expression Curation)
+
+  These rules apply for WormBase group curation and refine the base extractor policy.
+  Reference guidance: https://academic.oup.com/database/article/doi/10.1093/database/baaf063/8268905?login=false
+
+  ### Anatomy specificity
+  - Prefer the most specific supported anatomy label.
+  - Use curated WB-preferred granularity where evidence supports it (for example prefer `dendrite` over `dendritic tree`).
+  - Do not infer finer specificity than what evidence supports.
+
+  ### Marker/promoter exclusions
+  - Exclude promoter-driven localization used only to label cells (reason_code: `promoter_driven_marker_localization`).
+    Example pattern: ser-2 promoter used to drive PVD labeling.
+  - Exclude marker-only visualization constructs (reason_code: `marker_only_visualization`).
+    Example pattern: wdIs52 [F49H12.4p::GFP] used only to visualize PVD.
+  - Exclude structural labeling markers not representing new expression findings (reason_code: `structural_label_or_fusion_only`).
+    Example pattern: tagRFP::TBA-1 or UtrCH used as microtubule/F-actin marker.
+
+  ### Previously reported / non-experimental exclusions
+  - Exclude prior-literature/background-only statements (reason_code: `previously_reported`).
+    Example pattern: act-4 expression cited as previously described/data not shown.
+  - Exclude narrative/mechanistic statements that are not direct experimental findings in this paper (reason_code: `non_experimental_claim`).
+    Example pattern: speculative discussion of SAX-7/MNR-1 roles without direct new experiment readout.
+
+  ### Mutant-background exclusion
+  - Exclude annotations observed only in mutant/perturbation background when no direct wild-type finding is established (reason_code: `mutant_background_only`).
+    Example pattern: TIAM-1::GFP observation only in dma-1(DPDZ) mutant context.
+
+  ### Reagent/genotype capture
+  - Capture full reagent genotype strings exactly as written when reporting retained findings, without inferring, normalizing, or modifying them.
+  - Include full genotype details for constructs such as qyIs369 when present in the evidence.
+  - C. elegans transgene arrays follow the format: xxIs### (integrated) or xxEx### (extrachromosomal).
+
+  ### Positive inclusion reminder
+  - Retain directly supported experimental positives with complete evidence.
+  - Example: hpo-30 expression findings directly demonstrated in this paper should be retained.
+  - Gene names like hpo-30 follow C. elegans nomenclature (lowercase, 3-letter code + hyphen + number).
+
+  ### Output discipline
+  - Every excluded candidate must land in `exclusions[]` with canonical reason_code and evidence.
+  - Keep only experimentally observed WB-curation-relevant annotations in `annotations[]`.
+
+  ### Rescue experiment language exclusion
+  - Exclude sentences where "expression" refers to transgenic rescue, not endogenous expression profiling (reason_code: `rescue_experiment_not_expression`).
+    Example pattern: "Expression of CKR-1 in AIB robustly rescued ckr-1 mutant animal's escape defects."
+  - Cue words in C. elegans papers: "rescued", "restored", "suppressed", "complemented".
+  - This is distinct from promoter-driven localization: rescue experiments use a transgene to test gene function, not to profile where a gene is expressed.
+  - Common in C. elegans rescue experiments where tissue-specific promoters drive gene expression to test sufficiency.
+
+  ### Summary/conclusion statements from this paper
+  - Summary or conclusion statements about experiments performed IN THIS paper are curatable expression findings.
+  - Do NOT exclude these as non-experimental claims.
+    Example INCLUDE: "In conclusion, gmap1 and gmap-2/3 genes are both expressed in epithelial cells."
+    Example EXCLUDE: "abts-1 is expressed in HSNs from the L4 larval stage onward (Shinkai et al. 2018)." (external citation = previously_reported)
+  - The key distinction: does the statement summarize experiments in THIS paper (include), or cite prior work (exclude)?
+
+  ### Incomplete annotation handling
+  - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
+    - Still capture the annotation with null anatomy_label and/or life_stage_label.
+    - Add an ambiguities[] entry noting which fields are incomplete and may require curator review of figures.
+    - Example: "Expression pattern of the acox-1.1 gene." -> capture with gene but null anatomy.
+  - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):
+    - Capture the annotation with the tentative identities.
+    - Include the uncertainty qualifier in evidence_text verbatim.
+    - Add an ambiguities[] entry noting the tentative identification.
+
+  ### Negative expression results (C. elegans)
+  - Experimentally demonstrated absence of expression is a valid annotation with is_negative: true.
+    Example: "no GFP signal was observed in the pharynx" -> annotation with anatomy_label=pharynx, is_negative=true.
+  - Expression unchanged in perturbation background (e.g., "expression of RAB-11 in acs-1(RNAi) embryos was not different from wild type") is generally NOT a new expression annotation.
+    - If wild-type expression is established elsewhere in the paper, do not duplicate it.
+    - If this is the ONLY evidence of the expression pattern, capture it with context.
+
+  ### Ambiguity handling policy
+  - When uncertain whether a sentence reports new experimental results or summarizes prior work, err on the side of INCLUSION with an ambiguities[] entry.
+  - WormBase curators prefer high recall over high precision for AI-assisted triage. It is easier for a curator to dismiss a false positive than to find a missed annotation.
+
+  ### Additional WB exclusion reason_codes
+  - rescue_experiment_not_expression: The sentence uses expression-related language but describes a transgenic rescue experiment, not endogenous expression profiling. Cues: "rescued", "restored", "suppressed", "complemented".
