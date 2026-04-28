@@ -36,7 +36,7 @@ write_context_json() {
         description: "Description.",
         url: "https://linear.example/ALL-123",
         state: {name: "Ready for PR"},
-        labels: (if $delivery_label == "" then [] else [$delivery_label] end)
+        labels: (if $delivery_label == "" then [] else [{id: "label-no-pr", name: $delivery_label, color: "#888888"}] end)
       },
       comments: [],
       workpad_comment: null,
@@ -264,6 +264,69 @@ EOF
   rm -rf "${temp_root}"
 }
 
+test_no_pr_label_moves_to_human_review_prep() {
+  local temp_root repo context helper_dir ready_helper output workpad_log state_log section_log
+  temp_root="$(mktemp -d)"
+  repo="${temp_root}/repo"
+  context="${temp_root}/context.json"
+  helper_dir="${temp_root}/helpers"
+  ready_helper="${helper_dir}/ready.sh"
+  output="${temp_root}/output.txt"
+  workpad_log="${temp_root}/workpad.log"
+  state_log="${temp_root}/state.log"
+  section_log="${temp_root}/section.md"
+
+  make_repo "${repo}"
+  write_context_json "${context}" "workflow:no-pr"
+  write_stub_helpers "${helper_dir}" "${workpad_log}" "${state_log}" "${section_log}"
+
+  cat > "${ready_helper}" <<'EOF'
+#!/usr/bin/env bash
+delivery_mode=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --delivery-mode)
+      delivery_mode="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ "${delivery_mode}" != "no_pr" ]]; then
+  echo "Expected delivery mode no_pr, got ${delivery_mode}" >&2
+  exit 1
+fi
+cat <<'OUT'
+READY_FOR_PR_STATUS=skip_no_pr
+READY_FOR_PR_NEXT_STATE=Human Review Prep
+READY_FOR_PR_CHECK_STATUS=skipped
+READY_FOR_PR_CLAUDE_STATUS=skipped
+OUT
+EOF
+  chmod +x "${ready_helper}"
+
+  bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-123 \
+    --context-json-file "${context}" \
+    --workspace-dir "${repo}" \
+    --workpad-helper "${helper_dir}/workpad.sh" \
+    --state-helper "${helper_dir}/state.sh" \
+    --ready-helper "${ready_helper}" \
+    --guard-helper "${GUARD_PATH}" \
+    --wait-for-review-seconds 0 \
+    --wait-for-checks-seconds 0 \
+    > "${output}"
+
+  assert_contains "READY_FOR_PR_LANE_STATUS=ready" "${output}"
+  assert_contains "READY_FOR_PR_LANE_TO_STATE=Human Review Prep" "${output}"
+  assert_contains "READY_FOR_PR_LANE_REASON=workflow_no_pr" "${output}"
+  assert_contains "target=Human Review Prep" "${state_log}"
+
+  rm -rf "${temp_root}"
+}
+
 test_dirty_workspace_at_entry_returns_to_in_progress() {
   local temp_root repo context helper_dir ready_helper output workpad_log state_log section_log
   temp_root="$(mktemp -d)"
@@ -363,6 +426,7 @@ EOF
 test_clean_pr_moves_to_human_review_prep
 test_helper_auto_bounce_does_not_write_second_transition
 test_pending_gate_stays_ready_for_pr_without_transition
+test_no_pr_label_moves_to_human_review_prep
 test_dirty_workspace_at_entry_returns_to_in_progress
 test_dirty_workspace_after_helper_returns_to_in_progress
 

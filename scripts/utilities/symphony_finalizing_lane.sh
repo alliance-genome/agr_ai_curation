@@ -300,7 +300,14 @@ context_issue_identifier() {
 }
 
 infer_delivery_mode() {
-  if jq -e '[.issue.labels[]? | ascii_downcase] | index("workflow:no-pr")' "${context_json_path}" >/dev/null; then
+  if jq -e '
+    [
+      .issue.labels[]?
+      | if type == "object" then (.name // "") else . end
+      | ascii_downcase
+    ]
+    | index("workflow:no-pr")
+  ' "${context_json_path}" >/dev/null; then
     printf 'no_pr'
   else
     printf 'pr'

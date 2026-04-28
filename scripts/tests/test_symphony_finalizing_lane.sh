@@ -37,7 +37,7 @@ write_context_json() {
         description: "Description.",
         url: "https://linear.example/ALL-123",
         state: {name: $state},
-        labels: (if $delivery_label == "" then [] else [$delivery_label] end)
+        labels: (if $delivery_label == "" then [] else [{id: "label-no-pr", name: $delivery_label, color: "#888888"}] end)
       },
       comments: [],
       workpad_comment: null,
@@ -132,6 +132,22 @@ test_successful_finalization_moves_to_done() {
 
   cat > "${finalizer}" <<'EOF'
 #!/usr/bin/env bash
+expected_delivery_mode=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --delivery-mode)
+      expected_delivery_mode="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ "${expected_delivery_mode}" != "no_pr" ]]; then
+  echo "Expected delivery mode no_pr, got ${expected_delivery_mode}" >&2
+  exit 1
+fi
 cat <<'OUT'
 FINALIZE_STATUS=finalized_no_pr
 FINALIZE_NEXT_STATE=Done
