@@ -43,7 +43,16 @@ def test_non_gene_extractor_prompts_include_record_evidence_domain_guidance(
     assert "record_evidence" in content
     assert "Strong quote examples:" in content
     assert "Weak quote examples:" in content
-    assert "items[].evidence" in content
+    if folder_name == "disease_extractor":
+        assert "evidence_records[]" in content
+        assert "evidence_record_ids[]" in content
+        assert re.search(
+            r"Do not emit\s+legacy ad hoc evidence arrays such as "
+            r"diseases\[\]\.evidence or items\[\]\.evidence",
+            content,
+        )
+    else:
+        assert "items[].evidence" in content
     assert domain_specific_snippet in content
 
 
