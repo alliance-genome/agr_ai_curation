@@ -181,6 +181,72 @@ EOF
   rm -rf "${temp_root}"
 }
 
+test_successful_finalization_tolerates_already_done_state() {
+  local temp_root repo context helper_dir finalizer output workpad_log state_log section_log
+  temp_root="$(mktemp -d)"
+  repo="${temp_root}/repo"
+  context="${temp_root}/context.json"
+  helper_dir="${temp_root}/helpers"
+  finalizer="${helper_dir}/finalize.sh"
+  output="${temp_root}/output.txt"
+  workpad_log="${temp_root}/workpad.log"
+  state_log="${temp_root}/state.log"
+  section_log="${temp_root}/section.md"
+
+  make_repo "${repo}"
+  write_context_json "${context}"
+  write_stub_helpers "${helper_dir}" "${workpad_log}" "${state_log}" "${section_log}"
+
+  cat > "${helper_dir}/state.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo "target=Done" > "${SYMPHONY_TEST_STATE_LOG:?}"
+cat <<'OUT'
+LINEAR_STATE_STATUS=error
+LINEAR_STATE_FROM=Done
+LINEAR_STATE_TO=Done
+LINEAR_STATE_ERROR=Current state does not match --from-state.
+OUT
+exit 3
+EOF
+  chmod +x "${helper_dir}/state.sh"
+
+  cat > "${finalizer}" <<'EOF'
+#!/usr/bin/env bash
+cat <<'OUT'
+FINALIZE_STATUS=merged
+FINALIZE_NEXT_STATE=Done
+FINALIZE_DELIVERY_MODE=pr
+FINALIZE_BRANCH=all-123
+FINALIZE_PR_NUMBER=123
+FINALIZE_PR_URL=https://example.test/pr/123
+FINALIZE_PRE_CLEANUP_STATUS=success
+FINALIZE_POST_CLEANUP_STATUS=success
+FINALIZE_WORKSPACE_REMOVAL=deferred_to_terminal_cleanup
+FINALIZE_MERGE_STATUS=merged
+FINALIZE_MESSAGE=Merged PR 123.
+OUT
+EOF
+  chmod +x "${finalizer}"
+
+  bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-123 \
+    --context-json-file "${context}" \
+    --workspace-dir "${repo}" \
+    --workpad-helper "${helper_dir}/workpad.sh" \
+    --state-helper "${helper_dir}/state.sh" \
+    --finalize-helper "${finalizer}" \
+    > "${output}"
+
+  assert_contains "FINALIZING_LANE_STATUS=done" "${output}"
+  assert_contains "FINALIZING_LANE_TO_STATE=Done" "${output}"
+  assert_contains "FINALIZING_LANE_STATE_STATUS=already_done" "${output}"
+  assert_contains "FINALIZE_STATUS" "${section_log}"
+  assert_contains "target=Done" "${state_log}"
+
+  rm -rf "${temp_root}"
+}
+
 test_merge_conflict_returns_to_in_progress() {
   local temp_root repo context helper_dir finalizer output workpad_log state_log section_log
   temp_root="$(mktemp -d)"
@@ -317,6 +383,7 @@ EOF
 }
 
 test_successful_finalization_moves_to_done
+test_successful_finalization_tolerates_already_done_state
 test_merge_conflict_returns_to_in_progress
 test_missing_pr_moves_to_blocked
 test_non_finalizing_state_noops

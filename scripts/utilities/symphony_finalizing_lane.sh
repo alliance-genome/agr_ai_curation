@@ -344,7 +344,7 @@ append_finalization_summary() {
 
 move_issue_state() {
   local target_state="$1"
-  local output rc
+  local output rc current_state reported_target_state
 
   set +e
   output="$(bash "${STATE_HELPER}" \
@@ -355,6 +355,13 @@ move_issue_state() {
   set -e
 
   if [[ "${rc}" -ne 0 ]]; then
+    current_state="$(extract_kv "LINEAR_STATE_FROM" "${output}")"
+    reported_target_state="$(extract_kv "LINEAR_STATE_TO" "${output}")"
+    if [[ "${current_state}" == "${target_state}" && "${reported_target_state}" == "${target_state}" ]]; then
+      printf 'already_%s' "$(printf '%s' "${target_state}" | tr '[:upper:] ' '[:lower:]_')"
+      return 0
+    fi
+
     echo "${output}" >&2
     return "${rc}"
   fi
