@@ -4,7 +4,7 @@
 # Exported from database on 2026-01-29 22:12:03
 # Original version: 2
 # Created: 2026-01-07
-# Notes: Improved with XML structure, specific formatting rules, example, and constraints
+# Notes: Structured with Markdown headings, specific formatting rules, example, and constraints
 #
 # This file contains the base prompt for the agent. Group-specific rules
 # are stored in the group_rules/ subdirectory and injected at runtime.
