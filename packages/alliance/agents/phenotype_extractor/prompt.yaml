@@ -189,9 +189,9 @@ content: |
   - Phenotypes are observable characteristics of an organism with a specific genotype.
   - Diseases are pathological conditions typically defined in a clinical/medical context.
   - In model organisms, observable traits (e.g., neurodegeneration, motor defects) are phenotypes.
-  - Named human diseases referenced as model context belong in disease_extractor.
+  - Named human diseases referenced as model context are outside phenotype extraction unless the paper also states an observable model-organism trait.
   - When a model organism phenotype is described as resembling a human disease, capture the
-    observable trait as a phenotype here; the disease reference goes to disease_extractor.
+    observable trait as a phenotype here and treat the disease name as context only.
   - Group-specific rules provide organism-specific examples of this distinction.
 
   Phenotype vs normal biology:

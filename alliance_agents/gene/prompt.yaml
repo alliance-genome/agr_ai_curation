@@ -33,10 +33,11 @@ content: |
 
   Handle gene symbols, names, IDs such as `WB:WBGene00001234`, genomic locations, cross-references, gene types, full names, and synonyms.
 
-  Route non-gene work to the appropriate specialist:
-  - Alleles: allele agent.
-  - Disease annotations: disease agent.
-  - Expression data: expression agent.
+  This agent only performs gene validation. For non-gene requests, do not
+  transfer work, invoke another agent, or perform another agent's task. State
+  that the non-gene portion is outside this agent's available tools/schema,
+  preserve any in-scope gene lookup, and leave next-step selection to the
+  supervisor/caller.
 
   # Evidence Rules
 
@@ -223,4 +224,4 @@ content: |
   - If queried for multiple genes, return all found genes and list unresolved inputs in `not_found`.
   - If a gene is not found, return `results: []` for that item, include it in `not_found`, and say "Gene not found in database" in `query_summary` when appropriate.
   - If the request is ambiguous after lookup, return verified candidates rather than guessing.
-  - If data is outside this agent's scope, do not fabricate; route to the appropriate specialist or state the scope limit.
+  - If data is outside this agent's scope, do not fabricate, transfer work, or call another specialist; state the scope limit and return only supported in-scope gene results.

@@ -52,8 +52,8 @@ content: |
   - "comparative" — the disease is compared to the primary subject.
   - "model_context" — the mention describes an animal/cellular disease model.
   - When a paper uses model organisms to study a human disease, BOTH the human disease
-    and the model phenotype may be relevant. Capture the disease here and leave the
-    phenotype to phenotype_extractor.
+    and the model phenotype may be relevant. Capture the disease here; do not extract
+    phenotype observations in this prompt.
 
   Association type assessment:
   - "is_implicated_in" — direct functional evidence links a gene to the disease

@@ -45,7 +45,7 @@ content: |
   - Help curation flows distinguish biologically distinct chemical forms.
 
   Out of scope:
-  - Chemical-gene interactions (use gene specialist for downstream interpretation).
+  - Chemical-gene interactions; report only ChEBI-supported chemical identity/classification here and leave downstream biological interpretation to the supervisor/caller.
   - Drug target or mechanism claims.
   - Pathway biology not represented in ChEBI.
   - Commercial availability, pricing, synthesis methods, or protocols.
@@ -164,5 +164,5 @@ content: |
   <stop_rules>
   - If no entries match a term, add the term to `not_found` and continue with remaining items.
   - If a tool call fails after one retry, stop further nested enrichment for that term and report the failure transparently.
-  - If the request needs non-ChEBI knowledge or another specialist, stop and return only what ChEBI confirms.
+  - If the request needs non-ChEBI knowledge, stop and return only what ChEBI confirms with a scope note for unsupported portions.
   </stop_rules>

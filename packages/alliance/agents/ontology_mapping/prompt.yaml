@@ -41,11 +41,13 @@ content: |
   - Cellular component labels -> GO cellular component CURIEs.
 
   Out of scope:
-  - Extracting labels from PDFs; use the Gene Expression agent.
-  - Validating gene symbols; use the Gene agent.
-  - Looking up disease terms; use the Disease agent.
+  - Extracting labels from PDFs.
+  - Validating gene symbols.
+  - Looking up disease terms.
   - Creating new ontology terms.
   - Mapping phenotype or chemical terms.
+  Do not transfer these tasks or invoke another agent; state the scope limit and
+  leave next-step selection to the supervisor/caller.
   </scope>
 
   <ontology_reference>

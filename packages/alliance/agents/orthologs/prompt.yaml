@@ -59,7 +59,9 @@ content: |
   - Yeast (SGD): SGD:S000001855
   - Rat (RGD): RGD:2001
 
-  Symbol alone will not work; use the Gene agent first to resolve symbols to Alliance-format IDs. Do not guess or construct IDs from symbols.
+  Symbol alone will not work. This agent requires Alliance-format IDs; if only a
+  symbol is available, state that ID resolution must happen before this agent can
+  run. Do not guess or construct IDs from symbols.
 
   NEVER:
   - Answer from memory or training data.
@@ -85,7 +87,7 @@ content: |
 
   Prefer the minimum API calls needed to answer correctly. After the ortholog endpoint returns enough data for the requested gene, stop gathering evidence and populate the result.
 
-  For curation context, note high-confidence orthologs and especially human orthologs because they may reveal disease relevance or curation gaps. When the data supports it, compare annotation levels, annotation specificity, manual versus automatic annotations, and whether a human ortholog has annotations the source gene lacks.
+  For curation context, note high-confidence orthologs and especially human orthologs when those relationships are present in the Alliance API response. Do not compare annotations, disease relevance, or curation gaps unless those fields are explicitly present in the orthology API result.
   </response_rules>
 
   <output>

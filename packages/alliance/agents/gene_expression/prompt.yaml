@@ -44,7 +44,7 @@ content: |
   - Capture reagent genotype strings exactly as written, without inference.
   - Prefer the most specific anatomy term supported by evidence and active group policy overlays.
   - Use human-readable labels from the paper for anatomy_label, life_stage_label, and go_cc_label;
-    ontology ID mapping is handled by a separate downstream process.
+    do not perform ontology ID mapping in this prompt. Return labels for downstream/caller processing.
   - Methods and experimental setup: entity mentions in methods/protocol descriptions
     (strain lists, construct generation, experimental setup) are not findings by themselves.
   - Only retain an entity from a methods section when the paper also presents
