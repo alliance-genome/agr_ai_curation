@@ -296,6 +296,20 @@ The helper does not parse or rewrite SQL. Keep curator-feedback investigations
 focused, prefer `SELECT`/schema-inspection queries with `LIMIT`, and never print
 or paste the generated tunnel env file because it contains credentials.
 
+### utilities/symphony_todo_lane.sh
+
+Script-only Symphony Todo lane handler. It prepares or verifies the issue branch,
+writes a `Todo Handoff` workpad section, and moves the issue from `Todo` to
+`In Progress` without launching Codex. If branch setup finds a dirty worktree or
+unexpected branch, it records the exact blocker context and moves the issue to
+`Blocked`.
+
+```bash
+./scripts/utilities/symphony_todo_lane.sh \
+  --issue-identifier ALL-49 \
+  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
+```
+
 ### utilities/symphony_human_review_prep_lane.sh
 
 Script-only Symphony Human Review Prep lane handler. It verifies that the

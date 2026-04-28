@@ -175,6 +175,26 @@ verify_one() {
   fi
 }
 
+verify_one_or_source_fallback() {
+  local dest_rel="$1"
+  local required="$2"
+
+  local dest="${workspace_dir}/${dest_rel}"
+  if [[ -f "${dest}" ]]; then
+    return 0
+  fi
+
+  if [[ -f "${local_source_root}/${dest_rel}" ]]; then
+    return 0
+  fi
+
+  if [[ "${required}" == "required" ]]; then
+    missing_required+=("${dest_rel}")
+  else
+    missing_optional+=("${dest_rel}")
+  fi
+}
+
 # Runtime overlay files come from the local Symphony runtime source.
 ensure_one "${hooks_source}/pre-commit" "${workspace_hooks_dir}/pre-commit" "0755" "required"
 ensure_one "${hooks_source}/pre-push" "${workspace_hooks_dir}/pre-push" "0755" "required"
@@ -193,6 +213,7 @@ verify_one "scripts/utilities/symphony_guard_workspace_repo.sh" "required"
 # AgentRunner can execute it from SYMPHONY_LOCAL_SOURCE_ROOT when the workspace
 # checkout lacks the tracked copy, so do not block pre-existing workspaces here.
 verify_one "scripts/utilities/symphony_guard_no_code_changes.sh" "optional"
+verify_one_or_source_fallback "scripts/utilities/symphony_todo_lane.sh" "required"
 verify_one "scripts/utilities/symphony_human_review_prep.sh" "required"
 verify_one "scripts/utilities/symphony_main_sandbox.sh" "required"
 verify_one "scripts/utilities/symphony_ready_for_pr.sh" "required"
