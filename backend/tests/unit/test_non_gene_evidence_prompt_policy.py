@@ -1,9 +1,11 @@
+import re
 from pathlib import Path
 
 import pytest
 import yaml
 
 from src.lib.config.agent_sources import resolve_agent_config_sources
+from src.schemas.models.base import ExclusionReasonCode
 
 
 def _repo_root() -> Path:
@@ -43,3 +45,26 @@ def test_non_gene_extractor_prompts_include_record_evidence_domain_guidance(
     assert "Weak quote examples:" in content
     assert "items[].evidence" in content
     assert domain_specific_snippet in content
+
+
+def test_disease_extractor_prompt_reason_codes_match_schema_contract():
+    content = _load_prompt_content("disease_extractor")
+    exclusion_block = re.search(
+        r"<exclusion_reason_codes>(?P<body>.*?)</exclusion_reason_codes>",
+        content,
+        flags=re.DOTALL,
+    )
+    assert exclusion_block is not None
+
+    prompt_reason_codes = {
+        match.group("code")
+        for match in re.finditer(
+            r"^\s*-\s+(?P<code>[a-z_]+)\s+",
+            exclusion_block.group("body"),
+            flags=re.MULTILINE,
+        )
+    }
+
+    schema_reason_codes = {reason_code.value for reason_code in ExclusionReasonCode}
+    assert prompt_reason_codes
+    assert prompt_reason_codes <= schema_reason_codes

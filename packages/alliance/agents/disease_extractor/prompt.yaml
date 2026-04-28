@@ -179,18 +179,16 @@ content: |
   </disambiguation_guidance>
 
   <exclusion_reason_codes>
-  Use only these reason_code values when excluding candidates:
+  Use only these schema-supported reason_code values when excluding candidates:
   - previously_reported — disease association cited from prior work with no new data here
-  - non_experimental_claim — narrative or review-style mention without experimental support
+  - non_experimental_claim — narrative, review-style, background-only, population-descriptor,
+    or drug/treatment-qualifier mention without experimental support
   - insufficient_experimental_evidence — mentioned but not experimentally studied in this paper
   - out_of_scope — disease outside the curation domain
   - ambiguous_entity — cannot resolve to a specific disease (use ambiguities[] if partially resolvable)
   - duplicate_mention — same disease already captured from a different text span
-  - unsupported_entity_type — entity is not a disease (phenotype, symptom, biological process)
-  - background_context_only — disease mentioned solely in introduction or background for context
-  - population_descriptor — disease name used only to describe the study cohort, not as a finding
-  - phenotype_not_disease — mention describes an observable phenotype, not a disease entity
-  - drug_or_treatment_context — disease name appears only as a qualifier for a drug/treatment
+  - unsupported_entity_type — entity is not a disease, including phenotype-only, symptom-only,
+    biological-process, or drug/treatment mentions
   </exclusion_reason_codes>
 
   <evidence_record_contract>
