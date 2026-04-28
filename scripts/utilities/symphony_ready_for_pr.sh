@@ -265,8 +265,23 @@ infer_pr_title() {
   fi
 }
 
-if [[ -z "${repo}" && -z "${pr_json_file}" && -z "${pr_view_json_file}" ]]; then
-  repo="$(infer_repo_from_origin || true)"
+origin_repo=""
+if [[ -z "${pr_json_file}" && -z "${pr_view_json_file}" ]]; then
+  origin_repo="$(infer_repo_from_origin || true)"
+fi
+
+if [[ -z "${repo}" ]]; then
+  repo="${origin_repo}"
+elif [[ -n "${origin_repo}" && "${repo}" != "${origin_repo}" ]]; then
+  echo "READY_FOR_PR_STATUS=repo_mismatch"
+  echo "READY_FOR_PR_NEXT_STATE=Ready for PR"
+  echo "READY_FOR_PR_REPO=${repo}"
+  echo "READY_FOR_PR_ORIGIN_REPO=${origin_repo}"
+  echo "READY_FOR_PR_MESSAGE=Provided --repo does not match workspace origin. Omit --repo or use the exact owner/name from git remote get-url origin."
+  cat <<INST
+READY_FOR_PR_INSTRUCTIONS=The supplied --repo value (${repo}) does not match the workspace origin (${origin_repo}). Re-run this helper without --repo, or with the exact origin-derived owner/name. Do not use the Linear organization or project slug as the GitHub repository owner.
+INST
+  exit 2
 fi
 
 auto_bounce_to_in_progress_for_claude() {

@@ -175,6 +175,39 @@ test_dry_run_create_reports_title() {
   assert_contains "READY_FOR_PR_PR_TITLE=ALL-51: Example" "${output}"
 }
 
+test_repo_mismatch_is_rejected_when_origin_is_known() {
+  local temp_dir output_file rc output
+  temp_dir="$(mktemp -d)"
+  output_file="${temp_dir}/out.txt"
+
+  git -C "${temp_dir}" init -q
+  git -C "${temp_dir}" remote add origin git@github.com:alliance-genome/agr_ai_curation.git
+
+  set +e
+  (
+    cd "${temp_dir}"
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-338 \
+      --branch all-338 \
+      --repo alliance-genome-resources/agr_ai_curation \
+      --create-if-missing
+  ) > "${output_file}"
+  rc=$?
+  set -e
+
+  output="$(cat "${output_file}")"
+
+  [[ "${rc}" == "2" ]] || {
+    echo "Expected exit code 2, got ${rc}" >&2
+    exit 1
+  }
+
+  assert_contains "READY_FOR_PR_STATUS=repo_mismatch" "${output}"
+  assert_contains "READY_FOR_PR_REPO=alliance-genome-resources/agr_ai_curation" "${output}"
+  assert_contains "READY_FOR_PR_ORIGIN_REPO=alliance-genome/agr_ai_curation" "${output}"
+}
+
 test_dry_run_create_infers_title() {
   local temp_dir pr_json output
   temp_dir="$(mktemp -d)"
@@ -586,6 +619,7 @@ test_conflicted_pr_routes_back_to_in_progress
 test_missing_pr_reports_nonzero
 test_base_branch_is_rejected
 test_dry_run_create_reports_title
+test_repo_mismatch_is_rejected_when_origin_is_known
 test_dry_run_create_infers_title
 test_create_pr_uses_plain_cli_output_and_view_json
 test_claude_detected_auto_bounces_to_in_progress
