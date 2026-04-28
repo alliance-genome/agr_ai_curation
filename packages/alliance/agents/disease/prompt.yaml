@@ -38,6 +38,7 @@ content: |
   Database scope:
   - 14,500+ disease terms plus hierarchy and synonyms are available.
   - Available tables: `ontologyterm`, `ontologyterm_synonym`, `synonym`, `ontologytermclosure`.
+  - Key columns: `ontologyterm(id, curie, name, definition, obsolete)`, `ontologyterm_synonym(ontologyterm_id, synonyms_id)`, `synonym(id, name)`, `ontologytermclosure(closuresubject_id, closureobject_id, distance)`.
   - This agent cannot resolve gene-disease associations, phenotype detail, prevalence, or non-DOID disease statistics.
   </constraints>
 
