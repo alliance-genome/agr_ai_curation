@@ -198,6 +198,52 @@ EOF
   export STUB_CURL_BEHAVIOR="${behavior}"
 }
 
+test_review_prep_default_skips_stack_startup() {
+  local temp_root workspace stub_dir output docker_log old_path env_file
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/ALL-49"
+  stub_dir="${temp_root}/stubbin"
+  output="${temp_root}/output.txt"
+  docker_log="${temp_root}/docker.log"
+  env_file="${temp_root}/private.env"
+
+  mkdir -p "${workspace}/scripts"
+  : > "${workspace}/docker-compose.yml"
+  cat > "${env_file}" <<'EOF'
+export OPENAI_API_KEY=test-openai
+export GROQ_API_KEY=test-groq
+export POSTGRES_PASSWORD=postgres
+EOF
+
+  make_stub_bin "${stub_dir}" "healthy"
+
+  old_path="${PATH}"
+  export PATH="${stub_dir}:${PATH}"
+  export DOCKER_STUB_LOG="${docker_log}"
+  export SYMPHONY_REVIEW_PREP_REFRESH_MANAGED=0
+
+  "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
+    --workspace-dir "${workspace}" \
+    --env-file "${env_file}" \
+    > "${output}"
+
+  assert_contains "human_review_prep_wrapper_status=skipped" "${output}"
+  assert_contains "human_review_prep_wrapper_reason=start_test_containers_false" "${output}"
+  assert_contains "start_test_containers=0" "${output}"
+  assert_contains "stack_startup=skipped_by_flag" "${output}"
+  assert_contains "dependency_start_status=skipped_by_flag" "${output}"
+  assert_contains "frontend_health=skipped_by_flag" "${output}"
+  assert_contains "backend_health=skipped_by_flag" "${output}"
+  if [[ -f "${docker_log}" ]]; then
+    echo "Expected docker not to be called when stack startup is skipped" >&2
+    exit 1
+  fi
+
+  export PATH="${old_path}"
+  unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
+  unset SYMPHONY_REVIEW_PREP_REFRESH_MANAGED
+}
+
 test_review_prep_happy_path() {
   local temp_root workspace stub_dir output docker_log old_path env_file
   temp_root="$(mktemp -d)"
@@ -237,8 +283,11 @@ EOF
   "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
     --workspace-dir "${workspace}" \
     --env-file "${env_file}" \
+    --start-test-containers true \
     > "${output}"
 
+  assert_contains "human_review_prep_wrapper_status=ready" "${output}"
+  assert_contains "human_review_prep_wrapper_reason=healthy" "${output}"
   assert_contains "compose_project=all49" "${output}"
   assert_contains "compose_file=${workspace}/docker-compose.yml" "${output}"
   assert_contains "frontend_host_port=3049" "${output}"
@@ -315,8 +364,10 @@ EOF
   "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
     --workspace-dir "${workspace}" \
     --env-file "${env_file}" \
+    --start-test-containers true \
     > "${output}"
 
+  assert_contains "human_review_prep_wrapper_status=ready" "${output}"
   assert_contains "rerank_provider=local_transformers" "${output}"
   assert_contains "reranker_dependency_required=1" "${output}"
   assert_contains "dependency_start_attempt_failed=1" "${output}"
@@ -371,8 +422,10 @@ EOF
   "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
     --workspace-dir "${workspace}" \
     --env-file "${env_file}" \
+    --start-test-containers true \
     > "${output}"
 
+  assert_contains "human_review_prep_wrapper_status=ready" "${output}"
   assert_contains "include_langfuse_stack=1" "${output}"
   assert_contains "dependency_services=postgres,redis,weaviate,clickhouse,minio,langfuse,langfuse-worker" "${output}"
   assert_contains "args=compose --env-file ${env_file} -f ${workspace}/docker-compose.yml -p all49 up -d --wait postgres redis weaviate clickhouse minio langfuse langfuse-worker" "${docker_log}"
@@ -423,8 +476,10 @@ EOF
   "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
     --workspace-dir "${workspace}" \
     --env-file "${env_file}" \
+    --start-test-containers true \
     > "${output}"
 
+  assert_contains "human_review_prep_wrapper_status=ready" "${output}"
   assert_contains "langfuse_host_port=3449" "${output}"
   assert_contains "LANGFUSE_HOST_PORT=3449" "${docker_log}"
   assert_contains "NEXTAUTH_URL=http://192.168.86.44:3449" "${docker_log}"
@@ -472,6 +527,7 @@ EOF
   if "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
     --workspace-dir "${workspace}" \
     --env-file "${env_file}" \
+    --start-test-containers true \
     > "${output}" 2>&1; then
     echo "Expected review prep to fail when backend health never comes up" >&2
     exit 1
@@ -479,6 +535,8 @@ EOF
 
   assert_contains "backend_health=unreachable" "${output}"
   assert_contains "backend_root_cause=sqlalchemy.exc.ProgrammingError: (psycopg2.errors.UndefinedColumn) column \"mod_prompt_overrides\" of relation \"agents\" does not exist" "${output}"
+  assert_contains "human_review_prep_wrapper_status=partial" "${output}"
+  assert_contains "human_review_prep_wrapper_reason=backend_unreachable" "${output}"
 
   export PATH="${old_path}"
   unset DOCKER_STUB_LOG STUB_CURL_BEHAVIOR
@@ -527,8 +585,10 @@ EOF
   "${REPO_ROOT}/scripts/utilities/symphony_human_review_prep.sh" \
     --workspace-dir "${workspace}" \
     --env-file "${env_file}" \
+    --start-test-containers true \
     > "${output}"
 
+  assert_contains "human_review_prep_wrapper_status=ready" "${output}"
   assert_contains "normalized_langfuse_env=${env_file}" "${output}"
   # Assertions use variable-built URIs to avoid secret-scanner false positives
   _lf_new_url="postgresql://""postgres:postgres@postgres:5432/postgres"
@@ -545,6 +605,7 @@ EOF
   unset SYMPHONY_REVIEW_PREP_REFRESH_MANAGED
 }
 
+test_review_prep_default_skips_stack_startup
 test_review_prep_happy_path
 test_review_prep_retries_dependency_start_once
 test_review_prep_preserves_review_ports_over_private_env

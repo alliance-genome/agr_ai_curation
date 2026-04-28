@@ -296,23 +296,42 @@ The helper does not parse or rewrite SQL. Keep curator-feedback investigations
 focused, prefer `SELECT`/schema-inspection queries with `LIMIT`, and never print
 or paste the generated tunnel env file because it contains credentials.
 
+### utilities/symphony_human_review_prep_lane.sh
+
+Script-only Symphony Human Review Prep lane handler. It verifies that the
+workspace is clean for a no-code lane, runs the local prep wrapper below, writes
+an objective `Human Review Handoff` workpad section, and moves the issue to
+`Human Review`. It does not inspect GitHub PRs, run Claude sweeps, parse prior
+workpad sections, or triage human comments; `Ready for PR` owns PR and Claude
+readiness.
+
+```bash
+./scripts/utilities/symphony_human_review_prep_lane.sh \
+  --issue-identifier ALL-49 \
+  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
+```
+
 ### utilities/symphony_human_review_prep.sh
 
 One-command Human Review Prep for a Symphony workspace. It derives issue-specific
-ports, starts the local curation DB tunnel, prepares a workspace-local Docker
-config, stages dependency startup with retry/diagnostics before bringing up the
-app services, rebuilds backend and frontend by default so the review stack
-reflects the workspace branch, force-recreates the backend so fresh tunnel env
-reaches the container, and prints review URLs plus health summaries.
+ports and prints stable summary lines. By default it skips container startup and
+reports `stack_startup=skipped_by_flag`. When called with
+`--start-test-containers true`, it starts the local curation DB tunnel, prepares
+a workspace-local Docker config, stages dependency startup with
+retry/diagnostics before bringing up the app services, rebuilds backend and
+frontend by default so the review stack reflects the workspace branch,
+force-recreates the backend so fresh tunnel env reaches the container, and
+prints review URLs plus health summaries.
 
 ```bash
-# Prepare the current workspace for local review
+# Prepare the current workspace without booting containers
 ./scripts/utilities/symphony_human_review_prep.sh
 
-# Prepare a specific workspace with explicit review host
+# Prepare a specific workspace with explicit review host and container startup
 ./scripts/utilities/symphony_human_review_prep.sh \
   --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
-  --review-host 192.168.86.44
+  --review-host 192.168.86.44 \
+  --start-test-containers true
 ```
 
 ### utilities/symphony_main_sandbox.sh

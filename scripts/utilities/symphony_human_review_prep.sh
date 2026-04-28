@@ -166,6 +166,14 @@ log_step() {
   printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"
 }
 
+emit_wrapper_status() {
+  local status="$1"
+  local reason="${2:-}"
+
+  echo "human_review_prep_wrapper_status=${status}"
+  echo "human_review_prep_wrapper_reason=${reason}"
+}
+
 normalize_private_env_file() {
   if [[ ! -f "${PRIVATE_ENV_FILE}" ]]; then
     return 0
@@ -530,6 +538,7 @@ export RUN_DB_MIGRATIONS_ON_START="${RUN_DB_MIGRATIONS_ON_START:-true}"
 
 if [[ "${START_TEST_CONTAINERS}" -eq 0 ]]; then
   log_step "Human Review Prep stack startup skipped for ${ISSUE_KEY} (start_test_containers=false)"
+  emit_wrapper_status "skipped" "start_test_containers_false"
   echo "workspace_dir=${WORKSPACE_DIR}"
   echo "compose_file=${COMPOSE_FILE}"
   echo "compose_project=${COMPOSE_PROJECT}"
@@ -603,21 +612,49 @@ if [[ "${SKIP_DB_TUNNEL}" -eq 0 ]]; then
 fi
 
 log_step "Starting dependency services"
+set +e
 start_dependency_services
+dependency_start_rc=$?
+set -e
+if [[ "${dependency_start_rc}" -ne 0 ]]; then
+  emit_wrapper_status "failed" "dependency_start_failed"
+  exit "${dependency_start_rc}"
+fi
 
 log_step "Building review services"
 if [[ "${BUILD_BACKEND}" -eq 1 || "${BUILD_FRONTEND}" -eq 1 ]]; then
   build_targets=()
   [[ "${BUILD_BACKEND}" -eq 1 ]] && build_targets+=(backend)
   [[ "${BUILD_FRONTEND}" -eq 1 ]] && build_targets+=(frontend)
+  set +e
   compose_run build "${build_targets[@]}"
+  build_rc=$?
+  set -e
+  if [[ "${build_rc}" -ne 0 ]]; then
+    emit_wrapper_status "failed" "service_build_failed"
+    exit "${build_rc}"
+  fi
 fi
 
 log_step "Starting Docker services"
+set +e
 compose_run up -d backend frontend
+app_start_rc=$?
+set -e
+if [[ "${app_start_rc}" -ne 0 ]]; then
+  emit_wrapper_status "failed" "app_start_failed"
+  exit "${app_start_rc}"
+fi
 
 log_step "Force-recreating backend to pick up fresh tunnel/runtime env"
+set +e
 compose_run up -d --force-recreate backend
+backend_recreate_rc=$?
+set -e
+if [[ "${backend_recreate_rc}" -ne 0 ]]; then
+  emit_wrapper_status "failed" "backend_recreate_failed"
+  exit "${backend_recreate_rc}"
+fi
 
 FRONTEND_URL="http://127.0.0.1:${FRONTEND_HOST_PORT}/"
 BACKEND_HEALTH_URL="http://127.0.0.1:${BACKEND_HOST_PORT}/health"
@@ -667,5 +704,21 @@ if [[ "${backend_status}" == "unreachable" ]]; then
   if [[ -n "${backend_root_cause}" ]]; then
     echo "backend_root_cause=${backend_root_cause}"
   fi
+  emit_wrapper_status "partial" "backend_unreachable"
   exit 1
 fi
+
+wrapper_status="ready"
+wrapper_reason="healthy"
+if [[ "${frontend_status}" != "healthy" ]]; then
+  wrapper_status="partial"
+  wrapper_reason="frontend_${frontend_status}"
+elif [[ "${curation_status}" == "unreachable" ]]; then
+  wrapper_status="partial"
+  wrapper_reason="curation_db_unreachable"
+elif [[ "${pdf_status}" == "unreachable" ]]; then
+  wrapper_status="partial"
+  wrapper_reason="pdf_extraction_unreachable"
+fi
+
+emit_wrapper_status "${wrapper_status}" "${wrapper_reason}"
