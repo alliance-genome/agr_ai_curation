@@ -217,6 +217,7 @@ verify_one_or_source_fallback "scripts/utilities/symphony_todo_lane.sh" "require
 verify_one "scripts/utilities/symphony_human_review_prep.sh" "required"
 verify_one "scripts/utilities/symphony_main_sandbox.sh" "required"
 verify_one "scripts/utilities/symphony_ready_for_pr.sh" "required"
+verify_one_or_source_fallback "scripts/utilities/symphony_ready_for_pr_lane.sh" "required"
 verify_one "scripts/utilities/symphony_claude_review_loop.sh" "required"
 verify_one "scripts/utilities/symphony_in_review.sh" "required"
 verify_one "scripts/utilities/symphony_in_progress.sh" "required"

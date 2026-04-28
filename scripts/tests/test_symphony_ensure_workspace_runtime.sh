@@ -84,6 +84,7 @@ EOF
     symphony_human_review_prep.sh \
     symphony_main_sandbox.sh \
     symphony_ready_for_pr.sh \
+    symphony_ready_for_pr_lane.sh \
     symphony_claude_review_loop.sh \
     symphony_in_review.sh \
     symphony_in_progress.sh \

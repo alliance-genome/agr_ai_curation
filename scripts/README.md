@@ -310,6 +310,20 @@ unexpected branch, it records the exact blocker context and moves the issue to
   --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
 ```
 
+### utilities/symphony_ready_for_pr_lane.sh
+
+Script-only Symphony Ready for PR lane handler. It verifies the workspace is
+clean, runs the canonical PR gate helper with GitHub checks before Claude review,
+lets failed checks or Claude feedback auto-bounce to `In Progress`, and moves
+clean PRs to `Human Review Prep` after writing `PR Handoff`.
+
+```bash
+./scripts/utilities/symphony_ready_for_pr_lane.sh \
+  --issue-identifier ALL-49 \
+  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
+  --delivery-mode pr
+```
+
 ### utilities/symphony_human_review_prep_lane.sh
 
 Script-only Symphony Human Review Prep lane handler. It verifies that the
