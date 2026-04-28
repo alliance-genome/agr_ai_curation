@@ -90,6 +90,7 @@ EOF
     symphony_in_progress.sh \
     symphony_issue_branch.sh \
     symphony_needs_review_claim.sh \
+    symphony_finalizing_lane.sh \
     symphony_finalize_issue.sh \
     symphony_request_claude_rereview.sh \
     symphony_wait_for_claude_review.sh \

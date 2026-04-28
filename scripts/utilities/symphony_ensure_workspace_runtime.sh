@@ -229,6 +229,7 @@ verify_one "scripts/utilities/symphony_needs_review_claim.sh" "optional"
 verify_one "scripts/utilities/symphony_linear_issue_context.sh" "required"
 verify_one "scripts/utilities/symphony_linear_workpad.sh" "required"
 verify_one "scripts/utilities/symphony_linear_issue_state.sh" "required"
+verify_one_or_source_fallback "scripts/utilities/symphony_finalizing_lane.sh" "required"
 verify_one "scripts/utilities/symphony_finalize_issue.sh" "required"
 # Legacy scripts kept for backward compatibility until all workspaces update.
 verify_one "scripts/utilities/symphony_request_claude_rereview.sh" "optional"

@@ -339,6 +339,20 @@ readiness.
   --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49
 ```
 
+### utilities/symphony_finalizing_lane.sh
+
+Script-only Symphony Finalizing lane handler. It runs the canonical finalization
+helper, writes a `Finalization Summary` workpad section, and moves the issue to
+`Done`, `In Progress`, or `Blocked` based on the helper's machine-readable
+result. It does not launch Codex.
+
+```bash
+./scripts/utilities/symphony_finalizing_lane.sh \
+  --issue-identifier ALL-49 \
+  --workspace-dir ~/.symphony/workspaces/agr_ai_curation/ALL-49 \
+  --delivery-mode pr
+```
+
 ### utilities/symphony_human_review_prep.sh
 
 One-command Human Review Prep for a Symphony workspace. It derives issue-specific
