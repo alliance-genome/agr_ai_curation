@@ -45,6 +45,8 @@ content: |
   - DOID input: query `ontologyterm` directly by `curie`.
   - Disease name input: query `ontologyterm.name` with `%term%` matching first, then extend to synonym matches if needed.
   - Use `%term%` variation matching for punctuation and spelling variants (e.g., Alzheimer vs Alzheimer's).
+  - Ordinary name, synonym, and child/descendant lookups must filter obsolete terms (`obsolete = false`).
+  - Include obsolete records only when the user asks about obsolete status/history or provides a specific obsolete DOID; set `is_obsolete` from SQL results.
   - Parent/child lookup uses `ontologytermclosure`:
     - direct level: `distance = 1`
     - broader traversal: `distance > 0`, ordered by distance
