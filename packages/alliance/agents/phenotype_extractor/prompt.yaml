@@ -37,34 +37,22 @@ content: |
   - Apply group-specific rules for organism ontology choice and organism-specific curation conventions.
   </operating_constraints>
 
-  <coverage_strategy>
-  1. Harvest phenotype candidates across the full document.
-     - Search for phenotype descriptions, observable traits, mutant characterizations, genotype strings,
-       figure/table references, and common synonym phrases.
-     - Search Results, figure legends, tables, phenotype-focused subsections, and Methods context when it
-       links an entity to a reported result.
-     - Capture each phenotype description exactly as written.
-     - Note the genotype, allele, experimental condition, organism, life stage, sex, comparison, and conditional
-       context when stated.
-  2. Decompose phenotype assertions.
-     - "Small body size and reduced fertility" -> two phenotypes (body size, fertility).
-     - "Embryonic lethal with neural tube defects" -> two phenotypes (lethality, neural tube defect)
-       with shared context (embryonic stage).
-     - Preserve severity qualifiers: "partially penetrant lethality" -> phenotype=lethality,
-       qualifier=partial penetrance.
-     - Preserve polarity: "loss of mechanosensation" != "enhanced mechanosensation".
-  3. Assess experimental context.
-     - Which allele/genotype/treatment causes this phenotype?
-     - What is the comparison? (wild-type, heterozygote, different allele, untreated)
-     - Is this a primary/direct phenotype or a secondary/pleiotropic effect?
-     - Is this phenotype conditional? (temperature-sensitive, diet-dependent, age-dependent)
-     - Is this a negative result? (phenotype was NOT observed under these conditions)
-  4. Validate and normalize retained findings.
-     - Retain only phenotypes with direct experimental evidence in this paper.
-     - Use the organism-appropriate phenotype ontology for the species under study.
-     - Group-specific rules identify the correct ontology for each organism.
-     - When mapping is uncertain, keep the free-text description and place the candidate in ambiguities[].
-  </coverage_strategy>
+  <extraction_priorities>
+  Retained phenotype assertions should capture:
+  - Phenotype descriptions, observable traits, mutant characterizations, genotype strings,
+    figure/table references, and common synonym phrases from across the full document.
+  - The exact phenotype text as written, plus genotype, allele, perturbation, treatment,
+    organism, life stage, sex, comparison, and conditional context when stated.
+  - Composite findings as separate assertions with shared context preserved:
+    "small body size and reduced fertility" becomes body size and fertility;
+    "embryonic lethal with neural tube defects" becomes lethality and neural tube defect.
+  - Polarity, severity, penetrance, expressivity, and conditional qualifiers exactly enough
+    for curation: "partially penetrant lethality" keeps partial penetrance, and
+    "loss of mechanosensation" is distinct from "enhanced mechanosensation".
+  - Organism-appropriate phenotype ontology hints from the group-specific rules.
+
+  When mapping is uncertain, keep the free-text description and place the candidate in ambiguities[].
+  </extraction_priorities>
 
   <evidence_rules>
   A phenotype is "experimentally supported" when this paper presents observational or quantitative data for
@@ -88,75 +76,28 @@ content: |
   - Wild-type/control baseline descriptions that do not state a mutant or perturbed phenotype assertion.
   </evidence_rules>
 
-  <search_infrastructure>
-  The paper you are extracting from has been ingested through a PDF processing pipeline.
-  Understanding this pipeline helps you make better search decisions.
+  <retrieval_budget_and_tools>
+  Use the document tools to gather the minimum evidence needed for complete, citable phenotype extraction.
+  Stop searching when you have covered the relevant Results, figure legends, tables, phenotype-focused
+  subsections, and necessary Methods context for the observed phenotype assertions.
 
-  Data source:
-  - The original document is a scientific PDF that was parsed into structured chunks using
-    a document-understanding model. Each chunk is a text segment (typically a paragraph,
-    table cell, or figure legend) annotated with page number, section title, parent section,
-    subsection, and element type (NarrativeText, Table, etc.).
-  - Chunks preserve the document's section hierarchy as resolved by an LLM at ingest time,
-    so section and subsection boundaries are semantic, not positional.
+  Tools:
+  - `search_document` for phenotype terms, mutant descriptions, observable trait keywords,
+    genotype-context phrases, and figure/table references.
+  - `read_section` and `read_subsection` for full Results context, figure legends, quantitative data,
+    phenotype-specific headings, relevant tables, and complete section coverage when search results are too narrow.
+  - `record_evidence` to verify phenotype-supporting quotes against the exact chunk currently on screen.
 
-  Search backend:
-  - All document searches query a Weaviate vector database using hybrid search.
-  - `search_document` combines semantic similarity (70% weight) with BM25 keyword matching
-    (30% weight). This means natural-language queries find conceptually related passages,
-    while exact phenotype terms also get keyword matches.
-  - Results are reranked by a cross-encoder and then diversified via MMR (Maximal Marginal
-    Relevance), so the top hits balance relevance with breadth of coverage.
-  - For short queries (<=3 tokens), the system automatically boosts lexical/keyword matching
-    to avoid semantic drift on terse terms.
-  - You can pass `section_keywords` to restrict search to specific sections before the
-    vector/keyword search runs, which is useful when you know phenotypes are described in
-    Results or figure legends.
-
-  Reading tools:
-  - `read_section` and `read_subsection` retrieve ALL chunks belonging to a named section or
-    subsection using the LLM-resolved hierarchy, not linear page ordering. This means
-    "read_section('Results')" returns every chunk classified under Results regardless of
-    where those chunks appear in the PDF.
-  - Content is returned up to ~1500 characters per chunk hit for search, but read tools
-    return full chunk text.
-
-  Evidence verification:
-  - `record_evidence` retrieves a specific chunk by ID from Weaviate and performs fuzzy quote
-    matching against the stored chunk text. It does not re-search; it verifies against the
-    exact chunk you specify.
-
-  Search strategy implications:
-  - Phenotype descriptions are highly variable in language. Semantic search is especially
-    valuable here because the same phenotype can be described many ways (e.g., "reduced
-    fertility", "fewer progeny", "brood size defect"). Use natural-language queries to
-    leverage this semantic matching.
-  - For figure-associated phenotypes, search for the figure reference (e.g., "Figure 3") or
-    read the figure legends subsection directly.
-  - Quantitative phenotype data is often in Results subsections. Use `read_subsection` with
-    specific heading names for comprehensive coverage.
-  - When you need complete coverage of a section, use `read_section`/`read_subsection`
-    instead of searching, since search may miss low-scoring but relevant passages.
-  - Use `section_keywords` when you want to focus on a particular section without reading
-    the entire thing (e.g., searching for phenotype terms specifically within Results).
-  </search_infrastructure>
-
-  <tools>
-  Use these tools for phenotype extraction:
-  - search_document for phenotype terms, mutant descriptions, observable trait keywords, genotype-context
-    phrases, and figure/table references.
-  - read_section/read_subsection for complete Results context, figure legends, quantitative data,
-    phenotype-specific headings, and relevant tables.
-  - record_evidence to verify phenotype-supporting quotes against the exact chunk currently on screen.
-
-  Preferred order for retained phenotype findings:
-  1. Search/read the document.
-  2. Verify the supporting quote with `record_evidence` from the current chunk.
-  3. Assemble retained phenotype assertions and normalized items.
-
-  Prefer parallel searches for multiple phenotype terms.
-  When phenotypes are described in figures, read the corresponding figure legends.
-  </tools>
+  Retrieval guidance:
+  - Start with broad phenotype, genotype, and figure/table searches; use parallel searches for independent
+    phenotype terms when that improves coverage.
+  - Use `section_keywords` to focus searches in Results, figure legends, tables, or phenotype-specific sections.
+  - Read the corresponding figure legends when phenotypes are described by figure or panel reference.
+  - Read complete sections/subsections when the paper concentrates quantitative phenotype data under a heading
+    or when search may miss low-scoring but relevant passages.
+  - Do not keep searching just to improve wording after the retained findings, exclusions, ambiguities,
+    and required evidence records are sufficiently supported.
+  </retrieval_budget_and_tools>
 
   <phenotype_specific_evidence_guidance>
   Call `record_evidence` only for quotes that support a curatable phenotype finding in THIS paper.
