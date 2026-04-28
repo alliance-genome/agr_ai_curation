@@ -175,6 +175,38 @@ test_switches_to_remote_only_issue_branch() {
   }
 }
 
+test_switches_to_remote_only_issue_branch_from_depth_one_main_clone() {
+  local temp_dir remote_dir source_dir repo_dir output current_branch
+  temp_dir="$(mktemp -d)"
+  remote_dir="${temp_dir}/remote.git"
+  source_dir="${temp_dir}/source"
+  repo_dir="${temp_dir}/repo"
+
+  make_bare_remote "${remote_dir}"
+  make_repo "${source_dir}"
+  git -C "${source_dir}" remote add origin "${remote_dir}"
+  git -C "${source_dir}" push -u origin main >/dev/null
+  git -C "${source_dir}" switch -c all-126 >/dev/null
+  printf 'branch work\n' >> "${source_dir}/README.md"
+  git -C "${source_dir}" commit -am "issue branch" >/dev/null
+  git -C "${source_dir}" push -u origin all-126 >/dev/null
+  git clone --depth 1 --branch main "file://${remote_dir}" "${repo_dir}" >/dev/null
+
+  output="$(
+    cd "${repo_dir}" &&
+      bash "${SCRIPT_PATH}" --issue-identifier ALL-126
+  )"
+
+  current_branch="$(git -C "${repo_dir}" branch --show-current)"
+
+  assert_contains "ISSUE_BRANCH_STATUS=switched_remote" "${output}"
+  assert_contains "ISSUE_BRANCH_NAME=all-126" "${output}"
+  [[ "${current_branch}" == "all-126" ]] || {
+    echo "Expected current branch to be all-126, got ${current_branch}" >&2
+    exit 1
+  }
+}
+
 test_detached_head_is_blocked_when_issue_branch_missing() {
   local temp_dir repo_dir output_file rc output current_branch
   temp_dir="$(mktemp -d)"
@@ -212,6 +244,7 @@ test_switches_to_existing_issue_branch
 test_unexpected_existing_branch_is_blocked
 test_dirty_base_branch_is_blocked
 test_switches_to_remote_only_issue_branch
+test_switches_to_remote_only_issue_branch_from_depth_one_main_clone
 test_detached_head_is_blocked_when_issue_branch_missing
 
 echo "symphony_issue_branch tests passed"

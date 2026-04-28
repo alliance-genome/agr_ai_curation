@@ -160,8 +160,9 @@ if git ls-remote --exit-code --heads origin "${target_branch}" >/dev/null 2>&1; 
     exit 0
   fi
 
-  git fetch origin "${target_branch}" >/dev/null 2>&1
-  git switch --track -c "${target_branch}" "origin/${target_branch}" >/dev/null 2>&1
+  git fetch origin "refs/heads/${target_branch}:refs/remotes/origin/${target_branch}" >/dev/null 2>&1
+  git switch -c "${target_branch}" "origin/${target_branch}" >/dev/null 2>&1
+  git branch --set-upstream-to="origin/${target_branch}" "${target_branch}" >/dev/null 2>&1 || true
   emit_result "switched_remote" "${target_branch}" "${current_branch}" \
     "Fetched origin/${target_branch} and created a local issue branch from it."
   exit 0
