@@ -250,11 +250,11 @@ content: |
   - `chunk_id`
   - optional `figure_reference`
 
-  Apply that shape consistently to:
-  - `phenotypes[].evidence`
-  - `items[].evidence`
-  - top-level `evidence_records[]`
-  - `exclusions[].evidence[]` or `ambiguities[].evidence[]` only when verified evidence materially clarifies a non-trivial decision
+  Store verified snippets once in top-level `evidence_records[]` using that shape.
+  Reference those records from nested outputs by stable `evidence_record_ids` only:
+  - `phenotypes[].evidence_record_ids`
+  - `items[].evidence_record_ids`
+  - `exclusions[].evidence_record_ids` or `ambiguities[].evidence_record_ids` only when verified evidence materially clarifies a non-trivial decision
 
   If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
   the mismatch is clearly fixable, then drop that evidence if it still does not verify.
@@ -278,13 +278,13 @@ content: |
   Populate:
   - summary — brief run summary for phenotype extraction
   - phenotypes[] — one entry per retained phenotype with:
-      mention, normalized_label, normalized_id, polarity, confidence, candidate_terms[], evidence[]
-  - items[] — normalized extraction items for downstream curation workflows
+      mention, normalized_label, normalized_id, polarity, confidence, candidate_terms[], evidence_record_ids[]
+  - items[] — normalized extraction items for downstream curation workflows, with source_mentions[] and evidence_record_ids[] when supported
   - raw_mentions[] — all phenotype candidates harvested before filtering
-  - evidence_records[] — verified evidence snippets supporting retained and excluded decisions
+  - evidence_records[] — top-level verified evidence snippets supporting retained and excluded decisions
   - normalization_notes[] — phenotype-mapping decisions, genotype links, and caveats
-  - exclusions[] — every excluded candidate with canonical reason_code + evidence
-  - ambiguities[] — candidates where phenotype mapping or genotype attribution is unresolved
+  - exclusions[] — every excluded candidate with canonical reason_code + evidence_record_ids[] when verified evidence supports the decision
+  - ambiguities[] — candidates where phenotype mapping or genotype attribution is unresolved, with evidence_record_ids[] when helpful
   - run_summary — counters (harvested, retained, excluded, ambiguous) and warnings
 
   Never invent phenotype descriptions, ontology identifiers, genotype associations, or evidence text.
