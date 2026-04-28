@@ -221,20 +221,20 @@ content: |
   </disambiguation_guidance>
 
   <exclusion_reason_codes>
-  Use only these reason_code values when excluding candidates:
+  Use only these PhenotypeResultEnvelope-compatible reason_code values when excluding candidates:
   - previously_reported — phenotype cited from prior work with no new data here
-  - non_experimental_claim — narrative, speculative, or review-style mention
+  - non_experimental_claim — narrative, speculative, author interpretation, or review-style mention
   - insufficient_experimental_evidence — mentioned but not experimentally demonstrated
   - out_of_scope — phenotype outside the curation domain
   - ambiguous_entity — cannot map to a specific phenotype concept (use ambiguities[] if partially resolvable)
   - duplicate_mention — same phenotype-genotype pair already captured from different text span
-  - unsupported_entity_type — entity is not a phenotype (disease name, gene function, normal process)
-  - wild_type_description — observation describes normal/wild-type baseline, not a mutant phenotype
+  - unsupported_entity_type — entity is not a phenotype (disease name, gene function, normal process,
+    or wild-type/control baseline without a mutant or perturbed phenotype assertion)
   - mutant_background_only — phenotype observed only in a complex mutant background where
     the specific gene contribution cannot be attributed
-  - author_interpretation — author's mechanistic interpretation, not a directly observed phenotype
-  - conditional_not_specified — phenotype is mentioned as conditional but conditions are not
-    specified in this paper
+
+  Use details to capture the specific rationale when needed, such as wild-type baseline,
+  author interpretation, or missing conditional context. Do not create new reason_code values.
   </exclusion_reason_codes>
 
   <evidence_record_contract>
