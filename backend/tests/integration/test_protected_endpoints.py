@@ -31,6 +31,15 @@ from fastapi import HTTPException, Security
 from conftest import MockCognitoUser
 
 
+def _ensure_users_table_exists() -> None:
+    """Create the user table for isolated authenticated endpoint checks."""
+    from src.models.sql.database import SessionLocal
+    from src.models.sql.user import User
+
+    with SessionLocal() as db:
+        User.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+
 @pytest.fixture
 def unauthenticated_client(monkeypatch):
     """Create test client without authentication (simulates missing token)."""
@@ -117,6 +126,7 @@ def authenticated_client(monkeypatch):
             with patch("src.services.user_service.get_connection"):
                 from main import app
 
+                _ensure_users_table_exists()
                 yield TestClient(app)
 
                 app.dependency_overrides.clear()
@@ -311,6 +321,80 @@ class TestProtectedEndpoints:
         # Should succeed (200) or return appropriate success/error (not 401)
         assert response.status_code != 401, \
             f"Valid auth should not return 401, got {response.status_code}"
+
+    def test_feedback_debug_endpoint_passes_authenticated_scope(
+        self,
+        authenticated_client,
+        monkeypatch,
+    ):
+        """Feedback debug detail must pass the authenticated principal into authorization."""
+        from src.api import feedback as feedback_api
+
+        calls = {}
+
+        class _FakeService:
+            def __init__(self, _db):
+                pass
+
+            def get_feedback_debug_detail(self, feedback_id, **kwargs):
+                calls["feedback_id"] = feedback_id
+                calls["kwargs"] = kwargs
+                return {
+                    "feedback_id": feedback_id,
+                    "session_id": "session-123",
+                    "curator_id": "protected_test@alliancegenome.org",
+                    "feedback_text": "Scoped debug detail.",
+                    "trace_ids": [],
+                    "processing_status": "completed",
+                    "created_at": "2026-04-25T12:00:00",
+                    "processing_started_at": None,
+                    "processing_completed_at": None,
+                    "email_sent_at": None,
+                    "processing_error": None,
+                    "feedback_debug_url": f"/api/feedback/{feedback_id}/debug",
+                    "trace_review_session_url": (
+                        "/api/traces/sessions/session-123/export?source=remote"
+                    ),
+                    "transcript": {
+                        "available": False,
+                        "message_count": None,
+                        "captured_at": None,
+                        "session_id": None,
+                        "chat_kind": None,
+                        "title": None,
+                        "effective_title": None,
+                        "session_matches_feedback": None,
+                    },
+                    "trace_data": {
+                        "available": False,
+                        "status": "missing",
+                        "stale": False,
+                        "capture_status": None,
+                        "captured_at": None,
+                        "schema_version": None,
+                        "source_kind": None,
+                        "source_extractor": None,
+                        "expected_trace_ids": [],
+                        "stored_trace_ids": [],
+                        "trace_count": 0,
+                        "omitted_trace_id_count": None,
+                        "error_summary": None,
+                        "errors": [],
+                    },
+                }
+
+        monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+        monkeypatch.setattr(feedback_api, "get_admin_emails", lambda: set())
+
+        response = authenticated_client.get("/api/feedback/feedback-123/debug")
+
+        assert response.status_code == 200
+        assert calls["feedback_id"] == "feedback-123"
+        assert calls["kwargs"] == {
+            "user_auth_sub": "test_protected_user",
+            "authenticated_curator_email": "protected_test@alliancegenome.org",
+            "allow_admin_debug_access": False,
+        }
 
     def test_error_messages_indicate_auth_issue(self, unauthenticated_client):
         """Test that 401 error messages clearly indicate authentication problem.

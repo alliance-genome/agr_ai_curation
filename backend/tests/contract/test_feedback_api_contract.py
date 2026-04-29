@@ -315,7 +315,7 @@ class TestFeedbackSubmitEndpoint:
             def __init__(self, _db):
                 pass
 
-            def get_feedback_debug_detail(self, feedback_id):
+            def get_feedback_debug_detail(self, feedback_id, **_kwargs):
                 assert feedback_id == "feedback-123"
                 return {
                     "feedback_id": "feedback-123",

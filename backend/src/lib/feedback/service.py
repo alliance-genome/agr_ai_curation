@@ -38,6 +38,10 @@ _SECRET_ASSIGNMENT_RE = re.compile(
 )
 
 
+class FeedbackDebugDetailForbidden(Exception):
+    """Raised when an authenticated user cannot inspect feedback debug detail."""
+
+
 class FeedbackService:
     """Orchestrates the complete user feedback processing workflow.
 
@@ -211,8 +215,15 @@ class FeedbackService:
             report.error_details = f"Unexpected error: {str(e)}"
             self.db.commit()
 
-    def get_feedback_debug_detail(self, feedback_id: str) -> dict[str, Any] | None:
-        """Return read-only feedback debug details without raw trace payloads."""
+    def get_feedback_debug_detail(
+        self,
+        feedback_id: str,
+        *,
+        user_auth_sub: str,
+        authenticated_curator_email: str | None,
+        allow_admin_debug_access: bool = False,
+    ) -> dict[str, Any] | None:
+        """Return read-only feedback debug details for the owner or an admin."""
 
         report = (
             self.db.query(FeedbackReport)
@@ -221,6 +232,18 @@ class FeedbackService:
         )
         if report is None:
             return None
+
+        if not allow_admin_debug_access and not self._curator_matches_authenticated_user(
+            curator_id=report.curator_id,
+            user_auth_sub=user_auth_sub,
+            authenticated_curator_email=authenticated_curator_email,
+        ):
+            logger.warning(
+                "Feedback debug detail denied for feedback %s because the "
+                "authenticated user does not match the feedback curator",
+                feedback_id,
+            )
+            raise FeedbackDebugDetailForbidden
 
         trace_ids = self._normalize_trace_ids(report.trace_ids)
         return {

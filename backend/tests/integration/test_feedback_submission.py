@@ -289,6 +289,81 @@ def test_feedback_submission_captures_transcript_and_includes_email_excerpt(
     assert "super-secret" not in str(debug_payload)
 
 
+def test_feedback_debug_detail_denies_cross_curator_access(
+    client,
+    get_auth_mock,
+    curator1_user,
+    curator2_user,
+    captured_email_messages,
+):
+    session_id = f"{SESSION_PREFIX}debug-cross-curator"
+    _seed_durable_chat_session(session_id, user_auth_sub=curator1_user["sub"])
+
+    response = client.post(
+        "/api/feedback/submit",
+        json={
+            "session_id": session_id,
+            "curator_id": curator1_user["email"],
+            "feedback_text": "Only this curator should inspect debug detail.",
+            "trace_ids": ["trace-debug-cross-curator-1"],
+        },
+    )
+
+    assert response.status_code == 200
+    feedback_id = response.json()["feedback_id"]
+    assert len(captured_email_messages) == 1
+
+    owner_response = client.get(f"/api/feedback/{feedback_id}/debug")
+    assert owner_response.status_code == 200
+
+    get_auth_mock.set_user("chat2")
+    cross_curator_response = client.get(f"/api/feedback/{feedback_id}/debug")
+
+    assert curator2_user["email"] != curator1_user["email"]
+    assert cross_curator_response.status_code == 403
+    assert "Only this curator should inspect debug detail" not in cross_curator_response.text
+    assert "trace-debug-cross-curator-1" not in cross_curator_response.text
+
+
+def test_feedback_debug_detail_allows_admin_cross_curator_access(
+    client,
+    get_auth_mock,
+    curator1_user,
+    curator2_user,
+    captured_email_messages,
+    monkeypatch,
+):
+    session_id = f"{SESSION_PREFIX}debug-admin"
+    _seed_durable_chat_session(session_id, user_auth_sub=curator1_user["sub"])
+
+    response = client.post(
+        "/api/feedback/submit",
+        json={
+            "session_id": session_id,
+            "curator_id": curator1_user["email"],
+            "feedback_text": "Admin should inspect this debug detail.",
+            "trace_ids": ["trace-debug-admin-1"],
+        },
+    )
+
+    assert response.status_code == 200
+    feedback_id = response.json()["feedback_id"]
+    assert len(captured_email_messages) == 1
+
+    from src.api import feedback as feedback_api
+
+    monkeypatch.setattr(feedback_api, "get_admin_emails", lambda: {curator2_user["email"]})
+    get_auth_mock.set_user("chat2")
+
+    admin_response = client.get(f"/api/feedback/{feedback_id}/debug")
+
+    assert admin_response.status_code == 200
+    admin_payload = admin_response.json()
+    assert admin_payload["feedback_id"] == feedback_id
+    assert admin_payload["curator_id"] == curator1_user["email"]
+    assert admin_payload["trace_ids"] == ["trace-debug-admin-1"]
+
+
 def test_feedback_submission_logs_lookup_failure_but_still_succeeds(
     client,
     curator1_user,

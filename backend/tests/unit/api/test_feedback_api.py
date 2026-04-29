@@ -237,12 +237,15 @@ def test_submit_feedback_uses_authenticated_sub_for_authorization(monkeypatch):
 
 
 def test_get_feedback_debug_detail_returns_service_payload(monkeypatch):
+    calls = {}
+
     class _FakeService:
         def __init__(self, _db):
             pass
 
-        def get_feedback_debug_detail(self, feedback_id):
+        def get_feedback_debug_detail(self, feedback_id, **kwargs):
             assert feedback_id == "feedback-123"
+            calls["kwargs"] = kwargs
             return {
                 "feedback_id": "feedback-123",
                 "session_id": "session-123",
@@ -292,12 +295,105 @@ def test_get_feedback_debug_detail_returns_service_payload(monkeypatch):
     response = feedback_api.get_feedback_debug_detail(
         feedback_id="feedback-123",
         db=object(),
-        user={"sub": "user-123"},
+        user={"sub": "user-123", "email": "curator@example.org"},
     )
 
     assert response.feedback_id == "feedback-123"
     assert response.trace_data.status == "missing"
     assert response.feedback_debug_url == "/api/feedback/feedback-123/debug"
+    assert calls["kwargs"] == {
+        "user_auth_sub": "user-123",
+        "authenticated_curator_email": "curator@example.org",
+        "allow_admin_debug_access": False,
+    }
+
+
+def test_get_feedback_debug_detail_allows_admin_policy(monkeypatch):
+    calls = {}
+
+    class _FakeService:
+        def __init__(self, _db):
+            pass
+
+        def get_feedback_debug_detail(self, _feedback_id, **kwargs):
+            calls["kwargs"] = kwargs
+            return {
+                "feedback_id": "feedback-123",
+                "session_id": "session-123",
+                "curator_id": "curator@example.org",
+                "feedback_text": "Please inspect this answer.",
+                "trace_ids": [],
+                "processing_status": "completed",
+                "created_at": "2026-04-25T12:00:00",
+                "processing_started_at": None,
+                "processing_completed_at": None,
+                "email_sent_at": None,
+                "processing_error": None,
+                "feedback_debug_url": "/api/feedback/feedback-123/debug",
+                "trace_review_session_url": (
+                    "/api/traces/sessions/session-123/export?source=remote"
+                ),
+                "transcript": {
+                    "available": False,
+                    "message_count": None,
+                    "captured_at": None,
+                    "session_id": None,
+                    "chat_kind": None,
+                    "title": None,
+                    "effective_title": None,
+                    "session_matches_feedback": None,
+                },
+                "trace_data": {
+                    "available": False,
+                    "status": "missing",
+                    "stale": False,
+                    "capture_status": None,
+                    "captured_at": None,
+                    "schema_version": None,
+                    "source_kind": None,
+                    "source_extractor": None,
+                    "expected_trace_ids": [],
+                    "stored_trace_ids": [],
+                    "trace_count": 0,
+                    "omitted_trace_id_count": None,
+                    "error_summary": None,
+                    "errors": [],
+                },
+            }
+
+    monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+    monkeypatch.setattr(feedback_api, "get_admin_emails", lambda: {"admin@example.org"})
+
+    response = feedback_api.get_feedback_debug_detail(
+        feedback_id="feedback-123",
+        db=object(),
+        user={"sub": "admin-sub", "email": "Admin@Example.org"},
+    )
+
+    assert response.feedback_id == "feedback-123"
+    assert calls["kwargs"]["allow_admin_debug_access"] is True
+    assert calls["kwargs"]["authenticated_curator_email"] == "Admin@Example.org"
+
+
+def test_get_feedback_debug_detail_returns_403_when_service_denies(monkeypatch):
+    class _FakeService:
+        def __init__(self, _db):
+            pass
+
+        def get_feedback_debug_detail(self, _feedback_id, **_kwargs):
+            raise feedback_api.FeedbackDebugDetailForbidden
+
+    monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
+
+    response = feedback_api.get_feedback_debug_detail(
+        feedback_id="feedback-123",
+        db=object(),
+        user={"sub": "other-user", "email": "other@example.org"},
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 403
+    assert b"Not authorized to inspect this feedback" in response.body
 
 
 def test_get_feedback_debug_detail_returns_404_when_missing(monkeypatch):
@@ -305,7 +401,7 @@ def test_get_feedback_debug_detail_returns_404_when_missing(monkeypatch):
         def __init__(self, _db):
             pass
 
-        def get_feedback_debug_detail(self, _feedback_id):
+        def get_feedback_debug_detail(self, _feedback_id, **_kwargs):
             return None
 
     monkeypatch.setattr(feedback_api, "FeedbackService", _FakeService)
