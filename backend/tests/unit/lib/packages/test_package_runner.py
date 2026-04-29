@@ -569,12 +569,31 @@ def test_package_runner_executes_alliance_weaviate_bindings_in_isolation(monkeyp
 
     assert section_result.ok is True
     assert section_result.result == {
-        "summary": "Read 2 chunks from 'Materials and Methods'",
+        "summary": (
+            "Read 2 chunks from 'Materials and Methods'. "
+            "Use section.source_chunks[].chunk_id with record_evidence."
+        ),
         "section": {
             "section_title": "Materials and Methods",
             "page_numbers": [3, 4],
             "content": "Paragraph one\n\nParagraph two",
             "chunk_count": 2,
+            "source_chunks": [
+                {
+                    "chunk_id": "chunk-methods-1",
+                    "page_number": 3,
+                    "section_title": "Materials and Methods",
+                    "subsection": "Animals",
+                    "content_preview": "Paragraph one",
+                },
+                {
+                    "chunk_id": "chunk-methods-2",
+                    "page_number": 4,
+                    "section_title": "Materials and Methods",
+                    "subsection": None,
+                    "content_preview": "Paragraph two",
+                },
+            ],
             "doc_items": [{"id": "bbox-1"}, {"id": "bbox-2"}],
         },
     }
@@ -848,7 +867,7 @@ def _write_fake_weaviate_backend(tmp_path: Path) -> Path:
             \"score\": 0.91,
             \"text\": \"Wingless expression expanded in the mutant tissue.\",
             \"metadata\": {
-                \"chunk_id\": \"chunk-search-1\",
+                \"chunk_id\": \"stale-metadata-search-id\",
                 \"section_title\": \"Results\",
                 \"page_number\": 7,
                 \"doc_items\": [{\"id\": \"bbox-search\"}],
@@ -871,16 +890,19 @@ async def get_document_sections(*_args, **_kwargs):
 async def get_chunks_by_parent_section(*, document_id, parent_section, user_id, **_kwargs):
     return [
         {
+            \"id\": \"chunk-methods-1\",
             \"text\": \"Paragraph one\",
             \"page_number\": 3,
             \"section_title\": \"Materials and Methods\",
-            \"metadata\": '{\"doc_items\": [{\"id\": \"bbox-1\"}], \"document_id\": \"%s\", \"parent_section\": \"%s\", \"user_id\": \"%s\"}' % (document_id, parent_section, user_id),
+            \"subsection\": \"Animals\",
+            \"metadata\": '{\"chunk_id\": \"stale-metadata-methods-1\", \"doc_items\": [{\"id\": \"bbox-1\"}], \"document_id\": \"%s\", \"parent_section\": \"%s\", \"user_id\": \"%s\"}' % (document_id, parent_section, user_id),
         },
         {
+            \"chunkId\": \"chunk-methods-2\",
             \"content\": \"Paragraph two\",
             \"pageNumber\": 4,
             \"sectionTitle\": \"Materials and Methods\",
-            \"metadata\": {\"doc_items\": [{\"id\": \"bbox-2\"}]},
+            \"metadata\": {\"chunk_id\": \"stale-metadata-methods-2\", \"doc_items\": [{\"id\": \"bbox-2\"}]},
         },
     ]
 

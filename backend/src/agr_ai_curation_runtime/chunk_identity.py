@@ -13,7 +13,7 @@ def resolve_chunk_identifier(
     chunk: Mapping[str, Any],
     metadata: Mapping[str, Any] | None = None,
 ) -> str | None:
-    """Return the first non-empty chunk identifier from known chunk shapes."""
+    """Return the first non-empty concrete chunk identifier from known chunk shapes."""
     if metadata is None:
         raw_metadata = chunk.get("metadata")
         metadata = raw_metadata if isinstance(raw_metadata, Mapping) else {}

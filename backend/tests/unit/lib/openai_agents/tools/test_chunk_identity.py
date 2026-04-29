@@ -1,6 +1,6 @@
 """Unit tests for shared document chunk identity helpers."""
 
-from src.lib.openai_agents.tools.chunk_identity import resolve_chunk_identifier
+from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
 
 
 def test_resolve_chunk_identifier_prefers_chunk_fields_before_metadata():

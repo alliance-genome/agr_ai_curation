@@ -14,7 +14,7 @@ from typing import Optional, List, TYPE_CHECKING
 from pydantic import BaseModel
 from agents import function_tool
 
-from src.lib.openai_agents.tools.chunk_identity import resolve_chunk_identifier
+from agr_ai_curation_runtime.chunk_identity import resolve_chunk_identifier
 from src.lib.weaviate_client.chunks import (
     hybrid_search_chunks,
     get_chunks_by_parent_section,  # Uses LLM-resolved parentSection for accurate boundaries
@@ -106,7 +106,7 @@ def create_search_tool(document_id: str, user_id: str, tracker: Optional["ToolCa
 
                 hits.append(
                     ChunkHit(
-                        chunk_id=metadata.get("chunk_id") or chunk.get("id"),
+                        chunk_id=resolve_chunk_identifier(chunk, metadata),
                         section_title=section,
                         page_number=page,
                         score=score,
