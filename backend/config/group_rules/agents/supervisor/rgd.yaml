@@ -33,14 +33,31 @@ allele_dispatch_strategy:
 
 # Main search strategy injected into supervisor prompt
 search_strategy: |
-  <role>
-  You are coordinating allele lookups for RGD (Rat Genome Database). Your goal is to ensure the Allele Specialist has sufficient context to find the correct allele, especially when multiple alleles exist for the same gene.
-  </role>
+  <rgd_search_rules>
+  ## RGD-SPECIFIC ALLELE DISPATCH GUIDELINES (Rattus norvegicus)
+
+  <goal>
+  Route rat allele lookups with enough institution attribution for the Allele Specialist
+  to distinguish between similar RGD alleles for the same gene.
+  </goal>
+
+  <success_criteria>
+  A successful RGD allele dispatch:
+  - Includes the institution source when the source document explicitly reports where
+    the allele was obtained, generated, produced, or purchased.
+  - Uses the institution name or abbreviation as concise disambiguating context.
+  - Does not fabricate institution attribution or delay the lookup for vague source
+    language.
+  - Ignores author names when institution attribution is the useful RGD disambiguator.
+  </success_criteria>
 
   <instructions>
-  When the PDF Specialist reports rat allele information, determine if institution attribution context is available. If the source document explicitly mentions where the allele was obtained, generated, or purchased, include this information in your query to the Allele Specialist.
+  When the PDF Specialist reports rat allele information, determine if institution
+  attribution context is available. If the source document explicitly mentions where
+  the allele was obtained, generated, produced, or purchased, include this information
+  in your query to the Allele Specialist.
 
-  **Format your dispatch as:**
+  Format your dispatch as:
   "Look up [specific allele name/description] from [institution name]"
   OR
   "Look up [specific allele name/description] (source: [institution abbreviation])"
@@ -87,23 +104,26 @@ search_strategy: |
   <constraints>
   - ONLY include institution information if explicitly stated in the source document
   - Do NOT fabricate or infer institution attribution if unclear or absent
-  - Do NOT delay the query if institution information is ambiguous—proceed with the allele name alone
+  - Do NOT delay the query if institution information is ambiguous; proceed with the allele name alone
   - Focus on institution name/abbreviation; ignore other attribution like author names
   </constraints>
+  </rgd_search_rules>
 
 # Result synthesis
 result_synthesis: |
   <instructions>
-  When presenting allele lookup results to the user, include institution attribution information if the Allele Specialist found a match and it aligns with the source document.
+  When presenting allele lookup results to the user, include institution attribution
+  information only when the Allele Specialist found a match and it aligns with the
+  source document.
 
-  **Format:**
+  Format:
   - If institution matched: "Allele [RGD ID] was generated at [Institution Name], matching the paper's reported source."
   - If institution found but differs: "Allele [RGD ID] is attributed to [Institution Name], which differs from the paper's reported source ([Paper Institution])."
   - If no institution attribution in database: "Allele [RGD ID] found. No institution attribution available in RGD."
   </instructions>
 
   <constraints>
-  - Do NOT overstate the importance of institution matches—they are confirmatory context, not definitive identifiers
+  - Do NOT overstate the importance of institution matches - they are confirmatory context, not definitive identifiers
   - If attribution is unclear or missing from both the paper and database, simply omit this section
   - Keep attribution details to 1 sentence maximum
   </constraints>
