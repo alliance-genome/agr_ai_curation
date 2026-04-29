@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from fastapi import HTTPException
 
-from src.api import chat
+from src.api import chat_stream as chat
 
 
 def _reset_local_state():

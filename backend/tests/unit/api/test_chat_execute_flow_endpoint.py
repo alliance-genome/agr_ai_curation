@@ -12,7 +12,13 @@ from uuid import uuid4
 from fastapi.responses import StreamingResponse
 import pytest
 
-chat = importlib.import_module("src.api.chat")
+from tests.chat_api_test_support import patch_chat_impl_for
+
+chat = importlib.import_module("src.api.chat_execute_flow")
+chat_common = importlib.import_module("src.api.chat_common")
+
+_CHAT_IMPLEMENTATION_MODULES = (chat_common, chat)
+_patch_chat_impl = patch_chat_impl_for(_CHAT_IMPLEMENTATION_MODULES)
 
 
 @pytest.fixture(autouse=True)
@@ -287,14 +293,14 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     repository = _FakeChatHistoryRepository()
     completion_db = _DummyCompletionDB()
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "_resolve_session_create_active_document", lambda **_kwargs: (None, None))
 
     async def _register_active_stream(
         session_id: str,
@@ -314,18 +320,18 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
     async def _clear_cancel_signal(session_id: str):
         calls["clear"].append(session_id)
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
 
     async def _check_cancel_signal(_session_id: str) -> bool:
         return cancel_requested
 
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
     calls["repository"] = repository
     calls["completion_db"] = completion_db
     return calls
@@ -334,8 +340,8 @@ def _patch_stream_dependencies(monkeypatch, *, cancel_requested: bool):
 def _patch_durable_history(monkeypatch):
     repository = _FakeChatHistoryRepository()
     completion_db = _DummyCompletionDB()
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
-    monkeypatch.setattr(chat, "SessionLocal", lambda: completion_db)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "SessionLocal", lambda: completion_db)
     return repository, completion_db
 
 
@@ -362,7 +368,7 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
             "details": {"note": "ok"},
         }
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -410,15 +416,15 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
     calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
     captured_backfill_calls = []
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "_generate_title_from_turn",
         lambda *, user_message, assistant_message=None: (
             "assistant-aware-flow-title" if assistant_message else "user-only-flow-title"
         ),
     )
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "_backfill_chat_session_generated_title",
         lambda session_id, user_id, preferred_generated_title=None: captured_backfill_calls.append(
             (session_id, user_id, preferred_generated_title)
@@ -436,7 +442,7 @@ def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_ti
             "data": {"status": "completed", "failure_reason": None},
         }
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -479,7 +485,7 @@ def test_execute_flow_endpoint_cancel_stops_stream(monkeypatch):
     async def _fake_execute_flow(**_kwargs):
         yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "should-not-stream"}}
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -528,7 +534,7 @@ def test_execute_flow_endpoint_preserves_event_order_and_domain_warning(monkeypa
         }
         yield {"type": "TEXT_MESSAGE_CONTENT", "data": {"delta": "done"}}
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -603,7 +609,7 @@ def test_execute_flow_endpoint_preserves_flow_step_evidence_payload(monkeypatch)
             },
         }
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -678,7 +684,7 @@ def test_execute_flow_endpoint_injects_flow_context_without_leaking_internal_pay
             "data": {"status": "completed", "failure_reason": None},
         }
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -753,7 +759,7 @@ def test_execute_flow_endpoint_replays_completed_turn_without_rerunning(monkeypa
             },
         }
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     first_response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -863,7 +869,7 @@ def test_execute_flow_endpoint_retries_incomplete_turn_without_reincrementing_co
             },
         }
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -941,7 +947,7 @@ def test_execute_flow_endpoint_retry_reuses_persisted_trace_context(monkeypatch)
             },
         }
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
 
     first_response = asyncio.run(
         chat.execute_flow_endpoint(
@@ -1099,8 +1105,8 @@ def test_execute_flow_endpoint_surfaces_trace_checkpoint_persistence_failure(mon
     def _raise_checkpoint_failure(**_kwargs):
         raise RuntimeError("checkpoint write failed")
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
-    monkeypatch.setattr(chat, "_persist_execute_flow_runtime_state", _raise_checkpoint_failure)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "_persist_execute_flow_runtime_state", _raise_checkpoint_failure)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
@@ -1158,8 +1164,8 @@ def test_execute_flow_endpoint_surfaces_completion_persistence_failure(monkeypat
     def _raise_completion_failure(**_kwargs):
         raise RuntimeError("completion transcript write failed")
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
-    monkeypatch.setattr(chat, "_persist_completed_execute_flow_turn", _raise_completion_failure)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "_persist_completed_execute_flow_turn", _raise_completion_failure)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
@@ -1210,15 +1216,15 @@ def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypat
     )
     db = _DummyDB(flow=flow)
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
 
     async def _deny_register(
         _session_id: str,
@@ -1228,7 +1234,7 @@ def test_execute_flow_endpoint_rejects_session_owned_by_different_user(monkeypat
         del stream_token
         return False
 
-    monkeypatch.setattr(chat, "register_active_stream", _deny_register)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _deny_register)
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(
@@ -1259,15 +1265,15 @@ def test_execute_flow_endpoint_rejects_local_session_collision_before_register(m
 
     register_calls = []
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
 
     async def _register_active_stream(
         _session_id: str,
@@ -1278,7 +1284,7 @@ def test_execute_flow_endpoint_rejects_local_session_collision_before_register(m
         register_calls.append(user_id)
         return True
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(
@@ -1309,15 +1315,15 @@ def test_execute_flow_endpoint_rejects_same_user_when_session_already_active(mon
     chat._LOCAL_SESSION_OWNERS["session-active-same-user"] = "auth-sub"
     chat._LOCAL_CANCEL_EVENTS["session-active-same-user"] = existing_event
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: {"filename": "paper.pdf"}))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(
@@ -1351,7 +1357,7 @@ def test_execute_flow_endpoint_streams_error_events_on_executor_exception(monkey
             yield {"type": "RUN_STARTED"}
         raise RuntimeError("executor boom")
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
@@ -1395,7 +1401,7 @@ def test_execute_flow_endpoint_sanitizes_runner_run_error_event(monkeypatch, cap
             "details": {"error": "runner exploded"},
         }
 
-    monkeypatch.setattr(chat, "execute_flow", _fake_execute_flow)
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
@@ -1422,8 +1428,8 @@ def test_execute_flow_endpoint_returns_404_when_flow_missing(monkeypatch):
     request = chat.ExecuteFlowRequest(flow_id=uuid4(), session_id="session-missing-flow")
     db = _DummyDB(flow=None)
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
@@ -1451,8 +1457,8 @@ def test_execute_flow_endpoint_returns_403_for_cross_user_flow(monkeypatch):
     request = chat.ExecuteFlowRequest(flow_id=flow.id, session_id="session-cross-user-flow")
     db = _DummyDB(flow=flow)
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
@@ -1485,7 +1491,7 @@ def test_execute_flow_endpoint_sanitizes_validation_error(monkeypatch, caplog):
     def _raise_prepare(**_kwargs):
         raise ValueError("flow request contains hidden validation detail")
 
-    monkeypatch.setattr(chat, "_prepare_execute_flow_turn", _raise_prepare)
+    _patch_chat_impl(monkeypatch, "_prepare_execute_flow_turn", _raise_prepare)
     caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     with pytest.raises(chat.HTTPException) as exc:
@@ -1517,12 +1523,12 @@ def test_execute_flow_endpoint_requires_user_sub(monkeypatch):
     request = chat.ExecuteFlowRequest(flow_id=flow.id, session_id="session-no-user-sub")
     db = _DummyDB(flow=flow)
 
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "set_global_user_from_cognito",
         lambda _db, _user: SimpleNamespace(id=7),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(

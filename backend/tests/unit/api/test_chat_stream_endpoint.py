@@ -11,9 +11,14 @@ from uuid import uuid4
 from fastapi.responses import StreamingResponse
 import pytest
 
-from src.api import chat
+from src.api import chat, chat_common, chat_stream
 from src.lib.curation_workspace import extraction_results as extraction_results_module
 from src.lib.openai_agents.evidence_summary import build_evidence_record_id
+from tests.chat_api_test_support import patch_chat_impl_for
+
+
+_CHAT_IMPLEMENTATION_MODULES = (chat_common, chat_stream)
+_patch_chat_impl = patch_chat_impl_for(_CHAT_IMPLEMENTATION_MODULES)
 
 
 async def _consume_stream(response: StreamingResponse) -> list[dict]:
@@ -69,14 +74,14 @@ def _stub_stream_turn_persistence(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: object())
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: object())
+    _patch_chat_impl(
+        monkeypatch,
         "_resolve_session_create_active_document",
         lambda **_kwargs: (None, None),
     )
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "_backfill_chat_session_generated_title",
         lambda *_args, **_kwargs: None,
     )
@@ -123,8 +128,8 @@ def _stub_stream_turn_persistence(monkeypatch):
             trace_id=trace_id,
         )
 
-    monkeypatch.setattr(chat, "_prepare_chat_stream_turn", _prepare)
-    monkeypatch.setattr(chat, "_persist_completed_chat_stream_turn", _finalize)
+    _patch_chat_impl(monkeypatch, "_prepare_chat_stream_turn", _prepare)
+    _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", _finalize)
     yield
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
@@ -133,12 +138,12 @@ def _stub_stream_turn_persistence(monkeypatch):
 def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch):
     calls = {"register": [], "unregister": [], "clear": []}
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -165,11 +170,11 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -197,11 +202,11 @@ def test_chat_stream_endpoint_has_idempotent_cleanup_background_task(monkeypatch
 def test_chat_stream_endpoint_sanitizes_prepare_turn_validation_error(monkeypatch, caplog):
     calls = {"register": [], "unregister": [], "clear": []}
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
         session_id: str,
@@ -221,14 +226,14 @@ def test_chat_stream_endpoint_sanitizes_prepare_turn_validation_error(monkeypatc
     async def _clear_cancel_signal(session_id: str):
         calls["clear"].append(session_id)
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
 
     def _raise_prepare(**_kwargs):
         raise ValueError("stream turn invalid because hidden detail leaked")
 
-    monkeypatch.setattr(chat, "_prepare_chat_stream_turn", _raise_prepare)
+    _patch_chat_impl(monkeypatch, "_prepare_chat_stream_turn", _raise_prepare)
     caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     with pytest.raises(chat.HTTPException) as exc:
@@ -251,13 +256,13 @@ def test_chat_stream_endpoint_sanitizes_prepare_turn_validation_error(monkeypatc
 def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_title(monkeypatch):
     captured_backfill_calls = []
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(
+        monkeypatch,
         "_build_context_messages_from_durable_messages",
         lambda *_args, **_kwargs: (
             [{"role": "user", "content": _kwargs.get("user_message", "")}]
@@ -265,15 +270,15 @@ def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_tit
             else []
         ),
     )
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "_generate_title_from_turn",
         lambda *, user_message, assistant_message=None: (
             "assistant-aware-title" if assistant_message else "user-only-title"
         ),
     )
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(
+        monkeypatch,
         "_backfill_chat_session_generated_title",
         lambda session_id, user_id, preferred_generated_title=None: captured_backfill_calls.append(
             (session_id, user_id, preferred_generated_title)
@@ -304,11 +309,11 @@ def test_chat_stream_endpoint_background_backfill_uses_final_assistant_aware_tit
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-123"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "assistant reply"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -335,12 +340,12 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
 
     captured = {}
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -367,11 +372,11 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stream", "model": "gpt-5.4-nano"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "stream complete"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -406,12 +411,12 @@ def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypa
 
     captured = {}
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     async def _register_active_stream(
         session_id: str,
@@ -438,11 +443,11 @@ def test_chat_stream_endpoint_leaves_model_overrides_unset_when_omitted(monkeypa
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stream-defaults"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "stream complete"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -472,12 +477,12 @@ def test_chat_stream_endpoint_rejects_same_user_when_session_already_active(monk
     chat._LOCAL_SESSION_OWNERS["session-active-same-user"] = "auth-sub"
     chat._LOCAL_CANCEL_EVENTS["session-active-same-user"] = existing_event
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(
@@ -498,17 +503,17 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
 
     persisted_requests = []
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(
+        monkeypatch,
         "get_supervisor_tool_agent_map",
         lambda: {"ask_gene_expression_specialist": "gene-expression"},
     )
@@ -567,13 +572,13 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(
+        monkeypatch,
         "persist_extraction_results",
         lambda requests, **_kwargs: persisted_requests.extend(requests),
     )
@@ -608,12 +613,12 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
         session_id: str,
@@ -660,11 +665,11 @@ def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monke
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -690,14 +695,14 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {"ask_gene_extractor_specialist": "gene_extractor"})
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {"ask_gene_extractor_specialist": "gene_extractor"})
+    _patch_chat_impl(
+        monkeypatch,
         "get_agent_curation_metadata",
         lambda agent_key: {"adapter_key": "gene", "launchable": True}
         if agent_key == "gene_extractor"
@@ -755,11 +760,11 @@ def test_chat_stream_endpoint_uses_runner_emitted_evidence_summary(monkeypatch):
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -794,12 +799,12 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
         session_id: str,
@@ -853,11 +858,11 @@ def test_chat_stream_endpoint_flattens_details_evidence_summary(monkeypatch):
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -890,17 +895,17 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
 
     persisted_requests = []
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(
+        monkeypatch,
         "get_supervisor_tool_agent_map",
         lambda: {"ask_gene_extractor_specialist": "gene_extractor"},
     )
@@ -956,13 +961,13 @@ def test_chat_stream_endpoint_infers_scope_for_scope_free_extraction_envelopes(m
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(
+        monkeypatch,
         "persist_extraction_results",
         lambda requests, **_kwargs: persisted_requests.extend(requests),
     )
@@ -988,17 +993,17 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(
+        monkeypatch,
         "get_supervisor_tool_agent_map",
         lambda: {"ask_gene_expression_specialist": "gene-expression"},
     )
@@ -1057,16 +1062,16 @@ def test_chat_stream_endpoint_emits_turn_failed_when_completion_side_effect_pers
         }
         yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     def _raise_persistence(_requests, **_kwargs):
         raise RuntimeError("db unavailable")
 
-    monkeypatch.setattr(chat, "persist_extraction_results", _raise_persistence)
+    _patch_chat_impl(monkeypatch, "persist_extraction_results", _raise_persistence)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
@@ -1091,11 +1096,11 @@ def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
         session_id: str,
@@ -1126,12 +1131,12 @@ def test_chat_stream_endpoint_emits_turn_save_failed_when_assistant_persistence_
             "Failed to persist stream assistant turn"
         ) from RuntimeError("assistant row unavailable")
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
-    monkeypatch.setattr(chat, "_persist_completed_chat_stream_turn", _raise_assistant_save_failed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", _raise_assistant_save_failed)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
@@ -1156,11 +1161,11 @@ def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, capl
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
         session_id: str,
@@ -1185,11 +1190,11 @@ def test_chat_stream_endpoint_sanitizes_runner_run_error_event(monkeypatch, capl
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_ERROR", "data": {"message": "runner exploded", "error_type": "RuntimeError"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
     caplog.set_level(logging.ERROR, logger=chat.logger.name)
 
     response = asyncio.run(
@@ -1218,11 +1223,11 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
     check_calls = {"count": 0}
     finalize_calls = []
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
         session_id: str,
@@ -1249,13 +1254,13 @@ def test_chat_stream_endpoint_emits_turn_interrupted_on_cancel_signal(monkeypatc
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stop"}}
         yield {"type": "TOOL_COMPLETE", "details": {"toolName": "should-not-arrive"}}
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(
+        monkeypatch,
         "_persist_completed_chat_stream_turn",
         lambda **_kwargs: finalize_calls.append("finalize"),
     )
@@ -1279,13 +1284,13 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(
+        monkeypatch,
         "_prepare_chat_stream_turn",
         lambda **_kwargs: chat.PreparedChatStreamTurn(
             turn_id="turn-replay",
@@ -1324,11 +1329,11 @@ def test_chat_stream_endpoint_replays_existing_assistant_turn_without_runner(mon
         raise AssertionError("runner should not be invoked for replayed turns")
         yield
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -1350,11 +1355,11 @@ def test_chat_stream_endpoint_emits_session_gone_when_session_disappears_before_
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(chat, "document_state", SimpleNamespace(get_document=lambda _uid: None))
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: {})
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(monkeypatch, "document_state", SimpleNamespace(get_document=lambda _uid: None))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", lambda: {})
 
     async def _register_active_stream(
         session_id: str,
@@ -1383,12 +1388,12 @@ def test_chat_stream_endpoint_emits_session_gone_when_session_disappears_before_
     def _raise_session_gone(**_kwargs):
         raise chat.ChatHistorySessionNotFoundError("Chat session not found")
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", _run_agent_streamed)
-    monkeypatch.setattr(chat, "_persist_completed_chat_stream_turn", _raise_session_gone)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(monkeypatch, "_persist_completed_chat_stream_turn", _raise_session_gone)
 
     response = asyncio.run(
         chat.chat_stream_endpoint(
@@ -1426,7 +1431,7 @@ async def test_assistant_rescue_endpoint_is_idempotent_on_turn_id(monkeypatch):
         ),
     )
 
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     first_response = await chat.assistant_rescue(
         session_id="session-rescue",
@@ -1461,7 +1466,7 @@ async def test_assistant_rescue_endpoint_returns_404_when_session_is_missing(mon
     repository = SimpleNamespace(
         get_session=lambda **_kwargs: None,
     )
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
 
     with pytest.raises(chat.HTTPException) as exc:
         await chat.assistant_rescue(
@@ -1484,7 +1489,7 @@ async def test_assistant_rescue_endpoint_sanitizes_validation_error(monkeypatch,
         get_message_by_turn_id=lambda **_kwargs: (_ for _ in ()).throw(ValueError("assistant rescue invariant exploded")),
     )
     rollbacks: list[str] = []
-    monkeypatch.setattr(chat, "_get_chat_history_repository", lambda _db: repository)
+    _patch_chat_impl(monkeypatch, "_get_chat_history_repository", lambda _db: repository)
     caplog.set_level(logging.WARNING, logger=chat.logger.name)
 
     with pytest.raises(chat.HTTPException) as exc:
@@ -1509,20 +1514,20 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
     chat._LOCAL_CANCEL_EVENTS.clear()
     chat._LOCAL_SESSION_OWNERS.clear()
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(
-        chat,
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(
+        monkeypatch,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(chat, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
 
     def _raise_tool_map():
         raise RuntimeError("agent registry unavailable")
 
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", _raise_tool_map)
+    _patch_chat_impl(monkeypatch, "get_supervisor_tool_agent_map", _raise_tool_map)
 
     # Stream infrastructure should never be reached; provide sentinels to verify.
     stream_infra_called = False
@@ -1536,7 +1541,7 @@ def test_chat_stream_endpoint_raises_when_tool_map_resolution_fails(monkeypatch)
         stream_infra_called = True
         return True
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
 
     with pytest.raises(chat.HTTPException) as exc:
         asyncio.run(

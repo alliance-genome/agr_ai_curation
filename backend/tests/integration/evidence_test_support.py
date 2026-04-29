@@ -15,6 +15,7 @@ from fastapi import Security
 from fastapi.testclient import TestClient
 
 from conftest import MOCK_USERS
+from tests.chat_api_test_support import patch_chat_impl
 from tests.fixtures.evidence.harness import (
     DEFAULT_FIXTURE_NAME,
     build_expected_sse_records,
@@ -234,22 +235,26 @@ def configure_chat_stream_mocks(
     tool_agent_map: dict[str, str],
     run_agent_streamed,
 ):
-    from src.api import chat
+    from src.api import chat_common, chat_stream
 
-    monkeypatch.setattr(chat, "set_current_session_id", lambda _session_id: None)
-    monkeypatch.setattr(chat, "set_current_user_id", lambda _user_id: None)
-    monkeypatch.setattr(
-        chat,
+    chat_modules = (chat_common, chat_stream)
+
+    patch_chat_impl(monkeypatch, chat_modules, "set_current_session_id", lambda _session_id: None)
+    patch_chat_impl(monkeypatch, chat_modules, "set_current_user_id", lambda _user_id: None)
+    patch_chat_impl(
+        monkeypatch,
+        chat_modules,
         "document_state",
         SimpleNamespace(get_document=lambda _uid: {"id": document_id, "filename": filename}),
     )
-    monkeypatch.setattr(chat, "get_groups_from_cognito", lambda _groups: [])
-    monkeypatch.setattr(
-        chat,
+    patch_chat_impl(monkeypatch, chat_modules, "get_groups_from_cognito", lambda _groups: [])
+    patch_chat_impl(
+        monkeypatch,
+        chat_modules,
         "_build_context_messages_from_durable_messages",
         lambda *_args, **_kwargs: [{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else [],
     )
-    monkeypatch.setattr(chat, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map))
+    patch_chat_impl(monkeypatch, chat_modules, "get_supervisor_tool_agent_map", lambda: dict(tool_agent_map))
 
     async def _register_active_stream(
         session_id: str,
@@ -271,11 +276,11 @@ def configure_chat_stream_mocks(
     async def _check_cancel_signal(_session_id: str) -> bool:
         return False
 
-    monkeypatch.setattr(chat, "register_active_stream", _register_active_stream)
-    monkeypatch.setattr(chat, "unregister_active_stream", _unregister_active_stream)
-    monkeypatch.setattr(chat, "clear_cancel_signal", _clear_cancel_signal)
-    monkeypatch.setattr(chat, "check_cancel_signal", _check_cancel_signal)
-    monkeypatch.setattr(chat, "run_agent_streamed", run_agent_streamed)
+    patch_chat_impl(monkeypatch, chat_modules, "register_active_stream", _register_active_stream)
+    patch_chat_impl(monkeypatch, chat_modules, "unregister_active_stream", _unregister_active_stream)
+    patch_chat_impl(monkeypatch, chat_modules, "clear_cancel_signal", _clear_cancel_signal)
+    patch_chat_impl(monkeypatch, chat_modules, "check_cancel_signal", _check_cancel_signal)
+    patch_chat_impl(monkeypatch, chat_modules, "run_agent_streamed", run_agent_streamed)
 
 
 def make_fixture_runner(evidence_fixture: dict[str, object]):
