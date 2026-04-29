@@ -51,6 +51,22 @@ def _report(report_id="feedback-1"):
     )
 
 
+def _get_debug_detail(
+    service,
+    feedback_id="feedback-1",
+    *,
+    user_auth_sub="auth-sub-1",
+    authenticated_curator_email="curator@example.org",
+    allow_admin_debug_access=False,
+):
+    return service.get_feedback_debug_detail(
+        feedback_id,
+        user_auth_sub=user_auth_sub,
+        authenticated_curator_email=authenticated_curator_email,
+        allow_admin_debug_access=allow_admin_debug_access,
+    )
+
+
 def test_init_uses_email_notifier_by_default(monkeypatch):
     class _EmailNotifier:
         pass
@@ -575,7 +591,7 @@ def test_get_feedback_debug_detail_returns_redacted_summary(monkeypatch):
     monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
 
     service = _feedback_service_module().FeedbackService(db=db)
-    detail = service.get_feedback_debug_detail(report.id)
+    detail = _get_debug_detail(service, report.id)
 
     assert detail["feedback_id"] == "feedback-1"
     assert detail["feedback_debug_url"] == "/api/feedback/feedback-1/debug"
@@ -616,6 +632,53 @@ def test_get_feedback_debug_detail_returns_redacted_summary(monkeypatch):
     assert "curator@example.org" not in str(detail["trace_data"])
 
 
+def test_get_feedback_debug_detail_returns_none_when_not_found(monkeypatch):
+    db = MagicMock()
+    db.query.return_value = _QueryChain(None)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = _feedback_service_module().FeedbackService(db=db)
+
+    detail = _get_debug_detail(service, "missing-feedback")
+
+    assert detail is None
+
+
+def test_get_feedback_debug_detail_denies_cross_curator(monkeypatch):
+    service_module = _feedback_service_module()
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = service_module.FeedbackService(db=db)
+
+    with pytest.raises(service_module.FeedbackDebugDetailForbidden):
+        _get_debug_detail(
+            service,
+            report.id,
+            user_auth_sub="other-auth-sub",
+            authenticated_curator_email="other@example.org",
+        )
+
+
+def test_get_feedback_debug_detail_allows_admin_cross_curator(monkeypatch):
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    service = _feedback_service_module().FeedbackService(db=db)
+
+    detail = _get_debug_detail(
+        service,
+        report.id,
+        user_auth_sub="admin-auth-sub",
+        authenticated_curator_email="admin@example.org",
+        allow_admin_debug_access=True,
+    )
+
+    assert detail["feedback_id"] == report.id
+    assert detail["curator_id"] == "curator@example.org"
+
+
 def test_get_feedback_debug_detail_marks_missing_and_stale_trace_data(monkeypatch):
     db = MagicMock()
     monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
@@ -623,7 +686,7 @@ def test_get_feedback_debug_detail_marks_missing_and_stale_trace_data(monkeypatc
 
     missing_report = _report("missing-feedback")
     db.query.return_value = _QueryChain(missing_report)
-    missing_detail = service.get_feedback_debug_detail("missing-feedback")
+    missing_detail = _get_debug_detail(service, "missing-feedback")
 
     assert missing_detail["trace_data"]["available"] is False
     assert missing_detail["trace_data"]["status"] == "missing"
@@ -641,7 +704,7 @@ def test_get_feedback_debug_detail_marks_missing_and_stale_trace_data(monkeypatc
         "traces": [],
     }
     db.query.return_value = _QueryChain(stale_report)
-    stale_detail = service.get_feedback_debug_detail("stale-feedback")
+    stale_detail = _get_debug_detail(service, "stale-feedback")
 
     assert stale_detail["trace_data"]["available"] is True
     assert stale_detail["trace_data"]["status"] == "stale"
@@ -665,7 +728,7 @@ def test_get_feedback_debug_detail_marks_missing_capture_status(monkeypatch):
     monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
     service = _feedback_service_module().FeedbackService(db=db)
 
-    detail = service.get_feedback_debug_detail(report.id)
+    detail = _get_debug_detail(service, report.id)
 
     assert detail["trace_data"]["available"] is True
     assert detail["trace_data"]["status"] == "capture_status_missing"
@@ -689,7 +752,7 @@ def test_get_feedback_debug_detail_surfaces_corrupt_numeric_metadata(monkeypatch
     service = _feedback_service_module().FeedbackService(db=db)
 
     with pytest.raises(ValueError):
-        service.get_feedback_debug_detail(report.id)
+        _get_debug_detail(service, report.id)
 
 
 def test_get_feedback_debug_detail_surfaces_wrong_trace_data_shapes(monkeypatch):
@@ -706,4 +769,4 @@ def test_get_feedback_debug_detail_surfaces_wrong_trace_data_shapes(monkeypatch)
     service = _feedback_service_module().FeedbackService(db=db)
 
     with pytest.raises(TypeError):
-        service.get_feedback_debug_detail(report.id)
+        _get_debug_detail(service, report.id)

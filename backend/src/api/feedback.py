@@ -8,8 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from src.api.admin.prompts import get_admin_emails
 from src.api.auth import get_auth_dependency
-from src.lib.feedback.service import FeedbackService
+from src.lib.feedback.service import FeedbackDebugDetailForbidden, FeedbackService
 from src.models.sql.database import get_feedback_db
 from src.schemas.feedback import (
     ErrorResponse,
@@ -34,6 +35,30 @@ def _require_user_sub(user: Dict[str, Any]) -> str:
     if not user_id:
         raise HTTPException(status_code=401, detail="User identifier not found in token")
     return user_id
+
+
+def _authenticated_user_email(user: Dict[str, Any]) -> str | None:
+    """Return the normalized authenticated user email when present."""
+
+    raw_email = user.get("email")
+    if raw_email is None:
+        return None
+
+    email = str(raw_email).strip()
+    return email or None
+
+
+def _can_admin_debug_feedback(user: Dict[str, Any]) -> bool:
+    """Return whether the user can inspect any feedback debug detail.
+
+    Feedback debug admin access uses the same documented ADMIN_EMAILS allowlist
+    policy as the admin prompt API.
+    """
+
+    user_email = _authenticated_user_email(user)
+    if user_email is None:
+        return False
+    return user_email.casefold() in get_admin_emails()
 
 
 def _run_feedback_processing_in_background(feedback_id: str) -> None:
@@ -183,6 +208,7 @@ def submit_feedback(
     response_model=FeedbackDebugDetailResponse,
     responses={
         404: {"model": ErrorResponse, "description": "Feedback report not found"},
+        403: {"model": ErrorResponse, "description": "Not authorized to inspect this feedback"},
         500: {"model": ErrorResponse, "description": "Server error loading debug detail"},
     },
     summary="Get feedback debug detail",
@@ -191,6 +217,8 @@ def submit_feedback(
     non-secret feedback metadata, transcript availability, trace IDs, trace-data
     capture status, redacted trace-data error metadata, and canonical links for
     the feedback debug endpoint and TraceReview session bundle export.
+    Access is limited to the feedback owner, matched by authenticated subject or
+    email, and administrators listed in the ADMIN_EMAILS allowlist.
 
     This endpoint intentionally does not expose raw trace payloads, auth headers,
     cookies, or full persisted trace data.
@@ -203,10 +231,24 @@ def get_feedback_debug_detail(
 ) -> FeedbackDebugDetailResponse:
     """Return read-only feedback debug details for an authenticated user."""
 
-    _require_user_sub(user)
+    user_auth_sub = _require_user_sub(user)
+    authenticated_curator_email = _authenticated_user_email(user)
 
     try:
-        detail = FeedbackService(db).get_feedback_debug_detail(feedback_id)
+        detail = FeedbackService(db).get_feedback_debug_detail(
+            feedback_id,
+            user_auth_sub=user_auth_sub,
+            authenticated_curator_email=authenticated_curator_email,
+            allow_admin_debug_access=_can_admin_debug_feedback(user),
+        )
+    except FeedbackDebugDetailForbidden:
+        return JSONResponse(
+            status_code=403,
+            content={
+                "status": "error",
+                "error": "Not authorized to inspect this feedback",
+            },
+        )
     except Exception as exc:
         logger.error(
             "Failed to load feedback debug detail for %s: %s",
