@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
@@ -17,8 +18,10 @@ from sqlalchemy.pool import StaticPool
 
 from src.lib.curation_adapters.reference import REFERENCE_ADAPTER_KEY
 from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGET_KEY
+from src.lib.curation_workspace import session_queries as query_module
 from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
 from src.lib.curation_workspace import session_service as module
+from src.lib.curation_workspace import session_submission_service as submission_module
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -642,7 +645,7 @@ def test_create_manual_candidate_rejects_non_manual_source(db_session):
         extraction_result_id=extraction_result.id,
     )
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.create_manual_candidate(
             db_session,
             str(session_row.id),
@@ -877,7 +880,7 @@ def test_get_session_workspace_rejects_entity_tag_candidates_missing_entity_type
     session_row.current_candidate_id = candidate.id
     db_session.commit()
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.get_session_workspace(db_session, str(session_row.id))
 
     assert exc.value.status_code == 500
@@ -1113,13 +1116,13 @@ def test_list_flow_run_sessions_reuses_flow_run_summary_count_for_page_info(
     )
 
     captured_total_items: list[int | None] = []
-    original_list_session_summaries = module._list_session_summaries
+    original_list_session_summaries = query_module._list_session_summaries
 
     def wrapped_list_session_summaries(*args, **kwargs):
         captured_total_items.append(kwargs.get("total_items"))
         return original_list_session_summaries(*args, **kwargs)
 
-    monkeypatch.setattr(module, "_list_session_summaries", wrapped_list_session_summaries)
+    monkeypatch.setattr(query_module, "_list_session_summaries", wrapped_list_session_summaries)
 
     response = module.list_flow_run_sessions(
         db_session,
@@ -1151,7 +1154,7 @@ def test_list_flow_run_sessions_raises_not_found_for_unknown_group(db_session):
         pending_candidates=1,
     )
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.list_flow_run_sessions(
             db_session,
             CurationFlowRunSessionsRequest(flow_run_id="flow-missing"),
@@ -1533,7 +1536,7 @@ def test_submission_preview_routes_payload_generation_through_submission_adapter
             )
 
     monkeypatch.setattr(
-        module,
+        submission_module,
         "_resolve_submission_domain_adapter",
         lambda adapter_key: StubSubmissionAdapter(),
     )
@@ -1594,7 +1597,7 @@ def test_submission_preview_handles_candidates_without_matching_validation_snaps
     )
 
     monkeypatch.setattr(
-        module,
+        submission_module,
         "validate_session",
         lambda *_args, **_kwargs: SimpleNamespace(
             candidate_validations=[],
@@ -1698,7 +1701,7 @@ def test_submission_preview_rejects_unknown_candidate_ids(db_session):
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
     )
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.submission_preview(
             db_session,
             seeded["session_id"],
@@ -1715,7 +1718,7 @@ def test_submission_preview_rejects_unknown_candidate_ids(db_session):
 
 
 def test_submission_adapter_registry_is_built_lazily_and_cached(monkeypatch):
-    module._submission_adapter_registry.cache_clear()
+    submission_module._submission_adapter_registry.cache_clear()
 
     build_calls = []
 
@@ -1727,13 +1730,13 @@ def test_submission_adapter_registry_is_built_lazily_and_cached(monkeypatch):
         build_calls.append("built")
         return StubRegistry()
 
-    monkeypatch.setattr(module, "build_default_submission_adapter_registry", _build_registry)
+    monkeypatch.setattr(submission_module, "build_default_submission_adapter_registry", _build_registry)
 
     try:
-        first = module._resolve_submission_transport_adapter("reference_target")
-        second = module._resolve_submission_transport_adapter("reference_target")
+        first = submission_module._resolve_submission_transport_adapter("reference_target")
+        second = submission_module._resolve_submission_transport_adapter("reference_target")
     finally:
-        module._submission_adapter_registry.cache_clear()
+        submission_module._submission_adapter_registry.cache_clear()
 
     assert first == {"transport_key": "reference_target"}
     assert second == {"transport_key": "reference_target"}
@@ -1741,24 +1744,24 @@ def test_submission_adapter_registry_is_built_lazily_and_cached(monkeypatch):
 
 
 def test_resolve_submission_transport_adapter_sanitizes_missing_target(monkeypatch, caplog):
-    caplog.set_level(logging.WARNING, logger=module.logger.name)
-    module._submission_adapter_registry.cache_clear()
+    caplog.set_level(logging.WARNING, logger=submission_module.logger.name)
+    submission_module._submission_adapter_registry.cache_clear()
 
     class StubRegistry:
         def require(self, target_key):
             raise KeyError(f"Submission target '{target_key}' is missing")
 
     monkeypatch.setattr(
-        module,
+        submission_module,
         "build_default_submission_adapter_registry",
         lambda: StubRegistry(),
     )
 
     try:
-        with pytest.raises(module.HTTPException) as exc:
-            module._resolve_submission_transport_adapter("missing_target")
+        with pytest.raises(HTTPException) as exc:
+            submission_module._resolve_submission_transport_adapter("missing_target")
     finally:
-        module._submission_adapter_registry.cache_clear()
+        submission_module._submission_adapter_registry.cache_clear()
 
     assert exc.value.status_code == 400
     assert exc.value.detail == "Submission target is not configured"
@@ -1767,7 +1770,7 @@ def test_resolve_submission_transport_adapter_sanitizes_missing_target(monkeypat
 
 
 def test_build_submission_execute_payload_sanitizes_adapter_errors(caplog, monkeypatch):
-    caplog.set_level(logging.WARNING, logger=module.logger.name)
+    caplog.set_level(logging.WARNING, logger=submission_module.logger.name)
 
     class StubExportAdapter:
         def build_submission_payload(self, *, mode, target_key, payload_context):
@@ -1780,10 +1783,10 @@ def test_build_submission_execute_payload_sanitizes_adapter_errors(caplog, monke
         adapter_key=REFERENCE_ADAPTER_KEY,
     )
 
-    monkeypatch.setattr(module, "_resolve_export_adapter", lambda _adapter_key: StubExportAdapter())
+    monkeypatch.setattr(submission_module, "_resolve_export_adapter", lambda _adapter_key: StubExportAdapter())
 
-    with pytest.raises(module.HTTPException) as exc:
-        module._build_submission_execute_payload(
+    with pytest.raises(HTTPException) as exc:
+        submission_module._build_submission_execute_payload(
             db=db,
             session_row=session_row,
             mode=SubmissionMode.DIRECT_SUBMIT,
@@ -1890,7 +1893,7 @@ def test_execute_submission_preserves_payload_warnings_across_reload(db_session,
     transport_warning = "Transport warning"
 
     monkeypatch.setattr(
-        module,
+        submission_module,
         "_build_submission_execute_payload",
         lambda **_kwargs: SubmissionPayloadContract(
             mode=SubmissionMode.DIRECT_SUBMIT,
@@ -1905,7 +1908,7 @@ def test_execute_submission_preserves_payload_warnings_across_reload(db_session,
         ),
     )
     monkeypatch.setattr(
-        module,
+        submission_module,
         "_resolve_submission_transport_adapter",
         lambda _target_key: NoOpSubmissionAdapter(
             target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
@@ -1972,7 +1975,7 @@ def test_execute_submission_persists_validation_errors_without_marking_session_s
             }
 
     monkeypatch.setattr(
-        module,
+        submission_module,
         "_resolve_submission_transport_adapter",
         lambda _target_key: StubSubmissionAdapter(),
     )
@@ -2023,12 +2026,12 @@ def test_execute_submission_normalizes_transport_errors_to_failed_submission_rec
             raise RuntimeError("timeout talking to downstream submitter")
 
     monkeypatch.setattr(
-        module,
+        submission_module,
         "_resolve_submission_transport_adapter",
         lambda _target_key: ExplodingSubmissionAdapter(),
     )
 
-    caplog.set_level(logging.ERROR, logger=module.logger.name)
+    caplog.set_level(logging.ERROR, logger=submission_module.logger.name)
 
     response = module.execute_submission(
         db_session,
@@ -2197,7 +2200,7 @@ def test_retry_submission_rejects_non_failed_original_submission(db_session):
     db_session.add(original_submission)
     db_session.commit()
 
-    with pytest.raises(module.HTTPException) as exc:
+    with pytest.raises(HTTPException) as exc:
         module.retry_submission(
             db_session,
             seeded["session_id"],
