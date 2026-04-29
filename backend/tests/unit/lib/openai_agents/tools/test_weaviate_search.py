@@ -72,13 +72,14 @@ async def test_search_tool_maps_hits_and_truncates_content(monkeypatch):
     result = await tool(query="query", limit=2)
 
     assert result.summary == "Found 2 chunks"
-    assert result.hits[0].chunk_id == "chunk-meta-1"
+    assert result.hits[0].chunk_id == "chunk-1"
     assert result.hits[0].section_title == "Results"
     assert result.hits[0].page_number == 5
     assert result.hits[0].score == 0.91
     assert result.hits[0].content.endswith("... [truncated]")
     assert result.hits[0].doc_items == [{"id": "bbox-1"}]
     assert result.hits[1].section_title == "Discussion"
+    assert result.hits[1].chunk_id == "chunk-2"
     assert result.hits[1].page_number == 8
     assert result.hits[1].doc_items == [{"id": "bbox-2"}]
 

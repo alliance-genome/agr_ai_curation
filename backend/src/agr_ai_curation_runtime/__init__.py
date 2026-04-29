@@ -1,6 +1,7 @@
 """Public runtime surfaces exposed to isolated package tools."""
 
 from .agr_curation import get_curation_resolver, is_valid_curie, list_groups
+from .chunk_identity import resolve_chunk_identifier
 from .file_outputs import (
     FileOutputRequestContext,
     PersistedFileOutput,
@@ -19,6 +20,7 @@ __all__ = [
     "get_curation_resolver",
     "is_valid_curie",
     "list_groups",
+    "resolve_chunk_identifier",
     "FileOutputRequestContext",
     "PersistedFileOutput",
     "get_current_file_output_context",
