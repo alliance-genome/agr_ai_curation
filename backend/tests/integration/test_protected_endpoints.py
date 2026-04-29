@@ -36,11 +36,8 @@ def _ensure_users_table_exists() -> None:
     from src.models.sql.database import SessionLocal
     from src.models.sql.user import User
 
-    db = SessionLocal()
-    try:
+    with SessionLocal() as db:
         User.__table__.create(bind=db.get_bind(), checkfirst=True)
-    finally:
-        db.close()
 
 
 @pytest.fixture
@@ -126,13 +123,13 @@ def authenticated_client(monkeypatch):
 
         # Also mock provision_weaviate_tenants to prevent real tenant creation
         with patch("src.services.user_service.provision_weaviate_tenants", return_value=True):
-                with patch("src.services.user_service.get_connection"):
-                    from main import app
+            with patch("src.services.user_service.get_connection"):
+                from main import app
 
-                    _ensure_users_table_exists()
-                    yield TestClient(app)
+                _ensure_users_table_exists()
+                yield TestClient(app)
 
-                    app.dependency_overrides.clear()
+                app.dependency_overrides.clear()
 
 
 class TestProtectedEndpoints:

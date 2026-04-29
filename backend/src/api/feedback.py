@@ -58,7 +58,7 @@ def _can_admin_debug_feedback(user: Dict[str, Any]) -> bool:
     user_email = _authenticated_user_email(user)
     if user_email is None:
         return False
-    return user_email.casefold() in get_admin_emails()
+    return user_email.lower() in get_admin_emails()
 
 
 def _run_feedback_processing_in_background(feedback_id: str) -> None:
