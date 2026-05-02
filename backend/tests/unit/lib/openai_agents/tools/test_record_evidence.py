@@ -208,6 +208,76 @@ async def test_record_evidence_rejects_model_generated_chunk_placeholders(monkey
     assert "evidence_record_id" not in result
 
 
+@pytest.mark.parametrize(
+    ("entity", "claimed_quote", "closest_quote", "mismatch_reason"),
+    [
+        (
+            "LSL-DTA",
+            (
+                "LSL-DTA (Strain NO. 009669) mice were kindly provided by Dr. Ming O Li, "
+                "Memorial Sloan Kettering Cancer Center."
+            ),
+            (
+                "LSL-DTR (Strain NO. 007900) mice were kindly provided by Dr. Ming O Li, "
+                "Memorial Sloan Kettering Cancer Center."
+            ),
+            "strain_or_stock_identifier_mismatch",
+        ),
+        (
+            "CD8a-/-",
+            "CD8a-/- (Strain NO. S-KO-01440) mice were purchased from Cyagen.",
+            "CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen.",
+            "allele_or_entity_identifier_mismatch",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_adjacent_allele_quote_mismatch(
+    monkeypatch,
+    entity,
+    claimed_quote,
+    closest_quote,
+    mismatch_reason,
+):
+    chunk_text = (
+        "DBHCre (Strain NO. 033951) mice were kindly provided by Dr. Patricia Jensen, "
+        "National Institute of Health and Dr. Ming O Li, Memorial Sloan Kettering Cancer Center. "
+        "LSL-DTR (Strain NO. 007900) mice were kindly provided by Dr. Ming O Li, "
+        "Memorial Sloan Kettering Cancer Center. "
+        "CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen."
+    )
+
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "id": "b247a1a2-a6fa-2176-46ff-b814431e61c8",
+            "text": chunk_text,
+            "page_number": 22,
+            "parent_section": "Methods",
+            "subsection": "Mice",
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-8323314", "user-1")
+
+    result = await tool(
+        entity=entity,
+        chunk_id="b247a1a2-a6fa-2176-46ff-b814431e61c8",
+        claimed_quote=claimed_quote,
+    )
+
+    assert result["status"] == "quote_mismatch"
+    assert result["needs_retry"] is True
+    assert result["closest_quote"] == closest_quote
+    assert mismatch_reason in result["mismatch_reasons"]
+    assert result["candidate_neighboring_quotes"]
+    assert closest_quote in result["candidate_neighboring_quotes"]
+    assert result["page"] == 22
+    assert result["section"] == "Methods"
+    assert result["subsection"] == "Mice"
+    assert "evidence_record_id" not in result
+
+
 @pytest.mark.asyncio
 async def test_record_evidence_prefers_pdf_provenance_page_when_chunk_page_is_stale(monkeypatch):
     async def _fake_get_chunk_by_id(**_kwargs):

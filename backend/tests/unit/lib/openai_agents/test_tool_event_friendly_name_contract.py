@@ -1655,6 +1655,97 @@ async def test_allele_specialist_rejects_empty_evidence_after_section_label_reco
 
 
 @pytest.mark.asyncio
+async def test_allele_specialist_treats_quote_mismatch_as_unverified_evidence(monkeypatch):
+    claimed_quote = "CD8a-/- (Strain NO. S-KO-01440) mice were purchased from Cyagen."
+    captured_events = []
+
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            [
+                _tool_call_stream_event(
+                    "record_evidence",
+                    arguments=json.dumps(
+                        {
+                            "entity": "CD8a-/-",
+                            "chunk_id": "b247a1a2-a6fa-2176-46ff-b814431e61c8",
+                            "claimed_quote": claimed_quote,
+                        }
+                    ),
+                ),
+                _tool_output_stream_event(
+                    json.dumps(
+                        {
+                            "status": "quote_mismatch",
+                            "needs_retry": True,
+                            "entity": "CD8a-/-",
+                            "chunk_id": "b247a1a2-a6fa-2176-46ff-b814431e61c8",
+                            "claimed_quote": claimed_quote,
+                            "closest_quote": (
+                                "CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen."
+                            ),
+                            "candidate_neighboring_quotes": [
+                                "CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen."
+                            ],
+                            "mismatch_reasons": [
+                                "allele_or_entity_identifier_mismatch",
+                                "strain_or_stock_identifier_mismatch",
+                            ],
+                            "message": "Closest quote in this chunk names different critical identifiers.",
+                            "retry_tool": "record_evidence",
+                        }
+                    )
+                ),
+            ],
+            final_output=_FakeStructuredOutput(
+                {
+                    "summary": "Found a plausible allele but evidence verification needs retry.",
+                    "alleles": [
+                        {
+                            "mention": "CD8a-/-",
+                            "normalized_symbol": "Cd8a<sup>tm1Mak</sup>",
+                            "normalized_id": "MGI:1857149",
+                            "associated_gene": "Cd8a",
+                            "confidence": "medium",
+                            "evidence_record_ids": [],
+                        },
+                    ],
+                    "items": [],
+                    "evidence_records": [],
+                    "run_summary": {"kept_count": 1},
+                }
+            ),
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Allele/Variant Extraction Agent",
+        tools=[],
+        output_type=AlleleExtractionResultEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract alleles",
+            specialist_name="Allele/Variant Extraction Agent",
+            max_turns=3,
+            tool_name="ask_allele_extractor_specialist",
+        )
+
+    specialist_errors = [event for event in captured_events if event.get("type") == "SPECIALIST_ERROR"]
+    assert len(specialist_errors) == 1
+    assert specialist_errors[0]["details"]["reason"] == "missing_evidence_records"
+    assert not any(event.get("type") == "evidence_summary" for event in captured_events)
+
+
+@pytest.mark.asyncio
 async def test_specialist_accepts_schema_defined_retained_collection_without_items(monkeypatch):
     verified_quote = "Actin 5C was the focal allele examined in the study."
     expected_record = _build_expected_evidence_record(

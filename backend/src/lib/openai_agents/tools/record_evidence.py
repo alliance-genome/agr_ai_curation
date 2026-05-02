@@ -33,6 +33,10 @@ _TABLE_REFERENCE_PATTERN = re.compile(
 _NOT_FOUND_MESSAGE = (
     "Quote not found in this chunk. Retry with text from the chunk or drop this evidence."
 )
+_QUOTE_MISMATCH_MESSAGE = (
+    "Closest quote in this chunk names different critical identifiers. Retry with an exact "
+    "quote from the chunk or drop this evidence."
+)
 _INVALID_CHUNK_LOAD_MESSAGE = (
     "Chunk could not be loaded. Retry with a chunk_id returned by search_document "
     "or read_section source_chunks, or drop this evidence."
@@ -44,6 +48,45 @@ _MISSING_CHUNK_MESSAGE = (
 _PREVIEW_CHARS = 300
 _LEGACY_SYMBOLIC_CHUNK_ID_PATTERN = re.compile(r"^chunk-", re.IGNORECASE)
 _TRAILING_SECTION_INDEX_PATTERN = re.compile(r"(?:[_\s-]+(?:chunk)?\d+)$", re.IGNORECASE)
+_STRAIN_OR_STOCK_ID_PATTERN = re.compile(
+    r"\b(?:strain|stock)\s*(?:no\.?|number|#)?\s*[:.]?\s*"
+    r"([A-Za-z0-9][A-Za-z0-9._:/-]*\d[A-Za-z0-9._:/-]*)",
+    re.IGNORECASE,
+)
+_RRID_PATTERN = re.compile(r"\bRRID\s*[:#]?\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+_PREFIXED_STOCK_ID_PATTERN = re.compile(
+    r"\b(?:JAX|CYA|IMSR_JAX|IMSR_CYAGEN|BDSC|RRRC|MMRRC)\s*[:#]\s*"
+    r"([A-Za-z0-9._-]*\d[A-Za-z0-9._-]*)",
+    re.IGNORECASE,
+)
+_SYMBOL_WITH_MARKUP_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9-]*<sup>[^<]+</sup>", re.IGNORECASE)
+_SYMBOL_WITH_PARENS_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9-]*\([A-Za-z0-9.+_-]+\)")
+_PUNCTUATED_SYMBOL_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:[./_-][A-Za-z0-9+/-]+)+\b")
+_PROVIDER_PATTERN = re.compile(
+    r"\b(?:purchased|obtained)\s+from\s+(.{1,100}?)(?:[.;)]|$)",
+    re.IGNORECASE,
+)
+_SOURCE_LAB_PATTERN = re.compile(
+    r"\b(?:provided|obtained)\s+by\s+(.{1,140}?)(?:[.;)]|$)",
+    re.IGNORECASE,
+)
+_SOURCE_STOPWORDS = {
+    "and",
+    "by",
+    "from",
+    "kindly",
+    "mice",
+    "mouse",
+    "no",
+    "number",
+    "obtained",
+    "provided",
+    "purchased",
+    "strain",
+    "the",
+    "were",
+    "was",
+}
 
 
 @dataclass(frozen=True)
@@ -58,6 +101,11 @@ class _TokenSpan:
     token: str
     start: int
     end: int
+
+
+@dataclass(frozen=True)
+class _QuoteIdentityComparison:
+    reasons: tuple[str, ...]
 
 
 def _canonicalize_character(value: str) -> str | None:
@@ -207,6 +255,158 @@ def _find_verified_quote(claimed_quote: str, chunk_text: str) -> tuple[str | Non
     if not claimed_normalized or not chunk_normalized:
         return None, None
     return _best_fuzzy_match(claimed_normalized, chunk_normalized, chunk_index_map, chunk_text)
+
+
+def _normalize_identifier(value: str) -> str:
+    normalized, _index_map = _normalize_text_with_index_map(value)
+    return re.sub(r"[^a-z0-9]+", "", normalized)
+
+
+def _normalize_identifier_set(values: list[str]) -> set[str]:
+    return {
+        normalized
+        for value in values
+        for normalized in [_normalize_identifier(value)]
+        if normalized
+    }
+
+
+def _looks_like_symbolic_entity(value: str) -> bool:
+    stripped = str(value or "").strip()
+    if not stripped:
+        return False
+    if any(character.isdigit() for character in stripped):
+        return True
+    if re.search(r"[./_+()<>-]", stripped):
+        return True
+    uppercase_count = sum(1 for character in stripped if character.isupper())
+    return uppercase_count >= 2 and len(stripped) <= 24
+
+
+def _extract_symbolic_mentions(text: str) -> set[str]:
+    candidates: list[str] = []
+    candidates.extend(_SYMBOL_WITH_MARKUP_PATTERN.findall(text))
+    candidates.extend(_SYMBOL_WITH_PARENS_PATTERN.findall(text))
+    candidates.extend(_PUNCTUATED_SYMBOL_PATTERN.findall(text))
+    return _normalize_identifier_set(candidates)
+
+
+def _critical_symbol_mentions(text: str, entity: str | None = None) -> set[str]:
+    mentions = _extract_symbolic_mentions(text)
+    normalized_text = _normalize_identifier(text)
+    normalized_entity = _normalize_identifier(entity or "")
+    if (
+        normalized_entity
+        and normalized_entity in normalized_text
+        and _looks_like_symbolic_entity(str(entity or ""))
+    ):
+        mentions.add(normalized_entity)
+    return mentions
+
+
+def _extract_strain_or_stock_ids(text: str) -> set[str]:
+    candidates = [
+        *[match.group(1) for match in _STRAIN_OR_STOCK_ID_PATTERN.finditer(text)],
+        *[match.group(1) for match in _PREFIXED_STOCK_ID_PATTERN.finditer(text)],
+    ]
+    return _normalize_identifier_set(candidates)
+
+
+def _extract_rrids(text: str) -> set[str]:
+    return _normalize_identifier_set([match.group(1) for match in _RRID_PATTERN.finditer(text)])
+
+
+def _extract_source_tokens(text: str) -> set[str]:
+    source_phrases = [
+        *[match.group(1) for match in _PROVIDER_PATTERN.finditer(text)],
+        *[match.group(1) for match in _SOURCE_LAB_PATTERN.finditer(text)],
+    ]
+    tokens: set[str] = set()
+    for phrase in source_phrases:
+        for token in _TOKEN_PATTERN.findall(phrase.lower()):
+            if len(token) < 3 or token in _SOURCE_STOPWORDS:
+                continue
+            tokens.add(token)
+    return tokens
+
+
+def _missing_claimed_values(
+    claimed_values: set[str],
+    verified_values: set[str],
+) -> set[str]:
+    if not claimed_values:
+        return set()
+    return claimed_values - verified_values
+
+
+def _compare_quote_identity(
+    *,
+    entity: str,
+    claimed_quote: str,
+    verified_quote: str,
+) -> _QuoteIdentityComparison | None:
+    reasons: list[str] = []
+
+    claimed_symbols = _critical_symbol_mentions(claimed_quote, entity)
+    verified_symbols = _critical_symbol_mentions(verified_quote, entity)
+    if _missing_claimed_values(claimed_symbols, verified_symbols):
+        reasons.append("allele_or_entity_identifier_mismatch")
+
+    claimed_strain_ids = _extract_strain_or_stock_ids(claimed_quote)
+    verified_strain_ids = _extract_strain_or_stock_ids(verified_quote)
+    if _missing_claimed_values(claimed_strain_ids, verified_strain_ids):
+        reasons.append("strain_or_stock_identifier_mismatch")
+
+    claimed_rrids = _extract_rrids(claimed_quote)
+    verified_rrids = _extract_rrids(verified_quote)
+    if _missing_claimed_values(claimed_rrids, verified_rrids):
+        reasons.append("rrid_mismatch")
+
+    claimed_source_tokens = _extract_source_tokens(claimed_quote)
+    verified_source_tokens = _extract_source_tokens(verified_quote)
+    if claimed_source_tokens and verified_source_tokens and not claimed_source_tokens <= verified_source_tokens:
+        reasons.append("provider_or_source_lab_mismatch")
+
+    if not reasons:
+        return None
+    return _QuoteIdentityComparison(reasons=tuple(dict.fromkeys(reasons)))
+
+
+def _sentence_like_spans(text: str) -> list[tuple[int, int, str]]:
+    spans: list[tuple[int, int, str]] = []
+    for match in re.finditer(r"[^.\n]+(?:\.|$)", text):
+        quote = match.group(0).strip()
+        if quote:
+            spans.append((match.start(), match.end(), quote))
+    return spans
+
+
+def _candidate_neighboring_quotes(chunk_text: str, match: _QuoteMatch | None) -> list[str]:
+    if match is None:
+        preview = _build_preview(chunk_text)
+        return [preview] if preview else []
+
+    spans = _sentence_like_spans(chunk_text)
+    if not spans:
+        preview = _build_preview(chunk_text, match)
+        return [preview] if preview else []
+
+    match_center = (match.raw_start + match.raw_end) // 2
+    ranked_spans = sorted(
+        spans,
+        key=lambda span: (
+            not (span[0] <= match.raw_end and span[1] >= match.raw_start),
+            abs(((span[0] + span[1]) // 2) - match_center),
+        ),
+    )
+    quotes: list[str] = []
+    seen: set[str] = set()
+    for _start, _end, quote in ranked_spans[:5]:
+        if quote in seen:
+            continue
+        seen.add(quote)
+        quotes.append(quote)
+    return quotes
 
 
 def _build_preview(chunk_text: str, match: _QuoteMatch | None = None) -> str:
@@ -412,6 +612,54 @@ def _build_not_found_result(
     return payload
 
 
+def _build_quote_mismatch_result(
+    chunk_text: str,
+    *,
+    entity: str,
+    chunk_id: str,
+    claimed_quote: str,
+    closest_quote: str,
+    page: int | None,
+    section: str | None,
+    subsection: str | None,
+    best_match: _QuoteMatch | None,
+    identity_comparison: _QuoteIdentityComparison,
+) -> dict[str, Any]:
+    neighboring_quotes = [closest_quote]
+    neighboring_quotes.extend(
+        quote
+        for quote in _candidate_neighboring_quotes(chunk_text, best_match)
+        if quote != closest_quote
+    )
+    payload: dict[str, Any] = {
+        "status": "quote_mismatch",
+        "needs_retry": True,
+        "entity": entity,
+        "chunk_id": chunk_id,
+        "claimed_quote": claimed_quote,
+        "closest_quote": closest_quote,
+        "candidate_neighboring_quotes": neighboring_quotes[:5],
+        "mismatch_reasons": list(identity_comparison.reasons),
+        "chunk_content_preview": _build_preview(chunk_text, best_match),
+        "message": _QUOTE_MISMATCH_MESSAGE,
+        "retry_tool": "record_evidence",
+        "retry_instructions": (
+            "Use one of the neighboring quotes only if it names the same allele/entity and "
+            "strain, stock, RRID, provider, or source-lab identifiers as the claim. Otherwise "
+            "retry search_document/read_section for the exact evidence or drop this evidence."
+        ),
+    }
+    if best_match is not None:
+        payload["closest_match_score"] = round(best_match.score, 4)
+    if page is not None:
+        payload["page"] = page
+    if section:
+        payload["section"] = section
+    if subsection:
+        payload["subsection"] = subsection
+    return payload
+
+
 def _build_section_label_retry_fields(chunk_id: str, claimed_quote: str) -> dict[str, Any]:
     return {
         "invalid_chunk_id": chunk_id,
@@ -536,6 +784,25 @@ def create_record_evidence_tool(
                 section=section,
                 subsection=subsection,
                 best_match=best_match,
+            )
+
+        identity_comparison = _compare_quote_identity(
+            entity=normalized_entity,
+            claimed_quote=normalized_claimed_quote,
+            verified_quote=verified_quote,
+        )
+        if identity_comparison is not None:
+            return _build_quote_mismatch_result(
+                chunk_text,
+                entity=normalized_entity,
+                chunk_id=normalized_chunk_id,
+                claimed_quote=normalized_claimed_quote,
+                closest_quote=verified_quote,
+                page=page,
+                section=section,
+                subsection=subsection,
+                best_match=best_match,
+                identity_comparison=identity_comparison,
             )
 
         payload: dict[str, Any] = {

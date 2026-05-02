@@ -149,3 +149,27 @@ def test_record_evidence_summary_uses_resolved_output_chunk_id():
 
     assert record is not None
     assert record["chunk_id"] == resolved_chunk_id
+
+
+def test_record_evidence_summary_ignores_quote_mismatch_results():
+    record = build_record_evidence_summary_record(
+        tool_name="record_evidence",
+        tool_input={
+            "entity": "CD8a-/-",
+            "chunk_id": "b247a1a2-a6fa-2176-46ff-b814431e61c8",
+            "claimed_quote": "CD8a-/- (Strain NO. S-KO-01440) mice were purchased from Cyagen.",
+        },
+        tool_output={
+            "status": "quote_mismatch",
+            "needs_retry": True,
+            "closest_quote": "CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen.",
+            "page": 22,
+            "section": "Methods",
+            "mismatch_reasons": [
+                "allele_or_entity_identifier_mismatch",
+                "strain_or_stock_identifier_mismatch",
+            ],
+        },
+    )
+
+    assert record is None
