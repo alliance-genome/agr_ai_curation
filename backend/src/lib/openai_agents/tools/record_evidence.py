@@ -61,7 +61,9 @@ _PREFIXED_STOCK_ID_PATTERN = re.compile(
 )
 _SYMBOL_WITH_MARKUP_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9-]*<sup>[^<]+</sup>", re.IGNORECASE)
 _SYMBOL_WITH_PARENS_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9-]*\([A-Za-z0-9.+_-]+\)")
-_PUNCTUATED_SYMBOL_PATTERN = re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:[./_-][A-Za-z0-9+/-]+)+\b")
+_PUNCTUATED_SYMBOL_PATTERN = re.compile(
+    r"\b[A-Za-z][A-Za-z0-9]*(?:(?:[./_-][A-Za-z0-9+]+)|(?:[+-]/[+-]))+(?=\W|$)"
+)
 _PROVIDER_PATTERN = re.compile(
     r"\b(?:purchased|obtained)\s+from\s+(.{1,100}?)(?:[.;)]|$)",
     re.IGNORECASE,
