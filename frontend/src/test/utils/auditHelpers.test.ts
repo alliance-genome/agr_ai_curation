@@ -314,6 +314,30 @@ describe('formatAuditEvent (T013)', () => {
     expect(formatted).toContain('Calling external API...')
     expect(formatted).toContain('GET https://api.example.com/endpoint')
   })
+
+  it('formats ZFIN AGR Curation gene search with Danio rerio species label', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'TOOL_START',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        toolName: 'agr_curation_query',
+        friendlyName: 'Searching AGR Curation...',
+        toolArgs: {
+          method: 'search_genes',
+          gene_symbol: 'pax2a',
+          data_provider: 'ZFIN'
+        }
+      } as ToolStartDetails
+    }
+
+    const formatted = formatAuditEvent(event)
+
+    expect(formatted).toContain('AGR Curation: Gene Search')
+    expect(formatted).toContain('Species: D. rerio (ZFIN)')
+    expect(formatted).not.toContain('Species: Z. rerio (ZFIN)')
+  })
 })
 
 // ===================================================================
@@ -371,18 +395,24 @@ describe('getEventPrefix (T014)', () => {
     expect(getEventPrefix('FLOW_STEP_EVIDENCE')).toBe('[EVIDENCE]')
   })
 
-  it('handles all 10 event types', () => {
+  it('handles all event types', () => {
     const eventTypes: AuditEventType[] = [
       'SUPERVISOR_START',
       'SUPERVISOR_DISPATCH',
       'CREW_START',
       'AGENT_COMPLETE',
+      'AGENT_GENERATING',
+      'AGENT_THINKING',
       'TOOL_START',
       'TOOL_COMPLETE',
       'LLM_CALL',
       'SUPERVISOR_RESULT',
       'SUPERVISOR_COMPLETE',
       'SUPERVISOR_ERROR',
+      'SPECIALIST_RETRY',
+      'SPECIALIST_RETRY_SUCCESS',
+      'SPECIALIST_ERROR',
+      'FORMATTER_PROCESSING',
       'DOMAIN_PLAN_CREATED',
       'DOMAIN_PLANNING',
       'DOMAIN_EXECUTION_START',
@@ -390,6 +420,7 @@ describe('getEventPrefix (T014)', () => {
       'DOMAIN_CATEGORY_ERROR',
       'DOMAIN_SKIPPED',
       'FLOW_STEP_EVIDENCE',
+      'FILE_READY',
     ]
 
     const expectedPrefixes: Record<AuditEventType, string> = {
@@ -400,9 +431,15 @@ describe('getEventPrefix (T014)', () => {
       'SUPERVISOR_ERROR': '[SUPERVISOR ERROR]',
       'CREW_START': '[CREW]',
       'AGENT_COMPLETE': '[AGENT]',
+      'AGENT_GENERATING': '[AGENT]',
+      'AGENT_THINKING': '[AGENT]',
       'TOOL_START': '[TOOL]',
       'TOOL_COMPLETE': '[TOOL]',
       'LLM_CALL': '[LLM]',
+      'SPECIALIST_RETRY': '[SPECIALIST]',
+      'SPECIALIST_RETRY_SUCCESS': '[SPECIALIST]',
+      'SPECIALIST_ERROR': '[SPECIALIST ERROR]',
+      'FORMATTER_PROCESSING': '[FORMATTER]',
       'DOMAIN_PLAN_CREATED': '[DOMAIN]',
       'DOMAIN_PLANNING': '[DOMAIN]',
       'DOMAIN_EXECUTION_START': '[DOMAIN]',
@@ -410,6 +447,7 @@ describe('getEventPrefix (T014)', () => {
       'DOMAIN_CATEGORY_ERROR': '[DOMAIN ERROR]',
       'DOMAIN_SKIPPED': '[DOMAIN]',
       'FLOW_STEP_EVIDENCE': '[EVIDENCE]',
+      'FILE_READY': '[FILE]',
     }
 
     eventTypes.forEach(type => {
@@ -943,12 +981,18 @@ describe('getEventSeverity (T016)', () => {
       'SUPERVISOR_DISPATCH': 'info',
       'CREW_START': 'info',
       'AGENT_COMPLETE': 'success',
+      'AGENT_GENERATING': 'processing',
+      'AGENT_THINKING': 'processing',
       'TOOL_START': 'info',
       'TOOL_COMPLETE': 'success',
       'LLM_CALL': 'info',
       'SUPERVISOR_RESULT': 'success',
       'SUPERVISOR_COMPLETE': 'success',
       'SUPERVISOR_ERROR': 'error',
+      'SPECIALIST_RETRY': 'warning',
+      'SPECIALIST_RETRY_SUCCESS': 'warning',
+      'SPECIALIST_ERROR': 'error',
+      'FORMATTER_PROCESSING': 'processing',
       'DOMAIN_PLAN_CREATED': 'info',
       'DOMAIN_PLANNING': 'info',
       'DOMAIN_EXECUTION_START': 'info',
@@ -956,6 +1000,7 @@ describe('getEventSeverity (T016)', () => {
       'DOMAIN_CATEGORY_ERROR': 'error',
       'DOMAIN_SKIPPED': 'info',
       'FLOW_STEP_EVIDENCE': 'info',
+      'FILE_READY': 'success',
     }
 
     Object.entries(expectedSeverities).forEach(([type, severity]) => {
