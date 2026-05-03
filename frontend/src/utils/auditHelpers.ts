@@ -46,7 +46,7 @@ const SPECIES_MAP: Record<string, string> = {
   'NCBITaxon:7227': 'D. melanogaster',
   'NCBITaxon:9606': 'H. sapiens',
   'NCBITaxon:10090': 'M. musculus',
-  'NCBITaxon:7955': 'Z. rerio',
+  'NCBITaxon:7955': 'D. rerio',
   'NCBITaxon:10116': 'R. norvegicus',
   'NCBITaxon:559292': 'S. cerevisiae'
 }
