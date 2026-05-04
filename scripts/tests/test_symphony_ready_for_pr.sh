@@ -289,11 +289,12 @@ EOF
 }
 
 test_claude_detected_auto_bounces_to_in_progress() {
-  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub report_file workpad_log state_log section_log output
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub report_file workpad_log state_log section_log output
   temp_dir="$(mktemp -d)"
   pr_json="${temp_dir}/prs.json"
   pr_view_json="${temp_dir}/pr-view.json"
   loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${temp_dir}/classifier"
   workpad_stub="${temp_dir}/workpad"
   state_stub="${temp_dir}/state"
   report_file="${temp_dir}/claude-report.md"
@@ -322,6 +323,15 @@ exit 10
 EOF
   chmod +x "${loop_stub}"
 
+  cat > "${classifier_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo PR_FEEDBACK_CLASSIFIER_STATUS=actionable
+echo PR_FEEDBACK_CLASSIFIER_CLASSIFICATION=actionable
+echo PR_FEEDBACK_CLASSIFIER_REASON=Review asks for implementation work.
+exit 10
+EOF
+  chmod +x "${classifier_stub}"
+
   cat > "${workpad_stub}" <<EOF
 #!/usr/bin/env bash
 printf '%s\n' "\$*" > "${workpad_log}"
@@ -345,6 +355,7 @@ EOF
 
   output="$(
     SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
     SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
     SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
     bash "${SCRIPT_PATH}" \
@@ -368,11 +379,12 @@ EOF
 }
 
 test_claude_wait_zero_still_scans_existing_feedback() {
-  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub report_file output
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub report_file output
   temp_dir="$(mktemp -d)"
   pr_json="${temp_dir}/prs.json"
   pr_view_json="${temp_dir}/pr-view.json"
   loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${temp_dir}/classifier"
   workpad_stub="${temp_dir}/workpad"
   state_stub="${temp_dir}/state"
   report_file="${temp_dir}/claude-report.md"
@@ -402,6 +414,15 @@ exit 10
 EOF
   chmod +x "${loop_stub}"
 
+  cat > "${classifier_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo PR_FEEDBACK_CLASSIFIER_STATUS=actionable
+echo PR_FEEDBACK_CLASSIFIER_CLASSIFICATION=actionable
+echo PR_FEEDBACK_CLASSIFIER_REASON=Review asks for implementation work.
+exit 10
+EOF
+  chmod +x "${classifier_stub}"
+
   cat > "${workpad_stub}" <<'EOF'
 #!/usr/bin/env bash
 echo WORKPAD_STATUS=updated
@@ -416,6 +437,7 @@ EOF
 
   output="$(
     SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
     SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
     SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
     bash "${SCRIPT_PATH}" \
@@ -433,11 +455,12 @@ EOF
 }
 
 test_clean_claude_review_does_not_auto_bounce() {
-  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub report_file output
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub report_file output
   temp_dir="$(mktemp -d)"
   pr_json="${temp_dir}/prs.json"
   pr_view_json="${temp_dir}/pr-view.json"
   loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${temp_dir}/classifier"
   workpad_stub="${temp_dir}/workpad"
   state_stub="${temp_dir}/state"
   report_file="${temp_dir}/claude-report.md"
@@ -476,6 +499,15 @@ exit 10
 EOF
   chmod +x "${loop_stub}"
 
+  cat > "${classifier_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo PR_FEEDBACK_CLASSIFIER_STATUS=clean
+echo PR_FEEDBACK_CLASSIFIER_CLASSIFICATION=clean
+echo PR_FEEDBACK_CLASSIFIER_REASON=Review clearly approves with no remaining work.
+exit 0
+EOF
+  chmod +x "${classifier_stub}"
+
   cat > "${workpad_stub}" <<'EOF'
 #!/usr/bin/env bash
 echo "workpad should not be called for clean Claude reviews" >&2
@@ -492,6 +524,7 @@ EOF
 
   output="$(
     SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
     SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
     SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
     bash "${SCRIPT_PATH}" \
@@ -511,12 +544,98 @@ EOF
   assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
 }
 
+test_default_classifier_uses_source_root_fallback() {
+  local temp_dir workspace source_root runner_path pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub report_file output
+  temp_dir="$(mktemp -d)"
+  workspace="${temp_dir}/workspace"
+  source_root="${temp_dir}/source"
+  runner_path="${workspace}/scripts/utilities/symphony_ready_for_pr.sh"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${source_root}/scripts/utilities/symphony_classify_pr_feedback.sh"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  report_file="${temp_dir}/claude-report.md"
+  mkdir -p "${workspace}/scripts/utilities" "${source_root}/scripts/utilities"
+  cp "${SCRIPT_PATH}" "${runner_path}"
+  chmod +x "${runner_path}"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":344,"title":"ALL-344: Existing PR","url":"https://example.test/pr/344","headRefName":"all-344"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":344,"title":"ALL-344: Existing PR","url":"https://example.test/pr/344","headRefName":"all-344","baseRefName":"main","headRefOid":"abc344","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-05-04T00:13:22Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
+EOF
+
+  printf 'clean approval\n' > "${report_file}"
+
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=1
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  chmod +x "${loop_stub}"
+
+  cat > "${classifier_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo PR_FEEDBACK_CLASSIFIER_STATUS=clean
+echo PR_FEEDBACK_CLASSIFIER_CLASSIFICATION=clean
+echo PR_FEEDBACK_CLASSIFIER_REASON=source root fallback
+exit 0
+EOF
+  chmod +x "${classifier_stub}"
+
+  cat > "${workpad_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo "workpad should not be called for clean Claude reviews" >&2
+exit 97
+EOF
+  chmod +x "${workpad_stub}"
+
+  cat > "${state_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo "state helper should not be called for clean Claude reviews" >&2
+exit 98
+EOF
+  chmod +x "${state_stub}"
+
+  output="$(
+    (
+      cd "${temp_dir}"
+      SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" \
+      SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+      SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+      SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+      bash "${runner_path}" \
+        --delivery-mode pr \
+        --issue-identifier ALL-344 \
+        --branch all-344 \
+        --repo alliance-genome/agr_ai_curation \
+        --wait-for-review-seconds 1 \
+        --pr-json-file "${pr_json}" \
+        --pr-view-json-file "${pr_view_json}"
+    )
+  )"
+
+  assert_contains "PR_FEEDBACK_CLASSIFIER_REASON=source root fallback" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
+  assert_not_contains "READY_FOR_PR_CLAUDE_CLASSIFIER_WARNING" "${output}"
+}
+
 test_approval_with_actionable_suggestions_still_auto_bounces() {
-  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub report_file output
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub report_file output
   temp_dir="$(mktemp -d)"
   pr_json="${temp_dir}/prs.json"
   pr_view_json="${temp_dir}/pr-view.json"
   loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${temp_dir}/classifier"
   workpad_stub="${temp_dir}/workpad"
   state_stub="${temp_dir}/state"
   report_file="${temp_dir}/claude-report.md"
@@ -548,6 +667,16 @@ exit 10
 EOF
   chmod +x "${loop_stub}"
 
+  cat > "${classifier_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo PR_FEEDBACK_CLASSIFIER_STATUS=actionable
+echo PR_FEEDBACK_CLASSIFIER_CLASSIFICATION=actionable
+echo PR_FEEDBACK_CLASSIFIER_REASON=Review includes non-blocking implementation work.
+echo PR_FEEDBACK_CLASSIFIER_ACTION_ITEM_1=Add a regression test.
+exit 10
+EOF
+  chmod +x "${classifier_stub}"
+
   cat > "${workpad_stub}" <<'EOF'
 #!/usr/bin/env bash
 echo WORKPAD_STATUS=updated
@@ -562,6 +691,7 @@ EOF
 
   output="$(
     SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
     SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
     SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
     bash "${SCRIPT_PATH}" \
@@ -575,6 +705,80 @@ EOF
   )"
 
   assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
+  assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
+}
+
+test_classifier_error_is_conservative_and_auto_bounces() {
+  local temp_dir pr_json pr_view_json loop_stub classifier_stub workpad_stub state_stub report_file output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  classifier_stub="${temp_dir}/classifier"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  report_file="${temp_dir}/claude-report.md"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":343,"title":"ALL-343: Existing PR","url":"https://example.test/pr/343","headRefName":"all-343"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":343,"title":"ALL-343: Existing PR","url":"https://example.test/pr/343","headRefName":"all-343","baseRefName":"main","headRefOid":"abc343","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-05-04T00:13:22Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
+EOF
+
+  printf 'Claude report that the classifier cannot parse.\n' > "${report_file}"
+
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=1
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  chmod +x "${loop_stub}"
+
+  cat > "${classifier_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo PR_FEEDBACK_CLASSIFIER_STATUS=error
+echo PR_FEEDBACK_CLASSIFIER_ERROR=simulated failure
+exit 2
+EOF
+  chmod +x "${classifier_stub}"
+
+  cat > "${workpad_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo WORKPAD_STATUS=updated
+EOF
+  chmod +x "${workpad_stub}"
+
+  cat > "${state_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo LINEAR_STATE_STATUS=ok
+EOF
+  chmod +x "${state_stub}"
+
+  output="$(
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER="${classifier_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-343 \
+      --branch all-343 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-review-seconds 1 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}"
+  )"
+
+  assert_contains "PR_FEEDBACK_CLASSIFIER_STATUS=error" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_CLASSIFIER_WARNING=Could not classify Claude report safely" "${output}"
   assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
   assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
 }
@@ -772,7 +976,9 @@ test_create_pr_uses_plain_cli_output_and_view_json
 test_claude_detected_auto_bounces_to_in_progress
 test_claude_wait_zero_still_scans_existing_feedback
 test_clean_claude_review_does_not_auto_bounce
+test_default_classifier_uses_source_root_fallback
 test_approval_with_actionable_suggestions_still_auto_bounces
+test_classifier_error_is_conservative_and_auto_bounces
 test_claude_pending_after_clean_checks_stops_before_human_review
 test_failed_github_check_auto_bounces_to_in_progress
 test_claude_maxed_out_without_report_does_not_abort
