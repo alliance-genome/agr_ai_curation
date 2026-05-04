@@ -57,15 +57,36 @@ class ExclusionReasonCode(str, Enum):
 
     PREVIOUSLY_REPORTED = "previously_reported"
     NON_EXPERIMENTAL_CLAIM = "non_experimental_claim"
-    MARKER_ONLY_VISUALIZATION = "marker_only_visualization"
-    PROMOTER_DRIVEN_MARKER_LOCALIZATION = "promoter_driven_marker_localization"
-    MUTANT_BACKGROUND_ONLY = "mutant_background_only"
-    STRUCTURAL_LABEL_OR_FUSION_ONLY = "structural_label_or_fusion_only"
     INSUFFICIENT_EXPERIMENTAL_EVIDENCE = "insufficient_experimental_evidence"
     OUT_OF_SCOPE = "out_of_scope"
     AMBIGUOUS_ENTITY = "ambiguous_entity"
     DUPLICATE_MENTION = "duplicate_mention"
     UNSUPPORTED_ENTITY_TYPE = "unsupported_entity_type"
+
+    # Gene expression-specific exclusions.
+    MARKER_ONLY_VISUALIZATION = "marker_only_visualization"
+    PROMOTER_DRIVEN_MARKER_LOCALIZATION = "promoter_driven_marker_localization"
+    MUTANT_BACKGROUND_ONLY = "mutant_background_only"
+    STRUCTURAL_LABEL_OR_FUSION_ONLY = "structural_label_or_fusion_only"
+    RESCUE_EXPERIMENT_NOT_EXPRESSION = "rescue_experiment_not_expression"
+
+    # Gene extractor-specific exclusions.
+    GENE_FAMILY_NOT_INDIVIDUAL = "gene_family_not_individual"
+    AUTHOR_OR_REAGENT_NAME = "author_or_reagent_name"
+    REFERENCE_LIST_ONLY = "reference_list_only"
+
+    # Allele extractor-specific exclusions.
+    STRAIN_NOT_ALLELE = "strain_not_allele"
+    TRANSGENE_CONSTRUCT = "transgene_construct"
+    BALANCER_OR_DEFICIENCY = "balancer_or_deficiency"
+    WILD_TYPE_REFERENCE = "wild_type_reference"
+    BACKGROUND_GENOTYPE_ONLY = "background_genotype_only"
+
+    # Chemical extractor-specific exclusions.
+    BUFFER_OR_MEDIA_COMPONENT = "buffer_or_media_component"
+    STANDARD_LAB_REAGENT = "standard_lab_reagent"
+    VEHICLE_CONTROL_ONLY = "vehicle_control_only"
+    ASSAY_REAGENT_ONLY = "assay_reagent_only"
 
 
 class EvidenceRecord(BaseModel):
