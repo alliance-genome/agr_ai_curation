@@ -26,6 +26,8 @@ EOF
 }
 
 report_file=""
+default_model="gpt-5.4-mini"
+default_reasoning_effort="high"
 model="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_MODEL:-}"
 reasoning_effort="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_REASONING_EFFORT:-}"
 timeout_seconds="${SYMPHONY_PR_FEEDBACK_CLASSIFIER_TIMEOUT_SECONDS:-120}"
@@ -98,7 +100,7 @@ if [[ -z "${overrides_file}" ]]; then
 fi
 
 resolve_classifier_config() {
-  python3 - "${overrides_file}" "${model}" "${reasoning_effort}" <<'PY'
+  python3 - "${overrides_file}" "${model}" "${reasoning_effort}" "${default_model}" "${default_reasoning_effort}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -106,10 +108,12 @@ from pathlib import Path
 overrides_path = Path(sys.argv[1])
 model_override = sys.argv[2].strip()
 reasoning_override = sys.argv[3].strip()
+default_model = sys.argv[4].strip()
+default_reasoning = sys.argv[5].strip()
 
 config = {
-    "model": "gpt-5.4-mini",
-    "reasoning_effort": "high",
+    "model": default_model,
+    "reasoning_effort": default_reasoning,
 }
 
 if overrides_path.exists():
@@ -121,8 +125,11 @@ if overrides_path.exists():
                 config["model"] = classifier["model"].strip()
             if isinstance(classifier.get("reasoning_effort"), str) and classifier["reasoning_effort"].strip():
                 config["reasoning_effort"] = classifier["reasoning_effort"].strip()
-    except Exception:
-        pass
+    except Exception as exc:
+        print(
+            f"PR_FEEDBACK_CLASSIFIER_CONFIG_WARNING=Failed to read overrides file {overrides_path}: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
 
 if model_override:
     config["model"] = model_override
@@ -135,8 +142,8 @@ PY
 }
 
 mapfile -t classifier_config < <(resolve_classifier_config)
-model="${classifier_config[0]:-gpt-5.4-mini}"
-reasoning_effort="${classifier_config[1]:-high}"
+model="${classifier_config[0]:-${default_model}}"
+reasoning_effort="${classifier_config[1]:-${default_reasoning_effort}}"
 
 prompt_file="$(mktemp "${TMPDIR:-/tmp}/symphony-pr-feedback-prompt-XXXXXX.md")"
 schema_file="$(mktemp "${TMPDIR:-/tmp}/symphony-pr-feedback-schema-XXXXXX.json")"
@@ -213,6 +220,14 @@ else
     exit 2
   fi
 
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "PR_FEEDBACK_CLASSIFIER_STATUS=error"
+    echo "PR_FEEDBACK_CLASSIFIER_MODEL=${model}"
+    echo "PR_FEEDBACK_CLASSIFIER_REASONING_EFFORT=${reasoning_effort}"
+    echo "PR_FEEDBACK_CLASSIFIER_ERROR=timeout executable not found; cannot enforce ${timeout_seconds}s classifier bound"
+    exit 2
+  fi
+
   cmd=(
     "${codex_bin}" exec
     --ephemeral
@@ -225,11 +240,7 @@ else
   )
 
   set +e
-  if command -v timeout >/dev/null 2>&1; then
-    timeout "${timeout_seconds}s" "${cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2> "${stderr_file}"
-  else
-    "${cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2> "${stderr_file}"
-  fi
+  timeout "${timeout_seconds}s" "${cmd[@]}" < "${prompt_file}" > "${stdout_file}" 2> "${stderr_file}"
   codex_rc=$?
   set -e
 

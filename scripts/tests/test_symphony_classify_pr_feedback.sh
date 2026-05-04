@@ -182,10 +182,35 @@ EOF
   assert_contains "PR_FEEDBACK_CLASSIFIER_REASONING_EFFORT=high" "${output}"
 }
 
+test_malformed_override_config_warns_and_uses_defaults() {
+  local temp_dir report fixture overrides output_file output
+  temp_dir="$(mktemp -d)"
+  report="${temp_dir}/report.md"
+  fixture="${temp_dir}/fixture.json"
+  overrides="${temp_dir}/codex-overrides.json"
+  output_file="${temp_dir}/output.txt"
+
+  printf 'Claude review report\n' > "${report}"
+  printf '{"classification":"clean","reason":"ok","action_items":[]}\n' > "${fixture}"
+  printf '{broken json\n' > "${overrides}"
+
+  bash "${SCRIPT_PATH}" \
+    --report-file "${report}" \
+    --fixture-output-file "${fixture}" \
+    --overrides-file "${overrides}" \
+    > "${output_file}" 2>&1
+
+  output="$(cat "${output_file}")"
+  assert_contains "PR_FEEDBACK_CLASSIFIER_CONFIG_WARNING=Failed to read overrides file" "${output}"
+  assert_contains "PR_FEEDBACK_CLASSIFIER_MODEL=gpt-5.4-mini" "${output}"
+  assert_contains "PR_FEEDBACK_CLASSIFIER_REASONING_EFFORT=high" "${output}"
+}
+
 test_fixture_classifications_map_to_exit_codes
 test_invalid_json_is_error
 test_clean_with_action_items_is_uncertain
 test_json_override_config_is_used
 test_source_root_override_config_is_used_when_workspace_copy_missing
+test_malformed_override_config_warns_and_uses_defaults
 
 echo "symphony_classify_pr_feedback tests passed"
