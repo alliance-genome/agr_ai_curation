@@ -15,7 +15,7 @@
       "metadata": {}
     },
     {
-      "id": "chunk-crumb-fuzzy",
+      "id": "chunk-crumb-changed-quote",
       "text": "Crb is required for epithelial polarity during early embryogenesis and localizes to the apical membrane.",
       "page_number": 5,
       "parent_section": "Results",
@@ -49,18 +49,24 @@
       }
     },
     {
-      "case_id": "verified_fuzzy",
+      "case_id": "not_found_changed_quote",
       "tool_input": {
         "entity": "crumb",
-        "chunk_id": "chunk-crumb-fuzzy",
+        "chunk_id": "chunk-crumb-changed-quote",
         "claimed_quote": "Crb is required for epithelial polarity during embryogenesis."
       },
       "expected_tool_result": {
-        "status": "verified",
-        "verified_quote": "Crb is required for epithelial polarity during early embryogenesis",
+        "status": "not_found",
         "page": 5,
         "section": "Results",
-        "subsection": "Embryonic localization"
+        "subsection": "Embryonic localization",
+        "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+        "chunk_content_preview": "Crb is required for epithelial polarity during early embryogenesis and localizes to the apical membrane.",
+        "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
+        "unverified_attempts": 1,
+        "max_unverified_attempts": 3,
+        "retry_exhausted": false,
+        "terminal": false
       }
     },
     {
@@ -75,8 +81,13 @@
         "page": 6,
         "section": "Discussion",
         "subsection": "Comparative notes",
-        "message": "Quote not found in this chunk. Retry with text from the chunk or drop this evidence.",
-        "chunk_content_preview": "Shotgun localized to adherens junctions but the manuscript did not report a verified polarity phenotype quote."
+        "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+        "chunk_content_preview": "Shotgun localized to adherens junctions but the manuscript did not report a verified polarity phenotype quote.",
+        "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
+        "unverified_attempts": 1,
+        "max_unverified_attempts": 3,
+        "retry_exhausted": false,
+        "terminal": false
       }
     },
     {
@@ -89,7 +100,8 @@
       "expected_tool_result": {
         "status": "not_found",
         "chunk_content_preview": "",
-        "message": "Chunk not found in the active document. Retry with a chunk_id returned by search_document or read_section source_chunks, or drop this evidence."
+        "message": "Chunk not found in the active document. Retry with a chunk_id returned by search_document or read_section source_chunks, or drop this evidence.",
+        "retry_instructions": "Use an exact contiguous substring copied from this chunk, retry with another chunk_id returned by search_document/read_section, or drop this evidence."
       }
     }
   ],
@@ -118,8 +130,7 @@
           "Crb"
         ],
         "evidence_case_ids": [
-          "verified_exact",
-          "verified_fuzzy"
+          "verified_exact"
         ]
       },
       {
@@ -133,8 +144,7 @@
       }
     ],
     "top_level_evidence_case_ids": [
-      "verified_exact",
-      "verified_fuzzy"
+      "verified_exact"
     ],
     "run_summary": {
       "candidate_count": 2
@@ -161,8 +171,7 @@
         "source_mentions.1"
       ],
       "evidence_case_ids": [
-        "verified_exact",
-        "verified_fuzzy"
+        "verified_exact"
       ]
     }
   ],

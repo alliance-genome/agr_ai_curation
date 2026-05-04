@@ -223,12 +223,12 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
     assert prep_candidate.adapter_key == expected_candidate["adapter_key"]
     assert prep_candidate.payload == expected_candidate["payload"]
     assert [record.field_paths for record in prep_candidate.evidence_records] == [
-        expected_candidate["field_paths"],
-        expected_candidate["field_paths"],
+        expected_candidate["field_paths"]
+        for _evidence in expected_candidate["evidence"]
     ]
     assert [record.extraction_result_id for record in prep_candidate.evidence_records] == [
-        persisted_extraction.extraction_result_id,
-        persisted_extraction.extraction_result_id,
+        persisted_extraction.extraction_result_id
+        for _evidence in expected_candidate["evidence"]
     ]
     assert [record.anchor.snippet_text for record in prep_candidate.evidence_records] == [
         evidence["verified_quote"]
@@ -258,8 +258,8 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
 
     assert workspace_candidate["adapter_key"] == expected_candidate["adapter_key"]
     assert [anchor["field_keys"] for anchor in workspace_candidate["evidence_anchors"]] == [
-        expected_candidate["field_paths"],
-        expected_candidate["field_paths"],
+        expected_candidate["field_paths"]
+        for _evidence in expected_candidate["evidence"]
     ]
     assert [anchor["anchor"]["snippet_text"] for anchor in workspace_candidate["evidence_anchors"]] == [
         evidence["verified_quote"]
