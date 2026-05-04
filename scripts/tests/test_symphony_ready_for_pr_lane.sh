@@ -35,9 +35,9 @@ write_context_json() {
         title: "Script Ready for PR lane",
         description: "Description.",
         url: "https://linear.example/ALL-123",
-        state: {name: "Ready for PR"},
-        labels: (if $delivery_label == "" then [] else [{id: "label-no-pr", name: $delivery_label, color: "#888888"}] end)
+        state: {name: "Ready for PR"}
       },
+      labels: (if $delivery_label == "" then [] else [{id: "label-no-pr", name: $delivery_label, color: "#888888"}] end),
       comments: [],
       workpad_comment: null,
       latest_non_workpad_comment: null,
@@ -278,6 +278,14 @@ test_no_pr_label_moves_to_human_review_prep() {
 
   make_repo "${repo}"
   write_context_json "${context}" "workflow:no-pr"
+  if ! jq -e '.labels[]? | select(.name == "workflow:no-pr")' "${context}" >/dev/null; then
+    echo "Expected normalized top-level workflow:no-pr label in fixture" >&2
+    exit 1
+  fi
+  if jq -e '.issue | has("labels")' "${context}" >/dev/null; then
+    echo "Fixture must not use noncanonical issue.labels" >&2
+    exit 1
+  fi
   write_stub_helpers "${helper_dir}" "${workpad_log}" "${state_log}" "${section_log}"
 
   cat > "${ready_helper}" <<'EOF'
