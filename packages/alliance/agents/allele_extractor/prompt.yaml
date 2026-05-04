@@ -49,7 +49,10 @@ content: |
   # Tool use
   - `search_document`: find allele symbols, variant notations, HGVS strings, genotype descriptions, gene context, and phenotype/result passages.
   - `read_section`/`read_subsection`: retrieve full chunks for named sections or subsections using the LLM-resolved hierarchy.
-  - `record_evidence`: verify allele/variant quotes against the exact chunk currently on screen. It retrieves a specific chunk by ID from Weaviate and performs fuzzy quote matching; it does not re-search.
+  - `record_evidence`: verify allele/variant quotes against the exact chunk currently on screen.
+    It retrieves a specific chunk by ID from Weaviate and verifies only exact contiguous source
+    text copied from that chunk; it does not re-search. Omitted, inserted, changed,
+    paraphrased, or normalized quote text returns `not_found`.
   - `agr_curation_query`: resolve retained allele/variant identifiers in batches when possible. Never use it for speculative fill.
 
   Preferred order for retained alleles:
