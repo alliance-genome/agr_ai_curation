@@ -24,6 +24,49 @@ def _load_prompt_content(folder_name: str) -> str:
     return str(data.get("content") or "")
 
 
+def _extractor_prompt_sources():
+    return sorted(
+        [
+            source
+            for source in resolve_agent_config_sources(_repo_root() / "packages")
+            if source.folder_name == "gene_expression" or source.folder_name.endswith("_extractor")
+        ],
+        key=lambda source: source.folder_name,
+    )
+
+
+def _listed_reason_codes(content: str) -> set[str]:
+    codes: set[str] = set()
+    collecting = False
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if (
+            stripped == "<exclusion_reason_codes>"
+            or stripped == "# Exclusion reason codes"
+            or stripped == "Exclude with canonical reason_code when applicable:"
+        ):
+            collecting = True
+            continue
+
+        if not collecting:
+            continue
+
+        if (
+            stripped.startswith("</")
+            or stripped.startswith("<")
+            or (stripped.startswith("# ") and stripped != "# Exclusion reason codes")
+        ):
+            collecting = False
+            continue
+
+        match = re.match(r"-\s+`?(?P<code>[a-z_]+)`?(?:\s|$)", stripped)
+        if match:
+            codes.add(match.group("code"))
+
+    return codes
+
+
 @pytest.mark.parametrize(
     ("folder_name", "domain_specific_snippet"),
     [
@@ -56,23 +99,18 @@ def test_non_gene_extractor_prompts_include_record_evidence_domain_guidance(
     assert domain_specific_snippet in content
 
 
-def test_disease_extractor_prompt_reason_codes_match_schema_contract():
-    content = _load_prompt_content("disease_extractor")
-    exclusion_block = re.search(
-        r"<exclusion_reason_codes>(?P<body>.*?)</exclusion_reason_codes>",
-        content,
-        flags=re.DOTALL,
-    )
-    assert exclusion_block is not None
+@pytest.mark.parametrize(
+    "source",
+    _extractor_prompt_sources(),
+    ids=lambda source: source.folder_name,
+)
+def test_extractor_prompt_reason_codes_match_schema_contract(source):
+    prompt_path = source.prompt_yaml
+    assert prompt_path is not None
+    data = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
+    content = str(data.get("content") or "")
 
-    prompt_reason_codes = {
-        match.group("code")
-        for match in re.finditer(
-            r"^\s*-\s+(?P<code>[a-z_]+)\s+",
-            exclusion_block.group("body"),
-            flags=re.MULTILINE,
-        )
-    }
+    prompt_reason_codes = _listed_reason_codes(content)
 
     schema_reason_codes = {reason_code.value for reason_code in ExclusionReasonCode}
     assert prompt_reason_codes
