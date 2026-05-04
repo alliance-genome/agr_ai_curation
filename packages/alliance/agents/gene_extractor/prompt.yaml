@@ -53,9 +53,9 @@ content: |
     return full chunk text.
 
   Evidence verification:
-  - `record_evidence` retrieves a specific chunk by ID from Weaviate and performs fuzzy quote
-    matching against the stored chunk text. It does not re-search; it verifies against the
-    exact chunk you specify.
+  - `record_evidence` retrieves a specific chunk by ID from Weaviate and verifies only exact
+    contiguous source text copied from that chunk. It does not re-search; omitted, inserted,
+    changed, paraphrased, or normalized quote text returns `not_found`.
 
   Search strategy implications:
   - For broad sweeps (all gene mentions), use natural-language queries with `search_document`

@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
-import unicodedata
 from dataclasses import dataclass
-from difflib import SequenceMatcher
 from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
@@ -21,7 +19,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
 _FIGURE_REFERENCE_PATTERN = re.compile(
     r"\b(?:Fig(?:ure)?\.?\s*\d+[A-Za-z0-9-]*)\b",
     re.IGNORECASE,
@@ -31,7 +28,12 @@ _TABLE_REFERENCE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _NOT_FOUND_MESSAGE = (
-    "Quote not found in this chunk. Retry with text from the chunk or drop this evidence."
+    "Exact quote not found in this chunk. Retry with exact text copied from the chunk "
+    "or drop this evidence."
+)
+_RETRY_EXHAUSTED_MESSAGE = (
+    "Exact quote not found in this chunk after repeated attempts for this entity and chunk. "
+    "Stop retrying this evidence; re-search for a better chunk or drop it."
 )
 _INVALID_CHUNK_LOAD_MESSAGE = (
     "Chunk could not be loaded. Retry with a chunk_id returned by search_document "
@@ -42,6 +44,7 @@ _MISSING_CHUNK_MESSAGE = (
     "or read_section source_chunks, or drop this evidence."
 )
 _PREVIEW_CHARS = 300
+_MAX_UNVERIFIED_ATTEMPTS_PER_ENTITY_CHUNK = 3
 _LEGACY_SYMBOLIC_CHUNK_ID_PATTERN = re.compile(r"^chunk-", re.IGNORECASE)
 _TRAILING_SECTION_INDEX_PATTERN = re.compile(r"(?:[_\s-]+(?:chunk)?\d+)$", re.IGNORECASE)
 
@@ -50,163 +53,22 @@ _TRAILING_SECTION_INDEX_PATTERN = re.compile(r"(?:[_\s-]+(?:chunk)?\d+)$", re.IG
 class _QuoteMatch:
     raw_start: int
     raw_end: int
-    score: float
-
-
-@dataclass(frozen=True)
-class _TokenSpan:
-    token: str
-    start: int
-    end: int
-
-
-def _canonicalize_character(value: str) -> str | None:
-    if value == "\u00ad":
-        return None
-    if value == "\u00a0" or value.isspace():
-        return " "
-    if value.isalnum():
-        return value.lower()
-    return " "
-
-
-def _normalize_text_with_index_map(text: str) -> tuple[str, tuple[int, ...]]:
-    normalized: list[str] = []
-    index_map: list[int] = []
-
-    for raw_index, raw_character in enumerate(text):
-        for normalized_character in unicodedata.normalize("NFKC", raw_character):
-            canonical = _canonicalize_character(normalized_character)
-            if canonical is None:
-                continue
-            if canonical == " ":
-                if not normalized or normalized[-1] == " ":
-                    continue
-                normalized.append(" ")
-                index_map.append(raw_index)
-                continue
-            normalized.append(canonical)
-            index_map.append(raw_index)
-
-    while normalized and normalized[-1] == " ":
-        normalized.pop()
-        index_map.pop()
-
-    return "".join(normalized), tuple(index_map)
-
-
-def _tokenize_with_spans(text: str) -> list[_TokenSpan]:
-    return [
-        _TokenSpan(token=match.group(0), start=match.start(), end=match.end())
-        for match in _TOKEN_PATTERN.finditer(text)
-    ]
-
-
-def _minimum_fuzzy_score(token_count: int) -> float:
-    if token_count >= 12:
-        return 0.78
-    if token_count >= 8:
-        return 0.82
-    if token_count >= 5:
-        return 0.87
-    return 0.92
-
-
-def _extract_raw_span(
-    raw_text: str,
-    index_map: tuple[int, ...],
-    normalized_start: int,
-    normalized_end: int,
-) -> str:
-    raw_start = index_map[normalized_start]
-    raw_end = index_map[normalized_end - 1] + 1
-
-    while raw_start > 0 and raw_text[raw_start - 1] in "\"'([{":
-        raw_start -= 1
-    while raw_end < len(raw_text) and raw_text[raw_end] in "\"').,;:!?]}":
-        raw_end += 1
-
-    return raw_text[raw_start:raw_end].strip()
-
-
-def _best_fuzzy_match(
-    claimed_normalized: str,
-    chunk_normalized: str,
-    chunk_index_map: tuple[int, ...],
-    raw_text: str,
-) -> tuple[str | None, _QuoteMatch | None]:
-    exact_start = chunk_normalized.find(claimed_normalized)
-    if exact_start >= 0:
-        exact_end = exact_start + len(claimed_normalized)
-        return (
-            _extract_raw_span(raw_text, chunk_index_map, exact_start, exact_end),
-            _QuoteMatch(
-                raw_start=chunk_index_map[exact_start],
-                raw_end=chunk_index_map[exact_end - 1] + 1,
-                score=1.0,
-            ),
-        )
-
-    claim_tokens = _tokenize_with_spans(claimed_normalized)
-    chunk_tokens = _tokenize_with_spans(chunk_normalized)
-    if len(claim_tokens) < 3 or not chunk_tokens:
-        return None, None
-
-    claim_text = " ".join(token.token for token in claim_tokens)
-    claim_token_count = len(claim_tokens)
-    max_delta = max(2, claim_token_count // 5)
-    min_window = max(1, claim_token_count - 2)
-    max_window = min(len(chunk_tokens), claim_token_count + max_delta)
-
-    best_quote: str | None = None
-    best_match: _QuoteMatch | None = None
-
-    for window_size in range(min_window, max_window + 1):
-        for start_index in range(0, len(chunk_tokens) - window_size + 1):
-            window_tokens = chunk_tokens[start_index:start_index + window_size]
-            candidate_text = " ".join(token.token for token in window_tokens)
-            if best_match is not None:
-                shorter = min(len(candidate_text), len(claim_text))
-                longer = max(len(candidate_text), len(claim_text))
-                max_possible_ratio = (2 * shorter) / (shorter + longer)
-                if max_possible_ratio < best_match.score:
-                    continue
-            score = SequenceMatcher(None, claim_text, candidate_text).ratio()
-            if best_match is not None and score < best_match.score:
-                continue
-
-            normalized_start = window_tokens[0].start
-            normalized_end = window_tokens[-1].end
-            raw_start = chunk_index_map[normalized_start]
-            raw_end = chunk_index_map[normalized_end - 1] + 1
-            candidate_quote = _extract_raw_span(
-                raw_text,
-                chunk_index_map,
-                normalized_start,
-                normalized_end,
-            )
-
-            if best_match is None or score > best_match.score or (
-                score == best_match.score
-                and (raw_end - raw_start) < (best_match.raw_end - best_match.raw_start)
-            ):
-                best_quote = candidate_quote
-                best_match = _QuoteMatch(raw_start=raw_start, raw_end=raw_end, score=score)
-            if best_match is not None and best_match.score >= 0.98:
-                return best_quote, best_match
-
-    if best_match is None or best_match.score < _minimum_fuzzy_score(claim_token_count):
-        return None, best_match
-
-    return best_quote, best_match
 
 
 def _find_verified_quote(claimed_quote: str, chunk_text: str) -> tuple[str | None, _QuoteMatch | None]:
-    claimed_normalized, _claimed_index_map = _normalize_text_with_index_map(claimed_quote)
-    chunk_normalized, chunk_index_map = _normalize_text_with_index_map(chunk_text)
-    if not claimed_normalized or not chunk_normalized:
+    """Return a verified quote only when the stripped claim is exact source text."""
+    source_quote = claimed_quote.strip()
+    if not source_quote:
         return None, None
-    return _best_fuzzy_match(claimed_normalized, chunk_normalized, chunk_index_map, chunk_text)
+
+    # record_evidence is a strict source-provenance verifier. PDF text-layer
+    # normalization and fuzzy localization belong in the viewer, not here.
+    raw_start = chunk_text.find(source_quote)
+    if raw_start < 0:
+        return None, None
+
+    raw_end = raw_start + len(source_quote)
+    return chunk_text[raw_start:raw_end], _QuoteMatch(raw_start=raw_start, raw_end=raw_end)
 
 
 def _build_preview(chunk_text: str, match: _QuoteMatch | None = None) -> str:
@@ -400,6 +262,10 @@ def _build_not_found_result(
         "claimed_quote": claimed_quote,
         "chunk_content_preview": _build_preview(chunk_text, best_match),
         "message": message,
+        "retry_instructions": (
+            "Use an exact contiguous substring copied from this chunk, retry with another "
+            "chunk_id returned by search_document/read_section, or drop this evidence."
+        ),
     }
     if page is not None:
         payload["page"] = page
@@ -436,16 +302,21 @@ def _section_label_not_found_message(chunk_id: str) -> str:
     )
 
 
+def _retry_key(entity: str, chunk_id: str) -> tuple[str, str]:
+    return (entity.casefold(), chunk_id)
+
+
 def create_record_evidence_tool(
     document_id: str,
     user_id: str,
     tracker: Optional["ToolCallTracker"] = None,
 ):
     """Create a record_evidence tool bound to one document and user."""
+    unverified_attempts_by_entity_chunk: dict[tuple[str, str], int] = {}
 
     @function_tool
     async def record_evidence(entity: str, chunk_id: str, claimed_quote: str) -> dict[str, Any]:
-        """Verify a claimed quote against a specific Weaviate chunk before persisting evidence."""
+        """Verify exact source-corpus text against a specific Weaviate chunk."""
         if tracker:
             tracker.record_call("record_evidence")
 
@@ -527,6 +398,10 @@ def create_record_evidence_tool(
 
         verified_quote, best_match = _find_verified_quote(normalized_claimed_quote, chunk_text)
         if verified_quote is None:
+            attempt_key = _retry_key(normalized_entity, normalized_chunk_id)
+            attempt_count = unverified_attempts_by_entity_chunk.get(attempt_key, 0) + 1
+            unverified_attempts_by_entity_chunk[attempt_key] = attempt_count
+            retry_exhausted = attempt_count >= _MAX_UNVERIFIED_ATTEMPTS_PER_ENTITY_CHUNK
             return _build_not_found_result(
                 chunk_text,
                 entity=normalized_entity,
@@ -536,8 +411,25 @@ def create_record_evidence_tool(
                 section=section,
                 subsection=subsection,
                 best_match=best_match,
+                message=_RETRY_EXHAUSTED_MESSAGE if retry_exhausted else _NOT_FOUND_MESSAGE,
+                extra_fields={
+                    "unverified_attempts": attempt_count,
+                    "max_unverified_attempts": _MAX_UNVERIFIED_ATTEMPTS_PER_ENTITY_CHUNK,
+                    "retry_exhausted": retry_exhausted,
+                    "terminal": retry_exhausted,
+                    "retry_instructions": (
+                        "Stop retrying this entity/chunk pair; use search_document or read_section "
+                        "to find exact source text in a better chunk, or drop this evidence."
+                    )
+                    if retry_exhausted
+                    else (
+                        "Retry with an exact contiguous substring copied from this chunk, "
+                        "or re-search/drop the evidence if the chunk does not contain the claim."
+                    ),
+                },
             )
 
+        unverified_attempts_by_entity_chunk.pop(_retry_key(normalized_entity, normalized_chunk_id), None)
         payload: dict[str, Any] = {
             "status": "verified",
             "entity": normalized_entity,

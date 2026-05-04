@@ -63,17 +63,34 @@ def identity_function_tool(monkeypatch):
     monkeypatch.setattr(record_evidence, "function_tool", lambda fn: fn)
 
 
-def test_find_verified_quote_handles_fuzzy_quote_variants():
-    case = TOOL_CASES["verified_fuzzy"]
-    chunk = chunk_map(FIXTURE)[case["tool_input"]["chunk_id"]]
+def test_find_verified_quote_requires_exact_source_substring():
+    chunk_text = "Alpha beta gamma delta."
+
+    quote, match = record_evidence._find_verified_quote(" beta gamma ", chunk_text)
+
+    assert quote == "beta gamma"
+    assert match is not None
+    assert match.raw_start == 6
+    assert match.raw_end == 16
+
+
+@pytest.mark.parametrize(
+    "claimed_quote",
+    [
+        "Alpha beta delta.",
+        "Alpha beta gamma.",
+        "Alpha beta gamma inserted delta.",
+        "alpha beta gamma delta.",
+    ],
+)
+def test_find_verified_quote_rejects_omitted_inserted_or_changed_text(claimed_quote):
     quote, match = record_evidence._find_verified_quote(
-        case["tool_input"]["claimed_quote"],
-        chunk["text"],
+        claimed_quote,
+        "Alpha beta gamma delta.",
     )
 
-    assert quote == case["expected_tool_result"]["verified_quote"]
-    assert match is not None
-    assert match.score >= 0.87
+    assert quote is None
+    assert match is None
 
 
 @pytest.mark.asyncio
@@ -104,7 +121,7 @@ async def test_record_evidence_records_exact_match_and_tracker_usage(monkeypatch
 @pytest.mark.parametrize(
     "case_id",
     [
-        "verified_fuzzy",
+        "not_found_changed_quote",
         "not_found_absent_quote",
         "not_found_wrong_chunk_id",
     ],
@@ -130,6 +147,114 @@ async def test_record_evidence_fixture_cases(monkeypatch, case_id):
         "user_id": "user-1",
         "document_id": "doc-123",
     }
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_returns_terminal_unverified_after_repeated_entity_chunk_attempts(monkeypatch):
+    async def _fake_get_chunk_by_id(**_kwargs):
+        return {
+            "id": "chunk-retry",
+            "text": "Exact source text names the retained allele.",
+            "page_number": 3,
+            "parent_section": "Methods",
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    first = await tool(
+        entity="retained allele",
+        chunk_id="chunk-retry",
+        claimed_quote="Approximate source text names the retained allele.",
+    )
+    second = await tool(
+        entity="retained allele",
+        chunk_id="chunk-retry",
+        claimed_quote="Approximate source text names the retained allele.",
+    )
+    third = await tool(
+        entity="retained allele",
+        chunk_id="chunk-retry",
+        claimed_quote="Approximate source text names the retained allele.",
+    )
+
+    assert first["status"] == "not_found"
+    assert first["retry_exhausted"] is False
+    assert first["terminal"] is False
+    assert first["unverified_attempts"] == 1
+    assert second["unverified_attempts"] == 2
+    assert third["status"] == "not_found"
+    assert third["retry_exhausted"] is True
+    assert third["terminal"] is True
+    assert third["unverified_attempts"] == 3
+    assert "Stop retrying" in third["message"]
+    assert "evidence_record_id" not in third
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_regression_rejects_all_341_neighboring_allele_quotes(monkeypatch):
+    chunk_id = "b247a1a2-a6fa-2176-46ff-b814431e61c8"
+    chunk_text = (
+        "DBHCre (Strain NO. 033951) mice were kindly provided by Dr. Patricia Jensen, "
+        "National Institute of Health and Dr. Ming O Li, Memorial Sloan Kettering Cancer Center. "
+        "LSL-DTR (Strain NO. 007900) mice were kindly provided by Dr. Ming O Li, "
+        "Memorial Sloan Kettering Cancer Center. "
+        "CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen."
+    )
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 22,
+            "parent_section": "Methods",
+            "subsection": "Mice",
+            "metadata": {},
+        }
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    tool = record_evidence.create_record_evidence_tool(
+        "c86ebc60-ae69-4591-baa0-071fc5dee5af",
+        "user-1",
+    )
+
+    lsl_dta_result = await tool(
+        entity="LSL-DTA",
+        chunk_id=chunk_id,
+        claimed_quote=(
+            "LSL-DTA (Strain NO. 009669) mice were kindly provided by Dr. Ming O Li, "
+            "Memorial Sloan Kettering Cancer Center."
+        ),
+    )
+    cd8_result = await tool(
+        entity="CD8a-/-",
+        chunk_id=chunk_id,
+        claimed_quote="CD8a-/- (Strain NO. S-KO-01440) mice were purchased from Cyagen.",
+    )
+    cd4_result = await tool(
+        entity="CD4-/-",
+        chunk_id=chunk_id,
+        claimed_quote="CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen.",
+    )
+
+    assert lsl_dta_result["status"] == "not_found"
+    assert lsl_dta_result["entity"] == "LSL-DTA"
+    assert "evidence_record_id" not in lsl_dta_result
+    assert "verified_quote" not in lsl_dta_result
+    assert "LSL-DTR (Strain NO. 007900)" in lsl_dta_result["chunk_content_preview"]
+
+    assert cd8_result["status"] == "not_found"
+    assert cd8_result["entity"] == "CD8a-/-"
+    assert "evidence_record_id" not in cd8_result
+    assert "verified_quote" not in cd8_result
+    assert "CD4-/-" in cd8_result["chunk_content_preview"]
+
+    assert cd4_result["status"] == "verified"
+    assert cd4_result["verified_quote"] == (
+        "CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen."
+    )
 
 
 @pytest.mark.parametrize(

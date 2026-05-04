@@ -33,7 +33,7 @@ Each tool case defines one `record_evidence` invocation:
 }
 ```
 
-Use `status: "verified"` for accepted evidence and `status: "not_found"` for rejected quotes or bad chunk ids.
+Use `status: "verified"` only when `claimed_quote.strip()` is an exact substring of the chunk text. Use `status: "not_found"` for changed, omitted, inserted, paraphrased, or bad-chunk evidence.
 
 ## `extraction`
 

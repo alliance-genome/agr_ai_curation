@@ -75,8 +75,13 @@
         "page": 2,
         "section": "Introduction",
         "subsection": "Background",
-        "message": "Quote not found in this chunk. Retry with text from the chunk or drop this evidence.",
-        "chunk_content_preview": "Andersen-Tawil syndrome has been linked to KCNJ2 in previous studies."
+        "message": "Exact quote not found in this chunk. Retry with exact text copied from the chunk or drop this evidence.",
+        "chunk_content_preview": "Andersen-Tawil syndrome has been linked to KCNJ2 in previous studies.",
+        "retry_instructions": "Retry with an exact contiguous substring copied from this chunk, or re-search/drop the evidence if the chunk does not contain the claim.",
+        "unverified_attempts": 1,
+        "max_unverified_attempts": 3,
+        "retry_exhausted": false,
+        "terminal": false
       }
     },
     {
@@ -89,7 +94,8 @@
       "expected_tool_result": {
         "status": "not_found",
         "chunk_content_preview": "",
-        "message": "Chunk not found in the active document. Retry with a chunk_id returned by search_document or read_section source_chunks, or drop this evidence."
+        "message": "Chunk not found in the active document. Retry with a chunk_id returned by search_document or read_section source_chunks, or drop this evidence.",
+        "retry_instructions": "Use an exact contiguous substring copied from this chunk, retry with another chunk_id returned by search_document/read_section, or drop this evidence."
       }
     }
   ],

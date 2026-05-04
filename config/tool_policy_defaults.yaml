@@ -37,7 +37,7 @@ tool_policies:
 
   record_evidence:
     display_name: Record Evidence
-    description: Verify a claimed quote against a specific chunk before evidence is persisted.
+    description: Verify exact source text against a specific chunk before evidence is persisted.
     category: Document
     curator_visible: false
     allow_attach: false

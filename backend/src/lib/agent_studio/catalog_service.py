@@ -57,7 +57,9 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- Prefer complementary quotes when different passages establish different parts of the support (for example identity, condition, effect, or scope).\n"
     "- Each claimed quote should be a single contiguous excerpt. A short multi-sentence passage is fine when that is the tightest support, but do not stitch together disconnected text.\n"
     "- Pass the entity label, the exact `chunk_id` from prior `search_document` hits "
-    "or `read_section` source_chunks, and the quote you believe appears in that chunk.\n"
+    "or `read_section` source_chunks, and exact source text copied from that chunk.\n"
+    "- `record_evidence` is strict source-provenance verification: omitted, inserted, "
+    "changed, paraphrased, or normalized quote text returns `not_found`.\n"
     "- If the tool returns `not_found`, inspect the returned chunk preview or retry "
     "instructions, use `search_document` to get a chunk_id from tool results when requested, "
     "and drop the evidence if it still does not verify.\n"
@@ -509,11 +511,11 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
     },
     "record_evidence": {
         "name": "Record Evidence",
-        "description": "Verify one contiguous claimed quote against a specific PDF chunk before persisting evidence.",
+        "description": "Verify one contiguous exact source quote against a specific PDF chunk before persisting evidence.",
         "category": "PDF Extraction",
         "source_file": "backend/src/lib/openai_agents/tools/record_evidence.py",
         "documentation": {
-            "summary": "Checks whether a claimed quote appears in a known chunk and returns a verified verbatim quote plus locator metadata when it does. Use separate calls for multiple complementary quotes when one quote is not enough.",
+            "summary": "Checks whether the claimed quote is an exact substring of a known chunk and returns that verbatim source quote plus locator metadata when it is. Use separate calls for multiple complementary quotes when one quote is not enough.",
             "parameters": [
                 {
                     "name": "entity",
@@ -534,7 +536,7 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
                     "name": "claimed_quote",
                     "type": "string",
                     "required": True,
-                    "description": "One contiguous quote to verify against the target chunk. It may be one sentence or a short multi-sentence passage when that is the strongest support.",
+                    "description": "One contiguous quote copied exactly from the target chunk. It may be one sentence or a short multi-sentence passage when that is the strongest support.",
                 },
             ],
         },

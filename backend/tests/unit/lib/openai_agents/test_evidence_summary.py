@@ -149,3 +149,23 @@ def test_record_evidence_summary_uses_resolved_output_chunk_id():
 
     assert record is not None
     assert record["chunk_id"] == resolved_chunk_id
+
+
+def test_record_evidence_summary_ignores_terminal_unverified_retry_result():
+    record = build_record_evidence_summary_record(
+        tool_name="record_evidence",
+        tool_input={
+            "entity": "LSL-DTA",
+            "chunk_id": "b247a1a2-a6fa-2176-46ff-b814431e61c8",
+            "claimed_quote": "LSL-DTA (Strain NO. 009669) mice were kindly provided by Dr. Ming O Li.",
+        },
+        tool_output={
+            "status": "not_found",
+            "chunk_id": "b247a1a2-a6fa-2176-46ff-b814431e61c8",
+            "message": "Exact quote not found in this chunk after repeated attempts.",
+            "terminal": True,
+            "retry_exhausted": True,
+        },
+    )
+
+    assert record is None
