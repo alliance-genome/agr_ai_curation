@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 import importlib
 import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY
 from uuid import uuid4
@@ -19,6 +20,7 @@ chat_common = importlib.import_module("src.api.chat_common")
 
 _CHAT_IMPLEMENTATION_MODULES = (chat_common, chat)
 _patch_chat_impl = patch_chat_impl_for(_CHAT_IMPLEMENTATION_MODULES)
+CONFIG_PATH = Path(__file__).resolve().parents[4] / "config"
 
 
 @pytest.fixture(autouse=True)
@@ -396,6 +398,60 @@ def test_execute_flow_endpoint_streams_flattened_events(monkeypatch):
     assert calls["register"] == [("session-flow-1", "auth-sub", ANY)]
     assert calls["unregister"] == [("session-flow-1", "auth-sub", ANY)]
     assert calls["clear"] == ["session-flow-1"]
+
+
+def test_execute_flow_endpoint_maps_real_mgi_cognito_groups_to_active_groups(monkeypatch):
+    from src.lib.config.groups_loader import (
+        get_groups_for_provider_groups,
+        load_groups,
+        reset_cache,
+    )
+
+    flow_id = uuid4()
+    request = chat.ExecuteFlowRequest(flow_id=flow_id, session_id="session-flow-mgi")
+    flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="MGI Alleles Test",
+        execution_count=0,
+        last_executed_at=None,
+    )
+    db = _DummyDB(flow=flow)
+    captured_execute_kwargs = {}
+
+    calls = _patch_stream_dependencies(monkeypatch, cancel_requested=False)
+    reset_cache()
+    load_groups(CONFIG_PATH / "groups.yaml", force_reload=True)
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", get_groups_for_provider_groups)
+
+    async def _fake_execute_flow(**kwargs):
+        captured_execute_kwargs.update(kwargs)
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-mgi"}}
+
+    _patch_chat_impl(monkeypatch, "execute_flow", _fake_execute_flow)
+
+    try:
+        response = asyncio.run(
+            chat.execute_flow_endpoint(
+                request=request,
+                db=db,
+                user={
+                    "sub": "auth-sub",
+                    "cognito:groups": ["MGIStaff", "Tester", "MGICurator"],
+                },
+            )
+        )
+
+        events = asyncio.run(_consume_stream(response))
+        asyncio.run(response.background())
+
+        assert events[0]["type"] == "RUN_STARTED"
+        assert captured_execute_kwargs["active_groups"] == ["MGI"]
+        assert calls["register"] == [("session-flow-mgi", "auth-sub", ANY)]
+        assert calls["unregister"] == [("session-flow-mgi", "auth-sub", ANY)]
+        assert calls["clear"] == ["session-flow-mgi"]
+    finally:
+        reset_cache()
 
 
 def test_execute_flow_endpoint_background_backfill_uses_final_assistant_aware_title(monkeypatch):
