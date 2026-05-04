@@ -432,6 +432,153 @@ EOF
   assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
 }
 
+test_clean_claude_review_does_not_auto_bounce() {
+  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub report_file output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  report_file="${temp_dir}/claude-report.md"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":341,"title":"ALL-341: Existing PR","url":"https://example.test/pr/341","headRefName":"all-341"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":341,"title":"ALL-341: Existing PR","url":"https://example.test/pr/341","headRefName":"all-341","baseRefName":"main","headRefOid":"abc341","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-05-04T00:13:22Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
+EOF
+
+  cat > "${report_file}" <<'EOF'
+# Claude Code Review Report — PR #341
+
+## 1. review
+
+### BLOCKING Issues
+
+None.
+
+### Assessment
+
+Previous approval stands. **Approve.**
+EOF
+
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=3
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  chmod +x "${loop_stub}"
+
+  cat > "${workpad_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo "workpad should not be called for clean Claude reviews" >&2
+exit 97
+EOF
+  chmod +x "${workpad_stub}"
+
+  cat > "${state_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo "state helper should not be called for clean Claude reviews" >&2
+exit 98
+EOF
+  chmod +x "${state_stub}"
+
+  output="$(
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-341 \
+      --branch all-341 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-review-seconds 1 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}"
+  )"
+
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
+  assert_contains "READY_FOR_PR_CHECK_STATUS=clean" "${output}"
+  assert_contains "move to Human Review Prep" "${output}"
+  assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
+}
+
+test_approval_with_actionable_suggestions_still_auto_bounces() {
+  local temp_dir pr_json pr_view_json loop_stub workpad_stub state_stub report_file output
+  temp_dir="$(mktemp -d)"
+  pr_json="${temp_dir}/prs.json"
+  pr_view_json="${temp_dir}/pr-view.json"
+  loop_stub="${temp_dir}/claude-loop"
+  workpad_stub="${temp_dir}/workpad"
+  state_stub="${temp_dir}/state"
+  report_file="${temp_dir}/claude-report.md"
+
+  cat > "${pr_json}" <<'EOF'
+[{"number":342,"title":"ALL-342: Existing PR","url":"https://example.test/pr/342","headRefName":"all-342"}]
+EOF
+
+  cat > "${pr_view_json}" <<'EOF'
+{"number":342,"title":"ALL-342: Existing PR","url":"https://example.test/pr/342","headRefName":"all-342","baseRefName":"main","headRefOid":"abc342","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","createdAt":"2026-05-04T00:13:22Z","statusCheckRollup":[{"__typename":"CheckRun","name":"Agent PR Gate","status":"COMPLETED","conclusion":"SUCCESS","detailsUrl":"https://example.test/checks/agent"}]}
+EOF
+
+  cat > "${report_file}" <<'EOF'
+LGTM overall.
+
+Non-blocking issues:
+- Please add a regression test for the retry path before final handoff.
+EOF
+
+  cat > "${loop_stub}" <<EOF
+#!/usr/bin/env bash
+cat <<'OUT'
+CLAUDE_LOOP_STATUS=detected
+CLAUDE_LOOP_REPORT_FILE=${report_file}
+CLAUDE_LOOP_ROUND=1
+CLAUDE_LOOP_MAX_ROUNDS=5
+OUT
+exit 10
+EOF
+  chmod +x "${loop_stub}"
+
+  cat > "${workpad_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo WORKPAD_STATUS=updated
+EOF
+  chmod +x "${workpad_stub}"
+
+  cat > "${state_stub}" <<'EOF'
+#!/usr/bin/env bash
+echo LINEAR_STATE_STATUS=ok
+EOF
+  chmod +x "${state_stub}"
+
+  output="$(
+    SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER="${loop_stub}" \
+    SYMPHONY_READY_FOR_PR_WORKPAD_HELPER="${workpad_stub}" \
+    SYMPHONY_READY_FOR_PR_STATE_HELPER="${state_stub}" \
+    bash "${SCRIPT_PATH}" \
+      --delivery-mode pr \
+      --issue-identifier ALL-342 \
+      --branch all-342 \
+      --repo alliance-genome/agr_ai_curation \
+      --wait-for-review-seconds 1 \
+      --pr-json-file "${pr_json}" \
+      --pr-view-json-file "${pr_view_json}"
+  )"
+
+  assert_contains "READY_FOR_PR_CLAUDE_STATUS=detected" "${output}"
+  assert_contains "READY_FOR_PR_CLAUDE_ACTION=bounced_to_in_progress" "${output}"
+  assert_not_contains "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce" "${output}"
+}
+
 test_claude_pending_after_clean_checks_stops_before_human_review() {
   local temp_dir pr_json pr_view_json loop_stub output_file output rc
   temp_dir="$(mktemp -d)"
@@ -624,6 +771,8 @@ test_dry_run_create_infers_title
 test_create_pr_uses_plain_cli_output_and_view_json
 test_claude_detected_auto_bounces_to_in_progress
 test_claude_wait_zero_still_scans_existing_feedback
+test_clean_claude_review_does_not_auto_bounce
+test_approval_with_actionable_suggestions_still_auto_bounces
 test_claude_pending_after_clean_checks_stops_before_human_review
 test_failed_github_check_auto_bounces_to_in_progress
 test_claude_maxed_out_without_report_does_not_abort

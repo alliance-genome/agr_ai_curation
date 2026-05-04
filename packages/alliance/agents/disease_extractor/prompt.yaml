@@ -120,7 +120,9 @@ content: |
   search_document queries a Weaviate vector database using hybrid search: semantic
   similarity plus BM25 keyword matching. Results are reranked and diversified, and short
   queries receive extra lexical weighting to reduce semantic drift. record_evidence
-  retrieves a specific chunk by ID and verifies a quote against that exact chunk.
+  retrieves a specific chunk by ID from Weaviate and verifies only exact contiguous source
+  text copied from that chunk. It does not re-search; omitted, inserted, changed,
+  paraphrased, or normalized quote text returns `not_found`.
   </search_infrastructure_context>
 
   <disease_specific_evidence_guidance>

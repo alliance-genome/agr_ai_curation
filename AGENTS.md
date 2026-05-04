@@ -42,7 +42,7 @@ This file is a fast startup map for humans and coding agents working in `agr_ai_
   - Backend unit tests: `docker compose -f docker-compose.test.yml run --rm backend-unit-tests`
   - Backend contract tests: `docker compose -f docker-compose.test.yml run --rm backend-contract-tests`
   - Specific backend test file: `docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"`
-  - Syntax-only validation: `python3 -m py_compile backend/src/path/to/file.py`
+- Syntax-only validation: `PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache python3 -m py_compile backend/src/path/to/file.py` (keeps compile artifacts out of the workspace)
 - LLM provider smoke (local evidence JSON):
   - `./scripts/testing/llm_provider_smoke_local.sh`
 - Agent PR gate (local):

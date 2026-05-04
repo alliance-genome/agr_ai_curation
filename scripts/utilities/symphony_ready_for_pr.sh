@@ -392,6 +392,78 @@ EOF
   echo "READY_FOR_PR_NEXT_STATE=In Progress"
 }
 
+claude_report_requires_implementation() {
+  local report_file="$1"
+
+  if [[ ! -s "${report_file}" ]]; then
+    return 0
+  fi
+
+  python3 - "$report_file" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").lower()
+collapsed = re.sub(r"\s+", " ", text)
+
+clean_markers = [
+    "previous approval stands",
+    "no blocking issues and no non-blocking follow-ups",
+    "no blocking findings and no non-blocking follow-ups",
+    "no blocking issues and no non-blocking issues",
+    "no blocking findings and no non-blocking issues",
+    "no actionable implementation work",
+    "no actionable feedback",
+    "no actionable follow-up",
+    "no actionable followups",
+    "no blocking issues",
+    "no blocking findings",
+    "**approve.**",
+    "approve.",
+    "lgtm",
+]
+
+actionable_text = collapsed
+for marker in clean_markers:
+    actionable_text = actionable_text.replace(marker, " ")
+
+# Review reports often include section headings such as "Blocking Issues" even
+# when the section says "None"; those headings are not implementation work.
+actionable_text = re.sub(
+    r"\b(?:blocking|non-blocking|other) "
+    r"(?:issues?|findings|follow[- ]?ups?)\b[:\s#*.-]*(?:none|no|n/a)",
+    " ",
+    actionable_text,
+)
+
+actionable_patterns = [
+    r"\b(?:blocking|non-blocking|other) (?:issues?|findings|follow[- ]?ups?)\b",
+    r"\bcritical\b",
+    r"\brequested changes\b",
+    r"\bmust fix\b",
+    r"\bneeds? to (?:be )?fix",
+    r"\bplease (?:add|fix|change|update|remove|verify|check|cover)\b",
+    r"\bshould (?:fix|change|update|add|remove)\b",
+    r"\bwarnings?\b",
+    r"\bsuggestions?\b",
+    r"\bconcerns?\b",
+    r"\bimprovement (?:idea|request|suggestion)\b",
+    r"\bfollow[- ]?ups?\b",
+    r"\bactionable (?:finding|feedback|issue|work)\b",
+]
+
+if any(re.search(pattern, actionable_text) for pattern in actionable_patterns):
+    sys.exit(0)
+
+if any(marker in collapsed for marker in clean_markers):
+    sys.exit(10)
+
+# Unknown Claude prose should stay conservative and go back to In Progress.
+sys.exit(0)
+PY
+}
+
 analyze_check_rollup() {
   local rollup_json="$1"
   local failures_file="$2"
@@ -727,6 +799,23 @@ INST
         echo "READY_FOR_PR_CLAUDE_REPORT_FILE=${CLAUDE_REPORT_FILE}"
         echo "READY_FOR_PR_CLAUDE_ROUND=${loop_round:-1}"
         echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
+
+        set +e
+        claude_report_requires_implementation "${CLAUDE_REPORT_FILE}"
+        claude_classifier_rc=$?
+        set -e
+
+        if (( claude_classifier_rc == 10 )); then
+          echo "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce"
+          cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Claude Code left a clean approval/LGTM on PR #${pr_num}. GitHub checks are clean; write PR Handoff, move to Human Review Prep, and stop this run.
+INST
+          return 0
+        fi
+
+        if (( claude_classifier_rc != 0 )); then
+          echo "READY_FOR_PR_CLAUDE_CLASSIFIER_WARNING=Could not classify Claude report safely; treating it as actionable feedback."
+        fi
 
         if (( auto_bounce_claude_feedback == 1 )); then
           if ! auto_bounce_to_in_progress_for_claude "${pr_num}" "${CLAUDE_REPORT_FILE}" "${loop_round:-1}" "${loop_max:-5}"; then
