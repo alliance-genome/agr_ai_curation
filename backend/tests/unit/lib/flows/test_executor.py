@@ -476,6 +476,41 @@ class TestDbUserIdPropagation:
         assert mock_get_agent.call_args.kwargs.get("db_user_id") == 77
 
 
+class TestActiveGroupPropagation:
+    """Tests that active curator groups reach flow specialist construction."""
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_mgi_active_groups_reach_allele_extractor_specialist(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        def _metadata(agent_id, **_kwargs):
+            assert agent_id == "allele_extractor"
+            return {
+                "agent_id": "allele_extractor",
+                "display_name": "Allele Extractor",
+                "description": "Extract allele findings",
+                "requires_document": False,
+                "required_params": [],
+                "curation": {
+                    "adapter_key": "allele",
+                    "launchable": True,
+                },
+            }
+
+        monkeypatch.setattr("src.lib.flows.executor.get_agent_metadata", _metadata)
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        mock_streaming.return_value = MagicMock()
+
+        flow = _make_flow([_agent_node("n1", "allele_extractor")])
+        tools, created_names = get_all_agent_tools(flow, active_groups=["MGI"])
+
+        assert tools
+        assert created_names == {"ask_allele_extractor_specialist"}
+        assert mock_get_agent.call_args.args == ("allele_extractor",)
+        assert mock_get_agent.call_args.kwargs["active_groups"] == ["MGI"]
+
+
 class TestGetAllAgentToolsCustomInstructions:
     """Tests that get_all_agent_tools prepends per-node custom_instructions."""
 

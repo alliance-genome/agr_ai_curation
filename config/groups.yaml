@@ -55,6 +55,8 @@ groups:
     provider_groups:
       - "mgi-curators"
       - "mgi-admins"
+      - "MGIStaff"
+      - "MGICurator"
 
   # ---------------------------------------------------------------------------
   # Zebrafish Information Network (ZFIN)
