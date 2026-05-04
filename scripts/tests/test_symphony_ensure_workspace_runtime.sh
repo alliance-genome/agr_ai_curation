@@ -84,6 +84,7 @@ EOF
     symphony_human_review_prep.sh \
     symphony_main_sandbox.sh \
     symphony_ready_for_pr.sh \
+    symphony_classify_pr_feedback.sh \
     symphony_ready_for_pr_lane.sh \
     symphony_claude_review_loop.sh \
     symphony_in_review.sh \
@@ -257,6 +258,36 @@ test_invalid_hooks_source_falls_back_to_local_source_git_dir() {
   }
 }
 
+test_codex_overrides_are_copied_when_present() {
+  local temp_root workspace source_root output
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/workspace"
+  source_root="${temp_root}/source"
+  mkdir -p "${workspace}"
+  make_source_root "${source_root}"
+  seed_workspace_repo "${source_root}" "${workspace}"
+
+  cat > "${source_root}/.symphony/codex-overrides.json" <<'EOF'
+{
+  "model_overrides": {},
+  "pr_feedback_classifier": {
+    "model": "gpt-5.5",
+    "reasoning_effort": "high"
+  }
+}
+EOF
+
+  output="$(
+    SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" \
+    SYMPHONY_HOOKS_SOURCE="${source_root}/.git/hooks" \
+    bash "${SCRIPT_PATH}" --workspace-dir "${workspace}"
+  )"
+
+  assert_contains "SYNC_ENV_STATUS=ready" "${output}"
+  assert_contains "SYNC_ENV_COPIED=7" "${output}"
+  assert_contains '"model": "gpt-5.5"' "$(cat "${workspace}/.symphony/codex-overrides.json")"
+}
+
 test_missing_required_git_owned_files_are_reported() {
   local temp_root workspace source_root output status
   temp_root="$(mktemp -d)"
@@ -282,7 +313,7 @@ test_missing_required_git_owned_files_are_reported() {
   }
   assert_contains "SYNC_ENV_STATUS=missing_required" "${output}"
   assert_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_human_review_prep.sh" "${output}"
-  assert_contains "SYNC_ENV_MISSING_OPTIONAL=docker-compose.yml" "${output}"
+  assert_contains "docker-compose.yml" "${output}"
 }
 
 test_missing_no_code_guard_helper_is_optional_for_existing_workspaces() {
@@ -303,7 +334,7 @@ test_missing_no_code_guard_helper_is_optional_for_existing_workspaces() {
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
   assert_not_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_guard_no_code_changes.sh" "${output}"
-  assert_contains "SYNC_ENV_MISSING_OPTIONAL=scripts/utilities/symphony_guard_no_code_changes.sh" "${output}"
+  assert_contains "scripts/utilities/symphony_guard_no_code_changes.sh" "${output}"
 }
 
 test_missing_todo_lane_helper_uses_source_root_fallback_for_existing_workspaces() {
@@ -325,6 +356,27 @@ test_missing_todo_lane_helper_uses_source_root_fallback_for_existing_workspaces(
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
   assert_not_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_todo_lane.sh" "${output}"
   assert_not_contains "SYNC_ENV_MISSING_OPTIONAL=scripts/utilities/symphony_todo_lane.sh" "${output}"
+}
+
+test_missing_feedback_classifier_uses_source_root_fallback_for_existing_workspaces() {
+  local temp_root workspace source_root output
+  temp_root="$(mktemp -d)"
+  workspace="${temp_root}/workspace"
+  source_root="${temp_root}/source"
+  mkdir -p "${workspace}"
+  make_source_root "${source_root}"
+  seed_workspace_repo "${source_root}" "${workspace}"
+  rm -f "${workspace}/scripts/utilities/symphony_classify_pr_feedback.sh"
+
+  output="$(
+    SYMPHONY_LOCAL_SOURCE_ROOT="${source_root}" \
+    SYMPHONY_HOOKS_SOURCE="${source_root}/.git/hooks" \
+    bash "${SCRIPT_PATH}" --workspace-dir "${workspace}" 2>&1
+  )"
+
+  assert_contains "SYNC_ENV_STATUS=ready" "${output}"
+  assert_not_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_classify_pr_feedback.sh" "${output}"
+  assert_not_contains "SYNC_ENV_MISSING_OPTIONAL=scripts/utilities/symphony_classify_pr_feedback.sh" "${output}"
 }
 
 test_missing_todo_lane_helper_without_source_root_fails_closed() {
@@ -374,15 +426,17 @@ test_missing_curation_db_psql_helper_is_optional_for_existing_workspaces() {
 
   assert_contains "SYNC_ENV_STATUS=ready" "${output}"
   assert_not_contains "SYNC_ENV_MISSING_REQUIRED=scripts/utilities/symphony_curation_db_psql.sh" "${output}"
-  assert_contains "SYNC_ENV_MISSING_OPTIONAL=scripts/utilities/symphony_curation_db_psql.sh" "${output}"
+  assert_contains "scripts/utilities/symphony_curation_db_psql.sh" "${output}"
 }
 
 test_default_mode_preserves_existing_overlay_and_tracked_files
 test_refresh_managed_only_overwrites_overlay_files
 test_invalid_hooks_source_falls_back_to_local_source_git_dir
+test_codex_overrides_are_copied_when_present
 test_missing_required_git_owned_files_are_reported
 test_missing_no_code_guard_helper_is_optional_for_existing_workspaces
 test_missing_todo_lane_helper_uses_source_root_fallback_for_existing_workspaces
+test_missing_feedback_classifier_uses_source_root_fallback_for_existing_workspaces
 test_missing_todo_lane_helper_without_source_root_fails_closed
 test_missing_curation_db_psql_helper_is_optional_for_existing_workspaces
 

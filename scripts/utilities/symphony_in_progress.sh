@@ -434,6 +434,9 @@ build_brief() {
   echo "5. **Check PR Status** (Section 5) for failing checks and Claude review"
   echo "   feedback that needs addressing."
   echo ""
+  echo "For syntax-only checks, use \`PYTHONPYCACHEPREFIX=/tmp/symphony-pycache python3 -m py_compile backend/src/path/to/file.py\`"
+  echo "so compile artifacts stay out of the workspace."
+  echo ""
 
   case "${entry_from}" in
     Todo|Backlog)

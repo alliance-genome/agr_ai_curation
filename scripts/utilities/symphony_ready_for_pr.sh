@@ -185,8 +185,16 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_LOOP_HELPER="${SYMPHONY_READY_FOR_PR_CLAUDE_LOOP_HELPER:-${SCRIPT_DIR}/symphony_claude_review_loop.sh}"
+FEEDBACK_CLASSIFIER_HELPER="${SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER:-${SCRIPT_DIR}/symphony_classify_pr_feedback.sh}"
 WORKPAD_HELPER="${SYMPHONY_READY_FOR_PR_WORKPAD_HELPER:-${SCRIPT_DIR}/symphony_linear_workpad.sh}"
 STATE_HELPER="${SYMPHONY_READY_FOR_PR_STATE_HELPER:-${SCRIPT_DIR}/symphony_linear_issue_state.sh}"
+
+if [[ ! -x "${FEEDBACK_CLASSIFIER_HELPER}" && -z "${SYMPHONY_READY_FOR_PR_FEEDBACK_CLASSIFIER_HELPER:-}" && -n "${SYMPHONY_LOCAL_SOURCE_ROOT:-}" ]]; then
+  source_classifier="${SYMPHONY_LOCAL_SOURCE_ROOT}/scripts/utilities/symphony_classify_pr_feedback.sh"
+  if [[ -x "${source_classifier}" ]]; then
+    FEEDBACK_CLASSIFIER_HELPER="${source_classifier}"
+  fi
+fi
 
 is_base_like_branch() {
   local branch_name="$1"
@@ -390,6 +398,24 @@ EOF
 
   echo "READY_FOR_PR_CHECK_ACTION=bounced_to_in_progress"
   echo "READY_FOR_PR_NEXT_STATE=In Progress"
+}
+
+classify_claude_report() {
+  local report_file="$1"
+
+  if [[ ! -s "${report_file}" ]]; then
+    echo "PR_FEEDBACK_CLASSIFIER_STATUS=error"
+    echo "PR_FEEDBACK_CLASSIFIER_ERROR=Missing Claude report file"
+    return 2
+  fi
+
+  if [[ ! -x "${FEEDBACK_CLASSIFIER_HELPER}" ]]; then
+    echo "PR_FEEDBACK_CLASSIFIER_STATUS=error"
+    echo "PR_FEEDBACK_CLASSIFIER_ERROR=Classifier helper is not executable: ${FEEDBACK_CLASSIFIER_HELPER}"
+    return 2
+  fi
+
+  bash "${FEEDBACK_CLASSIFIER_HELPER}" --report-file "${report_file}"
 }
 
 analyze_check_rollup() {
@@ -727,6 +753,26 @@ INST
         echo "READY_FOR_PR_CLAUDE_REPORT_FILE=${CLAUDE_REPORT_FILE}"
         echo "READY_FOR_PR_CLAUDE_ROUND=${loop_round:-1}"
         echo "READY_FOR_PR_CLAUDE_MAX_ROUNDS=${loop_max:-5}"
+
+        set +e
+        claude_classifier_output="$(classify_claude_report "${CLAUDE_REPORT_FILE}" 2>&1)"
+        claude_classifier_rc=$?
+        set -e
+        if [[ -n "${claude_classifier_output}" ]]; then
+          printf '%s\n' "${claude_classifier_output}"
+        fi
+
+        if (( claude_classifier_rc == 0 )); then
+          echo "READY_FOR_PR_CLAUDE_ACTION=clean_review_no_bounce"
+          cat <<INST
+READY_FOR_PR_INSTRUCTIONS=Claude Code left a clean approval/LGTM on PR #${pr_num}. GitHub checks are clean; write PR Handoff, move to Human Review Prep, and stop this run.
+INST
+          return 0
+        fi
+
+        if (( claude_classifier_rc != 10 && claude_classifier_rc != 11 )); then
+          echo "READY_FOR_PR_CLAUDE_CLASSIFIER_WARNING=Could not classify Claude report safely; treating it as actionable feedback."
+        fi
 
         if (( auto_bounce_claude_feedback == 1 )); then
           if ! auto_bounce_to_in_progress_for_claude "${pr_num}" "${CLAUDE_REPORT_FILE}" "${loop_round:-1}" "${loop_max:-5}"; then

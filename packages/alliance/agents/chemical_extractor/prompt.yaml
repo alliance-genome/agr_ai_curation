@@ -105,8 +105,9 @@ content: |
   hierarchy and are better than search when you need complete coverage of a protocol,
   results section, or dedicated treatment subsection.
 
-  `record_evidence` verifies a quote against a specific chunk ID; it does not re-search.
-  Use the exact chunk currently being read.
+  `record_evidence` retrieves a specific chunk by ID from Weaviate and verifies only exact
+  contiguous source text copied from that chunk. It does not re-search; omitted, inserted,
+  changed, paraphrased, or normalized quote text returns `not_found`.
   </search_infrastructure>
 
   <tools>
