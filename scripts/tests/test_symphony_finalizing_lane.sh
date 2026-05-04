@@ -36,9 +36,9 @@ write_context_json() {
         title: "Script Finalizing lane",
         description: "Description.",
         url: "https://linear.example/ALL-123",
-        state: {name: $state},
-        labels: (if $delivery_label == "" then [] else [{id: "label-no-pr", name: $delivery_label, color: "#888888"}] end)
+        state: {name: $state}
       },
+      labels: (if $delivery_label == "" then [] else [{id: "label-no-pr", name: $delivery_label, color: "#888888"}] end),
       comments: [],
       workpad_comment: null,
       latest_non_workpad_comment: null,
@@ -128,6 +128,14 @@ test_successful_finalization_moves_to_done() {
 
   make_repo "${repo}"
   write_context_json "${context}" "Finalizing" "workflow:no-pr"
+  if ! jq -e '.labels[]? | select(.name == "workflow:no-pr")' "${context}" >/dev/null; then
+    echo "Expected normalized top-level workflow:no-pr label in fixture" >&2
+    exit 1
+  fi
+  if jq -e '.issue | has("labels")' "${context}" >/dev/null; then
+    echo "Fixture must not use noncanonical issue.labels" >&2
+    exit 1
+  fi
   write_stub_helpers "${helper_dir}" "${workpad_log}" "${state_log}" "${section_log}"
 
   cat > "${finalizer}" <<'EOF'

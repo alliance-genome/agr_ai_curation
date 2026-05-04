@@ -302,7 +302,7 @@ context_issue_identifier() {
 infer_delivery_mode() {
   if jq -e '
     [
-      .issue.labels[]?
+      .labels[]?
       | if type == "object" then (.name // "") else . end
       | ascii_downcase
     ]
