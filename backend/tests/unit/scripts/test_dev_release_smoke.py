@@ -336,6 +336,50 @@ def test_ask_streaming_chat_question_accepts_durable_turn_completed(monkeypatch)
     assert checks[-1]["step"] == "chat_stream"
 
 
+def test_ask_streaming_chat_question_accepts_non_empty_evidence_summary(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    sse_body = (
+        'data: {"type":"RUN_STARTED","trace_id":"trace-789","model":"gpt-5.5"}\n'
+        "\n"
+        'data: {"type":"evidence_summary","evidence_records":[{"record_id":"ev-1","quote":"Crb organizes the rhabdomere."}]}\n'
+        "\n"
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"The paper studies Crumbs-dependent photoreceptor organization."}\n'
+        "\n"
+        'data: {"type":"turn_completed","trace_id":"trace-789","message":"Chat turn completed."}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    summary = smoke.ask_streaming_chat_question(
+        base_url="http://example.test",
+        headers={"X-API-Key": "test-key"},
+        session_id="session-stream-1",
+        message="Summarize the loaded paper.",
+        chat_model=None,
+        specialist_model=None,
+        expected_model="gpt-5.5",
+        chat_timeout_seconds=5.0,
+        checks=checks,
+    )
+
+    assert summary["trace_id"] == "trace-789"
+    assert "evidence_summary" in summary["event_types"]
+    assert "CHUNK_PROVENANCE" not in summary["event_types"]
+    assert "crumbs" in summary["response_preview"].lower()
+    assert checks[-1]["step"] == "chat_stream"
+
+
 def test_ask_streaming_chat_question_rejects_missing_trace_id(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []

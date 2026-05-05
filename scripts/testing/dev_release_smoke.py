@@ -431,6 +431,22 @@ def collect_error_events(events: Iterable[Dict[str, Any]]) -> list[Dict[str, Any
     ]
 
 
+def has_grounding_evidence_event(events: Iterable[Dict[str, Any]]) -> bool:
+    for event in events:
+        event_type = str(event.get("type", ""))
+        if event_type == "CHUNK_PROVENANCE":
+            return True
+        if event_type != "evidence_summary":
+            continue
+
+        evidence_records = event.get("evidence_records")
+        if not evidence_records and isinstance(event.get("details"), dict):
+            evidence_records = event["details"].get("evidence_records")
+        if isinstance(evidence_records, list) and evidence_records:
+            return True
+    return False
+
+
 def parse_sse_events(text: str) -> list[Dict[str, Any]]:
     events: list[Dict[str, Any]] = []
     for raw_line in text.splitlines():
@@ -1178,8 +1194,9 @@ def ask_streaming_chat_question(
         f"Missing terminal success event in chat stream events: {event_types}",
     )
     require(
-        "CHUNK_PROVENANCE" in event_types,
-        f"Streaming chat did not emit CHUNK_PROVENANCE, so document grounding was not proven: {event_types}",
+        has_grounding_evidence_event(events),
+        "Streaming chat did not emit CHUNK_PROVENANCE or a non-empty evidence_summary, "
+        f"so document grounding was not proven: {event_types}",
     )
 
     error_events = collect_error_events(events)
