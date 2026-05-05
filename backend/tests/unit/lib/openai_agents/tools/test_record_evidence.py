@@ -93,6 +93,213 @@ def test_find_verified_quote_rejects_omitted_inserted_or_changed_text(claimed_qu
     assert match is None
 
 
+def test_identity_token_preservation_requires_whole_identity_tokens():
+    assert record_evidence._identity_tokens_preserved(
+        entity="LSL-DTA",
+        claimed_quote="LSL-DTA (Strain NO. 009669) mice were used.",
+        candidate_text="LSL-DTR (Strain NO. 007900) mice were used.",
+    ) is False
+    assert record_evidence._identity_tokens_preserved(
+        entity="ninaE",
+        claimed_quote="Rh1 induced by mutating the ninaE gene",
+        candidate_text="Rh1 induced by mutating the ninaE gene, [20]",
+    ) is True
+    assert record_evidence._identity_tokens_preserved(
+        entity="crb",
+        claimed_quote="crb mutants showed abnormal rhabdomeres.",
+        candidate_text="nrg mutants showed abnormal rhabdomeres.",
+    ) is False
+    assert record_evidence._identity_tokens_preserved(
+        entity="Vitamin A",
+        claimed_quote="Vitamin A precursors were removed from the diet.",
+        candidate_text="Vitamin B precursors were removed from the diet.",
+    ) is False
+
+
+def test_fuzzy_candidate_generation_keeps_strain_no_sentence_intact():
+    chunk_text = (
+        "DBHCre (Strain NO. 033951) mice were kindly provided by Dr. Patricia Jensen. "
+        "LSL-DTR (Strain NO. 007900) mice were kindly provided by Dr. Ming O Li, "
+        "Memorial Sloan Kettering Cancer Center."
+    )
+
+    candidates = record_evidence._fuzzy_quote_candidates(
+        "LSL-DTA (Strain NO. 009669) mice were kindly provided by Dr. Ming O Li, "
+        "Memorial Sloan Kettering Cancer Center.",
+        chunk_text,
+    )
+
+    assert candidates
+    assert candidates[0].text.startswith("LSL-DTR (Strain NO. 007900)")
+
+
+def test_accepted_candidate_index_rejects_bool_selected_index():
+    assert record_evidence._accepted_candidate_index(
+        {"decision": "accept", "selected_index": True},
+        candidate_count=3,
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_accepts_fuzzy_match_after_citation_marker_elision(monkeypatch):
+    chunk_id = "935d683a-68c0-f825-cfdc-2237b100eaeb"
+    chunk_text = (
+        "Rh1 is the most abundant opsin in the fly eye and comprises the Opsin protein "
+        "(encoded by the gene ninaE [19] ) conjugated to a chromophore. "
+        "Decreased levels of Rh1 induced by mutating the ninaE gene, [20] or by removal "
+        "of Vitamin A precursors [21] from the diet resulted in substantially smaller "
+        "rhabdomeres."
+    )
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 1,
+            "parent_section": "Results and Discussion",
+            "subsection": "The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
+            "metadata": {},
+        }
+
+    async def _fake_llm_confirmation(**kwargs):
+        assert kwargs["entity"] == "ninaE"
+        assert kwargs["candidates"][0].text.startswith("Decreased levels of Rh1")
+        return 0
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="ninaE",
+        chunk_id=chunk_id,
+        claimed_quote=(
+            "Decreased levels of Rh1 induced by mutating the ninaE gene, or by removal "
+            "of Vitamin A precursors from the diet resulted in substantially smaller "
+            "rhabdomeres."
+        ),
+    )
+
+    assert result["status"] == "verified"
+    assert result["verified_quote"] == (
+        "Decreased levels of Rh1 induced by mutating the ninaE gene, [20] or by removal "
+        "of Vitamin A precursors [21] from the diet resulted in substantially smaller "
+        "rhabdomeres."
+    )
+    assert result["evidence_record_id"] == build_evidence_record_id(
+        evidence_record={
+            "entity": "ninaE",
+            "verified_quote": result["verified_quote"],
+            "page": 1,
+            "section": "Results and Discussion",
+            "chunk_id": chunk_id,
+            "subsection": "The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
+            "figure_reference": None,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_does_not_auto_accept_same_entity_semantic_flip(monkeypatch):
+    chunk_id = "chunk-semantic-flip"
+    chunk_text = "crb mutants showed normal rhabdomeres in the eye."
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 4,
+            "parent_section": "Results",
+            "metadata": {},
+        }
+
+    async def _fake_llm_confirmation(**_kwargs):
+        return None
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="crb",
+        chunk_id=chunk_id,
+        claimed_quote="crb mutants showed abnormal rhabdomeres in the eye.",
+    )
+
+    assert result["status"] == "not_found"
+    assert "evidence_record_id" not in result
+    assert "verified_quote" not in result
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_can_accept_fuzzy_match_after_llm_confirmation(monkeypatch):
+    chunk_id = "chunk-hyphen"
+    chunk_text = "The alpha-beta complex was detected at the apical membrane."
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 2,
+            "parent_section": "Results",
+            "metadata": {},
+        }
+
+    async def _fake_llm_confirmation(**kwargs):
+        assert kwargs["entity"] == "alpha-beta"
+        assert kwargs["candidates"][0].text == chunk_text
+        return 0
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="alpha-beta",
+        chunk_id=chunk_id,
+        claimed_quote="The alpha beta complex was detected at the apical membrane.",
+    )
+
+    assert result["status"] == "verified"
+    assert result["verified_quote"] == chunk_text
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_llm_accepted_simple_entity_swap(monkeypatch):
+    chunk_id = "chunk-simple-entity"
+    chunk_text = "nrg mutants showed abnormal rhabdomeres in the eye."
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 4,
+            "parent_section": "Results",
+            "metadata": {},
+        }
+
+    async def _fake_llm_confirmation(**_kwargs):
+        return 0
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="crb",
+        chunk_id=chunk_id,
+        claimed_quote="crb mutants showed abnormal rhabdomeres in the eye.",
+    )
+
+    assert result["status"] == "not_found"
+    assert "evidence_record_id" not in result
+    assert "verified_quote" not in result
+
+
 @pytest.mark.asyncio
 async def test_record_evidence_records_exact_match_and_tracker_usage(monkeypatch):
     case = TOOL_CASES["verified_exact"]
@@ -214,7 +421,14 @@ async def test_record_evidence_regression_rejects_all_341_neighboring_allele_quo
             "metadata": {},
         }
 
+    llm_confirmation_calls = []
+
+    async def _fake_llm_confirmation(**kwargs):
+        llm_confirmation_calls.append(kwargs)
+        return 0
+
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
     tool = record_evidence.create_record_evidence_tool(
         "c86ebc60-ae69-4591-baa0-071fc5dee5af",
         "user-1",
@@ -255,6 +469,7 @@ async def test_record_evidence_regression_rejects_all_341_neighboring_allele_quo
     assert cd4_result["verified_quote"] == (
         "CD4-/- (Strain NO. S-KO-01417) mice were purchased from Cyagen."
     )
+    assert [call["entity"] for call in llm_confirmation_calls] == ["LSL-DTA", "CD8a-/-"]
 
 
 @pytest.mark.parametrize(

@@ -110,6 +110,9 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - OPENAI_API_KEY=test-key
+      - EVIDENCE_CONFIRMATION_ENABLED=true
+      - EVIDENCE_CONFIRMATION_MODEL=gpt-5.4-mini
+      - EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS=8
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - WEAVIATE_HOST=weaviate-test
       - WEAVIATE_PORT=8080
@@ -156,6 +159,9 @@ services:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
       - OPENAI_API_KEY=test-key-for-unit-tests
+      - EVIDENCE_CONFIRMATION_ENABLED=true
+      - EVIDENCE_CONFIRMATION_MODEL=gpt-5.4-mini
+      - EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS=8
       - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
       - LANGFUSE_PUBLIC_KEY=test-key
       - LANGFUSE_SECRET_KEY=test-key
@@ -202,6 +208,9 @@ services:
       - WEAVIATE_SCHEME=http
       - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - EVIDENCE_CONFIRMATION_ENABLED=${EVIDENCE_CONFIRMATION_ENABLED:-true}
+      - EVIDENCE_CONFIRMATION_MODEL=${EVIDENCE_CONFIRMATION_MODEL:-gpt-5.4-mini}
+      - EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS=${EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS:-8}
       - GROQ_API_KEY=${GROQ_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - GROQ_BASE_URL=${GROQ_BASE_URL:-https://api.groq.com/openai/v1}
@@ -308,6 +317,9 @@ services:
       - WEAVIATE_PORT=8080
       - WEAVIATE_SCHEME=http
       - OPENAI_API_KEY=test-key
+      - EVIDENCE_CONFIRMATION_ENABLED=true
+      - EVIDENCE_CONFIRMATION_MODEL=gpt-5.4-mini
+      - EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS=8
       - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
       - UNSTRUCTURED_API_URL=http://test-unstructured
       - EMBEDDING_MODEL=text-embedding-3-small

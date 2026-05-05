@@ -33,6 +33,7 @@ from .evidence_summary import (
     canonicalize_structured_result_payload,
     coerce_tool_event_dict,
     extract_evidence_records_from_structured_result,
+    structured_result_evidence_reference_report,
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
@@ -506,7 +507,20 @@ def _emit_specialist_evidence_summary_or_raise(
     error_message = (
         f"{specialist_name} completed extraction output without the required verified evidence records."
     )
-    logger.error("%s", error_message)
+    evidence_reference_report = structured_result_evidence_reference_report(
+        final_output,
+        expected_output_type=expected_output_type,
+    )
+    logger.error(
+        "%s requires_evidence=%s missing_record_refs=%s structured_evidence_count=%s "
+        "live_evidence_count=%s evidence_reference_report=%s",
+        error_message,
+        requires_evidence,
+        missing_record_refs,
+        len(evidence_records),
+        len(live_evidence_records),
+        evidence_reference_report,
+    )
     add_specialist_event({
         "type": "SPECIALIST_ERROR",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -515,6 +529,11 @@ def _emit_specialist_evidence_summary_or_raise(
             "output_type": output_type_name,
             "error": error_message,
             "reason": "missing_evidence_records",
+            "requires_evidence": requires_evidence,
+            "missing_record_refs": missing_record_refs,
+            "structured_evidence_count": len(evidence_records),
+            "live_evidence_count": len(live_evidence_records),
+            "evidence_reference_report": evidence_reference_report,
             "severity": "error",
         }
     })

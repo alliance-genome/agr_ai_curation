@@ -3,10 +3,11 @@
 from src.lib.openai_agents.evidence_summary import (
     build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
+    structured_result_evidence_reference_report,
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
-from src.lib.openai_agents.models import AlleleExtractionResultEnvelope
+from src.lib.openai_agents.models import AlleleExtractionResultEnvelope, GeneExtractionResultEnvelope
 
 
 def _record(
@@ -126,6 +127,67 @@ def test_schema_defined_auxiliary_lists_do_not_satisfy_retained_evidence_guard()
         payload,
         expected_output_type=AlleleExtractionResultEnvelope,
     ) is True
+
+
+def test_evidence_reference_report_names_retained_items_missing_refs():
+    report = structured_result_evidence_reference_report(
+        {
+            "genes": [
+                {
+                    "mention": "crb",
+                    "normalized_symbol": "crb",
+                    "normalized_id": "FB:FBgn0000368",
+                    "species": "Drosophila melanogaster",
+                    "confidence": "high",
+                    "evidence_record_ids": ["evidence-live-a"],
+                },
+                {
+                    "mention": "ninaE",
+                    "normalized_symbol": "ninaE",
+                    "normalized_id": "FB:FBgn0002940",
+                    "species": "Drosophila melanogaster",
+                    "confidence": "high",
+                    "evidence_record_ids": [],
+                },
+            ],
+            "items": [
+                {
+                    "label": "ninaE",
+                    "entity_type": "gene",
+                    "normalized_id": "FB:FBgn0002940",
+                    "source_mentions": ["ninaE"],
+                    "evidence_record_ids": [],
+                }
+            ],
+            "evidence_records": [
+                {**_record(entity="crb"), "evidence_record_id": "evidence-live-a"}
+            ],
+            "run_summary": {"kept_count": 2},
+        },
+        expected_output_type=GeneExtractionResultEnvelope,
+    )
+
+    assert report["retained_item_count"] == 3
+    assert report["evidence_record_count"] == 1
+    assert report["evidence_record_ids"] == ["evidence-live-a"]
+    assert report["missing_record_refs"] == [
+        {
+            "collection": "genes",
+            "index": 1,
+            "label": "ninaE",
+            "normalized_id": "FB:FBgn0002940",
+            "entity_type": None,
+            "source_mentions": [],
+        },
+        {
+            "collection": "items",
+            "index": 0,
+            "label": "ninaE",
+            "normalized_id": "FB:FBgn0002940",
+            "entity_type": "gene",
+            "source_mentions": ["ninaE"],
+        },
+    ]
 
 
 def test_record_evidence_summary_uses_resolved_output_chunk_id():

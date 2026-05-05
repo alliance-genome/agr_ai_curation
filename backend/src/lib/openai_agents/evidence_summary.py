@@ -849,6 +849,84 @@ def structured_result_missing_evidence_record_refs(value: Any, *, expected_outpu
     return False
 
 
+def _retained_record_label(record: Dict[str, Any]) -> str:
+    for key in ("label", "mention", "normalized_symbol", "normalized_label", "normalized_id"):
+        text = str(record.get(key) or "").strip()
+        if text:
+            return text
+
+    source_mentions = record.get("source_mentions")
+    if isinstance(source_mentions, list):
+        for source_mention in source_mentions:
+            text = str(source_mention or "").strip()
+            if text:
+                return text
+
+    return "<unlabeled>"
+
+
+def structured_result_evidence_reference_report(
+    value: Any,
+    *,
+    expected_output_type: Any = None,
+) -> Dict[str, Any]:
+    """Return diagnostics for retained structured items and evidence references."""
+
+    payload = _coerce_evidence_record_dict(value)
+    if not isinstance(payload, dict):
+        return {
+            "payload_type": type(value).__name__,
+            "retained_collection_count": 0,
+            "retained_item_count": 0,
+            "missing_record_refs": [],
+        }
+
+    retained_collections = _structured_result_retained_collections(
+        payload,
+        expected_output_type=expected_output_type,
+    )
+    missing_record_refs: List[Dict[str, Any]] = []
+    retained_item_count = 0
+
+    for collection_name, records in retained_collections:
+        retained_item_count += len(records)
+        for index, record in enumerate(records):
+            evidence_record_ids = _merge_unique_reference_ids(record.get("evidence_record_ids"))
+            if evidence_record_ids:
+                continue
+            missing_record_refs.append({
+                "collection": collection_name,
+                "index": index,
+                "label": _retained_record_label(record),
+                "normalized_id": str(record.get("normalized_id") or "").strip() or None,
+                "entity_type": str(record.get("entity_type") or "").strip() or None,
+                "source_mentions": _merge_unique_strings(record.get("source_mentions")),
+            })
+
+    run_summary = payload.get("run_summary")
+    kept_count = None
+    if isinstance(run_summary, dict):
+        candidate_kept_count = run_summary.get("kept_count")
+        if isinstance(candidate_kept_count, int) and not isinstance(candidate_kept_count, bool):
+            kept_count = candidate_kept_count
+
+    evidence_records = normalize_evidence_records(payload.get("evidence_records"))
+
+    return {
+        "payload_type": type(value).__name__,
+        "retained_collection_count": len(retained_collections),
+        "retained_item_count": retained_item_count,
+        "missing_record_refs": missing_record_refs,
+        "kept_count": kept_count,
+        "evidence_record_count": len(evidence_records),
+        "evidence_record_ids": [
+            record["evidence_record_id"]
+            for record in evidence_records
+            if record.get("evidence_record_id")
+        ],
+    }
+
+
 def structured_result_requires_evidence(value: Any, *, expected_output_type: Any = None) -> bool:
     """Whether a structured result represents retained extraction findings that require evidence."""
 
