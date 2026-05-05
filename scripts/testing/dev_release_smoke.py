@@ -444,6 +444,28 @@ def parse_sse_events(text: str) -> list[Dict[str, Any]]:
     return events
 
 
+def event_field(event: Dict[str, Any], key: str, default: Any = "") -> Any:
+    if key in event:
+        return event.get(key, default)
+    data = event.get("data")
+    if isinstance(data, dict):
+        return data.get(key, default)
+    return default
+
+
+def collect_text_message_content(events: Iterable[Dict[str, Any]]) -> str:
+    chunks: list[str] = []
+    for event in events:
+        if event.get("type") != "TEXT_MESSAGE_CONTENT":
+            continue
+        for key in ("content", "delta", "text"):
+            value = event_field(event, key)
+            if isinstance(value, str) and value:
+                chunks.append(value)
+                break
+    return "".join(chunks).strip()
+
+
 def build_default_fixture_candidates() -> list[Path]:
     repo_root = Path.cwd()
     fixtures_root = repo_root / "backend" / "tests" / "fixtures"
@@ -1147,7 +1169,10 @@ def ask_streaming_chat_question(
     require(events, "Streaming chat returned no SSE events")
     event_types = [str(event.get("type", "")) for event in events]
     require("RUN_STARTED" in event_types, f"Missing RUN_STARTED in chat stream events: {event_types}")
-    require("RUN_FINISHED" in event_types, f"Missing RUN_FINISHED in chat stream events: {event_types}")
+    require(
+        "RUN_FINISHED" in event_types or "turn_completed" in event_types,
+        f"Missing terminal success event in chat stream events: {event_types}",
+    )
     require(
         "CHUNK_PROVENANCE" in event_types,
         f"Streaming chat did not emit CHUNK_PROVENANCE, so document grounding was not proven: {event_types}",
@@ -1157,10 +1182,10 @@ def ask_streaming_chat_question(
     require(not error_events, f"Streaming chat emitted error events: {error_events}")
 
     run_started = next(event for event in events if event.get("type") == "RUN_STARTED")
-    trace_id = str(run_started.get("trace_id", "")).strip()
+    trace_id = str(event_field(run_started, "trace_id")).strip()
     require(trace_id, f"Streaming chat RUN_STARTED did not expose a trace_id: {run_started}")
 
-    model_blob = str(run_started.get("model", "")).strip()
+    model_blob = str(event_field(run_started, "model")).strip()
     resolved_expected_model = expected_model or chat_model
     if resolved_expected_model:
         require_model_looks_expected(
@@ -1169,12 +1194,16 @@ def ask_streaming_chat_question(
             context="Streaming chat RUN_STARTED",
         )
 
-    run_finished = next(event for event in events if event.get("type") == "RUN_FINISHED")
-    answer = str(run_finished.get("response", "")).strip()
+    run_finished = next((event for event in events if event.get("type") == "RUN_FINISHED"), None)
+    terminal_success = next((event for event in events if event.get("type") == "turn_completed"), None)
+    answer = str(event_field(run_finished, "response")).strip() if run_finished else ""
+    if not answer:
+        answer = collect_text_message_content(events)
+    raw_terminal_details = run_finished or terminal_success or {"event_types": event_types}
     require_chat_answer_ok(
         answer,
         context="Streaming chat response",
-        raw_details=run_finished,
+        raw_details=raw_terminal_details,
     )
 
     summary = {
@@ -1182,6 +1211,7 @@ def ask_streaming_chat_question(
         "trace_id": trace_id,
         "model": model_blob,
         "event_types": event_types,
+        "terminal_event": str(raw_terminal_details.get("type", "")),
         "response_preview": answer[:500],
     }
     append_check(

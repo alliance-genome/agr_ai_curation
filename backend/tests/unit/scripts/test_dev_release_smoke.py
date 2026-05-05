@@ -263,6 +263,52 @@ def test_ask_streaming_chat_question_returns_trace_and_model_summary(monkeypatch
     assert checks[-1]["step"] == "chat_stream"
 
 
+def test_ask_streaming_chat_question_accepts_durable_turn_completed(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    sse_body = (
+        'data: {"type":"RUN_STARTED","trace_id":"trace-456","model":"gpt-5.5"}\n'
+        "\n"
+        'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
+        "\n"
+        'data: {"type":"TEXT_MESSAGE_CONTENT","delta":"crumbs "}\n'
+        "\n"
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"(crb) is the main focus gene."}\n'
+        "\n"
+        'data: {"type":"turn_completed","trace_id":"trace-456","message":"Chat turn completed."}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    summary = smoke.ask_streaming_chat_question(
+        base_url="http://example.test",
+        headers={"X-API-Key": "test-key"},
+        session_id="session-stream-1",
+        message="What genes are the focus of the publication?",
+        chat_model=None,
+        specialist_model=None,
+        expected_model="gpt-5.5",
+        chat_timeout_seconds=5.0,
+        checks=checks,
+    )
+
+    assert summary["trace_id"] == "trace-456"
+    assert summary["terminal_event"] == "turn_completed"
+    assert "RUN_FINISHED" not in summary["event_types"]
+    assert "crb" in summary["response_preview"].lower()
+    assert checks[-1]["step"] == "chat_stream"
+
+
 def test_ask_streaming_chat_question_rejects_missing_trace_id(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []
