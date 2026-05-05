@@ -2,13 +2,13 @@ import {
   AnnotationMode,
   GlobalWorkerOptions,
   getDocument,
-} from "../build/pdf.mjs";
+} from "../build/pdf.mjs?v=20260505-mjs-mime";
 import {
   EventBus,
   PDFFindController,
   PDFLinkService,
   PDFViewer,
-} from "./pdf_viewer.mjs";
+} from "./pdf_viewer.mjs?v=20260505-mjs-mime";
 
 const SUPPORTED_PROTOCOLS = new Set(["http:", "https:"]);
 
@@ -25,7 +25,7 @@ if (!(loadingNode instanceof HTMLDivElement) || !(errorNode instanceof HTMLDivEl
   throw new Error("The PDF viewer status elements did not render correctly.");
 }
 
-GlobalWorkerOptions.workerSrc = "../build/pdf.worker.mjs";
+GlobalWorkerOptions.workerSrc = "../build/pdf.worker.mjs?v=20260505-mjs-mime";
 
 const eventBus = new EventBus();
 const linkService = new PDFLinkService({ eventBus });
