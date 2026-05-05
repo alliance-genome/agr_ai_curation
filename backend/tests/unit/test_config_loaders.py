@@ -1766,10 +1766,12 @@ class TestConnectionDefinitionDataclass:
         monkeypatch.setenv("RERANK_PROVIDER", "local_transformers")
         local_conn = ConnectionDefinition.from_yaml("reranker", data)
         assert local_conn.required is True
+        assert local_conn.active is True
 
         monkeypatch.setenv("RERANK_PROVIDER", "none")
         disabled_conn = ConnectionDefinition.from_yaml("reranker", data)
         assert disabled_conn.required is False
+        assert disabled_conn.active is False
 
 
 class TestHealthCheckDataclass:

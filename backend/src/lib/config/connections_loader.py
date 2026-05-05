@@ -87,12 +87,11 @@ def _parse_boolean_value(value: Any, field_name: str) -> bool:
     raise ValueError(f"{field_name} must be a boolean value")
 
 
-def _resolve_required_flag(data: Dict[str, Any]) -> bool:
-    """Resolve whether a connection is required for startup."""
-    required = _parse_boolean_value(data.get("required", False), "required")
+def _required_when_matches(data: Dict[str, Any]) -> Optional[bool]:
+    """Return whether a conditional service predicate matches, if present."""
     required_when = data.get("required_when")
     if required_when is None:
-        return required
+        return None
 
     if not isinstance(required_when, dict):
         raise ValueError("required_when must be a mapping")
@@ -105,7 +104,26 @@ def _resolve_required_flag(data: Dict[str, Any]) -> bool:
     default_value = str(_substitute_env_vars(required_when.get("default", ""))).strip()
     actual_value = os.getenv(env_name, default_value).strip().lower()
 
-    return required or actual_value == expected_value
+    return actual_value == expected_value
+
+
+def _resolve_required_flag(data: Dict[str, Any]) -> bool:
+    """Resolve whether a connection is required for startup."""
+    required = _parse_boolean_value(data.get("required", False), "required")
+    required_when_matches = _required_when_matches(data)
+    return required or required_when_matches is True
+
+
+def _resolve_active_flag(data: Dict[str, Any]) -> bool:
+    """Resolve whether a connection should be actively health-checked."""
+    required = _parse_boolean_value(data.get("required", False), "required")
+    required_when_matches = _required_when_matches(data)
+
+    if required:
+        return True
+    if required_when_matches is None:
+        return True
+    return required_when_matches
 
 
 # Default path for connections configuration
@@ -285,6 +303,7 @@ class ConnectionDefinition:
     url: str = ""
     health_check: HealthCheck = field(default_factory=HealthCheck)
     required: bool = False
+    active: bool = True
     timeout_seconds: int = 10
     credentials: Optional[CredentialsConfig] = None
     is_healthy: Optional[bool] = None
@@ -316,6 +335,7 @@ class ConnectionDefinition:
             url=url,
             health_check=HealthCheck.from_yaml(data.get("health_check")),
             required=_resolve_required_flag(data),
+            active=_resolve_active_flag(data),
             timeout_seconds=data.get("timeout_seconds", 10),
             credentials=CredentialsConfig.from_yaml(data.get("credentials")),
         )
@@ -535,6 +555,10 @@ async def check_service_health(service_id: str) -> Optional[bool]:
     if not conn:
         logger.warning('Unknown service: %s', service_id)
         return False
+
+    if not conn.active:
+        update_health_status(service_id, None, None)
+        return None
 
     health = conn.health_check
     is_healthy: Optional[bool] = False

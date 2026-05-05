@@ -542,6 +542,42 @@ class TestCheckAllHealth:
         for status in result.values():
             assert isinstance(status.get("is_healthy"), bool) or status.get("is_healthy") is None
 
+    @pytest.mark.asyncio
+    async def test_inactive_conditional_services_are_not_health_checked(self, tmp_path, monkeypatch):
+        """Inactive provider alternatives should report unknown, not degraded."""
+        import src.lib.config.connections_loader as connections_loader
+
+        connections_yaml = tmp_path / "connections.yaml"
+        connections_yaml.write_text(
+            """
+services:
+  reranker:
+    description: Local reranker
+    url: "http://reranker-transformers:8080"
+    health_check:
+      endpoint: "/.well-known/ready"
+      method: GET
+      expected_status: 204
+    required: false
+    required_when:
+      env: RERANK_PROVIDER
+      equals: local_transformers
+      default: bedrock_cohere
+""",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setenv("RERANK_PROVIDER", "bedrock_cohere")
+        connections_loader.load_connections(connections_yaml, force_reload=True)
+
+        with patch.object(connections_loader, "_check_http_health", new=AsyncMock()) as check_http:
+            result = await connections_loader.check_all_health()
+
+        check_http.assert_not_called()
+        assert result["reranker"]["required"] is False
+        assert result["reranker"]["is_healthy"] is None
+        assert result["reranker"]["last_error"] is None
+
 
 class TestRedactUrlCredentials:
     """Tests for _redact_url_credentials function (KANBAN-1017 security fix)."""
