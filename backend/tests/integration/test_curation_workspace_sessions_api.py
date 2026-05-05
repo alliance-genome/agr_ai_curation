@@ -19,6 +19,20 @@ def _hash(char: str) -> str:
     return char * 64
 
 
+def _patch_submission_transport_adapter(monkeypatch, adapter_factory):
+    from src.lib.curation_workspace import session_service, session_submission_service
+
+    # The public facade re-exports functions owned by session_submission_service.
+    # Patch the owning module deliberately so endpoint tests still exercise the
+    # real facade import path.
+    assert session_service.retry_submission is session_submission_service.retry_submission
+    monkeypatch.setattr(
+        session_submission_service,
+        "_resolve_submission_transport_adapter",
+        adapter_factory,
+    )
+
+
 def _seed_submission_record(
     test_db,
     *,
@@ -29,7 +43,7 @@ def _seed_submission_record(
     mode="direct_submit",
     target_key: str = "review_export_bundle",
 ) -> str:
-    from src.lib.curation_workspace import session_service, session_submission_service
+    from src.lib.curation_workspace import session_service
     from src.lib.curation_workspace.models import CurationSubmissionRecord
     from src.schemas.curation_workspace import SubmissionMode, SubmissionPayloadContract
 
@@ -1360,7 +1374,7 @@ def test_post_submission_retry_creates_new_submission_record(
     test_db,
     monkeypatch,
 ):
-    from src.lib.curation_workspace import session_service, session_submission_service
+    from src.lib.curation_workspace import session_service
     from src.lib.curation_workspace.models import CurationSubmissionRecord
     from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
     from src.schemas.curation_workspace import (
@@ -1376,9 +1390,8 @@ def test_post_submission_retry_creates_new_submission_record(
         candidate_id=seeded_review_sessions["candidate_beta_id"],
         status=CurationSubmissionStatus.FAILED,
     )
-    monkeypatch.setattr(
-        session_submission_service,
-        "_resolve_submission_transport_adapter",
+    _patch_submission_transport_adapter(
+        monkeypatch,
         lambda _target_key: NoOpSubmissionAdapter(target_key="review_export_bundle"),
     )
 

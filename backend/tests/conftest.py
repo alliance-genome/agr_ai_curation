@@ -181,7 +181,7 @@ def _bootstrap_weaviate_schema() -> None:
                     Property(name="sectionPath", data_type=DataType.TEXT_ARRAY),
                     Property(name="parentSection", data_type=DataType.TEXT),
                     Property(name="subsection", data_type=DataType.TEXT),
-                    Property(name="isTopLevel", data_type=DataType.BOOL),
+                    Property(name="isTopLevel", data_type=DataType.TEXT),
                     Property(name="contentType", data_type=DataType.TEXT),
                     Property(name="metadata", data_type=DataType.TEXT),
                     Property(name="embeddingTimestamp", data_type=DataType.DATE),

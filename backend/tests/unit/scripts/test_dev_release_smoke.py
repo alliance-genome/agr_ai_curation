@@ -66,10 +66,10 @@ def test_parse_args_allows_stream_chat_message_override():
     assert args.stream_chat_message == "Stream this exact prompt."
 
 
-def test_batch_flow_uses_deterministic_file_output_payload():
+def test_batch_plumbing_flow_uses_deterministic_file_output_payload():
     smoke = _load_smoke_module()
 
-    flow = smoke.build_batch_flow_definition()
+    flow = smoke.build_batch_plumbing_flow_definition()
 
     nodes = {node["id"]: node for node in flow["nodes"]}
     pdf_goal = nodes["pdf_1"]["data"]["step_goal"]
@@ -79,6 +79,99 @@ def test_batch_flow_uses_deterministic_file_output_payload():
     assert "Do not include quotes" in pdf_goal
     assert '[{"check":"batch_file_output","status":"completed"}]' in formatter_goal
     assert "do not include any previous-step prose" in formatter_goal
+
+
+def test_require_batch_plumbing_payload_requires_exact_json_artifact():
+    smoke = _load_smoke_module()
+
+    smoke.require_batch_plumbing_payload(
+        {
+            "batch_release_smoke_result.json": [
+                {"check": "batch_file_output", "status": "completed"}
+            ]
+        }
+    )
+
+    with pytest.raises(smoke.SmokeFailure, match="parsed JSON"):
+        smoke.require_batch_plumbing_payload(
+            {"batch_release_smoke_result.txt": '[{"check":"batch_file_output","status":"completed"}]'}
+        )
+
+    with pytest.raises(smoke.SmokeFailure, match="deterministic payload"):
+        smoke.require_batch_plumbing_payload(
+            {"batch_release_smoke_result.json": [{"check": "batch_file_output", "status": "changed"}]}
+        )
+
+
+def test_batch_extraction_flow_preserves_real_extraction_requirements():
+    smoke = _load_smoke_module()
+
+    flow = smoke.build_batch_extraction_flow_definition()
+
+    nodes = {node["id"]: node for node in flow["nodes"]}
+    task_instructions = nodes["task_input_1"]["data"]["task_instructions"]
+    gene_goal = nodes["gene_1"]["data"]["step_goal"]
+    formatter_goal = nodes["json_1"]["data"]["step_goal"]
+
+    assert "crb/Crumbs" in task_instructions
+    assert "record_evidence" in task_instructions
+    assert "Do not extract any other genes" in task_instructions
+    assert "evidence_record_id" in gene_goal
+    assert "batch_extraction_smoke_result" in formatter_goal
+    assert "preserve the previous gene extraction result" in formatter_goal
+    assert "evidence_record_id" in formatter_goal
+
+
+def test_require_batch_extraction_payload_requires_gene_and_evidence_reference():
+    smoke = _load_smoke_module()
+
+    smoke.require_batch_extraction_payload(
+        {
+            "result.json": [
+                {
+                    "gene": "crb",
+                    "evidence_record_ids": ["0ef4ac66-e782-4f92-b483-9ec99ec7b510"],
+                }
+            ]
+        }
+    )
+
+    with pytest.raises(smoke.SmokeFailure, match="crb/Crumbs"):
+        smoke.require_batch_extraction_payload({"result.json": [{"gene": "ninaE"}]})
+
+    with pytest.raises(smoke.SmokeFailure, match="evidence record"):
+        smoke.require_batch_extraction_payload({"result.json": [{"gene": "crb"}]})
+
+    with pytest.raises(smoke.SmokeFailure, match="parsed JSON"):
+        smoke.require_batch_extraction_payload({"result.txt": "crb evidence_record_id"})
+
+    with pytest.raises(smoke.SmokeFailure, match="attach an evidence record"):
+        smoke.require_batch_extraction_payload(
+            {"result.json": {"note": "crb", "evidence_record_id": "0ef4ac66-e782-4f92-b483-9ec99ec7b510"}}
+        )
+
+    with pytest.raises(smoke.SmokeFailure, match="attach an evidence record"):
+        smoke.require_batch_extraction_payload(
+            {"result.json": {"gene": "crb", "note": "missing evidence_record_id"}}
+        )
+
+    with pytest.raises(smoke.SmokeFailure, match="unrelated gene"):
+        smoke.require_batch_extraction_payload(
+            {
+                "result.json": {
+                    "genes": [
+                        {
+                            "gene": "crb",
+                            "evidence_record_id": "0ef4ac66-e782-4f92-b483-9ec99ec7b510",
+                        },
+                        {
+                            "gene": "ninaE",
+                            "evidence_record_id": "bd2dde8e-5de9-41a0-8d2f-d64c01f84ef4",
+                        },
+                    ]
+                }
+            }
+        )
 
 
 def test_run_local_rerank_provider_smoke_reads_nested_evidence(monkeypatch, tmp_path):
@@ -336,13 +429,13 @@ def test_ask_streaming_chat_question_accepts_durable_turn_completed(monkeypatch)
     assert checks[-1]["step"] == "chat_stream"
 
 
-def test_ask_streaming_chat_question_accepts_non_empty_evidence_summary(monkeypatch):
+def test_ask_streaming_chat_question_accepts_structured_evidence_summary(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []
     sse_body = (
         'data: {"type":"RUN_STARTED","trace_id":"trace-789","model":"gpt-5.5"}\n'
         "\n"
-        'data: {"type":"evidence_summary","evidence_records":[{"record_id":"ev-1","quote":"Crb organizes the rhabdomere."}]}\n'
+        'data: {"type":"evidence_summary","evidence_records":[{"record_id":"evidence-1","quote":"Crb organizes the rhabdomere.","chunk_id":"chunk-1"}]}\n'
         "\n"
         'data: {"type":"TEXT_MESSAGE_CONTENT","content":"The paper studies Crumbs-dependent photoreceptor organization."}\n'
         "\n"
@@ -378,6 +471,45 @@ def test_ask_streaming_chat_question_accepts_non_empty_evidence_summary(monkeypa
     assert "CHUNK_PROVENANCE" not in summary["event_types"]
     assert "crumbs" in summary["response_preview"].lower()
     assert checks[-1]["step"] == "chat_stream"
+
+
+def test_ask_streaming_chat_question_rejects_weak_evidence_summary(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+    sse_body = (
+        'data: {"type":"RUN_STARTED","trace_id":"trace-weak","model":"gpt-5.5"}\n'
+        "\n"
+        'data: {"type":"evidence_summary","evidence_records":[{"record_id":"evidence-1"}]}\n'
+        "\n"
+        'data: {"type":"TEXT_MESSAGE_CONTENT","content":"The paper studies Crumbs-dependent photoreceptor organization."}\n'
+        "\n"
+        'data: {"type":"turn_completed","trace_id":"trace-weak","message":"Chat turn completed."}\n'
+        "\n"
+    )
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        return smoke.Response(
+            status_code=200,
+            body=sse_body.encode("utf-8"),
+            text=sse_body,
+            json_body=None,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    with pytest.raises(smoke.SmokeFailure, match="document grounding"):
+        smoke.ask_streaming_chat_question(
+            base_url="http://example.test",
+            headers={"X-API-Key": "test-key"},
+            session_id="session-stream-weak",
+            message="Summarize the loaded paper.",
+            chat_model=None,
+            specialist_model=None,
+            expected_model="gpt-5.5",
+            chat_timeout_seconds=5.0,
+            checks=checks,
+        )
 
 
 def test_ask_streaming_chat_question_rejects_missing_trace_id(monkeypatch):

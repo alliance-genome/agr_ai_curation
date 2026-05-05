@@ -56,6 +56,7 @@ DEFAULT_FLOW_QUERY = (
 DEFAULT_FLOW_MODEL = "gpt-5.4-mini"
 DEFAULT_CHAT_MODEL = "gpt-5.5"
 DEFAULT_SPECIALIST_MODEL = "gpt-5.4-mini"
+EXPECTED_BATCH_PLUMBING_PAYLOAD = [{"check": "batch_file_output", "status": "completed"}]
 DEFAULT_WORKSPACE_ADAPTER_KEY = "gene"
 DEFAULT_SHARED_SAMPLE_PDF = Path(
     "/home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf"
@@ -441,15 +442,36 @@ def has_grounding_evidence_event(events: Iterable[Dict[str, Any]]) -> bool:
     for event in events:
         event_type = str(event.get("type", ""))
         if event_type == "CHUNK_PROVENANCE":
-            return True
+            chunk_id = str(event_field(event, "chunk_id", "") or event_field(event, "chunkId", "")).strip()
+            doc_items = event.get("doc_items")
+            if not doc_items and isinstance(event.get("details"), dict):
+                doc_items = event["details"].get("doc_items")
+            if chunk_id or (isinstance(doc_items, list) and doc_items):
+                return True
+            continue
         if event_type != "evidence_summary":
             continue
 
         evidence_records = event.get("evidence_records")
         if not evidence_records and isinstance(event.get("details"), dict):
             evidence_records = event["details"].get("evidence_records")
-        if isinstance(evidence_records, list) and evidence_records:
-            return True
+        if not isinstance(evidence_records, list):
+            continue
+        for record in evidence_records:
+            if not isinstance(record, dict):
+                continue
+            record_id = str(
+                record.get("evidence_record_id")
+                or record.get("record_id")
+                or record.get("id")
+                or ""
+            ).strip()
+            quote = str(record.get("verified_quote") or record.get("quote") or "").strip()
+            chunk_id = str(record.get("chunk_id") or record.get("chunkId") or "").strip()
+            page = record.get("page")
+            section = str(record.get("section") or "").strip()
+            if record_id and quote and (chunk_id or page is not None or section):
+                return True
     return False
 
 
@@ -1201,7 +1223,7 @@ def ask_streaming_chat_question(
     )
     require(
         has_grounding_evidence_event(events),
-        "Streaming chat did not emit CHUNK_PROVENANCE or a non-empty evidence_summary, "
+        "Streaming chat did not emit CHUNK_PROVENANCE or structured evidence_summary grounding, "
         f"so document grounding was not proven: {event_types}",
     )
 
@@ -1340,7 +1362,7 @@ def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
     }
 
 
-def build_batch_flow_definition() -> Dict[str, Any]:
+def build_batch_plumbing_flow_definition() -> Dict[str, Any]:
     return {
         "version": "1.0",
         "entry_node_id": "task_input_1",
@@ -1400,6 +1422,70 @@ def build_batch_flow_definition() -> Dict[str, Any]:
         "edges": [
             {"id": "edge_1", "source": "task_input_1", "target": "pdf_1"},
             {"id": "edge_2", "source": "pdf_1", "target": "json_1"},
+        ],
+    }
+
+
+def build_batch_extraction_flow_definition() -> Dict[str, Any]:
+    return {
+        "version": "1.0",
+        "entry_node_id": "task_input_1",
+        "nodes": [
+            {
+                "id": "task_input_1",
+                "type": "task_input",
+                "position": {"x": 0, "y": 0},
+                "data": {
+                    "agent_id": "task_input",
+                    "agent_display_name": "Initial Instructions",
+                    "task_instructions": (
+                        "For this batch extraction smoke, extract exactly one experimentally "
+                        "supported gene from the loaded paper: crb/Crumbs. Include the organism "
+                        "when possible, call record_evidence for one supporting quote, and retain "
+                        "the returned evidence_record_id. Do not extract any other genes. Then save "
+                        "a compact JSON file that preserves the retained gene and evidence IDs."
+                    ),
+                    "output_key": "task_input_text",
+                    "input_source": "user_query",
+                },
+            },
+            {
+                "id": "gene_1",
+                "type": "agent",
+                "position": {"x": 280, "y": 0},
+                "data": {
+                    "agent_id": "gene_extractor",
+                    "agent_display_name": "Gene Extractor",
+                    "output_key": "gene_extraction",
+                    "input_source": "previous_output",
+                    "step_goal": (
+                        "Extract only crb/Crumbs from the loaded document. Keep exactly one "
+                        "verified evidence record, and include its evidence_record_id in the "
+                        "structured extraction result."
+                    ),
+                },
+            },
+            {
+                "id": "json_1",
+                "type": "agent",
+                "position": {"x": 560, "y": 0},
+                "data": {
+                    "agent_id": "json_formatter",
+                    "agent_display_name": "JSON Formatter",
+                    "output_key": "final_output",
+                    "input_source": "previous_output",
+                    "step_goal": (
+                        "Save a compact JSON file named batch_extraction_smoke_result. The file "
+                        "must preserve the previous gene extraction result and include the string "
+                        "crb or Crumbs plus at least one evidence_record_id from the extraction. "
+                        "Do not invent evidence IDs and do not include unrelated genes."
+                    ),
+                },
+            },
+        ],
+        "edges": [
+            {"id": "edge_1", "source": "task_input_1", "target": "gene_1"},
+            {"id": "edge_2", "source": "gene_1", "target": "json_1"},
         ],
     }
 
@@ -1925,6 +2011,146 @@ def download_batch_zip(
     return members
 
 
+def download_batch_zip_payloads(
+    *,
+    base_url: str,
+    headers: Dict[str, str],
+    batch_id: str,
+    timeout_seconds: float,
+    checks: list[Dict[str, Any]],
+    step_name: str,
+) -> Dict[str, Any]:
+    response = http_request(
+        "GET",
+        f"{base_url}/api/batches/{batch_id}/download-zip",
+        headers=headers,
+        timeout=timeout_seconds,
+    )
+    require(response.status_code == 200, f"Unexpected batch ZIP response: {response.status_code} {response.text}")
+    require(response.body.startswith(b"PK"), "Batch ZIP response did not look like a ZIP archive")
+
+    payloads: Dict[str, Any] = {}
+    with zipfile.ZipFile(io.BytesIO(response.body)) as archive:
+        members = [name for name in archive.namelist() if not name.endswith("/")]
+        for name in members:
+            raw_payload = archive.read(name)
+            text = raw_payload.decode("utf-8", errors="replace")
+            parsed_payload = decode_json(text)
+            payloads[name] = parsed_payload if parsed_payload is not None else text
+    require(members, "Batch ZIP archive was empty")
+
+    append_check(
+        checks,
+        step=step_name,
+        ok=True,
+        status_code=response.status_code,
+        payload={
+            "members": members,
+            "json_member_count": sum(1 for payload in payloads.values() if not isinstance(payload, str)),
+        },
+    )
+    return {"members": members, "payloads": payloads}
+
+
+def _json_text_values(value: Any) -> Iterable[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _json_text_values(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _json_text_values(item)
+
+
+def require_batch_plumbing_payload(payloads: Dict[str, Any]) -> None:
+    parsed_payloads = [payload for payload in payloads.values() if not isinstance(payload, str)]
+    require(parsed_payloads, f"Batch plumbing ZIP did not contain a parsed JSON artifact: {payloads}")
+    require(
+        any(payload == EXPECTED_BATCH_PLUMBING_PAYLOAD for payload in parsed_payloads),
+        f"Batch plumbing ZIP did not contain the expected deterministic payload: {payloads}",
+    )
+
+
+def _has_evidence_record_reference(value: Any) -> bool:
+    if isinstance(value, str):
+        return False
+    if isinstance(value, dict):
+        for key, item in value.items():
+            lowered_key = str(key).lower()
+            if "evidence" in lowered_key and "id" in lowered_key and item:
+                return True
+            if _has_evidence_record_reference(item):
+                return True
+    if isinstance(value, list):
+        return any(_has_evidence_record_reference(item) for item in value)
+    return False
+
+
+def _is_crb_label(value: str) -> bool:
+    lowered = value.lower()
+    return "crb" in lowered or "crumbs" in lowered
+
+
+def _looks_like_gene_label_key(key: str) -> bool:
+    lowered = key.lower()
+    if any(token in lowered for token in ("id", "curie", "taxon", "organism", "species", "evidence")):
+        return False
+    return lowered in {"gene", "gene_symbol", "symbol", "normalized_symbol", "entity", "label", "mention"} or (
+        "gene" in lowered and any(token in lowered for token in ("symbol", "name", "label", "mention"))
+    )
+
+
+def _candidate_gene_labels(value: Any) -> Iterable[str]:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if _looks_like_gene_label_key(str(key)) and isinstance(item, str) and item.strip():
+                yield item.strip()
+            yield from _candidate_gene_labels(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _candidate_gene_labels(item)
+
+
+def _has_crb_gene_record_with_evidence(value: Any) -> bool:
+    if isinstance(value, dict):
+        has_crb_gene_label = any(
+            _looks_like_gene_label_key(str(key)) and isinstance(item, str) and _is_crb_label(item)
+            for key, item in value.items()
+        )
+        if has_crb_gene_label and _has_evidence_record_reference(value):
+            return True
+        return any(_has_crb_gene_record_with_evidence(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_crb_gene_record_with_evidence(item) for item in value)
+    return False
+
+
+def require_batch_extraction_payload(payloads: Dict[str, Any]) -> None:
+    parsed_payloads = [payload for payload in payloads.values() if not isinstance(payload, str)]
+    require(parsed_payloads, f"Batch extraction ZIP did not contain a parsed JSON artifact: {payloads}")
+
+    combined_text = "\n".join(_json_text_values(parsed_payloads)).lower()
+    require(
+        "crb" in combined_text or "crumbs" in combined_text,
+        f"Batch extraction ZIP payload did not mention crb/Crumbs: {payloads}",
+    )
+
+    unexpected_gene_labels = [
+        label
+        for label in _candidate_gene_labels(parsed_payloads)
+        if not _is_crb_label(label)
+    ]
+    require(
+        not unexpected_gene_labels,
+        f"Batch extraction ZIP payload included unrelated gene labels: {unexpected_gene_labels}",
+    )
+    require(
+        any(_has_crb_gene_record_with_evidence(payload) for payload in parsed_payloads),
+        f"Batch extraction ZIP payload did not attach an evidence record reference to crb/Crumbs: {payloads}",
+    )
+
+
 def cleanup_document(base_url: str, document_id: str, headers: Dict[str, str], checks: list[Dict[str, Any]]) -> None:
     response = http_request("DELETE", f"{base_url}/weaviate/documents/{document_id}", headers=headers, timeout=30.0)
     append_check(
@@ -2027,14 +2253,17 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             "custom_agent_key": None,
             "flow_id": None,
             "workspace_session_id": None,
-            "batch_flow_id": None,
-            "batch_id": None,
+            "batch_plumbing_flow_id": None,
+            "batch_plumbing_id": None,
+            "batch_extraction_flow_id": None,
+            "batch_extraction_id": None,
         },
         "chat_response_preview": None,
         "chat_stream_summary": None,
         "flow_summary": None,
         "workspace_summary": None,
-        "batch_zip_members": None,
+        "batch_plumbing_zip_members": None,
+        "batch_extraction_zip_members": None,
         "rerank_provider_smoke": {
             "included": args.include_rerank_provider_smoke,
             "base_url": args.rerank_provider_smoke_base_url if args.include_rerank_provider_smoke else None,
@@ -2057,7 +2286,8 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
     loaded_document = False
     custom_agent_id: Optional[str] = None
     flow_id: Optional[str] = None
-    batch_flow_id: Optional[str] = None
+    batch_plumbing_flow_id: Optional[str] = None
+    batch_extraction_flow_id: Optional[str] = None
     primary_document_id: Optional[str] = None
     secondary_document_id: Optional[str] = None
     sample_pdf: Optional[Path] = None
@@ -2477,41 +2707,41 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             )
             require(int(secondary_status.get("chunk_count") or 0) > 0, f"Expected chunk_count > 0: {secondary_status}")
 
-            print_step("Creating a batch-compatible flow")
-            batch_flow_id = create_flow(
+            print_step("Creating a batch plumbing flow")
+            batch_plumbing_flow_id = create_flow(
                 base_url=base_url,
                 headers=headers,
                 name=f"Dev Release Smoke Batch {uuid4().hex[:8]}",
-                description="Temporary dev release smoke batch flow",
-                flow_definition=build_batch_flow_definition(),
+                description="Temporary dev release smoke batch plumbing flow",
+                flow_definition=build_batch_plumbing_flow_definition(),
                 checks=checks,
-                step_name="create_batch_flow",
+                step_name="create_batch_plumbing_flow",
             )
-            evidence["resources"]["batch_flow_id"] = batch_flow_id
+            evidence["resources"]["batch_plumbing_flow_id"] = batch_plumbing_flow_id
 
-            print_step("Validating the batch flow")
+            print_step("Validating the batch plumbing flow")
             validate_batch_flow(
                 base_url=base_url,
                 headers=headers,
-                flow_id=batch_flow_id,
+                flow_id=batch_plumbing_flow_id,
                 checks=checks,
             )
 
-            print_step("Creating the batch run")
-            batch_id = create_batch(
+            print_step("Creating the batch plumbing run")
+            batch_plumbing_id = create_batch(
                 base_url=base_url,
                 headers=headers,
-                flow_id=batch_flow_id,
+                flow_id=batch_plumbing_flow_id,
                 document_ids=[primary_document_id, secondary_document_id],
                 checks=checks,
             )
-            evidence["resources"]["batch_id"] = batch_id
+            evidence["resources"]["batch_plumbing_id"] = batch_plumbing_id
 
-            print_step("Waiting for batch processing to complete")
+            print_step("Waiting for batch plumbing processing to complete")
             terminal_batch = wait_for_batch_terminal(
                 base_url=base_url,
                 headers=headers,
-                batch_id=batch_id,
+                batch_id=batch_plumbing_id,
                 batch_timeout_seconds=args.batch_timeout_seconds,
                 poll_interval_seconds=args.poll_interval_seconds,
                 checks=checks,
@@ -2525,15 +2755,77 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 )
                 require(document_result.get("result_file_path"), f"Missing result_file_path: {document_result}")
 
-            print_step("Downloading the batch ZIP")
-            zip_members = download_batch_zip(
+            print_step("Downloading and checking the batch plumbing ZIP")
+            plumbing_zip = download_batch_zip_payloads(
                 base_url=base_url,
                 headers=headers,
-                batch_id=batch_id,
+                batch_id=batch_plumbing_id,
                 timeout_seconds=args.zip_timeout_seconds,
                 checks=checks,
+                step_name="batch_plumbing_download_zip",
             )
-            evidence["batch_zip_members"] = zip_members
+            require_batch_plumbing_payload(plumbing_zip["payloads"])
+            evidence["batch_plumbing_zip_members"] = plumbing_zip["members"]
+
+            print_step("Creating a real batch extraction flow")
+            batch_extraction_flow_id = create_flow(
+                base_url=base_url,
+                headers=headers,
+                name=f"Dev Release Smoke Batch Extraction {uuid4().hex[:8]}",
+                description="Temporary dev release smoke real batch extraction flow",
+                flow_definition=build_batch_extraction_flow_definition(),
+                checks=checks,
+                step_name="create_batch_extraction_flow",
+            )
+            evidence["resources"]["batch_extraction_flow_id"] = batch_extraction_flow_id
+
+            print_step("Validating the real batch extraction flow")
+            validate_batch_flow(
+                base_url=base_url,
+                headers=headers,
+                flow_id=batch_extraction_flow_id,
+                checks=checks,
+            )
+
+            print_step("Creating the real batch extraction run")
+            batch_extraction_id = create_batch(
+                base_url=base_url,
+                headers=headers,
+                flow_id=batch_extraction_flow_id,
+                document_ids=[primary_document_id],
+                checks=checks,
+            )
+            evidence["resources"]["batch_extraction_id"] = batch_extraction_id
+
+            print_step("Waiting for real batch extraction to complete")
+            terminal_extraction_batch = wait_for_batch_terminal(
+                base_url=base_url,
+                headers=headers,
+                batch_id=batch_extraction_id,
+                batch_timeout_seconds=args.batch_timeout_seconds,
+                poll_interval_seconds=args.poll_interval_seconds,
+                checks=checks,
+            )
+            extraction_documents = terminal_extraction_batch.get("documents") or []
+            require(len(extraction_documents) >= 1, f"Expected at least one extraction batch document result: {terminal_extraction_batch}")
+            for document_result in extraction_documents:
+                require(
+                    str(document_result.get("status", "")).lower() == "completed",
+                    f"Batch extraction document did not complete successfully: {document_result}",
+                )
+                require(document_result.get("result_file_path"), f"Missing extraction result_file_path: {document_result}")
+
+            print_step("Downloading and checking the real batch extraction ZIP")
+            extraction_zip = download_batch_zip_payloads(
+                base_url=base_url,
+                headers=headers,
+                batch_id=batch_extraction_id,
+                timeout_seconds=args.zip_timeout_seconds,
+                checks=checks,
+                step_name="batch_extraction_download_zip",
+            )
+            require_batch_extraction_payload(extraction_zip["payloads"])
+            evidence["batch_extraction_zip_members"] = extraction_zip["members"]
 
         if args.include_rerank_provider_smoke:
             print_step("Running optional local rerank provider smoke")
@@ -2563,13 +2855,22 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         evidence["overall_status"] = "fail"
         evidence["error"] = str(exc)
     finally:
-        if batch_flow_id:
+        if batch_extraction_flow_id:
             attempt_cleanup(
-                step=f"cleanup_flow_exception:{batch_flow_id}",
+                step=f"cleanup_flow_exception:{batch_extraction_flow_id}",
                 checks=checks,
                 cleanup_fn=cleanup_flow,
                 base_url=base_url,
-                flow_id=batch_flow_id,
+                flow_id=batch_extraction_flow_id,
+                headers=headers,
+            )
+        if batch_plumbing_flow_id:
+            attempt_cleanup(
+                step=f"cleanup_flow_exception:{batch_plumbing_flow_id}",
+                checks=checks,
+                cleanup_fn=cleanup_flow,
+                base_url=base_url,
+                flow_id=batch_plumbing_flow_id,
                 headers=headers,
             )
         if flow_id:
@@ -2771,8 +3072,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     print_step(f"Evidence file: {evidence_path}")
     if payload.get("chat_response_preview"):
         print_step(f"Chat preview: {payload['chat_response_preview']}")
-    if payload.get("batch_zip_members"):
-        print_step(f"Batch ZIP members: {', '.join(payload['batch_zip_members'][:5])}")
+    if payload.get("batch_plumbing_zip_members"):
+        print_step(f"Batch plumbing ZIP members: {', '.join(payload['batch_plumbing_zip_members'][:5])}")
+    if payload.get("batch_extraction_zip_members"):
+        print_step(f"Batch extraction ZIP members: {', '.join(payload['batch_extraction_zip_members'][:5])}")
     return 0
 
 

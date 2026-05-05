@@ -18,6 +18,21 @@ def _hash(char: str) -> str:
     return char * 64
 
 
+def _patch_submission_transport_adapter(monkeypatch, adapter_factory):
+    from src.lib.curation_workspace import session_service, session_submission_service
+
+    # The public facade re-exports functions owned by session_submission_service.
+    # Patch the owning module deliberately so endpoint tests still exercise the
+    # real facade import path.
+    assert session_service.execute_submission is session_submission_service.execute_submission
+    assert session_service.retry_submission is session_submission_service.retry_submission
+    monkeypatch.setattr(
+        session_submission_service,
+        "_resolve_submission_transport_adapter",
+        adapter_factory,
+    )
+
+
 @pytest.fixture
 def client(test_db, get_auth_mock, monkeypatch):
     """Create isolated app client with auth and database overrides."""
@@ -378,7 +393,6 @@ def test_submission_workflow_e2e_with_retry_and_history(
     monkeypatch,
 ):
     from src.lib.curation_workspace import session_service
-    from src.lib.curation_workspace import session_submission_service
     from src.lib.curation_workspace.extraction_results import persist_extraction_result
     from src.lib.curation_workspace.models import CurationReviewSession, CurationSubmissionRecord
     from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
@@ -524,9 +538,8 @@ def test_submission_workflow_e2e_with_retry_and_history(
     assert preview_payload["submission"]["payload"]["candidate_ids"] == [candidate_id]
     assert preview_payload["submission"]["payload"]["payload_json"]["candidate_count"] == 1
 
-    monkeypatch.setattr(
-        session_submission_service,
-        "_resolve_submission_transport_adapter",
+    _patch_submission_transport_adapter(
+        monkeypatch,
         lambda _target_key: NoOpSubmissionAdapter(
             target_key="review_export_bundle",
             response_status=CurationSubmissionStatus.FAILED,
@@ -556,9 +569,8 @@ def test_submission_workflow_e2e_with_retry_and_history(
     assert persisted_failed_submission is not None
     assert persisted_failed_submission.status == CurationSubmissionStatus.FAILED
 
-    monkeypatch.setattr(
-        session_submission_service,
-        "_resolve_submission_transport_adapter",
+    _patch_submission_transport_adapter(
+        monkeypatch,
         lambda _target_key: NoOpSubmissionAdapter(target_key="review_export_bundle"),
     )
     retry_response = client.post(
