@@ -44,6 +44,11 @@ DEFAULT_STREAM_CHAT_MESSAGE = (
     "Briefly summarize the loaded publication in one sentence for a curator. "
     "Mention the main biological topic, but do not extract, normalize, or curate entities."
 )
+DEFAULT_WORKSPACE_PREP_CHAT_MESSAGE = (
+    "Extract exactly one curation-ready gene candidate from the loaded paper: crb/Crumbs. "
+    "Use the gene extraction path, include Drosophila melanogaster when possible, call "
+    "record_evidence for one supporting quote, and retain the returned evidence_record_id."
+)
 DEFAULT_FLOW_QUERY = (
     "Extract exactly one experimentally supported gene from the loaded paper: crb/Crumbs. "
     "Include the organism and one verified evidence record for that gene."
@@ -2273,11 +2278,47 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
             evidence["resources"]["chat_trace_id"] = chat_stream_summary["trace_id"]
 
             if not args.skip_workspace:
+                print_step("Creating a dedicated workspace-prep chat session")
+                workspace_prep_chat_session_id = create_chat_session(
+                    base_url=base_url,
+                    headers=headers,
+                    checks=checks,
+                )
+                evidence["resources"]["workspace_prep_chat_session_id"] = workspace_prep_chat_session_id
+
+                print_step("Refreshing the loaded document before workspace-prep chat")
+                load_document_into_chat(
+                    base_url=base_url,
+                    document_id=primary_document_id,
+                    headers=headers,
+                    checks=checks,
+                    step_name="chat_document_load_workspace_prep_refresh",
+                )
+
+                print_step("Asking a curation-ready extraction question for workspace prep")
+                workspace_prep_answer = ask_chat_question(
+                    base_url=base_url,
+                    headers=headers,
+                    session_id=workspace_prep_chat_session_id,
+                    message=args.workspace_prep_chat_message,
+                    chat_model=None,
+                    specialist_model=None,
+                    chat_timeout_seconds=args.chat_timeout_seconds,
+                    checks=checks,
+                )
+                require_text_contains_any_snippet(
+                    workspace_prep_answer,
+                    snippets=REQUIRED_FOCUS_GENE_SNIPPETS,
+                    context="Workspace-prep extraction chat response",
+                    raw_details=workspace_prep_answer,
+                )
+                evidence["workspace_prep_chat_response_preview"] = workspace_prep_answer[:500]
+
                 print_step("Previewing curation prep from the chat session")
                 workspace_prep_preview = fetch_workspace_prep_preview(
                     base_url=base_url,
                     headers=headers,
-                    chat_session_id=chat_session_id,
+                    chat_session_id=workspace_prep_chat_session_id,
                     checks=checks,
                 )
 
@@ -2286,7 +2327,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                     base_url=base_url,
                     headers=headers,
                     document_id=primary_document_id,
-                    origin_session_id=chat_session_id,
+                    origin_session_id=workspace_prep_chat_session_id,
                     adapter_key=DEFAULT_WORKSPACE_ADAPTER_KEY,
                     checks=checks,
                 )
@@ -2295,7 +2336,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 workspace_prep_run = run_workspace_chat_prep(
                     base_url=base_url,
                     headers=headers,
-                    chat_session_id=chat_session_id,
+                    chat_session_id=workspace_prep_chat_session_id,
                     adapter_key=DEFAULT_WORKSPACE_ADAPTER_KEY,
                     checks=checks,
                 )
@@ -2323,7 +2364,7 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                     base_url=base_url,
                     headers=headers,
                     document_id=primary_document_id,
-                    origin_session_id=chat_session_id,
+                    origin_session_id=workspace_prep_chat_session_id,
                     adapter_key=DEFAULT_WORKSPACE_ADAPTER_KEY,
                     checks=checks,
                 )
@@ -2591,6 +2632,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--stream-chat-message",
         default=DEFAULT_STREAM_CHAT_MESSAGE,
         help="Question to ask on the dedicated streaming chat path",
+    )
+    parser.add_argument(
+        "--workspace-prep-chat-message",
+        default=DEFAULT_WORKSPACE_PREP_CHAT_MESSAGE,
+        help="Extraction prompt to ask before curation workspace prep",
     )
     parser.add_argument(
         "--flow-query",

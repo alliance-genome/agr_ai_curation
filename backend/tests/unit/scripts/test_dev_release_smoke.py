@@ -517,6 +517,19 @@ def test_build_flow_definition_keeps_release_smoke_flow_narrow():
     assert "evidence_record_id" in step_goal
 
 
+def test_workspace_prep_chat_message_requires_extraction_before_prep():
+    smoke = _load_smoke_module()
+
+    message = smoke.DEFAULT_WORKSPACE_PREP_CHAT_MESSAGE
+
+    assert "Extract exactly one" in message
+    assert "crb/Crumbs" in message
+    assert "record_evidence" in message
+    assert "evidence_record_id" in message
+    assert message != smoke.DEFAULT_CHAT_MESSAGE
+    assert message != smoke.DEFAULT_STREAM_CHAT_MESSAGE
+
+
 def test_require_safe_fixture_deletion_principal_rejects_non_test_user():
     smoke = _load_smoke_module()
 
