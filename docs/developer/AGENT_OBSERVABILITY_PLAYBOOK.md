@@ -16,6 +16,7 @@ This playbook defines the default `observe -> diagnose -> verify` loop for agent
 docker compose ps
 curl http://localhost:8000/health
 curl http://localhost:8000/api/admin/health/llm-providers
+curl -fsS http://localhost:3100/ready
 ./scripts/testing/llm_provider_smoke_local.sh
 ./scripts/utilities/collect_agent_evidence.sh
 ```
@@ -76,4 +77,3 @@ Include:
 2. Pass/fail status for each validation.
 3. Pointer to evidence artifacts (`file_outputs/...`).
 4. Remaining risk statement when checks are partial.
-

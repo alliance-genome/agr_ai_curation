@@ -486,18 +486,12 @@ services:
 
   # Loki for log aggregation
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.6.4
     ports:
       - "${LOKI_HOST_PORT:-3100}:3100"
     volumes:
       - ./loki-config.yml:/etc/loki/local-config.yml:ro
       - loki-data:/loki
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3100/ready"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
 
   # Promtail for log collection
   promtail:

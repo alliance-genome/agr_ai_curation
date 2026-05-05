@@ -13,7 +13,7 @@ Validate that config-defined LLM providers and models work end-to-end in real ru
 
 ## Preconditions
 
-- All services are up and healthy (`docker compose ps` shows healthy status).
+- Core services are up and healthy (`docker compose ps` shows no exited core containers; verify Loki separately with `curl -fsS http://localhost:3100/ready` when log aggregation matters).
 - `config/providers.yaml` and `config/models.yaml` are in sync (every model references a valid provider).
 - API keys are configured for each provider under test (`OPENAI_API_KEY`, `GROQ_API_KEY`, etc.).
 - `LLM_PROVIDER_STRICT_MODE=true` is recommended for smoke testing.
