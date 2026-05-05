@@ -1327,8 +1327,10 @@ def build_batch_flow_definition() -> Dict[str, Any]:
                     "agent_id": "task_input",
                     "agent_display_name": "Initial Instructions",
                     "task_instructions": (
-                        "Read the loaded PDF and extract up to 5 curator-relevant findings. "
-                        "Include concise evidence snippets. Then format structured output."
+                        "For this batch release smoke, first confirm the loaded PDF can be read. "
+                        "Then create only a simple downloadable smoke-status artifact. Do not carry "
+                        "quoted paper text, evidence snippets, citations, or extracted findings into "
+                        "the formatter step."
                     ),
                     "output_key": "task_input_text",
                     "input_source": "user_query",
@@ -1343,7 +1345,12 @@ def build_batch_flow_definition() -> Dict[str, Any]:
                     "agent_display_name": "PDF Specialist",
                     "output_key": "pdf_findings",
                     "input_source": "previous_output",
-                    "step_goal": "Read the document and return concise evidence-based findings.",
+                    "step_goal": (
+                        "Read enough of the document to prove document access, then return exactly "
+                        "this plain ASCII sentence: PDF specialist completed document access for "
+                        "batch smoke. Do not include quotes, evidence snippets, citations, JSON, "
+                        "markdown, or extracted paper content."
+                    ),
                 },
             },
             {
@@ -1355,7 +1362,12 @@ def build_batch_flow_definition() -> Dict[str, Any]:
                     "agent_display_name": "JSON Formatter",
                     "output_key": "final_output",
                     "input_source": "previous_output",
-                    "step_goal": "Save the final findings as downloadable JSON output.",
+                    "step_goal": (
+                        "Save exactly this JSON payload as a downloadable file and do not include "
+                        "any previous-step prose in the file: "
+                        '[{"check":"batch_file_output","status":"completed"}]. '
+                        "Use filename batch_release_smoke_result."
+                    ),
                 },
             },
         ],

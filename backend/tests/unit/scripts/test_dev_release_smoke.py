@@ -66,6 +66,21 @@ def test_parse_args_allows_stream_chat_message_override():
     assert args.stream_chat_message == "Stream this exact prompt."
 
 
+def test_batch_flow_uses_deterministic_file_output_payload():
+    smoke = _load_smoke_module()
+
+    flow = smoke.build_batch_flow_definition()
+
+    nodes = {node["id"]: node for node in flow["nodes"]}
+    pdf_goal = nodes["pdf_1"]["data"]["step_goal"]
+    formatter_goal = nodes["json_1"]["data"]["step_goal"]
+
+    assert "prove document access" in pdf_goal
+    assert "Do not include quotes" in pdf_goal
+    assert '[{"check":"batch_file_output","status":"completed"}]' in formatter_goal
+    assert "do not include any previous-step prose" in formatter_goal
+
+
 def test_run_local_rerank_provider_smoke_reads_nested_evidence(monkeypatch, tmp_path):
     smoke = _load_smoke_module()
     script_path = tmp_path / "rerank_provider_smoke_local.sh"
