@@ -52,6 +52,18 @@ def test_parse_args_keeps_rerank_provider_smoke_opt_in_by_default():
     assert args.include_rerank_provider_smoke is False
     assert args.rerank_provider_smoke_base_url == "http://localhost:8000"
     assert args.rerank_provider_smoke_script == "scripts/testing/rerank_provider_smoke_local.sh"
+    assert args.chat_message == smoke.DEFAULT_CHAT_MESSAGE
+    assert args.stream_chat_message == smoke.DEFAULT_STREAM_CHAT_MESSAGE
+    assert "do not extract" in args.stream_chat_message
+
+
+def test_parse_args_allows_stream_chat_message_override():
+    smoke = _load_smoke_module()
+
+    args = smoke.parse_args(["--stream-chat-message", "Stream this exact prompt."])
+
+    assert args.chat_message == smoke.DEFAULT_CHAT_MESSAGE
+    assert args.stream_chat_message == "Stream this exact prompt."
 
 
 def test_run_local_rerank_provider_smoke_reads_nested_evidence(monkeypatch, tmp_path):

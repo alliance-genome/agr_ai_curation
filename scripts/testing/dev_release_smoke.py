@@ -40,6 +40,10 @@ from uuid import uuid4
 DEFAULT_CHAT_MESSAGE = (
     "What genes are the focus of the publication?"
 )
+DEFAULT_STREAM_CHAT_MESSAGE = (
+    "Briefly summarize the loaded publication in one sentence for a curator. "
+    "Mention the main biological topic, but do not extract, normalize, or curate entities."
+)
 DEFAULT_FLOW_QUERY = (
     "Extract the experimentally supported genes from the loaded paper, include the organism, and preserve verified evidence."
 )
@@ -1967,6 +1971,8 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "env_file": str(env_file),
         "sample_pdf": args.sample_pdf,
         "secondary_pdf": args.secondary_pdf,
+        "chat_message": args.chat_message,
+        "stream_chat_message": args.stream_chat_message,
         "expected_runtime_chat_model": args.chat_model,
         "expected_runtime_specialist_model": args.specialist_model,
         "runtime_default_specialist_model_directly_validated": False,
@@ -2216,14 +2222,14 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
                 base_url=base_url,
                 headers=headers,
                 session_id=stream_chat_session_id,
-                message=args.chat_message,
+                message=args.stream_chat_message,
                 chat_model=None,
                 specialist_model=None,
                 expected_model=args.chat_model,
                 chat_timeout_seconds=args.chat_timeout_seconds,
                 checks=checks,
             )
-            if args.chat_message.strip() == DEFAULT_CHAT_MESSAGE:
+            if args.stream_chat_message.strip() == DEFAULT_CHAT_MESSAGE:
                 require_text_contains_any_snippet(
                     str(chat_stream_summary.get("response_preview", "")),
                     snippets=REQUIRED_FOCUS_GENE_SNIPPETS,
@@ -2546,7 +2552,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     parser.add_argument(
         "--chat-message",
         default=DEFAULT_CHAT_MESSAGE,
-        help="Question to ask after loading the document into chat",
+        help="Question to ask on the non-streaming chat path after loading the document",
+    )
+    parser.add_argument(
+        "--stream-chat-message",
+        default=DEFAULT_STREAM_CHAT_MESSAGE,
+        help="Question to ask on the dedicated streaming chat path",
     )
     parser.add_argument(
         "--flow-query",
