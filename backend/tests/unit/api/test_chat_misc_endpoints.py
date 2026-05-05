@@ -1520,8 +1520,8 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
         chat.ChatMessage(
             message="hello",
             session_id="session-override",
-            model="gpt-5.4-nano",
-            specialist_model="gpt-5.4-nano",
+            model="gpt-5.4-mini",
+            specialist_model="gpt-5.4-mini",
             supervisor_temperature=0.0,
             specialist_temperature=0.0,
             supervisor_reasoning="minimal",
@@ -1531,8 +1531,8 @@ async def test_chat_endpoint_passes_model_overrides_to_runner(monkeypatch):
         db=_db_stub(),
     )
 
-    assert captured["supervisor_model"] == "gpt-5.4-nano"
-    assert captured["specialist_model"] == "gpt-5.4-nano"
+    assert captured["supervisor_model"] == "gpt-5.4-mini"
+    assert captured["specialist_model"] == "gpt-5.4-mini"
     assert captured["supervisor_temperature"] == 0.0
     assert captured["specialist_temperature"] == 0.0
     assert captured["supervisor_reasoning"] == "minimal"

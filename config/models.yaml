@@ -1,6 +1,6 @@
 models:
-  - model_id: gpt-5.4-nano
-    name: GPT-5.4 Nano
+  - model_id: gpt-5.4-mini
+    name: GPT-5.4 Mini
     provider: openai
     description: Faster, lower-cost model for quick drafting and lightweight extraction.
     guidance: Use when speed matters more than peak accuracy. GPT-5.5 is generally more reliable for nuanced or high-stakes curation decisions.
@@ -57,7 +57,7 @@ models:
     name: GPT-4o
     provider: openai
     description: Runtime compatibility model for legacy system agent defaults.
-    guidance: Internal compatibility model; prefer GPT-5.4 Nano or GPT-5.5 for new curator workflows.
+    guidance: Internal compatibility model; prefer GPT-5.4 Mini or GPT-5.5 for new curator workflows.
     default: false
     curator_visible: false
     supports_reasoning: false

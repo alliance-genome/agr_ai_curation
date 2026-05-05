@@ -530,12 +530,12 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
 
     built = catalog_service._create_db_agent(
         fake_row,
-        model_id_override="gpt-5.4-nano",
+        model_id_override="gpt-5.4-mini",
         model_temperature_override=0.0,
         model_reasoning_override="minimal",
     )
 
-    assert built.model == "gpt-5.4-nano"
-    assert captured["settings"]["model"] == "gpt-5.4-nano"
+    assert built.model == "gpt-5.4-mini"
+    assert captured["settings"]["model"] == "gpt-5.4-mini"
     assert captured["settings"]["temperature"] == 0.0
     assert captured["settings"]["reasoning_effort"] == "minimal"

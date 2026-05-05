@@ -43,9 +43,9 @@ DEFAULT_CHAT_MESSAGE = (
 DEFAULT_FLOW_QUERY = (
     "Extract the experimentally supported genes from the loaded paper, include the organism, and preserve verified evidence."
 )
-DEFAULT_FLOW_MODEL = "gpt-5.4-nano"
+DEFAULT_FLOW_MODEL = "gpt-5.4-mini"
 DEFAULT_CHAT_MODEL = "gpt-5.5"
-DEFAULT_SPECIALIST_MODEL = "gpt-5.4-nano"
+DEFAULT_SPECIALIST_MODEL = "gpt-5.4-mini"
 DEFAULT_WORKSPACE_ADAPTER_KEY = "gene"
 DEFAULT_SHARED_SAMPLE_PDF = Path(
     "/home/ctabone/analysis/alliance/ai_curation_new/agr_ai_curation/sample_fly_publication.pdf"

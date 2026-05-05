@@ -307,7 +307,7 @@ def _run_live_flow_case(
 @pytest.mark.streaming
 @pytest.mark.manual_only
 def test_live_flow_execution_openai(monkeypatch: pytest.MonkeyPatch):
-    model_id = os.getenv("LIVE_LLM_OPENAI_MODEL", "gpt-5.4-nano").strip()
+    model_id = os.getenv("LIVE_LLM_OPENAI_MODEL", "gpt-5.4-mini").strip()
     _run_live_flow_case(
         monkeypatch,
         provider="openai",
@@ -345,7 +345,7 @@ def test_live_flow_execution_openai_with_pdf_context(monkeypatch: pytest.MonkeyP
     if not os.getenv("OPENAI_API_KEY", "").strip():
         pytest.skip("OPENAI_API_KEY is required for live PDF-backed flow execution test")
 
-    model_id = os.getenv("LIVE_LLM_OPENAI_MODEL", "gpt-5.4-nano").strip()
+    model_id = os.getenv("LIVE_LLM_OPENAI_MODEL", "gpt-5.4-mini").strip()
     document_id = None
     for client in _create_live_client(monkeypatch, supervisor_model=model_id):
         headers = {"X-API-Key": os.environ["TESTING_API_KEY"]}

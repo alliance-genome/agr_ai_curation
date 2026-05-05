@@ -260,7 +260,7 @@ const MODEL_HELP_TEXT = [
   'Quick guide:',
   '• openai/gpt-oss-120b (Groq): fastest for database lookups and validation loops.',
   '• gpt-5.5 (medium reasoning): default for complex PDF extraction and hard reasoning.',
-  '• gpt-5.4-nano: balanced speed and quality for iterative drafting.',
+  '• gpt-5.4-mini: balanced speed and quality for iterative drafting.',
 ].join('\n')
 
 const REASONING_HELP_TEXT = [
@@ -1264,7 +1264,7 @@ function PromptWorkshop({
       return `- ${model.name} [${model.model_id}] via ${model.provider}\n  Guidance: ${model.guidance || model.description || 'n/a'}\n  ${reasoning}`
     }).join('\n')
 
-    const message = `Help me choose the best model settings for my Agent Workshop draft.\n\nAgent draft: ${targetName}\nCurrent model: ${selectedModelId || 'none'}\nCurrent reasoning: ${selectedModelReasoning || 'none'}\nAttached tools: ${selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'}\n\nAvailable models:\n${modelLines}\n\nRecommendation policy to follow unless my use case says otherwise:\n- Prefer openai/gpt-oss-120b (Groq) for database lookup and validation workflows.\n- Prefer gpt-5.5 with medium reasoning for complex PDF extraction and deep thinking.\n- Use gpt-5.4-nano as a faster middle-ground for iterative drafting.\n\nPlease:\n1. Ask 1-3 focused questions to understand my use case\n2. Recommend a model and (if applicable) reasoning level\n3. Explain tradeoffs in plain curator-friendly language\n4. Give one backup model choice\n\n[Request ID: ${Date.now()}]`
+    const message = `Help me choose the best model settings for my Agent Workshop draft.\n\nAgent draft: ${targetName}\nCurrent model: ${selectedModelId || 'none'}\nCurrent reasoning: ${selectedModelReasoning || 'none'}\nAttached tools: ${selectedToolIds.length > 0 ? selectedToolIds.join(', ') : 'none'}\n\nAvailable models:\n${modelLines}\n\nRecommendation policy to follow unless my use case says otherwise:\n- Prefer openai/gpt-oss-120b (Groq) for database lookup and validation workflows.\n- Prefer gpt-5.5 with medium reasoning for complex PDF extraction and deep thinking.\n- Use gpt-5.4-mini as a faster middle-ground for iterative drafting.\n\nPlease:\n1. Ask 1-3 focused questions to understand my use case\n2. Recommend a model and (if applicable) reasoning level\n3. Explain tradeoffs in plain curator-friendly language\n4. Give one backup model choice\n\n[Request ID: ${Date.now()}]`
     onVerifyRequest?.(message)
     setStatus('Opened model-selection discussion with Claude')
   }

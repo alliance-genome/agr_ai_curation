@@ -224,7 +224,7 @@ def log_agent_config(
     Args:
         agent_name: Name of the agent (e.g., "PDF Specialist")
         instructions: Full system prompt/instructions for the agent
-        model: Model name (e.g., "gpt-5.4-nano")
+        model: Model name (e.g., "gpt-5.4-mini")
         tools: List of tool names available to the agent
         model_settings: Dict with temperature, reasoning, etc.
         metadata: Additional metadata (document_id, hierarchy, etc.)

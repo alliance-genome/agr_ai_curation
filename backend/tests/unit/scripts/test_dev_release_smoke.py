@@ -224,7 +224,7 @@ def test_ask_streaming_chat_question_returns_trace_and_model_summary(monkeypatch
     smoke = _load_smoke_module()
     checks: list[dict] = []
     sse_body = (
-        'data: {"type":"RUN_STARTED","trace_id":"trace-123","model":"gpt-5.4-nano"}\n'
+        'data: {"type":"RUN_STARTED","trace_id":"trace-123","model":"gpt-5.4-mini"}\n'
         "\n"
         'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
         "\n"
@@ -248,15 +248,15 @@ def test_ask_streaming_chat_question_returns_trace_and_model_summary(monkeypatch
         headers={"X-API-Key": "test-key"},
         session_id="session-stream-1",
         message="Summarize the loaded paper.",
-        chat_model="gpt-5.4-nano",
-        specialist_model="gpt-5.4-nano",
+        chat_model="gpt-5.4-mini",
+        specialist_model="gpt-5.4-mini",
         expected_model=None,
         chat_timeout_seconds=5.0,
         checks=checks,
     )
 
     assert summary["trace_id"] == "trace-123"
-    assert summary["model"] == "gpt-5.4-nano"
+    assert summary["model"] == "gpt-5.4-mini"
     assert "RUN_STARTED" in summary["event_types"]
     assert "RUN_FINISHED" in summary["event_types"]
     assert "zebrafish" in summary["response_preview"].lower()
@@ -267,7 +267,7 @@ def test_ask_streaming_chat_question_rejects_missing_trace_id(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []
     sse_body = (
-        'data: {"type":"RUN_STARTED","model":"gpt-5.4-nano"}\n'
+        'data: {"type":"RUN_STARTED","model":"gpt-5.4-mini"}\n'
         "\n"
         'data: {"type":"CHUNK_PROVENANCE","chunk_id":"chunk-1"}\n'
         "\n"
@@ -292,8 +292,8 @@ def test_ask_streaming_chat_question_rejects_missing_trace_id(monkeypatch):
             headers={"X-API-Key": "test-key"},
             session_id="session-stream-2",
             message="Summarize the loaded paper.",
-            chat_model="gpt-5.4-nano",
-            specialist_model="gpt-5.4-nano",
+            chat_model="gpt-5.4-mini",
+            specialist_model="gpt-5.4-mini",
             expected_model=None,
             chat_timeout_seconds=5.0,
             checks=checks,

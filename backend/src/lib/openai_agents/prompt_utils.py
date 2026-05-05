@@ -298,7 +298,7 @@ async def _extract_abstract_with_llm(raw_text: str) -> Optional[str]:
         client = AsyncOpenAI()
 
         # Use a fast, cheap model for this extraction
-        model = os.getenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-nano")
+        model = os.getenv("ABSTRACT_EXTRACTION_MODEL", "gpt-5.4-mini")
 
         # GPT-5 models use max_completion_tokens, others use max_tokens
         is_gpt5 = model.startswith("gpt-5")

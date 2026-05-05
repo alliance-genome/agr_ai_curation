@@ -102,7 +102,7 @@ def test_validate_model_id_paths(monkeypatch):
         "get_model",
         lambda _model_id: SimpleNamespace(model_id=_model_id, curator_visible=True),
     )
-    assert service._validate_model_id(" gpt-5.4-nano ") == "gpt-5.4-nano"
+    assert service._validate_model_id(" gpt-5.4-mini ") == "gpt-5.4-mini"
 
 
 def test_resolve_system_template_agent_paths():
@@ -331,7 +331,7 @@ def test_custom_agent_runtime_info_and_to_dict(monkeypatch):
         user_id=7,
         description="desc",
         icon="tool",
-        model_id="gpt-5.4-nano",
+        model_id="gpt-5.4-mini",
         model_temperature=0.2,
         model_reasoning="medium",
         output_schema_key=None,

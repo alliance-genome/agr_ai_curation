@@ -369,7 +369,7 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
 
     async def _run_agent_streamed(**kwargs):
         captured.update(kwargs)
-        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stream", "model": "gpt-5.4-nano"}}
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-stream", "model": "gpt-5.4-mini"}}
         yield {"type": "RUN_FINISHED", "data": {"response": "stream complete"}}
 
     _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
@@ -383,8 +383,8 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
             chat_message=chat.ChatMessage(
                 message="hello",
                 session_id="session-stream-override",
-                model="gpt-5.4-nano",
-                specialist_model="gpt-5.4-nano",
+                model="gpt-5.4-mini",
+                specialist_model="gpt-5.4-mini",
                 supervisor_temperature=0.0,
                 specialist_temperature=0.0,
                 supervisor_reasoning="minimal",
@@ -396,8 +396,8 @@ def test_chat_stream_endpoint_passes_model_overrides_to_runner(monkeypatch):
 
     events = asyncio.run(_consume_stream(response))
     assert [event["type"] for event in events] == ["RUN_STARTED", "turn_completed"]
-    assert captured["supervisor_model"] == "gpt-5.4-nano"
-    assert captured["specialist_model"] == "gpt-5.4-nano"
+    assert captured["supervisor_model"] == "gpt-5.4-mini"
+    assert captured["specialist_model"] == "gpt-5.4-mini"
     assert captured["supervisor_temperature"] == 0.0
     assert captured["specialist_temperature"] == 0.0
     assert captured["supervisor_reasoning"] == "minimal"

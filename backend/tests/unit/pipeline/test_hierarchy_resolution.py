@@ -45,7 +45,7 @@ async def test_resolve_document_hierarchy_applies_classification_and_metadata(mo
         )
 
     monkeypatch.setattr(hierarchy, "_call_llm_for_hierarchy", _fake_llm)
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-nano")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
 
     elements = [
         {"metadata": {"section_title": "Intro"}, "text": "Overview"},
@@ -67,7 +67,7 @@ async def test_resolve_document_hierarchy_applies_classification_and_metadata(mo
     assert metadata.top_level_sections == ["Introduction"]
     assert metadata.abstract_section_title == "Intro"
     assert metadata.llm_raw_response == {"model": "stub"}
-    assert metadata.model_used == "gpt-5.4-nano"
+    assert metadata.model_used == "gpt-5.4-mini"
 
 
 @pytest.mark.asyncio
@@ -175,7 +175,7 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
     )
     captured, fake_reasoning_cls = _install_fake_agent_modules(monkeypatch, final_output=output)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-nano")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "medium")
 
     sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
@@ -197,7 +197,7 @@ async def test_call_llm_for_hierarchy_success_with_structured_output(monkeypatch
 async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
     captured, _ = _install_fake_agent_modules(monkeypatch, final_output=None)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
-    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-nano")
+    monkeypatch.setenv("HIERARCHY_LLM_MODEL", "gpt-5.4-mini")
     monkeypatch.setenv("HIERARCHY_LLM_REASONING", "low")
 
     sections, abstract_title, raw = await hierarchy._call_llm_for_hierarchy(
@@ -207,7 +207,7 @@ async def test_call_llm_for_hierarchy_handles_empty_final_output(monkeypatch):
     assert sections == []
     assert abstract_title is None
     assert raw is not None
-    assert raw["model"] == "gpt-5.4-nano"
+    assert raw["model"] == "gpt-5.4-mini"
     assert captured["temperature"] is None
 
 

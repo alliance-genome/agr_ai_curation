@@ -276,7 +276,7 @@ When curators ask which model to use, give a concrete recommendation (not just g
    - Escalate to `high` only for hard ambiguity; warn that it is slower and not ideal for routine DB checks
 
 3. **Fast balanced option between those two**
-   - Recommend: `gpt-5.4-nano`
+   - Recommend: `gpt-5.4-mini`
    - Position it as the "start here" option for quick drafting and iterative prompt work
 
 How to coach:

@@ -9,7 +9,7 @@ Environment variable naming convention:
 
 Example:
   AGENT_SUPERVISOR_MODEL=gpt-4o
-  AGENT_PDF_MODEL=gpt-5.4-nano
+  AGENT_PDF_MODEL=gpt-5.4-mini
   AGENT_PDF_TEMPERATURE=0.3
   AGENT_GENE_REASONING=medium
 
@@ -232,7 +232,7 @@ def get_model_for_agent(
     LiteLLM handles automatically. This function abstracts that complexity.
 
     Args:
-        model_name: The model name (e.g., "gpt-5.4-nano", "gemini-3-pro-preview")
+        model_name: The model name (e.g., "gpt-5.4-mini", "gemini-3-pro-preview")
 
     Returns:
         Model name string for OpenAI, or LitellmModel instance for Gemini
@@ -290,7 +290,7 @@ def supports_reasoning(model: str) -> bool:
     """Check if a model supports reasoning/thinking mode.
 
     All supported models use reasoning:
-    - GPT-5 series (gpt-5, gpt-5.4-nano) - OpenAI reasoning
+    - GPT-5 series (gpt-5, gpt-5.4-mini) - OpenAI reasoning
     - Gemini 3 Pro Preview (gemini-3-pro-preview) - "low"/"high" thinking levels
 
     For Gemini 3 models, the OpenAI SDK's reasoning_effort parameter maps to:
@@ -334,7 +334,7 @@ def build_model_settings(
     behavior across OpenAI and Gemini models (and potentially Anthropic in future).
 
     Reasoning is supported on:
-    - GPT-5 family models (gpt-5, gpt-5.4-nano)
+    - GPT-5 family models (gpt-5, gpt-5.4-mini)
     - Gemini 3 Pro Preview (gemini-3-pro-preview) - uses "low"/"high" thinking levels
 
     For Gemini 3, the OpenAI SDK's reasoning_effort parameter maps to:

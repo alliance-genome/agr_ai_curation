@@ -205,7 +205,7 @@ Historical note:
    - explicit evidence that the smoke expected `gpt-5.4` for the
      runtime-default supervisor path before the ALL-290 model upgrade
    - explicit evidence that the expected runtime-default specialist model is
-     `gpt-5.4-nano`, while also recording that this exact specialist model id is
+     `gpt-5.4-mini`, while also recording that this exact specialist model id is
      not yet directly observable via the current SSE contract
    - batch intentionally skipped because that slice is not implemented yet
 

@@ -116,7 +116,7 @@ def test_build_model_settings_applies_reasoning_and_provider_parallel_policy(mon
     )
 
     settings = supervisor_agent._build_model_settings(
-        model="gpt-5.4-nano",
+        model="gpt-5.4-mini",
         temperature=0.7,
         reasoning_effort="high",
     )
@@ -660,19 +660,19 @@ def test_create_supervisor_agent_applies_model_overrides(monkeypatch):
     created = supervisor_agent.create_supervisor_agent(
         document_id="doc-override",
         user_id="user-override",
-        model_override="gpt-5.4-nano",
+        model_override="gpt-5.4-mini",
         temperature_override=0.0,
         reasoning_override="minimal",
-        specialist_model_override="gpt-5.4-nano",
+        specialist_model_override="gpt-5.4-mini",
         specialist_temperature_override=0.0,
         specialist_reasoning_override="minimal",
     )
 
-    assert created.model == "gpt-5.4-nano"
-    assert created.model_settings["model"] == "gpt-5.4-nano"
+    assert created.model == "gpt-5.4-mini"
+    assert created.model_settings["model"] == "gpt-5.4-mini"
     assert created.model_settings["temperature"] == 0.0
     assert created.model_settings["reasoning_effort"] == "minimal"
-    assert captured_dynamic["specialist_model_override"] == "gpt-5.4-nano"
+    assert captured_dynamic["specialist_model_override"] == "gpt-5.4-mini"
     assert captured_dynamic["specialist_temperature_override"] == 0.0
     assert captured_dynamic["specialist_reasoning_override"] == "minimal"
 

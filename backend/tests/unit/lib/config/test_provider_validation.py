@@ -56,9 +56,9 @@ def test_build_provider_runtime_report_flags_missing_api_key_in_strict_mode(monk
             supports_parallel_tool_calls=True,
         )
     ])
-    monkeypatch.setattr(module, "load_models", lambda: {"gpt-5.4-nano": object()})
+    monkeypatch.setattr(module, "load_models", lambda: {"gpt-5.4-mini": object()})
     monkeypatch.setattr(module, "list_models", lambda: [
-        SimpleNamespace(model_id="gpt-5.4-nano", provider="openai", curator_visible=True)
+        SimpleNamespace(model_id="gpt-5.4-mini", provider="openai", curator_visible=True)
     ])
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
@@ -83,9 +83,9 @@ def test_build_provider_runtime_report_downgrades_missing_key_in_non_strict_mode
             supports_parallel_tool_calls=True,
         )
     ])
-    monkeypatch.setattr(module, "load_models", lambda: {"gpt-5.4-nano": object()})
+    monkeypatch.setattr(module, "load_models", lambda: {"gpt-5.4-mini": object()})
     monkeypatch.setattr(module, "list_models", lambda: [
-        SimpleNamespace(model_id="gpt-5.4-nano", provider="openai", curator_visible=True)
+        SimpleNamespace(model_id="gpt-5.4-mini", provider="openai", curator_visible=True)
     ])
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
