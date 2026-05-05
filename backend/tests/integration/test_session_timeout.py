@@ -135,7 +135,7 @@ def valid_token():
 @pytest.fixture
 def mock_valid_auth():
     """Mock auth that accepts valid tokens."""
-    from conftest import MockCognitoUser
+    from tests.integration.conftest import MockCognitoUser
 
     class MockValidAuth:
         def __init__(self, *args, **kwargs):

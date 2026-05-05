@@ -174,7 +174,18 @@ def _bootstrap_weaviate_schema() -> None:
                     Property(name="documentId", data_type=DataType.TEXT),
                     Property(name="chunkIndex", data_type=DataType.INT),
                     Property(name="content", data_type=DataType.TEXT),
+                    Property(name="contentPreview", data_type=DataType.TEXT),
+                    Property(name="elementType", data_type=DataType.TEXT),
+                    Property(name="pageNumber", data_type=DataType.INT),
+                    Property(name="sectionTitle", data_type=DataType.TEXT),
+                    Property(name="sectionPath", data_type=DataType.TEXT_ARRAY),
+                    Property(name="parentSection", data_type=DataType.TEXT),
+                    Property(name="subsection", data_type=DataType.TEXT),
+                    Property(name="isTopLevel", data_type=DataType.BOOL),
+                    Property(name="contentType", data_type=DataType.TEXT),
                     Property(name="metadata", data_type=DataType.TEXT),
+                    Property(name="embeddingTimestamp", data_type=DataType.DATE),
+                    Property(name="docItemProvenance", data_type=DataType.TEXT),
                 ],
             )
             _ensure_collection(

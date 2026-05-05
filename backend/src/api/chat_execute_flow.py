@@ -1034,6 +1034,11 @@ async def execute_flow_endpoint(
                 )
             )
         except Exception as exc:
+            run_error_message = (
+                str(exc)
+                if isinstance(exc, ValueError)
+                else "Flow execution failed unexpectedly."
+            )
             logger.error(
                 "Flow execution error: %s",
                 exc,
@@ -1064,7 +1069,7 @@ async def execute_flow_endpoint(
                     session_id=current_session_id,
                     turn_id=current_turn_id,
                     trace_id=trace_id,
-                    message="Flow execution failed unexpectedly.",
+                    message=run_error_message,
                     error_type=type(exc).__name__,
                 )
             )

@@ -99,8 +99,14 @@ services:
       dockerfile: Dockerfile.test
     volumes:
       - ./backend:/app/backend
+      - ./alliance_agents:/app/alliance_agents:ro
       - ./config:/app/config:ro
       - ./packages:/app/packages:ro
+      - ./config:/workspace/config:ro
+      - ./packages:/workspace/packages:ro
+      - ./docker-compose.production.yml:/workspace/docker-compose.production.yml:ro
+      - ./scripts/install:/workspace/scripts/install:ro
+      - ./scripts/testing:/app/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
       - OPENAI_API_KEY=test-key
@@ -184,8 +190,10 @@ services:
       dockerfile: Dockerfile.test
     volumes:
       - ./backend:/app/backend
+      - ./alliance_agents:/app/alliance_agents:ro
       - ./config:/app/config:ro
       - ./packages:/app/packages:ro
+      - ./scripts/testing:/app/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}

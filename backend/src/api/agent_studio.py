@@ -64,6 +64,7 @@ from src.lib.agent_studio import (
     SuggestionType,
     submit_suggestion_sns,
 )
+from src.lib.agent_studio import catalog_service
 from src.lib.agent_studio.catalog_service import get_prompt_catalog
 import src.lib.agent_studio.chat_session as agent_studio_chat_session
 import src.lib.agent_studio.prompt_builder as prompt_builder
@@ -2584,9 +2585,8 @@ async def get_all_tools_endpoint(
     user: Dict[str, Any] = get_auth_dependency()
 ):
     """Get all tools from the registry."""
-    from src.lib.agent_studio.catalog_service import get_all_tools
     try:
-        tools = get_all_tools()
+        tools = catalog_service.get_all_tools()
         return {"tools": tools}
     except Exception as exc:
         raise_sanitized_http_exception(
@@ -2620,14 +2620,13 @@ async def get_tool_details_endpoint(
         tool_id: Tool identifier
         agent_id: Optional agent ID to get agent-specific method context
     """
-    from src.lib.agent_studio.catalog_service import get_tool_details, get_tool_for_agent
     try:
         if agent_id:
             # Get tool with agent-specific context
-            tool = get_tool_for_agent(tool_id, agent_id)
+            tool = catalog_service.get_tool_for_agent(tool_id, agent_id)
         else:
             # Get generic tool details
-            tool = get_tool_details(tool_id)
+            tool = catalog_service.get_tool_details(tool_id)
 
         if not tool:
             raise HTTPException(
