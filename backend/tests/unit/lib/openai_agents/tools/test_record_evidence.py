@@ -201,6 +201,132 @@ async def test_record_evidence_accepts_fuzzy_match_after_citation_marker_elision
 
 
 @pytest.mark.asyncio
+async def test_record_evidence_rapidfuzz_recovers_quote_with_citations_and_trailing_clause(monkeypatch):
+    pytest.importorskip("rapidfuzz")
+
+    chunk_id = "935d683a-68c0-f825-cfdc-2237b100eaeb"
+    chunk_text = (
+        "Rh1 is the most abundant opsin in the fly eye and comprises the Opsin protein "
+        "(encoded by the gene ninaE [19] ) conjugated to a chromophore. "
+        "Decreased levels of Rh1 induced by mutating the ninaE gene, [20] or by removal "
+        "of Vitamin A precursors [21] from the diet resulted in substantially smaller "
+        "rhabdomeres (yet, this did not change the eye size) and suggested that levels "
+        "of Rh1 and Actin are linked."
+    )
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 1,
+            "parent_section": "Results and Discussion",
+            "subsection": "The Molar Abundance of Actins, Opsin, and Crumbs in Fly Eyes",
+            "metadata": {},
+        }
+
+    async def _fake_llm_confirmation(**kwargs):
+        candidate_text = kwargs["candidates"][0].text
+        assert kwargs["entity"] == "ninaE"
+        assert "ninaE gene, [20]" in candidate_text
+        assert "Vitamin A precursors [21]" in candidate_text
+        assert "yet, this did not change" not in candidate_text
+        return 0
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="ninaE",
+        chunk_id=chunk_id,
+        claimed_quote=(
+            "Decreased levels of Rh1 induced by mutating the ninaE gene, or by removal "
+            "of Vitamin A precursors from the diet resulted in substantially smaller "
+            "rhabdomeres."
+        ),
+    )
+
+    assert result["status"] == "verified"
+    assert result["verified_quote"] == (
+        "Decreased levels of Rh1 induced by mutating the ninaE gene, [20] or by removal "
+        "of Vitamin A precursors [21] from the diet resulted in substantially smaller "
+        "rhabdomeres"
+    )
+
+
+def test_fuzzy_candidate_review_ranking_prioritizes_identity_preserving_candidates():
+    claimed_quote = "GeneA mutants showed abnormal rhabdomeres."
+    candidates = [
+        record_evidence._FuzzyQuoteCandidate(
+            text="GeneB mutants showed abnormal rhabdomeres.",
+            raw_start=0,
+            raw_end=41,
+            score=0.99,
+        ),
+        record_evidence._FuzzyQuoteCandidate(
+            text="GeneC mutants showed abnormal rhabdomeres.",
+            raw_start=42,
+            raw_end=83,
+            score=0.98,
+        ),
+        record_evidence._FuzzyQuoteCandidate(
+            text="GeneD mutants showed abnormal rhabdomeres.",
+            raw_start=84,
+            raw_end=125,
+            score=0.97,
+        ),
+        record_evidence._FuzzyQuoteCandidate(
+            text="GeneA mutants showed abnormal rhabdomeres in adult eyes.",
+            raw_start=126,
+            raw_end=184,
+            score=0.80,
+        ),
+    ]
+
+    ranked = record_evidence._rank_fuzzy_candidates_for_review(
+        entity="GeneA",
+        claimed_quote=claimed_quote,
+        candidates=candidates,
+    )
+
+    assert ranked[0].text.startswith("GeneA")
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_rejects_llm_accepted_partial_claim_coverage(monkeypatch):
+    chunk_id = "chunk-partial-support"
+    chunk_text = "GeneA mutants showed abnormal rhabdomeres."
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 3,
+            "parent_section": "Results",
+            "metadata": {},
+        }
+
+    async def _fake_llm_confirmation(**_kwargs):
+        return 0
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="GeneA",
+        chunk_id=chunk_id,
+        claimed_quote="GeneA mutants showed abnormal rhabdomeres and had reduced survival.",
+    )
+
+    assert result["status"] == "not_found"
+    assert "evidence_record_id" not in result
+    assert "verified_quote" not in result
+
+
+@pytest.mark.asyncio
 async def test_record_evidence_does_not_auto_accept_same_entity_semantic_flip(monkeypatch):
     chunk_id = "chunk-semantic-flip"
     chunk_text = "crb mutants showed normal rhabdomeres in the eye."

@@ -61,9 +61,11 @@ _IDENTITY_TOKEN_PATTERN = re.compile(
     r"[A-Za-z]+[A-Z][A-Za-z0-9]*)\b"
 )
 _WORD_TOKEN_PATTERN = re.compile(r"\b[A-Za-z0-9]+\b")
+_SOURCE_TRAILING_PUNCTUATION = ".,;:!?)]}"
 _FUZZY_CANDIDATE_LIMIT = 5
 _FUZZY_REVIEW_CANDIDATE_LIMIT = 3
 _FUZZY_MIN_SCORE = 0.78
+_MIN_CLAIM_TOKEN_COVERAGE = 0.90
 _EVIDENCE_CONFIRMATION_MODEL_ENV = "EVIDENCE_CONFIRMATION_MODEL"
 _EVIDENCE_CONFIRMATION_ENABLED_ENV = "EVIDENCE_CONFIRMATION_ENABLED"
 _EVIDENCE_CONFIRMATION_TIMEOUT_ENV = "EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS"
@@ -105,6 +107,46 @@ def _normalize_for_similarity(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().casefold()
 
 
+def _is_token_char(value: str) -> bool:
+    return value.isalnum() or value == "_"
+
+
+def _expand_match_to_source_boundaries(text: str, start: int, end: int) -> tuple[int, int]:
+    bounded_start = max(0, min(start, len(text)))
+    bounded_end = max(bounded_start, min(end, len(text)))
+
+    while (
+        bounded_start > 0
+        and bounded_start < len(text)
+        and _is_token_char(text[bounded_start - 1])
+        and _is_token_char(text[bounded_start])
+    ):
+        bounded_start -= 1
+
+    nearby_prefix_start = max(0, bounded_start - 80)
+    nearby_prefix = text[nearby_prefix_start:bounded_start]
+    sentence_boundaries = list(_SENTENCE_BOUNDARY_PATTERN.finditer(nearby_prefix))
+    if sentence_boundaries:
+        sentence_start = nearby_prefix_start + sentence_boundaries[-1].end()
+        if bounded_start - sentence_start <= 40:
+            bounded_start = sentence_start
+    elif bounded_start <= 40:
+        bounded_start = 0
+
+    while (
+        bounded_end > 0
+        and bounded_end < len(text)
+        and _is_token_char(text[bounded_end - 1])
+        and _is_token_char(text[bounded_end])
+    ):
+        bounded_end += 1
+
+    while bounded_end < len(text) and text[bounded_end] in _SOURCE_TRAILING_PUNCTUATION:
+        bounded_end += 1
+
+    return bounded_start, bounded_end
+
+
 def _iter_sentence_spans(chunk_text: str) -> list[tuple[int, int]]:
     text = chunk_text.strip()
     if not text:
@@ -126,6 +168,63 @@ def _iter_sentence_spans(chunk_text: str) -> list[tuple[int, int]]:
         spans.append((start, final_end))
 
     return spans or [(0, len(chunk_text))]
+
+
+def _sentence_spans_overlapping(
+    sentence_spans: list[tuple[int, int]],
+    start: int,
+    end: int,
+) -> list[tuple[int, int]]:
+    overlaps: list[tuple[int, int]] = []
+    for span_start, span_end in sentence_spans:
+        if span_start < end and start < span_end:
+            overlaps.append((span_start, span_end))
+    return overlaps
+
+
+def _rapidfuzz_partial_alignment(claimed_quote: str, chunk_text: str) -> tuple[float, int, int] | None:
+    try:
+        from rapidfuzz import fuzz
+
+        claimed_for_alignment = claimed_quote.lower()
+        chunk_for_alignment = chunk_text.lower()
+        if len(claimed_for_alignment) != len(claimed_quote) or len(chunk_for_alignment) != len(chunk_text):
+            claimed_for_alignment = claimed_quote
+            chunk_for_alignment = chunk_text
+        alignment = fuzz.partial_ratio_alignment(
+            claimed_for_alignment,
+            chunk_for_alignment,
+        )
+    except Exception:
+        return None
+
+    score = float(alignment.score) / 100.0
+    start = int(alignment.dest_start)
+    end = int(alignment.dest_end)
+    if end <= start:
+        return None
+    return score, start, end
+
+
+def _rapidfuzz_partial_score(claimed_quote: str, candidate_text: str) -> float | None:
+    try:
+        from rapidfuzz import fuzz
+
+        return float(fuzz.partial_ratio(claimed_quote.lower(), candidate_text.lower())) / 100.0
+    except Exception:
+        return None
+
+
+def _candidate_similarity_score(claimed_quote: str, candidate_text: str) -> float:
+    rapidfuzz_score = _rapidfuzz_partial_score(claimed_quote, candidate_text)
+    if rapidfuzz_score is not None:
+        return rapidfuzz_score
+
+    return SequenceMatcher(
+        None,
+        _normalize_for_similarity(claimed_quote),
+        _normalize_for_similarity(candidate_text),
+    ).ratio()
 
 
 def _identity_tokens(value: str) -> set[str]:
@@ -187,6 +286,58 @@ def _candidate_satisfies_required_identity(
     return required_tokens <= candidate_tokens
 
 
+def _claim_token_coverage(claimed_quote: str, candidate_text: str) -> float:
+    claimed_tokens = [
+        token.casefold()
+        for token in _WORD_TOKEN_PATTERN.findall(str(claimed_quote or ""))
+        if token.strip()
+    ]
+    if not claimed_tokens:
+        return 0.0
+
+    remaining_candidate_tokens: dict[str, int] = {}
+    for token in _WORD_TOKEN_PATTERN.findall(str(candidate_text or "")):
+        normalized = token.casefold()
+        if not normalized:
+            continue
+        remaining_candidate_tokens[normalized] = remaining_candidate_tokens.get(normalized, 0) + 1
+
+    matched = 0
+    for token in claimed_tokens:
+        count = remaining_candidate_tokens.get(token, 0)
+        if count <= 0:
+            continue
+        matched += 1
+        remaining_candidate_tokens[token] = count - 1
+
+    return matched / len(claimed_tokens)
+
+
+def _candidate_satisfies_claim_coverage(*, claimed_quote: str, candidate_text: str) -> bool:
+    return _claim_token_coverage(claimed_quote, candidate_text) >= _MIN_CLAIM_TOKEN_COVERAGE
+
+
+def _rank_fuzzy_candidates_for_review(
+    *,
+    entity: str,
+    claimed_quote: str,
+    candidates: list[_FuzzyQuoteCandidate],
+) -> list[_FuzzyQuoteCandidate]:
+    return sorted(
+        candidates,
+        key=lambda candidate: (
+            _candidate_satisfies_required_identity(
+                entity=entity,
+                claimed_quote=claimed_quote,
+                candidate_text=candidate.text,
+            ),
+            candidate.score,
+            -len(candidate.text),
+        ),
+        reverse=True,
+    )
+
+
 def _fuzzy_quote_candidates(claimed_quote: str, chunk_text: str) -> list[_FuzzyQuoteCandidate]:
     normalized_claim = _normalize_for_similarity(claimed_quote)
     if not normalized_claim:
@@ -194,6 +345,25 @@ def _fuzzy_quote_candidates(claimed_quote: str, chunk_text: str) -> list[_FuzzyQ
 
     sentence_spans = _iter_sentence_spans(chunk_text)
     candidate_spans: list[tuple[int, int]] = []
+
+    alignment = _rapidfuzz_partial_alignment(claimed_quote, chunk_text)
+    if alignment is not None:
+        alignment_score, alignment_start, alignment_end = alignment
+        if alignment_score >= _FUZZY_MIN_SCORE:
+            expanded_start, expanded_end = _expand_match_to_source_boundaries(
+                chunk_text,
+                alignment_start,
+                alignment_end,
+            )
+            candidate_spans.append((expanded_start, expanded_end))
+
+            overlapping_sentence_spans = _sentence_spans_overlapping(
+                sentence_spans,
+                alignment_start,
+                alignment_end,
+            )
+            candidate_spans.extend(overlapping_sentence_spans)
+
     for index, (start, end) in enumerate(sentence_spans):
         candidate_spans.append((start, end))
         if index + 1 < len(sentence_spans):
@@ -210,11 +380,7 @@ def _fuzzy_quote_candidates(claimed_quote: str, chunk_text: str) -> list[_FuzzyQ
         if not candidate_text:
             continue
 
-        score = SequenceMatcher(
-            None,
-            normalized_claim,
-            _normalize_for_similarity(candidate_text),
-        ).ratio()
+        score = _candidate_similarity_score(claimed_quote, candidate_text)
         if score < _FUZZY_MIN_SCORE:
             continue
 
@@ -225,7 +391,7 @@ def _fuzzy_quote_candidates(claimed_quote: str, chunk_text: str) -> list[_FuzzyQ
             score=score,
         ))
 
-    candidates.sort(key=lambda candidate: candidate.score, reverse=True)
+    candidates.sort(key=lambda candidate: (candidate.score, -len(candidate.text)), reverse=True)
     return candidates[:_FUZZY_CANDIDATE_LIMIT]
 
 
@@ -353,6 +519,11 @@ async def _find_fuzzy_verified_quote(
     candidates = _fuzzy_quote_candidates(claimed_quote, chunk_text)
     if not candidates:
         return None, None, []
+    candidates = _rank_fuzzy_candidates_for_review(
+        entity=entity,
+        claimed_quote=claimed_quote,
+        candidates=candidates,
+    )
 
     best = candidates[0]
     second_score = candidates[1].score if len(candidates) > 1 else 0.0
@@ -383,6 +554,20 @@ async def _find_fuzzy_verified_quote(
         return None, _QuoteMatch(raw_start=best.raw_start, raw_end=best.raw_end), candidates
 
     selected = candidates[selected_index]
+    if not _candidate_satisfies_claim_coverage(
+        claimed_quote=claimed_quote,
+        candidate_text=selected.text,
+    ):
+        logger.warning(
+            "record_evidence rejected LLM-accepted fuzzy candidate because claim coverage was too low "
+            "entity=%r selected_index=%d score=%.4f coverage=%.4f",
+            entity,
+            selected_index,
+            selected.score,
+            _claim_token_coverage(claimed_quote, selected.text),
+        )
+        return None, _QuoteMatch(raw_start=best.raw_start, raw_end=best.raw_end), candidates
+
     if not _candidate_satisfies_required_identity(
         entity=entity,
         claimed_quote=claimed_quote,
