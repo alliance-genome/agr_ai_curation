@@ -498,6 +498,25 @@ def test_ask_streaming_chat_question_can_validate_runtime_default_model_without_
     assert "crb" in summary["response_preview"].lower()
 
 
+def test_build_flow_definition_keeps_release_smoke_flow_narrow():
+    smoke = _load_smoke_module()
+
+    flow_definition = smoke.build_flow_definition(
+        agent_id="ca-test-agent",
+        agent_name="Test Agent",
+    )
+
+    task_instructions = flow_definition["nodes"][0]["data"]["task_instructions"]
+    step_goal = flow_definition["nodes"][1]["data"]["step_goal"]
+
+    assert "exactly one" in smoke.DEFAULT_FLOW_QUERY
+    assert "crb/Crumbs" in smoke.DEFAULT_FLOW_QUERY
+    assert "evidence record" in smoke.DEFAULT_FLOW_QUERY
+    assert "Do not extract any other genes" in task_instructions
+    assert "evidence_record_id" in task_instructions
+    assert "evidence_record_id" in step_goal
+
+
 def test_require_safe_fixture_deletion_principal_rejects_non_test_user():
     smoke = _load_smoke_module()
 

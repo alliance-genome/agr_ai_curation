@@ -45,7 +45,8 @@ DEFAULT_STREAM_CHAT_MESSAGE = (
     "Mention the main biological topic, but do not extract, normalize, or curate entities."
 )
 DEFAULT_FLOW_QUERY = (
-    "Extract the experimentally supported genes from the loaded paper, include the organism, and preserve verified evidence."
+    "Extract exactly one experimentally supported gene from the loaded paper: crb/Crumbs. "
+    "Include the organism and one verified evidence record for that gene."
 )
 DEFAULT_FLOW_MODEL = "gpt-5.4-mini"
 DEFAULT_CHAT_MODEL = "gpt-5.5"
@@ -1302,8 +1303,10 @@ def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
                     "agent_id": "task_input",
                     "agent_display_name": "Initial Instructions",
                     "task_instructions": (
-                        "Read the loaded paper and extract the experimentally supported genes. "
-                        "Include the organism when possible and preserve verified supporting evidence."
+                        "Read the loaded paper and extract exactly one experimentally supported gene: "
+                        "crb/Crumbs. Include the organism when possible. Call record_evidence for "
+                        "one supporting quote, and include the returned evidence_record_id on the "
+                        "retained item. Do not extract any other genes."
                     ),
                     "output_key": "task_input_text",
                     "input_source": "user_query",
@@ -1319,8 +1322,9 @@ def build_flow_definition(agent_id: str, agent_name: str) -> Dict[str, Any]:
                     "output_key": "final_output",
                     "input_source": "previous_output",
                     "step_goal": (
-                        "Extract experimentally supported genes from the loaded document and retain "
-                        "verified evidence records."
+                        "Extract only crb/Crumbs from the loaded document, retain exactly one "
+                        "verified evidence record, and include its evidence_record_id in the final "
+                        "structured result."
                     ),
                 },
             },
