@@ -103,6 +103,8 @@ export type {
 } from './pdfEvidenceNavigation'
 export type { PdfViewerProps } from './pdfViewerTypes'
 
+const PDFJS_FIND_STATE_NOT_FOUND = 1
+
 export function PdfViewer({
   activeDocumentOwnerToken,
   storageUserId = null,
@@ -120,6 +122,7 @@ export function PdfViewer({
   const pdfAppRef = useRef<any>(null)
   const cleanupRefs = useRef<(() => void)[]>([])
   const highlightTermsRef = useRef<string[]>([])
+  const toolbarSearchQueryRef = useRef('')
   const settingsRef = useRef<HighlightSettings>(defaultHighlightSettings)
   const viewerStateRef = useRef<ViewerState>({ ...DEFAULT_STATE })
   const loadStartRef = useRef<number | null>(null)
@@ -146,6 +149,14 @@ export function PdfViewer({
   const [overlayRenderKey, setOverlayRenderKey] = useState(0)
   const [navigationResult, setNavigationResult] = useState<PdfViewerNavigationResult | null>(null)
   const [evidenceHighlight, setEvidenceHighlight] = useState<EvidenceTextLayerHighlight | null>(null)
+  const [viewerUiState, setViewerUiState] = useState({
+    currentPage: DEFAULT_STATE.currentPage,
+    zoomLevel: DEFAULT_STATE.zoomLevel,
+    searchQuery: '',
+    searchCurrent: null as number | null,
+    searchTotal: null as number | null,
+    searchNotFound: false,
+  })
   const [eventPendingNavigation, setEventPendingNavigation] =
     useState<EvidenceNavigationCommand | null>(null)
   const effectivePendingNavigation = pendingNavigation ?? eventPendingNavigation
@@ -198,12 +209,21 @@ export function PdfViewer({
       lastInteraction: new Date().toISOString(),
     }
     highlightTermsRef.current = []
+    toolbarSearchQueryRef.current = ''
     idleResetErrorRef.current = nextError
     setActiveDocument(null)
     setStatus(nextError ? 'error' : 'idle')
     setError(nextError)
     setHighlightTerms([])
     setEvidenceHighlight(null)
+    setViewerUiState({
+      currentPage: DEFAULT_STATE.currentPage,
+      zoomLevel: DEFAULT_STATE.zoomLevel,
+      searchQuery: '',
+      searchCurrent: null,
+      searchTotal: null,
+      searchNotFound: false,
+    })
     commitNavigationResult(null)
     if (viewerSessionStorageKey) {
       localStorage.removeItem(viewerSessionStorageKey)
@@ -456,6 +476,14 @@ export function PdfViewer({
       }
     }
 
+    toolbarSearchQueryRef.current = ''
+    setViewerUiState((current) => ({
+      ...current,
+      searchQuery: '',
+      searchCurrent: null,
+      searchTotal: null,
+      searchNotFound: false,
+    }))
     setEvidenceHighlight(null)
     clearPdfJsFindHighlights(pdfApp)
 
@@ -903,6 +931,20 @@ export function PdfViewer({
         setStatus('ready')
         const resolvedPageCount =
           pdfApp?.pdfDocument?.numPages ?? pdfApp?.pdfViewer?.pdfDocument?.numPages ?? null
+        const resolvedCurrentPage = pdfApp?.pdfViewer?.currentPageNumber ?? pdfApp?.page ?? DEFAULT_STATE.currentPage
+        const resolvedScale = pdfApp?.pdfViewer?.currentScale
+        setViewerUiState((current) => ({
+          ...current,
+          currentPage: typeof resolvedCurrentPage === 'number'
+            ? resolvedCurrentPage
+            : current.currentPage,
+          zoomLevel: typeof resolvedScale === 'number'
+            ? Math.round(Math.max(10, Math.min(500, resolvedScale * 100)))
+            : current.zoomLevel,
+          searchCurrent: null,
+          searchTotal: null,
+          searchNotFound: false,
+        }))
         if (typeof resolvedPageCount === 'number' && resolvedPageCount > 0) {
           setActiveDocument((current) =>
             current && current.pageCount !== resolvedPageCount
@@ -934,6 +976,10 @@ export function PdfViewer({
       const onPageChanging = (event: any) => {
         if (typeof event.pageNumber === 'number') {
           updateViewerState({ currentPage: event.pageNumber })
+          setViewerUiState((current) => ({
+            ...current,
+            currentPage: event.pageNumber,
+          }))
           setOverlayRenderKey((prev) => prev + 1)
         }
       }
@@ -950,8 +996,46 @@ export function PdfViewer({
           // Clamp to reasonable values (10% to 500%) to prevent extreme zoom bugs
           const newZoomLevel = Math.round(Math.max(10, Math.min(500, event.scale * 100)))
           updateViewerState({ zoomLevel: newZoomLevel })
+          setViewerUiState((current) => ({
+            ...current,
+            zoomLevel: newZoomLevel,
+          }))
           setOverlayRenderKey((prev) => prev + 1)
         }
+      }
+
+      const onFindMatchesCount = (event: any) => {
+        if (event?.source !== pdfApp?.findController) {
+          return
+        }
+        const activeSearchQuery = toolbarSearchQueryRef.current.trim()
+        const controllerQuery = typeof event?.source?.state?.query === 'string'
+          ? event.source.state.query.trim()
+          : ''
+        if (!activeSearchQuery || controllerQuery !== activeSearchQuery) {
+          return
+        }
+        setViewerUiState((current) => ({
+          ...current,
+          searchCurrent: event?.matchesCount?.current ?? current.searchCurrent,
+          searchTotal: event?.matchesCount?.total ?? current.searchTotal,
+        }))
+      }
+
+      const onFindControlState = (event: any) => {
+        if (event?.source !== pdfApp?.findController) {
+          return
+        }
+        const rawQuery = typeof event?.rawQuery === 'string' ? event.rawQuery : ''
+        if (!toolbarSearchQueryRef.current.trim() || rawQuery.trim() !== toolbarSearchQueryRef.current.trim()) {
+          return
+        }
+        setViewerUiState((current) => ({
+          ...current,
+          searchCurrent: event?.matchesCount?.current ?? current.searchCurrent,
+          searchTotal: event?.matchesCount?.total ?? current.searchTotal,
+          searchNotFound: event?.state === PDFJS_FIND_STATE_NOT_FOUND,
+        }))
       }
 
       eventBus.on('textlayerrendered', onTextLayerRendered)
@@ -959,6 +1043,8 @@ export function PdfViewer({
       eventBus.on('pagechanging', onPageChanging)
       eventBus.on('updatetextlayermatches', onTextLayerMatchesUpdated)
       eventBus.on('scalechanging', onScaleChanging)
+      eventBus.on('updatefindmatchescount', onFindMatchesCount)
+      eventBus.on('updatefindcontrolstate', onFindControlState)
 
       cleanupRefs.current.push(() => {
         eventBus.off('textlayerrendered', onTextLayerRendered)
@@ -966,6 +1052,8 @@ export function PdfViewer({
         eventBus.off('pagechanging', onPageChanging)
         eventBus.off('updatetextlayermatches', onTextLayerMatchesUpdated)
         eventBus.off('scalechanging', onScaleChanging)
+        eventBus.off('updatefindmatchescount', onFindMatchesCount)
+        eventBus.off('updatefindcontrolstate', onFindControlState)
       })
 
       // CRITICAL FIX: Check if PDF is already loaded (race condition fix)
@@ -1064,6 +1152,16 @@ export function PdfViewer({
     navigationRequestIdRef.current += 1
     setStatus('loading')
     setError(null)
+    toolbarSearchQueryRef.current = ''
+    setViewerUiState((current) => ({
+      ...current,
+      currentPage: viewerStateRef.current.currentPage,
+      zoomLevel: viewerStateRef.current.zoomLevel,
+      searchQuery: '',
+      searchCurrent: null,
+      searchTotal: null,
+      searchNotFound: false,
+    }))
     setTelemetry((prev) => ({
       ...prev,
       lastLoadMs: null,
@@ -1121,10 +1219,19 @@ export function PdfViewer({
       lastInteraction: new Date().toISOString(),
     }
     highlightTermsRef.current = []
+    toolbarSearchQueryRef.current = ''
     setHighlightTerms([])
     setActiveDocument(null)
     setStatus('idle')
     setError(null)
+    setViewerUiState({
+      currentPage: DEFAULT_STATE.currentPage,
+      zoomLevel: DEFAULT_STATE.zoomLevel,
+      searchQuery: '',
+      searchCurrent: null,
+      searchTotal: null,
+      searchNotFound: false,
+    })
     setTelemetry({
       lastLoadMs: null,
       lastHighlightMs: null,
@@ -1802,6 +1909,119 @@ export function PdfViewer({
     beginDocumentLoad(refreshedDocument)
   }, [activeDocument, beginDocumentLoad])
 
+  const getPdfApplication = useCallback(() => {
+    return pdfAppRef.current ?? (iframeRef.current?.contentWindow as any)?.PDFViewerApplication ?? null
+  }, [])
+
+  const handlePreviousPage = useCallback(() => {
+    const pdfViewer = getPdfApplication()?.pdfViewer
+    if (!pdfViewer) return
+    if (typeof pdfViewer.previousPage === 'function') {
+      pdfViewer.previousPage()
+      return
+    }
+    if (typeof pdfViewer.currentPageNumber === 'number') {
+      pdfViewer.currentPageNumber = Math.max(1, pdfViewer.currentPageNumber - 1)
+    }
+  }, [getPdfApplication])
+
+  const handleNextPage = useCallback(() => {
+    const pdfViewer = getPdfApplication()?.pdfViewer
+    if (!pdfViewer) return
+    if (typeof pdfViewer.nextPage === 'function') {
+      pdfViewer.nextPage()
+      return
+    }
+    if (typeof pdfViewer.currentPageNumber === 'number') {
+      const pageCount = activeDocument?.pageCount ?? pdfViewer.pagesCount ?? 1
+      pdfViewer.currentPageNumber = Math.min(pageCount, pdfViewer.currentPageNumber + 1)
+    }
+  }, [activeDocument?.pageCount, getPdfApplication])
+
+  const handleZoomOut = useCallback(() => {
+    const pdfViewer = getPdfApplication()?.pdfViewer
+    if (!pdfViewer) return
+    if (typeof pdfViewer.decreaseScale === 'function') {
+      pdfViewer.decreaseScale()
+      return
+    }
+    if (typeof pdfViewer.currentScale === 'number') {
+      pdfViewer.currentScale = Math.max(0.1, pdfViewer.currentScale * 0.9)
+    }
+  }, [getPdfApplication])
+
+  const handleZoomIn = useCallback(() => {
+    const pdfViewer = getPdfApplication()?.pdfViewer
+    if (!pdfViewer) return
+    if (typeof pdfViewer.increaseScale === 'function') {
+      pdfViewer.increaseScale()
+      return
+    }
+    if (typeof pdfViewer.currentScale === 'number') {
+      pdfViewer.currentScale = Math.min(5, pdfViewer.currentScale * 1.1)
+    }
+  }, [getPdfApplication])
+
+  const handleZoomAuto = useCallback(() => {
+    const pdfViewer = getPdfApplication()?.pdfViewer
+    if (!pdfViewer) return
+    pdfViewer.currentScaleValue = 'auto'
+  }, [getPdfApplication])
+
+  const dispatchPdfSearch = useCallback((query: string, options?: { findPrevious?: boolean; type?: string }) => {
+    const pdfApp = getPdfApplication()
+    const trimmedQuery = query.trim()
+    if (!pdfApp?.eventBus) return
+
+    if (!trimmedQuery) {
+      toolbarSearchQueryRef.current = ''
+      pdfApp.eventBus.dispatch('findbarclose', {
+        source: 'pdf-viewer-toolbar',
+      })
+      setViewerUiState((current) => ({
+        ...current,
+        searchCurrent: null,
+        searchTotal: null,
+        searchNotFound: false,
+      }))
+      return
+    }
+
+    toolbarSearchQueryRef.current = trimmedQuery
+    navigationRequestIdRef.current += 1
+    setEvidenceHighlight(null)
+    commitNavigationResult(null)
+    pdfApp.eventBus.dispatch('find', {
+      source: 'pdf-viewer-toolbar',
+      type: options?.type ?? '',
+      query: trimmedQuery,
+      caseSensitive: false,
+      entireWord: false,
+      highlightAll: true,
+      findPrevious: options?.findPrevious ?? false,
+      matchDiacritics: false,
+    })
+  }, [commitNavigationResult, getPdfApplication])
+
+  const handleSearchQueryChange = useCallback((query: string) => {
+    setViewerUiState((current) => ({
+      ...current,
+      searchQuery: query,
+      searchCurrent: null,
+      searchTotal: null,
+      searchNotFound: false,
+    }))
+    dispatchPdfSearch(query)
+  }, [dispatchPdfSearch])
+
+  const handleSearchNext = useCallback(() => {
+    dispatchPdfSearch(viewerUiState.searchQuery, { type: 'again', findPrevious: false })
+  }, [dispatchPdfSearch, viewerUiState.searchQuery])
+
+  const handleSearchPrevious = useCallback(() => {
+    dispatchPdfSearch(viewerUiState.searchQuery, { type: 'again', findPrevious: true })
+  }, [dispatchPdfSearch, viewerUiState.searchQuery])
+
   const navigationBannerMessage = navigationResult
     ? getNavigationBannerMessage(navigationResult, evidenceHighlight)
     : null
@@ -1821,12 +2041,26 @@ export function PdfViewer({
       uploadInFlight={uploadInFlight}
       dropError={dropError}
       uploadDialog={uploadDialog}
+      currentPage={viewerUiState.currentPage}
+      zoomLevel={viewerUiState.zoomLevel}
+      searchQuery={viewerUiState.searchQuery}
+      searchCurrent={viewerUiState.searchCurrent}
+      searchTotal={viewerUiState.searchTotal}
+      searchNotFound={viewerUiState.searchNotFound}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onRetry={handleRetry}
       onCloseUploadDialog={handleCloseUploadDialog}
+      onPreviousPage={handlePreviousPage}
+      onNextPage={handleNextPage}
+      onZoomOut={handleZoomOut}
+      onZoomIn={handleZoomIn}
+      onZoomAuto={handleZoomAuto}
+      onSearchQueryChange={handleSearchQueryChange}
+      onSearchNext={handleSearchNext}
+      onSearchPrevious={handleSearchPrevious}
     />
   )
 }

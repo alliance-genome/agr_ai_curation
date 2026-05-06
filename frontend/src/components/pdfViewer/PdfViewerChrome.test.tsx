@@ -1,6 +1,6 @@
 import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '../../test/test-utils'
+import { fireEvent, render, screen } from '../../test/test-utils'
 
 import { PdfViewerChrome } from './PdfViewerChrome'
 import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
@@ -29,12 +29,26 @@ const renderChrome = (overrides: Partial<Parameters<typeof PdfViewerChrome>[0]> 
     uploadInFlight: false,
     dropError: null,
     uploadDialog: defaultUploadDialog,
+    currentPage: 1,
+    zoomLevel: 100,
+    searchQuery: '',
+    searchCurrent: null,
+    searchTotal: null,
+    searchNotFound: false,
     onDragEnter: vi.fn(),
     onDragOver: vi.fn(),
     onDragLeave: vi.fn(),
     onDrop: vi.fn(),
     onRetry: vi.fn(),
     onCloseUploadDialog: vi.fn(),
+    onPreviousPage: vi.fn(),
+    onNextPage: vi.fn(),
+    onZoomOut: vi.fn(),
+    onZoomIn: vi.fn(),
+    onZoomAuto: vi.fn(),
+    onSearchQueryChange: vi.fn(),
+    onSearchNext: vi.fn(),
+    onSearchPrevious: vi.fn(),
     ...overrides,
   }
 
@@ -93,6 +107,66 @@ describe('PdfViewerChrome', () => {
     expect(screen.getByText('Page 3')).toBeInTheDocument()
     expect(screen.getByText('gene')).toBeInTheDocument()
     expect(screen.getByText('variant')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Previous PDF page' })).toBeInTheDocument()
+    expect(screen.getByText('1 / 12')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Zoom out' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Automatic zoom' })).toBeInTheDocument()
+    expect(screen.getByRole('textbox', { name: 'Find in PDF' })).toBeInTheDocument()
     expect(screen.queryByRole('region', { name: 'PDF drop zone' })).not.toBeInTheDocument()
+  })
+
+  it('wires curator PDF toolbar controls to callbacks', () => {
+    const onPreviousPage = vi.fn()
+    const onNextPage = vi.fn()
+    const onZoomOut = vi.fn()
+    const onZoomIn = vi.fn()
+    const onZoomAuto = vi.fn()
+    const onSearchQueryChange = vi.fn()
+    const onSearchNext = vi.fn()
+    const onSearchPrevious = vi.fn()
+
+    renderChrome({
+      activeDocument: {
+        documentId: 'doc-1',
+        viewerUrl: '/documents/doc-1/viewer',
+        filename: 'paper.pdf',
+        pageCount: 12,
+        loadedAt: '2026-04-27T00:00:00.000Z',
+      },
+      status: 'ready',
+      currentPage: 3,
+      searchQuery: 'kinase',
+      searchCurrent: 1,
+      searchTotal: 4,
+      onPreviousPage,
+      onNextPage,
+      onZoomOut,
+      onZoomIn,
+      onZoomAuto,
+      onSearchQueryChange,
+      onSearchNext,
+      onSearchPrevious,
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Previous PDF page' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Next PDF page' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom out' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Automatic zoom' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Find in PDF' }), {
+      target: { value: 'variant' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Next PDF search match' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Previous PDF search match' }))
+
+    expect(onPreviousPage).toHaveBeenCalledTimes(1)
+    expect(onNextPage).toHaveBeenCalledTimes(1)
+    expect(onZoomOut).toHaveBeenCalledTimes(1)
+    expect(onZoomIn).toHaveBeenCalledTimes(1)
+    expect(onZoomAuto).toHaveBeenCalledTimes(1)
+    expect(onSearchQueryChange).toHaveBeenCalledWith('variant')
+    expect(onSearchNext).toHaveBeenCalledTimes(1)
+    expect(onSearchPrevious).toHaveBeenCalledTimes(1)
   })
 })

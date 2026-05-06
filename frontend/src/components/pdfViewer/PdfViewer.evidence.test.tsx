@@ -117,7 +117,6 @@ class MockPdfEventBus {
       query: payload.query,
       pageBeforeDispatch: this.getCurrentPage(),
     })
-
     const response = this.onFind(payload.query)
     this.findQueries.push(payload.query)
 
@@ -3001,8 +3000,6 @@ describe('PdfViewer evidence navigation', () => {
     const query = 'Actin 87E (80 ± 51 fmoles/eye) is critical for photoreceptor maintenance.'
     const textSegments = ['Header ', pageQuote, ' Bridge ', pageQuote, ' Results']
     const pageText = textSegments.join('')
-    const firstMatchIndex = pageText.indexOf(pageQuote)
-    const secondMatchIndex = pageText.indexOf(pageQuote, firstMatchIndex + 1)
 
     const command = buildNavigationCommand({
       anchor: {

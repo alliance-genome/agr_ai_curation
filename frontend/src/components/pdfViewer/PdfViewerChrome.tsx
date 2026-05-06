@@ -1,15 +1,28 @@
-import type { DragEventHandler, Ref } from 'react'
+import type { ChangeEvent, DragEventHandler, KeyboardEvent, Ref } from 'react'
 import {
   Alert,
   Box,
   Button,
   Chip,
   CircularProgress,
+  Divider,
+  IconButton,
+  InputAdornment,
   Paper,
   Stack,
+  TextField,
+  Tooltip,
   Typography,
 } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
+import {
+  ChevronLeft as ChevronLeftIcon,
+  ChevronRight as ChevronRightIcon,
+  FitScreen as FitScreenIcon,
+  Search as SearchIcon,
+  ZoomIn as ZoomInIcon,
+  ZoomOut as ZoomOutIcon,
+} from '@mui/icons-material'
 import UploadProgressDialog from '@/components/weaviate/UploadProgressDialog'
 import {
   formatLocatorQualityLabel,
@@ -34,12 +47,26 @@ interface PdfViewerChromeProps {
   uploadInFlight: boolean
   dropError: string | null
   uploadDialog: UploadDialogState
+  currentPage: number
+  zoomLevel: number
+  searchQuery: string
+  searchCurrent: number | null
+  searchTotal: number | null
+  searchNotFound: boolean
   onDragEnter: DragEventHandler<HTMLDivElement>
   onDragOver: DragEventHandler<HTMLDivElement>
   onDragLeave: DragEventHandler<HTMLDivElement>
   onDrop: DragEventHandler<HTMLDivElement>
   onRetry: () => void
   onCloseUploadDialog: () => void
+  onPreviousPage: () => void
+  onNextPage: () => void
+  onZoomOut: () => void
+  onZoomIn: () => void
+  onZoomAuto: () => void
+  onSearchQueryChange: (query: string) => void
+  onSearchNext: () => void
+  onSearchPrevious: () => void
 }
 
 export function PdfViewerChrome({
@@ -56,14 +83,48 @@ export function PdfViewerChrome({
   uploadInFlight,
   dropError,
   uploadDialog,
+  currentPage,
+  zoomLevel,
+  searchQuery,
+  searchCurrent,
+  searchTotal,
+  searchNotFound,
   onDragEnter,
   onDragOver,
   onDragLeave,
   onDrop,
   onRetry,
   onCloseUploadDialog,
+  onPreviousPage,
+  onNextPage,
+  onZoomOut,
+  onZoomIn,
+  onZoomAuto,
+  onSearchQueryChange,
+  onSearchNext,
+  onSearchPrevious,
 }: PdfViewerChromeProps) {
   const theme = useTheme()
+  const controlsDisabled = !activeDocument || status !== 'ready'
+  const searchDisabled = controlsDisabled || searchQuery.trim().length === 0
+  const searchMatchLabel = searchNotFound
+    ? 'No matches'
+    : searchTotal !== null && searchTotal > 0
+      ? `${searchCurrent ?? 0} / ${searchTotal}`
+      : ''
+  const handleSearchChange = (event: ChangeEvent<HTMLInputElement>) => {
+    onSearchQueryChange(event.target.value)
+  }
+  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter' && !searchDisabled) {
+      event.preventDefault()
+      if (event.shiftKey) {
+        onSearchPrevious()
+      } else {
+        onSearchNext()
+      }
+    }
+  }
 
   return (
     <Paper
@@ -121,6 +182,149 @@ export function PdfViewerChrome({
                 ))}
               </Stack>
             )}
+            <Stack
+              direction={{ xs: 'column', sm: 'row' }}
+              spacing={1}
+              alignItems={{ xs: 'stretch', sm: 'center' }}
+              sx={{ pt: 0.75 }}
+            >
+              <Stack direction="row" spacing={0.5} alignItems="center">
+                <Tooltip title="Previous page">
+                  <span>
+                    <IconButton
+                      aria-label="Previous PDF page"
+                      size="small"
+                      disabled={controlsDisabled || currentPage <= 1}
+                      onClick={onPreviousPage}
+                    >
+                      <ChevronLeftIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ minWidth: 72, textAlign: 'center' }}
+                >
+                  {currentPage} / {activeDocument.pageCount}
+                </Typography>
+                <Tooltip title="Next page">
+                  <span>
+                    <IconButton
+                      aria-label="Next PDF page"
+                      size="small"
+                      disabled={controlsDisabled || currentPage >= activeDocument.pageCount}
+                      onClick={onNextPage}
+                    >
+                      <ChevronRightIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Stack>
+              <Divider orientation="vertical" flexItem sx={{ display: { xs: 'none', sm: 'block' } }} />
+              <Stack direction="row" spacing={0.5} alignItems="center">
+                <Tooltip title="Zoom out">
+                  <span>
+                    <IconButton
+                      aria-label="Zoom out"
+                      size="small"
+                      disabled={controlsDisabled || zoomLevel <= 10}
+                      onClick={onZoomOut}
+                    >
+                      <ZoomOutIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Typography
+                  variant="body2"
+                  color="text.secondary"
+                  sx={{ minWidth: 48, textAlign: 'center' }}
+                >
+                  {zoomLevel}%
+                </Typography>
+                <Tooltip title="Zoom in">
+                  <span>
+                    <IconButton
+                      aria-label="Zoom in"
+                      size="small"
+                      disabled={controlsDisabled || zoomLevel >= 500}
+                      onClick={onZoomIn}
+                    >
+                      <ZoomInIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Automatic zoom">
+                  <span>
+                    <IconButton
+                      aria-label="Automatic zoom"
+                      size="small"
+                      disabled={controlsDisabled}
+                      onClick={onZoomAuto}
+                    >
+                      <FitScreenIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Stack>
+              <TextField
+                size="small"
+                value={searchQuery}
+                onChange={handleSearchChange}
+                onKeyDown={handleSearchKeyDown}
+                disabled={controlsDisabled}
+                placeholder="Find in PDF"
+                inputProps={{ 'aria-label': 'Find in PDF' }}
+                sx={{
+                  flex: 1,
+                  minWidth: { xs: '100%', sm: 180 },
+                }}
+                InputProps={{
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <SearchIcon fontSize="small" color="action" />
+                    </InputAdornment>
+                  ),
+                  endAdornment: searchMatchLabel ? (
+                    <InputAdornment position="end">
+                      <Typography
+                        variant="caption"
+                        color={searchNotFound ? 'error.main' : 'text.secondary'}
+                        sx={{ whiteSpace: 'nowrap' }}
+                      >
+                        {searchMatchLabel}
+                      </Typography>
+                    </InputAdornment>
+                  ) : undefined,
+                }}
+              />
+              <Stack direction="row" spacing={0.5} alignItems="center">
+                <Tooltip title="Previous match">
+                  <span>
+                    <IconButton
+                      aria-label="Previous PDF search match"
+                      size="small"
+                      disabled={searchDisabled}
+                      onClick={onSearchPrevious}
+                    >
+                      <ChevronLeftIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+                <Tooltip title="Next match">
+                  <span>
+                    <IconButton
+                      aria-label="Next PDF search match"
+                      size="small"
+                      disabled={searchDisabled}
+                      onClick={onSearchNext}
+                    >
+                      <ChevronRightIcon fontSize="small" />
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Stack>
+            </Stack>
           </Stack>
         ) : (
           <Typography variant="h6">No document loaded</Typography>
