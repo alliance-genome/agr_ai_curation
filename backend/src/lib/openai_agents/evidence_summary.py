@@ -313,6 +313,7 @@ class _EvidenceRegistry:
         self._records_by_id: Dict[str, Dict[str, Any]] = {}
         self._id_by_exact_key: Dict[tuple[Any, ...], str] = {}
         self._ids_by_locator_key: Dict[tuple[Any, ...], List[str]] = {}
+        self._canonical_id_by_input_id: Dict[str, str] = {}
 
     def add_many(
         self,
@@ -352,11 +353,13 @@ class _EvidenceRegistry:
         exact_key = _evidence_record_key(normalized_record)
         existing_id = self._id_by_exact_key.get(exact_key)
         if existing_id:
+            self._canonical_id_by_input_id[str(normalized_record["evidence_record_id"])] = existing_id
             return existing_id
 
         locator_key = _evidence_locator_key(normalized_record)
         locator_ids = self._ids_by_locator_key.get(locator_key, [])
         if allow_locator_fallback and len(locator_ids) == 1:
+            self._canonical_id_by_input_id[str(normalized_record["evidence_record_id"])] = locator_ids[0]
             return locator_ids[0]
 
         evidence_record_id = str(normalized_record["evidence_record_id"])
@@ -364,10 +367,20 @@ class _EvidenceRegistry:
         self._records_by_id[evidence_record_id] = normalized_record
         self._id_by_exact_key[exact_key] = evidence_record_id
         self._ids_by_locator_key.setdefault(locator_key, []).append(evidence_record_id)
+        self._canonical_id_by_input_id[evidence_record_id] = evidence_record_id
         return evidence_record_id
 
     def records(self) -> List[Dict[str, Any]]:
         return list(self._records)
+
+    def canonicalize_reference_ids(self, values: Any) -> List[str]:
+        reference_ids = _merge_unique_reference_ids(values)
+        return _merge_unique_reference_ids(
+            [
+                self._canonical_id_by_input_id.get(reference_id, reference_id)
+                for reference_id in reference_ids
+            ]
+        )
 
 
 def _consolidate_items(
@@ -660,7 +673,7 @@ def _canonicalize_nested_evidence_references(
             registry=registry,
         )
 
-    evidence_record_ids = _merge_unique_reference_ids(record_dict.get("evidence_record_ids"))
+    evidence_record_ids = registry.canonicalize_reference_ids(record_dict.get("evidence_record_ids"))
     legacy_evidence = record_dict.get("evidence")
     if isinstance(legacy_evidence, list):
         evidence_record_ids = _merge_unique_reference_ids(
@@ -691,9 +704,8 @@ def canonicalize_structured_result_payload(
 
     preferred_labels = _collect_preferred_labels(payload)
     registry = _EvidenceRegistry()
-    registry.add_many(
-        preferred_evidence_records if preferred_evidence_records is not None else payload.get("evidence_records")
-    )
+    registry.add_many(preferred_evidence_records)
+    registry.add_many(payload.get("evidence_records"))
     canonical_payload = _canonicalize_nested_evidence_references(
         payload,
         registry=registry,

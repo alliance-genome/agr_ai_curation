@@ -3,6 +3,7 @@
 from src.lib.openai_agents.evidence_summary import (
     build_record_evidence_summary_record,
     canonicalize_structured_result_payload,
+    extract_evidence_records_from_structured_result,
     structured_result_evidence_reference_report,
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
@@ -58,6 +59,100 @@ def test_canonicalize_keeps_distinct_live_records_when_entities_share_same_locat
     assert canonical["evidence_records"] == [
         {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"},
         {**_record(entity="Actin 87E"), "evidence_record_id": "evidence-live-b"},
+    ]
+
+
+def test_canonicalize_preserves_structured_evidence_when_preferred_records_empty():
+    payload = {
+        "items": [
+            {
+                "label": "vtg1",
+                "entity_type": "gene",
+                "source_mentions": ["vtg1"],
+                "evidence_record_ids": ["EV1"],
+            }
+        ],
+        "evidence_records": [
+            {**_record(entity="vtg1"), "evidence_record_id": "EV1"}
+        ],
+        "run_summary": {"kept_count": 1},
+    }
+
+    canonical = canonicalize_structured_result_payload(
+        payload,
+        preferred_evidence_records=[],
+    )
+
+    assert canonical["evidence_records"] == [
+        {**_record(entity="vtg1"), "evidence_record_id": "EV1"}
+    ]
+    assert extract_evidence_records_from_structured_result(canonical) == [
+        {**_record(entity="vtg1"), "evidence_record_id": "EV1"}
+    ]
+    assert structured_result_evidence_reference_report(canonical)["evidence_record_count"] == 1
+
+
+def test_canonicalize_merges_live_and_payload_evidence_records():
+    payload = {
+        "items": [
+            {
+                "label": "Actin 5C",
+                "entity_type": "gene",
+                "source_mentions": ["Actin 5C"],
+                "evidence_record_ids": ["evidence-live-a"],
+            },
+            {
+                "label": "vtg1",
+                "entity_type": "gene",
+                "source_mentions": ["vtg1"],
+                "evidence_record_ids": ["EV1"],
+            },
+        ],
+        "evidence_records": [
+            {**_record(entity="vtg1"), "evidence_record_id": "EV1"}
+        ],
+        "run_summary": {"kept_count": 2},
+    }
+
+    canonical = canonicalize_structured_result_payload(
+        payload,
+        preferred_evidence_records=[
+            {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"}
+        ],
+    )
+
+    assert canonical["evidence_records"] == [
+        {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"},
+        {**_record(entity="vtg1"), "evidence_record_id": "EV1"},
+    ]
+
+
+def test_canonicalize_remaps_payload_refs_when_live_record_id_is_preferred():
+    payload = {
+        "items": [
+            {
+                "label": "vtg1",
+                "entity_type": "gene",
+                "source_mentions": ["vtg1"],
+                "evidence_record_ids": ["EV1"],
+            }
+        ],
+        "evidence_records": [
+            {**_record(entity="vtg1"), "evidence_record_id": "EV1"}
+        ],
+        "run_summary": {"kept_count": 1},
+    }
+
+    canonical = canonicalize_structured_result_payload(
+        payload,
+        preferred_evidence_records=[
+            {**_record(entity="vtg1"), "evidence_record_id": "evidence-live-a"}
+        ],
+    )
+
+    assert canonical["items"][0]["evidence_record_ids"] == ["evidence-live-a"]
+    assert canonical["evidence_records"] == [
+        {**_record(entity="vtg1"), "evidence_record_id": "evidence-live-a"}
     ]
 
 
