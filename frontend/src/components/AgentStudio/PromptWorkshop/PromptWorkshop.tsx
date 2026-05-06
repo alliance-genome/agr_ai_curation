@@ -792,6 +792,16 @@ function PromptWorkshop({
     const contextTemplateName = contextTemplateId
       ? (selectedTemplate?.name || parentAgent?.agent_name)
       : undefined
+    const normalizedSelectedGroupOverrides = selectedCustomAgent?.group_prompt_overrides || {}
+    const draftIsDirty = selectedCustomAgent
+      ? customPrompt !== selectedCustomAgent.custom_prompt
+        || JSON.stringify(groupPromptOverrides) !== JSON.stringify(normalizedSelectedGroupOverrides)
+        || includeGroupRules !== selectedCustomAgent.include_group_rules
+        || selectedModelId !== selectedCustomAgent.model_id
+        || (selectedModelReasoning || '') !== (selectedCustomAgent.model_reasoning || '')
+        || JSON.stringify(selectedToolIds) !== JSON.stringify(selectedCustomAgent.tool_ids || [])
+        || (outputSchemaKey || '') !== (selectedCustomAgent.output_schema_key || '')
+      : Boolean(customPrompt.trim())
     onContextChange({
       template_source: contextTemplateId || undefined,
       template_name: contextTemplateName,
@@ -801,6 +811,8 @@ function PromptWorkshop({
       selected_group_id: selectedGroupId || undefined,
       prompt_draft: debouncedPromptDraft,
       selected_group_prompt_draft: selectedGroupPromptForContext,
+      draft_is_dirty: draftIsDirty,
+      custom_agent_updated_at: selectedCustomAgent?.updated_at,
       group_prompt_override_count: Object.keys(debouncedGroupPromptOverrides).length,
       has_group_prompt_overrides: Object.keys(debouncedGroupPromptOverrides).length > 0,
       template_prompt_stale: selectedCustomAgent?.parent_prompt_stale,
@@ -817,17 +829,28 @@ function PromptWorkshop({
     selectedTemplate?.name,
     selectedCustomAgent?.agent_id,
     selectedCustomAgent?.name,
+    selectedCustomAgent?.custom_prompt,
+    selectedCustomAgent?.group_prompt_overrides,
+    selectedCustomAgent?.include_group_rules,
+    selectedCustomAgent?.model_id,
+    selectedCustomAgent?.model_reasoning,
+    selectedCustomAgent?.tool_ids,
+    selectedCustomAgent?.output_schema_key,
+    selectedCustomAgent?.updated_at,
     selectedCustomAgent?.template_source,
     selectedCustomAgent?.parent_prompt_stale,
     selectedCustomAgent?.parent_exists,
     includeGroupRules,
     selectedGroupId,
+    customPrompt,
+    groupPromptOverrides,
     debouncedPromptDraft,
     selectedGroupPromptForContext,
     debouncedGroupPromptOverrides,
     selectedToolIds,
     selectedModelId,
     selectedModelReasoning,
+    outputSchemaKey,
   ])
 
   useEffect(() => {

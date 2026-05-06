@@ -200,6 +200,8 @@ class AgentWorkshopContext(BaseModel):
         None,
         validation_alias=AliasChoices("selected_group_prompt_draft", "selected_mod_prompt_draft"),
     )
+    draft_is_dirty: Optional[bool] = None
+    custom_agent_updated_at: Optional[str] = None
     group_prompt_override_count: Optional[int] = Field(
         None,
         validation_alias=AliasChoices("group_prompt_override_count", "mod_prompt_override_count"),

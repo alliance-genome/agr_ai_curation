@@ -247,6 +247,8 @@ export interface AgentWorkshopContext {
   selected_group_id?: string
   prompt_draft?: string
   selected_group_prompt_draft?: string
+  draft_is_dirty?: boolean
+  custom_agent_updated_at?: string
   group_prompt_override_count?: number
   has_group_prompt_overrides?: boolean
   template_prompt_stale?: boolean

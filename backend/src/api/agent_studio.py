@@ -7,12 +7,13 @@ Provides endpoints for the Agent Studio feature:
 """
 
 import json
+import hashlib
 import logging
 import os
 import re
 import asyncio
 import uuid
-from datetime import datetime  # noqa: F401 - Agent Studio module API surface.
+from datetime import datetime, timezone  # noqa: F401 - Agent Studio module API surface.
 from pathlib import Path as FilePath
 from typing import Any, Callable, Dict, List, NoReturn, Optional
 
@@ -82,6 +83,7 @@ from src.lib.agent_studio.custom_agent_service import (
     custom_agent_to_dict,
     get_custom_agent_group_prompt,
     get_custom_agent_for_user,
+    get_custom_agent_visible_to_user,
     list_custom_agents_visible_to_user,
     make_custom_agent_id,
     parse_custom_agent_id,
@@ -989,6 +991,8 @@ async def test_agent_endpoint(
 
 # Public Agent Studio tool definitions exposed from the focused helper module.
 ANTHROPIC_SUGGESTION_TOOL = opus_tools.ANTHROPIC_SUGGESTION_TOOL
+REFRESH_WORKSHOP_PROMPT_TOOL = opus_tools.REFRESH_WORKSHOP_PROMPT_TOOL
+ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL = opus_tools.ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL
 UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.UPDATE_WORKSHOP_PROMPT_TOOL
 ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = opus_tools.ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL
 REPORT_TOOL_FAILURE_TOOL = opus_tools.REPORT_TOOL_FAILURE_TOOL
@@ -1005,6 +1009,7 @@ GET_TRACE_CONVERSATION_TOOL = opus_tools.GET_TRACE_CONVERSATION_TOOL
 GET_TRACE_VIEW_TOOL = opus_tools.GET_TRACE_VIEW_TOOL
 GET_SERVICE_LOGS_TOOL = opus_tools.GET_SERVICE_LOGS_TOOL
 _COMMON_TOOLS = opus_tools.COMMON_TOOLS
+_WORKSHOP_TOOLS = opus_tools.WORKSHOP_TOOLS
 _TRACE_TOOLS = opus_tools.TRACE_TOOLS
 _FLOW_TOOLS = opus_tools.FLOW_TOOLS
 _AGENTS_ONLY_DIAGNOSTIC_TOOLS = opus_tools.AGENTS_ONLY_DIAGNOSTIC_TOOLS
@@ -1064,6 +1069,191 @@ def _apply_targeted_workshop_edits(
     return prompt_builder.apply_targeted_workshop_edits(base_prompt, edits)
 
 
+def _parse_optional_datetime(value: Any) -> datetime | None:
+    """Parse an optional ISO-ish timestamp without raising."""
+
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _is_newer_datetime(left: datetime | None, right: datetime | None) -> bool:
+    """Return whether left is newer than right, normalizing naive datetimes."""
+
+    if left is None or right is None:
+        return False
+    left_cmp = left if left.tzinfo else left.replace(tzinfo=timezone.utc)
+    right_cmp = right if right.tzinfo else right.replace(tzinfo=timezone.utc)
+    return left_cmp > right_cmp
+
+
+def _parse_workshop_custom_agent_uuid(raw_agent_id: Any) -> uuid.UUID | None:
+    """Parse either `ca_<uuid>` or raw UUID custom-agent identifiers."""
+
+    if not isinstance(raw_agent_id, str) or not raw_agent_id.strip():
+        return None
+    parsed = parse_custom_agent_id(raw_agent_id.strip())
+    if parsed:
+        return parsed
+    try:
+        return uuid.UUID(raw_agent_id.strip())
+    except ValueError:
+        return None
+
+
+def _prompt_hash(prompt: str) -> str:
+    """Return a stable content hash for refreshed prompt metadata."""
+
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def _resolve_refresh_target(tool_input: dict, context: Optional[ChatContext]) -> tuple[str, str]:
+    """Resolve which workshop prompt the refresh tool should return."""
+
+    target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
+    if target_prompt not in {"main", "group"}:
+        target_prompt = "main"
+
+    target_group_id = ""
+    if target_prompt == "group" and context and context.agent_workshop:
+        raw_group_id = tool_input.get("target_group_id")
+        if isinstance(raw_group_id, str) and raw_group_id.strip():
+            target_group_id = raw_group_id.strip().upper()
+        else:
+            target_group_id = (context.agent_workshop.selected_group_id or "").strip().upper()
+
+    return target_prompt, target_group_id
+
+
+def _build_refresh_workshop_prompt_result(
+    *,
+    tool_input: dict,
+    context: Optional[ChatContext],
+    user_db_id: int | None,
+) -> Dict[str, Any]:
+    """Return the current Agent Workshop prompt text with compact freshness metadata."""
+
+    if not context or context.active_tab != "agent_workshop" or not context.agent_workshop:
+        return {
+            "success": False,
+            "error": "This tool is only available while the curator is on the Agent Workshop tab.",
+        }
+
+    workshop = context.agent_workshop
+    target_prompt, target_group_id = _resolve_refresh_target(tool_input, context)
+    context_prompt = (
+        workshop.selected_group_prompt_draft
+        if target_prompt == "group"
+        else workshop.prompt_draft
+    ) or ""
+
+    saved_prompt: str | None = None
+    saved_custom_agent: Any | None = None
+    saved_updated_at: datetime | None = None
+    custom_agent_uuid = _parse_workshop_custom_agent_uuid(workshop.custom_agent_id)
+
+    if custom_agent_uuid and user_db_id is not None:
+        db = SessionLocal()
+        try:
+            saved_custom_agent = get_custom_agent_visible_to_user(
+                db,
+                custom_agent_uuid,
+                user_db_id,
+            )
+            if target_prompt == "group":
+                if not target_group_id:
+                    return {
+                        "success": False,
+                        "error": "No Agent Workshop group is selected for a group prompt refresh.",
+                    }
+                saved_prompt = get_custom_agent_group_prompt(
+                    parent_agent_key=getattr(saved_custom_agent, "parent_agent_key", ""),
+                    group_id=target_group_id,
+                    group_prompt_overrides=(
+                        getattr(saved_custom_agent, "group_prompt_overrides", None)
+                        or getattr(saved_custom_agent, "mod_prompt_overrides", None)
+                    ),
+                )
+            else:
+                saved_prompt = str(getattr(saved_custom_agent, "custom_prompt", "") or "")
+            saved_updated_at = getattr(saved_custom_agent, "updated_at", None)
+        except (CustomAgentAccessError, CustomAgentNotFoundError):
+            logger.warning(
+                "Agent Workshop prompt refresh could not access custom agent %s",
+                custom_agent_uuid,
+                exc_info=True,
+            )
+        finally:
+            db.close()
+
+    context_updated_at = _parse_optional_datetime(workshop.custom_agent_updated_at)
+    saved_is_newer = _is_newer_datetime(saved_updated_at, context_updated_at)
+    has_unsaved_context = bool(workshop.draft_is_dirty) and not saved_is_newer
+
+    if has_unsaved_context and context_prompt:
+        source = "current_workshop_draft"
+        refreshed_prompt = context_prompt
+        version = getattr(saved_custom_agent, "version", None) if saved_custom_agent else None
+        updated_at = context_updated_at
+    elif saved_prompt is not None:
+        source = "saved_custom_agent"
+        refreshed_prompt = saved_prompt or ""
+        version = getattr(saved_custom_agent, "version", None) if saved_custom_agent else None
+        updated_at = saved_updated_at
+    else:
+        source = "current_workshop_draft"
+        refreshed_prompt = context_prompt
+        version = None
+        updated_at = context_updated_at
+
+    return {
+        "success": True,
+        "source": source,
+        "target_prompt": target_prompt,
+        "target_group_id": target_group_id or None,
+        "custom_agent_id": str(custom_agent_uuid) if custom_agent_uuid else None,
+        "runtime_agent_id": make_custom_agent_id(custom_agent_uuid) if custom_agent_uuid else None,
+        "version": int(version) if version is not None else None,
+        "updated_at": updated_at.isoformat() if isinstance(updated_at, datetime) else None,
+        "length": len(refreshed_prompt),
+        "hash": _prompt_hash(refreshed_prompt),
+        "current_prompt": refreshed_prompt,
+        "instruction": (
+            "Use current_prompt as the only current Agent Workshop prompt text. "
+            "Treat conversation history and older versions as historical."
+        ),
+    }
+
+
+_PROMPT_SENSITIVE_WORKSHOP_RE = re.compile(
+    r"\b("
+    r"review|check|look\s+over|what\s+do\s+you\s+think|did\s+i\s+fix|fixed|"
+    r"typo|misspell|spelling|schema|prompt|draft|main\s+prompt|group\s+prompt|"
+    r"minerite|now"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _should_force_workshop_prompt_refresh(
+    *,
+    context: Optional[ChatContext],
+    latest_user_message: str,
+) -> bool:
+    """Selectively force prompt refresh for Agent Workshop review/check turns."""
+
+    if not context or context.active_tab != "agent_workshop" or not context.agent_workshop:
+        return False
+    if not latest_user_message.strip():
+        return False
+    return bool(_PROMPT_SENSITIVE_WORKSHOP_RE.search(latest_user_message))
+
+
 async def _handle_tool_call(
     tool_name: str,
     tool_input: dict,
@@ -1071,6 +1261,7 @@ async def _handle_tool_call(
     user_email: str,
     user_auth_sub: str,
     messages: Optional[List[dict]] = None,
+    user_db_id: int | None = None,
 ) -> dict:
     """
     Handle a tool call from Opus.
@@ -1276,6 +1467,13 @@ async def _handle_tool_call(
             since=since,
         )
         return result
+
+    elif tool_name == "refresh_workshop_prompt":
+        return _build_refresh_workshop_prompt_result(
+            tool_input=tool_input,
+            context=context,
+            user_db_id=user_db_id,
+        )
 
     elif tool_name == "submit_prompt_suggestion":
         # Validate required fields (agent_id is optional for general feedback)
@@ -1840,6 +2038,14 @@ async def chat_with_opus(
                 "tools": _get_all_opus_tools(request.context),
                 "output_config": {"effort": "medium"},
             }
+            if _should_force_workshop_prompt_refresh(
+                context=request.context,
+                latest_user_message=prepared_turn.user_message,
+            ):
+                api_params["tool_choice"] = {
+                    "type": "tool",
+                    "name": "refresh_workshop_prompt",
+                }
             logger.info(
                 "Agent Studio chat using model='%s' (%s) and effort='medium' for balanced quality/cost",
                 anthropic_model_id,
@@ -1899,6 +2105,7 @@ async def chat_with_opus(
                                 user_email=user_email,
                                 user_auth_sub=user_id,
                                 messages=current_messages,
+                                user_db_id=db_user_id,
                             )
                             safe_tool_result = _json_safe(tool_result)
 
@@ -1938,6 +2145,7 @@ async def chat_with_opus(
                     })
                     # Update api_params with new messages for next iteration
                     api_params["messages"] = current_messages
+                    api_params.pop("tool_choice", None)
                     # Continue the loop for next turn
                 else:
                     # Done - either end_turn or max_tokens
