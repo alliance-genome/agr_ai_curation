@@ -1,14 +1,16 @@
+import "../compat/map_get_or_insert_computed.mjs?v=20260506-map-polyfill";
+
 import {
   AnnotationMode,
   GlobalWorkerOptions,
   getDocument,
-} from "../build/pdf.mjs?v=20260505-mjs-mime";
+} from "../build/pdf.mjs?v=20260506-map-polyfill";
 import {
   EventBus,
   PDFFindController,
   PDFLinkService,
   PDFViewer,
-} from "./pdf_viewer.mjs?v=20260505-mjs-mime";
+} from "./pdf_viewer.mjs?v=20260506-map-polyfill";
 
 const SUPPORTED_PROTOCOLS = new Set(["http:", "https:"]);
 
@@ -25,7 +27,7 @@ if (!(loadingNode instanceof HTMLDivElement) || !(errorNode instanceof HTMLDivEl
   throw new Error("The PDF viewer status elements did not render correctly.");
 }
 
-GlobalWorkerOptions.workerSrc = "../build/pdf.worker.mjs?v=20260505-mjs-mime";
+GlobalWorkerOptions.workerSrc = "../build/pdf.worker.compat.mjs?v=20260506-map-polyfill";
 
 const eventBus = new EventBus();
 const linkService = new PDFLinkService({ eventBus });
