@@ -541,6 +541,7 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.
 7. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
 8. after a curator applies a prompt update, verify the current `<workshop_prompt_draft>` contains the intended change and provide a quick quality review.
+8a. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; after it returns, treat conversation history and older versions as historical only and never report text as present unless it appears in the refreshed `current_prompt`.
 9. when proposing or applying prompt edits, use this distilled OpenAI-style prompt playbook:
    - put core instructions first, then separate context/examples with clear delimiters (`###` sections or triple quotes),
    - make directions specific and measurable (length, format, required fields, decision rules),

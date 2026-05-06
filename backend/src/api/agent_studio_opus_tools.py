@@ -97,6 +97,35 @@ The UI will show the proposal and require explicit curator approval before apply
 
 ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL = UPDATE_WORKSHOP_PROMPT_TOOL
 
+REFRESH_WORKSHOP_PROMPT_TOOL = {
+    "name": "refresh_workshop_prompt",
+    "description": """Refresh the current Agent Workshop prompt before reviewing it.
+
+Use this before commenting on the current Agent Workshop prompt text, especially
+after the curator saves manual edits or asks whether a typo, schema issue, or
+prompt-quality concern is fixed. Treat older chat history and version snapshots
+as historical after this tool returns.
+""",
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "target_prompt": {
+                "type": "string",
+                "enum": ["main", "group"],
+                "description": "Refresh the main prompt or the currently selected group prompt.",
+                "default": "main",
+            },
+            "target_group_id": {
+                "type": "string",
+                "description": "Optional group ID when target_prompt='group'. Defaults to the selected Agent Workshop group.",
+            },
+        },
+        "required": [],
+    },
+}
+
+ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL = REFRESH_WORKSHOP_PROMPT_TOOL
+
 REPORT_TOOL_FAILURE_TOOL = {
     "name": "report_tool_failure",
     "description": """Report a tool failure to the development team.
@@ -386,6 +415,10 @@ COMMON_TOOLS = {
     "submit_prompt_suggestion",
     "report_tool_failure",
 }
+WORKSHOP_TOOLS = {
+    "refresh_workshop_prompt",
+    "update_workshop_prompt_draft",
+}
 TRACE_TOOLS = {
     "get_trace_summary",
     "get_tool_calls_summary",
@@ -441,7 +474,7 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
     if tool_name in COMMON_TOOLS:
         return True
 
-    if tool_name == "update_workshop_prompt_draft":
+    if tool_name in WORKSHOP_TOOLS:
         return active_tab == "agent_workshop" and bool(context and context.agent_workshop)
 
     if tool_name in FLOW_TOOLS:
@@ -489,6 +522,7 @@ def get_all_opus_tools(
 
     candidate_tools = [
         ANTHROPIC_SUGGESTION_TOOL,
+        ANTHROPIC_REFRESH_WORKSHOP_PROMPT_TOOL,
         ANTHROPIC_UPDATE_WORKSHOP_PROMPT_TOOL,
         ANTHROPIC_REPORT_TOOL_FAILURE_TOOL,
         LIST_RECENT_CHATS_TOOL,

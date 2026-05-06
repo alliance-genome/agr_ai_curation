@@ -236,6 +236,10 @@ Include `token_info` in responses for budget management:
 - **`submit_prompt_suggestion`** - Submit improvement suggestions.
   - Types: improvement, bug, clarification, group_specific, missing_case. Legacy `mod_specific` is also accepted.
   - Use when: concrete improvement identified, curator agrees, sufficient detail available
+- **`refresh_workshop_prompt`** - Refresh the current Agent Workshop prompt.
+  - Use before reviewing or commenting on Agent Workshop prompt text, especially after manual edits, save, typo checks, schema checks, "did I fix it?", or "what do you think now?".
+  - The returned `current_prompt` is the only current prompt text. Treat conversation history, older chat context, and version snapshots as historical evidence only.
+  - Never report text as present in the current draft unless it is present in the refreshed `current_prompt`.
 - **`update_workshop_prompt_draft`** - Propose updates for the Agent Workshop draft prompt.
   - Use when: the curator asks you to rewrite the draft or make focused edits, OR when you identify a concrete low-risk improvement and the curator approves applying it.
   - Set `target_prompt="main"` for base system prompt edits.
