@@ -18,6 +18,7 @@ from src.models.sql.database import SessionLocal
 
 CUSTOM_AGENT_PREFIX = "ca_"
 _DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
+_SYSTEM_MANAGED_INHERITED_TOOL_IDS = {"record_evidence"}
 
 
 class CustomAgentError(Exception):
@@ -97,28 +98,77 @@ def _get_next_version(db: Session, custom_agent_uuid: uuid.UUID) -> int:
     return int(max_version or 0) + 1
 
 
+def _dedupe_tool_ids(tool_ids: List[str]) -> List[str]:
+    """Return tool IDs in first-seen order after trimming blanks."""
+    deduped: List[str] = []
+    seen: set[str] = set()
+    for tool_id in tool_ids:
+        normalized = str(tool_id).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _tool_policy_by_key(db: Session) -> Dict[str, Any]:
+    return {
+        entry.tool_key: entry
+        for entry in get_tool_policy_cache().list_all(db)
+    }
+
+
+def _system_managed_tool_ids(db: Session, tool_ids: List[str]) -> List[str]:
+    """Tools inherited from system templates that curators cannot attach manually."""
+    policy_by_key = _tool_policy_by_key(db)
+    managed: List[str] = []
+    for tool_id in _dedupe_tool_ids(tool_ids):
+        if tool_id not in _SYSTEM_MANAGED_INHERITED_TOOL_IDS:
+            continue
+        policy = policy_by_key.get(tool_id)
+        if policy is None or not policy.allow_attach:
+            managed.append(tool_id)
+    return managed
+
+
+def _merge_system_managed_tool_ids(
+    requested_tool_ids: List[str],
+    inherited_tool_ids: List[str],
+) -> List[str]:
+    return _dedupe_tool_ids([*requested_tool_ids, *inherited_tool_ids])
+
+
 def _validate_requested_tool_ids(
     db: Session,
     tool_ids: Optional[List[str]],
+    inherited_tool_ids: Optional[List[str]] = None,
 ) -> Optional[List[str]]:
     """Validate requested tool attachments against DB tool policies."""
     if tool_ids is None:
         return None
 
-    normalized = [str(tool_id).strip() for tool_id in tool_ids if str(tool_id).strip()]
+    normalized = _dedupe_tool_ids(tool_ids)
     if not normalized:
         return []
 
-    policy_by_key = {
-        entry.tool_key: entry
-        for entry in get_tool_policy_cache().list_all(db)
-    }
-    unknown = sorted({tool_id for tool_id in normalized if tool_id not in policy_by_key})
+    policy_by_key = _tool_policy_by_key(db)
+    inherited_system_managed = set(_dedupe_tool_ids(inherited_tool_ids or [])) & _SYSTEM_MANAGED_INHERITED_TOOL_IDS
+    unknown = sorted({
+        tool_id
+        for tool_id in normalized
+        if tool_id not in policy_by_key and tool_id not in inherited_system_managed
+    })
     if unknown:
         raise ValueError(f"Unknown tool_ids: {', '.join(unknown)}")
 
     disallowed = sorted(
-        {tool_id for tool_id in normalized if not policy_by_key[tool_id].allow_attach}
+        {
+            tool_id
+            for tool_id in normalized
+            if tool_id in policy_by_key
+            and not policy_by_key[tool_id].allow_attach
+            and tool_id not in inherited_system_managed
+        }
     )
     if disallowed:
         raise ValueError(f"Tool(s) are not attachable: {', '.join(disallowed)}")
@@ -251,7 +301,20 @@ def create_custom_agent(
 
     effective_model_id = _validate_model_id(model_id or parent_defaults["model_id"] or "")
 
-    requested_tool_ids = _validate_requested_tool_ids(db, tool_ids)
+    parent_tool_ids = list(parent_defaults["tool_ids"] or [])
+    requested_tool_ids = _validate_requested_tool_ids(
+        db,
+        tool_ids,
+        inherited_tool_ids=parent_tool_ids,
+    )
+    if requested_tool_ids is not None:
+        inherited_system_tool_ids = _system_managed_tool_ids(db, parent_tool_ids)
+        effective_tool_ids = _merge_system_managed_tool_ids(
+            requested_tool_ids,
+            inherited_system_tool_ids,
+        )
+    else:
+        effective_tool_ids = parent_tool_ids
 
     custom_agent = CustomAgent(
         id=custom_uuid,
@@ -268,11 +331,7 @@ def create_custom_agent(
             else parent_defaults["model_temperature"]
         ),
         model_reasoning=model_reasoning if model_reasoning is not None else parent_defaults["model_reasoning"],
-        tool_ids=list(
-            requested_tool_ids
-            if requested_tool_ids is not None
-            else parent_defaults["tool_ids"]
-        ),
+        tool_ids=list(effective_tool_ids),
         output_schema_key=output_schema_key if output_schema_key is not None else parent_defaults["output_schema_key"],
         group_rules_enabled=include_group_rules,
         group_rules_component=parent_agent_key,
@@ -582,7 +641,28 @@ def update_custom_agent(
     if model_reasoning is not None:
         custom_agent.model_reasoning = model_reasoning
     if tool_ids is not None:
-        validated_tool_ids = _validate_requested_tool_ids(db, tool_ids) or []
+        inherited_tool_ids: List[str] = []
+        template_source = getattr(custom_agent, "template_source", None)
+        if template_source:
+            try:
+                parent_template = _resolve_system_template_agent(db, template_source)
+                inherited_tool_ids = list(parent_template.tool_ids or [])
+            except ValueError:
+                inherited_tool_ids = []
+        inherited_system_tool_ids = (
+            _system_managed_tool_ids(db, inherited_tool_ids)
+            if inherited_tool_ids
+            else []
+        )
+        validated_tool_ids = _validate_requested_tool_ids(
+            db,
+            tool_ids,
+            inherited_tool_ids=inherited_tool_ids,
+        ) or []
+        validated_tool_ids = _merge_system_managed_tool_ids(
+            validated_tool_ids,
+            inherited_system_tool_ids,
+        )
         existing_tool_ids = list(custom_agent.tool_ids or [])
         if existing_tool_ids and not validated_tool_ids and not allow_empty_tool_ids:
             raise ValueError(

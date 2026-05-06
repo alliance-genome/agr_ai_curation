@@ -307,7 +307,7 @@ export async function createCustomAgent(
     body: JSON.stringify(request),
   })
   if (!response.ok) {
-    throw new Error(`Failed to create custom agent: ${response.status}`)
+    throw new Error(await readCurationApiError(response))
   }
   return response.json()
 }
@@ -330,7 +330,7 @@ export async function updateCustomAgent(
     body: JSON.stringify(request),
   })
   if (!response.ok) {
-    throw new Error(`Failed to update custom agent: ${response.status}`)
+    throw new Error(await readCurationApiError(response))
   }
   return response.json()
 }

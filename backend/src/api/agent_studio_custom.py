@@ -67,17 +67,41 @@ def _raise_custom_agent_validation_http_exception(
     status_code: int,
     detail: str,
     log_message: str,
+    log_extra: Optional[Dict[str, Any]] = None,
 ) -> NoReturn:
     """Log validation failures while returning a stable client response."""
 
-    raise_sanitized_http_exception(
-        logger,
-        status_code=status_code,
-        detail=detail,
-        log_message=log_message,
-        exc=exc,
-        level=logging.WARNING,
+    logger.warning(
+        log_message,
+        exc_info=(type(exc), exc, exc.__traceback__),
+        extra=log_extra,
     )
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _custom_agent_log_context(
+    *,
+    action: str,
+    db_user: Any,
+    request: Any,
+    custom_agent_id: Optional[UUID] = None,
+) -> Dict[str, Any]:
+    """Build safe custom-agent log metadata without prompt content."""
+
+    return {
+        "action": action,
+        "user_id": getattr(db_user, "id", None),
+        "custom_agent_id": str(custom_agent_id) if custom_agent_id else None,
+        "template_source": getattr(request, "template_source", None),
+        "model_id": getattr(request, "model_id", None),
+        "tool_ids": list(getattr(request, "tool_ids", None) or []),
+        "output_schema_key": getattr(request, "output_schema_key", None),
+        "include_group_rules": getattr(request, "include_group_rules", None),
+        "has_custom_prompt": getattr(request, "custom_prompt", None) is not None,
+        "group_override_keys": sorted(
+            (getattr(request, "group_prompt_overrides", None) or {}).keys()
+        ),
+    }
 
 
 class CreateCustomAgentRequest(BaseModel):
@@ -234,6 +258,11 @@ async def create_custom_agent_endpoint(
 ) -> CustomAgentResponse:
     """Create custom agent from template or explicit model/tool settings."""
     db_user = set_global_user_from_cognito(db, user)
+    log_context = _custom_agent_log_context(
+        action="create",
+        db_user=db_user,
+        request=request,
+    )
     try:
         custom_agent = create_custom_agent(
             db=db,
@@ -254,6 +283,15 @@ async def create_custom_agent_endpoint(
         )
         db.commit()
         db.refresh(custom_agent)
+        logger.info(
+            "Created custom agent",
+            extra={
+                **log_context,
+                "custom_agent_id": str(
+                    getattr(custom_agent, "id", getattr(custom_agent, "agent_id", ""))
+                ),
+            },
+        )
         return _as_response_payload(custom_agent)
     except ValueError as exc:
         db.rollback()
@@ -263,12 +301,14 @@ async def create_custom_agent_endpoint(
                 status_code=409,
                 detail="A custom agent with this name already exists",
                 log_message="Failed to create custom agent because the target name already exists",
+                log_extra=log_context,
             )
         _raise_custom_agent_validation_http_exception(
             exc=exc,
             status_code=400,
             detail="Custom agent request is invalid",
             log_message="Failed to create custom agent",
+            log_extra=log_context,
         )
     except IntegrityError as exc:
         db.rollback()
@@ -332,6 +372,12 @@ async def update_custom_agent_endpoint(
 ) -> CustomAgentResponse:
     """Update custom-agent settings and/or prompt text."""
     db_user = set_global_user_from_cognito(db, user)
+    log_context = _custom_agent_log_context(
+        action="update",
+        db_user=db_user,
+        request=request,
+        custom_agent_id=custom_agent_id,
+    )
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
         update_custom_agent(
@@ -353,6 +399,7 @@ async def update_custom_agent_endpoint(
         )
         db.commit()
         db.refresh(custom_agent)
+        logger.info("Updated custom agent", extra=log_context)
         return _as_response_payload(custom_agent)
     except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
         db.rollback()
@@ -368,12 +415,14 @@ async def update_custom_agent_endpoint(
                 status_code=409,
                 detail="A custom agent with this name already exists",
                 log_message=f"Failed to update custom agent '{custom_agent_id}' because the target name already exists",
+                log_extra=log_context,
             )
         _raise_custom_agent_validation_http_exception(
             exc=exc,
             status_code=400,
             detail="Custom agent update is invalid",
             log_message=f"Failed to update custom agent '{custom_agent_id}'",
+            log_extra=log_context,
         )
     except IntegrityError as exc:
         db.rollback()
