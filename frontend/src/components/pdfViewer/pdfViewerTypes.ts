@@ -1,7 +1,7 @@
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence'
 import type { PdfViewerNavigationResult } from './pdfEvidenceNavigation'
 
-export const VIEWER_BASE_PATH = '/pdfjs/web/viewer.html'
+export const VIEWER_BASE_PATH = '/pdfjs/web/viewer.html?v=20260506-map-polyfill'
 
 export interface ViewerDocument {
   documentId: string
