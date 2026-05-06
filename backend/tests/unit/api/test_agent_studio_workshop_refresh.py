@@ -150,14 +150,99 @@ def test_workshop_prompt_refresh_is_forced_only_for_prompt_sensitive_turns():
         context=context,
         latest_user_message="what do you think now?",
     )
+    assert api_module._should_force_workshop_prompt_refresh(
+        context=context,
+        latest_user_message="Does it still mention minerite?",
+    )
     assert not api_module._should_force_workshop_prompt_refresh(
         context=context,
         latest_user_message="How should I think about model tradeoffs?",
     )
     assert not api_module._should_force_workshop_prompt_refresh(
+        context=context,
+        latest_user_message="What should I do now about the flow?",
+    )
+    assert not api_module._should_force_workshop_prompt_refresh(
+        context=context,
+        latest_user_message="Can you explain minerite?",
+    )
+    assert not api_module._should_force_workshop_prompt_refresh(
         context=ChatContext(active_tab="agents"),
         latest_user_message="Review main prompt",
     )
+
+
+@pytest.mark.asyncio
+async def test_refresh_workshop_prompt_rejects_invalid_target_prompt():
+    result = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input={"target_prompt": "mod"},
+        context=ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(prompt_draft="Current draft"),
+        ),
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Invalid target_prompt: 'mod'. Must be 'main' or 'group'.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_refresh_workshop_prompt_rejects_invalid_context_timestamp():
+    result = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input={"target_prompt": "main"},
+        context=ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                prompt_draft="Current draft",
+                custom_agent_updated_at="not-a-date",
+            ),
+        ),
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+    )
+
+    assert result == {
+        "success": False,
+        "error": "Invalid custom_agent_updated_at value. Expected an ISO 8601 timestamp.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_refresh_workshop_prompt_returns_error_when_saved_agent_is_inaccessible(monkeypatch):
+    custom_agent_uuid = uuid4()
+
+    monkeypatch.setattr(api_module, "SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    def _raise_access_error(*_args):
+        raise api_module.CustomAgentAccessError("permission denied")
+
+    monkeypatch.setattr(api_module, "get_custom_agent_visible_to_user", _raise_access_error)
+
+    result = await api_module._handle_tool_call(
+        tool_name="refresh_workshop_prompt",
+        tool_input={"target_prompt": "main"},
+        context=ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(
+                custom_agent_id=f"ca_{custom_agent_uuid}",
+                prompt_draft="Potentially stale draft.",
+            ),
+        ),
+        user_email="curator@example.org",
+        user_auth_sub="auth-sub-1",
+        user_db_id=7,
+    )
+
+    assert result == {
+        "success": False,
+        "error": f"Could not access custom agent {custom_agent_uuid}.",
+    }
 
 
 @pytest.mark.asyncio

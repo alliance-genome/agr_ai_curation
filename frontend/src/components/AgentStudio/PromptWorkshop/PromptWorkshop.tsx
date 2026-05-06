@@ -75,6 +75,20 @@ import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 
 const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
 
+function areStringRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftKeys = Object.keys(left).sort()
+  const rightKeys = Object.keys(right).sort()
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key])
+}
+
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) return false
+  const sortedLeft = [...left].sort()
+  const sortedRight = [...right].sort()
+  return sortedLeft.every((value, index) => value === sortedRight[index])
+}
+
 const Toolbar = styled(Box)(({ theme }) => ({
   display: 'flex',
   alignItems: 'center',
@@ -795,11 +809,11 @@ function PromptWorkshop({
     const normalizedSelectedGroupOverrides = selectedCustomAgent?.group_prompt_overrides || {}
     const draftIsDirty = selectedCustomAgent
       ? customPrompt !== selectedCustomAgent.custom_prompt
-        || JSON.stringify(groupPromptOverrides) !== JSON.stringify(normalizedSelectedGroupOverrides)
+        || !areStringRecordsEqual(groupPromptOverrides, normalizedSelectedGroupOverrides)
         || includeGroupRules !== selectedCustomAgent.include_group_rules
         || selectedModelId !== selectedCustomAgent.model_id
         || (selectedModelReasoning || '') !== (selectedCustomAgent.model_reasoning || '')
-        || JSON.stringify(selectedToolIds) !== JSON.stringify(selectedCustomAgent.tool_ids || [])
+        || !areStringArraysEqual(selectedToolIds, selectedCustomAgent.tool_ids || [])
         || (outputSchemaKey || '') !== (selectedCustomAgent.output_schema_key || '')
       : Boolean(customPrompt.trim())
     onContextChange({

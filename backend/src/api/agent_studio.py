@@ -1070,7 +1070,7 @@ def _apply_targeted_workshop_edits(
 
 
 def _parse_optional_datetime(value: Any) -> datetime | None:
-    """Parse an optional ISO-ish timestamp without raising."""
+    """Parse an optional ISO-ish timestamp."""
 
     if isinstance(value, datetime):
         return value
@@ -1079,7 +1079,8 @@ def _parse_optional_datetime(value: Any) -> datetime | None:
     try:
         return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
     except ValueError:
-        return None
+        logger.warning("Unparseable Agent Workshop datetime value: %r", value)
+        raise
 
 
 def _is_newer_datetime(left: datetime | None, right: datetime | None) -> bool:
@@ -1112,12 +1113,12 @@ def _prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
-def _resolve_refresh_target(tool_input: dict, context: Optional[ChatContext]) -> tuple[str, str]:
+def _resolve_refresh_target(
+    target_prompt: str,
+    tool_input: dict,
+    context: Optional[ChatContext],
+) -> tuple[str, str]:
     """Resolve which workshop prompt the refresh tool should return."""
-
-    target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
-    if target_prompt not in {"main", "group"}:
-        target_prompt = "main"
 
     target_group_id = ""
     if target_prompt == "group" and context and context.agent_workshop:
@@ -1145,7 +1146,20 @@ def _build_refresh_workshop_prompt_result(
         }
 
     workshop = context.agent_workshop
-    target_prompt, target_group_id = _resolve_refresh_target(tool_input, context)
+    target_prompt = str(tool_input.get("target_prompt", "main")).strip().lower()
+    if target_prompt not in {"main", "group"}:
+        return {
+            "success": False,
+            "error": (
+                f"Invalid target_prompt: {target_prompt!r}. "
+                "Must be 'main' or 'group'."
+            ),
+        }
+    target_prompt, target_group_id = _resolve_refresh_target(
+        target_prompt,
+        tool_input,
+        context,
+    )
     context_prompt = (
         workshop.selected_group_prompt_draft
         if target_prompt == "group"
@@ -1153,7 +1167,7 @@ def _build_refresh_workshop_prompt_result(
     ) or ""
 
     saved_prompt: str | None = None
-    saved_custom_agent: Any | None = None
+    saved_custom_agent: UnifiedAgent | None = None
     saved_updated_at: datetime | None = None
     custom_agent_uuid = _parse_workshop_custom_agent_uuid(workshop.custom_agent_id)
 
@@ -1172,38 +1186,48 @@ def _build_refresh_workshop_prompt_result(
                         "error": "No Agent Workshop group is selected for a group prompt refresh.",
                     }
                 saved_prompt = get_custom_agent_group_prompt(
-                    parent_agent_key=getattr(saved_custom_agent, "parent_agent_key", ""),
+                    parent_agent_key=saved_custom_agent.parent_agent_key,
                     group_id=target_group_id,
-                    group_prompt_overrides=(
-                        getattr(saved_custom_agent, "group_prompt_overrides", None)
-                        or getattr(saved_custom_agent, "mod_prompt_overrides", None)
-                    ),
+                    group_prompt_overrides=saved_custom_agent.group_prompt_overrides,
                 )
             else:
-                saved_prompt = str(getattr(saved_custom_agent, "custom_prompt", "") or "")
-            saved_updated_at = getattr(saved_custom_agent, "updated_at", None)
+                saved_prompt = str(saved_custom_agent.custom_prompt or "")
+            saved_updated_at = saved_custom_agent.updated_at
         except (CustomAgentAccessError, CustomAgentNotFoundError):
             logger.warning(
                 "Agent Workshop prompt refresh could not access custom agent %s",
                 custom_agent_uuid,
                 exc_info=True,
             )
+            return {
+                "success": False,
+                "error": f"Could not access custom agent {custom_agent_uuid}.",
+            }
         finally:
             db.close()
 
-    context_updated_at = _parse_optional_datetime(workshop.custom_agent_updated_at)
+    try:
+        context_updated_at = _parse_optional_datetime(workshop.custom_agent_updated_at)
+    except ValueError:
+        return {
+            "success": False,
+            "error": (
+                "Invalid custom_agent_updated_at value. "
+                "Expected an ISO 8601 timestamp."
+            ),
+        }
     saved_is_newer = _is_newer_datetime(saved_updated_at, context_updated_at)
     has_unsaved_context = bool(workshop.draft_is_dirty) and not saved_is_newer
 
     if has_unsaved_context and context_prompt:
         source = "current_workshop_draft"
         refreshed_prompt = context_prompt
-        version = getattr(saved_custom_agent, "version", None) if saved_custom_agent else None
+        version = saved_custom_agent.version if saved_custom_agent else None
         updated_at = context_updated_at
     elif saved_prompt is not None:
         source = "saved_custom_agent"
         refreshed_prompt = saved_prompt or ""
-        version = getattr(saved_custom_agent, "version", None) if saved_custom_agent else None
+        version = saved_custom_agent.version if saved_custom_agent else None
         updated_at = saved_updated_at
     else:
         source = "current_workshop_draft"
@@ -1234,7 +1258,7 @@ _PROMPT_SENSITIVE_WORKSHOP_RE = re.compile(
     r"\b("
     r"review|check|look\s+over|what\s+do\s+you\s+think|did\s+i\s+fix|fixed|"
     r"typo|misspell|spelling|schema|prompt|draft|main\s+prompt|group\s+prompt|"
-    r"minerite|now"
+    r"does\s+it\s+(?:still\s+)?(?:say|mention|contain)"
     r")\b",
     re.IGNORECASE,
 )
