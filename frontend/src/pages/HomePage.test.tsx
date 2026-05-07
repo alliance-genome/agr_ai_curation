@@ -6,6 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import theme from '@/theme'
 import { DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT, getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  DOCUMENT_LOADING_STORAGE_KEY,
+  DOCUMENT_LOAD_ERROR_EVENT,
+} from '@/features/documents/documentLoadEvents'
 import HomePage from './HomePage'
 
 const mockUseAuth = vi.hoisted(() => vi.fn())
@@ -464,7 +468,75 @@ describe('HomePage durable session bootstrap', () => {
 
     expect(screen.getByText(viewerRestoreMessage)).toBeInTheDocument()
     expect(screen.queryByText(/Document loading timed out/i)).not.toBeInTheDocument()
-    expect(sessionStorage.getItem('document-loading')).toBeNull()
+    expect(sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY)).toBeNull()
+  })
+
+  it('clears document loading storage and emits an error when the handoff safety timeout fires', async () => {
+    const timeoutMessage = 'Document loading timed out before the chat handoff completed. The PDF may still be processing, unavailable, or too large.'
+    const loadErrorSpy = vi.fn()
+    const realSetTimeout = window.setTimeout.bind(window)
+    let loadingTimeoutCallback: (() => void) | undefined
+
+    window.addEventListener(DOCUMENT_LOAD_ERROR_EVENT, loadErrorSpy as EventListener)
+    sessionStorage.setItem(DOCUMENT_LOADING_STORAGE_KEY, 'true')
+
+    vi.spyOn(window, 'setTimeout').mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 30000) {
+        loadingTimeoutCallback = () => {
+          if (typeof handler === 'function') {
+            handler(...args)
+          }
+        }
+        return 30000
+      }
+
+      return realSetTimeout(handler, timeout, ...(args as []))
+    }) as typeof window.setTimeout)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        return jsonResponse({
+          session_id: 'timeout-session',
+          created_at: '2026-05-07T15:00:00Z',
+          updated_at: '2026-05-07T15:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage()
+
+    expect(await screen.findByText('timeout-session')).toBeInTheDocument()
+    expect(loadingTimeoutCallback).toBeDefined()
+
+    await act(async () => {
+      loadingTimeoutCallback?.()
+    })
+
+    expect(await screen.findByText(timeoutMessage)).toBeInTheDocument()
+    expect(sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY)).toBeNull()
+    expect(loadErrorSpy).toHaveBeenCalledTimes(1)
+    expect((loadErrorSpy.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+      message: timeoutMessage,
+    })
+
+    window.removeEventListener(DOCUMENT_LOAD_ERROR_EVENT, loadErrorSpy as EventListener)
   })
 
   it('preserves non-text durable transcript rows when restoring a requested session', async () => {

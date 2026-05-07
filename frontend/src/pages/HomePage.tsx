@@ -603,10 +603,9 @@ function HomePage() {
     if (!loadingDocument || loadingError) return
 
     const timeoutId = window.setTimeout(() => {
+      const message = 'Document loading timed out before the chat handoff completed. The PDF may still be processing, unavailable, or too large.'
       debug.log('[HomePage] Document loading timeout - showing error')
-      setLoadingError(
-        'Document loading timed out before the chat handoff completed. The PDF may still be processing, unavailable, or too large.',
-      )
+      failDocumentLoad({ message })
     }, 30000) // 30 second timeout
 
     return () => {
