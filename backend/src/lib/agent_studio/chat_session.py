@@ -31,6 +31,7 @@ class PreparedAgentStudioTurn:
     turn_id: str
     user_message: str
     requested_context_session_id: str | None
+    user_turn_created: bool = True
     replay_assistant_turn: ChatMessageRecord | None = None
 
 
@@ -289,6 +290,7 @@ def prepare_agent_studio_turn(
         turn_id=turn_id,
         user_message=user_turn.message.content,
         requested_context_session_id=requested_context_session_id,
+        user_turn_created=user_turn.created,
         replay_assistant_turn=replay_assistant_turn,
     )
 
@@ -328,10 +330,13 @@ def build_agent_studio_assistant_payload(
     tool_calls: List[Dict[str, Any]],
     requested_context_session_id: str | None,
     session_id: str,
+    trace_capture: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
     payload: Dict[str, Any] = {}
     if tool_calls:
         payload["tool_calls"] = tool_calls
+    if trace_capture:
+        payload["trace_capture"] = trace_capture
     if (
         requested_context_session_id is not None
         and requested_context_session_id != session_id
@@ -413,23 +418,30 @@ def build_agent_studio_replay_events(
 ) -> List[str]:
     replay_events: List[str] = []
     for tool_call in assistant_tool_calls_from_payload(assistant_turn.payload_json):
+        tool_input = tool_call.get("argument_summary")
+        result_payload = {
+            "status": tool_call.get("result_status"),
+            "error": tool_call.get("result_error"),
+            "summary": tool_call.get("result_summary"),
+            "backend_blocked_tool_scope": tool_call.get("backend_blocked_tool_scope"),
+        }
         replay_events.append(
             opus_sse_event(
                 session_id=session_id,
                 turn_id=turn_id,
                 event_type="TOOL_USE",
                 tool_name=tool_call.get("tool_name"),
-                tool_input=tool_call.get("tool_input"),
+                tool_input=tool_input,
             )
         )
-        if "result" in tool_call:
+        if any(value is not None for value in result_payload.values()):
             replay_events.append(
                 opus_sse_event(
                     session_id=session_id,
                     turn_id=turn_id,
                     event_type="TOOL_RESULT",
                     tool_name=tool_call.get("tool_name"),
-                    result=tool_call.get("result"),
+                    result=result_payload,
                 )
             )
 

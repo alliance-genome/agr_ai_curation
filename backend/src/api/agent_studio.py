@@ -1113,6 +1113,374 @@ def _prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
+# Short strings under these keys are persisted verbatim in tool-call audit
+# summaries because they are operational identifiers, selectors, or statuses
+# that support SQL debugging queries without exposing prompt text or
+# credentials. When adding a new tool-call argument/result field that should be
+# searchable in persisted audit metadata, add it here only if the value is
+# non-sensitive by contract, then update the audit summarization tests.
+_AUDIT_SAFE_VALUE_KEYS = {
+    "agent_id",
+    "apply_mode",
+    "call_id",
+    "chat_kind",
+    "custom_agent_id",
+    "runtime_agent_id",
+    "session_id",
+    "source",
+    "status",
+    "success",
+    "target_group_id",
+    "target_mod_id",
+    # Refresh-tool selector, not prompt content.
+    "target_prompt",
+    "tool_name",
+    "trace_id",
+    "view_name",
+}
+
+
+def _audit_text_summary(value: str) -> Dict[str, Any]:
+    """Return a compact non-reversible string summary for durable audit metadata."""
+
+    return {
+        "type": "string",
+        "length": len(value),
+        "sha256": _prompt_hash(value),
+    }
+
+
+def _summarize_audit_value(value: Any, *, key: str | None = None, depth: int = 0) -> Any:
+    """Summarize JSON-ish data without storing raw prompts, credentials, or large values."""
+
+    normalized_key = key.lower() if isinstance(key, str) else None
+    if value is None:
+        return {"type": "null"}
+    if isinstance(value, bool):
+        return {"type": "boolean", "value": value}
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return {"type": "number", "value": value}
+    if isinstance(value, str):
+        if normalized_key in _AUDIT_SAFE_VALUE_KEYS and len(value) <= 255:
+            return {"type": "string", "value": value, "length": len(value)}
+        return _audit_text_summary(value)
+    if isinstance(value, list):
+        summary: Dict[str, Any] = {"type": "array", "length": len(value)}
+        if depth < 2:
+            summary["items"] = [
+                _summarize_audit_value(item, depth=depth + 1)
+                for item in value[:5]
+            ]
+            if len(value) > 5:
+                summary["truncated"] = True
+        return summary
+    if isinstance(value, dict):
+        keys = sorted(str(item_key) for item_key in value.keys())
+        summary = {
+            "type": "object",
+            "keys": keys,
+            "key_count": len(keys),
+        }
+        if depth < 2:
+            summary["fields"] = {
+                str(item_key): _summarize_audit_value(
+                    item_value,
+                    key=str(item_key),
+                    depth=depth + 1,
+                )
+                for item_key, item_value in value.items()
+            }
+        return summary
+
+    return {
+        "type": type(value).__name__,
+        "repr_sha256": _prompt_hash(str(value)),
+    }
+
+
+def _prompt_digest_summary(prompt: Any) -> Dict[str, Any]:
+    """Summarize prompt text without retaining the prompt itself."""
+
+    if isinstance(prompt, str):
+        return {
+            "provided": True,
+            "length": len(prompt),
+            "sha256": _prompt_hash(prompt),
+        }
+    return {
+        "provided": False,
+        "length": None,
+        "sha256": None,
+    }
+
+
+def _trace_capture_snapshot(trace_id: str | None) -> Dict[str, Any]:
+    """Describe whether this Agent Studio turn has a durable trace link."""
+
+    normalized_trace_id = _normalize_optional_text(trace_id)
+    if normalized_trace_id:
+        return {
+            "status": "provided_context_trace_id",
+            "trace_id": normalized_trace_id,
+            "error": None,
+        }
+    return {
+        "status": "capture_unavailable",
+        "trace_id": None,
+        "error": "Agent Studio Opus chat does not currently create a Langfuse trace.",
+    }
+
+
+def _tool_result_status(tool_result: Any) -> str:
+    """Normalize heterogeneous tool results into a compact audit status."""
+
+    if not isinstance(tool_result, dict):
+        return "success"
+    if tool_result.get("success") is False:
+        return "error"
+    raw_status = tool_result.get("status")
+    if isinstance(raw_status, str) and raw_status.strip():
+        normalized_status = raw_status.strip().lower()
+        if normalized_status in {"error", "failed", "failure"}:
+            return "error"
+        return normalized_status
+    if tool_result.get("error"):
+        return "error"
+    if tool_result.get("pending_user_approval") is True:
+        return "pending_user_approval"
+    return "success"
+
+
+def _tool_result_error(tool_result: Any) -> str | None:
+    if not isinstance(tool_result, dict):
+        return None
+    raw_error = tool_result.get("error")
+    if isinstance(raw_error, str) and raw_error.strip():
+        return raw_error.strip()[:500]
+    return None
+
+
+def _is_backend_scope_block(tool_name: str, context: Optional[ChatContext], tool_result: Any) -> bool:
+    if not _is_tool_allowed_for_context(tool_name, context):
+        return True
+    error_text = _tool_result_error(tool_result) or ""
+    return (
+        "only available while the curator is on" in error_text
+        or "is not available on the" in error_text
+    )
+
+
+def _tool_call_audit_entry(
+    *,
+    tool_name: str,
+    tool_use_id: Any,
+    tool_input: Any,
+    tool_result: Any,
+    context: Optional[ChatContext],
+) -> Dict[str, Any]:
+    """Build one durable tool-call audit record without raw arguments/results."""
+
+    result_status = _tool_result_status(tool_result)
+    result_error = _tool_result_error(tool_result)
+    return {
+        "tool_name": tool_name,
+        "tool_use_id": str(tool_use_id) if tool_use_id is not None else None,
+        "requested": True,
+        # _AUDIT_SAFE_VALUE_KEYS is the only place that permits raw short
+        # strings inside these summaries; add safe searchable fields there
+        # when introducing new audited tool arguments or result metadata.
+        "argument_summary": _summarize_audit_value(tool_input),
+        "result_status": result_status,
+        "result_error": result_error,
+        "result_type": type(tool_result).__name__,
+        "backend_blocked_tool_scope": _is_backend_scope_block(
+            tool_name,
+            context,
+            tool_result,
+        ),
+        "result_summary": _summarize_audit_value(tool_result),
+    }
+
+
+def _resolve_saved_workshop_agent(
+    *,
+    db: Session,
+    workshop: Any,
+    user_db_id: int | None,
+) -> tuple[uuid.UUID | None, UnifiedAgent | None, str | None]:
+    custom_agent_uuid = _parse_workshop_custom_agent_uuid(workshop.custom_agent_id)
+    if custom_agent_uuid is None or user_db_id is None:
+        return custom_agent_uuid, None, None
+    try:
+        return (
+            custom_agent_uuid,
+            get_custom_agent_visible_to_user(db, custom_agent_uuid, user_db_id),
+            None,
+        )
+    except (CustomAgentAccessError, CustomAgentNotFoundError) as exc:
+        logger.warning(
+            "Could not resolve Agent Workshop custom agent for debug snapshot",
+            extra={"custom_agent_id": str(custom_agent_uuid)},
+        )
+        return custom_agent_uuid, None, type(exc).__name__
+
+
+def _build_workshop_prompt_context_summary(
+    *,
+    db: Session,
+    workshop: Any,
+    user_db_id: int | None,
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Build redacted Agent Workshop prompt freshness/debug metadata."""
+
+    custom_agent_uuid, saved_custom_agent, lookup_error = _resolve_saved_workshop_agent(
+        db=db,
+        workshop=workshop,
+        user_db_id=user_db_id,
+    )
+    selected_group_id = (workshop.selected_group_id or "").strip().upper() or None
+    frontend_main = _prompt_digest_summary(workshop.prompt_draft)
+    frontend_group = _prompt_digest_summary(workshop.selected_group_prompt_draft)
+
+    saved_main: Dict[str, Any] | None = None
+    saved_group: Dict[str, Any] | None = None
+    if saved_custom_agent is not None:
+        saved_main = _prompt_digest_summary(saved_custom_agent.custom_prompt or "")
+        if selected_group_id:
+            saved_group_prompt = get_custom_agent_group_prompt(
+                parent_agent_key=saved_custom_agent.parent_agent_key,
+                group_id=selected_group_id,
+                group_prompt_overrides=saved_custom_agent.group_prompt_overrides,
+            )
+            saved_group = _prompt_digest_summary(saved_group_prompt)
+
+    frontend_matches_saved = None
+    if saved_main is not None and frontend_main["provided"]:
+        main_matches = frontend_main["sha256"] == saved_main["sha256"]
+        group_matches = True
+        if selected_group_id and frontend_group["provided"] and saved_group is not None:
+            group_matches = frontend_group["sha256"] == saved_group["sha256"]
+        frontend_matches_saved = main_matches and group_matches
+
+    if bool(workshop.draft_is_dirty) and (frontend_main["provided"] or frontend_group["provided"]):
+        context_source = "frontend_draft"
+    elif saved_custom_agent is not None:
+        context_source = "saved_custom_agent"
+    elif frontend_main["provided"] or frontend_group["provided"]:
+        context_source = "frontend_draft"
+    else:
+        context_source = "unavailable"
+
+    saved_updated_at = (
+        saved_custom_agent.updated_at.isoformat()
+        if saved_custom_agent is not None and isinstance(saved_custom_agent.updated_at, datetime)
+        else None
+    )
+    saved_version = (
+        int(saved_custom_agent.version)
+        if saved_custom_agent is not None and saved_custom_agent.version is not None
+        else None
+    )
+    saved_debug = {
+        "custom_agent_id": str(custom_agent_uuid) if custom_agent_uuid else None,
+        "runtime_agent_id": make_custom_agent_id(custom_agent_uuid) if custom_agent_uuid else None,
+        "version": saved_version,
+        "updated_at": saved_updated_at,
+        "lookup_error": lookup_error,
+    }
+    prompt_summary = {
+        "context_source": context_source,
+        "frontend_draft_matches_saved_db": frontend_matches_saved,
+        "selected_group_id": selected_group_id,
+        "frontend_draft": {
+            "main_prompt": frontend_main,
+            "selected_group_prompt": frontend_group,
+            "custom_agent_updated_at": workshop.custom_agent_updated_at,
+            "draft_is_dirty": workshop.draft_is_dirty,
+        },
+        "saved_db_prompt": {
+            **saved_debug,
+            "main_prompt": saved_main,
+            "selected_group_prompt": saved_group,
+        },
+    }
+    return prompt_summary, saved_debug
+
+
+def _build_agent_studio_user_debug_payload(
+    *,
+    db: Session,
+    request: ChatRequest,
+    prepared_turn: "PreparedAgentStudioTurn",
+    user_db_id: int | None,
+) -> Dict[str, Any]:
+    """Build compact per-turn debug metadata for the durable user row."""
+
+    context = request.context
+    trace_id = context.trace_id if context else None
+    payload: Dict[str, Any] = {
+        "debug_context": {
+            "session_id": prepared_turn.session_id,
+            "turn_id": prepared_turn.turn_id,
+            "requested_context_session_id": prepared_turn.requested_context_session_id,
+            "active_tab": context.active_tab if context else None,
+            "selected_agent_id": context.selected_agent_id if context else None,
+            "selected_group_id": context.selected_group_id if context else None,
+            "view_mode": context.view_mode if context else None,
+        },
+        "trace_capture": _trace_capture_snapshot(trace_id),
+    }
+    if context and context.agent_workshop:
+        prompt_summary, saved_debug = _build_workshop_prompt_context_summary(
+            db=db,
+            workshop=context.agent_workshop,
+            user_db_id=user_db_id,
+        )
+        workshop = context.agent_workshop
+        payload["debug_context"]["agent_workshop"] = {
+            "template_source": workshop.template_source,
+            "template_name": workshop.template_name,
+            "custom_agent_id": workshop.custom_agent_id,
+            "custom_agent_name": workshop.custom_agent_name,
+            "selected_group_id": workshop.selected_group_id,
+            "include_group_rules": workshop.include_group_rules,
+            "draft_is_dirty": workshop.draft_is_dirty,
+            "group_prompt_override_count": workshop.group_prompt_override_count,
+            "has_group_prompt_overrides": workshop.has_group_prompt_overrides,
+            "template_prompt_stale": workshop.template_prompt_stale,
+            "template_exists": workshop.template_exists,
+            "draft_tool_count": (
+                len(workshop.draft_tool_ids)
+                if isinstance(workshop.draft_tool_ids, list)
+                else None
+            ),
+            "draft_model_id": workshop.draft_model_id,
+            "draft_model_reasoning": workshop.draft_model_reasoning,
+            "saved_custom_agent": saved_debug,
+        }
+        payload["agent_workshop_prompt_context"] = prompt_summary
+    return _json_safe(payload)
+
+
+def _persist_agent_studio_user_debug_payload(
+    *,
+    db: Session,
+    user_id: str,
+    prepared_turn: "PreparedAgentStudioTurn",
+    trace_id: str | None,
+    payload_json: Dict[str, Any],
+) -> ChatMessageRecord:
+    repository = ChatHistoryRepository(db)
+    return repository.update_message_by_turn_id(
+        session_id=prepared_turn.session_id,
+        user_auth_sub=user_id,
+        turn_id=prepared_turn.turn_id,
+        role="user",
+        payload_json=payload_json,
+        trace_id=trace_id,
+    )
+
+
 def _resolve_refresh_target(
     target_prompt: str,
     tool_input: dict,
@@ -1841,11 +2209,13 @@ def _build_agent_studio_assistant_payload(
     tool_calls: List[Dict[str, Any]],
     requested_context_session_id: str | None,
     session_id: str,
+    trace_capture: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
     return agent_studio_chat_session.build_agent_studio_assistant_payload(
         tool_calls=tool_calls,
         requested_context_session_id=requested_context_session_id,
         session_id=session_id,
+        trace_capture=trace_capture,
     )
 
 
@@ -1944,6 +2314,22 @@ async def chat_with_opus(
                 user_id=user_id,
                 request=request,
             )
+            if prepared_turn.user_turn_created:
+                trace_id = request.context.trace_id if request.context else None
+                user_payload = _build_agent_studio_user_debug_payload(
+                    db=db,
+                    request=request,
+                    prepared_turn=prepared_turn,
+                    user_db_id=db_user_id,
+                )
+                _persist_agent_studio_user_debug_payload(
+                    db=db,
+                    user_id=user_id,
+                    prepared_turn=prepared_turn,
+                    trace_id=trace_id,
+                    payload_json=user_payload,
+                )
+                db.commit()
         finally:
             db.close()
     except HTTPException:
@@ -2144,11 +2530,13 @@ async def chat_with_opus(
                             )
 
                             completed_tool_calls.append(
-                                {
-                                    "tool_name": block.name,
-                                    "tool_input": safe_tool_input,
-                                    "result": safe_tool_result,
-                                }
+                                _tool_call_audit_entry(
+                                    tool_name=block.name,
+                                    tool_use_id=getattr(block, "id", None),
+                                    tool_input=safe_tool_input,
+                                    tool_result=safe_tool_result,
+                                    context=request.context,
+                                )
                             )
 
                             # Collect for API continuation
@@ -2183,6 +2571,7 @@ async def chat_with_opus(
                 tool_calls=completed_tool_calls,
                 requested_context_session_id=prepared_turn.requested_context_session_id,
                 session_id=prepared_turn.session_id,
+                trace_capture=_trace_capture_snapshot(trace_id),
             )
             assistant_turn = _persist_completed_agent_studio_turn(
                 session_id=prepared_turn.session_id,
