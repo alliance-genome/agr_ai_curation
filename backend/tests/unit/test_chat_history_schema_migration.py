@@ -23,6 +23,12 @@ CHAT_KIND_MIGRATION_PATH = (
     / "versions"
     / "z9a0b1c2d3e4_add_chat_kind_discriminator.py"
 )
+AGENT_STUDIO_DEBUG_MIGRATION_PATH = (
+    REPO_ROOT
+    / "alembic"
+    / "versions"
+    / "i8j9k0l1m2n3_agent_studio_chat_debug_metadata.py"
+)
 
 
 class RecordingOp:
@@ -412,3 +418,60 @@ def test_chat_kind_downgrade_restores_pre_discriminator_shape(monkeypatch):
         "AFTER INSERT OR UPDATE OF title, generated_title" in statement
         for statement in op_recorder.executed
     )
+
+
+def test_agent_studio_debug_upgrade_adds_indexes_and_view(monkeypatch):
+    module = _load_migration_module(
+        monkeypatch,
+        module_name="agent_studio_debug_migration_upgrade_test",
+        migration_path=AGENT_STUDIO_DEBUG_MIGRATION_PATH,
+    )
+    op_recorder = RecordingOp()
+    module.op = op_recorder
+
+    module.upgrade()
+
+    index_map = {index["name"]: index for index in op_recorder.created_indexes}
+    assert set(index_map) == {
+        "ix_chat_messages_agent_studio_trace_id",
+        "ix_chat_messages_agent_studio_payload_json",
+    }
+    assert index_map["ix_chat_messages_agent_studio_trace_id"]["columns"] == [
+        "trace_id"
+    ]
+    assert index_map["ix_chat_messages_agent_studio_payload_json"]["kwargs"][
+        "postgresql_using"
+    ] == "gin"
+    assert any(
+        "CREATE OR REPLACE VIEW agent_studio_chat_debug_turns" in statement
+        and "tool_call_count" in statement
+        and "agent_workshop_prompt_context" in statement
+        for statement in op_recorder.executed
+    )
+
+
+def test_agent_studio_debug_downgrade_drops_view_and_indexes(monkeypatch):
+    module = _load_migration_module(
+        monkeypatch,
+        module_name="agent_studio_debug_migration_downgrade_test",
+        migration_path=AGENT_STUDIO_DEBUG_MIGRATION_PATH,
+    )
+    op_recorder = RecordingOp()
+    module.op = op_recorder
+
+    module.downgrade()
+
+    assert any(
+        "DROP VIEW IF EXISTS agent_studio_chat_debug_turns" in statement
+        for statement in op_recorder.executed
+    )
+    assert op_recorder.dropped_indexes == [
+        {
+            "name": "ix_chat_messages_agent_studio_payload_json",
+            "table_name": "chat_messages",
+        },
+        {
+            "name": "ix_chat_messages_agent_studio_trace_id",
+            "table_name": "chat_messages",
+        },
+    ]

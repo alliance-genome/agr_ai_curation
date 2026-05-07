@@ -117,6 +117,19 @@ class ChatMessage(Base):
             postgresql_using="gin",
             postgresql_where=text("chat_kind = 'agent_studio'"),
         ),
+        Index(
+            "ix_chat_messages_agent_studio_trace_id",
+            "trace_id",
+            postgresql_where=text("chat_kind = 'agent_studio' AND trace_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_chat_messages_agent_studio_payload_json",
+            "payload_json",
+            postgresql_using="gin",
+            postgresql_where=text(
+                "chat_kind = 'agent_studio' AND payload_json IS NOT NULL"
+            ),
+        ),
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging helper

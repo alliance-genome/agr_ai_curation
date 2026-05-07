@@ -106,6 +106,7 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
             turn_id="opus-turn-1",
             user_message=request.messages[-1].content,
             requested_context_session_id=request.context.session_id,
+            user_turn_created=False,
         )
 
     def _persist_turn(*, payload_json, trace_id, **_kwargs):
@@ -162,4 +163,11 @@ def test_agent_studio_chat_endpoint_round_trips_context_session_id(
     assert all(event["session_id"] == "agent-studio-session-1" for event in events)
     assert captured["request_context_session_id"] == "assistant-session-123"
     assert captured["assistant_trace_id"] == "trace-123"
-    assert captured["assistant_payload"] == {"seed_session_id": "assistant-session-123"}
+    assert captured["assistant_payload"] == {
+        "trace_capture": {
+            "status": "provided_context_trace_id",
+            "trace_id": "trace-123",
+            "error": None,
+        },
+        "seed_session_id": "assistant-session-123",
+    }

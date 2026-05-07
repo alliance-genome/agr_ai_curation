@@ -499,6 +499,24 @@ ORDER BY created_at DESC
 LIMIT 20;
 ```
 
+Agent Studio chat debug verification:
+```sql
+SELECT
+  session_id,
+  turn_id,
+  trace_id,
+  trace_capture->>'status' AS trace_capture_status,
+  tool_call_count,
+  debug_context->>'active_tab' AS active_tab,
+  agent_workshop_prompt_context->>'context_source' AS workshop_context_source,
+  agent_workshop_prompt_context->>'frontend_draft_matches_saved_db' AS workshop_draft_matches_saved
+FROM agent_studio_chat_debug_turns
+WHERE session_id = '<agent-studio-session-id>'
+ORDER BY user_created_at DESC
+LIMIT 20;
+```
+The view exposes compact JSONB metadata only: context IDs, prompt hashes/lengths, custom-agent version timestamps, trace status, and redacted tool-call audit summaries. It intentionally omits raw prompts, tool credentials, and full tool results.
+
 ---
 
 ## User & Auth Utilities

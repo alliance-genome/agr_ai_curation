@@ -175,15 +175,30 @@ def test_agent_studio_chat_persists_durable_rows_and_replays_completed_turn(
         ("user", AGENT_STUDIO_CHAT_KIND, "Please analyze this trace"),
         ("assistant", AGENT_STUDIO_CHAT_KIND, "Stored answer"),
     ]
-    assert rows[1].payload_json == {
-        "tool_calls": [
-            {
-                "tool_name": "summarize_trace",
-                "tool_input": {"trace_id": "trace-123"},
-                "result": {"summary": "trace summary"},
-            }
-        ]
+    assert rows[0].trace_id == "trace-123"
+    assert rows[0].payload_json["debug_context"]["session_id"] == "agent-studio-session-replay"
+    assert rows[0].payload_json["debug_context"]["turn_id"] == rows[0].turn_id
+    assert rows[0].payload_json["trace_capture"] == {
+        "status": "provided_context_trace_id",
+        "trace_id": "trace-123",
+        "error": None,
     }
+    assert rows[1].payload_json["trace_capture"] == {
+        "status": "provided_context_trace_id",
+        "trace_id": "trace-123",
+        "error": None,
+    }
+    assert rows[1].payload_json["tool_calls"][0]["tool_name"] == "summarize_trace"
+    assert rows[1].payload_json["tool_calls"][0]["tool_use_id"] == "toolu-1"
+    assert rows[1].payload_json["tool_calls"][0]["argument_summary"] == {
+        "type": "object",
+        "keys": ["trace_id"],
+        "key_count": 1,
+        "fields": {"trace_id": {"type": "string", "value": "trace-123", "length": 9}},
+    }
+    assert rows[1].payload_json["tool_calls"][0]["result_status"] == "success"
+    assert rows[1].payload_json["tool_calls"][0]["result_error"] is None
+    assert rows[1].payload_json["tool_calls"][0]["backend_blocked_tool_scope"] is False
 
     from src.api import agent_studio as api_module
 
@@ -280,7 +295,14 @@ def test_agent_studio_chat_derives_a_durable_session_from_assistant_seed_id(
         ("user", "Please continue from the seeded transcript"),
         ("assistant", "Seeded durable answer"),
     ]
-    assert stored_messages[1].payload_json == {"seed_session_id": "assistant-seed-session"}
+    assert stored_messages[1].payload_json == {
+        "trace_capture": {
+            "status": "provided_context_trace_id",
+            "trace_id": "trace-seeded",
+            "error": None,
+        },
+        "seed_session_id": "assistant-seed-session",
+    }
 
 
 def test_agent_studio_chat_returns_404_for_other_users_session(

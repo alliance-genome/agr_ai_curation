@@ -331,6 +331,7 @@ def test_prompt_sensitive_agent_workshop_chat_forces_refresh_before_review(
             turn_id="opus-turn-1",
             user_message=request.messages[-1].content,
             requested_context_session_id=None,
+            user_turn_created=False,
         ),
     )
     monkeypatch.setattr(

@@ -57,6 +57,7 @@ def _configure_chat_endpoint(monkeypatch, error: Exception):
         turn_id="opus-turn-1",
         user_message="Please help",
         requested_context_session_id=None,
+        user_turn_created=False,
     )
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")

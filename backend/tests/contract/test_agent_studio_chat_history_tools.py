@@ -104,6 +104,7 @@ def test_agent_studio_chat_endpoint_registers_chat_history_tools_on_the_wire(
             turn_id="opus-turn-1",
             user_message=request.messages[-1].content,
             requested_context_session_id=request.context.session_id if request.context else None,
+            user_turn_created=False,
         ),
     )
     monkeypatch.setattr(
