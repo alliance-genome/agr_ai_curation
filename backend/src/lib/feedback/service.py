@@ -400,7 +400,7 @@ class FeedbackService:
             "capture_status": capture_status,
             "captured_at": captured_at,
             "source": {
-                "kind": "langfuse",
+                "kind": os.getenv("TRACE_CONTEXT_SOURCE", "langfuse_sdk"),
                 "extractor": (
                     "src.lib.agent_studio.trace_context_service."
                     "get_trace_context_for_explorer"
@@ -512,7 +512,7 @@ class FeedbackService:
             "capture_status": "error",
             "captured_at": self._utc_timestamp(),
             "source": {
-                "kind": "langfuse",
+                "kind": os.getenv("TRACE_CONTEXT_SOURCE", "langfuse_sdk"),
                 "extractor": (
                     "src.lib.agent_studio.trace_context_service."
                     "get_trace_context_for_explorer"

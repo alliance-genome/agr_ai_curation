@@ -78,28 +78,8 @@ async def test_get_trace_context_for_explorer_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_trace_context_for_explorer_falls_back_to_trace_review_export(monkeypatch):
+async def test_get_trace_context_for_explorer_uses_configured_trace_review_export(monkeypatch):
     captured_request = {}
-
-    class _FakeLangfuse:
-        def __init__(self):
-            self.api = SimpleNamespace(
-                trace=SimpleNamespace(
-                    get=lambda _trace_id: SimpleNamespace(
-                        session_id="session-direct",
-                        timestamp=datetime.utcnow(),
-                    )
-                ),
-                observations=SimpleNamespace(
-                    get_many=lambda **_kwargs: (_ for _ in ()).throw(
-                        RuntimeError(
-                            "x-robots-tag: noindex\n"
-                            "x-content-type-options: nosniff\n"
-                            "<html>not the API</html>"
-                        )
-                    )
-                ),
-            )
 
     class _FakeAsyncClient:
         def __init__(self, *, timeout):
@@ -118,12 +98,12 @@ async def test_get_trace_context_for_explorer_falls_back_to_trace_review_export(
                 200,
                 json={
                     "raw_trace": {
-                        "session_id": "session-remote",
+                        "sessionId": "session-remote",
                         "timestamp": "2026-05-06T19:01:58.333Z",
                         "input": {"message": "Run flow"},
                         "output": {"response": "Final flow answer"},
-                        "startTime": "2026-05-06T19:01:58.333Z",
-                        "endTime": "2026-05-06T19:02:00.333Z",
+                        "createdAt": "2026-05-06T19:01:58.333Z",
+                        "updatedAt": "2026-05-06T19:02:00.333Z",
                     },
                     "observations": [
                         {
@@ -137,6 +117,8 @@ async def test_get_trace_context_for_explorer_falls_back_to_trace_review_export(
                             "model": "gpt-test",
                             "usage": {"total": 321},
                             "metadata": {"active_groups": "MGI"},
+                            "startTime": "2026-05-06T19:01:58.500Z",
+                            "endTime": "2026-05-06T19:01:58.900Z",
                         },
                         {
                             "type": "SPAN",
@@ -149,21 +131,28 @@ async def test_get_trace_context_for_explorer_falls_back_to_trace_review_export(
                     "analysis": {
                         "summary": {
                             "timestamp": "2026-05-06T19:01:58.333Z",
-                            "duration_ms": 2000,
+                            "duration_seconds": 2,
                             "total_tokens": 321,
                         },
                         "conversation": {
                             "user_input": "TraceReview user input",
                             "assistant_response": "TraceReview assistant response",
                         },
+                        "tool_calls": [
+                            {
+                                "name": "agr_curation_query",
+                                "duration": "250ms",
+                                "status": "ok",
+                                "input": {"method": "search_alleles"},
+                            }
+                        ],
                     },
                 },
                 request=httpx.Request("GET", url),
             )
 
-    monkeypatch.setitem(sys.modules, "langfuse", SimpleNamespace(Langfuse=_FakeLangfuse))
+    monkeypatch.setenv("TRACE_CONTEXT_SOURCE", "trace_review_export")
     monkeypatch.setenv("TRACE_REVIEW_URL", "http://trace-review:8001")
-    monkeypatch.delenv("TRACE_CONTEXT_TRACE_REVIEW_SOURCE", raising=False)
     monkeypatch.delenv("TRACE_REVIEW_SOURCE", raising=False)
     monkeypatch.setattr(trace_context_service.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -186,29 +175,9 @@ async def test_get_trace_context_for_explorer_falls_back_to_trace_review_export(
 
 
 @pytest.mark.asyncio
-async def test_get_trace_context_for_explorer_sanitizes_header_blob_when_fallback_fails(
+async def test_get_trace_context_for_explorer_sanitizes_header_blob_from_trace_review(
     monkeypatch,
 ):
-    class _FakeLangfuse:
-        def __init__(self):
-            self.api = SimpleNamespace(
-                trace=SimpleNamespace(
-                    get=lambda _trace_id: SimpleNamespace(
-                        session_id="session-direct",
-                        timestamp=datetime.utcnow(),
-                    )
-                ),
-                observations=SimpleNamespace(
-                    get_many=lambda **_kwargs: (_ for _ in ()).throw(
-                        RuntimeError(
-                            "x-robots-tag: noindex\n"
-                            "referrer-policy: strict-origin\n"
-                            "<html>not the API</html>"
-                        )
-                    )
-                ),
-            )
-
     class _FakeAsyncClient:
         def __init__(self, *, timeout):
             self.timeout = timeout
@@ -227,7 +196,7 @@ async def test_get_trace_context_for_explorer_sanitizes_header_blob_when_fallbac
                 request=httpx.Request("GET", url),
             )
 
-    monkeypatch.setitem(sys.modules, "langfuse", SimpleNamespace(Langfuse=_FakeLangfuse))
+    monkeypatch.setenv("TRACE_CONTEXT_SOURCE", "trace_review_export")
     monkeypatch.setenv("TRACE_REVIEW_URL", "http://trace-review:8001")
     monkeypatch.setattr(trace_context_service.httpx, "AsyncClient", _FakeAsyncClient)
 
@@ -235,8 +204,7 @@ async def test_get_trace_context_for_explorer_sanitizes_header_blob_when_fallbac
         await trace_context_service.get_trace_context_for_explorer("trace-1")
 
     message = str(exc_info.value)
-    assert "Langfuse SDK" in message
-    assert "TraceReview export fallback" in message
+    assert "TraceReview export failed with HTTP 502" in message
     assert "HTML/header response" in message
     assert "x-robots-tag" not in message
     assert "referrer-policy" not in message

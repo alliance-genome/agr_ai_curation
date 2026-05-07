@@ -9,9 +9,10 @@ prompts fired, tool calls, and routing decisions.
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Optional, List, Any
+from urllib.parse import quote
 
 import httpx
 
@@ -48,6 +49,11 @@ class TraceReviewExportError(TraceContextError):
 _HEADER_OR_HTML_RE = re.compile(
     r"(?is)(x-robots-tag|x-content-type-options|referrer-policy|<!doctype|<html)"
 )
+_TRACE_ID_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
+_TRACE_CONTEXT_SOURCE_ENV = "TRACE_CONTEXT_SOURCE"
+_TRACE_CONTEXT_SOURCE_LANGFUSE_SDK = "langfuse_sdk"
+_TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT = "trace_review_export"
+_TRACE_REVIEW_SOURCE_ENV = "TRACE_REVIEW_SOURCE"
 _TRACE_REVIEW_TIMEOUT_SECONDS = 30.0
 
 
@@ -69,30 +75,23 @@ async def get_trace_context_for_explorer(trace_id: str) -> TraceContext:
         TraceNotFoundError: If the trace is not found
         TraceContextError: For other extraction failures
     """
-    try:
+    source = _configured_trace_context_source()
+    if source == _TRACE_CONTEXT_SOURCE_LANGFUSE_SDK:
         return await _get_trace_context_from_langfuse_sdk(trace_id)
-    except TraceContextError as langfuse_error:
-        if not _trace_review_fallback_configured():
-            raise
 
-        logger.warning(
-            "Langfuse SDK trace context extraction failed for %s; "
-            "trying TraceReview export fallback: %s",
-            trace_id,
-            _safe_exception_message(langfuse_error),
+    if source == _TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT:
+        return await _get_trace_context_from_trace_review_export(trace_id)
+
+    allowed_sources = ", ".join(
+        (
+            _TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
+            _TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT,
         )
-        try:
-            return await _get_trace_context_from_trace_review_export(trace_id)
-        except TraceNotFoundError:
-            raise
-        except TraceContextError as trace_review_error:
-            message = (
-                "Failed to extract trace context via Langfuse SDK and "
-                "TraceReview export fallback. "
-                f"langfuse_error={_safe_exception_message(langfuse_error)}; "
-                f"trace_review_error={_safe_exception_message(trace_review_error)}"
-            )
-            raise TraceContextError(message) from trace_review_error
+    )
+    raise TraceContextError(
+        f"Unsupported {_TRACE_CONTEXT_SOURCE_ENV}={source!r}; expected one of: "
+        f"{allowed_sources}"
+    )
 
 
 async def _get_trace_context_from_langfuse_sdk(trace_id: str) -> TraceContext:
@@ -156,7 +155,7 @@ async def _get_trace_context_from_langfuse_sdk(trace_id: str) -> TraceContext:
         return TraceContext(
             trace_id=trace_id,
             session_id=trace.session_id,
-            timestamp=trace.timestamp or datetime.utcnow(),
+            timestamp=trace.timestamp or datetime.now(timezone.utc),
             user_query=user_query,
             final_response_preview=final_response[:500] if final_response else "",
             prompts_executed=prompts_executed,
@@ -183,15 +182,15 @@ async def _get_trace_context_from_langfuse_sdk(trace_id: str) -> TraceContext:
 
 
 async def _get_trace_context_from_trace_review_export(trace_id: str) -> TraceContext:
+    _validate_trace_id_for_export_path(trace_id)
+
     base_url = os.getenv("TRACE_REVIEW_URL")
     if not base_url:
         raise TraceReviewExportError("TRACE_REVIEW_URL is not configured")
 
-    source = os.getenv(
-        "TRACE_CONTEXT_TRACE_REVIEW_SOURCE",
-        os.getenv("TRACE_REVIEW_SOURCE", "remote"),
-    )
-    url = f"{base_url.rstrip('/')}/api/traces/{trace_id}/export"
+    source = os.getenv(_TRACE_REVIEW_SOURCE_ENV, "remote")
+    encoded_trace_id = quote(trace_id, safe="")
+    url = f"{base_url.rstrip('/')}/api/traces/{encoded_trace_id}/export"
 
     try:
         async with httpx.AsyncClient(
@@ -231,71 +230,58 @@ async def _get_trace_context_from_trace_review_export(trace_id: str) -> TraceCon
     return _trace_context_from_trace_review_export(trace_id, export_payload)
 
 
+def _configured_trace_context_source() -> str:
+    return os.getenv(
+        _TRACE_CONTEXT_SOURCE_ENV,
+        _TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
+    ).strip()
+
+
+def _validate_trace_id_for_export_path(trace_id: str) -> None:
+    if _TRACE_ID_PATH_RE.fullmatch(trace_id):
+        return
+    raise TraceContextError(
+        "Invalid trace ID for TraceReview export path; expected a non-empty "
+        "Langfuse trace identifier containing only letters, digits, '_' or '-'"
+    )
+
+
 def _trace_context_from_trace_review_export(
     trace_id: str,
     export_payload: dict[str, Any],
 ) -> TraceContext:
-    raw_trace = _mapping_or_empty(export_payload.get("raw_trace"))
-    analysis = _mapping_or_empty(export_payload.get("analysis"))
-    summary = _mapping_or_empty(analysis.get("summary"))
-    conversation = _mapping_or_empty(analysis.get("conversation"))
-    observations = [
-        _observation_from_export(item)
-        for item in export_payload.get("observations", [])
-        if isinstance(item, dict)
-    ]
+    raw_trace = _required_mapping(export_payload, "raw_trace")
+    analysis = _required_mapping(export_payload, "analysis")
+    summary = _required_mapping(analysis, "summary")
+    conversation = _required_mapping(analysis, "conversation")
+    raw_tool_calls = _required_list(analysis, "tool_calls")
+    observations = []
+    for item in _required_list(export_payload, "observations"):
+        if not isinstance(item, dict):
+            raise TraceReviewExportError("TraceReview observations contains a non-object item")
+        observations.append(_observation_from_export(item))
 
     trace = _trace_from_export(raw_trace)
     prompts_executed = _extract_prompts_executed(observations)
     routing_decisions = _extract_routing_decisions(observations)
-    tool_calls = _extract_tool_calls(observations)
+    tool_calls = _tool_calls_from_trace_review_analysis(raw_tool_calls)
 
-    if not tool_calls:
-        tool_calls = _tool_calls_from_trace_review_analysis(analysis)
+    user_query = _required_string(conversation, "user_input")
+    final_response = _required_string(conversation, "assistant_response")
+    timestamp = _required_datetime(summary, "timestamp")
 
-    user_query = (
-        _string_or_none(conversation.get("user_input"))
-        or _string_or_none(conversation.get("user_query"))
-        or _extract_user_query(trace, observations)
-    )
-    final_response = (
-        _string_or_none(conversation.get("assistant_response"))
-        or _string_or_none(conversation.get("response"))
-        or _extract_final_response(trace, observations)
-    )
-
-    timestamp = (
-        _parse_datetime(summary.get("timestamp"))
-        or getattr(trace, "timestamp", None)
-        or datetime.utcnow()
-    )
-    total_duration_ms = _number_to_int(summary.get("duration_ms"))
-    if total_duration_ms is None:
-        total_duration_seconds = _number_to_float(summary.get("duration_seconds"))
-        if total_duration_seconds is not None:
-            total_duration_ms = int(total_duration_seconds * 1000)
-    if total_duration_ms is None:
-        total_duration_ms = _calculate_duration_ms(trace)
+    total_duration_ms = None
+    total_duration_seconds = _number_to_float(summary.get("duration_seconds"))
+    if total_duration_seconds is not None:
+        total_duration_ms = int(total_duration_seconds * 1000)
 
     total_tokens = _number_to_int(summary.get("total_tokens"))
-    if total_tokens is None:
-        total_tokens = sum(
-            (obs.usage.total if obs.usage else 0)
-            for obs in observations
-            if hasattr(obs, "usage") and obs.usage
-        )
 
     agent_count = len({prompt.agent_id for prompt in prompts_executed})
-    if agent_count == 0:
-        agent_count = _number_to_int(summary.get("agent_count")) or 0
 
     return TraceContext(
         trace_id=trace_id,
-        session_id=_string_or_none(
-            raw_trace.get("session_id")
-            or raw_trace.get("sessionId")
-            or summary.get("session_id")
-        ),
+        session_id=_string_or_none(raw_trace.get("sessionId")),
         timestamp=timestamp,
         user_query=user_query,
         final_response_preview=final_response[:500] if final_response else "",
@@ -308,18 +294,14 @@ def _trace_context_from_trace_review_export(
     )
 
 
-def _trace_review_fallback_configured() -> bool:
-    return bool(os.getenv("TRACE_REVIEW_URL"))
-
-
 def _trace_from_export(raw_trace: dict[str, Any]) -> SimpleNamespace:
     return SimpleNamespace(
-        session_id=_string_or_none(raw_trace.get("session_id") or raw_trace.get("sessionId")),
-        timestamp=_parse_datetime(raw_trace.get("timestamp") or raw_trace.get("startTime")),
+        session_id=_string_or_none(raw_trace.get("sessionId")),
+        timestamp=_parse_datetime(raw_trace.get("timestamp")),
         input=raw_trace.get("input"),
         output=raw_trace.get("output"),
-        start_time=_parse_datetime(raw_trace.get("start_time") or raw_trace.get("startTime")),
-        end_time=_parse_datetime(raw_trace.get("end_time") or raw_trace.get("endTime")),
+        start_time=_parse_datetime(raw_trace.get("createdAt")),
+        end_time=_parse_datetime(raw_trace.get("updatedAt")),
     )
 
 
@@ -333,61 +315,34 @@ def _observation_from_export(item: dict[str, Any]) -> SimpleNamespace:
         model=item.get("model"),
         usage=usage,
         metadata=item.get("metadata") if isinstance(item.get("metadata"), dict) else None,
-        start_time=_parse_datetime(item.get("start_time") or item.get("startTime")),
-        end_time=_parse_datetime(item.get("end_time") or item.get("endTime")),
+        start_time=_parse_datetime(item.get("startTime")),
+        end_time=_parse_datetime(item.get("endTime")),
     )
 
 
 def _usage_from_export(item: dict[str, Any]) -> SimpleNamespace | None:
     raw_usage = item.get("usage")
     if not isinstance(raw_usage, dict):
-        raw_usage = item.get("usageDetails")
-    if not isinstance(raw_usage, dict):
         return None
 
-    total = _number_to_int(
-        raw_usage.get("total")
-        or raw_usage.get("total_tokens")
-        or raw_usage.get("totalTokens")
-    )
-    if total is None:
-        prompt_tokens = _number_to_int(
-            raw_usage.get("prompt_tokens")
-            or raw_usage.get("input_tokens")
-            or raw_usage.get("input")
-        )
-        completion_tokens = _number_to_int(
-            raw_usage.get("completion_tokens")
-            or raw_usage.get("output_tokens")
-            or raw_usage.get("output")
-        )
-        if prompt_tokens is not None or completion_tokens is not None:
-            total = (prompt_tokens or 0) + (completion_tokens or 0)
-
-    return SimpleNamespace(total=total or 0)
+    return SimpleNamespace(total=_number_to_int(raw_usage.get("total")))
 
 
 def _tool_calls_from_trace_review_analysis(
-    analysis: dict[str, Any],
+    raw_tool_calls: list[Any],
 ) -> List[ToolCallInfo]:
-    raw_tool_calls = analysis.get("tool_calls")
-    if not isinstance(raw_tool_calls, list):
-        return []
-
     tool_calls = []
     for item in raw_tool_calls:
         if not isinstance(item, dict):
-            continue
-        name = _string_or_none(item.get("name"))
-        if not name:
-            continue
+            raise TraceReviewExportError("TraceReview analysis.tool_calls contains a non-object item")
+        name = _required_string(item, "name")
         tool_calls.append(
             ToolCallInfo(
                 name=name,
-                input={},
+                input=item.get("input") if isinstance(item.get("input"), dict) else {},
                 output_preview=None,
                 duration_ms=_duration_to_ms(item.get("duration")),
-                status=_string_or_none(item.get("status")) or "completed",
+                status=_required_string(item, "status"),
             )
         )
     return tool_calls
@@ -443,8 +398,32 @@ def _compact_message(message: str, *, max_chars: int = 240) -> str:
     return f"{normalized[:max_chars - 3]}..."
 
 
-def _mapping_or_empty(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
+def _required_mapping(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    value = payload.get(key)
+    if isinstance(value, dict):
+        return value
+    raise TraceReviewExportError(f"TraceReview export missing object field: {key}")
+
+
+def _required_list(payload: dict[str, Any], key: str) -> list[Any]:
+    value = payload.get(key)
+    if isinstance(value, list):
+        return value
+    raise TraceReviewExportError(f"TraceReview export missing array field: {key}")
+
+
+def _required_string(payload: dict[str, Any], key: str) -> str:
+    value = _string_or_none(payload.get(key))
+    if value is not None:
+        return value
+    raise TraceReviewExportError(f"TraceReview export missing string field: {key}")
+
+
+def _required_datetime(payload: dict[str, Any], key: str) -> datetime:
+    value = _parse_datetime(payload.get(key))
+    if value is not None:
+        return value
+    raise TraceReviewExportError(f"TraceReview export missing datetime field: {key}")
 
 
 def _string_or_none(value: Any) -> str | None:
