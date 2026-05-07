@@ -24,8 +24,8 @@ type PipelineState = {
   message?: string;
 };
 
-const readString = (value: unknown, fallback: string): string => (
-  typeof value === 'string' && value.trim() ? value : fallback
+const readString = (value: unknown, defaultValue: string): string => (
+  typeof value === 'string' && value.trim() ? value : defaultValue
 );
 
 const readNullableString = (value: unknown): string | null => {

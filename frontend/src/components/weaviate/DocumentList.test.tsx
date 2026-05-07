@@ -2,6 +2,10 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '../../test/test-utils';
 import DocumentList from './DocumentList';
 import type { DocumentSummary } from '../../services/weaviate';
+import {
+  DOCUMENT_LOADING_STORAGE_KEY,
+  DOCUMENT_LOAD_START_EVENT,
+} from '../../features/documents/documentLoadEvents';
 
 const refetchHealthMock = vi.fn();
 const emitGlobalToastMock = vi.fn();
@@ -254,7 +258,7 @@ describe('DocumentList', () => {
 
   it('navigates to Home with document route state for Load for Chat', () => {
     const loadStartListener = vi.fn();
-    window.addEventListener('document-load-start', loadStartListener);
+    window.addEventListener(DOCUMENT_LOAD_START_EVENT, loadStartListener);
 
     render(<DocumentList {...defaultProps} />);
 
@@ -263,7 +267,7 @@ describe('DocumentList', () => {
       .filter((icon) => icon.closest('td') !== null);
     fireEvent.click(loadButtons[0].parentElement!);
 
-    expect(sessionStorage.getItem('document-loading')).toBe('true');
+    expect(sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY)).toBe('true');
     expect(loadStartListener).toHaveBeenCalledTimes(1);
     expect(mockNavigate).toHaveBeenCalledWith('/', {
       state: {
@@ -274,7 +278,7 @@ describe('DocumentList', () => {
       },
     });
 
-    window.removeEventListener('document-load-start', loadStartListener);
+    window.removeEventListener(DOCUMENT_LOAD_START_EVENT, loadStartListener);
   });
 
   it('opens Review & Curate from the document action column', async () => {

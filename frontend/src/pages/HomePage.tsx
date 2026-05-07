@@ -581,7 +581,7 @@ function HomePage() {
 
     const handleLoadError = (event: Event) => {
       const detail = (event as CustomEvent<{ message?: string }>).detail
-      const message = detail?.message || 'Document loaded for chat, but the PDF viewer could not be restored.'
+      const message = detail?.message ?? 'Document loaded for chat, but the PDF viewer could not be restored.'
       debug.log('[HomePage] Document load error', message)
       setLoadingDocument(true)
       setLoadingError(message)
