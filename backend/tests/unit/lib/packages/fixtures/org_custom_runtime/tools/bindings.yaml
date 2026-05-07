@@ -1,0 +1,9 @@
+package_id: org.custom
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: demo_search_tool
+    binding_kind: static
+    callable: org_custom.tools.demo:demo_search_tool
+    required_context: []
+    description: Neutral demo lookup tool binding
+    source_file: python/src/org_custom/tools/demo.py

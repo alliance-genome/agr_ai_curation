@@ -1,4 +1,3 @@
-import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { MemoryRouter } from 'react-router-dom';
@@ -99,11 +98,13 @@ describe('ProtectedRoutes logout integration', () => {
     localStorage.clear();
     sessionStorage.clear();
 
-    delete (window as Window & { location?: Location }).location;
-    window.location = {
-      href: 'https://app.example.org/',
-      reload: vi.fn(),
-    } as Location;
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: {
+        href: 'https://app.example.org/',
+        reload: vi.fn(),
+      } as unknown as Location,
+    });
   });
 
   it('suppresses auto-login after AuthContext logout drives the real justLoggedOut flow', async () => {
@@ -125,7 +126,7 @@ describe('ProtectedRoutes logout integration', () => {
       if (url === '/api/users/me') {
         return jsonResponse({
           auth_sub: 'user-123',
-          email: 'curator@alliancegenome.org',
+          email: 'curator@example.test',
           display_name: 'Test Curator',
         });
       }
