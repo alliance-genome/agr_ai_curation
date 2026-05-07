@@ -36,6 +36,9 @@ _BEARER_TOKEN_RE = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]{12,}")
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b(api[_-]?key|authorization|password|secret|token)\b\s*[:=]\s*([^\s,;]+)"
 )
+_HEADER_OR_HTML_RE = re.compile(
+    r"(?is)(x-robots-tag|x-content-type-options|referrer-policy|<!doctype|<html)"
+)
 
 
 class FeedbackDebugDetailForbidden(Exception):
@@ -535,7 +538,17 @@ class FeedbackService:
 
     @classmethod
     def _trace_capture_error(cls, error: Exception) -> dict:
-        message = cls._compact_redacted_text(str(error), max_chars=MAX_TRACE_ERROR_CHARS)
+        raw_message = str(error)
+        if _HEADER_OR_HTML_RE.search(raw_message):
+            message = (
+                "Upstream trace capture returned an HTML/header response; "
+                "check TraceReview/Langfuse URL, source, and credentials."
+            )
+        else:
+            message = cls._compact_redacted_text(
+                raw_message,
+                max_chars=MAX_TRACE_ERROR_CHARS,
+            )
         return {
             "type": error.__class__.__name__,
             "message": message,

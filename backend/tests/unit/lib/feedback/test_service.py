@@ -472,6 +472,42 @@ def test_process_feedback_report_persists_trace_capture_failure_metadata(monkeyp
     assert "curator@example.org" not in str(report.trace_data)
 
 
+def test_process_feedback_report_sanitizes_header_blob_trace_capture_errors(monkeypatch):
+    async def _raise_trace_context(_trace_id):
+        raise RuntimeError(
+            "Failed to extract trace context: x-robots-tag: noindex\n"
+            "x-content-type-options: nosniff\n"
+            "referrer-policy: strict-origin\n"
+            "<html>not the API</html>"
+        )
+
+    report = _report()
+    db = MagicMock()
+    db.query.return_value = _QueryChain(report)
+    monkeypatch.setenv("FEEDBACK_USE_SNS", "false")
+    monkeypatch.setattr(
+        "src.lib.feedback.service.get_trace_context_for_explorer",
+        _raise_trace_context,
+    )
+    service = _feedback_service_module().FeedbackService(db=db)
+    service.notifier = MagicMock()
+
+    service.process_feedback_report(report.id)
+
+    trace_error = report.trace_data["traces"][0]["error"]
+    assert trace_error == {
+        "type": "RuntimeError",
+        "message": (
+            "Upstream trace capture returned an HTML/header response; "
+            "check TraceReview/Langfuse URL, source, and credentials."
+        ),
+    }
+    assert "x-robots-tag" not in str(report.trace_data)
+    assert "x-content-type-options" not in str(report.trace_data)
+    assert "referrer-policy" not in str(report.trace_data)
+    assert "<html>" not in str(report.trace_data)
+
+
 def test_process_feedback_report_handles_notifier_failure(monkeypatch):
     report = _report()
     db = MagicMock()

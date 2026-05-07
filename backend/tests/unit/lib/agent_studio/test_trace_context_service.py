@@ -6,6 +6,7 @@ import sys
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+import httpx
 import pytest
 
 import src.lib.agent_studio.trace_context_service as trace_context_service
@@ -74,6 +75,172 @@ async def test_get_trace_context_for_explorer_success(monkeypatch):
     assert context.routing_decisions[0].to_agent == "gene_extractor"
     assert len(context.tool_calls) == 1
     assert context.tool_calls[0].name == "search_document"
+
+
+@pytest.mark.asyncio
+async def test_get_trace_context_for_explorer_falls_back_to_trace_review_export(monkeypatch):
+    captured_request = {}
+
+    class _FakeLangfuse:
+        def __init__(self):
+            self.api = SimpleNamespace(
+                trace=SimpleNamespace(
+                    get=lambda _trace_id: SimpleNamespace(
+                        session_id="session-direct",
+                        timestamp=datetime.utcnow(),
+                    )
+                ),
+                observations=SimpleNamespace(
+                    get_many=lambda **_kwargs: (_ for _ in ()).throw(
+                        RuntimeError(
+                            "x-robots-tag: noindex\n"
+                            "x-content-type-options: nosniff\n"
+                            "<html>not the API</html>"
+                        )
+                    )
+                ),
+            )
+
+    class _FakeAsyncClient:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *, params):
+            captured_request["url"] = url
+            captured_request["params"] = params
+            return httpx.Response(
+                200,
+                json={
+                    "raw_trace": {
+                        "session_id": "session-remote",
+                        "timestamp": "2026-05-06T19:01:58.333Z",
+                        "input": {"message": "Run flow"},
+                        "output": {"response": "Final flow answer"},
+                        "startTime": "2026-05-06T19:01:58.333Z",
+                        "endTime": "2026-05-06T19:02:00.333Z",
+                    },
+                    "observations": [
+                        {
+                            "type": "GENERATION",
+                            "name": "ask_allele_extractor_specialist",
+                            "input": {
+                                "messages": [
+                                    {"role": "system", "content": "allele prompt"}
+                                ]
+                            },
+                            "model": "gpt-test",
+                            "usage": {"total": 321},
+                            "metadata": {"active_groups": "MGI"},
+                        },
+                        {
+                            "type": "SPAN",
+                            "name": "agr_curation_query",
+                            "input": {"method": "search_alleles"},
+                            "startTime": "2026-05-06T19:01:59.000Z",
+                            "endTime": "2026-05-06T19:01:59.250Z",
+                        },
+                    ],
+                    "analysis": {
+                        "summary": {
+                            "timestamp": "2026-05-06T19:01:58.333Z",
+                            "duration_ms": 2000,
+                            "total_tokens": 321,
+                        },
+                        "conversation": {
+                            "user_input": "TraceReview user input",
+                            "assistant_response": "TraceReview assistant response",
+                        },
+                    },
+                },
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setitem(sys.modules, "langfuse", SimpleNamespace(Langfuse=_FakeLangfuse))
+    monkeypatch.setenv("TRACE_REVIEW_URL", "http://trace-review:8001")
+    monkeypatch.delenv("TRACE_CONTEXT_TRACE_REVIEW_SOURCE", raising=False)
+    monkeypatch.delenv("TRACE_REVIEW_SOURCE", raising=False)
+    monkeypatch.setattr(trace_context_service.httpx, "AsyncClient", _FakeAsyncClient)
+
+    context = await trace_context_service.get_trace_context_for_explorer("trace-1")
+
+    assert captured_request == {
+        "url": "http://trace-review:8001/api/traces/trace-1/export",
+        "params": {"source": "remote"},
+    }
+    assert context.trace_id == "trace-1"
+    assert context.session_id == "session-remote"
+    assert context.user_query == "TraceReview user input"
+    assert context.final_response_preview == "TraceReview assistant response"
+    assert context.total_duration_ms == 2000
+    assert context.total_tokens == 321
+    assert context.prompts_executed[0].agent_id == "allele_extractor"
+    assert context.prompts_executed[0].group_applied == "MGI"
+    assert context.tool_calls[0].name == "agr_curation_query"
+    assert context.tool_calls[0].duration_ms == 250
+
+
+@pytest.mark.asyncio
+async def test_get_trace_context_for_explorer_sanitizes_header_blob_when_fallback_fails(
+    monkeypatch,
+):
+    class _FakeLangfuse:
+        def __init__(self):
+            self.api = SimpleNamespace(
+                trace=SimpleNamespace(
+                    get=lambda _trace_id: SimpleNamespace(
+                        session_id="session-direct",
+                        timestamp=datetime.utcnow(),
+                    )
+                ),
+                observations=SimpleNamespace(
+                    get_many=lambda **_kwargs: (_ for _ in ()).throw(
+                        RuntimeError(
+                            "x-robots-tag: noindex\n"
+                            "referrer-policy: strict-origin\n"
+                            "<html>not the API</html>"
+                        )
+                    )
+                ),
+            )
+
+    class _FakeAsyncClient:
+        def __init__(self, *, timeout):
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, *, params):
+            return httpx.Response(
+                502,
+                text="<html>bad gateway</html>",
+                headers={"content-type": "text/html"},
+                request=httpx.Request("GET", url),
+            )
+
+    monkeypatch.setitem(sys.modules, "langfuse", SimpleNamespace(Langfuse=_FakeLangfuse))
+    monkeypatch.setenv("TRACE_REVIEW_URL", "http://trace-review:8001")
+    monkeypatch.setattr(trace_context_service.httpx, "AsyncClient", _FakeAsyncClient)
+
+    with pytest.raises(trace_context_service.TraceContextError) as exc_info:
+        await trace_context_service.get_trace_context_for_explorer("trace-1")
+
+    message = str(exc_info.value)
+    assert "Langfuse SDK" in message
+    assert "TraceReview export fallback" in message
+    assert "HTML/header response" in message
+    assert "x-robots-tag" not in message
+    assert "referrer-policy" not in message
+    assert "<html>" not in message
 
 
 @pytest.mark.asyncio
