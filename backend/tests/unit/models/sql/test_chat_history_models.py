@@ -81,6 +81,8 @@ def test_chat_message_supports_turn_ids_search_payloads_and_flow_role():
         "uq_chat_messages_assistant_turn",
         "ix_chat_messages_search_vector_assistant_chat",
         "ix_chat_messages_search_vector_agent_studio",
+        "ix_chat_messages_agent_studio_trace_id",
+        "ix_chat_messages_agent_studio_payload_json",
     }
     assert _constraint_names(ChatMessage) >= {
         "ck_chat_messages_role",

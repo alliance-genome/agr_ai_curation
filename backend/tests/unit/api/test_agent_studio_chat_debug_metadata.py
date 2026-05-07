@@ -110,6 +110,7 @@ def test_tool_call_audit_entry_summarizes_arguments_and_scope_errors():
     assert audit["tool_name"] == "create_flow"
     assert audit["tool_use_id"] == "toolu-123"
     assert audit["result_status"] == "error"
+    assert audit["result_type"] == "dict"
     assert audit["backend_blocked_tool_scope"] is True
     assert audit["argument_summary"]["fields"]["trace_id"] == {
         "type": "string",
@@ -120,3 +121,18 @@ def test_tool_call_audit_entry_summarizes_arguments_and_scope_errors():
     assert prompt_summary["type"] == "string"
     assert prompt_summary["length"] == len("Raw prompt text should not be stored")
     assert "Raw prompt text should not be stored" not in str(audit)
+
+
+def test_tool_call_audit_entry_records_non_dict_result_type():
+    audit = api_module._tool_call_audit_entry(
+        tool_name="summarize_trace",
+        tool_use_id="toolu-456",
+        tool_input={"trace_id": "trace-123"},
+        tool_result="plain string result",
+        context=ChatContext(active_tab="agents"),
+    )
+
+    assert audit["result_status"] == "success"
+    assert audit["result_type"] == "str"
+    assert audit["result_summary"]["type"] == "string"
+    assert "plain string result" not in str(audit)

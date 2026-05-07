@@ -1127,11 +1127,13 @@ _AUDIT_SAFE_VALUE_KEYS = {
     "success",
     "target_group_id",
     "target_mod_id",
+    # Refresh-tool selector, not prompt content.
     "target_prompt",
     "tool_name",
     "trace_id",
     "view_name",
 }
+
 
 def _audit_text_summary(value: str) -> Dict[str, Any]:
     """Return a compact non-reversible string summary for durable audit metadata."""
@@ -1282,6 +1284,7 @@ def _tool_call_audit_entry(
         "argument_summary": _summarize_audit_value(tool_input),
         "result_status": result_status,
         "result_error": result_error,
+        "result_type": type(tool_result).__name__,
         "backend_blocked_tool_scope": _is_backend_scope_block(
             tool_name,
             context,
