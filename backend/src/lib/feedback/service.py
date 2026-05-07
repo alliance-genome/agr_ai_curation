@@ -11,7 +11,11 @@ from typing import Any, List
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
-from src.lib.agent_studio.trace_context_service import get_trace_context_for_explorer
+from src.lib.agent_studio.trace_context_service import (
+    TRACE_CONTEXT_SOURCE_ENV,
+    TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
+    get_trace_context_for_explorer,
+)
 from src.lib.feedback.debug_links import (
     build_feedback_debug_url,
     build_trace_review_session_bundle_url,
@@ -22,6 +26,7 @@ from src.lib.feedback.models import FeedbackReport, ProcessingStatus
 from src.lib.feedback.sns_notifier import SNSNotifier
 from src.lib.feedback.transcript import capture_feedback_conversation_transcript
 from src.lib.agent_studio.models import TraceContext
+from src.lib.upstream_error_diagnostics import looks_like_header_or_html_response
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +40,6 @@ _URL_RE = re.compile(r"https?://[^\s\"'<>]+")
 _BEARER_TOKEN_RE = re.compile(r"(?i)\bbearer\s+[a-z0-9._~+/=-]{12,}")
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b(api[_-]?key|authorization|password|secret|token)\b\s*[:=]\s*([^\s,;]+)"
-)
-_HEADER_OR_HTML_RE = re.compile(
-    r"(?is)(x-robots-tag|x-content-type-options|referrer-policy|<!doctype|<html)"
 )
 
 
@@ -400,7 +402,10 @@ class FeedbackService:
             "capture_status": capture_status,
             "captured_at": captured_at,
             "source": {
-                "kind": os.getenv("TRACE_CONTEXT_SOURCE", "langfuse_sdk"),
+                "kind": os.getenv(
+                    TRACE_CONTEXT_SOURCE_ENV,
+                    TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
+                ),
                 "extractor": (
                     "src.lib.agent_studio.trace_context_service."
                     "get_trace_context_for_explorer"
@@ -512,7 +517,10 @@ class FeedbackService:
             "capture_status": "error",
             "captured_at": self._utc_timestamp(),
             "source": {
-                "kind": os.getenv("TRACE_CONTEXT_SOURCE", "langfuse_sdk"),
+                "kind": os.getenv(
+                    TRACE_CONTEXT_SOURCE_ENV,
+                    TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
+                ),
                 "extractor": (
                     "src.lib.agent_studio.trace_context_service."
                     "get_trace_context_for_explorer"
@@ -539,7 +547,7 @@ class FeedbackService:
     @classmethod
     def _trace_capture_error(cls, error: Exception) -> dict:
         raw_message = str(error)
-        if _HEADER_OR_HTML_RE.search(raw_message):
+        if looks_like_header_or_html_response(raw_message):
             message = (
                 "Upstream trace capture returned an HTML/header response; "
                 "check TraceReview/Langfuse URL, source, and credentials."

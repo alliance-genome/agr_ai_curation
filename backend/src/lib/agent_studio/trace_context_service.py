@@ -16,6 +16,8 @@ from urllib.parse import quote
 
 import httpx
 
+from src.lib.upstream_error_diagnostics import looks_like_header_or_html_response
+
 from .models import (
     TraceContext,
     PromptExecution,
@@ -46,13 +48,10 @@ class TraceReviewExportError(TraceContextError):
     pass
 
 
-_HEADER_OR_HTML_RE = re.compile(
-    r"(?is)(x-robots-tag|x-content-type-options|referrer-policy|<!doctype|<html)"
-)
 _TRACE_ID_PATH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
-_TRACE_CONTEXT_SOURCE_ENV = "TRACE_CONTEXT_SOURCE"
-_TRACE_CONTEXT_SOURCE_LANGFUSE_SDK = "langfuse_sdk"
-_TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT = "trace_review_export"
+TRACE_CONTEXT_SOURCE_ENV = "TRACE_CONTEXT_SOURCE"
+TRACE_CONTEXT_SOURCE_LANGFUSE_SDK = "langfuse_sdk"
+TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT = "trace_review_export"
 _TRACE_REVIEW_SOURCE_ENV = "TRACE_REVIEW_SOURCE"
 _TRACE_REVIEW_INTERNAL_API_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
 _TRACE_REVIEW_TIMEOUT_SECONDS = 30.0
@@ -77,20 +76,20 @@ async def get_trace_context_for_explorer(trace_id: str) -> TraceContext:
         TraceContextError: For other extraction failures
     """
     source = _configured_trace_context_source()
-    if source == _TRACE_CONTEXT_SOURCE_LANGFUSE_SDK:
+    if source == TRACE_CONTEXT_SOURCE_LANGFUSE_SDK:
         return await _get_trace_context_from_langfuse_sdk(trace_id)
 
-    if source == _TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT:
+    if source == TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT:
         return await _get_trace_context_from_trace_review_export(trace_id)
 
     allowed_sources = ", ".join(
         (
-            _TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
-            _TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT,
+            TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
+            TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT,
         )
     )
     raise TraceContextError(
-        f"Unsupported {_TRACE_CONTEXT_SOURCE_ENV}={source!r}; expected one of: "
+        f"Unsupported {TRACE_CONTEXT_SOURCE_ENV}={source!r}; expected one of: "
         f"{allowed_sources}"
     )
 
@@ -237,8 +236,8 @@ async def _get_trace_context_from_trace_review_export(trace_id: str) -> TraceCon
 
 def _configured_trace_context_source() -> str:
     return os.getenv(
-        _TRACE_CONTEXT_SOURCE_ENV,
-        _TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
+        TRACE_CONTEXT_SOURCE_ENV,
+        TRACE_CONTEXT_SOURCE_LANGFUSE_SDK,
     ).strip()
 
 
@@ -353,7 +352,10 @@ def _response_error_detail(response: httpx.Response) -> str:
     try:
         payload = response.json()
     except ValueError:
-        if "html" in content_type.lower() or _HEADER_OR_HTML_RE.search(response.text):
+        if (
+            "html" in content_type.lower()
+            or looks_like_header_or_html_response(response.text)
+        ):
             return (
                 "upstream returned an HTML/header response; "
                 "check TraceReview source and Langfuse credentials"
@@ -375,7 +377,7 @@ def _safe_exception_message(error: Exception) -> str:
         status_code = response.status_code
 
     raw_message = str(error)
-    if _HEADER_OR_HTML_RE.search(raw_message):
+    if looks_like_header_or_html_response(raw_message):
         if status_code:
             return (
                 f"{error.__class__.__name__}: upstream returned an HTML/header "
