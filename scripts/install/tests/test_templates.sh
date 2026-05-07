@@ -61,6 +61,7 @@ required_env_keys=(
   TRACE_REVIEW_BACKEND_IMAGE
   TRACE_REVIEW_BACKEND_IMAGE_TAG
   TRACE_REVIEW_URL
+  TRACE_REVIEW_INTERNAL_API_TOKEN
   TRACE_REVIEW_DEV_MODE
   TRACE_REVIEW_LANGFUSE_HOST
   TRACE_REVIEW_LANGFUSE_PUBLIC_KEY
@@ -101,6 +102,7 @@ grep -q '^FRONTEND_IMAGE_TAG=latest$' "$env_template"
 grep -q '^TRACE_REVIEW_BACKEND_IMAGE=public.ecr.aws/v4p5b7m9/agr-ai-curation-trace-review-backend$' "$env_template"
 grep -q '^TRACE_REVIEW_BACKEND_IMAGE_TAG=latest$' "$env_template"
 grep -q '^TRACE_REVIEW_URL=http://trace_review_backend:8001$' "$env_template"
+grep -q '^TRACE_REVIEW_INTERNAL_API_TOKEN=$' "$env_template"
 grep -q '^TRACE_REVIEW_LANGFUSE_HOST=http://langfuse:3000$' "$env_template"
 grep -q '^TRACE_REVIEW_LANGFUSE_LOCAL_HOST=http://langfuse:3000$' "$env_template"
 grep -q '^TRACE_REVIEW_BACKEND_HOST=0.0.0.0$' "$env_template"

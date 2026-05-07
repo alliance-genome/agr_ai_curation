@@ -91,9 +91,9 @@ async def test_get_trace_context_for_explorer_uses_configured_trace_review_expor
         async def __aexit__(self, exc_type, exc, tb):
             return False
 
-        async def get(self, url, *, params):
+        async def get(self, url, **kwargs):
             captured_request["url"] = url
-            captured_request["params"] = params
+            captured_request.update(kwargs)
             return httpx.Response(
                 200,
                 json={
@@ -138,14 +138,19 @@ async def test_get_trace_context_for_explorer_uses_configured_trace_review_expor
                             "user_input": "TraceReview user input",
                             "assistant_response": "TraceReview assistant response",
                         },
-                        "tool_calls": [
-                            {
-                                "name": "agr_curation_query",
-                                "duration": "250ms",
-                                "status": "ok",
-                                "input": {"method": "search_alleles"},
-                            }
-                        ],
+                        "tool_calls": {
+                            "total_count": 1,
+                            "unique_tools": ["agr_curation_query"],
+                            "duplicates": {},
+                            "tool_calls": [
+                                {
+                                    "name": "agr_curation_query",
+                                    "duration": "250ms",
+                                    "status": "ok",
+                                    "input": {"method": "search_alleles"},
+                                }
+                            ],
+                        },
                     },
                 },
                 request=httpx.Request("GET", url),
@@ -154,6 +159,7 @@ async def test_get_trace_context_for_explorer_uses_configured_trace_review_expor
     monkeypatch.setenv("TRACE_CONTEXT_SOURCE", "trace_review_export")
     monkeypatch.setenv("TRACE_REVIEW_URL", "http://trace-review:8001")
     monkeypatch.delenv("TRACE_REVIEW_SOURCE", raising=False)
+    monkeypatch.setenv("TRACE_REVIEW_INTERNAL_API_TOKEN", "internal-token-123")
     monkeypatch.setattr(trace_context_service.httpx, "AsyncClient", _FakeAsyncClient)
 
     context = await trace_context_service.get_trace_context_for_explorer("trace-1")
@@ -161,6 +167,7 @@ async def test_get_trace_context_for_explorer_uses_configured_trace_review_expor
     assert captured_request == {
         "url": "http://trace-review:8001/api/traces/trace-1/export",
         "params": {"source": "remote"},
+        "headers": {"Authorization": "Bearer internal-token-123"},
     }
     assert context.trace_id == "trace-1"
     assert context.session_id == "session-remote"

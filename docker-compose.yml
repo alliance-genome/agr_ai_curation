@@ -182,6 +182,7 @@ services:
       - WEAVIATE_BATCH_REQUESTS_PER_MINUTE=${WEAVIATE_BATCH_REQUESTS_PER_MINUTE:-5000}
       - TRACE_CONTEXT_SOURCE=${TRACE_CONTEXT_SOURCE:-trace_review_export}
       - TRACE_REVIEW_URL=${TRACE_REVIEW_URL:-http://trace_review_backend:8001}
+      - TRACE_REVIEW_INTERNAL_API_TOKEN=${TRACE_REVIEW_INTERNAL_API_TOKEN:-}
       - PDF_STORAGE_PATH=${PDF_STORAGE_PATH:-/app/pdf_storage}
       - FILE_OUTPUT_STORAGE_PATH=${FILE_OUTPUT_STORAGE_PATH:-/app/file_outputs}
       - UNSTRUCTURED_API_URL=${UNSTRUCTURED_API_URL:-}
@@ -318,6 +319,7 @@ services:
       - COGNITO_REDIRECT_URI=${TRACE_REVIEW_COGNITO_REDIRECT_URI:-${COGNITO_REDIRECT_URI:-http://localhost:3001/api/auth/callback}}
       # Development Mode
       - DEV_MODE=${TRACE_REVIEW_DEV_MODE:-${DEV_MODE:-false}}
+      - TRACE_REVIEW_INTERNAL_API_TOKEN=${TRACE_REVIEW_INTERNAL_API_TOKEN:-}
       - SECURE_COOKIES=${TRACE_REVIEW_SECURE_COOKIES:-${SECURE_COOKIES:-false}}
       # Standalone/default deployments use the bundled langfuse service.
       - LANGFUSE_HOST=${TRACE_REVIEW_LANGFUSE_HOST:-http://langfuse:3000}

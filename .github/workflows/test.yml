@@ -9,8 +9,10 @@ on:
       - 'config/**'
       - 'alliance_agents/**'
       - 'packages/**'
+      - 'docker-compose.yml'
       - 'docker-compose.test.yml'
       - 'docker-compose.production.yml'
+      - 'promtail-config.yml'
       - 'scripts/install/**'
       - 'scripts/release/**'
       - 'scripts/tests/**'
@@ -24,8 +26,10 @@ on:
       - 'config/**'
       - 'alliance_agents/**'
       - 'packages/**'
+      - 'docker-compose.yml'
       - 'docker-compose.test.yml'
       - 'docker-compose.production.yml'
+      - 'promtail-config.yml'
       - 'scripts/install/**'
       - 'scripts/release/**'
       - 'scripts/tests/**'
@@ -67,7 +71,9 @@ jobs:
             -v "${{ github.workspace }}/alliance_agents:/app/alliance_agents" \
             -v "${{ github.workspace }}/config:/app/config" \
             -v "${{ github.workspace }}/packages:/app/packages:ro" \
+            -v "${{ github.workspace }}/docker-compose.yml:/workspace/docker-compose.yml:ro" \
             -v "${{ github.workspace }}/docker-compose.production.yml:/workspace/docker-compose.production.yml:ro" \
+            -v "${{ github.workspace }}/promtail-config.yml:/workspace/promtail-config.yml:ro" \
             -v "${{ github.workspace }}/scripts/install:/workspace/scripts/install:ro" \
             -e PYTHONUNBUFFERED=1 \
             -e OPENAI_API_KEY=test-key-for-unit-tests \

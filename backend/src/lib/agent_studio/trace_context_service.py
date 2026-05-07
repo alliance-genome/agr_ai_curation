@@ -54,6 +54,7 @@ _TRACE_CONTEXT_SOURCE_ENV = "TRACE_CONTEXT_SOURCE"
 _TRACE_CONTEXT_SOURCE_LANGFUSE_SDK = "langfuse_sdk"
 _TRACE_CONTEXT_SOURCE_TRACE_REVIEW_EXPORT = "trace_review_export"
 _TRACE_REVIEW_SOURCE_ENV = "TRACE_REVIEW_SOURCE"
+_TRACE_REVIEW_INTERNAL_API_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
 _TRACE_REVIEW_TIMEOUT_SECONDS = 30.0
 
 
@@ -196,7 +197,11 @@ async def _get_trace_context_from_trace_review_export(trace_id: str) -> TraceCon
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(_TRACE_REVIEW_TIMEOUT_SECONDS)
         ) as client:
-            response = await client.get(url, params={"source": source})
+            request_kwargs: dict[str, Any] = {"params": {"source": source}}
+            headers = _trace_review_export_headers()
+            if headers:
+                request_kwargs["headers"] = headers
+            response = await client.get(url, **request_kwargs)
     except httpx.TimeoutException as e:
         raise TraceReviewExportError(
             f"TraceReview export timed out after {_TRACE_REVIEW_TIMEOUT_SECONDS:g}s "
@@ -246,6 +251,13 @@ def _validate_trace_id_for_export_path(trace_id: str) -> None:
     )
 
 
+def _trace_review_export_headers() -> dict[str, str]:
+    token = os.getenv(_TRACE_REVIEW_INTERNAL_API_TOKEN_ENV, "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _trace_context_from_trace_review_export(
     trace_id: str,
     export_payload: dict[str, Any],
@@ -254,14 +266,14 @@ def _trace_context_from_trace_review_export(
     analysis = _required_mapping(export_payload, "analysis")
     summary = _required_mapping(analysis, "summary")
     conversation = _required_mapping(analysis, "conversation")
-    raw_tool_calls = _required_list(analysis, "tool_calls")
+    tool_call_summary = _required_mapping(analysis, "tool_calls")
+    raw_tool_calls = _required_list(tool_call_summary, "tool_calls")
     observations = []
     for item in _required_list(export_payload, "observations"):
         if not isinstance(item, dict):
             raise TraceReviewExportError("TraceReview observations contains a non-object item")
         observations.append(_observation_from_export(item))
 
-    trace = _trace_from_export(raw_trace)
     prompts_executed = _extract_prompts_executed(observations)
     routing_decisions = _extract_routing_decisions(observations)
     tool_calls = _tool_calls_from_trace_review_analysis(raw_tool_calls)
@@ -292,18 +304,6 @@ def _trace_context_from_trace_review_export(
         total_tokens=total_tokens,
         agent_count=agent_count,
     )
-
-
-def _trace_from_export(raw_trace: dict[str, Any]) -> SimpleNamespace:
-    return SimpleNamespace(
-        session_id=_string_or_none(raw_trace.get("sessionId")),
-        timestamp=_parse_datetime(raw_trace.get("timestamp")),
-        input=raw_trace.get("input"),
-        output=raw_trace.get("output"),
-        start_time=_parse_datetime(raw_trace.get("createdAt")),
-        end_time=_parse_datetime(raw_trace.get("updatedAt")),
-    )
-
 
 def _observation_from_export(item: dict[str, Any]) -> SimpleNamespace:
     usage = _usage_from_export(item)

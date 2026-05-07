@@ -40,6 +40,7 @@ from ..models.requests import DevBypassRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+TRACE_REVIEW_INTERNAL_API_TOKEN_ENV = "TRACE_REVIEW_INTERNAL_API_TOKEN"
 
 
 # ===========================
@@ -106,6 +107,10 @@ async def _get_user_from_cookie_impl(
     Raises:
         HTTPException: If token is missing or invalid
     """
+    internal_user = _get_internal_service_user(request)
+    if internal_user is not None:
+        return internal_user
+
     # Dev mode bypass
     if is_dev_mode():
         logger.debug("DEV_MODE enabled - returning mock user")
@@ -163,6 +168,31 @@ async def _get_user_from_cookie_impl(
     except jwt.InvalidTokenError as e:
         logger.error("Invalid token: %s", e)
         raise HTTPException(status_code=401, detail=f"Invalid token: {str(e)}")
+
+
+def _get_internal_service_user(request: Request) -> Optional[Dict[str, Any]]:
+    expected_token = os.getenv(TRACE_REVIEW_INTERNAL_API_TOKEN_ENV, "").strip()
+    if not expected_token:
+        return None
+
+    authorization = request.headers.get("authorization", "")
+    scheme, separator, token = authorization.partition(" ")
+    if not separator or scheme.lower() != "bearer":
+        return None
+
+    if not secrets.compare_digest(token.strip(), expected_token):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid TraceReview service token.",
+        )
+
+    return {
+        "sub": "trace-review-internal-service",
+        "uid": "trace-review-internal-service",
+        "email": "trace-review-internal-service@internal",
+        "name": "TraceReview internal service",
+        "token_use": "internal_service",
+    }
 
 
 def get_auth_dependency():

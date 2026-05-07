@@ -116,6 +116,7 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
     assert backend_env["RUN_DB_MIGRATIONS_ON_START"] == "${RUN_DB_MIGRATIONS_ON_START:-true}"
     assert backend_env["LLM_PROVIDER_STRICT_MODE"] == "${LLM_PROVIDER_STRICT_MODE:-false}"
     assert backend_env["TRACE_REVIEW_URL"] == "${TRACE_REVIEW_URL:-http://trace_review_backend:8001}"
+    assert backend_env["TRACE_REVIEW_INTERNAL_API_TOKEN"] == "${TRACE_REVIEW_INTERNAL_API_TOKEN:-}"
     assert backend_env["PDF_STORAGE_PATH"] == "/runtime/state/pdf_storage"
     assert backend_env["FILE_OUTPUT_STORAGE_PATH"] == "/runtime/state/file_outputs"
     assert backend_env["DATABASE_URL"] == "${DATABASE_URL:?set in standalone env}"
@@ -153,6 +154,9 @@ def test_production_compose_mounts_modular_runtime_contract_and_keeps_diagnostic
     assert trace_review_backend["environment"]["BACKEND_PORT"] == (
         "${TRACE_REVIEW_BACKEND_PORT:-8001}"
     )
+    assert trace_review_backend["environment"]["TRACE_REVIEW_INTERNAL_API_TOKEN"] == (
+        "${TRACE_REVIEW_INTERNAL_API_TOKEN:-}"
+    )
 
 
 def test_standalone_template_and_installer_reference_the_production_compose_path():
@@ -173,6 +177,7 @@ def test_standalone_template_and_installer_reference_the_production_compose_path
         "FRONTEND_IMAGE_TAG=",
         "TRACE_REVIEW_BACKEND_IMAGE=",
         "TRACE_REVIEW_BACKEND_IMAGE_TAG=",
+        "TRACE_REVIEW_INTERNAL_API_TOKEN=",
     ):
         assert key in env_template
 
