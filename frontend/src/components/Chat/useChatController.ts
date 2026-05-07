@@ -19,6 +19,10 @@ import {
   type CurationWorkspaceLaunchTarget,
 } from '@/features/curation/navigation/openCurationWorkspace'
 import { rehydrateChatDocumentFromSource } from '@/features/documents/chatDocumentRehydration'
+import {
+  completeDocumentLoad,
+  failDocumentLoad,
+} from '@/features/documents/documentLoadEvents'
 import { submitFeedback } from '@/services/feedbackService'
 import { useAuth } from '@/contexts/AuthContext'
 import type { SSEEvent } from '@/hooks/useChatStream'
@@ -1102,9 +1106,21 @@ export function useChatController({
 
           if (isActive) {
             debug.log('[Chat] Loading PDF in viewer after document change:', detail.document.filename)
+            completeDocumentLoad({
+              documentId: detail.document.id,
+              filename: detail.document.filename,
+              message: `${detail.document.filename ?? 'Document'} loaded for chat.`,
+            })
           }
         } catch (pdfError) {
           console.warn('[Chat] Unable to load PDF viewer after document change:', pdfError)
+          if (isActive) {
+            failDocumentLoad({
+              documentId: detail.document.id,
+              filename: detail.document.filename,
+              message: `Document loaded for chat, but the PDF viewer could not be restored. ${pdfError instanceof Error ? pdfError.message : 'Please retry from Documents.'}`,
+            })
+          }
         }
       } else {
         if (!isActive) {

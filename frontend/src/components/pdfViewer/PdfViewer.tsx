@@ -25,6 +25,10 @@ import {
   type PdfEvidenceFuzzyMatchPage,
   type PdfEvidenceFuzzyMatchResult,
 } from '@/features/curation/services/pdfEvidenceMatcherService'
+import {
+  completeDocumentLoad,
+  failDocumentLoad,
+} from '@/features/documents/documentLoadEvents'
 import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import { PdfViewerChrome } from './PdfViewerChrome'
 import {
@@ -231,13 +235,23 @@ export function PdfViewer({
   }, [commitNavigationResult, viewerSessionStorageKey])
 
   /**
-   * Signal that document loading is complete (whether success or failure).
-   * Clears the sessionStorage flag and dispatches the event to dismiss the loading overlay.
+   * Signal terminal document load states to the Home overlay.
    */
   const signalLoadComplete = useCallback(() => {
-    sessionStorage.removeItem('document-loading')
-    window.dispatchEvent(new CustomEvent('document-load-complete'))
-  }, [])
+    completeDocumentLoad({
+      documentId: activeDocument?.documentId,
+      filename: activeDocument?.filename,
+      message: `${activeDocument?.filename ?? 'Document'} loaded in the PDF viewer.`,
+    })
+  }, [activeDocument?.documentId, activeDocument?.filename])
+
+  const signalLoadError = useCallback((message: string) => {
+    failDocumentLoad({
+      documentId: activeDocument?.documentId,
+      filename: activeDocument?.filename,
+      message,
+    })
+  }, [activeDocument?.documentId, activeDocument?.filename])
 
   useEffect(() => {
     evidencePageTextCorpusRef.current = {
@@ -952,9 +966,7 @@ export function PdfViewer({
               : current,
           )
         }
-        // Signal that document loading is complete
-        sessionStorage.removeItem('document-loading')
-        window.dispatchEvent(new CustomEvent('document-load-complete'))
+        signalLoadComplete()
         if (loadStartRef.current !== null) {
           const duration = performance.now() - loadStartRef.current
           setTelemetry((prev) => ({
@@ -1106,7 +1118,7 @@ export function PdfViewer({
         setStatus('error')
         setError('Timed out waiting for the PDF viewer to initialise.')
         loadStartRef.current = null
-        signalLoadComplete()
+        signalLoadError('Timed out waiting for the PDF viewer to initialise.')
       }
     }, 8000)
 
@@ -1143,7 +1155,7 @@ export function PdfViewer({
 
     cleanupRefs.current.push(() => window.clearInterval(intervalId))
     cleanupRefs.current.push(() => window.clearTimeout(handshakeTimeout))
-  }, [applyHighlights, attachPdfEventListeners])
+  }, [applyHighlights, attachPdfEventListeners, signalLoadError])
 
   const beginDocumentLoad = useCallback((document: ViewerDocument) => {
     console.debug('[PDF DEBUG] beginDocumentLoad invoked', document)
@@ -1269,7 +1281,7 @@ export function PdfViewer({
         })
         resetViewerToIdle(error instanceof Error ? error.message : String(error))
         loadStartRef.current = null
-        signalLoadComplete()
+        signalLoadError(error instanceof Error ? error.message : String(error))
         return
       }
 
@@ -1385,6 +1397,7 @@ export function PdfViewer({
     clearAllHighlights,
     resetViewerToIdle,
     signalLoadComplete,
+    signalLoadError,
     status,
   ])
 
@@ -1427,7 +1440,7 @@ export function PdfViewer({
       setStatus('error')
       setError('Failed to load the PDF viewer frame.')
       loadStartRef.current = null
-      signalLoadComplete()
+      signalLoadError('Failed to load the PDF viewer frame.')
     }
 
     iframe.addEventListener('load', handleLoad)
@@ -1442,7 +1455,7 @@ export function PdfViewer({
       iframe.removeEventListener('load', handleLoad)
       iframe.removeEventListener('error', handleError)
     }
-  }, [activeDocument, initialisePdfApplication, viewerSrc, signalLoadComplete])
+  }, [activeDocument, initialisePdfApplication, viewerSrc, signalLoadError])
 
   useEffect(() => {
     if (activeDocument) {
@@ -1883,7 +1896,7 @@ export function PdfViewer({
           setStatus('error')
           setError('Unable to reach the PDF document. Please retry or re-upload.')
           loadStartRef.current = null
-          signalLoadComplete()
+          signalLoadError('Unable to reach the PDF document. Please retry or re-upload.')
         }
       } finally {
         window.clearTimeout(timeoutId)
@@ -1897,7 +1910,7 @@ export function PdfViewer({
       controller.abort()
       window.clearTimeout(timeoutId)
     }
-  }, [activeDocument, signalLoadComplete])
+  }, [activeDocument, signalLoadError])
 
   const handleRetry = useCallback(() => {
     if (!activeDocument) return

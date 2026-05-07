@@ -3,7 +3,7 @@ import { debug } from '@/utils/env'
 import { Box, Backdrop, CircularProgress, Typography, Stack, Button, Alert } from '@mui/material'
 import { alpha, styled } from '@mui/material/styles'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
 import Chat from '@/components/Chat'
 import RightPanel from '@/components/RightPanel'
@@ -20,6 +20,18 @@ import {
 import {
   rehydrateChatDocumentFromSource,
 } from '@/features/documents/chatDocumentRehydration'
+import {
+  DOCUMENT_LOADING_STORAGE_KEY,
+  DOCUMENT_LOAD_COMPLETE_EVENT,
+  DOCUMENT_LOAD_ERROR_EVENT,
+  DOCUMENT_LOAD_START_EVENT,
+  failDocumentLoad,
+  startDocumentLoad,
+} from '@/features/documents/documentLoadEvents'
+import {
+  dispatchChatDocumentChanged,
+  loadDocumentForChat,
+} from '@/features/documents/pdfUploadFlow'
 import { readCurationApiError } from '@/features/curation/services/api'
 import {
   ASSISTANT_CHAT_HISTORY_KIND,
@@ -89,8 +101,32 @@ interface DurableChatSessionResponse {
   active_document?: ChatHistoryActiveDocument | null
 }
 
+interface LoadForChatRouteDocument {
+  id: string
+  filename?: string | null
+}
+
+function readLoadForChatRouteDocument(state: unknown): LoadForChatRouteDocument | null {
+  const maybeState = state as { loadForChatDocument?: unknown } | null
+  const maybeDocument = maybeState?.loadForChatDocument as {
+    id?: unknown
+    filename?: unknown
+  } | null
+
+  if (!maybeDocument || typeof maybeDocument.id !== 'string' || !maybeDocument.id.trim()) {
+    return null
+  }
+
+  return {
+    id: maybeDocument.id,
+    filename: typeof maybeDocument.filename === 'string' ? maybeDocument.filename : null,
+  }
+}
+
 function HomePage() {
   const { user } = useAuth()
+  const location = useLocation()
+  const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedSessionId = normalizeChatHistoryValue(searchParams.get('session'))
   const chatStorageKeys = useMemo(
@@ -103,6 +139,7 @@ function HomePage() {
   const sessionIdRef = useRef<string | null>(null)
   const sessionInitPromiseRef = useRef<Promise<string> | null>(null)
   const latestCreatedSessionRef = useRef<DurableChatSessionResponse | null>(null)
+  const handledRouteDocumentLoadRef = useRef<string | null>(null)
   const [isBootstrappingSession, setIsBootstrappingSession] = useState(true)
   const [missingSessionId, setMissingSessionId] = useState<string | null>(null)
   const [sessionBootstrapError, setSessionBootstrapError] = useState<string | null>(null)
@@ -175,7 +212,7 @@ function HomePage() {
   }, [chatStorageKeys])
 
   const clearDocumentContext = useCallback(async () => {
-    sessionStorage.removeItem('document-loading')
+    sessionStorage.removeItem(DOCUMENT_LOADING_STORAGE_KEY)
     setLoadingDocument(false)
 
     if (chatStorageKeys) {
@@ -214,8 +251,11 @@ function HomePage() {
     try {
       setLoadingError(null)
       setLoadingDocument(true)
-      sessionStorage.setItem('document-loading', 'true')
-      window.dispatchEvent(new CustomEvent('document-load-start'))
+      startDocumentLoad({
+        documentId: document.id,
+        filename: document.filename,
+        message: `Restoring ${document.filename ?? 'the active document'} for chat...`,
+      })
 
       await rehydrateChatDocumentFromSource({
         loadDocument: async () => document,
@@ -225,7 +265,11 @@ function HomePage() {
       })
     } catch (error) {
       console.error('Failed to restore document context for resumed chat', error)
-      sessionStorage.removeItem('document-loading')
+      failDocumentLoad({
+        documentId: document.id,
+        filename: document.filename,
+        message: `Unable to restore ${document.filename ?? 'the active document'} for this chat session.`,
+      })
       setLoadingDocument(false)
       setLoadingError(
         `Unable to restore ${document.filename ?? 'the active document'} for this chat session.`,
@@ -444,10 +488,82 @@ function HomePage() {
     sessionIdRef.current = sessionId
   }, [sessionId])
 
+  useEffect(() => {
+    if (isBootstrappingSession || !user?.uid) {
+      return
+    }
+
+    const routeDocument = readLoadForChatRouteDocument(location.state)
+    if (!routeDocument) {
+      return
+    }
+
+    const routeLoadKey = routeDocument.id
+    if (handledRouteDocumentLoadRef.current === routeLoadKey) {
+      return
+    }
+    handledRouteDocumentLoadRef.current = routeLoadKey
+
+    navigate(
+      {
+        pathname: location.pathname,
+        search: location.search,
+        hash: location.hash,
+      },
+      { replace: true, state: null },
+    )
+
+    const loadRouteDocument = async () => {
+      startDocumentLoad({
+        documentId: routeDocument.id,
+        filename: routeDocument.filename,
+        message: `Loading ${routeDocument.filename ?? 'document'} for chat...`,
+      })
+      setLoadingDocument(true)
+      setLoadingError(null)
+
+      try {
+        const payload = await loadDocumentForChat(routeDocument.id)
+        if (handledRouteDocumentLoadRef.current !== routeLoadKey) {
+          return
+        }
+        window.setTimeout(() => {
+          if (handledRouteDocumentLoadRef.current === routeLoadKey) {
+            dispatchChatDocumentChanged(payload)
+          }
+        }, 0)
+      } catch (error) {
+        if (handledRouteDocumentLoadRef.current !== routeLoadKey) {
+          return
+        }
+        const message = error instanceof Error
+          ? error.message
+          : `Failed to load ${routeDocument.filename ?? 'the document'} for chat.`
+        failDocumentLoad({
+          documentId: routeDocument.id,
+          filename: routeDocument.filename,
+          message,
+        })
+        setLoadingDocument(true)
+        setLoadingError(message)
+      }
+    }
+
+    void loadRouteDocument()
+  }, [
+    isBootstrappingSession,
+    location.hash,
+    location.pathname,
+    location.search,
+    location.state,
+    navigate,
+    user?.uid,
+  ])
+
   // Handle document loading overlay with timeout safety net
   useEffect(() => {
     // Check if we're in the middle of loading a document (e.g., after navigation)
-    if (sessionStorage.getItem('document-loading') === 'true') {
+    if (sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY) === 'true') {
       setLoadingDocument(true)
     }
 
@@ -463,34 +579,45 @@ function HomePage() {
       setLoadingError(null)
     }
 
-    window.addEventListener('document-load-start', handleLoadStart)
-    window.addEventListener('document-load-complete', handleLoadComplete)
+    const handleLoadError = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail
+      const message = detail?.message ?? 'Document loaded for chat, but the PDF viewer could not be restored.'
+      debug.log('[HomePage] Document load error', message)
+      setLoadingDocument(true)
+      setLoadingError(message)
+    }
+
+    window.addEventListener(DOCUMENT_LOAD_START_EVENT, handleLoadStart)
+    window.addEventListener(DOCUMENT_LOAD_COMPLETE_EVENT, handleLoadComplete)
+    window.addEventListener(DOCUMENT_LOAD_ERROR_EVENT, handleLoadError)
 
     return () => {
-      window.removeEventListener('document-load-start', handleLoadStart)
-      window.removeEventListener('document-load-complete', handleLoadComplete)
+      window.removeEventListener(DOCUMENT_LOAD_START_EVENT, handleLoadStart)
+      window.removeEventListener(DOCUMENT_LOAD_COMPLETE_EVENT, handleLoadComplete)
+      window.removeEventListener(DOCUMENT_LOAD_ERROR_EVENT, handleLoadError)
     }
   }, [])
 
   // Timeout safety net: if loading takes too long, show an error
   useEffect(() => {
-    if (!loadingDocument) return
+    if (!loadingDocument || loadingError) return
 
     const timeoutId = window.setTimeout(() => {
+      const message = 'Document loading timed out before the chat handoff completed. The PDF may still be processing, unavailable, or too large.'
       debug.log('[HomePage] Document loading timeout - showing error')
-      setLoadingError('Document loading timed out. The PDF may be unavailable or too large.')
+      failDocumentLoad({ message })
     }, 30000) // 30 second timeout
 
     return () => {
       window.clearTimeout(timeoutId)
     }
-  }, [loadingDocument])
+  }, [loadingDocument, loadingError])
 
   // Dismiss loading overlay and clear error state
   const handleDismissLoading = useCallback(() => {
     setLoadingDocument(false)
     setLoadingError(null)
-    sessionStorage.removeItem('document-loading')
+    sessionStorage.removeItem(DOCUMENT_LOADING_STORAGE_KEY)
   }, [])
 
   const handleStartNewChat = useCallback(async () => {

@@ -50,6 +50,7 @@ import {
   uploadPdfDocument,
   validatePdfSelection,
 } from '@/features/documents/pdfUploadFlow';
+import { startDocumentLoad } from '@/features/documents/documentLoadEvents';
 import PreparedReviewAndCurateButton from '@/features/curation/components/PreparedReviewAndCurateButton';
 
 interface DocumentListProps {
@@ -62,7 +63,6 @@ interface DocumentListProps {
   pipelineBusy?: boolean;
   pipelineMessage?: string;
   onPipelineStateChange?: (busy: boolean, message?: string) => void;
-  onLoad?: (summary: DocumentSummary) => void;
   /** Enable checkbox selection for batch processing */
   checkboxSelection?: boolean;
   /** Controlled selection - array of selected document IDs */
@@ -88,7 +88,6 @@ const DocumentList: React.FC<DocumentListProps> = ({
   pipelineBusy = false,
   pipelineMessage,
   onPipelineStateChange,
-  onLoad,
   checkboxSelection = false,
   selectedIds,
   onSelectionChange,
@@ -184,16 +183,20 @@ const DocumentList: React.FC<DocumentListProps> = ({
   );
 
   const handleLoadFromTable = (summary: DocumentSummary) => {
-    if (onLoad) {
-      // Signal that document loading is starting (persists across navigation)
-      sessionStorage.setItem('document-loading', 'true');
-      window.dispatchEvent(new CustomEvent('document-load-start'));
+    startDocumentLoad({
+      documentId: summary.id,
+      filename: summary.filename,
+      message: `Loading ${summary.filename || 'document'} for chat...`,
+    });
 
-      // Load the document for chat
-      onLoad(summary);
-      // Navigate to home page
-      navigate('/');
-    }
+    navigate('/', {
+      state: {
+        loadForChatDocument: {
+          id: summary.id,
+          filename: summary.filename,
+        },
+      },
+    });
   };
 
   const getStatusColor = (status: string): 'default' | 'primary' | 'success' | 'error' | 'warning' => {

@@ -1,11 +1,36 @@
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '../../test/test-utils';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '../../test/test-utils';
 import DocumentList from './DocumentList';
-import { createMockDocument } from '../../test/test-utils';
+import type { DocumentSummary } from '../../services/weaviate';
+import {
+  DOCUMENT_LOADING_STORAGE_KEY,
+  DOCUMENT_LOAD_START_EVENT,
+} from '../../features/documents/documentLoadEvents';
 
 const refetchHealthMock = vi.fn();
 const emitGlobalToastMock = vi.fn();
 const openCurationWorkspaceMock = vi.fn();
+
+const createTestDocument = (overrides: Partial<DocumentSummary> = {}): DocumentSummary => ({
+  id: '1',
+  filename: 'test-document.pdf',
+  fileSize: 1024000,
+  creationDate: '2024-01-01T00:00:00.000Z',
+  lastAccessedDate: '2024-01-02T00:00:00.000Z',
+  processingStatus: 'completed',
+  embeddingStatus: 'completed',
+  chunkCount: 10,
+  vectorCount: 100,
+  metadata: {
+    pageCount: 5,
+    author: 'Test Author',
+    title: 'Test Document',
+    checksum: 'abc123',
+    documentType: 'research',
+    lastProcessedStage: 'completed',
+  },
+  ...overrides,
+});
 
 vi.mock('../../lib/globalNotifications', () => ({
   emitGlobalToast: (detail: unknown) => emitGlobalToastMock(detail),
@@ -138,9 +163,9 @@ vi.mock('react-router-dom', async () => {
 describe('DocumentList', () => {
   const defaultProps = {
     documents: [
-      createMockDocument({ id: '1', filename: 'doc1.pdf' }),
-      createMockDocument({ id: '2', filename: 'doc2.pdf', embeddingStatus: 'processing' }),
-      createMockDocument({ id: '3', filename: 'doc3.pdf', embeddingStatus: 'failed' }),
+      createTestDocument({ id: '1', filename: 'doc1.pdf' }),
+      createTestDocument({ id: '2', filename: 'doc2.pdf', embeddingStatus: 'processing' }),
+      createTestDocument({ id: '3', filename: 'doc3.pdf', embeddingStatus: 'failed' }),
     ],
     loading: false,
     totalCount: 3,
@@ -151,6 +176,7 @@ describe('DocumentList', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
     refetchHealthMock.mockReset();
     emitGlobalToastMock.mockReset();
     openCurationWorkspaceMock.mockReset();
@@ -173,9 +199,9 @@ describe('DocumentList', () => {
 
   it('formats file sizes correctly', () => {
     const docs = [
-      createMockDocument({ id: '11', fileSize: 1024 }),         // 1 KB
-      createMockDocument({ id: '12', fileSize: 1048576 }),      // 1 MB
-      createMockDocument({ id: '13', fileSize: 1073741824 }),   // 1 GB
+      createTestDocument({ id: '11', fileSize: 1024 }),         // 1 KB
+      createTestDocument({ id: '12', fileSize: 1048576 }),      // 1 MB
+      createTestDocument({ id: '13', fileSize: 1073741824 }),   // 1 GB
     ];
 
     render(<DocumentList {...defaultProps} documents={docs} />);
@@ -230,13 +256,38 @@ describe('DocumentList', () => {
     expect(defaultProps.onDelete).toHaveBeenCalledWith('1');
   });
 
+  it('navigates to Home with document route state for Load for Chat', () => {
+    const loadStartListener = vi.fn();
+    window.addEventListener(DOCUMENT_LOAD_START_EVENT, loadStartListener);
+
+    render(<DocumentList {...defaultProps} />);
+
+    const loadButtons = screen
+      .getAllByTestId('FileOpenIcon')
+      .filter((icon) => icon.closest('td') !== null);
+    fireEvent.click(loadButtons[0].parentElement!);
+
+    expect(sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY)).toBe('true');
+    expect(loadStartListener).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith('/', {
+      state: {
+        loadForChatDocument: {
+          id: '1',
+          filename: 'doc1.pdf',
+        },
+      },
+    });
+
+    window.removeEventListener(DOCUMENT_LOAD_START_EVENT, loadStartListener);
+  });
+
   it('opens Review & Curate from the document action column', async () => {
     openCurationWorkspaceMock.mockResolvedValue('session-1');
 
     render(
       <DocumentList
         {...defaultProps}
-        documents={[createMockDocument({ id: 'doc-review', embeddingStatus: 'completed' })]}
+        documents={[createTestDocument({ id: 'doc-review', embeddingStatus: 'completed' })]}
       />
     );
 
@@ -255,7 +306,7 @@ describe('DocumentList', () => {
     render(
       <DocumentList
         {...defaultProps}
-        documents={[createMockDocument({ id: 'doc-without-session', embeddingStatus: 'completed' })]}
+        documents={[createTestDocument({ id: 'doc-without-session', embeddingStatus: 'completed' })]}
       />
     );
 
@@ -309,10 +360,10 @@ describe('DocumentList', () => {
   it('formats dates correctly', () => {
     const creationDate = new Date('2024-01-01T10:00:00');
     const lastAccessedDate = new Date('2024-01-02T15:30:00');
-    const doc = createMockDocument({
+    const doc = createTestDocument({
       id: 'date-doc',
-      creationDate: new Date('2024-01-01T10:00:00'),
-      lastAccessedDate: new Date('2024-01-02T15:30:00'),
+      creationDate: '2024-01-01T10:00:00',
+      lastAccessedDate: '2024-01-02T15:30:00',
     });
 
     render(<DocumentList {...defaultProps} documents={[doc]} />);
@@ -322,7 +373,7 @@ describe('DocumentList', () => {
   });
 
   it('displays vector and chunk counts', () => {
-    const doc = createMockDocument({
+    const doc = createTestDocument({
       id: 'counts-doc',
       vectorCount: 150,
       chunkCount: 25,

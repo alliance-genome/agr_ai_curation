@@ -1,11 +1,15 @@
 import { type ComponentProps, StrictMode } from 'react'
 import { ThemeProvider } from '@mui/material/styles'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import theme from '@/theme'
 import { DEFAULT_CHAT_HISTORY_MESSAGE_LIMIT, getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
+import {
+  DOCUMENT_LOADING_STORAGE_KEY,
+  DOCUMENT_LOAD_ERROR_EVENT,
+} from '@/features/documents/documentLoadEvents'
 import HomePage from './HomePage'
 
 const mockUseAuth = vi.hoisted(() => vi.fn())
@@ -76,12 +80,14 @@ function LocationProbe() {
   return <div data-testid="location-search">{location.search}</div>
 }
 
-function renderHomePage(initialEntry: string = '/'): ReturnType<typeof render> {
+type HomeInitialEntry = NonNullable<ComponentProps<typeof MemoryRouter>['initialEntries']>[number]
+
+function renderHomePage(initialEntry: HomeInitialEntry = '/'): ReturnType<typeof render> {
   return renderHomePageWithOptions(initialEntry)
 }
 
 function renderHomePageWithOptions(
-  initialEntry: string = '/',
+  initialEntry: HomeInitialEntry = '/',
   options: { strictMode?: boolean } = {},
 ): ReturnType<typeof render> {
   const content = (
@@ -124,6 +130,7 @@ describe('HomePage durable session bootstrap', () => {
 
   afterEach(() => {
     actualChatMode.enabled = false
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -248,6 +255,288 @@ describe('HomePage durable session bootstrap', () => {
     })
 
     window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+  })
+
+  it('loads a Documents tab route-state handoff after Home and Chat are mounted', async () => {
+    const chatDocumentChangedSpy = vi.fn()
+    window.addEventListener('chat-document-changed', chatDocumentChangedSpy as EventListener)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        return jsonResponse({
+          session_id: 'route-session',
+          created_at: '2026-05-07T15:00:00Z',
+          updated_at: '2026-05-07T15:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      if (url === '/api/chat/document/load') {
+        expect(init?.method).toBe('POST')
+        expect(init?.body).toBe(JSON.stringify({ document_id: 'doc-route' }))
+        return jsonResponse({
+          active: true,
+          document: {
+            id: 'doc-route',
+            filename: 'route.pdf',
+          },
+        })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage({
+      pathname: '/',
+      state: {
+        loadForChatDocument: {
+          id: 'doc-route',
+          filename: 'route.pdf',
+        },
+      },
+    })
+
+    expect(await screen.findByText('route-session')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(
+        chatDocumentChangedSpy.mock.calls.filter(
+          ([event]) => (event as CustomEvent).detail?.active === true,
+        ),
+      ).toHaveLength(1)
+    })
+
+    expect(chatRenderSpy).toHaveBeenCalled()
+    const dispatchedEvent = chatDocumentChangedSpy.mock.calls.find(
+      ([event]) => (event as CustomEvent).detail?.active === true,
+    )?.[0] as CustomEvent
+    expect(dispatchedEvent.detail).toMatchObject({
+      active: true,
+      document: {
+        id: 'doc-route',
+        filename: 'route.pdf',
+      },
+    })
+
+    window.removeEventListener('chat-document-changed', chatDocumentChangedSpy as EventListener)
+  })
+
+  it('shows a viewer restore error instead of a stale timeout after route-state backend load succeeds', async () => {
+    actualChatMode.enabled = true
+    const viewerRestoreMessage = 'Document loaded for chat, but the PDF viewer could not be restored. Failed to fetch document viewer metadata'
+    const realSetTimeout = window.setTimeout.bind(window)
+    const realClearTimeout = window.clearTimeout.bind(window)
+    const clearedTimeouts = new Set<number>()
+    let nextSyntheticTimerId = 100000
+    let loadingTimeoutId: number | undefined
+    let loadingTimeoutCallback: (() => void) | undefined
+
+    vi.spyOn(window, 'setTimeout').mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 30000) {
+        const timerId = nextSyntheticTimerId
+        nextSyntheticTimerId += 1
+        loadingTimeoutId = timerId
+        loadingTimeoutCallback = () => {
+          if (typeof handler === 'function') {
+            handler(...args)
+          }
+        }
+        return timerId
+      }
+
+      return realSetTimeout(handler, timeout, ...(args as []))
+    }) as typeof window.setTimeout)
+    vi.spyOn(window, 'clearTimeout').mockImplementation(((timerId?: number) => {
+      if (typeof timerId === 'number' && timerId >= 100000) {
+        clearedTimeouts.add(timerId)
+        return
+      }
+
+      realClearTimeout(timerId)
+    }) as typeof window.clearTimeout)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        return jsonResponse({
+          session_id: 'route-session',
+          created_at: '2026-05-07T15:00:00Z',
+          updated_at: '2026-05-07T15:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      if (url === '/api/chat/document') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      if (url === '/api/chat/conversation') {
+        return jsonResponse({
+          is_active: true,
+          memory_stats: {
+            memory_sizes: {
+              short_term: { file_count: 0, size_mb: 0 },
+            },
+          },
+        })
+      }
+
+      if (url === '/health/deep') {
+        return jsonResponse({
+          services: {
+            weaviate: 'connected',
+            curation_db: 'connected',
+          },
+        })
+      }
+
+      if (url === '/api/chat/document/load') {
+        expect(init?.method).toBe('POST')
+        return jsonResponse({
+          active: true,
+          document: {
+            id: 'doc-route',
+            filename: 'route.pdf',
+          },
+        })
+      }
+
+      if (url === '/api/chat/conversation/reset') {
+        return jsonResponse({
+          session_id: 'route-session-reset',
+        })
+      }
+
+      if (url === '/api/pdf-viewer/documents/doc-route') {
+        return jsonResponse({ detail: 'viewer metadata missing' }, 500)
+      }
+
+      if (url === '/api/pdf-viewer/documents/doc-route/url') {
+        return jsonResponse({
+          viewer_url: '/viewer/doc-route',
+        })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage({
+      pathname: '/',
+      state: {
+        loadForChatDocument: {
+          id: 'doc-route',
+          filename: 'route.pdf',
+        },
+      },
+    })
+
+    expect(await screen.findByText(viewerRestoreMessage)).toBeInTheDocument()
+    expect(loadingTimeoutId).toBeDefined()
+    expect(clearedTimeouts.has(loadingTimeoutId!)).toBe(true)
+
+    await act(async () => {
+      if (loadingTimeoutId === undefined || !clearedTimeouts.has(loadingTimeoutId)) {
+        loadingTimeoutCallback?.()
+      }
+    })
+
+    expect(screen.getByText(viewerRestoreMessage)).toBeInTheDocument()
+    expect(screen.queryByText(/Document loading timed out/i)).not.toBeInTheDocument()
+    expect(sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY)).toBeNull()
+  })
+
+  it('clears document loading storage and emits an error when the handoff safety timeout fires', async () => {
+    const timeoutMessage = 'Document loading timed out before the chat handoff completed. The PDF may still be processing, unavailable, or too large.'
+    const loadErrorSpy = vi.fn()
+    const realSetTimeout = window.setTimeout.bind(window)
+    let loadingTimeoutCallback: (() => void) | undefined
+
+    window.addEventListener(DOCUMENT_LOAD_ERROR_EVENT, loadErrorSpy as EventListener)
+    sessionStorage.setItem(DOCUMENT_LOADING_STORAGE_KEY, 'true')
+
+    vi.spyOn(window, 'setTimeout').mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 30000) {
+        loadingTimeoutCallback = () => {
+          if (typeof handler === 'function') {
+            handler(...args)
+          }
+        }
+        return 30000
+      }
+
+      return realSetTimeout(handler, timeout, ...(args as []))
+    }) as typeof window.setTimeout)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        return jsonResponse({
+          session_id: 'timeout-session',
+          created_at: '2026-05-07T15:00:00Z',
+          updated_at: '2026-05-07T15:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage()
+
+    expect(await screen.findByText('timeout-session')).toBeInTheDocument()
+    expect(loadingTimeoutCallback).toBeDefined()
+
+    await act(async () => {
+      loadingTimeoutCallback?.()
+    })
+
+    expect(await screen.findByText(timeoutMessage)).toBeInTheDocument()
+    expect(sessionStorage.getItem(DOCUMENT_LOADING_STORAGE_KEY)).toBeNull()
+    expect(loadErrorSpy).toHaveBeenCalledTimes(1)
+    expect((loadErrorSpy.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+      message: timeoutMessage,
+    })
+
+    window.removeEventListener(DOCUMENT_LOAD_ERROR_EVENT, loadErrorSpy as EventListener)
   })
 
   it('preserves non-text durable transcript rows when restoring a requested session', async () => {
