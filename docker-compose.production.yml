@@ -480,11 +480,14 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - ./promtail-config.yml:/etc/promtail/config.yml:ro
+      - promtail-positions:/var/lib/promtail
 
 volumes:
   postgres_data:
     driver: local
   loki-data:
+    driver: local
+  promtail-positions:
     driver: local
   langfuse_clickhouse_data:
     driver: local
