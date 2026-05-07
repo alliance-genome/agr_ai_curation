@@ -612,7 +612,7 @@ function HomePage() {
     return () => {
       window.clearTimeout(timeoutId)
     }
-  }, [loadingDocument])
+  }, [loadingDocument, loadingError])
 
   // Dismiss loading overlay and clear error state
   const handleDismissLoading = useCallback(() => {

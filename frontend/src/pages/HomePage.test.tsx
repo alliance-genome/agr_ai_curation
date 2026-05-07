@@ -1,6 +1,6 @@
 import { type ComponentProps, StrictMode } from 'react'
 import { ThemeProvider } from '@mui/material/styles'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -126,6 +126,7 @@ describe('HomePage durable session bootstrap', () => {
 
   afterEach(() => {
     actualChatMode.enabled = false
+    vi.useRealTimers()
     vi.restoreAllMocks()
   })
 
@@ -328,6 +329,41 @@ describe('HomePage durable session bootstrap', () => {
 
   it('shows a viewer restore error instead of a stale timeout after route-state backend load succeeds', async () => {
     actualChatMode.enabled = true
+    const viewerRestoreMessage = 'Document loaded for chat, but the PDF viewer could not be restored. Failed to fetch document viewer metadata'
+    const realSetTimeout = window.setTimeout.bind(window)
+    const realClearTimeout = window.clearTimeout.bind(window)
+    const clearedTimeouts = new Set<number>()
+    let nextSyntheticTimerId = 100000
+    let loadingTimeoutId: number | undefined
+    let loadingTimeoutCallback: (() => void) | undefined
+
+    vi.spyOn(window, 'setTimeout').mockImplementation(((
+      handler: TimerHandler,
+      timeout?: number,
+      ...args: unknown[]
+    ) => {
+      if (timeout === 30000) {
+        const timerId = nextSyntheticTimerId
+        nextSyntheticTimerId += 1
+        loadingTimeoutId = timerId
+        loadingTimeoutCallback = () => {
+          if (typeof handler === 'function') {
+            handler(...args)
+          }
+        }
+        return timerId
+      }
+
+      return realSetTimeout(handler, timeout, ...(args as []))
+    }) as typeof window.setTimeout)
+    vi.spyOn(window, 'clearTimeout').mockImplementation(((timerId?: number) => {
+      if (typeof timerId === 'number' && timerId >= 100000) {
+        clearedTimeouts.add(timerId)
+        return
+      }
+
+      realClearTimeout(timerId)
+    }) as typeof window.clearTimeout)
 
     vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -416,11 +452,17 @@ describe('HomePage durable session bootstrap', () => {
       },
     })
 
-    expect(
-      await screen.findByText(
-        'Document loaded for chat, but the PDF viewer could not be restored. Failed to fetch document viewer metadata',
-      ),
-    ).toBeInTheDocument()
+    expect(await screen.findByText(viewerRestoreMessage)).toBeInTheDocument()
+    expect(loadingTimeoutId).toBeDefined()
+    expect(clearedTimeouts.has(loadingTimeoutId!)).toBe(true)
+
+    await act(async () => {
+      if (loadingTimeoutId === undefined || !clearedTimeouts.has(loadingTimeoutId)) {
+        loadingTimeoutCallback?.()
+      }
+    })
+
+    expect(screen.getByText(viewerRestoreMessage)).toBeInTheDocument()
     expect(screen.queryByText(/Document loading timed out/i)).not.toBeInTheDocument()
     expect(sessionStorage.getItem('document-loading')).toBeNull()
   })
