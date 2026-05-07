@@ -15,7 +15,9 @@ scrape_configs:
         refresh_interval: 5s
         filters:
           - name: label
-            values: ["com.docker.compose.project=ai_curation_prototype"]
+            # Keep discovery project-name agnostic. Compose adds this label to
+            # every service container, regardless of the chosen project name.
+            values: ["com.docker.compose.project"]
     relabel_configs:
       # Use container name as job label
       - source_labels: ['__meta_docker_container_name']
