@@ -42,6 +42,8 @@ scripts/
     ├── symphony_git_safety_tool_versions.sh # Shared pinned versions/checksums for VM git safety scanners
     ├── symphony_install_vm_shell_shortcuts.sh # Install/update the managed ~/.bash_aliases block for Symphony VM Codex shortcuts
     ├── symphony_materialize_linear_auth.sh # Materialize low-risk Linear helper files inside the Symphony VM user home
+    ├── symphony_prod_loki_status.sh     # VM-safe status probe for the host-owned production Loki read-only endpoint
+    ├── symphony_prod_loki_query.sh      # VM-safe helper for focused production Loki log searches
     ├── symphony_print_incus_vm_cloud_init.sh # Print tracked cloud-init for rebuilding the Symphony Incus VM
     ├── symphony_rebuild_incus_vm.sh    # Rebuild the Symphony Incus VM shell from the tracked cloud-init source
     ├── symphony_ruff_tool_version.sh   # Shared pinned version/checksums for the VM-baked ruff install
@@ -50,6 +52,21 @@ scripts/
     ├── validate_unused_files.py        # Multi-tool unused file detection
     └── generate_coverage.sh            # Generate coverage data for validation
 ```
+
+### Symphony Production Loki Access
+
+Chris's host can expose production AI Curation logs to the Symphony VM through a
+host-owned SSH tunnel plus a read-only Loki proxy. Agents should use only the
+VM-safe helpers:
+
+```bash
+bash scripts/utilities/symphony_prod_loki_status.sh
+bash scripts/utilities/symphony_prod_loki_query.sh --services
+bash scripts/utilities/symphony_prod_loki_query.sh --service backend --since 1h --contains '<trace-or-feedback-id>' --limit 200
+```
+
+Host-only lifecycle helpers are named `symphony_prod_loki_host_*`. The generated
+`.symphony/prod_loki_endpoint.env` file contains only non-secret endpoint values.
 
 ### PDF Quote Matching Diagnostics
 
