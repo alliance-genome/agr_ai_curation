@@ -1113,6 +1113,12 @@ def _prompt_hash(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
 
 
+# Short strings under these keys are persisted verbatim in tool-call audit
+# summaries because they are operational identifiers, selectors, or statuses
+# that support SQL debugging queries without exposing prompt text or
+# credentials. When adding a new tool-call argument/result field that should be
+# searchable in persisted audit metadata, add it here only if the value is
+# non-sensitive by contract, then update the audit summarization tests.
 _AUDIT_SAFE_VALUE_KEYS = {
     "agent_id",
     "apply_mode",
@@ -1281,6 +1287,9 @@ def _tool_call_audit_entry(
         "tool_name": tool_name,
         "tool_use_id": str(tool_use_id) if tool_use_id is not None else None,
         "requested": True,
+        # _AUDIT_SAFE_VALUE_KEYS is the only place that permits raw short
+        # strings inside these summaries; add safe searchable fields there
+        # when introducing new audited tool arguments or result metadata.
         "argument_summary": _summarize_audit_value(tool_input),
         "result_status": result_status,
         "result_error": result_error,

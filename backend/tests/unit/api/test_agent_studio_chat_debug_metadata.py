@@ -123,6 +123,35 @@ def test_tool_call_audit_entry_summarizes_arguments_and_scope_errors():
     assert "Raw prompt text should not be stored" not in str(audit)
 
 
+def test_audit_summary_preserves_only_allowlisted_short_debug_values():
+    custom_agent_uuid = "11111111-2222-3333-4444-555555555555"
+    summary = api_module._summarize_audit_value(
+        {
+            "trace_id": "trace-123",
+            "target_prompt": "group",
+            "custom_agent_id": custom_agent_uuid,
+            "runtime_agent_id": f"ca_{custom_agent_uuid}",
+            "source": "saved_custom_agent",
+            "updated_prompt": "Raw prompt text should not be stored",
+            "api_key": "secret-key-material",
+        }
+    )
+
+    fields = summary["fields"]
+    assert fields["trace_id"]["value"] == "trace-123"
+    assert fields["target_prompt"]["value"] == "group"
+    assert fields["custom_agent_id"]["value"] == custom_agent_uuid
+    assert fields["runtime_agent_id"]["value"] == f"ca_{custom_agent_uuid}"
+    assert fields["source"]["value"] == "saved_custom_agent"
+    assert "value" not in fields["updated_prompt"]
+    assert fields["updated_prompt"]["length"] == len(
+        "Raw prompt text should not be stored"
+    )
+    assert "value" not in fields["api_key"]
+    assert "Raw prompt text should not be stored" not in str(summary)
+    assert "secret-key-material" not in str(summary)
+
+
 def test_tool_call_audit_entry_records_non_dict_result_type():
     audit = api_module._tool_call_audit_entry(
         tool_name="summarize_trace",
