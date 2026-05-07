@@ -7,10 +7,6 @@ import {
   fetchPdfJobs,
 } from '../../services/weaviate';
 import { emitGlobalToast } from '../../lib/globalNotifications';
-import {
-  dispatchChatDocumentChanged,
-  loadDocumentForChat,
-} from '@/features/documents/pdfUploadFlow';
 import { buildPdfTerminalNotification } from '@/features/documents/pdfTerminalNotifications';
 import type {
   DocumentSummary,
@@ -26,6 +22,20 @@ const InlineFilterBar = lazy(() => import('../../components/weaviate/InlineFilte
 type PipelineState = {
   busy: boolean;
   message?: string;
+};
+
+const readString = (value: unknown, fallback: string): string => (
+  typeof value === 'string' && value.trim() ? value : fallback
+);
+
+const readNullableString = (value: unknown): string | null => {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  return null;
 };
 
 const MAX_BATCH_DOCUMENT_SELECTION = 10;
@@ -166,31 +176,29 @@ const DocumentsPage: React.FC = () => {
       }
 
       const data = (await response.json()) as DocumentListResponse;
-      const docs = data.documents || [];
-      const normalizedDocs = docs.map((doc: Record<string, unknown>) => ({
-          id: doc.document_id ?? doc.id,  // Backend returns document_id, fallback to id for compatibility
-          filename: doc.filename ?? 'Untitled',
-          title: doc.title ?? null,
+      const docs = (data.documents || []) as unknown as Array<Record<string, unknown>>;
+      const normalizedDocs: DocumentSummary[] = docs.map((doc) => {
+        const processingStatus = readString(
+          doc.status ?? doc.processing_status ?? doc.processingStatus,
+          'pending',
+        ).toLowerCase() as DocumentSummary['processingStatus'];
+
+        return {
+          id: readString(doc.document_id ?? doc.id, ''),
+          filename: readString(doc.filename, 'Untitled'),
+          title: typeof doc.title === 'string' ? doc.title : null,
           fileSize: typeof doc.file_size_bytes === 'number' ? doc.file_size_bytes : (typeof doc.file_size === 'number' ? doc.file_size : (typeof doc.fileSize === 'number' ? doc.fileSize : null)),
-          creationDate: doc.upload_timestamp ?? doc.creation_date ?? doc.creationDate ?? null,
-          lastAccessedDate: doc.last_accessed_date ?? doc.lastAccessedDate ?? null,
-          processingStatus: ((doc.status ?? doc.processing_status ?? doc.processingStatus ?? 'pending').toLowerCase()) as
-            | 'pending'
-            | 'parsing'
-            | 'chunking'
-            | 'embedding'
-            | 'storing'
-            | 'completed'
-            | 'failed',
-          embeddingStatus: (doc.embedding_status ?? doc.embeddingStatus ?? 'pending') as
-            | 'pending'
-            | 'processing'
-            | 'completed'
-            | 'failed'
-            | 'partial',
+          creationDate: readNullableString(doc.upload_timestamp ?? doc.creation_date ?? doc.creationDate),
+          lastAccessedDate: readNullableString(doc.last_accessed_date ?? doc.lastAccessedDate),
+          processingStatus,
+          embeddingStatus: readString(
+            doc.embedding_status ?? doc.embeddingStatus,
+            'pending',
+          ) as DocumentSummary['embeddingStatus'],
           chunkCount: typeof doc.chunk_count === 'number' ? doc.chunk_count : (typeof doc.chunkCount === 'number' ? doc.chunkCount : 0),
           vectorCount: typeof doc.vector_count === 'number' ? doc.vector_count : (typeof doc.vectorCount === 'number' ? doc.vectorCount : 0),
-        }));
+        };
+      });
       setDocuments(normalizedDocs);
       const totalItems =
         data.pagination?.totalItems ?? (data.pagination as Record<string, unknown> | undefined)?.total_items as number ?? docs.length;
@@ -347,24 +355,6 @@ const DocumentsPage: React.FC = () => {
       });
     }
   }, [buildActionErrorMessage, handleRefresh]);
-
-  const handleLoad = React.useCallback(async (summary: DocumentSummary) => {
-    try {
-      console.log('[DocumentsPage] Loading document for chat:', summary.id, summary.filename);
-      const payload = await loadDocumentForChat(summary.id);
-      console.log('[DocumentsPage] Document saved to backend:', payload);
-
-      // Dispatch chat-document-changed event so Chat component updates immediately
-      // This triggers Chat's event listener which will call fetchActiveDocument()
-      // and load the PDF in the viewer
-      console.log('[DocumentsPage] Dispatching chat-document-changed event with payload:', payload);
-      dispatchChatDocumentChanged(payload);
-
-    } catch (error) {
-      console.error('[DocumentsPage] Error loading document:', error);
-      window.alert(error instanceof Error ? error.message : 'Failed to load document for chat');
-    }
-  }, []);
 
   const handleTitleUpdate = React.useCallback(async (documentId: string, title: string) => {
     const response = await fetch(`/api/weaviate/documents/${documentId}`, {
@@ -537,7 +527,6 @@ const DocumentsPage: React.FC = () => {
             onDelete={handleDelete}
             onReembed={handleReembed}
             onRefresh={handleRefresh}
-            onLoad={handleLoad}
             onTitleUpdate={handleTitleUpdate}
             pipelineBusy={pipelineState.busy}
             pipelineMessage={pipelineState.message}

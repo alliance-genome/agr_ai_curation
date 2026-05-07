@@ -6,6 +6,10 @@ import {
   validatePdfSelection,
   waitForDocumentProcessing,
 } from '@/features/documents/pdfUploadFlow'
+import {
+  failDocumentLoad,
+  startDocumentLoad,
+} from '@/features/documents/documentLoadEvents'
 
 export interface UploadDialogState {
   open: boolean
@@ -63,6 +67,7 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
 
     const file = validation.files[0]
     const controller = new AbortController()
+    let startedChatLoad = false
     uploadAbortRef.current = controller
     setDropError(null)
     setUploadInFlight(true)
@@ -120,8 +125,12 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
         return
       }
 
-      sessionStorage.setItem('document-loading', 'true')
-      window.dispatchEvent(new CustomEvent('document-load-start'))
+      startDocumentLoad({
+        documentId,
+        filename: file.name,
+        message: `Loading ${file.name} for chat...`,
+      })
+      startedChatLoad = true
       const payload = await loadDocumentForChat(documentId)
       dispatchChatDocumentChanged(payload)
 
@@ -136,6 +145,12 @@ export const usePdfViewerUpload = ({ disabled }: UsePdfViewerUploadOptions) => {
     } catch (uploadError) {
       if (controller.signal.aborted) {
         return
+      }
+
+      if (startedChatLoad) {
+        failDocumentLoad({
+          message: uploadError instanceof Error ? uploadError.message : 'Failed to load document for chat.',
+        })
       }
 
       setUploadDialog((prev) => ({

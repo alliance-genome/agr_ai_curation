@@ -76,12 +76,14 @@ function LocationProbe() {
   return <div data-testid="location-search">{location.search}</div>
 }
 
-function renderHomePage(initialEntry: string = '/'): ReturnType<typeof render> {
+type HomeInitialEntry = NonNullable<ComponentProps<typeof MemoryRouter>['initialEntries']>[number]
+
+function renderHomePage(initialEntry: HomeInitialEntry = '/'): ReturnType<typeof render> {
   return renderHomePageWithOptions(initialEntry)
 }
 
 function renderHomePageWithOptions(
-  initialEntry: string = '/',
+  initialEntry: HomeInitialEntry = '/',
   options: { strictMode?: boolean } = {},
 ): ReturnType<typeof render> {
   const content = (
@@ -248,6 +250,179 @@ describe('HomePage durable session bootstrap', () => {
     })
 
     window.removeEventListener('pdf-viewer-document-changed', pdfDocumentChangedSpy as EventListener)
+  })
+
+  it('loads a Documents tab route-state handoff after Home and Chat are mounted', async () => {
+    const chatDocumentChangedSpy = vi.fn()
+    window.addEventListener('chat-document-changed', chatDocumentChangedSpy as EventListener)
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        return jsonResponse({
+          session_id: 'route-session',
+          created_at: '2026-05-07T15:00:00Z',
+          updated_at: '2026-05-07T15:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      if (url === '/api/chat/document/load') {
+        expect(init?.method).toBe('POST')
+        expect(init?.body).toBe(JSON.stringify({ document_id: 'doc-route' }))
+        return jsonResponse({
+          active: true,
+          document: {
+            id: 'doc-route',
+            filename: 'route.pdf',
+          },
+        })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage({
+      pathname: '/',
+      state: {
+        loadForChatDocument: {
+          id: 'doc-route',
+          filename: 'route.pdf',
+        },
+      },
+    })
+
+    expect(await screen.findByText('route-session')).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(
+        chatDocumentChangedSpy.mock.calls.filter(
+          ([event]) => (event as CustomEvent).detail?.active === true,
+        ),
+      ).toHaveLength(1)
+    })
+
+    expect(chatRenderSpy).toHaveBeenCalled()
+    const dispatchedEvent = chatDocumentChangedSpy.mock.calls.find(
+      ([event]) => (event as CustomEvent).detail?.active === true,
+    )?.[0] as CustomEvent
+    expect(dispatchedEvent.detail).toMatchObject({
+      active: true,
+      document: {
+        id: 'doc-route',
+        filename: 'route.pdf',
+      },
+    })
+
+    window.removeEventListener('chat-document-changed', chatDocumentChangedSpy as EventListener)
+  })
+
+  it('shows a viewer restore error instead of a stale timeout after route-state backend load succeeds', async () => {
+    actualChatMode.enabled = true
+
+    vi.mocked(global.fetch).mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+
+      if (url === '/api/chat/session') {
+        expect(init?.method).toBe('POST')
+        return jsonResponse({
+          session_id: 'route-session',
+          created_at: '2026-05-07T15:00:00Z',
+          updated_at: '2026-05-07T15:00:00Z',
+          active_document: null,
+        })
+      }
+
+      if (url === '/api/chat/document' && init?.method === 'DELETE') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      if (url === '/api/chat/document') {
+        return jsonResponse({
+          active: false,
+          document: null,
+        })
+      }
+
+      if (url === '/api/chat/conversation') {
+        return jsonResponse({
+          is_active: true,
+          memory_stats: {
+            memory_sizes: {
+              short_term: { file_count: 0, size_mb: 0 },
+            },
+          },
+        })
+      }
+
+      if (url === '/health/deep') {
+        return jsonResponse({
+          services: {
+            weaviate: 'connected',
+            curation_db: 'connected',
+          },
+        })
+      }
+
+      if (url === '/api/chat/document/load') {
+        expect(init?.method).toBe('POST')
+        return jsonResponse({
+          active: true,
+          document: {
+            id: 'doc-route',
+            filename: 'route.pdf',
+          },
+        })
+      }
+
+      if (url === '/api/chat/conversation/reset') {
+        return jsonResponse({
+          session_id: 'route-session-reset',
+        })
+      }
+
+      if (url === '/api/pdf-viewer/documents/doc-route') {
+        return jsonResponse({ detail: 'viewer metadata missing' }, 500)
+      }
+
+      if (url === '/api/pdf-viewer/documents/doc-route/url') {
+        return jsonResponse({
+          viewer_url: '/viewer/doc-route',
+        })
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`)
+    })
+
+    renderHomePage({
+      pathname: '/',
+      state: {
+        loadForChatDocument: {
+          id: 'doc-route',
+          filename: 'route.pdf',
+        },
+      },
+    })
+
+    expect(
+      await screen.findByText(
+        'Document loaded for chat, but the PDF viewer could not be restored. Failed to fetch document viewer metadata',
+      ),
+    ).toBeInTheDocument()
+    expect(screen.queryByText(/Document loading timed out/i)).not.toBeInTheDocument()
+    expect(sessionStorage.getItem('document-loading')).toBeNull()
   })
 
   it('preserves non-text durable transcript rows when restoring a requested session', async () => {
