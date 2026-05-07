@@ -56,11 +56,12 @@ jobs:
 
             Focus your review on:
             1. NO FALLBACKS — flag any fallback mechanisms, defensive fallbacks, backwards-compatibility shims, or graceful degradation patterns as BLOCKING
-            2. LEGACY CODE REMOVAL — flag any code that becomes unreferenced after this PR''s changes but was not removed as BLOCKING
-            3. Code quality and best practices
-            4. Security concerns (no secrets, proper validation)
-            5. Test coverage for changes
-            6. Docker and dependency changes
+            2. PROJECT-AGNOSTIC CORE — flag Alliance/AGR/MOD-specific assumptions leaking into reusable core code as BLOCKING
+            3. LEGACY CODE REMOVAL — flag any code that becomes unreferenced after this PR''s changes but was not removed as BLOCKING
+            4. Code quality and best practices
+            5. Security concerns (no secrets, proper validation)
+            6. Test coverage for changes
+            7. Docker and dependency changes
 
             If the repo contains a CLAUDE.md file, read it first for project context.
             If the repo contains a REVIEW.md file, follow its review guidelines.
@@ -150,7 +151,31 @@ jobs:
 
             Note: Nullish coalescing (`??`) and optional chaining (`?.`) for genuinely optional fields are fine. The rule targets patterns where missing/broken data is silently papered over instead of surfaced as an error.
 
-            ### Rule 2: REMOVE LEGACY CODE
+            ### Rule 2: PROJECT-AGNOSTIC CORE BOUNDARIES
+            The reusable platform should be usable by other groups that bring their own agents, tools, schemas,
+            labels, group identifiers, curation domains, prompts, data sources, and deployment settings.
+            Flag as BLOCKING any changed reusable core code that embeds Alliance/AGR/MOD-specific assumptions
+            instead of reading from config, package drop-ins, adapters, runtime manifests, environment settings,
+            or extension points.
+
+            Examples to flag when they appear in core paths:
+            - Hard-coded Alliance, AGR, MOD, organism, curator-group, or curation-domain concepts
+            - Fixed Alliance service choices, URLs, API names, database assumptions, feature gates, or labels
+            - Baked-in default agents, tools, prompts, schemas, sample data, or UI copy that should be supplied
+              by a runtime package or deployment config
+            - Generic interfaces that require Alliance identifiers or package names when an adapter/config value
+              should carry that meaning
+
+            Do NOT flag legitimate project-specific content that is intentionally scoped to Alliance drop-ins or
+            instance documentation, including `packages/alliance/`, `alliance_agents/`, `alliance_config/`,
+            `alliance_tools/`, `scripts/deploy_alliance.sh`, Alliance migration history, tests for those
+            package-specific paths, and docs/examples that explicitly describe the Alliance instance. The issue is
+            leakage from those boundaries into reusable platform/core code.
+
+            For BLOCKING project-agnostic findings, identify the smallest extraction or interface change that keeps
+            core reusable while preserving Alliance behavior through config/package boundaries.
+
+            ### Rule 3: REMOVE LEGACY CODE
             When a PR changes or removes functionality, ALL code that becomes unreferenced MUST be removed in the same PR. Flag as BLOCKING any instance of:
             - Imports that are no longer used after the PR's changes
             - Functions, components, hooks, or types that are no longer called/referenced after the PR's changes
@@ -193,7 +218,7 @@ jobs:
 
             Provide your review as a structured comment with:
             - A summary of what the PR does
-            - BLOCKING issues first (fallbacks found, legacy code not removed) with exact file:line references
+            - BLOCKING issues first (fallbacks found, project-specific core leakage, legacy code not removed) with exact file:line references
             - Other issues (categorized by severity: critical, warning, suggestion)
             - Overall assessment
 
