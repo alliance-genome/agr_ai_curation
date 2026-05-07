@@ -29,6 +29,7 @@ transport="ssh"
 bind_ip=""
 bind_port="${SYMPHONY_PROD_LOKI_PORT:-43100}"
 raw_port="${SYMPHONY_PROD_LOKI_RAW_PORT:-43101}"
+control_port="${SYMPHONY_PROD_LOKI_CONTROL_PORT:-43102}"
 remote_host="${SYMPHONY_PROD_LOKI_REMOTE_HOST:-172.31.29.141}"
 remote_port="${SYMPHONY_PROD_LOKI_REMOTE_PORT:-3100}"
 foreground=0
@@ -86,6 +87,7 @@ if [[ "${transport}" != "ssh" ]]; then
 fi
 prod_loki_validate_port "${bind_port}" || { prod_loki_error "Invalid --port ${bind_port}"; exit 2; }
 prod_loki_validate_port "${raw_port}" || { prod_loki_error "Invalid --raw-port ${raw_port}"; exit 2; }
+prod_loki_validate_port "${control_port}" || { prod_loki_error "Invalid control port ${control_port}"; exit 2; }
 
 repo_root="$(prod_loki_repo_root)"
 endpoint_file="$(prod_loki_endpoint_file "${repo_root}")"
@@ -93,8 +95,10 @@ state_root="$(prod_loki_state_root)"
 state_file="${state_root}/tunnel.state"
 ssh_pid_file="${state_root}/ssh.pid"
 proxy_pid_file="${state_root}/proxy.pid"
+control_pid_file="${state_root}/control.pid"
 ssh_log_file="${state_root}/ssh.log"
 proxy_log_file="${state_root}/proxy.log"
+control_log_file="${state_root}/control.log"
 loki_url=""
 
 if [[ -z "${bind_ip}" ]]; then
@@ -103,6 +107,7 @@ fi
 prod_loki_validate_bind_ip "${bind_ip}"
 prod_loki_validate_incus_bind_ip "${bind_ip}"
 loki_url="http://${bind_ip}:${bind_port}"
+control_url="http://${bind_ip}:${control_port}"
 
 write_state_file() {
   local tmp
@@ -119,9 +124,27 @@ write_state_file() {
     printf 'PROXY_PID=%q\n' "${PROXY_PID:-}"
     printf 'SSH_LOG_FILE=%q\n' "${ssh_log_file}"
     printf 'PROXY_LOG_FILE=%q\n' "${proxy_log_file}"
+    printf 'CONTROL_LOG_FILE=%q\n' "${control_log_file}"
     printf 'STARTED_AT=%q\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   } > "${tmp}"
   mv "${tmp}" "${state_file}"
+}
+
+ensure_control_server() {
+  local url="$1"
+  local args=(
+    python3 "${SCRIPT_DIR}/symphony_prod_loki_host_control_server.py"
+    --bind-ip "${bind_ip}"
+    --bind-port "${control_port}"
+    --repo-root "${repo_root}"
+  )
+
+  if ! curl -fsS -m 2 "${url}/prod-loki-tunnel/status" >/dev/null 2>&1; then
+    prod_loki_spawn_detached \
+      "${control_pid_file}" \
+      "${control_log_file}" \
+      "${args[@]}" >/dev/null
+  fi
 }
 
 cleanup_foreground() {
@@ -151,7 +174,8 @@ if [[ -f "${state_file}" && "${foreground}" -eq 0 ]]; then
   # shellcheck disable=SC1090
   source "${state_file}"
   if prod_loki_pid_running "${SSH_PID:-}" && prod_loki_pid_running "${PROXY_PID:-}" && prod_loki_wait_for_http_ready "${LOKI_URL:-}" 1 0; then
-    prod_loki_write_endpoint_file "${endpoint_file}" "${LOKI_URL}"
+    ensure_control_server "${control_url}"
+    prod_loki_write_endpoint_file "${endpoint_file}" "${LOKI_URL}" "${control_url}"
     prod_loki_sync_endpoint_file_to_vm "${endpoint_file}" || true
     prod_loki_info "Production Loki read-only tunnel already running: ${LOKI_URL}"
     if [[ "${print_env}" -eq 1 ]]; then
@@ -227,7 +251,9 @@ proxy_args=(
   --upstream "http://127.0.0.1:${raw_port}"
 )
 
-prod_loki_write_endpoint_file "${endpoint_file}" "${loki_url}"
+ensure_control_server "${control_url}"
+
+prod_loki_write_endpoint_file "${endpoint_file}" "${loki_url}" "${control_url}"
 prod_loki_sync_endpoint_file_to_vm "${endpoint_file}" || true
 
 if [[ "${foreground}" -eq 1 ]]; then
