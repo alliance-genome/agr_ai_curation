@@ -207,6 +207,7 @@ test_core_config_generates_env_and_backups() {
   assert_regex '^LANGFUSE_INIT_PROJECT_SECRET_KEY=sk-lf-[0-9a-f]{32}$' "$env_file"
   assert_regex '^LANGFUSE_LOCAL_PUBLIC_KEY=pk-lf-[0-9a-f]{32}$' "$env_file"
   assert_regex '^LANGFUSE_LOCAL_SECRET_KEY=sk-lf-[0-9a-f]{32}$' "$env_file"
+  assert_regex '^TRACE_REVIEW_INTERNAL_API_TOKEN=[0-9a-f]{64}$' "$env_file"
   assert_contains '^LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}$' "$env_file"
   assert_contains '^LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}$' "$env_file"
   assert_contains '^LANGFUSE_S3_BATCH_EXPORT_SECRET_ACCESS_KEY=${MINIO_ROOT_PASSWORD}$' "$env_file"
