@@ -1125,7 +1125,6 @@ _AUDIT_SAFE_VALUE_KEYS = {
     "call_id",
     "chat_kind",
     "custom_agent_id",
-    "query",
     "runtime_agent_id",
     "session_id",
     "source",

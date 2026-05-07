@@ -132,6 +132,7 @@ def test_audit_summary_preserves_only_allowlisted_short_debug_values():
             "custom_agent_id": custom_agent_uuid,
             "runtime_agent_id": f"ca_{custom_agent_uuid}",
             "source": "saved_custom_agent",
+            "query": "Raw prompt text should not be stored",
             "updated_prompt": "Raw prompt text should not be stored",
             "api_key": "secret-key-material",
         }
@@ -143,6 +144,8 @@ def test_audit_summary_preserves_only_allowlisted_short_debug_values():
     assert fields["custom_agent_id"]["value"] == custom_agent_uuid
     assert fields["runtime_agent_id"]["value"] == f"ca_{custom_agent_uuid}"
     assert fields["source"]["value"] == "saved_custom_agent"
+    assert "value" not in fields["query"]
+    assert fields["query"]["length"] == len("Raw prompt text should not be stored")
     assert "value" not in fields["updated_prompt"]
     assert fields["updated_prompt"]["length"] == len(
         "Raw prompt text should not be stored"
