@@ -94,6 +94,33 @@ Choose the path that matches your goal:
 See [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) and
 [backend/tools/README.md](../../backend/tools/README.md) for details.
 
+### Keep Project-Agnostic Tests Neutral
+
+This repository ships both a project-agnostic runtime core and bundled Alliance
+defaults. Generic runtime tests should prove that loaders, registries, tool
+binding discovery, and runtime validation work for packages that are not
+`agr.alliance`. Use neutral package and fixture values such as `org.custom`,
+`demo_agent`, `demo_search_tool`, `DEMO`, and `curator@example.test`.
+
+Generic tests should not rely on Alliance-only values such as `agr.alliance`,
+`agr_curation_query`, `alliance_api_call`, Alliance hostnames,
+Alliance-specific curator email domains, or MOD group codes like `FB`, `WB`,
+`MGI`, `RGD`, `SGD`, `ZFIN`, or `HGNC`.
+
+Alliance defaults are still first-class shipped package coverage because this
+repository includes `packages/alliance`. Tests may assert Alliance specialist
+agents, AGR curation database tools, MOD prefixes, real biological fixture IDs,
+and Alliance API hosts when they explicitly cover shipped Alliance package
+contracts, prompt/tool policy, biological curation fixtures, frontend rendering
+of bundled defaults, or current auth/deployment fixtures.
+
+The synthetic non-Alliance package fixture lives at
+`backend/tests/unit/lib/packages/fixtures/org_custom_runtime/`. It includes a
+neutral agent, prompt, schema, group rule, tool binding, and curation adapter
+export. `backend/tests/unit/lib/packages/test_project_agnostic_runtime_guardrails.py`
+scans backend and frontend test files for Alliance-specific literals; new
+generic/core test files should stay off that allowlist.
+
 ### Configure Groups
 
 ```bash

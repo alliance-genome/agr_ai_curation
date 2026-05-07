@@ -46,10 +46,10 @@ def test_build_agent_runtime_report_detects_unknown_model_and_tool(monkeypatch):
         module,
         "_load_runtime_policy",
         lambda: {
-            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"agr_curation_query"},
+            "agr_db_query_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -65,19 +65,19 @@ def test_build_agent_runtime_report_unknown_tool_only_warns_and_disables(monkeyp
     import src.lib.agent_studio.runtime_validation as module
 
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
-        _agent(agent_key="gene", visibility="system", user_id=None, tool_ids=["missing_tool"])
+        _agent(agent_key="demo_agent", visibility="system", user_id=None, tool_ids=["missing_tool"])
     ])
-    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"demo_agent"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
         lambda: {
-            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"agr_curation_query"},
+            "agr_db_query_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -94,19 +94,19 @@ def test_build_agent_runtime_report_detects_missing_system_agents(monkeypatch):
     import src.lib.agent_studio.runtime_validation as module
 
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
-        _agent(agent_key="gene", visibility="system", user_id=None, tool_ids=["agr_curation_query"]),
+        _agent(agent_key="demo_agent", visibility="system", user_id=None, tool_ids=["demo_search_tool"]),
     ])
-    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene", "phenotype_extractor"}, None))
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"demo_agent", "demo_enricher"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
         lambda: {
-            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"agr_curation_query"},
+            "agr_db_query_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -114,7 +114,7 @@ def test_build_agent_runtime_report_detects_missing_system_agents(monkeypatch):
     assert report["status"] == "unhealthy"
     assert report["summary"]["missing_system_agent_count"] == 1
     assert any(
-        "Missing active system agents in unified agents table: phenotype_extractor" in msg
+        "Missing active system agents in unified agents table: demo_enricher" in msg
         for msg in report["errors"]
     )
 
@@ -123,7 +123,7 @@ def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(
     import src.lib.agent_studio.runtime_validation as module
 
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
-        _agent(agent_key="gene", visibility="system", user_id=None, tool_ids=["agr_curation_query"]),
+        _agent(agent_key="demo_agent", visibility="system", user_id=None, tool_ids=["demo_search_tool"]),
     ])
     monkeypatch.setattr(
         module,
@@ -136,10 +136,10 @@ def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(
         module,
         "_load_runtime_policy",
         lambda: {
-            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"agr_curation_query"},
+            "agr_db_query_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -164,7 +164,7 @@ def test_build_agent_runtime_report_allows_unseeded_core_only_runtime(monkeypatc
             "tool_bindings": {},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"agr_curation_query"},
+            "agr_db_query_tool_ids": set(),
         },
     )
 
@@ -194,30 +194,30 @@ def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monk
 
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
         _agent(
-            agent_key="gene",
+            agent_key="demo_agent",
             visibility="system",
             user_id=None,
-            tool_ids=["agr_curation_query"],
+            tool_ids=["demo_search_tool"],
         ),
         _agent(
-            agent_key="ca_custom_gene",
+            agent_key="ca_custom_demo",
             visibility="private",
             user_id=7,
-            template_source="gene",
+            template_source="demo_agent",
             tool_ids=[],
         ),
     ])
-    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"demo_agent"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
         lambda: {
-            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"agr_curation_query"},
+            "agr_db_query_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -225,7 +225,7 @@ def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monk
     assert report["status"] == "degraded"
     assert report["errors"] == []
     assert report["summary"]["critical_missing_tool_backfill_candidates"] == 1
-    assert any("Likely missing critical tools from template 'gene'" in msg for msg in report["warnings"])
+    assert any("Likely missing critical tools from template 'demo_agent'" in msg for msg in report["warnings"])
 
 
 def test_build_agent_runtime_report_escalates_template_drift_in_strict_mode(monkeypatch):
@@ -233,36 +233,36 @@ def test_build_agent_runtime_report_escalates_template_drift_in_strict_mode(monk
 
     monkeypatch.setattr(module, "_fetch_active_agents", lambda: [
         _agent(
-            agent_key="gene",
+            agent_key="demo_agent",
             visibility="system",
             user_id=None,
-            tool_ids=["agr_curation_query"],
+            tool_ids=["demo_search_tool"],
         ),
         _agent(
-            agent_key="ca_custom_gene",
+            agent_key="ca_custom_demo",
             visibility="private",
             user_id=7,
-            template_source="gene",
+            template_source="demo_agent",
             tool_ids=[],
         ),
     ])
-    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"gene"}, None))
+    monkeypatch.setattr(module, "_load_expected_system_agent_keys", lambda: ({"demo_agent"}, None))
     monkeypatch.setattr(module, "load_models", lambda: None)
     monkeypatch.setattr(module, "list_models", lambda: [SimpleNamespace(model_id="gpt-5.4-mini")])
     monkeypatch.setattr(
         module,
         "_load_runtime_policy",
         lambda: {
-            "tool_bindings": {"agr_curation_query": {"required_context": []}},
+            "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"agr_curation_query"},
+            "agr_db_query_tool_ids": {"demo_search_tool"},
         },
     )
 
     report = module.build_agent_runtime_report(strict_mode=True)
     assert report["status"] == "unhealthy"
-    assert any("Likely missing critical tools from template 'gene'" in msg for msg in report["errors"])
+    assert any("Likely missing critical tools from template 'demo_agent'" in msg for msg in report["errors"])
 
 
 def test_validate_and_cache_agent_runtime_contracts_caches_report(monkeypatch):
@@ -330,10 +330,10 @@ def test_validate_and_cache_agent_runtime_contracts_disables_missing_tool_agents
                 "strict_mode": False,
                 "validated_at": "2026-02-25T00:00:00+00:00",
                 "errors": [],
-                "warnings": ["gene: Unknown tool_ids: missing_tool"],
+                "warnings": ["demo_agent: Unknown tool_ids: missing_tool"],
                 "agents": [
                     {
-                        "agent_key": "gene",
+                        "agent_key": "demo_agent",
                         "disabled": True,
                         "disable_reason": "references tools from uninstalled package(s).",
                     }

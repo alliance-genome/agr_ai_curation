@@ -1,0 +1,24 @@
+agent_id: demo_agent_validation
+name: Demo Agent
+description: Validates neutral demo records for package-agnostic runtime tests.
+category: Demo
+subcategory: Validation
+supervisor_routing:
+  enabled: true
+  description: Validate demo records.
+  batchable: true
+  batching_entity: demo records
+tools:
+  - demo_search_tool
+output_schema: DemoValidationEnvelope
+requires_document: false
+required_params: []
+batch_capabilities:
+  - validate
+group_rules_enabled: true
+frontend:
+  icon: "D"
+  show_in_palette: true
+curation:
+  adapter_key: demo
+  launchable: true
