@@ -86,6 +86,16 @@ def _iter_mapping_keys(value: Any):
             yield from _iter_mapping_keys(child)
 
 
+def _assert_metadata_refs_resolve(envelope: Any) -> None:
+    unresolved = [
+        metadata_ref.metadata_path
+        for annotation in envelope.objects
+        for metadata_ref in annotation.metadata_refs
+        if not field_path_exists(envelope.metadata, metadata_ref.metadata_path)
+    ]
+    assert unresolved == []
+
+
 def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     pack = _gene_expression_pack()
     metadata = pack.metadata
@@ -104,6 +114,18 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     validators = metadata.metadata["validators"]
     assert tuple(validators) == GENE_EXPRESSION_VALIDATOR_STATES
     assert all(validators[state] for state in GENE_EXPRESSION_VALIDATOR_STATES)
+    active_validator_ids = {
+        validator["validator_id"] for validator in validators["active"]
+    }
+    blocked_validator_ids = {
+        validator["validator_id"] for validator in validators["blocked"]
+    }
+    assert "gene_expression.extractor_output_migration" in active_validator_ids
+    assert "gene_expression.extractor_output_migration" not in blocked_validator_ids
+    assert all(
+        validator.get("blocked_by") != "ALL-407"
+        for validator in validators["blocked"]
+    )
 
     provider_ref = metadata.metadata[PROVIDER_REFS_METADATA_KEY]["alliance_linkml"]
     assert provider_ref["commit"] == curatable_unit.schema_ref.version
@@ -179,7 +201,13 @@ def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
     assert annotation.object_refs == []
     assert annotation.field_refs == []
     assert annotation.evidence_record_ids == ["evidence-tmem67-metanephros-1"]
-    assert annotation.metadata_refs[0].metadata_path == "raw_mentions[0]"
+    assert annotation.metadata_refs[0].metadata_path == (
+        "extraction_metadata.raw_mentions[0]"
+    )
+    assert annotation.metadata_refs[1].metadata_path == (
+        "extraction_metadata.evidence_records[0]"
+    )
+    _assert_metadata_refs_resolve(envelope)
     assert annotation.payload["expression_annotation_subject"] == {
         "primary_external_id": "MGI:1923928",
         "gene_symbol": "Tmem67",
@@ -245,10 +273,17 @@ def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
     assert annotation.object_type == GENE_EXPRESSION_OBJECT_TYPE
     assert annotation.status is CuratableObjectStatus.PENDING
     assert annotation.evidence_record_ids == ["evidence-tmem67-metanephros-1"]
+    assert annotation.metadata_refs[0].metadata_path == (
+        "extraction_metadata.raw_mentions[0]"
+    )
+    assert annotation.metadata_refs[1].metadata_path == (
+        "extraction_metadata.evidence_records[0]"
+    )
     assert converted.metadata["source_document_id"] == "document-tmem67-expression-fixture"
     assert converted.metadata["extraction_metadata"]["evidence_records"][0][
         "verified_quote"
     ].startswith("Tmem67 expression was detected")
+    _assert_metadata_refs_resolve(converted)
     assert validate_pending_gene_expression_envelope(converted) == ()
 
 

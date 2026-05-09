@@ -236,6 +236,12 @@ def _object_ref(obj: CuratableObjectEnvelope) -> ObjectRef:
 def _pending_object_from_extraction_object(
     obj: CuratableObjectEnvelope,
 ) -> CuratableObjectEnvelope:
+    metadata_refs = [
+        ref.model_copy(
+            update={"metadata_path": f"extraction_metadata.{ref.metadata_path}"}
+        )
+        for ref in obj.metadata_refs
+    ]
     return CuratableObjectEnvelope(
         object_type=GENE_EXPRESSION_OBJECT_TYPE,
         object_role=GENE_EXPRESSION_OBJECT_ROLE,
@@ -250,7 +256,7 @@ def _pending_object_from_extraction_object(
         object_refs=list(obj.object_refs),
         field_refs=list(obj.field_refs),
         evidence_record_ids=list(obj.evidence_record_ids),
-        metadata_refs=list(obj.metadata_refs),
+        metadata_refs=metadata_refs,
         repair_hints=list(obj.repair_hints),
         metadata=_object_metadata(obj.metadata),
     )
@@ -522,6 +528,26 @@ def validate_pending_gene_expression_envelope(
                     ),
                     object_ref=object_ref,
                     details={"missing_evidence_record_ids": missing_evidence_ids},
+                )
+            )
+
+        missing_metadata_refs = [
+            metadata_ref.metadata_path
+            for metadata_ref in expression_object.metadata_refs
+            if not field_path_exists(envelope.metadata, metadata_ref.metadata_path)
+        ]
+        if missing_metadata_refs:
+            findings.append(
+                ValidationFinding(
+                    severity=ValidationFindingSeverity.ERROR,
+                    code="alliance.gene_expression.metadata_refs_missing",
+                    message=(
+                        "GeneExpressionAnnotation metadata_refs must resolve inside "
+                        "envelope metadata: "
+                        + ", ".join(missing_metadata_refs)
+                    ),
+                    object_ref=object_ref,
+                    details={"missing_metadata_refs": missing_metadata_refs},
                 )
             )
 
