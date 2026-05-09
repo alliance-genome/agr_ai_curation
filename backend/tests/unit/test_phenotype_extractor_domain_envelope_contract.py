@@ -381,6 +381,14 @@ def test_phenotype_extractor_schema_rejects_repair_field_paths_missing_from_payl
     assert "not_a_payload_field" in str(exc_info.value)
 
 
+def test_phenotype_extractor_repair_payload_mapping_rejects_unexpected_types():
+    schema_cls = _phenotype_extractor_schema()
+    schema_module = sys.modules[schema_cls.__module__]
+
+    with pytest.raises(TypeError, match="expected BaseModel or dict payload, got object"):
+        schema_module._payload_mapping(object())
+
+
 def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract():
     source = _phenotype_extractor_source()
     prompt_content = str(

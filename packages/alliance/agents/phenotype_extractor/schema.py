@@ -643,7 +643,7 @@ def _payload_mapping(payload: Any) -> dict[str, Any]:
         return payload.model_dump(mode="python")
     if isinstance(payload, dict):
         return payload
-    return {}
+    raise TypeError(f"expected BaseModel or dict payload, got {type(payload).__name__}")
 
 
 def _object_ref_label(object_ref: Any) -> str:
