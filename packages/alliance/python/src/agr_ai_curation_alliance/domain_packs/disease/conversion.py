@@ -564,6 +564,7 @@ def validate_disease_extraction_objects(
     errors: list[str] = []
     evidence_by_id = _metadata_evidence_records_by_id(output)
     metadata_payload = output.metadata.model_dump(mode="python")
+    repair_field_ref_count = 0
 
     if output.curatable_objects and not output.metadata.raw_mentions:
         errors.append(
@@ -663,11 +664,7 @@ def validate_disease_extraction_objects(
             )
 
         if output.repair_mode:
-            if not obj.field_refs:
-                errors.append(
-                    f"{location}.field_refs must identify repaired field paths "
-                    "when repair_mode is true"
-                )
+            repair_field_ref_count += len(obj.field_refs)
             object_ref_keys = set(obj.ref_keys())
             for field_ref_index, field_ref in enumerate(obj.field_refs):
                 if field_ref.object_ref.ref_key() not in object_ref_keys:
@@ -676,6 +673,11 @@ def validate_disease_extraction_objects(
                         "must point at the repaired object"
                     )
 
+    if output.repair_mode and repair_field_ref_count == 0:
+        errors.append(
+            "curatable_objects[].field_refs must identify repaired field paths "
+            "when repair_mode is true"
+        )
     if output.repair_mode and not output.metadata.repair_notes:
         errors.append("metadata.repair_notes must describe repair-mode changes")
     return tuple(errors)
