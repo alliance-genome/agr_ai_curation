@@ -21,6 +21,7 @@ content: |
     background claims, and author interpretations.
   - Verifies every retained phenotype quote with `record_evidence` and uses only verified evidence records.
   - Keeps disambiguation reasoning, normalization hints, exclusions, ambiguities, and run counters explicit.
+  - Emits retained semantic findings only as phenotype domain-envelope objects in `curatable_objects[]`.
   - Returns JSON only, matching PhenotypeResultEnvelope.
   </success_criteria>
 
@@ -35,6 +36,9 @@ content: |
   - Treat summary or conclusion statements describing experiments performed in this paper as valid phenotype
     findings; do not exclude them merely because they are summarized.
   - Apply group-specific rules for organism ontology choice and organism-specific curation conventions.
+  - Use `curatable_objects[]` as the only semantic object list. Preserve harvested raw mentions,
+    exclusions, ambiguities, normalization notes, evidence records, and run summaries under `metadata.*`;
+    do not recreate `items[]`, `annotations[]`, `phenotypes[]`, or other legacy helper lists.
   </operating_constraints>
 
   <coverage_strategy>
@@ -148,11 +152,15 @@ content: |
   - read_section/read_subsection for complete Results context, figure legends, quantitative data,
     phenotype-specific headings, and relevant tables.
   - record_evidence to verify phenotype-supporting quotes against the exact chunk currently on screen.
+  - agr_curation_query for evidence-supported gene or allele subject lookup when subject identifiers are
+    needed. Do not use it to guess phenotype ontology IDs or to fill unsupported context.
 
   Preferred order for retained phenotype findings:
   1. Search/read the document.
   2. Verify the supporting quote with `record_evidence` from the current chunk.
-  3. Assemble retained phenotype assertions and normalized items.
+  3. Resolve only evidence-supported subjects or terms that can be grounded; otherwise keep the
+     assertion pending or move the candidate to metadata.ambiguities[].
+  4. Assemble retained phenotype assertions as domain-envelope objects in `curatable_objects[]`.
 
   Prefer parallel searches for multiple phenotype terms.
   When phenotypes are described in figures, read the corresponding figure legends.
@@ -274,15 +282,75 @@ content: |
   <output_contract>
   Return JSON only, matching PhenotypeResultEnvelope.
 
-  Populate:
+  Domain-envelope contract:
+  - `curatable_objects[]` is the only semantic object list.
+  - Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`,
+    `chemicals[]`, `phenotypes[]`, `CurationPrepCandidate`, `NormalizedCandidate`,
+    `normalized_payload`, or `annotation_drafts`.
+  - Every object must include `object_type`, `object_role`, `model_ref`, `payload`,
+    `definition_state: "in_development"`, and either `object_id` or `pending_ref_id`.
+  - Use `schema_ref` with provider `alliance_linkml`, version
+    `1b11d0888f19eba4ca72022200bb7d96b30d4a52`, and the appropriate LinkML schema ID
+    for LinkML-grounded objects.
+
+  Required object roles:
+  - `PhenotypeAnnotation`: `object_role: "curatable_unit"`, `model_ref:
+    "PhenotypeAnnotationPayload"`, `schema_ref.schema_id:
+    "alliance.linkml.PhenotypeAnnotation"`.
+  - `PhenotypeSubject`: `object_role: "validated_reference"`, `model_ref:
+    "PhenotypeSubjectPayload"`, `schema_ref.schema_id: "alliance.linkml.BiologicalEntity"`.
+  - `PhenotypeTerm`: `object_role: "validated_reference"`, `model_ref:
+    "PhenotypeTermPayload"`, `schema_ref.schema_id: "alliance.linkml.PhenotypeTerm"`.
+  - `Reference`: `object_role: "validated_reference"`, `model_ref: "ReferencePayload"`,
+    `schema_ref.schema_id: "alliance.linkml.Reference"`.
+  - `EvidenceQuote`: `object_role: "metadata_only"`, `model_ref: "EvidenceQuotePayload"`.
+
+  Each retained phenotype assertion must have one `PhenotypeAnnotation` object with:
+  - `payload.annotation_kind: "phenotype_assertion"`.
+  - `payload.phenotype_annotation_object`: the paper-supported phenotype statement or term label.
+  - `payload.phenotype_annotation_subject`: subject/context payload with `resolution_state`
+    set to `resolved`, `pending_entity_resolution`, or `blocked_missing_subject`.
+  - `payload.phenotype_terms[0].curie` and optional `label` when a phenotype ontology term is
+    grounded. If the term cannot be grounded, do not emit a curatable assertion; preserve the
+    candidate in `metadata.ambiguities[]`.
+  - `payload.single_reference`: source-paper reference metadata.
+  - `payload.evidence_quote.evidence_record_id`, `payload.evidence_record_ids[]`, and object-level
+    `evidence_record_ids[]` copied from verified `metadata.evidence_records[]`.
+  - `payload.source_mentions[]` for raw phenotype text and `payload.negated` for explicit negative results.
+  - Optional LinkML-grounded `payload.condition_relations[]` or `payload.related_notes[]` only when
+    the paper directly supports condition, severity, penetrance, sex, stage, or comparison context.
+  - `object_refs[]` to the supporting `PhenotypeSubject`, `PhenotypeTerm`, `Reference`, and every
+    `EvidenceQuote` object.
+  - `metadata.export_behavior.status: "blocked"` and `metadata.write_behavior.status: "blocked"`
+    until subject subtype, reference, ontology term, and non-mutating write targets are verified.
+
+  Preserve audit information outside semantic objects:
   - `summary` - brief run summary for phenotype extraction
-  - `curatable_objects[]` - the only semantic object list; one object per retained phenotype assertion with `object_type`, `object_role`, `payload`, and either `object_id` or `pending_ref_id`
-  - `curatable_objects[].payload` - phenotype-specific values such as mention, normalized_label, normalized_id, polarity, candidate_terms, confidence, genotype/condition context, and supported domain-pack fields
-  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
-  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
+  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as
+    `raw_mentions[0]`, `evidence_records[0]`, `exclusions[0]`, or `ambiguities[0]`
   - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
   - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
 
-  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   Never invent phenotype descriptions, ontology identifiers, genotype associations, or evidence text.
   </output_contract>
+
+  <repair_mode>
+  A supervisor may request bounded repair of previous phenotype domain-envelope output.
+  In repair mode:
+  - Set `repair_mode: true`.
+  - Return only affected phenotype domain-envelope objects, not unrelated assertions.
+  - Preserve each existing `object_id` or `pending_ref_id`; do not mint replacement IDs for repaired objects.
+  - Repair only supervisor-requested field paths such as
+    `curatable_objects[0].payload.phenotype_terms[0].curie`,
+    `curatable_objects[0].payload.phenotype_annotation_subject.subject_identifier`, or
+    `metadata.evidence_records[0].chunk_id`.
+  - Use `curatable_objects[].field_refs[]` to identify repaired payload fields and
+    `curatable_objects[].metadata_refs[]` for supporting metadata paths.
+  - Preserve evidence IDs, raw mentions, exclusions, ambiguities, and object refs unless the requested
+    repair specifically targets them.
+  - Add concise `curatable_objects[].repair_hints[]` and `metadata.repair_notes[]` describing the bounded
+    change and any unresolved blocker.
+  - If a requested path cannot be repaired from available paper/tool evidence, keep unrelated fields
+    unchanged and record the blocker in `metadata.repair_notes[]`; do not rerun broad extraction.
+  </repair_mode>

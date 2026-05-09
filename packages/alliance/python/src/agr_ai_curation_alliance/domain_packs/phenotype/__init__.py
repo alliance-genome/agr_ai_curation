@@ -38,6 +38,21 @@ PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID = (
 )
 PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID = "phenotype_subject_entity_validator"
 PHENOTYPE_TERM_VALIDATOR_BINDING_ID = "phenotype_term_ontology_validator"
+_FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
+    {
+        "items",
+        "annotations",
+        "genes",
+        "alleles",
+        "diseases",
+        "chemicals",
+        "phenotypes",
+        "CurationPrepCandidate",
+        "NormalizedCandidate",
+        "normalized_payload",
+        "annotation_drafts",
+    }
+)
 
 _PHENOTYPE_SOURCE_FILE = "model/schema/phenotypeAndDiseaseAnnotation.yaml"
 _ONTOLOGY_TERM_SOURCE_FILE = "model/schema/ontologyTerm.yaml"
@@ -303,6 +318,20 @@ def validate_pending_phenotype_envelope(
                     f"Expected domain_pack_id {PHENOTYPE_DOMAIN_PACK_ID}, "
                     f"found {envelope.domain_pack_id}."
                 ),
+            )
+        )
+
+    legacy_keys = _legacy_keys_in_envelope(envelope)
+    if legacy_keys:
+        findings.append(
+            ValidationFinding(
+                severity=ValidationFindingSeverity.ERROR,
+                code="alliance.phenotype.legacy_semantic_store_present",
+                message=(
+                    "Phenotype domain envelopes must use envelope objects as the semantic "
+                    "source of truth; legacy semantic collections are not allowed."
+                ),
+                details={"legacy_keys": sorted(legacy_keys)},
             )
         )
 
@@ -600,6 +629,10 @@ def _subject_payload(item: Mapping[str, Any]) -> dict[str, Any]:
             "phenotype_annotation_subject identifier and subtype."
         )
     return payload
+
+
+def _legacy_keys_in_envelope(envelope: DomainEnvelope) -> set[str]:
+    return _FORBIDDEN_LEGACY_COLLECTIONS.intersection(envelope.metadata)
 
 
 def _source_mentions(item: Mapping[str, Any]) -> list[str]:

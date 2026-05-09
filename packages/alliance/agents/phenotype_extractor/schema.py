@@ -1,11 +1,600 @@
-"""Phenotype extractor schema aliasing the shared domain-envelope output."""
+"""Phenotype extractor schema for Alliance phenotype domain-envelope output."""
+
+from __future__ import annotations
+
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
 
 from src.lib.openai_agents.models import (
     PhenotypeResultEnvelope as RuntimePhenotypeResultEnvelope,
 )
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    DefinitionState,
+    SchemaRef,
+    field_path_exists,
+)
+
+
+PHENOTYPE_OBJECT_TYPE = "PhenotypeAnnotation"
+PHENOTYPE_SUBJECT_OBJECT_TYPE = "PhenotypeSubject"
+PHENOTYPE_TERM_OBJECT_TYPE = "PhenotypeTerm"
+REFERENCE_OBJECT_TYPE = "Reference"
+EVIDENCE_QUOTE_OBJECT_TYPE = "EvidenceQuote"
+
+PHENOTYPE_MODEL_REF = "PhenotypeAnnotationPayload"
+PHENOTYPE_SUBJECT_MODEL_REF = "PhenotypeSubjectPayload"
+PHENOTYPE_TERM_MODEL_REF = "PhenotypeTermPayload"
+REFERENCE_MODEL_REF = "ReferencePayload"
+EVIDENCE_QUOTE_MODEL_REF = "EvidenceQuotePayload"
+
+ALLIANCE_LINKML_PROVIDER = "alliance_linkml"
+ALLIANCE_LINKML_COMMIT = "1b11d0888f19eba4ca72022200bb7d96b30d4a52"
+PHENOTYPE_SCHEMA_ID = "alliance.linkml.PhenotypeAnnotation"
+PHENOTYPE_SUBJECT_SCHEMA_ID = "alliance.linkml.BiologicalEntity"
+PHENOTYPE_TERM_SCHEMA_ID = "alliance.linkml.PhenotypeTerm"
+REFERENCE_SCHEMA_ID = "alliance.linkml.Reference"
+PHENOTYPE_SCHEMA_URI = (
+    "https://github.com/alliance-genome/agr_curation_schema/blob/"
+    f"{ALLIANCE_LINKML_COMMIT}/model/schema/phenotypeAndDiseaseAnnotation.yaml"
+)
+PHENOTYPE_SUBJECT_SCHEMA_URI = (
+    "https://github.com/alliance-genome/agr_curation_schema/blob/"
+    f"{ALLIANCE_LINKML_COMMIT}/model/schema/core.yaml"
+)
+PHENOTYPE_TERM_SCHEMA_URI = (
+    "https://github.com/alliance-genome/agr_curation_schema/blob/"
+    f"{ALLIANCE_LINKML_COMMIT}/model/schema/ontologyTerm.yaml"
+)
+REFERENCE_SCHEMA_URI = (
+    "https://github.com/alliance-genome/agr_curation_schema/blob/"
+    f"{ALLIANCE_LINKML_COMMIT}/model/schema/reference.yaml"
+)
+
+_EXPECTED_OBJECT_REF_TYPES = frozenset(
+    {
+        PHENOTYPE_SUBJECT_OBJECT_TYPE,
+        PHENOTYPE_TERM_OBJECT_TYPE,
+        REFERENCE_OBJECT_TYPE,
+        EVIDENCE_QUOTE_OBJECT_TYPE,
+    }
+)
+_SUBJECT_RESOLUTION_STATES = frozenset(
+    {"resolved", "pending_entity_resolution", "blocked_missing_subject"}
+)
+
+
+class PhenotypeSubjectPayload(BaseModel):
+    """Pending biological entity subject metadata for a phenotype assertion."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    resolution_state: Literal[
+        "resolved",
+        "pending_entity_resolution",
+        "blocked_missing_subject",
+    ] = Field(description="Subject resolution state for the phenotype assertion")
+    subject_identifier: StrictStr | None = Field(
+        default=None,
+        description="Durable subject identifier when available from extraction or lookup",
+    )
+    subject_label: StrictStr | None = Field(
+        default=None,
+        description="Paper-facing subject label, genotype, allele, gene, or AGM text",
+    )
+    subject_type: StrictStr | None = Field(
+        default=None,
+        description="Subject subtype such as gene, allele, or affected_genomic_model",
+    )
+    taxon: StrictStr | None = Field(
+        default=None,
+        description="NCBI Taxon CURIE when explicitly supported by the paper or lookup",
+    )
+    resolution_note: StrictStr | None = Field(
+        default=None,
+        description="Curator-facing blocker when the subject cannot be resolved yet",
+    )
+
+    @model_validator(mode="after")
+    def _validate_resolution_state(self) -> "PhenotypeSubjectPayload":
+        if self.resolution_state == "resolved":
+            missing = [
+                field_name
+                for field_name in ("subject_identifier", "subject_type")
+                if _is_missing(getattr(self, field_name))
+            ]
+            if missing:
+                raise ValueError(
+                    "resolved phenotype subjects must include "
+                    + ", ".join(missing)
+                )
+        if (
+            self.resolution_state == "blocked_missing_subject"
+            and _is_missing(self.resolution_note)
+        ):
+            raise ValueError(
+                "blocked_missing_subject phenotype subjects must include resolution_note"
+            )
+        return self
+
+
+class PhenotypeTermPayload(BaseModel):
+    """Pending phenotype ontology term reference."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    curie: StrictStr = Field(description="Phenotype ontology CURIE")
+    label: StrictStr | None = Field(default=None, description="Curator-facing term label")
+    source_mentions: list[StrictStr] = Field(
+        default_factory=list,
+        description="Paper text that supported this phenotype term candidate",
+    )
+
+    @model_validator(mode="after")
+    def _validate_curie(self) -> "PhenotypeTermPayload":
+        if _is_missing(self.curie):
+            raise ValueError("PhenotypeTerm payload.curie must not be empty")
+        return self
+
+
+class ReferencePayload(BaseModel):
+    """Pending source-paper reference metadata."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference_id: int | None = Field(
+        default=None,
+        description="Alliance reference row ID when already resolved",
+    )
+    title: StrictStr | None = Field(default=None, description="Source paper title")
+    filename: StrictStr | None = Field(default=None, description="Source document filename")
+
+
+class EvidenceQuotePayload(BaseModel):
+    """One record_evidence-verified quote with document location."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_record_id: StrictStr = Field(description="Stable verified evidence record ID")
+    entity: StrictStr | None = Field(default=None, description="Entity or assertion label")
+    verified_quote: StrictStr = Field(description="Verbatim quote verified by record_evidence")
+    page: int = Field(ge=1, description="1-based page containing the quote")
+    section: StrictStr = Field(description="Document section containing the quote")
+    chunk_id: StrictStr = Field(description="Document chunk ID used for verification")
+    subsection: StrictStr | None = Field(default=None, description="Subsection, if present")
+    figure_reference: StrictStr | None = Field(
+        default=None,
+        description="Figure or table locator, if present",
+    )
+
+    @model_validator(mode="after")
+    def _validate_evidence_fields(self) -> "EvidenceQuotePayload":
+        for field_name in (
+            "evidence_record_id",
+            "verified_quote",
+            "section",
+            "chunk_id",
+        ):
+            if _is_missing(getattr(self, field_name)):
+                raise ValueError(f"EvidenceQuote payload.{field_name} must not be empty")
+        return self
+
+
+class EvidenceQuoteRefPayload(BaseModel):
+    """Reference from a PhenotypeAnnotation payload to an evidence quote object."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_record_id: StrictStr = Field(description="Referenced evidence record ID")
+
+
+class PhenotypeAnnotationPayload(BaseModel):
+    """Pending PhenotypeAnnotation payload grounded to Alliance LinkML fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    annotation_kind: Literal["phenotype_assertion"] = Field(
+        description="Pending assertion kind for this extractor output"
+    )
+    phenotype_annotation_object: StrictStr = Field(
+        description="Free-text phenotype statement from the paper"
+    )
+    phenotype_annotation_subject: PhenotypeSubjectPayload = Field(
+        description="Pending subject/context payload for the phenotype carrier"
+    )
+    phenotype_terms: list[PhenotypeTermPayload] = Field(
+        min_length=1,
+        description="Phenotype ontology terms for this assertion",
+    )
+    single_reference: ReferencePayload = Field(
+        description="Source paper reference metadata"
+    )
+    evidence_quote: EvidenceQuoteRefPayload = Field(
+        description="Primary supporting evidence quote reference"
+    )
+    evidence_record_ids: list[StrictStr] = Field(
+        min_length=1,
+        description="Verified evidence records supporting this assertion",
+    )
+    source_mentions: list[StrictStr] = Field(
+        min_length=1,
+        description="Raw phenotype mentions supporting this assertion",
+    )
+    negated: bool = Field(
+        default=False,
+        description="True only when the paper explicitly reports the phenotype was not observed",
+    )
+    condition_relations: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Optional LinkML condition_relations context when explicitly supported",
+    )
+    related_notes: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Optional LinkML related_notes for severity, penetrance, or curator notes",
+    )
+
+    @model_validator(mode="after")
+    def _validate_required_values(self) -> "PhenotypeAnnotationPayload":
+        if _is_missing(self.phenotype_annotation_object):
+            raise ValueError("PhenotypeAnnotation payload.phenotype_annotation_object is required")
+        if not self.phenotype_terms or _is_missing(self.phenotype_terms[0].curie):
+            raise ValueError(
+                "PhenotypeAnnotation payload.phenotype_terms[0].curie is required"
+            )
+        if _is_missing(self.evidence_quote.evidence_record_id):
+            raise ValueError("PhenotypeAnnotation payload.evidence_quote.evidence_record_id is required")
+        if _has_missing_strings(self.evidence_record_ids):
+            raise ValueError("PhenotypeAnnotation payload.evidence_record_ids must not contain empty values")
+        if _has_missing_strings(self.source_mentions):
+            raise ValueError("PhenotypeAnnotation payload.source_mentions must not contain empty values")
+        return self
+
+
+class PhenotypeAnnotationObject(CuratableObjectEnvelope):
+    """One pending PhenotypeAnnotation curatable unit."""
+
+    object_type: Literal["PhenotypeAnnotation"] = PHENOTYPE_OBJECT_TYPE
+    object_role: Literal["curatable_unit"] = "curatable_unit"
+    model_ref: Literal["PhenotypeAnnotationPayload"] = PHENOTYPE_MODEL_REF
+    schema_ref: SchemaRef = Field(description="Alliance LinkML PhenotypeAnnotation schema ref")
+    definition_state: Literal[DefinitionState.IN_DEVELOPMENT] = DefinitionState.IN_DEVELOPMENT
+    definition_notes: list[StrictStr] = Field(
+        min_length=1,
+        description="Notes explaining pending/export-blocked phenotype assertion semantics",
+    )
+    payload: PhenotypeAnnotationPayload
+
+
+class PhenotypeSubjectObject(CuratableObjectEnvelope):
+    """Pending subject reference object for a phenotype annotation."""
+
+    object_type: Literal["PhenotypeSubject"] = PHENOTYPE_SUBJECT_OBJECT_TYPE
+    object_role: Literal["validated_reference"] = "validated_reference"
+    model_ref: Literal["PhenotypeSubjectPayload"] = PHENOTYPE_SUBJECT_MODEL_REF
+    schema_ref: SchemaRef = Field(description="Alliance LinkML BiologicalEntity schema ref")
+    definition_state: Literal[DefinitionState.IN_DEVELOPMENT] = DefinitionState.IN_DEVELOPMENT
+    payload: PhenotypeSubjectPayload
+
+
+class PhenotypeTermObject(CuratableObjectEnvelope):
+    """Pending phenotype ontology term reference object."""
+
+    object_type: Literal["PhenotypeTerm"] = PHENOTYPE_TERM_OBJECT_TYPE
+    object_role: Literal["validated_reference"] = "validated_reference"
+    model_ref: Literal["PhenotypeTermPayload"] = PHENOTYPE_TERM_MODEL_REF
+    schema_ref: SchemaRef = Field(description="Alliance LinkML PhenotypeTerm schema ref")
+    definition_state: Literal[DefinitionState.IN_DEVELOPMENT] = DefinitionState.IN_DEVELOPMENT
+    payload: PhenotypeTermPayload
+
+
+class ReferenceObject(CuratableObjectEnvelope):
+    """Pending source paper reference object."""
+
+    object_type: Literal["Reference"] = REFERENCE_OBJECT_TYPE
+    object_role: Literal["validated_reference"] = "validated_reference"
+    model_ref: Literal["ReferencePayload"] = REFERENCE_MODEL_REF
+    schema_ref: SchemaRef = Field(description="Alliance LinkML Reference schema ref")
+    definition_state: Literal[DefinitionState.IN_DEVELOPMENT] = DefinitionState.IN_DEVELOPMENT
+    payload: ReferencePayload
+
+
+class EvidenceQuoteObject(CuratableObjectEnvelope):
+    """Metadata-only verified evidence quote object."""
+
+    object_type: Literal["EvidenceQuote"] = EVIDENCE_QUOTE_OBJECT_TYPE
+    object_role: Literal["metadata_only"] = "metadata_only"
+    model_ref: Literal["EvidenceQuotePayload"] = EVIDENCE_QUOTE_MODEL_REF
+    definition_state: Literal[DefinitionState.IN_DEVELOPMENT] = DefinitionState.IN_DEVELOPMENT
+    payload: EvidenceQuotePayload
+
+
+PhenotypeCuratableObject = Annotated[
+    PhenotypeAnnotationObject
+    | PhenotypeSubjectObject
+    | PhenotypeTermObject
+    | ReferenceObject
+    | EvidenceQuoteObject,
+    Field(discriminator="object_type"),
+]
 
 
 class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
-    """Config-discovered alias for the runtime phenotype extraction envelope."""
+    """Config-discovered Alliance phenotype extraction envelope."""
 
     __envelope_class__ = True
+
+    curatable_objects: list[PhenotypeCuratableObject] = Field(
+        default_factory=list,
+        description=(
+            "The only semantic object list for new phenotype extractor runs. "
+            "Retained assertions are PhenotypeAnnotation objects with supporting "
+            "subject, phenotype term, reference, and evidence quote objects."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _validate_phenotype_domain_contract(self) -> "PhenotypeResultEnvelope":
+        errors: list[str] = []
+        metadata_payload = self.metadata.model_dump(mode="python")
+        evidence_by_id = {
+            record.evidence_record_id: record
+            for record in self.metadata.evidence_records
+            if record.evidence_record_id
+        }
+        objects_by_type = _objects_by_type(self.curatable_objects)
+
+        if self.curatable_objects and not self.metadata.raw_mentions:
+            errors.append(
+                "phenotype extractor output must preserve harvested mentions in "
+                "metadata.raw_mentions[]"
+            )
+
+        for index, obj in enumerate(self.curatable_objects):
+            location = f"curatable_objects[{index}]"
+            errors.extend(_schema_ref_errors(obj, location))
+            errors.extend(_metadata_ref_errors(obj, location, metadata_payload))
+            if isinstance(obj, EvidenceQuoteObject):
+                errors.extend(_evidence_quote_errors(obj, location, evidence_by_id))
+            elif isinstance(obj, PhenotypeSubjectObject):
+                errors.extend(_subject_errors(obj, location))
+            elif isinstance(obj, PhenotypeAnnotationObject):
+                errors.extend(
+                    _annotation_errors(
+                        obj,
+                        location,
+                        evidence_by_id,
+                        objects_by_type,
+                    )
+                )
+
+            if self.repair_mode:
+                errors.extend(_repair_ref_errors(obj, location))
+
+        if self.curatable_objects and not objects_by_type.get(PHENOTYPE_OBJECT_TYPE):
+            errors.append(
+                "phenotype extractor curatable_objects[] must include at least one "
+                "PhenotypeAnnotation when retained objects are present"
+            )
+
+        if self.repair_mode and not self.metadata.repair_notes:
+            errors.append("metadata.repair_notes must describe repair-mode changes")
+
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
+
+
+def _schema_ref_errors(obj: CuratableObjectEnvelope, location: str) -> list[str]:
+    expected = {
+        PHENOTYPE_OBJECT_TYPE: (
+            PHENOTYPE_SCHEMA_ID,
+            "PhenotypeAnnotation",
+            PHENOTYPE_SCHEMA_URI,
+        ),
+        PHENOTYPE_SUBJECT_OBJECT_TYPE: (
+            PHENOTYPE_SUBJECT_SCHEMA_ID,
+            "BiologicalEntity",
+            PHENOTYPE_SUBJECT_SCHEMA_URI,
+        ),
+        PHENOTYPE_TERM_OBJECT_TYPE: (
+            PHENOTYPE_TERM_SCHEMA_ID,
+            "PhenotypeTerm",
+            PHENOTYPE_TERM_SCHEMA_URI,
+        ),
+        REFERENCE_OBJECT_TYPE: (
+            REFERENCE_SCHEMA_ID,
+            "Reference",
+            REFERENCE_SCHEMA_URI,
+        ),
+    }.get(obj.object_type)
+    if expected is None:
+        return []
+    schema_id, schema_name, schema_uri = expected
+    errors: list[str] = []
+    if obj.schema_ref is None:
+        return [f"{location}.schema_ref is required"]
+    if obj.schema_ref.schema_id != schema_id:
+        errors.append(f"{location}.schema_ref.schema_id must be {schema_id}")
+    if obj.schema_ref.provider != ALLIANCE_LINKML_PROVIDER:
+        errors.append(
+            f"{location}.schema_ref.provider must be {ALLIANCE_LINKML_PROVIDER}"
+        )
+    if obj.schema_ref.name != schema_name:
+        errors.append(f"{location}.schema_ref.name must be {schema_name}")
+    if obj.schema_ref.version != ALLIANCE_LINKML_COMMIT:
+        errors.append(
+            f"{location}.schema_ref.version must match the pinned LinkML commit"
+        )
+    if obj.schema_ref.uri is not None and obj.schema_ref.uri != schema_uri:
+        errors.append(f"{location}.schema_ref.uri must target the pinned LinkML file")
+    return errors
+
+
+def _metadata_ref_errors(
+    obj: CuratableObjectEnvelope,
+    location: str,
+    metadata_payload: dict[str, Any],
+) -> list[str]:
+    missing_refs = [
+        metadata_ref.metadata_path
+        for metadata_ref in obj.metadata_refs
+        if not field_path_exists(metadata_payload, metadata_ref.metadata_path)
+    ]
+    if not missing_refs:
+        return []
+    return [
+        f"{location}.metadata_refs references missing metadata paths: "
+        + ", ".join(sorted(missing_refs))
+    ]
+
+
+def _evidence_quote_errors(
+    obj: EvidenceQuoteObject,
+    location: str,
+    evidence_by_id: dict[str, Any],
+) -> list[str]:
+    evidence_id = obj.payload.evidence_record_id
+    record = evidence_by_id.get(evidence_id)
+    if record is None:
+        return [
+            f"{location}.payload.evidence_record_id must resolve in "
+            f"metadata.evidence_records[]: {evidence_id}"
+        ]
+    errors: list[str] = []
+    for field_name in ("verified_quote", "page", "section", "chunk_id"):
+        if getattr(record, field_name) != getattr(obj.payload, field_name):
+            errors.append(
+                f"{location}.payload.{field_name} must match metadata.evidence_records[]"
+            )
+    return errors
+
+
+def _subject_errors(obj: PhenotypeSubjectObject, location: str) -> list[str]:
+    errors: list[str] = []
+    validation_state = obj.metadata.get("validation_state")
+    if validation_state not in _SUBJECT_RESOLUTION_STATES:
+        errors.append(
+            f"{location}.metadata.validation_state must describe phenotype subject resolution"
+        )
+    if validation_state != obj.payload.resolution_state:
+        errors.append(
+            f"{location}.metadata.validation_state must match payload.resolution_state"
+        )
+    return errors
+
+
+def _annotation_errors(
+    obj: PhenotypeAnnotationObject,
+    location: str,
+    evidence_by_id: dict[str, Any],
+    objects_by_type: dict[str, list[CuratableObjectEnvelope]],
+) -> list[str]:
+    errors: list[str] = []
+    payload_evidence_ids = list(obj.payload.evidence_record_ids)
+    object_evidence_ids = list(obj.evidence_record_ids)
+    if object_evidence_ids != payload_evidence_ids:
+        errors.append(
+            f"{location}.payload.evidence_record_ids must match object evidence_record_ids"
+        )
+    missing_evidence_ids = sorted(
+        evidence_id
+        for evidence_id in object_evidence_ids
+        if evidence_id not in evidence_by_id
+    )
+    if missing_evidence_ids:
+        errors.append(
+            f"{location}.evidence_record_ids references unknown metadata.evidence_records[]: "
+            + ", ".join(missing_evidence_ids)
+        )
+    if obj.payload.evidence_quote.evidence_record_id not in object_evidence_ids:
+        errors.append(
+            f"{location}.payload.evidence_quote.evidence_record_id must be one of "
+            "object evidence_record_ids"
+        )
+
+    ref_types = {ref.object_type for ref in obj.object_refs}
+    missing_ref_types = sorted(_EXPECTED_OBJECT_REF_TYPES - ref_types)
+    if missing_ref_types:
+        errors.append(
+            f"{location}.object_refs must include supporting objects: "
+            + ", ".join(missing_ref_types)
+        )
+
+    evidence_quote_ids = {
+        evidence_obj.payload.evidence_record_id
+        for evidence_obj in objects_by_type.get(EVIDENCE_QUOTE_OBJECT_TYPE, [])
+        if isinstance(evidence_obj, EvidenceQuoteObject)
+    }
+    missing_quote_ids = sorted(set(object_evidence_ids) - evidence_quote_ids)
+    if missing_quote_ids:
+        errors.append(
+            f"{location}.object_refs must have EvidenceQuote objects for evidence IDs: "
+            + ", ".join(missing_quote_ids)
+        )
+
+    for metadata_key in ("export_behavior", "write_behavior"):
+        behavior = obj.metadata.get(metadata_key)
+        if not isinstance(behavior, dict) or behavior.get("status") != "blocked":
+            errors.append(f"{location}.metadata.{metadata_key}.status must be blocked")
+
+    subject_state = obj.payload.phenotype_annotation_subject.resolution_state
+    if obj.metadata.get("validation_state") != subject_state:
+        errors.append(
+            f"{location}.metadata.validation_state must match "
+            "payload.phenotype_annotation_subject.resolution_state"
+        )
+    return errors
+
+
+def _repair_ref_errors(obj: CuratableObjectEnvelope, location: str) -> list[str]:
+    errors: list[str] = []
+    if not obj.field_refs:
+        errors.append(
+            f"{location}.field_refs must identify repaired field paths when repair_mode is true"
+        )
+        return errors
+
+    object_ref_keys = set(obj.ref_keys())
+    for ref_index, field_ref in enumerate(obj.field_refs):
+        if field_ref.object_ref.ref_key() not in object_ref_keys:
+            errors.append(
+                f"{location}.field_refs[{ref_index}].object_ref must point at the repaired object"
+            )
+    return errors
+
+
+def _objects_by_type(
+    objects: list[PhenotypeCuratableObject],
+) -> dict[str, list[CuratableObjectEnvelope]]:
+    grouped: dict[str, list[CuratableObjectEnvelope]] = {}
+    for obj in objects:
+        grouped.setdefault(obj.object_type, []).append(obj)
+    return grouped
+
+
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    return False
+
+
+def _has_missing_strings(values: list[str]) -> bool:
+    return any(_is_missing(value) for value in values)
+
+
+__all__ = [
+    "EvidenceQuoteObject",
+    "EvidenceQuotePayload",
+    "PhenotypeAnnotationObject",
+    "PhenotypeAnnotationPayload",
+    "PhenotypeResultEnvelope",
+    "PhenotypeSubjectObject",
+    "PhenotypeSubjectPayload",
+    "PhenotypeTermObject",
+    "PhenotypeTermPayload",
+    "ReferenceObject",
+    "ReferencePayload",
+]

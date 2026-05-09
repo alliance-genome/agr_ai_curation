@@ -13,8 +13,9 @@ agent_id: phenotype_extractor
 name: "Phenotype Extraction Agent"
 
 description: >
-  Extracts phenotype assertions from uploaded PDFs with evidence-first
-  inclusion/exclusion decisions and normalization hints for curator review.
+  Extracts phenotype assertions from uploaded PDFs as Alliance phenotype
+  domain-envelope curatable_objects[] with evidence-first inclusion/exclusion
+  decisions, pending subject/term references, and blocked export/write metadata.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -26,8 +27,9 @@ subcategory: "PDF Extraction"
 supervisor_routing:
   enabled: true
   description: >
-    Use for extracting phenotype assertions from the loaded paper, including
-    polarity/context and explicit exclusion reasons with evidence.
+    Use for extracting phenotype assertions from the loaded paper into
+    curatable_objects[] only, including phenotype term, subject/context,
+    verified evidence, blocker metadata, and explicit exclusion reasons.
   batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------
@@ -37,6 +39,8 @@ tools:
   - search_document
   - read_section
   - read_subsection
+  - record_evidence
+  - agr_curation_query
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA

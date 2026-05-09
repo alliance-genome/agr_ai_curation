@@ -463,6 +463,20 @@ object_definitions:
       - field_path: figure_reference
         field_type: string
         display_name: Figure reference
+fixture_packs:
+  - fixture_pack_id: tool_verified_pending
+    display_name: Tool-verified pending phenotype fixtures
+    path: fixtures/tool_verified_pending.yaml
+    description: Production-like pending PhenotypeAnnotation envelopes preserving phenotype extractor evidence and audit metadata.
+    object_types:
+      - PhenotypeAnnotation
+      - PhenotypeSubject
+      - PhenotypeTerm
+      - Reference
+      - EvidenceQuote
+    definition_state: in_development
+    definition_notes:
+      - Fixtures use curatable_objects/domain-envelope objects as the semantic source of truth.
 metadata:
   base_pack_id: agr.alliance.base
   object_role_key: object_role
