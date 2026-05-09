@@ -246,9 +246,13 @@ def test_cache_script_materializes_pinned_schema_checkout(tmp_path: Path):
 def test_pinned_linkml_class_slot_and_range_refs_exist(tmp_path: Path):
     schema_cache_dir, _env_values = _cache_schema(tmp_path)
     index = _load_linkml_index(schema_cache_dir)
-    metadata = load_domain_pack_metadata(get_alliance_domain_pack_metadata_path())
+    registry = load_alliance_domain_pack_registry()
 
-    provider_refs = tuple(_iter_linkml_provider_refs(metadata))
+    provider_refs = tuple(
+        provider_ref
+        for loaded_pack in registry.loaded_packs
+        for provider_ref in _iter_linkml_provider_refs(loaded_pack.metadata)
+    )
     assert provider_refs
 
     class_refs = {

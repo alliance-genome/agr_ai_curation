@@ -1,0 +1,24 @@
+envelope_id: gene-tool-verified-env-1
+document_id: WB-paper-0001
+produced_by: gene_extractor
+produced_at: "2026-05-09T00:00:00Z"
+gene_mentions:
+  - mention: daf-16
+    primary_external_id: "WB:WBGene00000912"
+    gene_symbol: daf-16
+    taxon: "NCBITaxon:6239"
+    species: Caenorhabditis elegans
+    confidence: high
+    evidence_record_ids:
+      - ev-daf16-1
+evidence_records:
+  - evidence_record_id: ev-daf16-1
+    entity: daf-16
+    verified_quote: DAF-16 translocated to nuclei after heat shock.
+    page: 4
+    section: Results
+    subsection: Stress response assay
+    chunk_id: chunk-daf16-1
+    figure_reference: Figure 2A
+normalization_notes:
+  - Resolved daf-16 through agr_curation_query get_gene_by_id.
