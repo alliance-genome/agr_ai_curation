@@ -1,9 +1,9 @@
 """Domain-pack validation supervisor.
 
 The supervisor consumes provider-owned domain-pack metadata and writes validation
-findings back into the domain envelope.  It intentionally keeps Alliance, DB, and
-schema-specific behavior behind domain-pack bindings instead of hard-coding it in
-core runtime code.
+findings back into the domain envelope.  It intentionally keeps provider-specific,
+DB, and schema-specific behavior behind domain-pack bindings instead of hard-coding
+it in core runtime code.
 """
 
 from __future__ import annotations
@@ -315,7 +315,7 @@ def _active_binding_findings(
     for binding_id in sorted(matches_by_binding):
         binding_matches = matches_by_binding[binding_id]
         binding = binding_matches[0].binding
-        if binding.validator:
+        if binding.is_executable:
             findings.extend(
                 _callable_binding_findings(
                     envelope=envelope,

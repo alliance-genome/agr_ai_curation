@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
+    ValidationRegistryError,
     ValidationBindingState,
 )
 from src.lib.domain_packs import validation_supervisor
@@ -203,6 +206,43 @@ def test_registry_exposes_planned_and_blocked_validator_metadata(tmp_path: Path)
     assert metadata_by_state[ValidationBindingState.BLOCKED] == "fixture.export_projection"
     assert binding_states["fixture.planned_symbol_lookup"] is ValidationBindingState.PLANNED
     assert binding_states["fixture.blocked_export_validator"] is ValidationBindingState.BLOCKED
+
+
+def test_registry_rejects_conflicting_status_and_state_metadata(tmp_path: Path):
+    metadata_text = _validation_pack_text().replace(
+        "validator_id: fixture.shape\n        description:",
+        "\n".join(
+            (
+                "validator_id: fixture.shape",
+                "        status: planned",
+                "        state: active",
+                "        description:",
+            )
+        ),
+        1,
+    )
+    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
+
+    with pytest.raises(
+        ValidationRegistryError,
+        match="validators item declares conflicting status/state values",
+    ):
+        DomainPackValidationRegistry.from_domain_pack(pack)
+
+
+def test_registry_required_ids_report_edge_whitespace(tmp_path: Path):
+    metadata_text = _validation_pack_text().replace(
+        "validator_id: fixture.shape",
+        "validator_id: ' fixture.shape'",
+        1,
+    )
+    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
+
+    with pytest.raises(
+        ValidationRegistryError,
+        match="validators.validator_id must not have leading or trailing whitespace",
+    ):
+        DomainPackValidationRegistry.from_domain_pack(pack)
 
 
 def test_supervisor_appends_required_planned_blocked_findings_and_history(

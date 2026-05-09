@@ -574,7 +574,7 @@ def _state_from_item(
         raise ValidationRegistryError(
             f"{field_name} items must be mappings; found {type(raw_item).__name__}"
         )
-    raw_state = raw_item.get("status", raw_item.get("state"))
+    raw_state = _raw_item_state(raw_item, field_name)
     if raw_state is None:
         # Domain-pack validator items are active unless scoped metadata says otherwise.
         return collection_state or ValidationBindingState.ACTIVE
@@ -600,6 +600,23 @@ def _required_mapping_item(raw_item: Any, field_name: str) -> Mapping[str, Any]:
     return raw_item
 
 
+def _raw_item_state(
+    raw_item: Mapping[str, Any],
+    field_name: str,
+) -> Any:
+    raw_status = raw_item.get("status")
+    raw_state = raw_item.get("state")
+    if (
+        raw_status is not None
+        and raw_state is not None
+        and str(raw_status) != str(raw_state)
+    ):
+        raise ValidationRegistryError(
+            f"{field_name} item declares conflicting status/state values"
+        )
+    return raw_status if raw_status is not None else raw_state
+
+
 def _optional_mapping(raw_item: Any, field_name: str) -> Mapping[str, Any]:
     if raw_item is None:
         return {}
@@ -617,7 +634,9 @@ def _required_string(
     if not isinstance(value, str) or not value.strip():
         raise ValidationRegistryError(f"{field_name}.{key} must be a non-empty string")
     if value != value.strip():
-        raise ValidationRegistryError(f"{field_name}.{key} must not include whitespace")
+        raise ValidationRegistryError(
+            f"{field_name}.{key} must not have leading or trailing whitespace"
+        )
     return value
 
 
@@ -745,7 +764,10 @@ def _infer_field_targets_for_value(
         prefix, field_path = value.split(".", 1)
         object_definition = object_definitions.get(prefix)
         if object_definition is not None:
-            normalized_field_path = _declared_field_path(object_definition, field_path)
+            normalized_field_path = _declared_inferred_field_path(
+                object_definition,
+                field_path,
+            )
             if normalized_field_path is not None:
                 return ((prefix, normalized_field_path),)
 
@@ -760,16 +782,23 @@ def _infer_field_targets_for_value(
 
     matches: list[tuple[str, str]] = []
     for object_definition in candidate_object_definitions:
-        normalized_field_path = _declared_field_path(object_definition, value)
+        normalized_field_path = _declared_inferred_field_path(object_definition, value)
         if normalized_field_path is not None:
             matches.append((object_definition.object_type, normalized_field_path))
     return tuple(matches)
 
 
-def _declared_field_path(
+def _declared_inferred_field_path(
     object_definition: DomainPackObjectDefinition,
     field_path: str,
 ) -> str | None:
+    """Return a declared field path match for heuristic target inference.
+
+    Invalid syntax returns ``None`` here because inference probes candidate strings
+    from binding metadata.  Explicit ``field_paths`` declarations are validated by
+    ``_collect_validator_bindings`` before bindings are constructed.
+    """
+
     try:
         normalized_field_path = validate_field_path_syntax(field_path)
     except ValueError:
