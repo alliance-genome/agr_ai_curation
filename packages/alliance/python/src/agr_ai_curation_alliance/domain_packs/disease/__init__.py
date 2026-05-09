@@ -12,12 +12,15 @@ from .constants import (
     get_disease_domain_pack_metadata_path,
 )
 from .conversion import (
+    DiseaseExtractionOutput,
     ToolVerifiedDiseaseAssertion,
     ToolVerifiedDiseaseCondition,
     ToolVerifiedDiseaseEvidenceRecord,
     ToolVerifiedDiseaseOutput,
     ToolVerifiedDiseaseSubject,
+    disease_extraction_output_to_pending_envelope,
     tool_verified_disease_output_to_pending_envelope,
+    validate_disease_extraction_objects,
     validate_pending_disease_envelope,
 )
 
@@ -30,12 +33,15 @@ __all__ = [
     "DISEASE_OBJECT_TYPE",
     "DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID",
     "DISEASE_VALIDATOR_STATES",
+    "DiseaseExtractionOutput",
     "ToolVerifiedDiseaseAssertion",
     "ToolVerifiedDiseaseCondition",
     "ToolVerifiedDiseaseEvidenceRecord",
     "ToolVerifiedDiseaseOutput",
     "ToolVerifiedDiseaseSubject",
+    "disease_extraction_output_to_pending_envelope",
     "get_disease_domain_pack_metadata_path",
     "tool_verified_disease_output_to_pending_envelope",
+    "validate_disease_extraction_objects",
     "validate_pending_disease_envelope",
 ]
