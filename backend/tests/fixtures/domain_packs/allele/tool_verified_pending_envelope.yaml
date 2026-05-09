@@ -1,0 +1,153 @@
+envelope:
+  envelope_id: allele-tool-verified-envelope
+  domain_pack_id: agr.alliance.allele
+  domain_pack_version: 0.1.0
+  schema_ref:
+    schema_id: agr.alliance.allele.domain_pack
+    provider: domain-pack
+    name: Alliance Allele Paper Evidence Domain Pack
+    version: 0.1.0
+    definition_state: in_development
+  objects:
+    - object_type: Reference
+      payload:
+        title: daf-2 allele evidence fixture paper
+        filename: test_tool_verified_allele_paper.pdf
+      pending_ref_id: paper-reference-1
+      schema_ref:
+        schema_id: alliance.linkml.Reference
+        provider: alliance_linkml
+        name: Reference
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: validated_reference
+        validation_state: pending_reference_resolution
+    - object_type: AlleleMention
+      payload:
+        mention_text: daf-2(m41)
+        normalized_id: WB:WBVar00000001
+        source_mentions:
+          - daf-2(m41)
+      pending_ref_id: allele-mention-1
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: metadata_only
+    - object_type: Allele
+      payload:
+        primary_external_id: WB:WBVar00000001
+        allele_symbol: daf-2(m41)
+        source_mentions:
+          - daf-2(m41)
+      pending_ref_id: allele-reference-1
+      schema_ref:
+        schema_id: alliance.linkml.Allele
+        provider: alliance_linkml
+        name: Allele
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/allele.yaml
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: validated_reference
+        validation_state: pending_materialization
+    - object_type: EvidenceQuote
+      payload:
+        evidence_record_id: daf-2-m41-evidence-1
+        entity: daf-2(m41)
+        verified_quote: daf-2(m41) animals formed dauer larvae at 25 C.
+        page: 3
+        section: Results
+        chunk_id: chunk-allele-phenotype
+        subsection: Dauer phenotype
+        figure_reference: Figure 3B
+      pending_ref_id: evidence-quote-1-1
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: metadata_only
+    - object_type: EvidenceQuote
+      payload:
+        evidence_record_id: daf-2-m41-evidence-2
+        entity: daf-2(m41)
+        verified_quote: Sequencing identified a glycine-to-glutamate substitution in daf-2(m41), confirming the allele lesion.
+        page: 4
+        section: Results
+        chunk_id: chunk-allele-lesion
+        subsection: Molecular characterization
+      pending_ref_id: evidence-quote-1-2
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: metadata_only
+    - object_type: AllelePaperEvidenceAssociation
+      payload:
+        association_kind: allele_paper_evidence
+        allele_identifier: WB:WBVar00000001
+        allele_label: daf-2(m41)
+        reference_title: daf-2 allele evidence fixture paper
+        evidence_record_ids:
+          - daf-2-m41-evidence-1
+          - daf-2-m41-evidence-2
+      pending_ref_id: allele-paper-evidence-association-1
+      schema_ref:
+        schema_id: alliance.linkml.AlleleAssociation
+        provider: alliance_linkml
+        name: AlleleAssociation
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/allele.yaml
+        definition_state: in_development
+        definition_notes:
+          - Abstract LinkML target used only for grounded pending-envelope metadata.
+      status: pending
+      definition_state: in_development
+      definition_notes:
+        - Pending only; write behavior is blocked until reference IDs and write targets are verified.
+      object_refs:
+        - pending_ref_id: allele-reference-1
+          object_type: Allele
+        - pending_ref_id: paper-reference-1
+          object_type: Reference
+        - pending_ref_id: allele-mention-1
+          object_type: AlleleMention
+        - pending_ref_id: evidence-quote-1-1
+          object_type: EvidenceQuote
+        - pending_ref_id: evidence-quote-1-2
+          object_type: EvidenceQuote
+      metadata:
+        object_role: curatable_unit
+        write_behavior:
+          status: blocked
+          reason: Reference materialization and non-mutating allele association writes are not verified for this pack.
+  validation_findings:
+    - severity: blocker
+      message: Allele paper/evidence association is pending only; write behavior is blocked until reference_id and non-mutating submission targets are verified.
+      code: alliance.allele.write_blocked
+      object_ref:
+        pending_ref_id: allele-paper-evidence-association-1
+        object_type: AllelePaperEvidenceAssociation
+      details:
+        write_behavior: blocked
+        blocked_targets:
+          - public.allele_reference
+          - public.allelegeneassociation
+          - public.allelegeneassociation_informationcontententity
+    - severity: warning
+      message: Skipped 1 allele candidate(s) without verified evidence records.
+      code: alliance.allele.skipped_without_verified_evidence
+      details:
+        skipped_without_evidence: 1
+  history:
+    - event_type: created
+      timestamp: "2026-05-09T00:00:00Z"
+      message: Converted tool-verified allele fixture to a pending domain envelope.
+      details:
+        retained_allele_count: 1
+        skipped_without_evidence: 1
+  metadata:
+    source_fixture_id: tool_verified_allele_paper
+    write_behavior:
+      status: blocked
