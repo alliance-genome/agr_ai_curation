@@ -647,6 +647,9 @@ def validate_pending_chemical_condition_envelope(
     chemical_terms = [
         obj for obj in envelope.objects if obj.object_type == CHEMICAL_TERM_OBJECT_TYPE
     ]
+    evidence_quotes = [
+        obj for obj in envelope.objects if obj.object_type == EVIDENCE_QUOTE_OBJECT_TYPE
+    ]
     if not conditions:
         findings.append(
             ValidationFinding(
@@ -663,6 +666,8 @@ def validate_pending_chemical_condition_envelope(
         findings.extend(_validate_condition_object(condition, objects_by_ref))
     for chemical_term in chemical_terms:
         findings.extend(_validate_chemical_term_object(chemical_term))
+    for evidence_quote in evidence_quotes:
+        findings.extend(_validate_evidence_quote_object(evidence_quote))
 
     return tuple(findings)
 
@@ -823,6 +828,37 @@ def _validate_chemical_term_object(
                     "validator_binding_id": CHEMICAL_CONDITION_CHEBI_FORMAT_VALIDATOR_ID,
                     "observed_value": chemical_curie,
                 },
+            )
+        )
+
+    return findings
+
+
+def _validate_evidence_quote_object(
+    evidence_quote: CuratableObjectEnvelope,
+) -> list[ValidationFinding]:
+    findings: list[ValidationFinding] = []
+    evidence_quote_ref = _ref_for_object(evidence_quote)
+
+    missing_payload_fields = sorted(
+        field_path
+        for field_path in ("verified_quote",)
+        if not field_path_exists(evidence_quote.payload, field_path)
+    )
+    if missing_payload_fields:
+        findings.append(
+            ValidationFinding(
+                severity=ValidationFindingSeverity.ERROR,
+                code=(
+                    "alliance.chemical_condition."
+                    "evidence_quote_required_payload_missing"
+                ),
+                message=(
+                    "EvidenceQuote is missing required payload fields: "
+                    + ", ".join(missing_payload_fields)
+                ),
+                object_ref=evidence_quote_ref,
+                details={"missing_payload_fields": missing_payload_fields},
             )
         )
 

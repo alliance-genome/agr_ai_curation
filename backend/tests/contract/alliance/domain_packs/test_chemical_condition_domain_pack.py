@@ -373,6 +373,41 @@ def test_chemical_condition_validator_checks_linked_chemical_term_curie():
     assert finding.details["observed_value"] == "ZECO:0000111"
 
 
+def test_chemical_condition_validator_checks_required_evidence_quote_payload():
+    raw_fixture = _load_raw_fixture_with_export_context()
+    envelope = build_pending_chemical_condition_envelope_from_tool_verified_output(
+        raw_fixture
+    )
+
+    updated_objects = []
+    for obj in envelope.objects:
+        if (
+            obj.object_type == EVIDENCE_QUOTE_OBJECT_TYPE
+            and obj.pending_ref_id == "evidence-quote-1"
+        ):
+            payload = dict(obj.payload)
+            payload.pop("verified_quote", None)
+            obj = obj.model_copy(update={"payload": payload})
+        updated_objects.append(obj)
+    envelope = envelope.model_copy(
+        update={"objects": updated_objects, "validation_findings": []}
+    )
+
+    quote_findings = [
+        finding
+        for finding in validate_pending_chemical_condition_envelope(envelope)
+        if finding.code
+        == "alliance.chemical_condition.evidence_quote_required_payload_missing"
+    ]
+
+    assert len(quote_findings) == 1
+    finding = quote_findings[0]
+    assert finding.object_ref is not None
+    assert finding.object_ref.object_type == EVIDENCE_QUOTE_OBJECT_TYPE
+    assert finding.object_ref.pending_ref_id == "evidence-quote-1"
+    assert finding.details["missing_payload_fields"] == ["verified_quote"]
+
+
 def test_tool_verified_chemical_fixture_rejects_malformed_required_data():
     raw_fixture = _load_raw_fixture()
 
