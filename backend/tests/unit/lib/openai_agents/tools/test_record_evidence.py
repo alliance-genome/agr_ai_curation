@@ -140,6 +140,56 @@ def test_accepted_candidate_index_rejects_bool_selected_index():
     ) is None
 
 
+def test_build_envelope_target_fields_normalizes_target_identity_and_field_path():
+    assert record_evidence._build_envelope_target_fields(
+        object_id="  expression:1  ",
+        pending_ref_id="pending-1",
+        object_type="  expression_assay  ",
+        field_path="  gene.symbol  ",
+    ) == {
+        "envelope_target": {
+            "object_id": "expression:1",
+            "object_type": "expression_assay",
+            "field_path": "gene.symbol",
+        }
+    }
+
+
+def test_build_envelope_target_fields_uses_pending_ref_when_object_id_missing():
+    assert record_evidence._build_envelope_target_fields(
+        object_id=" ",
+        pending_ref_id=" pending:gene:1 ",
+        object_type="gene",
+    ) == {
+        "envelope_target": {
+            "pending_ref_id": "pending:gene:1",
+            "object_type": "gene",
+        }
+    }
+
+
+def test_build_envelope_target_fields_omits_empty_targets():
+    assert record_evidence._build_envelope_target_fields(
+        object_id=None,
+        pending_ref_id=" ",
+        object_type="",
+        field_path=None,
+    ) == {}
+
+
+def test_merge_extra_fields_returns_merged_fields_or_none():
+    assert record_evidence._merge_extra_fields(
+        {},
+        {"envelope_target": {"object_id": "expression:1"}},
+        {"retry_tool": "search_document"},
+    ) == {
+        "envelope_target": {"object_id": "expression:1"},
+        "retry_tool": "search_document",
+    }
+    assert record_evidence._merge_extra_fields({}, {}) is None
+    assert record_evidence._merge_extra_fields() is None
+
+
 @pytest.mark.asyncio
 async def test_record_evidence_accepts_fuzzy_match_after_citation_marker_elision(monkeypatch):
     chunk_id = "935d683a-68c0-f825-cfdc-2237b100eaeb"
