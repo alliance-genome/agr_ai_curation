@@ -273,6 +273,21 @@ def test_phenotype_extractor_schema_accepts_domain_pack_objects_and_metadata():
     assert envelope.metadata.exclusions[0].reason_code == "previously_reported"
 
 
+def test_phenotype_extractor_schema_requires_taxon_for_resolved_subjects():
+    payload = copy.deepcopy(_valid_phenotype_payload())
+    subject_payload = payload["curatable_objects"][1]["payload"]
+    subject_payload["resolution_state"] = "resolved"
+    subject_payload.pop("taxon", None)
+    annotation_subject = payload["curatable_objects"][-1]["payload"][
+        "phenotype_annotation_subject"
+    ]
+    annotation_subject["resolution_state"] = "resolved"
+    annotation_subject.pop("taxon", None)
+
+    with pytest.raises(ValidationError, match="taxon"):
+        _phenotype_extractor_schema().model_validate(payload)
+
+
 @pytest.mark.parametrize("legacy_field", sorted(LEGACY_SEMANTIC_LIST_FIELDS))
 def test_phenotype_extractor_schema_rejects_top_level_legacy_semantic_lists(legacy_field):
     payload = _valid_phenotype_payload()
@@ -351,6 +366,8 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
     assert "alliance.linkml.PhenotypeAnnotation" in prompt_content
     assert "`definition_state: \"in_development\"`" in prompt_content
     assert "`metadata.export_behavior.status: \"blocked\"`" in prompt_content
+    assert "`taxon`" in prompt_content
+    assert "payload.phenotype_annotation_subject.taxon" in prompt_content
     assert "repair_mode: true" in prompt_content
     assert "CurationPrepCandidate" in prompt_content
     assert "normalized_id" not in prompt_content

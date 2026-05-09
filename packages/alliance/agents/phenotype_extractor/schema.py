@@ -101,7 +101,7 @@ class PhenotypeSubjectPayload(BaseModel):
         if self.resolution_state == "resolved":
             missing = [
                 field_name
-                for field_name in ("subject_identifier", "subject_type")
+                for field_name in ("subject_identifier", "subject_type", "taxon")
                 if _is_missing(getattr(self, field_name))
             ]
             if missing:

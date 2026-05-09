@@ -311,6 +311,10 @@ content: |
   - `payload.phenotype_annotation_object`: the paper-supported phenotype statement or term label.
   - `payload.phenotype_annotation_subject`: subject/context payload with `resolution_state`
     set to `resolved`, `pending_entity_resolution`, or `blocked_missing_subject`.
+    Include `subject_identifier`, `subject_label`, `subject_type`, and LinkML-required
+    `taxon` when supported. If a resolved subject lacks taxon support, keep the subject
+    pending or blocked and preserve the missing context in `resolution_note` or
+    `metadata.ambiguities[]`.
   - `payload.phenotype_terms[0].curie` and optional `label` when a phenotype ontology term is
     grounded. If the term cannot be grounded, do not emit a curatable assertion; preserve the
     candidate in `metadata.ambiguities[]`.
@@ -343,7 +347,8 @@ content: |
   - Preserve each existing `object_id` or `pending_ref_id`; do not mint replacement IDs for repaired objects.
   - Repair only supervisor-requested field paths such as
     `curatable_objects[0].payload.phenotype_terms[0].curie`,
-    `curatable_objects[0].payload.phenotype_annotation_subject.subject_identifier`, or
+    `curatable_objects[0].payload.phenotype_annotation_subject.subject_identifier`,
+    `curatable_objects[0].payload.phenotype_annotation_subject.taxon`, or
     `metadata.evidence_records[0].chunk_id`.
   - Use `curatable_objects[].field_refs[]` to identify repaired payload fields and
     `curatable_objects[].metadata_refs[]` for supporting metadata paths.

@@ -610,6 +610,7 @@ def _subject_payload(item: Mapping[str, Any]) -> dict[str, Any]:
         item.get("subject_type"),
         "extraction.items[].subject_type",
     )
+    taxon = _optional_string(item.get("taxon"), "extraction.items[].taxon")
 
     if subject_identifier and subject_type:
         resolution_state = "pending_entity_resolution"
@@ -623,6 +624,8 @@ def _subject_payload(item: Mapping[str, Any]) -> dict[str, Any]:
         payload["subject_label"] = subject_label
     if subject_type:
         payload["subject_type"] = subject_type
+    if taxon:
+        payload["taxon"] = taxon
     if resolution_state == "blocked_missing_subject":
         payload["resolution_note"] = (
             "Tool-verified phenotype extraction did not provide a durable "

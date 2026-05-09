@@ -95,6 +95,15 @@ def _phenotype_object_definition():
     )
 
 
+def _phenotype_subject_object_definition():
+    metadata = load_domain_pack_metadata(get_phenotype_domain_pack_metadata_path())
+    return next(
+        item
+        for item in metadata.object_definitions
+        if item.object_type == PHENOTYPE_SUBJECT_OBJECT_TYPE
+    )
+
+
 def _iter_mapping_keys(value: Any):
     if isinstance(value, Mapping):
         yield from value.keys()
@@ -158,6 +167,11 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
 
     subject_binding = validator_bindings[1]
     assert subject_binding["validation_kind"] == "db_backed_entity_lookup"
+    assert subject_binding["input_fields"] == {
+        "subject_identifier": "PhenotypeSubject.subject_identifier",
+        "subject_type": "PhenotypeSubject.subject_type",
+        "taxon": "PhenotypeSubject.taxon",
+    }
     assert subject_binding["blocking"] is True
 
     term_binding = validator_bindings[2]
@@ -239,6 +253,36 @@ def test_phenotype_annotation_declares_required_linkml_grounded_fields():
     ] == PHENOTYPE_TERM_VALIDATOR_BINDING_ID
 
 
+def test_phenotype_subject_declares_linkml_grounded_taxon_context():
+    subject = _phenotype_subject_object_definition()
+    fields_by_path = {field.field_path: field for field in subject.fields}
+
+    assert {
+        "resolution_state",
+        "subject_identifier",
+        "subject_label",
+        "subject_type",
+        "taxon",
+    }.issubset(fields_by_path)
+
+    taxon_field = fields_by_path["taxon"]
+    assert taxon_field.field_type is DomainPackFieldType.STRING
+    assert taxon_field.required is True
+    assert taxon_field.metadata["validatable"] is True
+    assert (
+        taxon_field.metadata["validator_binding_id"]
+        == PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID
+    )
+    taxon_ref = taxon_field.metadata[PROVIDER_REFS_METADATA_KEY][
+        ALLIANCE_LINKML_PROVIDER_KEY
+    ]
+    assert taxon_ref["commit"] == ALLIANCE_LINKML_COMMIT
+    assert taxon_ref["source_file"] == "model/schema/core.yaml"
+    assert taxon_ref["class"] == "BiologicalEntity"
+    assert taxon_ref["slot"] == "taxon"
+    assert taxon_ref["range"] == "NCBITaxonTerm"
+
+
 def test_tool_verified_phenotype_fixture_converts_to_pending_envelope():
     fixture = load_evidence_fixture("tool_verified_phenotype_paper")
     envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(
@@ -281,6 +325,30 @@ def test_tool_verified_phenotype_fixture_converts_to_pending_envelope():
         exclude_defaults=True,
         exclude_none=True,
     ) == expected["envelope"]
+
+
+def test_tool_verified_phenotype_fixture_preserves_subject_taxon_context():
+    fixture = load_evidence_fixture("tool_verified_phenotype_paper")
+    fixture["extraction"]["items"][0].update(
+        {
+            "subject_identifier": "WB:WBGene00000912",
+            "subject_label": "daf-2(e1370)",
+            "subject_type": "gene",
+            "taxon": "NCBITaxon:6239",
+        }
+    )
+    envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(fixture)
+
+    assert validate_pending_phenotype_envelope(envelope) == ()
+    subject = next(
+        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_SUBJECT_OBJECT_TYPE
+    )
+    annotation = next(obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE)
+    assert subject.payload["taxon"] == "NCBITaxon:6239"
+    assert (
+        annotation.payload["phenotype_annotation_subject"]["taxon"]
+        == "NCBITaxon:6239"
+    )
 
 
 def test_tool_verified_phenotype_envelope_omits_legacy_semantic_stores():
