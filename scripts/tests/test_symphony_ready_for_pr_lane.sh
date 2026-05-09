@@ -169,6 +169,157 @@ EOF
   rm -rf "${temp_root}"
 }
 
+test_pr_body_includes_selected_linear_ticket_sections() {
+  local temp_root repo context context_tmp helper_dir ready_helper output workpad_log state_log section_log body_log description
+  temp_root="$(mktemp -d)"
+  repo="${temp_root}/repo"
+  context="${temp_root}/context.json"
+  context_tmp="${temp_root}/context.tmp.json"
+  helper_dir="${temp_root}/helpers"
+  ready_helper="${helper_dir}/ready.sh"
+  output="${temp_root}/output.txt"
+  workpad_log="${temp_root}/workpad.log"
+  state_log="${temp_root}/state.log"
+  section_log="${temp_root}/section.md"
+  body_log="${temp_root}/pr-body.md"
+
+  make_repo "${repo}"
+  write_context_json "${context}"
+  description="$(cat <<'EOF'
+## Jira Description
+
+Preserved imported Jira content appears before the agent-ready sections.
+
+## Context
+
+Imported Jira context should not be copied.
+
+## Scope
+
+- [ ] Imported Jira scope should not be copied.
+
+## Validation
+
+- [ ] Imported Jira validation should not be copied.
+
+## Context
+
+This ticket updates the scripted PR lane.
+
+## Scope
+
+- [ ] Include selected Linear sections in the PR body.
+
+## Out of Scope — Do NOT Touch
+
+- Do not touch sibling-owned exporter code.
+
+## Grounding Requirements
+
+- Inspect the LinkML schema before changing schema-aligned code.
+
+## Source-of-Truth Checks
+
+- Verify the curation database model before changing persistence behavior.
+
+## Implementation Notes
+
+This section is useful for implementation but should not be copied into the PR body ticket context.
+
+## Blocking Conditions
+
+- Block if the curation database tunnel is unavailable.
+
+## Development Guardrails
+
+- Preserve forward-only implementation behavior.
+
+## Acceptance Criteria
+
+- [ ] PR body contains the selected ticket sections.
+
+## Validation
+
+- [ ] Run the Ready for PR lane shell test.
+
+## Parallel Coordination
+
+- Same-wave sibling detail should not be copied into the PR body ticket context.
+
+## Jira Metadata
+
+- Jira metadata should not be copied into the PR body ticket context.
+EOF
+)"
+  jq --arg description "${description}" '.issue.description = $description' "${context}" > "${context_tmp}"
+  mv "${context_tmp}" "${context}"
+  write_stub_helpers "${helper_dir}" "${workpad_log}" "${state_log}" "${section_log}"
+  export SYMPHONY_TEST_PR_BODY_LOG="${body_log}"
+
+  cat > "${ready_helper}" <<'EOF'
+#!/usr/bin/env bash
+body_file=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --body-file)
+      body_file="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+cat "${body_file}" > "${SYMPHONY_TEST_PR_BODY_LOG:?}"
+cat <<'OUT'
+READY_FOR_PR_STATUS=existing_pr
+READY_FOR_PR_NEXT_STATE=Ready for PR
+READY_FOR_PR_BRANCH=all-123
+READY_FOR_PR_PR_NUMBER=123
+READY_FOR_PR_PR_URL=https://example.test/pr/123
+READY_FOR_PR_CHECK_STATUS=clean
+READY_FOR_PR_CLAUDE_STATUS=quiet
+READY_FOR_PR_INSTRUCTIONS=Clean PR.
+OUT
+EOF
+  chmod +x "${ready_helper}"
+
+  bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-123 \
+    --context-json-file "${context}" \
+    --workspace-dir "${repo}" \
+    --workpad-helper "${helper_dir}/workpad.sh" \
+    --state-helper "${helper_dir}/state.sh" \
+    --ready-helper "${ready_helper}" \
+    --guard-helper "${GUARD_PATH}" \
+    --wait-for-review-seconds 0 \
+    --wait-for-checks-seconds 0 \
+    > "${output}"
+
+  assert_contains "READY_FOR_PR_LANE_STATUS=ready" "${output}"
+  assert_contains "## Linear Ticket Context" "${body_log}"
+  assert_contains "### Context" "${body_log}"
+  assert_contains "### Scope" "${body_log}"
+  assert_contains "### Out of Scope" "${body_log}"
+  assert_contains "Do not touch sibling-owned exporter code." "${body_log}"
+  assert_contains "### Grounding Requirements" "${body_log}"
+  assert_contains "Inspect the LinkML schema" "${body_log}"
+  assert_contains "### Source-of-Truth Checks" "${body_log}"
+  assert_contains "Verify the curation database model" "${body_log}"
+  assert_contains "### Development Guardrails" "${body_log}"
+  assert_contains "### Acceptance Criteria" "${body_log}"
+  assert_contains "### Validation" "${body_log}"
+  assert_not_contains "Imported Jira context should not be copied" "${body_log}"
+  assert_not_contains "Imported Jira scope should not be copied" "${body_log}"
+  assert_not_contains "Imported Jira validation should not be copied" "${body_log}"
+  assert_not_contains "This section is useful for implementation" "${body_log}"
+  assert_not_contains "Block if the curation database tunnel is unavailable" "${body_log}"
+  assert_not_contains "Same-wave sibling detail" "${body_log}"
+  assert_not_contains "Jira metadata should not be copied" "${body_log}"
+
+  rm -rf "${temp_root}"
+}
+
 test_helper_auto_bounce_does_not_write_second_transition() {
   local temp_root repo context helper_dir ready_helper output workpad_log state_log section_log
   temp_root="$(mktemp -d)"
@@ -432,6 +583,7 @@ EOF
 }
 
 test_clean_pr_moves_to_human_review_prep
+test_pr_body_includes_selected_linear_ticket_sections
 test_helper_auto_bounce_does_not_write_second_transition
 test_pending_gate_stays_ready_for_pr_without_transition
 test_no_pr_label_moves_to_human_review_prep

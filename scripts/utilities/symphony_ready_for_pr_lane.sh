@@ -355,6 +355,92 @@ issue_url() {
   jq -r '.issue.url // ""' "${context_json_path}"
 }
 
+extract_issue_section() {
+  local heading="$1"
+
+  jq -r '.issue.description // ""' "${context_json_path}" \
+    | awk -v heading="${heading}" '
+      $0 == heading {
+        count = 0
+        in_section = 1
+        next
+      }
+      in_section && /^##[[:space:]]+/ {
+        in_section = 0
+      }
+      in_section {
+        lines[++count] = $0
+      }
+      END {
+        start = 1
+        while (start <= count && lines[start] ~ /^[[:space:]]*$/) {
+          start++
+        }
+        while (count > 0 && lines[count] ~ /^[[:space:]]*$/) {
+          count--
+        }
+        for (i = start; i <= count; i++) {
+          print lines[i]
+        }
+      }
+    '
+}
+
+has_issue_section() {
+  local heading="$1"
+
+  jq -r '.issue.description // ""' "${context_json_path}" | awk -v heading="${heading}" '
+    $0 == heading {
+      found = 1
+      exit
+    }
+    END {
+      exit(found ? 0 : 1)
+    }
+  '
+}
+
+write_ticket_context_section() {
+  local title="$1"
+  local heading="$2"
+  local content
+
+  content="$(extract_issue_section "${heading}")"
+  if [[ -z "${content}" ]]; then
+    return 0
+  fi
+
+  echo "### ${title}"
+  printf '%s\n' "${content}"
+  echo
+}
+
+write_missing_context_warning() {
+  local missing=()
+  local heading
+
+  for heading in \
+    "## Context" \
+    "## Scope" \
+    "## Out of Scope — Do NOT Touch" \
+    "## Development Guardrails" \
+    "## Acceptance Criteria" \
+    "## Validation"
+  do
+    if ! has_issue_section "${heading}"; then
+      missing+=("${heading#\#\# }")
+    fi
+  done
+  if ((${#missing[@]} == 0)); then
+    return 0
+  fi
+
+  echo "### Linear Context Warning"
+  echo "- Missing expected scriptable section(s): ${missing[*]}"
+  echo "- Treat the Linear context below as best-effort."
+  echo
+}
+
 branch_name() {
   git -C "${workspace_dir}" rev-parse --abbrev-ref HEAD 2>/dev/null || true
 }
@@ -453,6 +539,18 @@ write_pr_body_file() {
       echo "- Linear issue: ${url}"
     fi
     echo
+    echo "## Linear Ticket Context"
+    echo "Selected Linear issue sections are included whole for ticket context."
+    echo
+    write_missing_context_warning
+    write_ticket_context_section "Context" "## Context"
+    write_ticket_context_section "Scope" "## Scope"
+    write_ticket_context_section "Out of Scope" "## Out of Scope — Do NOT Touch"
+    write_ticket_context_section "Grounding Requirements" "## Grounding Requirements"
+    write_ticket_context_section "Source-of-Truth Checks" "## Source-of-Truth Checks"
+    write_ticket_context_section "Development Guardrails" "## Development Guardrails"
+    write_ticket_context_section "Acceptance Criteria" "## Acceptance Criteria"
+    write_ticket_context_section "Validation" "## Validation"
     echo "## Test Plan"
     echo "- GitHub checks and Claude review are gated by the Symphony Ready for PR lane."
   } > "${body_file}"
