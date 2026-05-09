@@ -89,10 +89,12 @@ def test_non_gene_extractor_prompts_include_record_evidence_domain_guidance(
     assert "curatable_objects[]" in content
     assert "metadata.evidence_records[]" in content
     assert "evidence_record_ids" in content
-    assert (
-        "Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, "
-        "`diseases[]`, `chemicals[]`, or `phenotypes[]`."
-    ) in content
+    assert re.search(
+        r"Do not emit top-level\s+`items\[\]`,\s+`annotations\[\]`,\s+"
+        r"`genes\[\]`,\s+`alleles\[\]`,\s+`diseases\[\]`,\s+"
+        r"`chemicals\[\]`,\s+(?:or\s+)?`phenotypes\[\]`",
+        content,
+    )
     assert domain_specific_snippet in content
 
 

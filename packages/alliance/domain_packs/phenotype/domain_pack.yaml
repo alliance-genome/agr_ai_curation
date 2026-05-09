@@ -331,6 +331,29 @@ object_definitions:
       - field_path: subject_type
         field_type: string
         display_name: Subject type
+      - field_path: taxon
+        field_type: string
+        display_name: Taxon
+        description: >-
+          NCBI Taxon CURIE for the biological entity carrying the phenotype
+          assertion. LinkML requires taxon for resolved BiologicalEntity
+          subjects; missing taxon must remain explicit through pending or
+          blocked subject resolution state.
+        required: true
+        definition_state: in_development
+        definition_notes:
+          - Required for resolved/exportable BiologicalEntity subjects; pending envelopes may still block subject resolution when the source cannot support a taxon.
+        metadata:
+          validatable: true
+          validator_binding_id: phenotype_subject_entity_validator
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: BiologicalEntity
+              slot: taxon
+              range: NCBITaxonTerm
   - object_type: PhenotypeTerm
     display_name: Phenotype ontology term
     description: Pending validated-reference object for a phenotype ontology term.
@@ -463,6 +486,20 @@ object_definitions:
       - field_path: figure_reference
         field_type: string
         display_name: Figure reference
+fixture_packs:
+  - fixture_pack_id: tool_verified_pending
+    display_name: Tool-verified pending phenotype fixtures
+    path: fixtures/tool_verified_pending.yaml
+    description: Production-like pending PhenotypeAnnotation envelopes preserving phenotype extractor evidence and audit metadata.
+    object_types:
+      - PhenotypeAnnotation
+      - PhenotypeSubject
+      - PhenotypeTerm
+      - Reference
+      - EvidenceQuote
+    definition_state: in_development
+    definition_notes:
+      - Fixtures use curatable_objects/domain-envelope objects as the semantic source of truth.
 metadata:
   base_pack_id: agr.alliance.base
   object_role_key: object_role
@@ -498,6 +535,7 @@ metadata:
       input_fields:
         subject_identifier: PhenotypeSubject.subject_identifier
         subject_type: PhenotypeSubject.subject_type
+        taxon: PhenotypeSubject.taxon
       expected_db_targets:
         gene: public.genephenotypeannotation.phenotypeannotationsubject_id
         allele: public.allelephenotypeannotation.phenotypeannotationsubject_id
