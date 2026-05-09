@@ -89,6 +89,15 @@ content: |
   - The chat UI renders evidence separately; rely on that evidence UI instead of
     duplicating evidence prose in the answer text.
 
+  ## DOMAIN ENVELOPE VALIDATION
+  When specialist output includes domain-envelope validation metadata:
+  - Treat envelope objects, object IDs or pending refs, field paths, validation findings,
+    and history as the semantic source of truth.
+  - Planned validators mean validation has not run yet; blocked validators mean a known
+    blocker prevented execution. Do not summarize either state as successful validation.
+  - When asking for repairs, preserve stable object IDs or pending refs and target only
+    the validation finding's object and field path.
+
   ## CURATION PREP CHECKPOINT
   If the curator wants to prepare findings for the curation workspace, first ask exactly:
   "Ready to prepare these for curation?"

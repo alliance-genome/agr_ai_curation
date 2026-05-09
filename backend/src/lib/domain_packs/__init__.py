@@ -14,6 +14,20 @@ from .registry import (
     LoadedDomainPack,
     load_domain_pack_registry,
 )
+from .validation_registry import (
+    DomainPackValidationRegistry,
+    FieldValidationPolicy,
+    ValidationBindingState,
+    ValidationRegistryError,
+    ValidatorBinding,
+    ValidatorBindingMatch,
+    ValidatorMetadataEntry,
+)
+from .validation_supervisor import (
+    ValidationSupervisorResult,
+    append_validation_findings_to_envelope,
+    run_validation_supervisor,
+)
 
 __all__ = [
     "DomainFixturePackError",
@@ -22,8 +36,18 @@ __all__ = [
     "DomainPackMetadataError",
     "DomainPackRegistry",
     "DomainPackRegistryValidationError",
+    "DomainPackValidationRegistry",
+    "FieldValidationPolicy",
     "LoadedDomainPack",
+    "ValidationBindingState",
+    "ValidationRegistryError",
+    "ValidationSupervisorResult",
+    "ValidatorBinding",
+    "ValidatorBindingMatch",
+    "ValidatorMetadataEntry",
+    "append_validation_findings_to_envelope",
     "load_domain_fixture_pack",
     "load_domain_pack_metadata",
     "load_domain_pack_registry",
+    "run_validation_supervisor",
 ]

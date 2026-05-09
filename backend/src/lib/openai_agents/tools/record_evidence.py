@@ -832,6 +832,43 @@ def _preview_for_log(value: Any, *, limit: int = 180) -> str:
     return text[:limit].rstrip() + "..."
 
 
+def _optional_output_string(value: Any) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _build_envelope_target_fields(
+    *,
+    object_id: Any = None,
+    pending_ref_id: Any = None,
+    object_type: Any = None,
+    field_path: Any = None,
+) -> dict[str, Any]:
+    target: dict[str, Any] = {}
+    normalized_object_id = _optional_output_string(object_id)
+    normalized_pending_ref_id = _optional_output_string(pending_ref_id)
+    normalized_object_type = _optional_output_string(object_type)
+    normalized_field_path = _optional_output_string(field_path)
+
+    if normalized_object_id:
+        target["object_id"] = normalized_object_id
+    elif normalized_pending_ref_id:
+        target["pending_ref_id"] = normalized_pending_ref_id
+    if normalized_object_type:
+        target["object_type"] = normalized_object_type
+    if normalized_field_path:
+        target["field_path"] = normalized_field_path
+
+    return {"envelope_target": target} if target else {}
+
+
+def _merge_extra_fields(*field_groups: dict[str, Any]) -> dict[str, Any] | None:
+    merged: dict[str, Any] = {}
+    for fields in field_groups:
+        merged.update(fields)
+    return merged or None
+
+
 def _log_record_evidence_result(
     result: dict[str, Any],
     *,
@@ -869,7 +906,15 @@ def create_record_evidence_tool(
     unverified_attempts_by_entity_chunk: dict[tuple[str, str], int] = {}
 
     @function_tool
-    async def record_evidence(entity: str, chunk_id: str, claimed_quote: str) -> dict[str, Any]:
+    async def record_evidence(
+        entity: str,
+        chunk_id: str,
+        claimed_quote: str,
+        object_id: str | None = None,
+        pending_ref_id: str | None = None,
+        field_path: str | None = None,
+        object_type: str | None = None,
+    ) -> dict[str, Any]:
         """Verify exact source-corpus text against a specific Weaviate chunk."""
         if tracker:
             tracker.record_call("record_evidence")
@@ -877,6 +922,12 @@ def create_record_evidence_tool(
         normalized_entity = str(entity or "").strip()
         normalized_chunk_id = str(chunk_id or "").strip()
         normalized_claimed_quote = str(claimed_quote or "").strip()
+        envelope_target_fields = _build_envelope_target_fields(
+            object_id=object_id,
+            pending_ref_id=pending_ref_id,
+            object_type=object_type,
+            field_path=field_path,
+        )
 
         logger.info(
             "Verifying evidence for entity '%s' in chunk %s for document %s",
@@ -897,9 +948,12 @@ def create_record_evidence_tool(
                     section=section_label,
                     subsection=None,
                     message=_section_label_not_found_message(normalized_chunk_id),
-                    extra_fields=_build_section_label_retry_fields(
-                        normalized_chunk_id,
-                        normalized_claimed_quote,
+                    extra_fields=_merge_extra_fields(
+                        envelope_target_fields,
+                        _build_section_label_retry_fields(
+                            normalized_chunk_id,
+                            normalized_claimed_quote,
+                        ),
                     ),
                 ),
                 document_id=document_id,
@@ -924,6 +978,7 @@ def create_record_evidence_tool(
                         section=None,
                         subsection=None,
                         message=_INVALID_CHUNK_LOAD_MESSAGE,
+                        extra_fields=envelope_target_fields,
                     ),
                     document_id=document_id,
                     verification_method="chunk_load_error",
@@ -940,6 +995,7 @@ def create_record_evidence_tool(
                     section=None,
                     subsection=None,
                     message=_MISSING_CHUNK_MESSAGE,
+                    extra_fields=envelope_target_fields,
                 ),
                 document_id=document_id,
                 verification_method="missing_chunk",
@@ -961,6 +1017,7 @@ def create_record_evidence_tool(
                     section=section,
                     subsection=subsection,
                     message="This chunk has no text content. Drop this evidence or retry with another chunk.",
+                    extra_fields=envelope_target_fields,
                 ),
                 document_id=document_id,
                 verification_method="empty_chunk",
@@ -1000,21 +1057,24 @@ def create_record_evidence_tool(
                     subsection=subsection,
                     best_match=best_match,
                     message=_RETRY_EXHAUSTED_MESSAGE if retry_exhausted else _NOT_FOUND_MESSAGE,
-                    extra_fields={
-                        "unverified_attempts": attempt_count,
-                        "max_unverified_attempts": _MAX_UNVERIFIED_ATTEMPTS_PER_ENTITY_CHUNK,
-                        "retry_exhausted": retry_exhausted,
-                        "terminal": retry_exhausted,
-                        "retry_instructions": (
-                            "Stop retrying this entity/chunk pair; use search_document or read_section "
-                            "to find exact source text in a better chunk, or drop this evidence."
-                        )
-                        if retry_exhausted
-                        else (
-                            "Retry with an exact contiguous substring copied from this chunk, "
-                            "or re-search/drop the evidence if the chunk does not contain the claim."
-                        ),
-                    },
+                    extra_fields=_merge_extra_fields(
+                        envelope_target_fields,
+                        {
+                            "unverified_attempts": attempt_count,
+                            "max_unverified_attempts": _MAX_UNVERIFIED_ATTEMPTS_PER_ENTITY_CHUNK,
+                            "retry_exhausted": retry_exhausted,
+                            "terminal": retry_exhausted,
+                            "retry_instructions": (
+                                "Stop retrying this entity/chunk pair; use search_document or read_section "
+                                "to find exact source text in a better chunk, or drop this evidence."
+                            )
+                            if retry_exhausted
+                            else (
+                                "Retry with an exact contiguous substring copied from this chunk, "
+                                "or re-search/drop the evidence if the chunk does not contain the claim."
+                            ),
+                        },
+                    ),
                 ),
                 document_id=document_id,
                 verification_method="not_found",
@@ -1028,6 +1088,7 @@ def create_record_evidence_tool(
             "claimed_quote": normalized_claimed_quote,
             "verified_quote": verified_quote,
         }
+        payload.update(envelope_target_fields)
         if page is not None:
             payload["page"] = page
         if section:

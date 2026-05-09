@@ -113,20 +113,41 @@ def test_envelope_rejects_unknown_pending_refs():
     assert "unknown pending_ref_id 'missing-object'" in str(exc_info.value)
 
 
-def test_field_path_validation_rejects_invalid_object_paths():
+def test_validation_finding_field_refs_can_target_missing_fields():
+    envelope = DomainEnvelope(
+        envelope_id="env-1",
+        domain_pack_id="fixture.core",
+        objects=[_pending_gene_object()],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.ERROR,
+                message="Missing field",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(pending_ref_id="pending-gene-1"),
+                    field_path="gene.missing",
+                ),
+            )
+        ],
+    )
+
+    assert envelope.validation_findings[0].field_ref.field_path == "gene.missing"
+
+
+def test_object_field_refs_reject_missing_payload_paths():
     with pytest.raises(ValidationError) as exc_info:
         DomainEnvelope(
             envelope_id="env-1",
             domain_pack_id="fixture.core",
-            objects=[_pending_gene_object()],
-            validation_findings=[
-                ValidationFinding(
-                    severity=ValidationFindingSeverity.ERROR,
-                    message="Missing field",
-                    field_ref=FieldRef(
-                        object_ref=ObjectRef(pending_ref_id="pending-gene-1"),
-                        field_path="gene.missing",
-                    ),
+            objects=[
+                _pending_gene_object().model_copy(
+                    update={
+                        "field_refs": [
+                            FieldRef(
+                                object_ref=ObjectRef(pending_ref_id="pending-gene-1"),
+                                field_path="gene.missing",
+                            )
+                        ]
+                    }
                 )
             ],
         )
