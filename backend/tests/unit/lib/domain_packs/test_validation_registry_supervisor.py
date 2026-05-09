@@ -16,7 +16,6 @@ from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
-    FieldRef,
     ObjectRef,
     ValidationFinding,
     ValidationFindingSeverity,
