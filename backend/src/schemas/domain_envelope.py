@@ -552,10 +552,10 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
                     errors,
                 )
             if finding.field_ref is not None:
-                self._validate_field_ref(
-                    finding.field_ref,
+                self._validate_object_ref(
+                    finding.field_ref.object_ref,
                     objects_by_key,
-                    f"validation_findings[{index}].field_ref",
+                    f"validation_findings[{index}].field_ref.object_ref",
                     errors,
                 )
 

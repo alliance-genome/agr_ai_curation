@@ -5,7 +5,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
     required_context: []
-    description: Structured AGR curation database queries
+    description: Structured AGR curation database queries and validator reference lookups
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
   - tool_id: search_document
     binding_kind: context_factory
@@ -37,7 +37,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Verify a claimed quote against a specific document chunk
+    description: Verify exact source text against a document chunk and optionally echo envelope target refs
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: curation_db_sql
     binding_kind: context_factory
