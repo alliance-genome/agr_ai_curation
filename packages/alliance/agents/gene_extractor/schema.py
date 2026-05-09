@@ -24,6 +24,8 @@ GENE_LINKML_SCHEMA_URI = (
     "https://github.com/alliance-genome/agr_curation_schema/blob/"
     f"{GENE_LINKML_COMMIT}/model/schema/gene.yaml"
 )
+
+
 def _strip_required_string(value: object, field_name: str) -> object:
     if not isinstance(value, str):
         return value

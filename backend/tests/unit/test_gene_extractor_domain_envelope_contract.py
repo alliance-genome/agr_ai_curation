@@ -252,6 +252,10 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert '"object_type": "GeneAssertion"' not in prompt_content
     assert '"normalized_symbol"' not in prompt_content
     assert '"normalized_id"' not in prompt_content
+    example_object_count = prompt_content.count('"object_type": "gene_mention_evidence"')
+    assert example_object_count == 3
+    assert prompt_content.count('"schema_ref": {') == example_object_count
+    assert prompt_content.count('"definition_notes": [') == example_object_count
 
     for group_rule_file in source.group_rule_files:
         content = str(yaml.safe_load(group_rule_file.read_text(encoding="utf-8"))["content"])
