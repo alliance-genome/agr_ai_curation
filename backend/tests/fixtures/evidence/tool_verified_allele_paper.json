@@ -41,6 +41,7 @@
       },
       "expected_tool_result": {
         "status": "verified",
+        "evidence_record_id": "daf-2-m41-evidence-1",
         "verified_quote": "daf-2(m41) animals formed dauer larvae at 25 C.",
         "page": 3,
         "section": "Results",
@@ -57,6 +58,7 @@
       },
       "expected_tool_result": {
         "status": "verified",
+        "evidence_record_id": "daf-2-m41-evidence-2",
         "verified_quote": "Sequencing identified a glycine-to-glutamate substitution in daf-2(m41), confirming the allele lesion.",
         "page": 4,
         "section": "Results",
@@ -114,6 +116,29 @@
         "Confirmed tool-verified allele fixture scope."
       ]
     },
+    "alleles": [
+      {
+        "label": "daf-2(m41)",
+        "entity_type": "allele",
+        "normalized_id": "WB:WBVar00000001",
+        "source_mentions": [
+          "daf-2(m41)"
+        ],
+        "evidence_case_ids": [
+          "verified_exact",
+          "verified_supporting"
+        ]
+      },
+      {
+        "label": "daf-2(e1368)",
+        "entity_type": "allele",
+        "normalized_id": "WB:WBVar00000002",
+        "source_mentions": [
+          "daf-2(e1368)"
+        ],
+        "evidence_case_ids": []
+      }
+    ],
     "items": [
       {
         "label": "daf-2(m41)",

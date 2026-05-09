@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
+from agr_ai_curation_alliance.domain_packs.schema_refs import ALLIANCE_LINKML_COMMIT
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -25,36 +25,35 @@ from src.schemas.domain_envelope import (
 
 ALLELE_DOMAIN_PACK_ID = "agr.alliance.allele"
 ALLELE_DOMAIN_PACK_VERSION = "0.1.0"
-ALLELE_LINKML_COMMIT = "1b11d0888f19eba4ca72022200bb7d96b30d4a52"
 
 _ALLELE_SCHEMA_REF = SchemaRef(
     schema_id="alliance.linkml.Allele",
     provider="alliance_linkml",
     name="Allele",
-    version=ALLELE_LINKML_COMMIT,
+    version=ALLIANCE_LINKML_COMMIT,
     uri=(
         "https://github.com/alliance-genome/agr_curation_schema/blob/"
-        f"{ALLELE_LINKML_COMMIT}/model/schema/allele.yaml"
+        f"{ALLIANCE_LINKML_COMMIT}/model/schema/allele.yaml"
     ),
 )
 _REFERENCE_SCHEMA_REF = SchemaRef(
     schema_id="alliance.linkml.Reference",
     provider="alliance_linkml",
     name="Reference",
-    version=ALLELE_LINKML_COMMIT,
+    version=ALLIANCE_LINKML_COMMIT,
     uri=(
         "https://github.com/alliance-genome/agr_curation_schema/blob/"
-        f"{ALLELE_LINKML_COMMIT}/model/schema/reference.yaml"
+        f"{ALLIANCE_LINKML_COMMIT}/model/schema/reference.yaml"
     ),
 )
 _ASSOCIATION_SCHEMA_REF = SchemaRef(
     schema_id="alliance.linkml.AlleleAssociation",
     provider="alliance_linkml",
     name="AlleleAssociation",
-    version=ALLELE_LINKML_COMMIT,
+    version=ALLIANCE_LINKML_COMMIT,
     uri=(
         "https://github.com/alliance-genome/agr_curation_schema/blob/"
-        f"{ALLELE_LINKML_COMMIT}/model/schema/allele.yaml"
+        f"{ALLIANCE_LINKML_COMMIT}/model/schema/allele.yaml"
     ),
     definition_state=DefinitionState.IN_DEVELOPMENT,
     definition_notes=[
@@ -72,8 +71,8 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
     """Convert the tool-verified allele fixture into pending envelope objects."""
 
     timestamp = created_at or datetime.now(timezone.utc)
-    extraction = _as_mapping(fixture.get("extraction"))
-    paper = _as_mapping(fixture.get("paper"))
+    extraction = _required_mapping(fixture.get("extraction"), "extraction")
+    paper = _required_mapping(fixture.get("paper"), "paper")
     case_lookup = _tool_cases_by_id(fixture)
 
     objects: list[CuratableObjectEnvelope] = []
@@ -100,7 +99,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
     retained_count = 0
     skipped_without_evidence = 0
     for raw_item in _iter_allele_items(extraction):
-        item = _as_mapping(raw_item)
+        item = _required_mapping(raw_item, "extraction.alleles[]")
         evidence_records = _evidence_records_for_item(item, case_lookup)
         if not evidence_records:
             skipped_without_evidence += 1
@@ -113,11 +112,13 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             value
             for value in (
                 _optional_string(value)
-                for value in _as_sequence(item.get("source_mentions"))
+                for value in _optional_sequence(
+                    item.get("source_mentions"),
+                    "extraction.alleles[].source_mentions",
+                )
             )
             if value is not None
         ] or [label]
-        slug = _slug(label, fallback=f"allele-{retained_count}")
 
         mention_ref_id = f"allele-mention-{retained_count}"
         allele_ref_id = f"allele-reference-{retained_count}"
@@ -156,11 +157,11 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
         objects.extend([mention_object, allele_object])
 
         for evidence_index, evidence_record in enumerate(evidence_records, start=1):
-            record = _as_mapping(evidence_record)
+            record = _required_mapping(evidence_record, "evidence_records[]")
             evidence_ref_id = f"evidence-quote-{retained_count}-{evidence_index}"
-            evidence_record_id = (
-                _optional_string(record.get("evidence_record_id"))
-                or f"{slug}-evidence-{evidence_index}"
+            evidence_record_id = _required_string(
+                record.get("evidence_record_id"),
+                "evidence_record_id",
             )
             evidence_record_ids.append(evidence_record_id)
             evidence_refs.append(
@@ -343,8 +344,11 @@ def validate_pending_allele_envelope(
                 )
             )
 
-        write_behavior = _as_mapping(association.metadata.get("write_behavior"))
-        if write_behavior.get("status") != "blocked":
+        write_behavior = association.metadata.get("write_behavior")
+        if (
+            not isinstance(write_behavior, Mapping)
+            or write_behavior.get("status") != "blocked"
+        ):
             findings.append(
                 ValidationFinding(
                     severity=ValidationFindingSeverity.BLOCKER,
@@ -363,19 +367,28 @@ def validate_pending_allele_envelope(
 
 
 def _iter_allele_items(extraction: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
-    allele_findings = _as_sequence(extraction.get("alleles"))
-    if allele_findings:
-        return tuple(
-            {
-                "label": _optional_string(item.get("mention"))
-                or _optional_string(item.get("normalized_symbol")),
-                "normalized_id": item.get("normalized_id"),
-                "source_mentions": [_optional_string(item.get("mention"))],
-                "evidence_record_ids": item.get("evidence_record_ids"),
-            }
-            for item in (_as_mapping(raw_item) for raw_item in allele_findings)
+    return tuple(
+        {
+            "label": _optional_string(item.get("label"))
+            or _optional_string(item.get("mention"))
+            or _optional_string(item.get("normalized_symbol")),
+            "normalized_id": item.get("normalized_id"),
+            "source_mentions": item.get("source_mentions")
+            if item.get("source_mentions") is not None
+            else [_optional_string(item.get("mention"))],
+            "evidence": item.get("evidence"),
+            "evidence_records": item.get("evidence_records"),
+            "evidence_record_ids": item.get("evidence_record_ids"),
+            "evidence_case_ids": item.get("evidence_case_ids"),
+        }
+        for item in (
+            _required_mapping(raw_item, "extraction.alleles[]")
+            for raw_item in _required_sequence(
+                extraction.get("alleles"),
+                "extraction.alleles",
+            )
         )
-    return tuple(_as_mapping(item) for item in _as_sequence(extraction.get("items")))
+    )
 
 
 def _evidence_records_for_item(
@@ -383,47 +396,74 @@ def _evidence_records_for_item(
     case_lookup: Mapping[str, Mapping[str, Any]],
 ) -> tuple[Mapping[str, Any], ...]:
     direct_evidence = tuple(
-        _as_mapping(record) for record in _as_sequence(item.get("evidence"))
+        _required_mapping(record, "extraction.alleles[].evidence[]")
+        for record in _optional_sequence(
+            item.get("evidence"),
+            "extraction.alleles[].evidence",
+        )
     )
     if direct_evidence:
         return direct_evidence
 
     records_by_id = {
-        _optional_string(record.get("evidence_record_id")): _as_mapping(record)
-        for record in _as_sequence(item.get("evidence_records"))
-        if _optional_string(_as_mapping(record).get("evidence_record_id")) is not None
+        _optional_string(record.get("evidence_record_id")): record
+        for record in (
+            _required_mapping(record, "extraction.alleles[].evidence_records[]")
+            for record in _optional_sequence(
+                item.get("evidence_records"),
+                "extraction.alleles[].evidence_records",
+            )
+        )
+        if _optional_string(record.get("evidence_record_id")) is not None
     }
     evidence_record_ids = [
         value
         for value in (
             _optional_string(raw_id)
-            for raw_id in _as_sequence(item.get("evidence_record_ids"))
+            for raw_id in _optional_sequence(
+                item.get("evidence_record_ids"),
+                "extraction.alleles[].evidence_record_ids",
+            )
         )
         if value is not None
     ]
     if evidence_record_ids and records_by_id:
+        missing_record_ids = [
+            record_id for record_id in evidence_record_ids if record_id not in records_by_id
+        ]
+        if missing_record_ids:
+            raise ValueError(
+                "extraction.alleles[].evidence_record_ids references unknown "
+                f"evidence record(s): {', '.join(missing_record_ids)}"
+            )
         return tuple(
             records_by_id[record_id]
             for record_id in evidence_record_ids
-            if record_id in records_by_id
         )
 
     evidence_case_ids = [
         value
         for value in (
             _optional_string(raw_id)
-            for raw_id in _as_sequence(item.get("evidence_case_ids"))
+            for raw_id in _optional_sequence(
+                item.get("evidence_case_ids"),
+                "extraction.alleles[].evidence_case_ids",
+            )
         )
         if value is not None
     ]
-    return tuple(
-        record
-        for record in (
-            _verified_evidence_record(case_lookup.get(case_id))
-            for case_id in evidence_case_ids
-        )
-        if record is not None
-    )
+    records: list[Mapping[str, Any]] = []
+    for case_id in evidence_case_ids:
+        tool_case = case_lookup.get(case_id)
+        if tool_case is None:
+            raise ValueError(
+                "extraction.alleles[].evidence_case_ids references unknown "
+                f"tool case: {case_id}"
+            )
+        record = _verified_evidence_record(tool_case)
+        if record is not None:
+            records.append(record)
+    return tuple(records)
 
 
 def _verified_evidence_record(
@@ -432,12 +472,19 @@ def _verified_evidence_record(
     if tool_case is None:
         return None
 
-    tool_input = _as_mapping(tool_case.get("tool_input"))
-    tool_result = _as_mapping(tool_case.get("expected_tool_result"))
+    tool_input = _required_mapping(tool_case.get("tool_input"), "tool_cases[].tool_input")
+    tool_result = _required_mapping(
+        tool_case.get("expected_tool_result"),
+        "tool_cases[].expected_tool_result",
+    )
     if _optional_string(tool_result.get("status")) != "verified":
         return None
 
     record: dict[str, Any] = {
+        "evidence_record_id": _required_string(
+            tool_result.get("evidence_record_id"),
+            "tool_cases[].expected_tool_result.evidence_record_id",
+        ),
         "entity": tool_input.get("entity"),
         "chunk_id": tool_input.get("chunk_id"),
         "verified_quote": tool_result.get("verified_quote"),
@@ -474,19 +521,32 @@ def _evidence_quote_payload(
 
 
 def _tool_cases_by_id(fixture: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
-    return {
-        str(case["case_id"]): deepcopy(case)
-        for case in _as_sequence(fixture.get("tool_cases"))
-        if isinstance(case, Mapping) and case.get("case_id")
-    }
+    cases: dict[str, Mapping[str, Any]] = {}
+    for raw_case in _optional_sequence(fixture.get("tool_cases"), "tool_cases"):
+        case = _required_mapping(raw_case, "tool_cases[]")
+        case_id = _required_string(case.get("case_id"), "tool_cases[].case_id")
+        cases[case_id] = deepcopy(case)
+    return cases
 
 
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
+def _required_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be an object")
+    return value
 
 
-def _as_sequence(value: Any) -> Sequence[Any]:
-    return value if isinstance(value, (list, tuple)) else ()
+def _required_sequence(value: Any, field_name: str) -> Sequence[Any]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field_name} must be a list")
+    return value
+
+
+def _optional_sequence(value: Any, field_name: str) -> Sequence[Any]:
+    if value is None:
+        return ()
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{field_name} must be a list")
+    return value
 
 
 def _optional_string(value: Any) -> str | None:
@@ -503,11 +563,6 @@ def _required_string(value: Any, field_name: str) -> str:
     if normalized is None:
         raise ValueError(f"{field_name} must be a non-empty string")
     return normalized
-
-
-def _slug(value: str, *, fallback: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9]+", "-", value.strip().lower()).strip("-")
-    return slug or fallback
 
 
 __all__ = [

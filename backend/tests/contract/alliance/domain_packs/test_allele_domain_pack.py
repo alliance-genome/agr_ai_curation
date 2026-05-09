@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import importlib
 import sys
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
 import yaml
 
 from src.schemas.domain_envelope import CuratableObjectStatus
@@ -258,3 +260,22 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         exclude_defaults=True,
         exclude_none=True,
     ) == expected["envelope"]
+
+
+def test_tool_verified_allele_fixture_rejects_malformed_required_data():
+    fixture = load_evidence_fixture("tool_verified_allele_paper")
+
+    missing_extraction = copy.deepcopy(fixture)
+    missing_extraction.pop("extraction")
+    with pytest.raises(ValueError, match="extraction must be an object"):
+        build_pending_allele_envelope_from_tool_verified_fixture(missing_extraction)
+
+    legacy_items_only = copy.deepcopy(fixture)
+    legacy_items_only["extraction"].pop("alleles")
+    with pytest.raises(ValueError, match="extraction.alleles must be a list"):
+        build_pending_allele_envelope_from_tool_verified_fixture(legacy_items_only)
+
+    missing_evidence_id = copy.deepcopy(fixture)
+    missing_evidence_id["tool_cases"][0]["expected_tool_result"].pop("evidence_record_id")
+    with pytest.raises(ValueError, match="evidence_record_id"):
+        build_pending_allele_envelope_from_tool_verified_fixture(missing_evidence_id)
