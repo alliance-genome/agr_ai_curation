@@ -230,6 +230,13 @@ def test_supervisor_appends_required_planned_blocked_findings_and_history(
     required_finding = findings_by_code["domain_pack.required_field_missing"]
     assert required_finding.severity is ValidationFindingSeverity.BLOCKER
     assert required_finding.field_ref.field_path == "gene.identifier"
+    assert (
+        required_finding.details["validation_metadata"]["metadata_source"]
+        == "field_policy"
+    )
+    assert required_finding.details["validation_metadata"]["field_policy"][
+        "policy_source"
+    ] == "field_policy"
     assert required_finding.details["validation_metadata"]["field_policy"][
         "export_blocking"
     ] is True
@@ -259,6 +266,41 @@ def test_supervisor_appends_required_planned_blocked_findings_and_history(
         event.details["target"].get("field_path") == "gene.identifier"
         for event in result.envelope.history
     )
+
+
+def test_supervisor_marks_field_definition_source_when_policy_absent(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    envelope = _envelope(payload={"gene": {"symbol": "abc-1"}, "confidence": "high"})
+
+    class RegistryWithoutFormalFieldPolicies:
+        validator_metadata = ()
+
+        def __init__(self, delegate: DomainPackValidationRegistry) -> None:
+            self.object_definitions_by_type = delegate.object_definitions_by_type
+
+        def match_bindings(self, _envelope: DomainEnvelope) -> tuple[object, ...]:
+            return ()
+
+        def policy_for(self, _object_type: str, _field_path: str) -> None:
+            return None
+
+    result = run_validation_supervisor(
+        envelope,
+        pack,
+        registry=RegistryWithoutFormalFieldPolicies(registry),
+    )
+
+    required_finding = [
+        finding
+        for finding in result.envelope.validation_findings
+        if finding.code == "domain_pack.required_field_missing"
+    ][0]
+    metadata = required_finding.details["validation_metadata"]
+
+    assert metadata["metadata_source"] == "field_definition"
+    assert metadata["field_policy"]["policy_source"] == "field_definition"
+    assert metadata["field_policy"]["field_path"] == "gene.identifier"
 
 
 def test_supervisor_runs_callable_and_field_prefix_bindings(tmp_path: Path, monkeypatch):

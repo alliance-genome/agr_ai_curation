@@ -169,6 +169,7 @@ class FieldValidationPolicy:
             "object_type": self.object_type,
             "field_path": self.field_path,
             "field_type": self.field_type.value,
+            "policy_source": "field_policy",
             "required": self.required,
             "export_blocking": self.export_blocking,
             "definition_state": self.definition_state.value,
@@ -575,6 +576,7 @@ def _state_from_item(
         )
     raw_state = raw_item.get("status", raw_item.get("state"))
     if raw_state is None:
+        # Domain-pack validator items are active unless scoped metadata says otherwise.
         return collection_state or ValidationBindingState.ACTIVE
     try:
         item_state = ValidationBindingState(str(raw_state))

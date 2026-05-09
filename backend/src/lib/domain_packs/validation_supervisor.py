@@ -226,6 +226,16 @@ def _required_field_findings(
                 domain_object.object_type,
                 field_definition.field_path,
             )
+            field_policy_details = (
+                policy.identity_details()
+                if policy is not None
+                else _field_definition_details(
+                    envelope=envelope,
+                    domain_object=domain_object,
+                    field_path=field_definition.field_path,
+                    field_type=field_definition.field_type.value,
+                )
+            )
             findings.append(
                 ValidationFinding(
                     severity=(
@@ -247,15 +257,12 @@ def _required_field_findings(
                             {
                                 "validator_id": "domain_pack.required_field_policy",
                                 "binding_state": ValidationBindingState.ACTIVE.value,
-                                "metadata_source": "field_policy",
-                                "field_policy": policy.identity_details()
-                                if policy is not None
-                                else _fallback_field_policy_details(
-                                    envelope=envelope,
-                                    domain_object=domain_object,
-                                    field_path=field_definition.field_path,
-                                    field_type=field_definition.field_type.value,
+                                "metadata_source": (
+                                    "field_policy"
+                                    if policy is not None
+                                    else "field_definition"
                                 ),
+                                "field_policy": field_policy_details,
                             },
                             provider_model_ref,
                         )
@@ -585,7 +592,7 @@ def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
     return current
 
 
-def _fallback_field_policy_details(
+def _field_definition_details(
     *,
     envelope: DomainEnvelope,
     domain_object: CuratableObjectEnvelope,
@@ -597,6 +604,7 @@ def _fallback_field_policy_details(
         "object_type": domain_object.object_type,
         "field_path": field_path,
         "field_type": field_type,
+        "policy_source": "field_definition",
         "required": True,
         "export_blocking": False,
     }
