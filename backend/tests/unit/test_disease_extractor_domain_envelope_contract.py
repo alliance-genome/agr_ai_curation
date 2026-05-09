@@ -73,6 +73,21 @@ def _valid_disease_extractor_payload() -> dict[str, object]:
     return yaml.safe_load(FIXTURE_PATH.read_text(encoding="utf-8"))["output"]
 
 
+def _set_payload_field(payload: dict[str, object], field_path: str, value: object) -> None:
+    current = payload["curatable_objects"][0]["payload"]
+    for part in field_path.split(".")[:-1]:
+        current = current[part]
+    current[field_path.split(".")[-1]] = value
+
+
+def _valid_pending_disease_envelope():
+    return disease_extraction_output_to_pending_envelope(
+        copy.deepcopy(_valid_disease_extractor_payload()),
+        envelope_id="disease-extractor-env-1",
+        document_id="ZFIN-paper-disease-0001",
+    )
+
+
 def test_disease_extractor_schema_accepts_pending_disease_annotation_output():
     envelope = _disease_extractor_schema().model_validate(
         _valid_disease_extractor_payload()
@@ -124,6 +139,62 @@ def test_disease_extractor_schema_rejects_legacy_flat_disease_payload_fields():
     message = str(exc_info.value)
     assert "legacy flat disease helper fields" in message
     assert "disease_annotation_object.curie/name" in message
+
+
+@pytest.mark.parametrize(
+    "field_path",
+    [
+        "mention",
+        "disease_annotation_object.curie",
+        "disease_annotation_object.name",
+    ],
+)
+def test_disease_extractor_schema_rejects_blank_required_payload_values(
+    field_path: str,
+):
+    payload = _valid_disease_extractor_payload()
+    _set_payload_field(payload, field_path, "  ")
+
+    with pytest.raises(ValidationError) as exc_info:
+        _disease_extractor_schema().model_validate(payload)
+
+    message = str(exc_info.value)
+    assert "missing required non-empty fields" in message
+    assert field_path in message
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value"),
+    [
+        ("role", "not_a_role"),
+        ("confidence", "certain"),
+    ],
+)
+def test_disease_extractor_schema_rejects_unsupported_payload_enum_values(
+    field_path: str,
+    value: str,
+):
+    payload = _valid_disease_extractor_payload()
+    _set_payload_field(payload, field_path, value)
+
+    with pytest.raises(ValidationError) as exc_info:
+        _disease_extractor_schema().model_validate(payload)
+
+    message = str(exc_info.value)
+    assert f"payload.{field_path} must be one of" in message
+
+
+def test_disease_extractor_schema_rejects_incomplete_payload_evidence_snapshot():
+    payload = _valid_disease_extractor_payload()
+    payload["curatable_objects"][0]["payload"]["evidence_records"][0][
+        "verified_quote"
+    ] = " "
+
+    with pytest.raises(ValidationError) as exc_info:
+        _disease_extractor_schema().model_validate(payload)
+
+    message = str(exc_info.value)
+    assert "payload.evidence_records[0] must include non-empty verified_quote" in message
 
 
 def test_disease_extractor_schema_requires_metadata_evidence_alignment():
@@ -212,12 +283,7 @@ def test_disease_extractor_payload_persists_curatable_objects_only_for_new_runs(
 
 
 def test_disease_extractor_fixture_converts_to_pending_domain_envelope():
-    payload = copy.deepcopy(_valid_disease_extractor_payload())
-    converted = disease_extraction_output_to_pending_envelope(
-        payload,
-        envelope_id="disease-extractor-env-1",
-        document_id="ZFIN-paper-disease-0001",
-    )
+    converted = _valid_pending_disease_envelope()
 
     assert converted.domain_pack_id == DISEASE_DOMAIN_PACK_ID
     assert converted.objects[0].object_type == DISEASE_OBJECT_TYPE
@@ -228,3 +294,70 @@ def test_disease_extractor_fixture_converts_to_pending_domain_envelope():
     assert converted.metadata["semantic_source"] == "domain_envelope.objects"
     assert converted.metadata["legacy_semantic_lists"] == []
     assert validate_pending_disease_envelope(converted) == ()
+
+
+@pytest.mark.parametrize(
+    "field_path",
+    [
+        "mention",
+        "disease_annotation_object.curie",
+        "disease_annotation_object.name",
+    ],
+)
+def test_pending_disease_validator_rejects_blank_required_payload_values(
+    field_path: str,
+):
+    converted = _valid_pending_disease_envelope()
+    payload = converted.objects[0].payload
+    current = payload
+    for part in field_path.split(".")[:-1]:
+        current = current[part]
+    current[field_path.split(".")[-1]] = " "
+
+    findings = validate_pending_disease_envelope(converted)
+
+    assert [finding.code for finding in findings] == [
+        "alliance.disease.required_payload_fields_missing"
+    ]
+    assert findings[0].details["missing_fields"] == [field_path]
+
+
+@pytest.mark.parametrize(
+    ("field_path", "value"),
+    [
+        ("role", "not_a_role"),
+        ("confidence", "certain"),
+    ],
+)
+def test_pending_disease_validator_rejects_unsupported_payload_enum_values(
+    field_path: str,
+    value: str,
+):
+    converted = _valid_pending_disease_envelope()
+    converted.objects[0].payload[field_path] = value
+
+    findings = validate_pending_disease_envelope(converted)
+
+    assert [finding.code for finding in findings] == [
+        "alliance.disease.payload_enum_value_invalid"
+    ]
+    assert findings[0].details["field_path"] == field_path
+    assert findings[0].details["observed_value"] == value
+
+
+def test_pending_disease_validator_rejects_incomplete_evidence_snapshot():
+    converted = _valid_pending_disease_envelope()
+    converted.objects[0].payload["evidence_records"][0]["chunk_id"] = ""
+
+    findings = validate_pending_disease_envelope(converted)
+
+    assert [finding.code for finding in findings] == [
+        "alliance.disease.evidence_records_incomplete"
+    ]
+    assert findings[0].details["invalid_records"] == [
+        {
+            "record_index": 0,
+            "evidence_record_id": "ats-model-evidence-1",
+            "missing_or_invalid_fields": ["chunk_id"],
+        }
+    ]

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -24,6 +24,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
     field_path_exists,
+    parse_field_path,
 )
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
@@ -61,6 +62,22 @@ _FORBIDDEN_DISEASE_HELPER_PAYLOAD_FIELDS = frozenset(
         "disease_name",
     }
 )
+_DISEASE_ASSERTION_ROLES = frozenset(
+    {"primary", "background", "comparative", "model_context", "unspecified"}
+)
+_DISEASE_ASSERTION_CONFIDENCES = frozenset({"high", "medium", "low"})
+_DISEASE_PAYLOAD_ENUM_VALUES = {
+    "role": _DISEASE_ASSERTION_ROLES,
+    "confidence": _DISEASE_ASSERTION_CONFIDENCES,
+}
+_REQUIRED_DISEASE_EVIDENCE_SNAPSHOT_FIELDS = (
+    "evidence_record_id",
+    "verified_quote",
+    "page",
+    "section",
+    "chunk_id",
+)
+_MISSING_PAYLOAD_VALUE = object()
 
 
 def _strip_required_string(value: object, field_name: str) -> object:
@@ -347,9 +364,105 @@ def _metadata_evidence_records_by_id(
     }
 
 
+def _payload_value(
+    payload: Mapping[str, Any],
+    field_path: str,
+) -> Any:
+    current: Any = payload
+    for part in parse_field_path(field_path):
+        if isinstance(part, str):
+            if not isinstance(current, Mapping) or part not in current:
+                return _MISSING_PAYLOAD_VALUE
+            current = current[part]
+            continue
+
+        if (
+            not isinstance(current, Sequence)
+            or isinstance(current, (str, bytes, bytearray))
+            or part >= len(current)
+        ):
+            return _MISSING_PAYLOAD_VALUE
+        current = current[part]
+    return current
+
+
+def _required_payload_value_present(
+    payload: Mapping[str, Any],
+    field_path: str,
+) -> bool:
+    value = _payload_value(payload, field_path)
+    if value is _MISSING_PAYLOAD_VALUE or value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return bool(value)
+    return True
+
+
+def _missing_or_empty_payload_fields(payload: Mapping[str, Any]) -> list[str]:
+    return [
+        field_path
+        for field_path in REQUIRED_DISEASE_PAYLOAD_FIELDS
+        if not _required_payload_value_present(payload, field_path)
+    ]
+
+
+def _payload_enum_errors(*, location: str, payload: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    for field_path, allowed_values in _DISEASE_PAYLOAD_ENUM_VALUES.items():
+        value = _payload_value(payload, field_path)
+        if value is _MISSING_PAYLOAD_VALUE or value is None:
+            continue
+        normalized_value = value.strip() if isinstance(value, str) else value
+        if not normalized_value:
+            continue
+        if not isinstance(normalized_value, str) or normalized_value not in allowed_values:
+            errors.append(
+                f"{location}.payload.{field_path} must be one of "
+                + ", ".join(sorted(allowed_values))
+            )
+    return errors
+
+
+def _missing_required_mapping_fields(
+    record: Mapping[str, Any],
+    field_names: Sequence[str],
+) -> list[str]:
+    missing_fields: list[str] = []
+    for field_name in field_names:
+        value = record.get(field_name, _MISSING_PAYLOAD_VALUE)
+        if value is _MISSING_PAYLOAD_VALUE or value is None:
+            missing_fields.append(field_name)
+            continue
+        if isinstance(value, str) and not value.strip():
+            missing_fields.append(field_name)
+            continue
+        if field_name == "page" and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 1
+        ):
+            missing_fields.append(field_name)
+    return missing_fields
+
+
+def _required_mapping_field_errors(
+    *,
+    location: str,
+    record: Mapping[str, Any],
+    field_names: Sequence[str],
+) -> list[str]:
+    missing_fields = _missing_required_mapping_fields(record, field_names)
+    if not missing_fields:
+        return []
+    return [
+        f"{location} must include non-empty "
+        + ", ".join(missing_fields)
+    ]
+
+
 def _required_evidence_field_errors(evidence_id: str, evidence: Any) -> list[str]:
     missing_fields: list[str] = []
-    for field_name in ("entity", "verified_quote", "page", "section", "chunk_id"):
+    for field_name in _REQUIRED_DISEASE_EVIDENCE_SNAPSHOT_FIELDS:
         value = getattr(evidence, field_name, None)
         if value is None or (isinstance(value, str) and not value.strip()):
             missing_fields.append(field_name)
@@ -398,6 +511,21 @@ def _validate_payload_evidence_snapshot(
         errors.append(
             f"{location}.payload.evidence_records is missing snapshots for "
             + ", ".join(missing_payload_records)
+        )
+
+    for payload_record_index, payload_record in enumerate(payload_records):
+        payload_record_location = (
+            f"{location}.payload.evidence_records[{payload_record_index}]"
+        )
+        if not isinstance(payload_record, Mapping):
+            errors.append(f"{payload_record_location} must be an object")
+            continue
+        errors.extend(
+            _required_mapping_field_errors(
+                location=payload_record_location,
+                record=payload_record,
+                field_names=_REQUIRED_DISEASE_EVIDENCE_SNAPSHOT_FIELDS,
+            )
         )
 
     for evidence_id in obj.evidence_record_ids:
@@ -478,16 +606,13 @@ def validate_disease_extraction_objects(
                 "disease_annotation_object.curie/name instead"
             )
 
-        missing_payload_fields = sorted(
-            field_path
-            for field_path in REQUIRED_DISEASE_PAYLOAD_FIELDS
-            if not field_path_exists(obj.payload, field_path)
-        )
+        missing_payload_fields = _missing_or_empty_payload_fields(obj.payload)
         if missing_payload_fields:
             errors.append(
-                f"{location}.payload is missing required fields: "
+                f"{location}.payload is missing required non-empty fields: "
                 + ", ".join(missing_payload_fields)
             )
+        errors.extend(_payload_enum_errors(location=location, payload=obj.payload))
 
         if not obj.evidence_record_ids:
             errors.append(f"{location}.evidence_record_ids must not be empty")
@@ -955,11 +1080,7 @@ def validate_pending_disease_envelope(
             if disease_object.pending_ref_id
             else None
         )
-        missing_fields = [
-            field_path
-            for field_path in REQUIRED_DISEASE_PAYLOAD_FIELDS
-            if not field_path_exists(disease_object.payload, field_path)
-        ]
+        missing_fields = _missing_or_empty_payload_fields(disease_object.payload)
         if missing_fields:
             findings.append(
                 ValidationFinding(
@@ -967,16 +1088,54 @@ def validate_pending_disease_envelope(
                     code="alliance.disease.required_payload_fields_missing",
                     message=(
                         "DiseaseAnnotation pending assertion is missing required "
-                        "payload fields: "
+                        "non-empty payload fields: "
                         + ", ".join(missing_fields)
                     ),
                     object_ref=object_ref,
                     details={"missing_fields": missing_fields},
                 )
             )
+        for field_path, allowed_values in _DISEASE_PAYLOAD_ENUM_VALUES.items():
+            value = _payload_value(disease_object.payload, field_path)
+            if value is _MISSING_PAYLOAD_VALUE or value is None:
+                continue
+            normalized_value = value.strip() if isinstance(value, str) else value
+            if not normalized_value:
+                continue
+            if (
+                not isinstance(normalized_value, str)
+                or normalized_value not in allowed_values
+            ):
+                findings.append(
+                    ValidationFinding(
+                        severity=ValidationFindingSeverity.ERROR,
+                        code="alliance.disease.payload_enum_value_invalid",
+                        message=(
+                            f"DiseaseAnnotation pending assertion field {field_path} "
+                            "must be one of "
+                            + ", ".join(sorted(allowed_values))
+                            + "."
+                        ),
+                        object_ref=object_ref,
+                        field_ref=(
+                            FieldRef(
+                                object_ref=object_ref,
+                                field_path=field_path,
+                            )
+                            if object_ref is not None
+                            else None
+                        ),
+                        details={
+                            "field_path": field_path,
+                            "observed_value": value,
+                            "allowed_values": sorted(allowed_values),
+                        },
+                    )
+                )
 
         evidence_record_ids = disease_object.payload.get("evidence_record_ids")
         evidence_records = disease_object.payload.get("evidence_records")
+        verified_evidence_ids: list[str] = []
         if (
             not isinstance(evidence_record_ids, list)
             or not evidence_record_ids
@@ -990,6 +1149,8 @@ def validate_pending_disease_envelope(
                     object_ref=object_ref,
                 )
             )
+        else:
+            verified_evidence_ids = [item.strip() for item in evidence_record_ids]
         if not isinstance(evidence_records, list) or not evidence_records:
             findings.append(
                 ValidationFinding(
@@ -999,6 +1160,57 @@ def validate_pending_disease_envelope(
                     object_ref=object_ref,
                 )
             )
+        else:
+            invalid_records: list[dict[str, Any]] = []
+            records_by_id: dict[str, Mapping[str, Any]] = {}
+            for record_index, record in enumerate(evidence_records):
+                if not isinstance(record, Mapping):
+                    invalid_records.append(
+                        {
+                            "record_index": record_index,
+                            "reason": "record must be an object",
+                        }
+                    )
+                    continue
+                missing_evidence_fields = _missing_required_mapping_fields(
+                    record,
+                    _REQUIRED_DISEASE_EVIDENCE_SNAPSHOT_FIELDS,
+                )
+                raw_record_id = record.get("evidence_record_id")
+                record_id = raw_record_id.strip() if isinstance(raw_record_id, str) else None
+                if record_id:
+                    records_by_id[record_id] = record
+                if missing_evidence_fields:
+                    invalid_records.append(
+                        {
+                            "record_index": record_index,
+                            "evidence_record_id": record_id,
+                            "missing_or_invalid_fields": missing_evidence_fields,
+                        }
+                    )
+
+            missing_snapshots = sorted(
+                evidence_id
+                for evidence_id in verified_evidence_ids
+                if evidence_id not in records_by_id
+            )
+            if invalid_records or missing_snapshots:
+                findings.append(
+                    ValidationFinding(
+                        severity=ValidationFindingSeverity.ERROR,
+                        code="alliance.disease.evidence_records_incomplete",
+                        message=(
+                            "DiseaseAnnotation pending assertion evidence_records "
+                            "must include complete snapshots for every verified "
+                            "evidence_record_id."
+                        ),
+                        object_ref=object_ref,
+                        details={
+                            "invalid_records": invalid_records,
+                            "missing_snapshots": missing_snapshots,
+                        },
+                    )
+                )
 
         write_behavior = disease_object.metadata.get("write_behavior")
         if (
