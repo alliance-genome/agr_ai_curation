@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from agr_ai_curation_alliance.domain_packs.allele.curation_prep import (
+    AlleleExtractorPrepItemConverter,
+)
 from src.lib.curation_adapters.reference import (
     REFERENCE_ADAPTER_KEY,
     ReferenceCandidateNormalizer,
@@ -37,4 +40,9 @@ def register_curation_adapters(registry) -> None:
         adapter_key=REFERENCE_ADAPTER_KEY,
         candidate_normalizer=ReferenceCandidateNormalizer(),
         export_adapter=JsonBundleExportAdapter(adapter_key=REFERENCE_ADAPTER_KEY),
+    )
+    registry.register_prep_item_converter(
+        adapter_key="allele",
+        agent_key="allele_extractor",
+        converter=AlleleExtractorPrepItemConverter(),
     )

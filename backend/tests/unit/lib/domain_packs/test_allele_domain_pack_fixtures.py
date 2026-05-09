@@ -76,3 +76,26 @@ def test_allele_domain_pack_validator_rejects_legacy_semantic_keys():
     assert [finding.code for finding in findings] == [
         "alliance.allele.legacy_semantic_store_present"
     ]
+
+
+def test_allele_domain_pack_validator_allows_nested_payload_keys_named_like_legacy_lists():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(ALLELE_DOMAIN_PACK_ID)
+    assert pack is not None
+    fixture_ref = registry.get_fixture_pack_ref(ALLELE_DOMAIN_PACK_ID, "tool_verified")
+    assert fixture_ref is not None
+    fixture_pack = load_domain_fixture_pack(pack.pack_path / fixture_ref.path)
+    envelope = fixture_pack.fixtures[0].envelope
+    objects = list(envelope.objects)
+    objects[0] = objects[0].model_copy(
+        update={
+            "payload": {
+                **objects[0].payload,
+                "notes": {"items": ["paper supplemental table label"]},
+            }
+        }
+    )
+
+    envelope_with_nested_payload_key = envelope.model_copy(update={"objects": objects})
+
+    assert validate_pending_allele_envelope(envelope_with_nested_payload_key) == ()

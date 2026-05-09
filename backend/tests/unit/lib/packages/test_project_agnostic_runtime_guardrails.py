@@ -103,9 +103,11 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/api/test_flows_api.py"),
     Path("backend/tests/unit/lib/alerts/test_tool_failure_notifier.py"),
     Path("backend/tests/unit/lib/curation_workspace/test_session_service.py"),
+    Path("backend/tests/unit/lib/domain_packs/test_allele_domain_pack_fixtures.py"),
     Path("backend/tests/unit/lib/feedback/test_service.py"),
     Path("backend/tests/unit/lib/flows/test_executor.py"),
     Path("backend/tests/unit/models/sql/test_agent_prompt_override_columns.py"),
+    Path("backend/tests/unit/schemas/models/test_allele_extraction_envelope.py"),
     Path("backend/tests/unit/schemas/test_curation_workspace.py"),
     # Contract, integration, and live suites intentionally exercise shipped deployment data.
     Path("backend/tests/contract/alliance/domain_packs/test_allele_domain_pack.py"),

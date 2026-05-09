@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -401,22 +401,8 @@ def validate_pending_allele_envelope(
     return tuple(findings)
 
 
-def _iter_mapping_keys(value: Any) -> Iterator[str]:
-    if isinstance(value, Mapping):
-        for key, child in value.items():
-            if isinstance(key, str):
-                yield key
-            yield from _iter_mapping_keys(child)
-        return
-    if isinstance(value, list):
-        for child in value:
-            yield from _iter_mapping_keys(child)
-
-
 def _legacy_keys_in_envelope(envelope: DomainEnvelope) -> set[str]:
-    return _FORBIDDEN_LEGACY_COLLECTIONS.intersection(
-        _iter_mapping_keys(envelope.model_dump(mode="python"))
-    )
+    return _FORBIDDEN_LEGACY_COLLECTIONS.intersection(envelope.metadata)
 
 
 def _iter_allele_items(extraction: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:

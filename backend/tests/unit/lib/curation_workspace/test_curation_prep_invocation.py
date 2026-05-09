@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import pytest
 
+import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 from src.lib.curation_workspace import curation_prep_invocation as module
 from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepChatRunRequest
 from src.schemas.curation_workspace import CurationExtractionResultRecord, CurationExtractionSourceKind
+
+
+@pytest.fixture(autouse=True)
+def _reset_adapter_registry():
+    adapter_registry_module.load_curation_adapter_registry.cache_clear()
+    yield
+    adapter_registry_module.load_curation_adapter_registry.cache_clear()
 
 
 @pytest.fixture(autouse=True)

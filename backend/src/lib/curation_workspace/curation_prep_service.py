@@ -8,8 +8,14 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from sqlalchemy.orm import Session
 
+from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.extraction_results import persist_extraction_result
+from src.lib.curation_workspace.prep_item_conversion import (
+    compact_payload,
+    normalized_evidence_record_ids,
+    top_level_evidence_records_by_id,
+)
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
     CurationPrepCandidate,
@@ -333,21 +339,20 @@ def _candidate_blueprints(
     *,
     candidate_adapter_key: str,
 ) -> list[_CandidateBlueprint]:
-    evidence_records_by_id = _evidence_records_by_id(payload)
-
-    if (
-        candidate_adapter_key == "allele"
-        and _normalized_optional_string(extraction_result.agent_key) == "allele_extractor"
-    ):
-        raw_curatable_objects = payload.get("curatable_objects")
-        if not isinstance(raw_curatable_objects, list):
-            return []
+    converter = _prep_item_converter(
+        adapter_key=candidate_adapter_key,
+        agent_key=extraction_result.agent_key,
+    )
+    if converter is not None:
+        conversion_result = converter.convert(payload)
         return _build_candidate_blueprints_from_items(
             extraction_result,
-            _allele_items_from_curatable_objects(raw_curatable_objects),
-            evidence_records_by_id=evidence_records_by_id,
+            conversion_result.items,
+            evidence_records_by_id=conversion_result.evidence_records_by_id,
             candidate_adapter_key=candidate_adapter_key,
         )
+
+    evidence_records_by_id = top_level_evidence_records_by_id(payload)
 
     raw_items = payload.get("items")
     blueprints = _build_candidate_blueprints_from_items(
@@ -356,168 +361,18 @@ def _candidate_blueprints(
         evidence_records_by_id=evidence_records_by_id,
         candidate_adapter_key=candidate_adapter_key,
     )
-    if blueprints or not isinstance(raw_items, list):
-        return blueprints
+    return blueprints
 
-    specialized_items = _specialized_source_items(
-        payload,
-        candidate_adapter_key=candidate_adapter_key,
+
+def _prep_item_converter(*, adapter_key: str, agent_key: str | None) -> Any | None:
+    normalized_agent_key = _normalized_optional_string(agent_key)
+    if normalized_agent_key is None:
+        return None
+    registry = load_curation_adapter_registry()
+    return registry.get_prep_item_converter(
+        adapter_key=adapter_key,
+        agent_key=normalized_agent_key,
     )
-    if not specialized_items:
-        return blueprints
-
-    return _build_candidate_blueprints_from_items(
-        extraction_result,
-        specialized_items,
-        evidence_records_by_id=evidence_records_by_id,
-        candidate_adapter_key=candidate_adapter_key,
-    )
-
-
-def _allele_items_from_curatable_objects(
-    raw_curatable_objects: Sequence[Any],
-) -> list[dict[str, Any]]:
-    object_lookup = _curatable_object_lookup(raw_curatable_objects)
-    items: list[dict[str, Any]] = []
-
-    for raw_object in raw_curatable_objects:
-        if not isinstance(raw_object, Mapping):
-            continue
-        if raw_object.get("object_type") != "AllelePaperEvidenceAssociation":
-            continue
-
-        payload = raw_object.get("payload")
-        association_payload = payload if isinstance(payload, Mapping) else {}
-        mention_payloads = _referenced_object_payloads(
-            raw_object,
-            object_lookup,
-            object_type="AlleleMention",
-        )
-        allele_payloads = _referenced_object_payloads(
-            raw_object,
-            object_lookup,
-            object_type="Allele",
-        )
-
-        source_mentions = _dedupe_strings(
-            [
-                *_string_values(association_payload.get("source_mentions")),
-                *(
-                    value
-                    for mention_payload in mention_payloads
-                    for value in _string_values(mention_payload.get("source_mentions"))
-                ),
-                *(
-                    value
-                    for allele_payload in allele_payloads
-                    for value in _string_values(allele_payload.get("source_mentions"))
-                ),
-                *(
-                    value
-                    for mention_payload in mention_payloads
-                    for value in (
-                        _normalized_optional_string(mention_payload.get("mention_text")),
-                    )
-                    if value is not None
-                ),
-            ]
-        )
-        allele_label = (
-            _normalized_optional_string(association_payload.get("allele_label"))
-            or _first_payload_string(allele_payloads, "allele_symbol")
-            or (source_mentions[0] if source_mentions else None)
-            or _normalized_optional_string(association_payload.get("allele_identifier"))
-        )
-        evidence_record_ids = _normalized_evidence_record_ids(
-            raw_object.get("evidence_record_ids")
-        )
-        if not evidence_record_ids:
-            evidence_record_ids = _normalized_evidence_record_ids(
-                association_payload.get("evidence_record_ids")
-            )
-
-        item = _compact_payload(
-            {
-                "label": allele_label,
-                "entity_type": "allele",
-                "normalized_id": association_payload.get("allele_identifier"),
-                "source_mentions": source_mentions,
-                "associated_gene": association_payload.get("associated_gene"),
-                "confidence": association_payload.get("confidence"),
-                "evidence_record_ids": evidence_record_ids,
-            }
-        )
-        if isinstance(item, dict):
-            items.append(item)
-
-    return items
-
-
-def _curatable_object_lookup(
-    raw_curatable_objects: Sequence[Any],
-) -> dict[tuple[str, str], Mapping[str, Any]]:
-    object_lookup: dict[tuple[str, str], Mapping[str, Any]] = {}
-    for raw_object in raw_curatable_objects:
-        if not isinstance(raw_object, Mapping):
-            continue
-        for ref_key in ("pending_ref_id", "object_id"):
-            ref_value = _normalized_optional_string(raw_object.get(ref_key))
-            if ref_value is not None:
-                object_lookup[(ref_key, ref_value)] = raw_object
-    return object_lookup
-
-
-def _referenced_object_payloads(
-    raw_object: Mapping[str, Any],
-    object_lookup: Mapping[tuple[str, str], Mapping[str, Any]],
-    *,
-    object_type: str,
-) -> list[Mapping[str, Any]]:
-    raw_refs = raw_object.get("object_refs")
-    if not isinstance(raw_refs, list):
-        return []
-
-    payloads: list[Mapping[str, Any]] = []
-    for raw_ref in raw_refs:
-        if not isinstance(raw_ref, Mapping) or raw_ref.get("object_type") != object_type:
-            continue
-        referenced_object = None
-        for ref_key in ("pending_ref_id", "object_id"):
-            ref_value = _normalized_optional_string(raw_ref.get(ref_key))
-            if ref_value is None:
-                continue
-            referenced_object = object_lookup.get((ref_key, ref_value))
-            if referenced_object is not None:
-                break
-        if referenced_object is None:
-            continue
-        payload = referenced_object.get("payload")
-        if isinstance(payload, Mapping):
-            payloads.append(payload)
-    return payloads
-
-
-def _string_values(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [
-            normalized
-            for item in value
-            for normalized in (_normalized_optional_string(item),)
-            if normalized is not None
-        ]
-    normalized = _normalized_optional_string(value)
-    return [normalized] if normalized is not None else []
-
-
-def _first_payload_string(
-    payloads: Sequence[Mapping[str, Any]],
-    field_name: str,
-) -> str | None:
-    for payload in payloads:
-        value = _normalized_optional_string(payload.get(field_name))
-        if value is not None:
-            return value
-    return None
 
 
 def _build_candidate_blueprints_from_items(
@@ -556,73 +411,10 @@ def _build_candidate_blueprints_from_items(
     return blueprints
 
 
-def _specialized_source_items(
-    payload: Mapping[str, Any],
-    *,
-    candidate_adapter_key: str,
-) -> list[dict[str, Any]]:
-    if candidate_adapter_key == "allele":
-        return _specialized_items_from_collection(
-            payload.get("alleles"),
-            entity_type="allele",
-            label_keys=("normalized_symbol", "mention"),
-            passthrough_keys=(
-                "mention",
-                "associated_gene",
-                "normalized_symbol",
-                "confidence",
-            ),
-        )
-    return []
-
-
-def _specialized_items_from_collection(
-    raw_collection: Any,
-    *,
-    entity_type: str,
-    label_keys: Sequence[str],
-    passthrough_keys: Sequence[str],
-) -> list[dict[str, Any]]:
-    if not isinstance(raw_collection, list):
-        return []
-
-    items: list[dict[str, Any]] = []
-    for raw_item in raw_collection:
-        if not isinstance(raw_item, Mapping):
-            continue
-        mention = _normalized_optional_string(raw_item.get("mention"))
-        label = _first_non_empty_string(raw_item, *label_keys)
-        evidence_record_ids = _normalized_evidence_record_ids(raw_item.get("evidence_record_ids"))
-
-        synthesized_item = {
-            "label": label or mention,
-            "entity_type": entity_type,
-            "normalized_id": raw_item.get("normalized_id"),
-            "source_mentions": [mention] if mention else [],
-            "evidence_record_ids": evidence_record_ids,
-        }
-        for key in passthrough_keys:
-            if key in {"mention", "normalized_id"}:
-                synthesized_item[key] = raw_item.get(key)
-                continue
-            synthesized_item[key] = raw_item.get(key)
-        items.append(synthesized_item)
-
-    return items
-
-
-def _first_non_empty_string(raw_item: Mapping[str, Any], *keys: str) -> str | None:
-    for key in keys:
-        value = _normalized_optional_string(raw_item.get(key))
-        if value:
-            return value
-    return None
-
-
 def _candidate_payload_from_item(
     raw_item: Mapping[str, Any],
 ) -> dict[str, Any]:
-    candidate_payload = _compact_payload(
+    candidate_payload = compact_payload(
         {
             key: value
             for key, value in raw_item.items()
@@ -643,7 +435,7 @@ def _candidate_evidence_records(
 ) -> list[_CandidateEvidence]:
     source_records: list[_CandidateEvidence] = []
     evidence_index = 0
-    for evidence_record_id in _normalized_evidence_record_ids(raw_item.get("evidence_record_ids")):
+    for evidence_record_id in normalized_evidence_record_ids(raw_item.get("evidence_record_ids")):
         raw_record = evidence_records_by_id.get(evidence_record_id)
         if not isinstance(raw_record, Mapping):
             continue
@@ -685,45 +477,6 @@ def _candidate_evidence_records(
         )
 
     return source_records
-
-
-def _evidence_records_by_id(
-    payload: Mapping[str, Any],
-) -> dict[str, Mapping[str, Any]]:
-    raw_records = payload.get("evidence_records")
-    if not isinstance(raw_records, list):
-        metadata = payload.get("metadata")
-        if isinstance(metadata, Mapping):
-            raw_records = metadata.get("evidence_records")
-    if not isinstance(raw_records, list):
-        return {}
-
-    records_by_id: dict[str, Mapping[str, Any]] = {}
-    for raw_record in raw_records:
-        if not isinstance(raw_record, Mapping):
-            continue
-        evidence_record_id = _normalized_optional_string(raw_record.get("evidence_record_id"))
-        if not evidence_record_id:
-            continue
-        records_by_id[evidence_record_id] = raw_record
-
-    return records_by_id
-
-
-def _normalized_evidence_record_ids(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-
-    evidence_record_ids: list[str] = []
-    seen: set[str] = set()
-    for candidate in value:
-        evidence_record_id = _normalized_optional_string(candidate)
-        if not evidence_record_id or evidence_record_id in seen:
-            continue
-        seen.add(evidence_record_id)
-        evidence_record_ids.append(evidence_record_id)
-
-    return evidence_record_ids
 
 
 def _build_source_evidence_anchor(raw_record: Mapping[str, Any]) -> EvidenceAnchor | None:
@@ -782,27 +535,6 @@ def _candidate_conversation_summary(
     if label:
         return f"Prepared deterministic candidate for {label}."
     return "Prepared deterministic candidate from structured extraction output."
-
-
-def _compact_payload(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        compacted: dict[str, Any] = {}
-        for key, item in value.items():
-            compacted_item = _compact_payload(item)
-            if compacted_item is None:
-                continue
-            compacted[str(key)] = compacted_item
-        return compacted or None
-    if isinstance(value, list):
-        compacted_items = [_compact_payload(item) for item in value]
-        compacted_items = [item for item in compacted_items if item is not None]
-        return compacted_items or None
-    if isinstance(value, str):
-        normalized = _normalized_optional_string(value)
-        return normalized
-    if isinstance(value, bool):
-        return value
-    return value
 
 
 def _resolve_primary_extraction_result(
