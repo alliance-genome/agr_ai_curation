@@ -262,6 +262,32 @@ def _valid_phenotype_payload() -> dict[str, object]:
     }
 
 
+def _add_valid_repair_context(payload: dict[str, object]) -> None:
+    payload["repair_mode"] = True
+    payload["metadata"]["repair_notes"] = [
+        "Supervisor requested repair of curatable_objects[4].payload.phenotype_terms[0].curie."
+    ]
+    for obj in payload["curatable_objects"]:
+        obj["field_refs"] = [
+            {
+                "object_ref": {
+                    "pending_ref_id": obj["pending_ref_id"],
+                    "object_type": obj["object_type"],
+                },
+                "field_path": (
+                    "phenotype_terms[0].curie"
+                    if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
+                    else "payload"
+                ),
+            }
+        ]
+        obj["repair_hints"] = ["Repaired only the supervisor-requested field path."]
+    payload["curatable_objects"][0]["field_refs"][0]["field_path"] = "title"
+    payload["curatable_objects"][1]["field_refs"][0]["field_path"] = "subject_identifier"
+    payload["curatable_objects"][2]["field_refs"][0]["field_path"] = "curie"
+    payload["curatable_objects"][3]["field_refs"][0]["field_path"] = "verified_quote"
+
+
 def test_phenotype_extractor_schema_accepts_domain_pack_objects_and_metadata():
     envelope = _phenotype_extractor_schema().model_validate(_valid_phenotype_payload())
 
@@ -308,6 +334,19 @@ def test_phenotype_extractor_schema_rejects_evidence_ids_missing_from_metadata()
     assert "reduced-brood-size-evidence-1" in str(exc_info.value)
 
 
+def test_phenotype_extractor_schema_rejects_dangling_object_refs():
+    payload = copy.deepcopy(_valid_phenotype_payload())
+    payload["curatable_objects"][-1]["object_refs"][0]["pending_ref_id"] = (
+        "missing-subject-ref"
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        _phenotype_extractor_schema().model_validate(payload)
+
+    assert "object_refs references unknown objects" in str(exc_info.value)
+    assert "missing-subject-ref" in str(exc_info.value)
+
+
 def test_phenotype_extractor_schema_requires_bounded_repair_field_refs():
     payload = copy.deepcopy(_valid_phenotype_payload())
     payload["repair_mode"] = True
@@ -318,25 +357,7 @@ def test_phenotype_extractor_schema_requires_bounded_repair_field_refs():
     with pytest.raises(ValidationError, match="field_refs must identify repaired field paths"):
         _phenotype_extractor_schema().model_validate(payload)
 
-    for obj in payload["curatable_objects"]:
-        obj["field_refs"] = [
-            {
-                "object_ref": {
-                    "pending_ref_id": obj["pending_ref_id"],
-                    "object_type": obj["object_type"],
-                },
-                "field_path": (
-                    "phenotype_terms[0].curie"
-                    if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
-                    else "payload"
-                ),
-            }
-        ]
-        obj["repair_hints"] = ["Repaired only the supervisor-requested field path."]
-    payload["curatable_objects"][0]["field_refs"][0]["field_path"] = "title"
-    payload["curatable_objects"][1]["field_refs"][0]["field_path"] = "subject_identifier"
-    payload["curatable_objects"][2]["field_refs"][0]["field_path"] = "curie"
-    payload["curatable_objects"][3]["field_refs"][0]["field_path"] = "verified_quote"
+    _add_valid_repair_context(payload)
 
     envelope = _phenotype_extractor_schema().model_validate(payload)
 
@@ -344,6 +365,20 @@ def test_phenotype_extractor_schema_requires_bounded_repair_field_refs():
     assert envelope.curatable_objects[-1].field_refs[0].field_path == (
         "phenotype_terms[0].curie"
     )
+
+
+def test_phenotype_extractor_schema_rejects_repair_field_paths_missing_from_payload():
+    payload = copy.deepcopy(_valid_phenotype_payload())
+    _add_valid_repair_context(payload)
+    payload["curatable_objects"][-1]["field_refs"][0]["field_path"] = (
+        "not_a_payload_field"
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        _phenotype_extractor_schema().model_validate(payload)
+
+    assert "field_refs[0].field_path must resolve" in str(exc_info.value)
+    assert "not_a_payload_field" in str(exc_info.value)
 
 
 def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract():
