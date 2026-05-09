@@ -34,6 +34,8 @@ from src.lib.domain_envelopes.migration import (
 from src.models.sql.database import SessionLocal
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (
+    CurationActionType,
+    CurationActorType,
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationEvidenceSource,
@@ -290,3 +292,39 @@ def test_legacy_workspace_migration_persists_envelope_indexes_history_and_links(
     assert second_summary.migrated_envelopes == 0
     assert second_summary.linked_candidate_projection_refs == 0
     assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 1
+
+
+@pytest.mark.integration
+def test_legacy_workspace_migration_blocks_cross_session_action_log_candidate(db_session):
+    review_session_a, _candidate_a = _seed_retained_workspace(db_session)
+    _review_session_b, candidate_b = _seed_retained_workspace(db_session)
+    action = CurationActionLogEntry(
+        id=uuid4(),
+        session_id=review_session_a.id,
+        candidate_id=candidate_b.id,
+        action_type=CurationActionType.CANDIDATE_ACCEPTED,
+        actor_type=CurationActorType.USER,
+        actor={"actor_id": "curator-1"},
+        occurred_at=_now(),
+        previous_candidate_status=CurationCandidateStatus.PENDING,
+        new_candidate_status=CurationCandidateStatus.ACCEPTED,
+        changed_field_keys=[],
+        evidence_anchor_ids=[],
+        message="Cross-session retained action log.",
+        action_metadata={},
+    )
+    db_session.add(action)
+    db_session.commit()
+
+    summary = migrate_legacy_curation_workspace_to_domain_envelopes(
+        db_session,
+        options=LegacyCurationWorkspaceMigrationOptions(project_key="integration"),
+    )
+
+    assert summary.migrated_envelopes == 0
+    assert summary.blocker_count == 2
+    assert {blocker.source_table for blocker in summary.blockers} == {
+        "curation_action_log"
+    }
+    assert {blocker.source_id for blocker in summary.blockers} == {str(action.id)}
+    assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0

@@ -467,6 +467,46 @@ def test_candidate_with_unprovenanced_projection_ref_reports_blocker(db_session)
     assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
 
 
+def test_cross_session_action_log_candidate_reports_blockers(db_session):
+    _document_a, _extraction_a, session_a, _candidate_a = _create_legacy_session(db_session)
+    _document_b, _extraction_b, _session_b, candidate_b = _create_legacy_session(db_session)
+    action = CurationActionLogEntry(
+        id=uuid4(),
+        session_id=session_a.id,
+        candidate_id=candidate_b.id,
+        action_type=CurationActionType.CANDIDATE_ACCEPTED,
+        actor_type=CurationActorType.USER,
+        actor={"actor_id": "curator-1"},
+        occurred_at=_now(),
+        previous_candidate_status=CurationCandidateStatus.PENDING,
+        new_candidate_status=CurationCandidateStatus.ACCEPTED,
+        changed_field_keys=[],
+        evidence_anchor_ids=[],
+        message="Cross-session retained action log.",
+        action_metadata={},
+    )
+    db_session.add(action)
+    db_session.commit()
+
+    summary = _run_migration(db_session)
+
+    assert summary.migrated_envelopes == 0
+    assert summary.blocker_count == 2
+    assert {blocker.source_table for blocker in summary.blockers} == {
+        "curation_action_log"
+    }
+    assert {blocker.source_id for blocker in summary.blockers} == {str(action.id)}
+    assert {
+        blocker.reason for blocker in summary.blockers
+    } == {
+        "action log candidate_id does not point at a retained candidate "
+        "in the same review session",
+        "action log session_id does not match the retained candidate's "
+        "review session",
+    }
+    assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
+
+
 def test_orphan_extraction_result_migrates_as_standalone_envelope(db_session):
     document = _create_document(db_session)
     extraction_result = _create_extraction_result(db_session, document_id=document.id)

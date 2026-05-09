@@ -399,11 +399,58 @@ def _session_blockers(
             )
         )
 
+    blockers.extend(_action_log_relationship_blockers(session_row, candidate_ids))
+
     for candidate in session_row.candidates:
         blocker = _candidate_projection_blocker(candidate, migrated_sources)
         if blocker is not None:
             blockers.append(blocker)
 
+    return blockers
+
+
+def _action_log_relationship_blockers(
+    session_row: CurationReviewSession,
+    candidate_ids: set[str],
+) -> list[LegacyMigrationBlocker]:
+    blockers: list[LegacyMigrationBlocker] = []
+    session_id = str(session_row.id)
+    for entry in session_row.action_log_entries:
+        if entry.candidate_id is not None and str(entry.candidate_id) not in candidate_ids:
+            blockers.append(
+                LegacyMigrationBlocker(
+                    source_table=SOURCE_TABLE_ACTION_LOG,
+                    source_id=str(entry.id),
+                    reason=(
+                        "action log candidate_id does not point at a retained candidate "
+                        "in the same review session"
+                    ),
+                    details={
+                        "session_id": session_id,
+                        "candidate_id": str(entry.candidate_id),
+                    },
+                )
+            )
+
+    for candidate in session_row.candidates:
+        for entry in candidate.action_log_entries:
+            if str(entry.session_id) == session_id:
+                continue
+            blockers.append(
+                LegacyMigrationBlocker(
+                    source_table=SOURCE_TABLE_ACTION_LOG,
+                    source_id=str(entry.id),
+                    reason=(
+                        "action log session_id does not match the retained candidate's "
+                        "review session"
+                    ),
+                    details={
+                        "action_log_session_id": str(entry.session_id),
+                        "candidate_session_id": session_id,
+                        "candidate_id": str(candidate.id),
+                    },
+                )
+            )
     return blockers
 
 
