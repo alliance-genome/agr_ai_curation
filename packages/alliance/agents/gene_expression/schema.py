@@ -1,7 +1,7 @@
 """Gene-expression extractor schema for Alliance domain-envelope output."""
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 from pydantic import model_validator
 

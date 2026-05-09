@@ -20,6 +20,8 @@ GENE_EXPRESSION_LINKML_SCHEMA_URI = (
     "https://github.com/alliance-genome/agr_curation_schema/blob/"
     f"{ALLIANCE_LINKML_COMMIT}/model/schema/expression.yaml"
 )
+
+
 def get_gene_expression_domain_pack_metadata_path() -> Path:
     """Return the bundled gene-expression domain-pack metadata path."""
 
