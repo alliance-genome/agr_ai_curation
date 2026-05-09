@@ -11,6 +11,9 @@ from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, m
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState, SchemaRef
 
 
+# Keep these values synchronized with the Alliance gene domain-pack constants.
+# Agent schema discovery loads this file directly from the agent bundle, so this
+# module cannot assume the package python/src tree is importable in every runtime.
 GENE_MENTION_EVIDENCE_OBJECT_TYPE = "gene_mention_evidence"
 GENE_MENTION_EVIDENCE_MODEL_REF = "GeneMentionEvidencePayload"
 GENE_LINKML_SCHEMA_ID = "alliance.linkml.Gene"
@@ -21,14 +24,6 @@ GENE_LINKML_SCHEMA_URI = (
     "https://github.com/alliance-genome/agr_curation_schema/blob/"
     f"{GENE_LINKML_COMMIT}/model/schema/gene.yaml"
 )
-GENE_DEFINITION_NOTES = (
-    "Envelope-only validated reference evidence; this object does not create or "
-    "mutate Alliance Gene rows.",
-    "Paper-gene association write/export behavior is intentionally out of scope "
-    "until a concrete target is verified.",
-)
-
-
 def _strip_required_string(value: object, field_name: str) -> object:
     if not isinstance(value, str):
         return value
@@ -43,26 +38,6 @@ def _strip_optional_string(value: object) -> object:
         return value
     normalized = value.strip()
     return normalized or None
-
-
-def _gene_schema_ref() -> SchemaRef:
-    return SchemaRef(
-        schema_id=GENE_LINKML_SCHEMA_ID,
-        provider=GENE_LINKML_SCHEMA_PROVIDER,
-        name=GENE_LINKML_SCHEMA_NAME,
-        version=GENE_LINKML_COMMIT,
-        uri=GENE_LINKML_SCHEMA_URI,
-        metadata={
-            "provider_refs": {
-                GENE_LINKML_SCHEMA_PROVIDER: {
-                    "schema_ref": "alliance.linkml",
-                    "commit": GENE_LINKML_COMMIT,
-                    "source_file": "model/schema/gene.yaml",
-                    "class": "Gene",
-                }
-            }
-        },
-    )
 
 
 class GeneMentionEvidencePayload(BaseModel):
@@ -130,10 +105,15 @@ class GeneMentionEvidenceObjectEnvelope(CuratableObjectEnvelope):
     object_type: Literal["gene_mention_evidence"] = GENE_MENTION_EVIDENCE_OBJECT_TYPE
     object_role: Literal["validated_reference"] = "validated_reference"
     payload: GeneMentionEvidencePayload
-    schema_ref: SchemaRef = Field(default_factory=_gene_schema_ref)
+    schema_ref: SchemaRef = Field(
+        description="Alliance LinkML Gene schema ref for this validated-reference payload"
+    )
     model_ref: Literal["GeneMentionEvidencePayload"] = GENE_MENTION_EVIDENCE_MODEL_REF
     definition_state: Literal[DefinitionState.IN_DEVELOPMENT] = DefinitionState.IN_DEVELOPMENT
-    definition_notes: list[StrictStr] = Field(default_factory=lambda: list(GENE_DEFINITION_NOTES))
+    definition_notes: list[StrictStr] = Field(
+        min_length=1,
+        description="Notes explaining the non-exporting, in-development object contract",
+    )
 
     @model_validator(mode="after")
     def _validate_evidence_ref_alignment(self) -> "GeneMentionEvidenceObjectEnvelope":
@@ -146,6 +126,14 @@ class GeneMentionEvidenceObjectEnvelope(CuratableObjectEnvelope):
             raise ValueError("gene_mention_evidence schema_ref must be alliance.linkml.Gene")
         if self.schema_ref.provider != GENE_LINKML_SCHEMA_PROVIDER:
             raise ValueError("gene_mention_evidence schema_ref provider must be alliance_linkml")
+        if self.schema_ref.name != GENE_LINKML_SCHEMA_NAME:
+            raise ValueError("gene_mention_evidence schema_ref name must be Gene")
+        if self.schema_ref.version != GENE_LINKML_COMMIT:
+            raise ValueError(
+                "gene_mention_evidence schema_ref version must match the pinned LinkML commit"
+            )
+        if self.schema_ref.uri is not None and self.schema_ref.uri != GENE_LINKML_SCHEMA_URI:
+            raise ValueError("gene_mention_evidence schema_ref uri must target the pinned Gene schema")
         return self
 
 

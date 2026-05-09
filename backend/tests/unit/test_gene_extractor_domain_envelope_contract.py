@@ -66,6 +66,16 @@ def _valid_gene_extractor_payload() -> dict[str, object]:
                 "object_role": "validated_reference",
                 "pending_ref_id": "gene-mention-evidence-1",
                 "model_ref": GENE_MENTION_EVIDENCE_MODEL_ID,
+                "schema_ref": {
+                    "schema_id": "alliance.linkml.Gene",
+                    "provider": "alliance_linkml",
+                    "name": "Gene",
+                    "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+                    "uri": (
+                        "https://github.com/alliance-genome/agr_curation_schema/blob/"
+                        "1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml"
+                    ),
+                },
                 "definition_state": "in_development",
                 "definition_notes": [
                     "Envelope-only validated reference evidence; this object does not create or mutate Alliance Gene rows."
@@ -161,6 +171,15 @@ def test_gene_extractor_schema_accepts_gene_mention_evidence_domain_envelope():
     assert obj.evidence_record_ids == ["ev-daf16-1"]
     assert envelope.metadata.raw_mentions[0].mention == "daf-16"
     assert envelope.metadata.ambiguities[0].mention == "daf"
+
+
+@pytest.mark.parametrize("required_field", ("schema_ref", "definition_notes"))
+def test_gene_extractor_schema_requires_object_contract_fields(required_field):
+    payload = _valid_gene_extractor_payload()
+    del payload["curatable_objects"][0][required_field]
+
+    with pytest.raises(ValidationError, match=required_field):
+        _gene_extractor_schema().model_validate(payload)
 
 
 @pytest.mark.parametrize("legacy_field", sorted(LEGACY_SEMANTIC_LIST_FIELDS))
