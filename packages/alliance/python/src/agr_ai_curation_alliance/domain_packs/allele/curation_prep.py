@@ -50,16 +50,6 @@ def _items_from_curatable_objects(
         if not isinstance(association_payload, Mapping):
             continue
 
-        allele_label = normalized_optional_string(association_payload.get("allele_label"))
-        allele_identifier = normalized_optional_string(
-            association_payload.get("allele_identifier")
-        )
-        evidence_record_ids = normalized_evidence_record_ids(
-            raw_object.get("evidence_record_ids")
-        )
-        if allele_label is None or allele_identifier is None:
-            continue
-
         mention_payloads = referenced_object_payloads(
             raw_object,
             object_lookup,
@@ -70,6 +60,19 @@ def _items_from_curatable_objects(
             object_lookup,
             object_type="Allele",
         )
+        allele_label = _allele_label(
+            mention_payloads=mention_payloads,
+            allele_payloads=allele_payloads,
+        )
+        allele_identifier = normalized_optional_string(
+            association_payload.get("allele_identifier")
+        )
+        evidence_record_ids = normalized_evidence_record_ids(
+            raw_object.get("evidence_record_ids")
+        )
+        if allele_label is None or allele_identifier is None:
+            continue
+
         item = compact_payload(
             {
                 "label": allele_label,
@@ -89,6 +92,24 @@ def _items_from_curatable_objects(
             items.append(item)
 
     return items
+
+
+def _allele_label(
+    *,
+    mention_payloads: Sequence[Mapping[str, Any]],
+    allele_payloads: Sequence[Mapping[str, Any]],
+) -> str | None:
+    # Prefer the normalized allele object label; mention text preserves source wording
+    # when no label is available.
+    for allele_payload in allele_payloads:
+        normalized = normalized_optional_string(allele_payload.get("allele_symbol"))
+        if normalized is not None:
+            return normalized
+    for mention_payload in mention_payloads:
+        normalized = normalized_optional_string(mention_payload.get("mention_text"))
+        if normalized is not None:
+            return normalized
+    return None
 
 
 def _source_mentions(

@@ -663,7 +663,7 @@ async def test_run_curation_prep_allele_domain_objects_still_require_evidence_id
 
 
 @pytest.mark.asyncio
-async def test_run_curation_prep_allele_domain_objects_require_association_label(
+async def test_run_curation_prep_allele_domain_objects_derive_label_from_reference(
     monkeypatch,
 ):
     first = _make_allele_domain_payload(
@@ -731,4 +731,7 @@ async def test_run_curation_prep_allele_domain_objects_require_association_label
         ),
     )
 
-    assert [candidate.payload["label"] for candidate in prep_output.candidates] == ["crb11A22"]
+    assert [candidate.payload["label"] for candidate in prep_output.candidates] == [
+        "crb11A22",
+        "crb8F105",
+    ]
