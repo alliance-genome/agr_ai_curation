@@ -1,0 +1,212 @@
+envelope:
+  envelope_id: phenotype-tool-verified-envelope
+  domain_pack_id: agr.alliance.phenotype
+  domain_pack_version: 0.1.0
+  schema_ref:
+    schema_id: agr.alliance.phenotype.domain_pack
+    provider: domain-pack
+    name: Alliance Phenotype Domain Pack
+    version: 0.1.0
+    definition_state: in_development
+  objects:
+    - object_type: Reference
+      payload:
+        title: Brood size phenotype evidence fixture paper
+        filename: test_tool_verified_phenotype_paper.pdf
+      pending_ref_id: paper-reference-1
+      schema_ref:
+        schema_id: alliance.linkml.Reference
+        provider: alliance_linkml
+        name: Reference
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: validated_reference
+        validation_state: pending_reference_resolution
+        validator_binding_id: phenotype_reference_validator
+    - object_type: PhenotypeSubject
+      payload:
+        resolution_state: blocked_missing_subject
+        resolution_note: Tool-verified phenotype extraction did not provide a durable phenotype_annotation_subject identifier and subtype.
+      pending_ref_id: phenotype-subject-1
+      schema_ref:
+        schema_id: alliance.linkml.BiologicalEntity
+        provider: alliance_linkml
+        name: BiologicalEntity
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/core.yaml
+        definition_state: in_development
+        definition_notes:
+          - Generic subject placeholder until the Gene, Allele, or AGM subtype is resolved.
+      status: pending
+      definition_state: in_development
+      definition_notes:
+        - Pending subject reference; concrete Gene, Allele, or AGM subtype must be resolved before export.
+      metadata:
+        object_role: validated_reference
+        validation_state: blocked_missing_subject
+        validator_binding_id: phenotype_subject_entity_validator
+    - object_type: PhenotypeTerm
+      payload:
+        curie: WBPhenotype:0000886
+        label: reduced brood size
+        source_mentions:
+          - reduced brood size
+      pending_ref_id: phenotype-term-1
+      schema_ref:
+        schema_id: alliance.linkml.PhenotypeTerm
+        provider: alliance_linkml
+        name: PhenotypeTerm
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/ontologyTerm.yaml
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: validated_reference
+        validation_state: pending_ontology_resolution
+        validator_binding_id: phenotype_term_ontology_validator
+    - object_type: EvidenceQuote
+      payload:
+        evidence_record_id: verified_exact
+        entity: reduced brood size
+        verified_quote: daf-2(e1370) adults produced 40% fewer progeny than wild type.
+        page: 5
+        section: Results
+        chunk_id: chunk-phenotype-count
+        subsection: Fertility defects
+        figure_reference: Figure 5A
+      pending_ref_id: evidence-quote-1-1
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: metadata_only
+    - object_type: EvidenceQuote
+      payload:
+        evidence_record_id: verified_supporting
+        entity: reduced brood size
+        verified_quote: Brood size was reduced to 120 +/- 15 embryos in daf-2(e1370) adults compared with 200 +/- 12 in controls.
+        page: 6
+        section: Results
+        chunk_id: chunk-phenotype-supporting
+        subsection: Quantification
+      pending_ref_id: evidence-quote-1-2
+      status: pending
+      definition_state: in_development
+      metadata:
+        object_role: metadata_only
+    - object_type: PhenotypeAnnotation
+      payload:
+        annotation_kind: phenotype_assertion
+        phenotype_annotation_object: reduced brood size
+        phenotype_annotation_subject:
+          resolution_state: blocked_missing_subject
+          resolution_note: Tool-verified phenotype extraction did not provide a durable phenotype_annotation_subject identifier and subtype.
+        phenotype_terms:
+          - curie: WBPhenotype:0000886
+            label: reduced brood size
+        single_reference:
+          title: Brood size phenotype evidence fixture paper
+          filename: test_tool_verified_phenotype_paper.pdf
+        evidence_quote:
+          evidence_record_id: verified_exact
+        evidence_record_ids:
+          - verified_exact
+          - verified_supporting
+        source_mentions:
+          - reduced brood size
+        negated: false
+      pending_ref_id: phenotype-annotation-1
+      schema_ref:
+        schema_id: alliance.linkml.PhenotypeAnnotation
+        provider: alliance_linkml
+        name: PhenotypeAnnotation
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+        definition_state: in_development
+        definition_notes:
+          - Pending envelope target; concrete phenotype annotation subtype is unresolved.
+      status: pending
+      definition_state: in_development
+      definition_notes:
+        - Pending only; export is blocked until subject, reference, ontology, and write targets are resolved.
+      object_refs:
+        - pending_ref_id: phenotype-subject-1
+          object_type: PhenotypeSubject
+        - pending_ref_id: phenotype-term-1
+          object_type: PhenotypeTerm
+        - pending_ref_id: paper-reference-1
+          object_type: Reference
+        - pending_ref_id: evidence-quote-1-1
+          object_type: EvidenceQuote
+        - pending_ref_id: evidence-quote-1-2
+          object_type: EvidenceQuote
+      metadata:
+        object_role: curatable_unit
+        validation_state: blocked_missing_subject
+        export_behavior:
+          status: blocked
+          exportable: false
+          submit: false
+          reason: Phenotype export is blocked until subject subtype, reference materialization, ontology term resolution, and write targets are verified.
+          required_before_export:
+            - Resolve phenotype_annotation_subject to exactly one Gene, Allele, or AGM row.
+            - Resolve the source paper to a durable Alliance reference/information content row.
+            - Validate phenotype term CURIEs against public.ontologyterm.
+            - Prove the exporter can create phenotype rows without mutating canonical entity rows.
+        write_behavior:
+          status: blocked
+          reason: The curation DB phenotype target shape is verified, but this pack emits pending envelopes only.
+          blocked_targets:
+            - public.phenotypeannotation
+            - public.genephenotypeannotation
+            - public.allelephenotypeannotation
+            - public.agmphenotypeannotation
+            - public.phenotypeannotation_ontologyterm
+  validation_findings:
+    - severity: blocker
+      message: Phenotype assertion is pending only; export is blocked until subject, reference, ontology, and non-mutating write targets are resolved.
+      code: alliance.phenotype.export_blocked
+      object_ref:
+        pending_ref_id: phenotype-annotation-1
+        object_type: PhenotypeAnnotation
+      details:
+        export_behavior: blocked
+        blocked_targets:
+          - public.phenotypeannotation
+          - public.genephenotypeannotation
+          - public.allelephenotypeannotation
+          - public.agmphenotypeannotation
+          - public.phenotypeannotation_ontologyterm
+    - severity: blocker
+      message: Phenotype assertion requires a resolved Gene, Allele, or AGM subject before export.
+      code: alliance.phenotype.subject_resolution_required
+      object_ref:
+        pending_ref_id: phenotype-annotation-1
+        object_type: PhenotypeAnnotation
+      details:
+        validator_binding_id: phenotype_subject_entity_validator
+        subject_resolution_state: blocked_missing_subject
+        required_before_export:
+          - Resolve phenotype_annotation_subject to a concrete curation DB row.
+          - Select the concrete phenotype annotation subtype for export.
+    - severity: warning
+      message: Skipped 1 phenotype candidate(s) without verified evidence records.
+      code: alliance.phenotype.skipped_without_verified_evidence
+      details:
+        skipped_without_evidence: 1
+  history:
+    - event_type: created
+      timestamp: "2026-05-09T00:00:00Z"
+      message: Converted tool-verified phenotype fixture to a pending domain envelope.
+      details:
+        retained_phenotype_count: 1
+        skipped_without_evidence: 1
+  metadata:
+    source_fixture_id: tool_verified_phenotype_paper
+    semantic_source: domain_envelope.objects
+    export_behavior:
+      status: blocked
+    write_behavior:
+      status: blocked
