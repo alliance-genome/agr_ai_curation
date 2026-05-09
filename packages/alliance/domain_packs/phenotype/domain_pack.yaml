@@ -1,0 +1,602 @@
+pack_id: agr.alliance.phenotype
+display_name: Alliance Phenotype Domain Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+description: Pending phenotype assertion envelopes grounded to pinned Alliance LinkML and read-only curation DB targets.
+status: in_development
+schema_refs:
+  - schema_id: alliance.linkml
+    provider: alliance_linkml
+    name: Alliance curation LinkML schema
+    version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+    uri: https://github.com/alliance-genome/agr_curation_schema/tree/1b11d0888f19eba4ca72022200bb7d96b30d4a52
+    definition_state: stable
+    metadata:
+      provider_refs:
+        alliance_linkml:
+          repository: https://github.com/alliance-genome/agr_curation_schema.git
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          schema_dir: model/schema
+          root_schema: model/schema/allianceModel.yaml
+          cache_script: scripts/testing/cache_agr_curation_schema.sh
+          ref_kind: schema
+enum_definitions:
+  - enum_id: PhenotypeSubjectResolutionState
+    display_name: Phenotype subject resolution state
+    description: Resolution state for the biological entity that carries the phenotype assertion.
+    values:
+      - value: resolved
+        label: Resolved
+      - value: pending_entity_resolution
+        label: Pending entity resolution
+      - value: blocked_missing_subject
+        label: Blocked missing subject
+    definition_state: in_development
+model_definitions:
+  - model_id: PhenotypeAnnotationPayload
+    display_name: Phenotype annotation payload
+    description: Pending phenotype assertion payload shaped from Alliance PhenotypeAnnotation fields plus review-only evidence context.
+    schema_ref:
+      schema_id: alliance.linkml.PhenotypeAnnotation
+      provider: alliance_linkml
+      name: PhenotypeAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      definition_notes:
+        - Concrete write subtype remains blocked until the subject resolves to GenePhenotypeAnnotation, AllelePhenotypeAnnotation, or AGMPhenotypeAnnotation.
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: PhenotypeAnnotation
+  - model_id: PhenotypeSubjectPayload
+    display_name: Phenotype subject payload
+    description: Pending biological entity subject metadata for a phenotype assertion.
+    schema_ref:
+      schema_id: alliance.linkml.BiologicalEntity
+      provider: alliance_linkml
+      name: BiologicalEntity
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/core.yaml
+      definition_state: in_development
+      definition_notes:
+        - This pack keeps the unresolved paper subject as pending metadata until a subject resolver identifies the Gene, Allele, or AGM row.
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/core.yaml
+            class: BiologicalEntity
+  - model_id: PhenotypeTermPayload
+    display_name: Phenotype term payload
+    description: Pending ontology term reference for a phenotype assertion.
+    schema_ref:
+      schema_id: alliance.linkml.PhenotypeTerm
+      provider: alliance_linkml
+      name: PhenotypeTerm
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/ontologyTerm.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/ontologyTerm.yaml
+            class: PhenotypeTerm
+  - model_id: ReferencePayload
+    display_name: Reference payload
+    description: Pending literature reference object for phenotype evidence.
+    schema_ref:
+      schema_id: alliance.linkml.Reference
+      provider: alliance_linkml
+      name: Reference
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/reference.yaml
+            class: Reference
+  - model_id: EvidenceQuotePayload
+    display_name: Verified evidence quote payload
+    description: Metadata-only payload preserving record_evidence-verified paper text and document location.
+    definition_state: in_development
+    definition_notes:
+      - Provider-neutral evidence quote object; not a LinkML write target.
+object_definitions:
+  - object_type: PhenotypeAnnotation
+    display_name: Phenotype annotation
+    description: Pending curatable unit linking one extracted phenotype statement to a pending subject, phenotype term, source paper, and verified evidence.
+    model_ref: PhenotypeAnnotationPayload
+    schema_ref:
+      schema_id: alliance.linkml.PhenotypeAnnotation
+      provider: alliance_linkml
+      name: PhenotypeAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      definition_notes:
+        - Pending only; export is blocked until subject subtype, durable reference, and ontology term row targets are verified for submission.
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: PhenotypeAnnotation
+    definition_state: in_development
+    definition_notes:
+      - Envelope JSON and object refs are the semantic source of truth; no legacy phenotype list is required or emitted.
+      - Export/submission is blocked until a resolver supplies the concrete Gene, Allele, or AGM subject row and a non-mutating submission path is proven.
+    metadata:
+      object_role: curatable_unit
+      association_kind: phenotype_assertion
+      semantic_source: domain_envelope.objects
+      export_behavior:
+        status: blocked
+        exportable: false
+        submit: false
+        reason: Phenotype assertions remain pending until subject subtype, reference materialization, and ontology term projection are verified for the downstream exporter.
+      write_behavior:
+        status: blocked
+        reason: The curation DB phenotype target shape is verified, but this pack does not write phenotypeannotation or subtype rows.
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+          class: PhenotypeAnnotation
+    fields:
+      - field_path: annotation_kind
+        field_type: string
+        display_name: Annotation kind
+        required: true
+      - field_path: phenotype_annotation_object
+        field_type: string
+        display_name: Phenotype statement
+        description: Free-text phenotype statement carried by the LinkML PhenotypeAnnotation attribute.
+        required: true
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: PhenotypeAnnotation
+              attribute: phenotype_annotation_object
+              range: string
+              db_table: phenotypeannotation
+              db_column: phenotypeannotationobject
+      - field_path: phenotype_annotation_subject
+        field_type: object_ref
+        display_name: Phenotype annotation subject
+        required: true
+        object_type_ref: PhenotypeSubject
+        metadata:
+          validator_binding_id: phenotype_subject_entity_validator
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: PhenotypeAnnotation
+              slot: phenotype_annotation_subject
+              range: BiologicalEntity
+              db_targets:
+                - genephenotypeannotation.phenotypeannotationsubject_id
+                - allelephenotypeannotation.phenotypeannotationsubject_id
+                - agmphenotypeannotation.phenotypeannotationsubject_id
+      - field_path: phenotype_terms[0]
+        field_type: object_ref
+        display_name: First phenotype ontology term
+        required: true
+        object_type_ref: PhenotypeTerm
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: PhenotypeAnnotation
+              slot: phenotype_terms
+              range: PhenotypeTerm
+              db_table: phenotypeannotation_ontologyterm
+      - field_path: phenotype_terms[0].curie
+        field_type: string
+        display_name: First phenotype term CURIE
+        required: true
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: PhenotypeTerm
+              slot: curie
+              range: uriorcurie
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: phenotype_terms[0].label
+        field_type: string
+        display_name: First phenotype term label
+      - field_path: single_reference
+        field_type: object_ref
+        display_name: Evidence reference
+        required: true
+        object_type_ref: Reference
+        metadata:
+          validator_binding_id: phenotype_reference_validator
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: PhenotypeAnnotation
+              slot: single_reference
+              range: Reference
+              db_table: phenotypeannotation
+              db_column: evidenceitem_id
+      - field_path: evidence_quote
+        field_type: object_ref
+        display_name: Verified evidence quote
+        required: true
+        object_type_ref: EvidenceQuote
+      - field_path: evidence_record_ids[0]
+        field_type: string
+        display_name: First evidence record ID
+        required: true
+      - field_path: negated
+        field_type: boolean
+        display_name: Negated
+        description: >-
+          Missing negation in the extractor output is intentionally represented
+          as false; true must be supplied explicitly when the source states
+          negation.
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: PhenotypeAnnotation
+              slot: negated
+              range: boolean
+              db_table: phenotypeannotation
+      - field_path: source_mentions[0]
+        field_type: string
+        display_name: First source mention
+  - object_type: PhenotypeSubject
+    display_name: Phenotype subject
+    description: Pending biological entity subject for a phenotype annotation.
+    model_ref: PhenotypeSubjectPayload
+    schema_ref:
+      schema_id: alliance.linkml.BiologicalEntity
+      provider: alliance_linkml
+      name: BiologicalEntity
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/core.yaml
+      definition_state: in_development
+      definition_notes:
+        - Generic subject placeholder; concrete DB subtype must be resolved before export.
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/core.yaml
+            class: BiologicalEntity
+    definition_state: in_development
+    metadata:
+      object_role: validated_reference
+      validation_state: pending_entity_resolution
+      validator_binding_id: phenotype_subject_entity_validator
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/core.yaml
+          class: BiologicalEntity
+    fields:
+      - field_path: resolution_state
+        field_type: enum
+        display_name: Resolution state
+        required: true
+        enum_ref: PhenotypeSubjectResolutionState
+      - field_path: subject_identifier
+        field_type: string
+        display_name: Subject identifier
+        metadata:
+          validator_binding_id: phenotype_subject_entity_validator
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: BiologicalEntity
+              slot: primary_external_id
+              range: string
+              db_table: biologicalentity
+              db_column: primaryexternalid
+      - field_path: subject_label
+        field_type: string
+        display_name: Subject label
+      - field_path: subject_type
+        field_type: string
+        display_name: Subject type
+  - object_type: PhenotypeTerm
+    display_name: Phenotype ontology term
+    description: Pending validated-reference object for a phenotype ontology term.
+    model_ref: PhenotypeTermPayload
+    schema_ref:
+      schema_id: alliance.linkml.PhenotypeTerm
+      provider: alliance_linkml
+      name: PhenotypeTerm
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/ontologyTerm.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/ontologyTerm.yaml
+            class: PhenotypeTerm
+    definition_state: in_development
+    metadata:
+      object_role: validated_reference
+      validation_state: pending_ontology_resolution
+      validator_binding_id: phenotype_term_ontology_validator
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/ontologyTerm.yaml
+          class: PhenotypeTerm
+    fields:
+      - field_path: curie
+        field_type: string
+        display_name: Term CURIE
+        required: true
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: PhenotypeTerm
+              slot: curie
+              range: uriorcurie
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: label
+        field_type: string
+        display_name: Curator-facing label
+  - object_type: Reference
+    display_name: Reference
+    description: Pending literature/reference object for the source paper.
+    model_ref: ReferencePayload
+    schema_ref:
+      schema_id: alliance.linkml.Reference
+      provider: alliance_linkml
+      name: Reference
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/reference.yaml
+            class: Reference
+    definition_state: in_development
+    metadata:
+      object_role: validated_reference
+      validation_state: pending_reference_resolution
+      validator_binding_id: phenotype_reference_validator
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/reference.yaml
+          class: Reference
+    fields:
+      - field_path: reference_id
+        field_type: integer
+        display_name: Reference ID
+        metadata:
+          validator_binding_id: phenotype_reference_validator
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/reference.yaml
+              class: Reference
+              slot: reference_id
+              range: integer
+              db_table: reference
+              db_column: id
+      - field_path: title
+        field_type: string
+        display_name: Title
+      - field_path: filename
+        field_type: string
+        display_name: Filename
+  - object_type: EvidenceQuote
+    display_name: Verified evidence quote
+    description: Metadata-only object preserving one record_evidence-verified phenotype quote and document locator.
+    model_ref: EvidenceQuotePayload
+    definition_state: in_development
+    metadata:
+      object_role: metadata_only
+    fields:
+      - field_path: evidence_record_id
+        field_type: string
+        display_name: Evidence record ID
+        required: true
+      - field_path: entity
+        field_type: string
+        display_name: Evidence entity
+      - field_path: verified_quote
+        field_type: string
+        display_name: Verified quote
+        required: true
+      - field_path: page
+        field_type: integer
+        display_name: Page
+      - field_path: section
+        field_type: string
+        display_name: Section
+      - field_path: subsection
+        field_type: string
+        display_name: Subsection
+      - field_path: chunk_id
+        field_type: string
+        display_name: Chunk ID
+      - field_path: figure_reference
+        field_type: string
+        display_name: Figure reference
+metadata:
+  base_pack_id: agr.alliance.base
+  object_role_key: object_role
+  curatable_unit_object_type: PhenotypeAnnotation
+  semantic_source: domain_envelope.objects
+  legacy_semantic_lists: []
+  supported_object_roles:
+    - curatable_unit
+    - validated_reference
+    - metadata_only
+  provider_refs:
+    alliance_linkml:
+      schema_ref: alliance.linkml
+      repository: https://github.com/alliance-genome/agr_curation_schema.git
+      commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      schema_dir: model/schema
+      root_schema: model/schema/allianceModel.yaml
+      cache_script: scripts/testing/cache_agr_curation_schema.sh
+  validator_bindings:
+    - binding_id: phenotype_pending_envelope_validator
+      validator: agr_ai_curation_alliance.domain_packs.phenotype.validate_pending_phenotype_envelope
+      applies_to:
+        domain_pack_id: agr.alliance.phenotype
+        object_types:
+          - PhenotypeAnnotation
+          - PhenotypeSubject
+          - PhenotypeTerm
+          - Reference
+          - EvidenceQuote
+      definition_state: in_development
+    - binding_id: phenotype_subject_entity_validator
+      validation_kind: db_backed_entity_lookup
+      input_fields:
+        subject_identifier: PhenotypeSubject.subject_identifier
+        subject_type: PhenotypeSubject.subject_type
+      expected_db_targets:
+        gene: public.genephenotypeannotation.phenotypeannotationsubject_id
+        allele: public.allelephenotypeannotation.phenotypeannotationsubject_id
+        affected_genomic_model: public.agmphenotypeannotation.phenotypeannotationsubject_id
+      blocking: true
+      definition_state: in_development
+    - binding_id: phenotype_term_ontology_validator
+      validation_kind: db_backed_ontology_lookup
+      input_fields:
+        term_curie: PhenotypeTerm.curie
+      expected_db_target: public.phenotypeannotation_ontologyterm.phenotypeterms_id
+      blocking: true
+      definition_state: in_development
+    - binding_id: phenotype_reference_validator
+      validation_kind: db_backed_reference_lookup
+      input_fields:
+        reference_id: Reference.reference_id
+      expected_db_target: public.phenotypeannotation.evidenceitem_id
+      blocking: true
+      definition_state: in_development
+  validators:
+    active:
+      - validator_id: phenotype.domain_envelope_shape
+        description: Load the envelope through the provider-agnostic DomainEnvelope contract.
+      - validator_id: phenotype.pending_envelope_policy
+        description: Pending PhenotypeAnnotation objects must carry blocked export/write policy until subject, reference, and ontology targets are resolved.
+      - validator_id: phenotype.no_legacy_semantic_lists
+        description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
+    planned:
+      - validator_id: phenotype.subject_entity_resolution
+        description: Resolve phenotype_annotation_subject to Gene, Allele, or AGM DB rows before export.
+      - validator_id: phenotype.ontology_term_resolution
+        description: Validate phenotype term CURIEs against ontologyterm rows and configured Alliance ontology sources.
+    blocked:
+      - validator_id: phenotype.export_submission_projection
+        blocked_by: ALL-425
+        description: Export/submission adapter validation waits for disease phenotype and chemical export/submission adapters.
+      - validator_id: phenotype.extractor_output_migration
+        blocked_by: ALL-412
+        description: Runtime extractor output validation waits for the phenotype extractor migration to domain envelopes.
+  curation_db_grounding:
+    verified_with: read_only_curation_db
+    verified_date: "2026-05-09"
+    tables:
+      - table: public.phenotypeannotation
+        key_columns:
+          - id
+        verified_columns:
+          - phenotypeannotationobject
+          - evidenceitem_id
+          - relation_id
+          - dataprovider_id
+        verified_constraints:
+          - phenotypeannotation_evidenceitem_id_fk references public.informationcontententity(id)
+          - phenotypeannotation_relation_id_fk references public.vocabularyterm(id)
+          - phenotypeannotation_dataprovider_id_fk references public.organization(id)
+      - table: public.genephenotypeannotation
+        key_columns:
+          - id
+        verified_constraints:
+          - genephenotypeannotation_pasubject_id_fk references public.gene(id) on delete cascade
+          - fkf2daag5p16ps0d9jbgys9q8wn references public.phenotypeannotation(id)
+      - table: public.allelephenotypeannotation
+        key_columns:
+          - id
+        verified_constraints:
+          - allelephenotypeannotation_pasubject_id_fk references public.allele(id) on delete cascade
+          - fke1pme5isgq73km4sakb00ke0p references public.phenotypeannotation(id)
+      - table: public.agmphenotypeannotation
+        key_columns:
+          - id
+        verified_constraints:
+          - agmphenotypeannotation_pasubject_id_fk references public.affectedgenomicmodel(id) on delete cascade
+          - fkpfm2mj21xe7sk0yolm5gmsmlo references public.phenotypeannotation(id)
+      - table: public.phenotypeannotation_ontologyterm
+        key_columns:
+          - phenotypeannotation_id
+          - phenotypeterms_id
+        verified_constraints:
+          - phenotypeannotation_ontologyterm_pa_id_fk references public.phenotypeannotation(id)
+          - phenotypeannotation_ontologyterm_phenotypeterms_id_fk references public.ontologyterm(id)
+    verified_fixture_terms:
+      - curie: WBPhenotype:0000886
+      - curie: WBPhenotype:0001174
+    verified_fixture_subjects:
+      - primary_external_id: WB:WBGene00000912
+      - primary_external_id: WB:WBVar00000001
+      - primary_external_id: WB:WBVar00000002
+  export_blocker_policy:
+    status: blocked
+    reason: Pending phenotype assertions cannot be exported or submitted until the biological subject subtype, source reference, phenotype ontology term row, and exact non-mutating adapter target are resolved.
+    blocked_operations:
+      - insert public.phenotypeannotation
+      - insert public.genephenotypeannotation
+      - insert public.allelephenotypeannotation
+      - insert public.agmphenotypeannotation
+      - insert public.phenotypeannotation_ontologyterm
+    required_before_export:
+      - Resolve phenotype_annotation_subject to exactly one Gene, Allele, or AGM DB row.
+      - Resolve source papers to durable public.reference or public.informationcontententity rows.
+      - Validate phenotype term CURIEs against public.ontologyterm.
+      - Prove the exporter can create phenotype rows without mutating canonical entity rows.

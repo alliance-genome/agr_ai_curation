@@ -41,6 +41,7 @@
       },
       "expected_tool_result": {
         "status": "verified",
+        "evidence_record_id": "verified_exact",
         "verified_quote": "daf-2(e1370) adults produced 40% fewer progeny than wild type.",
         "page": 5,
         "section": "Results",
@@ -57,6 +58,7 @@
       },
       "expected_tool_result": {
         "status": "verified",
+        "evidence_record_id": "verified_supporting",
         "verified_quote": "Brood size was reduced to 120 +/- 15 embryos in daf-2(e1370) adults compared with 200 +/- 12 in controls.",
         "page": 6,
         "section": "Results",
