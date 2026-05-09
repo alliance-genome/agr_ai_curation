@@ -33,7 +33,6 @@ from ..schema_refs import (
     PROVIDER_REFS_METADATA_KEY,
 )
 from .constants import (
-    GENE_EXPRESSION_DEFINITION_NOTES,
     GENE_EXPRESSION_DOMAIN_PACK_CONVERTER_ID,
     GENE_EXPRESSION_DOMAIN_PACK_ID,
     GENE_EXPRESSION_DOMAIN_PACK_VERSION,
@@ -138,7 +137,8 @@ def validate_gene_expression_extraction_objects(
         if forbidden_payload_fields:
             errors.append(
                 f"{location}.payload stores evidence fields "
-                f"{', '.join(forbidden_payload_fields)}; use envelope metadata"
+                f"{', '.join(forbidden_payload_fields)}; use "
+                "metadata.evidence_records[] plus evidence_record_ids[]"
             )
 
         missing_payload_fields = sorted(
@@ -248,11 +248,11 @@ def _pending_object_from_extraction_object(
         payload=dict(obj.payload),
         object_id=obj.object_id,
         pending_ref_id=obj.pending_ref_id,
-        schema_ref=obj.schema_ref or _gene_expression_schema_ref(),
+        schema_ref=obj.schema_ref,
         model_ref=obj.model_ref,
         status=CuratableObjectStatus.PENDING,
         definition_state=DefinitionState.IN_DEVELOPMENT,
-        definition_notes=list(obj.definition_notes or GENE_EXPRESSION_DEFINITION_NOTES),
+        definition_notes=list(obj.definition_notes or []),
         object_refs=list(obj.object_refs),
         field_refs=list(obj.field_refs),
         evidence_record_ids=list(obj.evidence_record_ids),

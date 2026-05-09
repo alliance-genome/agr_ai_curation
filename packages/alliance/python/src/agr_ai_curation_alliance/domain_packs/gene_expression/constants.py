@@ -20,12 +20,6 @@ GENE_EXPRESSION_LINKML_SCHEMA_URI = (
     "https://github.com/alliance-genome/agr_curation_schema/blob/"
     f"{ALLIANCE_LINKML_COMMIT}/model/schema/expression.yaml"
 )
-GENE_EXPRESSION_DEFINITION_NOTES = (
-    "The envelope carries exactly one GeneExpressionAnnotation object per annotation.",
-    "Evidence and raw extraction details are preserved as envelope metadata.",
-)
-
-
 def get_gene_expression_domain_pack_metadata_path() -> Path:
     """Return the bundled gene-expression domain-pack metadata path."""
 
@@ -37,7 +31,6 @@ def get_gene_expression_domain_pack_metadata_path() -> Path:
 
 
 __all__ = [
-    "GENE_EXPRESSION_DEFINITION_NOTES",
     "GENE_EXPRESSION_DOMAIN_PACK_CONVERTER_ID",
     "GENE_EXPRESSION_DOMAIN_PACK_DIR_NAME",
     "GENE_EXPRESSION_DOMAIN_PACK_ID",

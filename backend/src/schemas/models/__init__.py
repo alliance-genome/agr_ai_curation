@@ -54,10 +54,6 @@ from .database_query_plan import DatabaseQueryPlan
 from .crew_execution_task import CrewExecutionTask
 from .external_api_plan import ExternalAPIPlan
 
-# Import helper classes (for type hints, but NOT registered as schemas)
-from .reagent import Reagent
-from .expression_pattern import ExpressionPattern
-from .expression_evidence import ExpressionEvidence
 from .ontology_mapping_item import OntologyMapping
 
 
@@ -67,7 +63,7 @@ from .ontology_mapping_item import OntologyMapping
 # 2. Get Pydantic models for response validation
 #
 # IMPORTANT: Only register top-level schemas here, not helper classes.
-# Helper classes (Reagent, ExpressionPattern, etc.) are NOT schemas themselves.
+# Helper classes are NOT schemas themselves.
 SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
     # Envelope schemas
     'supervisor': SupervisorEnvelope,
@@ -146,8 +142,5 @@ __all__ = [
     'ExternalAPIPlan',
 
     # Helper classes (not in SCHEMA_REGISTRY)
-    'Reagent',
-    'ExpressionPattern',
-    'ExpressionEvidence',
     'OntologyMapping',
 ]
