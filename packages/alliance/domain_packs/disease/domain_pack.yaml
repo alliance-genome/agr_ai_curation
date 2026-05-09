@@ -1,0 +1,899 @@
+pack_id: agr.alliance.disease
+display_name: Alliance Disease Domain Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+description: Pending disease assertion envelopes grounded to Alliance DiseaseAnnotation LinkML metadata and read-only curation DB target tables.
+status: in_development
+schema_refs:
+  - schema_id: alliance.linkml
+    provider: alliance_linkml
+    name: Alliance curation LinkML schema
+    version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+    uri: https://github.com/alliance-genome/agr_curation_schema/tree/1b11d0888f19eba4ca72022200bb7d96b30d4a52
+    definition_state: stable
+    metadata:
+      provider_refs:
+        alliance_linkml:
+          repository: https://github.com/alliance-genome/agr_curation_schema.git
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          schema_dir: model/schema
+          root_schema: model/schema/allianceModel.yaml
+          cache_script: scripts/testing/cache_agr_curation_schema.sh
+          ref_kind: schema
+enum_definitions:
+  - enum_id: DiseaseAssertionRole
+    display_name: Disease assertion role
+    description: Extractor role for the disease mention in the paper context.
+    values:
+      - value: primary
+        label: Primary
+      - value: background
+        label: Background
+      - value: comparative
+        label: Comparative
+      - value: model_context
+        label: Model context
+      - value: unspecified
+        label: Unspecified
+  - enum_id: DiseaseAssertionConfidence
+    display_name: Disease assertion confidence
+    description: Extractor confidence in disease normalization and role classification.
+    values:
+      - value: high
+        label: High
+      - value: medium
+        label: Medium
+      - value: low
+        label: Low
+  - enum_id: DiseaseSubjectType
+    display_name: Disease assertion subject type
+    description: Pending type for the biological entity subject before concrete annotation materialization.
+    definition_state: in_development
+    values:
+      - value: gene
+        label: Gene
+      - value: allele
+        label: Allele
+      - value: agm
+        label: Affected genomic model
+      - value: unknown
+        label: Unknown
+model_definitions:
+  - model_id: PendingDiseaseAssertionPayload
+    display_name: Pending disease assertion payload
+    description: One pending disease assertion grounded to abstract DiseaseAnnotation metadata; concrete Gene/Allele/AGM write targets are blocked.
+    schema_ref:
+      schema_id: alliance.linkml.DiseaseAnnotation
+      provider: alliance_linkml
+      name: DiseaseAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      definition_notes:
+        - DiseaseAnnotation is abstract in LinkML; this pack emits pending envelopes and blocks writes until concrete subject materialization is verified.
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: DiseaseAnnotation
+    definition_state: in_development
+    definition_notes:
+      - Required write DTO fields such as subject, reference, evidence code, and data provider are declared but not required for pending assertion validation.
+  - model_id: DiseaseOntologyTermSnapshotPayload
+    display_name: Disease ontology term snapshot payload
+    description: Embedded Disease Ontology term identity for the asserted disease.
+    schema_ref:
+      schema_id: alliance.linkml.DOTerm
+      provider: alliance_linkml
+      name: DOTerm
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/ontologyTerm.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/ontologyTerm.yaml
+            class: DOTerm
+  - model_id: DiseaseSubjectSnapshotPayload
+    display_name: Pending disease subject snapshot payload
+    description: Extractor-observed subject context before concrete Gene, Allele, or AGM materialization.
+    definition_state: in_development
+    definition_notes:
+      - Subject identity is not a stable write target until the disease extractor migration emits concrete subject identifiers.
+  - model_id: ReferenceSnapshotPayload
+    display_name: Reference snapshot payload
+    description: Source paper reference fields needed before a single_reference can be materialized.
+    schema_ref:
+      schema_id: alliance.linkml.Reference
+      provider: alliance_linkml
+      name: Reference
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+      definition_state: in_development
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/reference.yaml
+            class: Reference
+  - model_id: VocabularyTermSnapshotPayload
+    display_name: Vocabulary term snapshot payload
+    description: Embedded controlled vocabulary term identity.
+    schema_ref:
+      schema_id: alliance.linkml.VocabularyTerm
+      provider: alliance_linkml
+      name: VocabularyTerm
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/controlledVocabulary.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/controlledVocabulary.yaml
+            class: VocabularyTerm
+  - model_id: ConditionRelationPayload
+    display_name: Condition relation payload
+    description: Optional embedded condition relation context for pending disease assertions.
+    schema_ref:
+      schema_id: alliance.linkml.ConditionRelation
+      provider: alliance_linkml
+      name: ConditionRelation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: ConditionRelation
+  - model_id: ExperimentalConditionPayload
+    display_name: Experimental condition payload
+    description: Optional embedded experimental condition context.
+    schema_ref:
+      schema_id: alliance.linkml.ExperimentalCondition
+      provider: alliance_linkml
+      name: ExperimentalCondition
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: ExperimentalCondition
+  - model_id: EvidenceRecordPayload
+    display_name: Verified evidence record payload
+    description: Metadata-only record_evidence result preserved inside the pending disease assertion.
+    definition_state: stable
+object_definitions:
+  - object_type: DiseaseAnnotation
+    display_name: Disease annotation pending assertion
+    description: Pending curatable unit for one evidence-backed disease assertion before concrete subject/reference/write materialization.
+    model_ref: PendingDiseaseAssertionPayload
+    schema_ref:
+      schema_id: alliance.linkml.DiseaseAnnotation
+      provider: alliance_linkml
+      name: DiseaseAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+      definition_state: in_development
+      definition_notes:
+        - DiseaseAnnotation is abstract in LinkML; pending envelopes distinguish complete extraction fields from blocked write-target fields.
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+            class: DiseaseAnnotation
+    definition_state: in_development
+    definition_notes:
+      - Pending only; write behavior is blocked until subject type, subject ID, source reference ID, evidence codes, and concrete annotation subtype are verified.
+    metadata:
+      object_role: curatable_unit
+      assertion_kind: pending_disease_assertion
+      semantic_source: domain_envelope.objects
+      validator_binding_id: disease_pending_envelope_validator
+      write_behavior:
+        status: blocked
+        blocked_by: ALL-425
+        reason: The read-only DB projection is verified, but writes require concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation, or AGMDiseaseAnnotation materialization plus durable reference and evidence-code mappings.
+        blocked_operations:
+          - insert public.diseaseannotation
+          - insert public.genediseaseannotation
+          - insert public.allelediseaseannotation
+          - insert public.agmdiseaseannotation
+          - insert public.diseaseannotation_conditionrelation
+      export_behavior:
+        status: blocked
+        blocked_by: ALL-425
+        reason: Disease export/submission adapters are out of scope for this pack and wait for verified submission payload mapping.
+      definition_state_summary:
+        complete:
+          - mention
+          - disease_annotation_object
+          - role
+          - confidence
+          - evidence_record_ids
+          - evidence_records
+        under_development:
+          - disease_relation_name
+          - condition_relations
+        blocked:
+          - disease_annotation_subject
+          - single_reference
+          - evidence_code_curies
+          - data_provider
+      db_projection:
+        base_table: public.diseaseannotation
+        concrete_tables:
+          - public.genediseaseannotation
+          - public.allelediseaseannotation
+          - public.agmdiseaseannotation
+        condition_tables:
+          - public.diseaseannotation_conditionrelation
+          - public.conditionrelation
+          - public.conditionrelation_experimentalcondition
+          - public.experimentalcondition
+        representative_rows:
+          - row_id: 209127250
+            subtype: GeneDiseaseAnnotation
+            subject_primary_external_id: SGD:S000004578
+            disease_curie: DOID:0050730
+            relation_name: is_implicated_in
+            data_provider: SGD
+          - row_id: 209127267
+            subtype: AlleleDiseaseAnnotation
+            subject_primary_external_id: MGI:3689328
+            disease_curie: DOID:0111789
+            relation_name: is_implicated_in
+            data_provider: MGI
+          - row_id: 209127402
+            subtype: AGMDiseaseAnnotation
+            subject_primary_external_id: MGI:8308849
+            disease_curie: DOID:0111441
+            relation_name: is_model_of
+            data_provider: MGI
+        representative_condition_row:
+          diseaseannotation_id: 209127194
+          condition_relation_type: has_condition
+          condition_class_curie: ZECO:0000111
+          condition_id_curie: ZECO:0000238
+          condition_chemical_curie: CHEBI:6909
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+          class: DiseaseAnnotation
+        alliance_curation_db:
+          inspected_tables:
+            - public.diseaseannotation
+            - public.genediseaseannotation
+            - public.allelediseaseannotation
+            - public.agmdiseaseannotation
+            - public.diseaseannotation_conditionrelation
+            - public.conditionrelation
+            - public.conditionrelation_experimentalcondition
+            - public.experimentalcondition
+          row_counts:
+            diseaseannotation: 81227
+            genediseaseannotation: 43148
+            allelediseaseannotation: 5551
+            agmdiseaseannotation: 32528
+            diseaseannotation_conditionrelation: 4191
+            conditionrelation: 19549
+            conditionrelation_experimentalcondition: 23532
+            experimentalcondition: 15338
+    fields:
+      - field_path: mention
+        field_type: string
+        display_name: Paper disease mention
+        description: Disease mention exactly as written in the paper.
+        required: true
+        metadata:
+          evidence_source_field: true
+          definition_state_category: complete
+      - field_path: disease_annotation_object
+        field_type: object
+        display_name: Disease ontology term
+        description: Disease Ontology term asserted by the pending disease annotation.
+        required: true
+        model_ref: DiseaseOntologyTermSnapshotPayload
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: planned
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: DiseaseAnnotation
+              attribute: disease_annotation_object
+              range: DOTerm
+              db_table: diseaseannotation
+              db_column: diseaseannotationobject_id
+      - field_path: disease_annotation_object.curie
+        field_type: string
+        display_name: Disease term CURIE
+        description: Disease Ontology CURIE for the asserted disease term.
+        required: true
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: planned
+          validation_result_field: curie
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: DOTerm
+              slot: curie
+              range: uriorcurie
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: disease_annotation_object.name
+        field_type: string
+        display_name: Disease term name
+        description: Disease Ontology label for the asserted disease term.
+        required: true
+        metadata:
+          validatable: true
+          validator_binding_id: disease_ontology_term_lookup
+          validator_state: planned
+          validation_result_field: name
+          definition_state_category: complete
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: DOTerm
+              slot: name
+              range: string
+              db_table: ontologyterm
+              db_column: name
+      - field_path: role
+        field_type: enum
+        display_name: Paper role
+        description: Extractor classification for how the paper uses the disease mention.
+        required: true
+        enum_ref: DiseaseAssertionRole
+        metadata:
+          definition_state_category: complete
+      - field_path: confidence
+        field_type: enum
+        display_name: Confidence
+        required: true
+        enum_ref: DiseaseAssertionConfidence
+        metadata:
+          definition_state_category: complete
+      - field_path: disease_relation_name
+        field_type: string
+        display_name: Disease relation name
+        description: Name of the Disease Relation vocabulary term when the relation can be determined from evidence.
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_relation_cv_lookup
+          validator_state: planned
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: DiseaseAnnotationDTO
+              slot: disease_relation_name
+              range: string
+              db_table: vocabularyterm
+              db_column: name
+      - field_path: disease_annotation_subject
+        field_type: object
+        display_name: Disease annotation subject
+        model_ref: DiseaseSubjectSnapshotPayload
+        definition_state: in_development
+        definition_notes:
+          - Required for concrete LinkML disease annotations, but blocked until extractor output emits a verified Gene, Allele, or AGM subject.
+        metadata:
+          validatable: true
+          validator_binding_id: disease_subject_materialization
+          validator_state: blocked
+          definition_state_category: blocked
+          blocked_by: ALL-410
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: DiseaseAnnotation
+              slot: disease_annotation_subject
+              range: BiologicalEntity
+      - field_path: disease_annotation_subject.subject_type
+        field_type: enum
+        display_name: Subject type
+        enum_ref: DiseaseSubjectType
+        definition_state: in_development
+        metadata:
+          definition_state_category: blocked
+          blocked_by: ALL-410
+      - field_path: disease_annotation_subject.subject_label
+        field_type: string
+        display_name: Subject label
+        definition_state: in_development
+        metadata:
+          definition_state_category: blocked
+          blocked_by: ALL-410
+      - field_path: disease_annotation_subject.subject_identifier
+        field_type: string
+        display_name: Subject identifier
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_subject_materialization
+          validator_state: blocked
+          definition_state_category: blocked
+          blocked_by: ALL-410
+      - field_path: single_reference
+        field_type: object
+        display_name: Source reference
+        model_ref: ReferenceSnapshotPayload
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_reference_materialization
+          validator_state: blocked
+          definition_state_category: blocked
+          blocked_by: ALL-425
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: DiseaseAnnotation
+              slot: single_reference
+              range: Reference
+              db_table: diseaseannotation
+              db_column: evidenceitem_id
+      - field_path: single_reference.curie
+        field_type: string
+        display_name: Reference CURIE
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_reference_materialization
+          validator_state: blocked
+          definition_state_category: blocked
+          blocked_by: ALL-425
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/reference.yaml
+              class: DiseaseAnnotationDTO
+              slot: reference_curie
+              range: string
+              db_table: informationcontententity
+              db_column: curie
+      - field_path: evidence_code_curies[0]
+        field_type: string
+        display_name: First evidence code CURIE
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_evidence_code_lookup
+          validator_state: blocked
+          definition_state_category: blocked
+          blocked_by: ALL-425
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/ontologyTerm.yaml
+              class: DiseaseAnnotationDTO
+              slot: evidence_code_curies
+              range: string
+      - field_path: data_provider
+        field_type: object
+        display_name: Data provider
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_data_provider_lookup
+          validator_state: blocked
+          definition_state_category: blocked
+          blocked_by: ALL-425
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: DiseaseAnnotation
+              slot: data_provider
+              range: Organization
+              db_table: diseaseannotation
+              db_column: dataprovider_id
+      - field_path: data_provider.abbreviation
+        field_type: string
+        display_name: Data provider abbreviation
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_data_provider_lookup
+          validator_state: blocked
+          definition_state_category: blocked
+          blocked_by: ALL-425
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Organization
+              slot: abbreviation
+              range: string
+              db_table: organization
+              db_column: abbreviation
+      - field_path: evidence_record_ids
+        field_type: array
+        display_name: Verified evidence record IDs
+        required: true
+        metadata:
+          evidence_source_field: true
+          definition_state_category: complete
+      - field_path: evidence_records
+        field_type: array
+        display_name: Verified evidence records
+        required: true
+        model_ref: EvidenceRecordPayload
+        metadata:
+          evidence_source_field: true
+          definition_state_category: complete
+      - field_path: evidence_records[0].evidence_record_id
+        field_type: string
+        display_name: First evidence record ID
+        metadata:
+          evidence_source_field: true
+          definition_state_category: complete
+      - field_path: evidence_records[0].verified_quote
+        field_type: string
+        display_name: First verified quote
+        metadata:
+          evidence_source_field: true
+          definition_state_category: complete
+      - field_path: evidence_records[0].page
+        field_type: integer
+        display_name: First evidence page
+        metadata:
+          evidence_locator_field: true
+          definition_state_category: complete
+      - field_path: evidence_records[0].section
+        field_type: string
+        display_name: First evidence section
+        metadata:
+          evidence_locator_field: true
+          definition_state_category: complete
+      - field_path: evidence_records[0].chunk_id
+        field_type: string
+        display_name: First evidence chunk ID
+        metadata:
+          evidence_locator_field: true
+          definition_state_category: complete
+      - field_path: condition_relations
+        field_type: array
+        display_name: Condition relations
+        model_ref: ConditionRelationPayload
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validator_state: planned
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: Annotation
+              slot: condition_relations
+              range: ConditionRelation
+              db_table: diseaseannotation_conditionrelation
+      - field_path: condition_relations[0].condition_relation_type.name
+        field_type: string
+        display_name: First condition relation type
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_condition_relation_lookup
+          validator_state: planned
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelationDTO
+              slot: condition_relation_type_name
+              range: string
+              db_table: vocabularyterm
+              db_column: name
+      - field_path: condition_relations[0].conditions
+        field_type: array
+        display_name: First condition list
+        model_ref: ExperimentalConditionPayload
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_experimental_condition_lookup
+          validator_state: planned
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ConditionRelation
+              slot: conditions
+              range: ExperimentalCondition
+              db_table: conditionrelation_experimentalcondition
+      - field_path: condition_relations[0].conditions[0].condition_class.curie
+        field_type: string
+        display_name: First condition class CURIE
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_experimental_condition_lookup
+          validator_state: planned
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_class_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations[0].conditions[0].condition_id.curie
+        field_type: string
+        display_name: First condition ID CURIE
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_experimental_condition_lookup
+          validator_state: planned
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_id_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations[0].conditions[0].condition_chemical.curie
+        field_type: string
+        display_name: First condition chemical CURIE
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_experimental_condition_lookup
+          validator_state: planned
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_chemical_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations[0].conditions[0].condition_taxon.curie
+        field_type: string
+        display_name: First condition taxon CURIE
+        definition_state: in_development
+        metadata:
+          validatable: true
+          validator_binding_id: disease_experimental_condition_lookup
+          validator_state: planned
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalConditionDTO
+              slot: condition_taxon_curie
+              range: string
+              db_table: ontologyterm
+              db_column: curie
+      - field_path: condition_relations[0].conditions[0].condition_free_text
+        field_type: string
+        display_name: First condition free text
+        definition_state: in_development
+        metadata:
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalCondition
+              slot: condition_free_text
+              range: string
+              db_table: experimentalcondition
+              db_column: conditionfreetext
+      - field_path: condition_relations[0].conditions[0].condition_summary
+        field_type: string
+        display_name: First condition summary
+        definition_state: in_development
+        metadata:
+          definition_state_category: under_development
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: ExperimentalCondition
+              slot: condition_summary
+              range: string
+              db_table: experimentalcondition
+              db_column: conditionsummary
+fixture_packs:
+  - fixture_pack_id: tool_verified
+    display_name: Tool-verified disease assertion fixtures
+    path: fixtures/tool_verified.yaml
+    description: Pending disease assertion domain envelopes converted from verified disease extraction fixtures.
+    object_types:
+      - DiseaseAnnotation
+metadata:
+  object_role_key: object_role
+  curatable_unit_object_type: DiseaseAnnotation
+  semantic_source: domain_envelope.objects
+  legacy_semantic_lists: []
+  supported_object_roles:
+    - curatable_unit
+  validators:
+    active:
+      - validator_id: disease.domain_envelope_shape
+        description: Load the envelope through the provider-agnostic DomainEnvelope contract.
+      - validator_id: disease.required_payload_fields
+        description: Required pending disease assertion field paths declared in this pack must be present.
+      - validator_id: disease.tool_verified_evidence_links
+        description: Disease assertions must retain non-empty verified evidence_record_ids and evidence_records.
+      - validator_id: disease.no_legacy_semantic_lists
+        description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
+    planned:
+      - validator_id: disease.disease_ontology_term_lookup
+        description: Validate Disease Ontology curies and labels against public.ontologyterm rows with ontologytermtype DOTerm.
+      - validator_id: disease.disease_relation_cv_lookup
+        description: Validate disease_relation_name against the Disease Relation vocabulary.
+      - validator_id: disease.condition_relation_lookup
+        description: Validate condition relation names and condition ontology curies against public.conditionrelation and public.experimentalcondition projections.
+    blocked:
+      - validator_id: disease.subject_materialization
+        blocked_by: ALL-410
+        description: Concrete Gene, Allele, or AGM subject validation waits for the disease extractor output migration.
+      - validator_id: disease.export_submission_projection
+        blocked_by: ALL-425
+        description: Export/submission validation waits for verified disease phenotype and chemical export/submission adapters.
+      - validator_id: disease.reference_and_evidence_code_materialization
+        blocked_by: ALL-425
+        description: Durable reference IDs and ECO evidence-code mapping must be verified before writes can be enabled.
+  validator_bindings:
+    - binding_id: disease_pending_envelope_validator
+      validator: agr_ai_curation_alliance.domain_packs.disease.validate_pending_disease_envelope
+      applies_to:
+        domain_pack_id: agr.alliance.disease
+        object_types:
+          - DiseaseAnnotation
+      definition_state: in_development
+    - binding_id: disease_ontology_term_lookup
+      validation_kind: curation_db_reference_lookup
+      status: planned
+      table: public.ontologyterm
+      input_fields:
+        curie: disease_annotation_object.curie
+        name: disease_annotation_object.name
+      expected_result_fields:
+        curie: disease_annotation_object.curie
+        name: disease_annotation_object.name
+        ontologytermtype: DOTerm
+    - binding_id: disease_relation_cv_lookup
+      validation_kind: curation_db_reference_lookup
+      status: planned
+      table: public.vocabularyterm
+      input_fields:
+        name: disease_relation_name
+      expected_result_fields:
+        name: disease_relation_name
+        vocabulary_name: Disease Relation
+    - binding_id: disease_experimental_condition_lookup
+      validation_kind: curation_db_reference_lookup
+      status: planned
+      tables:
+        - public.conditionrelation
+        - public.experimentalcondition
+        - public.ontologyterm
+    - binding_id: disease_condition_relation_lookup
+      validation_kind: curation_db_reference_lookup
+      status: planned
+      tables:
+        - public.conditionrelation
+        - public.vocabularyterm
+      input_fields:
+        condition_relation_type_name: condition_relations[0].condition_relation_type.name
+      expected_result_fields:
+        condition_relation_type_name: condition_relations[0].condition_relation_type.name
+        vocabulary_name: Condition Relation Type
+    - binding_id: disease_subject_materialization
+      validation_kind: curation_db_reference_lookup
+      status: blocked
+      blocked_by: ALL-410
+    - binding_id: disease_reference_materialization
+      validation_kind: curation_db_reference_lookup
+      status: blocked
+      blocked_by: ALL-425
+      table: public.informationcontententity
+      input_fields:
+        curie: single_reference.curie
+      expected_result_fields:
+        curie: single_reference.curie
+    - binding_id: disease_evidence_code_lookup
+      validation_kind: curation_db_reference_lookup
+      status: blocked
+      blocked_by: ALL-425
+      table: public.ontologyterm
+      input_fields:
+        curie: evidence_code_curies[0]
+      expected_result_fields:
+        curie: evidence_code_curies[0]
+        ontologytermtype: ECOTerm
+    - binding_id: disease_data_provider_lookup
+      validation_kind: curation_db_reference_lookup
+      status: blocked
+      blocked_by: ALL-425
+      tables:
+        - public.diseaseannotation
+        - public.organization
+      input_fields:
+        abbreviation: data_provider.abbreviation
+      expected_result_fields:
+        abbreviation: data_provider.abbreviation
+  provider_refs:
+    alliance_linkml:
+      schema_ref: alliance.linkml
+      repository: https://github.com/alliance-genome/agr_curation_schema.git
+      commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      schema_dir: model/schema
+      root_schema: model/schema/allianceModel.yaml
+      cache_script: scripts/testing/cache_agr_curation_schema.sh
+    alliance_curation_db:
+      inspected_at: "2026-05-09"
+      readonly_user: ai_curation_readonly_curation
+      inspected_tables:
+        - public.diseaseannotation
+        - public.genediseaseannotation
+        - public.allelediseaseannotation
+        - public.agmdiseaseannotation
+        - public.diseaseannotation_conditionrelation
+        - public.conditionrelation
+        - public.conditionrelation_experimentalcondition
+        - public.experimentalcondition

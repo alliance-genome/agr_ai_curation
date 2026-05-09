@@ -1,0 +1,163 @@
+fixture_pack_id: tool_verified
+domain_pack_id: agr.alliance.disease
+fixtures_api_version: 1.0.0
+display_name: Tool-verified disease assertion fixtures
+description: Pending disease assertion domain envelope examples.
+fixtures:
+  - name: andersen_tawil_tool_verified_disease_assertion
+    description: A verified disease model assertion normalized to a Disease Ontology term.
+    envelope:
+      envelope_id: disease-tool-verified-env-1
+      domain_pack_id: agr.alliance.disease
+      domain_pack_version: 0.1.0
+      status: extracted
+      schema_ref:
+        schema_id: alliance.linkml.DiseaseAnnotation
+        provider: alliance_linkml
+        name: DiseaseAnnotation
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+        definition_state: in_development
+        definition_notes:
+          - Pending assertion payload grounded to abstract LinkML DiseaseAnnotation metadata.
+          - Concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation, or AGMDiseaseAnnotation materialization is blocked until subject, reference, evidence-code, and export targets are verified for migrated disease extractor output.
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+              class: DiseaseAnnotation
+      objects:
+        - object_type: DiseaseAnnotation
+          payload:
+            mention: Andersen-Tawil syndrome
+            disease_annotation_object:
+              curie: DOID:0050434
+              name: Andersen-Tawil syndrome
+            role: model_context
+            confidence: high
+            evidence_record_ids:
+              - ats-model-evidence-1
+              - ats-cohort-evidence-1
+            evidence_records:
+              - evidence_record_id: ats-model-evidence-1
+                entity: Andersen-Tawil syndrome
+                verified_quote: loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome.
+                page: 4
+                section: Results
+                chunk_id: chunk-disease-model
+                subsection: Disease model
+                figure_reference: Figure 4A
+                source_tool: record_evidence
+              - evidence_record_id: ats-cohort-evidence-1
+                entity: Andersen-Tawil syndrome
+                verified_quote: Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome.
+                page: 5
+                section: Results
+                chunk_id: chunk-disease-cohort
+                subsection: Clinical correlation
+                source_tool: record_evidence
+            disease_relation_name: is_model_of
+            disease_annotation_subject:
+              subject_type: gene
+              subject_label: kcnj2
+          pending_ref_id: disease-assertion-1
+          schema_ref:
+            schema_id: alliance.linkml.DiseaseAnnotation
+            provider: alliance_linkml
+            name: DiseaseAnnotation
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+            definition_state: in_development
+            definition_notes:
+              - Pending assertion payload grounded to abstract LinkML DiseaseAnnotation metadata.
+              - Concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation, or AGMDiseaseAnnotation materialization is blocked until subject, reference, evidence-code, and export targets are verified for migrated disease extractor output.
+            metadata:
+              provider_refs:
+                alliance_linkml:
+                  schema_ref: alliance.linkml
+                  commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+                  source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+                  class: DiseaseAnnotation
+          status: pending
+          definition_state: in_development
+          definition_notes:
+            - Pending assertion payload grounded to abstract LinkML DiseaseAnnotation metadata.
+            - Concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation, or AGMDiseaseAnnotation materialization is blocked until subject, reference, evidence-code, and export targets are verified for migrated disease extractor output.
+          object_refs: []
+          field_refs: []
+          metadata:
+            object_role: curatable_unit
+            assertion_kind: pending_disease_assertion
+            validator_binding_id: disease_pending_envelope_validator
+            write_behavior:
+              status: blocked
+              reason: Subject, reference, evidence-code, and concrete disease annotation write targets are not yet materialized from disease extractor output.
+            export_behavior:
+              status: blocked
+              reason: Disease export/submission adapters are tracked by ALL-425.
+            provider_refs:
+              alliance_linkml:
+                schema_ref: alliance.linkml
+                commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+                source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+                class: DiseaseAnnotation
+      validation_findings:
+        - severity: info
+          message: Disease assertion evidence was verified before envelope conversion.
+          status: resolved
+          code: alliance.disease_assertion.tool_verified
+          field_ref:
+            object_ref:
+              pending_ref_id: disease-assertion-1
+              object_type: DiseaseAnnotation
+            field_path: disease_annotation_object.curie
+          details:
+            validator_binding_id: disease_pending_envelope_validator
+            source_tool: record_evidence
+            blocking: false
+            grounded_slots:
+              disease_annotation_object:
+                source_file: model/schema/phenotypeAndDiseaseAnnotation.yaml
+                attribute: disease_annotation_object
+                range: DOTerm
+              curie:
+                source_file: model/schema/core.yaml
+                slot: curie
+                range: uriorcurie
+              name:
+                source_file: model/schema/core.yaml
+                slot: name
+                range: string
+      history:
+        - event_type: created
+          timestamp: "2026-05-09T00:00:00Z"
+          actor_type: system
+          actor_id: agr_ai_curation_alliance.domain_packs.disease
+          message: Converted tool-verified disease extraction output to a pending domain envelope.
+          details: {}
+        - event_type: object_extracted
+          timestamp: "2026-05-09T00:00:00Z"
+          actor_type: system
+          actor_id: agr_ai_curation_alliance.domain_packs.disease
+          message: Added pending disease assertion.
+          object_ref:
+            pending_ref_id: disease-assertion-1
+            object_type: DiseaseAnnotation
+          details:
+            evidence_record_ids:
+              - ats-model-evidence-1
+              - ats-cohort-evidence-1
+            validator_binding_id: disease_pending_envelope_validator
+            write_behavior: blocked
+      metadata:
+        source_document_id: ZFIN-paper-disease-0001
+        source_agent: disease_extractor
+        conversion: tool_verified_disease_output_to_pending_envelope
+        semantic_source: domain_envelope.objects
+        normalization_notes:
+          - Andersen-Tawil syndrome was verified against Disease Ontology term DOID:0050434 in the read-only curation DB.
+          - The assertion remains pending because concrete disease annotation subject and reference materialization are blocked for export.
+        write_behavior:
+          status: blocked
