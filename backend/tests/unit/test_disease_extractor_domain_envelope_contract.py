@@ -84,7 +84,7 @@ def _valid_pending_disease_envelope():
     return disease_extraction_output_to_pending_envelope(
         copy.deepcopy(_valid_disease_extractor_payload()),
         envelope_id="disease-extractor-env-1",
-        document_id="ZFIN-paper-disease-0001",
+        document_id="disease-paper-0001",
     )
 
 
