@@ -507,6 +507,93 @@ def test_cross_session_action_log_candidate_reports_blockers(db_session):
     assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
 
 
+def test_cross_session_action_log_draft_reports_blockers(db_session):
+    _document_a, _extraction_a, session_a, candidate_a = _create_legacy_session(db_session)
+    _document_b, _extraction_b, _session_b, candidate_b = _create_legacy_session(db_session)
+    assert candidate_b.draft is not None
+    action = CurationActionLogEntry(
+        id=uuid4(),
+        session_id=session_a.id,
+        candidate_id=candidate_a.id,
+        draft_id=candidate_b.draft.id,
+        action_type=CurationActionType.CANDIDATE_ACCEPTED,
+        actor_type=CurationActorType.USER,
+        actor={"actor_id": "curator-1"},
+        occurred_at=_now(),
+        previous_candidate_status=CurationCandidateStatus.PENDING,
+        new_candidate_status=CurationCandidateStatus.ACCEPTED,
+        changed_field_keys=["entity_name"],
+        evidence_anchor_ids=[],
+        message="Cross-session retained draft action log.",
+        action_metadata={},
+    )
+    db_session.add(action)
+    db_session.commit()
+
+    summary = _run_migration(db_session)
+
+    assert summary.migrated_envelopes == 0
+    assert summary.blocker_count == 2
+    assert {blocker.source_table for blocker in summary.blockers} == {
+        "curation_action_log"
+    }
+    assert {blocker.source_id for blocker in summary.blockers} == {str(action.id)}
+    assert {
+        blocker.reason for blocker in summary.blockers
+    } == {
+        "action log draft_id does not point at a retained draft "
+        "in the same review session",
+        "action log session_id does not match the retained draft's "
+        "review session",
+    }
+    assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
+
+
+def test_cross_session_validation_snapshot_reports_blockers(db_session):
+    _document_a, _extraction_a, session_a, _candidate_a = _create_legacy_session(db_session)
+    _document_b, _extraction_b, _session_b, candidate_b = _create_legacy_session(db_session)
+    snapshot = CurationValidationSnapshot(
+        id=uuid4(),
+        scope=CurationValidationScope.CANDIDATE,
+        session_id=session_a.id,
+        candidate_id=candidate_b.id,
+        adapter_key="reference_adapter",
+        state=CurationValidationSnapshotState.COMPLETED,
+        field_results={
+            "entity_name": {"status": FieldValidationStatus.VALIDATED.value}
+        },
+        summary={
+            "state": CurationValidationSnapshotState.COMPLETED.value,
+            "counts": {"validated": 1},
+            "warnings": [],
+            "stale_field_keys": [],
+        },
+        warnings=[],
+        requested_at=_now(),
+        completed_at=_now(),
+    )
+    db_session.add(snapshot)
+    db_session.commit()
+
+    summary = _run_migration(db_session)
+
+    assert summary.migrated_envelopes == 0
+    assert summary.blocker_count == 2
+    assert {blocker.source_table for blocker in summary.blockers} == {
+        "validation_snapshots"
+    }
+    assert {blocker.source_id for blocker in summary.blockers} == {str(snapshot.id)}
+    assert {
+        blocker.reason for blocker in summary.blockers
+    } == {
+        "validation snapshot candidate_id does not point at a retained "
+        "candidate in the same review session",
+        "validation snapshot session_id does not match the retained "
+        "candidate's review session",
+    }
+    assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
+
+
 def test_orphan_extraction_result_migrates_as_standalone_envelope(db_session):
     document = _create_document(db_session)
     extraction_result = _create_extraction_result(db_session, document_id=document.id)

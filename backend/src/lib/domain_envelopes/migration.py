@@ -294,9 +294,9 @@ def _load_review_sessions(db: Session) -> list[CurationReviewSession]:
         db.scalars(
             select(CurationReviewSession)
             .options(
-                selectinload(CurationReviewSession.candidates).selectinload(
-                    CurationCandidate.draft
-                ),
+                selectinload(CurationReviewSession.candidates)
+                .selectinload(CurationCandidate.draft)
+                .selectinload(CurationDraft.action_log_entries),
                 selectinload(CurationReviewSession.candidates).selectinload(
                     CurationCandidate.evidence_anchors
                 ),
@@ -383,6 +383,11 @@ def _session_blockers(
 ) -> list[LegacyMigrationBlocker]:
     blockers: list[LegacyMigrationBlocker] = []
     candidate_ids = {str(candidate.id) for candidate in session_row.candidates}
+    draft_candidate_ids = {
+        str(candidate.draft.id): str(candidate.id)
+        for candidate in session_row.candidates
+        if candidate.draft is not None
+    }
     if (
         session_row.current_candidate_id is not None
         and str(session_row.current_candidate_id) not in candidate_ids
@@ -399,7 +404,14 @@ def _session_blockers(
             )
         )
 
-    blockers.extend(_action_log_relationship_blockers(session_row, candidate_ids))
+    blockers.extend(
+        _action_log_relationship_blockers(
+            session_row,
+            candidate_ids,
+            draft_candidate_ids,
+        )
+    )
+    blockers.extend(_validation_snapshot_relationship_blockers(session_row, candidate_ids))
 
     for candidate in session_row.candidates:
         blocker = _candidate_projection_blocker(candidate, migrated_sources)
@@ -412,6 +424,7 @@ def _session_blockers(
 def _action_log_relationship_blockers(
     session_row: CurationReviewSession,
     candidate_ids: set[str],
+    draft_candidate_ids: dict[str, str],
 ) -> list[LegacyMigrationBlocker]:
     blockers: list[LegacyMigrationBlocker] = []
     session_id = str(session_row.id)
@@ -428,6 +441,42 @@ def _action_log_relationship_blockers(
                     details={
                         "session_id": session_id,
                         "candidate_id": str(entry.candidate_id),
+                    },
+                )
+            )
+        if entry.draft_id is None:
+            continue
+        draft_id = str(entry.draft_id)
+        draft_candidate_id = draft_candidate_ids.get(draft_id)
+        if draft_candidate_id is None:
+            blockers.append(
+                LegacyMigrationBlocker(
+                    source_table=SOURCE_TABLE_ACTION_LOG,
+                    source_id=str(entry.id),
+                    reason=(
+                        "action log draft_id does not point at a retained draft "
+                        "in the same review session"
+                    ),
+                    details={
+                        "session_id": session_id,
+                        "draft_id": draft_id,
+                    },
+                )
+            )
+        elif (
+            entry.candidate_id is not None
+            and draft_candidate_id != str(entry.candidate_id)
+        ):
+            blockers.append(
+                LegacyMigrationBlocker(
+                    source_table=SOURCE_TABLE_ACTION_LOG,
+                    source_id=str(entry.id),
+                    reason="action log draft_id does not belong to the action log candidate",
+                    details={
+                        "session_id": session_id,
+                        "candidate_id": str(entry.candidate_id),
+                        "draft_id": draft_id,
+                        "draft_candidate_id": draft_candidate_id,
                     },
                 )
             )
@@ -448,6 +497,75 @@ def _action_log_relationship_blockers(
                         "action_log_session_id": str(entry.session_id),
                         "candidate_session_id": session_id,
                         "candidate_id": str(candidate.id),
+                    },
+                )
+            )
+        if candidate.draft is None:
+            continue
+        for entry in candidate.draft.action_log_entries:
+            if str(entry.session_id) == session_id:
+                continue
+            blockers.append(
+                LegacyMigrationBlocker(
+                    source_table=SOURCE_TABLE_ACTION_LOG,
+                    source_id=str(entry.id),
+                    reason=(
+                        "action log session_id does not match the retained draft's "
+                        "review session"
+                    ),
+                    details={
+                        "action_log_session_id": str(entry.session_id),
+                        "draft_session_id": session_id,
+                        "draft_id": str(candidate.draft.id),
+                        "draft_candidate_id": str(candidate.id),
+                    },
+                )
+            )
+    return blockers
+
+
+def _validation_snapshot_relationship_blockers(
+    session_row: CurationReviewSession,
+    candidate_ids: set[str],
+) -> list[LegacyMigrationBlocker]:
+    blockers: list[LegacyMigrationBlocker] = []
+    session_id = str(session_row.id)
+    for snapshot in session_row.validation_snapshots:
+        if snapshot.candidate_id is None or str(snapshot.candidate_id) in candidate_ids:
+            continue
+        blockers.append(
+            LegacyMigrationBlocker(
+                source_table=SOURCE_TABLE_VALIDATION,
+                source_id=str(snapshot.id),
+                reason=(
+                    "validation snapshot candidate_id does not point at a retained "
+                    "candidate in the same review session"
+                ),
+                details={
+                    "session_id": session_id,
+                    "candidate_id": str(snapshot.candidate_id),
+                    "scope": snapshot.scope.value,
+                },
+            )
+        )
+
+    for candidate in session_row.candidates:
+        for snapshot in candidate.validation_snapshots:
+            if str(snapshot.session_id) == session_id:
+                continue
+            blockers.append(
+                LegacyMigrationBlocker(
+                    source_table=SOURCE_TABLE_VALIDATION,
+                    source_id=str(snapshot.id),
+                    reason=(
+                        "validation snapshot session_id does not match the retained "
+                        "candidate's review session"
+                    ),
+                    details={
+                        "validation_session_id": str(snapshot.session_id),
+                        "candidate_session_id": session_id,
+                        "candidate_id": str(candidate.id),
+                        "scope": snapshot.scope.value,
                     },
                 )
             )
@@ -792,6 +910,8 @@ def _session_history(
             )
 
     for snapshot in sorted(session_row.validation_snapshots, key=_validation_snapshot_sort_key):
+        if snapshot.candidate_id is not None:
+            continue
         events.append(
             _history_event(
                 event_id=f"legacy-session-validation-imported:{snapshot.id}",
@@ -860,6 +980,8 @@ def _session_validation_findings(
             )
 
     for snapshot in session_row.validation_snapshots:
+        if snapshot.candidate_id is not None:
+            continue
         findings.extend(_validation_findings_for_snapshot(snapshot, object_ref=None))
     return findings
 

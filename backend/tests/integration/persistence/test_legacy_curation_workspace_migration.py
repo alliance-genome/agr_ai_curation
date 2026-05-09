@@ -328,3 +328,82 @@ def test_legacy_workspace_migration_blocks_cross_session_action_log_candidate(db
     }
     assert {blocker.source_id for blocker in summary.blockers} == {str(action.id)}
     assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
+
+
+@pytest.mark.integration
+def test_legacy_workspace_migration_blocks_cross_session_action_log_draft(db_session):
+    review_session_a, candidate_a = _seed_retained_workspace(db_session)
+    _review_session_b, candidate_b = _seed_retained_workspace(db_session)
+    assert candidate_b.draft is not None
+    action = CurationActionLogEntry(
+        id=uuid4(),
+        session_id=review_session_a.id,
+        candidate_id=candidate_a.id,
+        draft_id=candidate_b.draft.id,
+        action_type=CurationActionType.CANDIDATE_ACCEPTED,
+        actor_type=CurationActorType.USER,
+        actor={"actor_id": "curator-1"},
+        occurred_at=_now(),
+        previous_candidate_status=CurationCandidateStatus.PENDING,
+        new_candidate_status=CurationCandidateStatus.ACCEPTED,
+        changed_field_keys=["entity_name"],
+        evidence_anchor_ids=[],
+        message="Cross-session retained draft action log.",
+        action_metadata={},
+    )
+    db_session.add(action)
+    db_session.commit()
+
+    summary = migrate_legacy_curation_workspace_to_domain_envelopes(
+        db_session,
+        options=LegacyCurationWorkspaceMigrationOptions(project_key="integration"),
+    )
+
+    assert summary.migrated_envelopes == 0
+    assert summary.blocker_count == 2
+    assert {blocker.source_table for blocker in summary.blockers} == {
+        "curation_action_log"
+    }
+    assert {blocker.source_id for blocker in summary.blockers} == {str(action.id)}
+    assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
+
+
+@pytest.mark.integration
+def test_legacy_workspace_migration_blocks_cross_session_validation_snapshot(db_session):
+    review_session_a, _candidate_a = _seed_retained_workspace(db_session)
+    _review_session_b, candidate_b = _seed_retained_workspace(db_session)
+    snapshot = CurationValidationSnapshot(
+        id=uuid4(),
+        scope=CurationValidationScope.CANDIDATE,
+        session_id=review_session_a.id,
+        candidate_id=candidate_b.id,
+        adapter_key="reference_adapter",
+        state=CurationValidationSnapshotState.COMPLETED,
+        field_results={
+            "entity_name": {"status": FieldValidationStatus.VALIDATED.value}
+        },
+        summary={
+            "state": CurationValidationSnapshotState.COMPLETED.value,
+            "counts": {"validated": 1},
+            "warnings": [],
+            "stale_field_keys": [],
+        },
+        warnings=[],
+        requested_at=_now(),
+        completed_at=_now(),
+    )
+    db_session.add(snapshot)
+    db_session.commit()
+
+    summary = migrate_legacy_curation_workspace_to_domain_envelopes(
+        db_session,
+        options=LegacyCurationWorkspaceMigrationOptions(project_key="integration"),
+    )
+
+    assert summary.migrated_envelopes == 0
+    assert summary.blocker_count == 2
+    assert {blocker.source_table for blocker in summary.blockers} == {
+        "validation_snapshots"
+    }
+    assert {blocker.source_id for blocker in summary.blockers} == {str(snapshot.id)}
+    assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
