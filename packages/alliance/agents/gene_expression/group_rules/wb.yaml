@@ -40,7 +40,8 @@ content: |
 
   ### Output discipline
   - Every excluded candidate must land in `metadata.exclusions[]` with canonical reason_code and evidence refs when available.
-  - Keep only experimentally observed WB-curation-relevant annotations in `curatable_objects[]`.
+  - Keep only experimentally observed WB-curation-relevant GeneExpressionAnnotation objects in `curatable_objects[]`.
+  - Store verified quotes, page numbers, figure references, genotype strings, and unresolved WB anatomy/stage labels in envelope metadata or object metadata; do not put legacy flat evidence fields in payload.
 
   ### Rescue experiment language exclusion
   - Exclude sentences where "expression" refers to transgenic rescue, not endogenous expression profiling (reason_code: `rescue_experiment_not_expression`).
@@ -58,17 +59,17 @@ content: |
 
   ### Incomplete annotation handling
   - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
-    - Still capture the annotation with null anatomy_label and/or life_stage_label.
+    - Still capture the annotation with null values at the relevant domain-pack payload paths, such as `expression_pattern.where_expressed.anatomical_structure.name` and/or `when_expressed_stage_name`.
     - Add a `metadata.ambiguities[]` entry noting which fields are incomplete and may require curator review of figures.
     - Example: "Expression pattern of the acox-1.1 gene." -> capture with gene but null anatomy.
   - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):
     - Capture the annotation with the tentative identities.
-    - Include the uncertainty qualifier in evidence_text verbatim.
+    - Preserve the uncertainty qualifier verbatim in the linked `metadata.evidence_records[]` quote and raw mention metadata.
     - Add a `metadata.ambiguities[]` entry noting the tentative identification.
 
   ### Negative expression results (C. elegans)
-  - Experimentally demonstrated absence of expression is a valid annotation with is_negative: true.
-    Example: "no GFP signal was observed in the pharynx" -> annotation with anatomy_label=pharynx, is_negative=true.
+  - Experimentally demonstrated absence of expression is a valid annotation with payload `negated: true`.
+    Example: "no GFP signal was observed in the pharynx" -> annotation with `expression_pattern.where_expressed.anatomical_structure.name: pharynx` and `negated: true`.
   - Expression unchanged in perturbation background (e.g., "expression of RAB-11 in acs-1(RNAi) embryos was not different from wild type") is generally NOT a new expression annotation.
     - If wild-type expression is established elsewhere in the paper, do not duplicate it.
     - If this is the ONLY evidence of the expression pattern, capture it with context.
@@ -82,7 +83,7 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Emit retained semantic findings only as `GeneExpressionAnnotation` entries in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
   - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
   - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

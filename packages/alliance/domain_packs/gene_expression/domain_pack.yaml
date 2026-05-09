@@ -740,6 +740,16 @@ object_definitions:
               class: GeneExpressionAnnotation
               slot: uncertain
               range: boolean
+fixture_packs:
+  - fixture_pack_id: tmem67_pending
+    display_name: tmem67 pending gene expression fixtures
+    path: fixtures/tmem67_pending.yaml
+    description: Production-like pending GeneExpressionAnnotation envelope preserving tmem67 extraction evidence metadata.
+    object_types:
+      - GeneExpressionAnnotation
+    definition_state: in_development
+    definition_notes:
+      - Fixture values mirror grounded tmem67 curation DB shape while preserving extractor-side metadata.
 metadata:
   object_role_key: object_role
   curatable_unit_object_type: GeneExpressionAnnotation
@@ -753,6 +763,8 @@ metadata:
         description: Required GeneExpressionAnnotation field paths declared in this pack must be present in each pending object payload.
       - validator_id: gene_expression.no_legacy_semantic_lists
         description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
+      - validator_id: gene_expression.extractor_output_migration
+        description: Validate runtime extractor output through the GeneExpressionAnnotation domain-envelope schema and pending-envelope conversion.
     planned:
       - validator_id: gene_expression.linkml_anatomical_site_postcondition
         description: Enforce the LinkML AnatomicalSite rule requiring anatomical_structure or cellular_component once validator runtime wiring lands.
@@ -762,9 +774,6 @@ metadata:
       - validator_id: gene_expression.export_submission_projection
         blocked_by: ALL-424
         description: Export/submission adapter validation waits for the 0.7.0 gene-expression submission adapter.
-      - validator_id: gene_expression.extractor_output_migration
-        blocked_by: ALL-407
-        description: Runtime extractor output validation waits for the gene-expression extractor migration to domain envelopes.
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

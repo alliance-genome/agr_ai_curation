@@ -51,6 +51,21 @@ def test_bundled_alliance_gene_extractor_declares_record_evidence(monkeypatch):
     ]
 
 
+def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    gene_expression = agents["gene_expression_extraction"]
+
+    assert gene_expression.tools == [
+        "search_document",
+        "read_section",
+        "read_subsection",
+        "record_evidence",
+        "agr_curation_query",
+    ]
+
+
 def test_bundled_alliance_gene_extractor_prompt_teaches_verified_evidence_flow(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 

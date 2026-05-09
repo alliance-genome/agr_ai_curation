@@ -39,9 +39,6 @@ def test_all_schema_files_have_registry_entries():
     excluded_stems = {
         "__init__",  # Registry definition file
         "base",  # Contains shared base types (Destination, RoutingPlan, etc.)
-        "reagent",  # Helper class used within gene_curation
-        "expression_pattern",  # Helper class used within gene_expression
-        "expression_evidence",  # Helper class used within gene_expression
         "ontology_mapping_item",  # Helper class used within ontology_mapping
     }
 
@@ -103,16 +100,13 @@ def test_registry_models_are_valid():
 def test_no_helper_classes_in_registry():
     """Ensure helper classes are NOT registered in SCHEMA_REGISTRY.
 
-    Helper classes (Reagent, ExpressionPattern, etc.) should not be in the registry
-    because they are components of schemas, not schemas themselves.
+    Helper classes should not be in the registry because they are components
+    of schemas, not schemas themselves.
     """
     from src.schemas.models import SCHEMA_REGISTRY
 
     # These should NOT be in the registry
     forbidden_names = [
-        'reagent',
-        'expression_pattern',
-        'expression_evidence',
         'ontology_mapping_item',
         'structured_message_envelope',  # base class
         'destination',  # enum
@@ -124,4 +118,4 @@ def test_no_helper_classes_in_registry():
             f"Helper class '{name}' should NOT be in SCHEMA_REGISTRY"
         )
 
-    print(f"\n✓ No helper classes in registry")
+    print("\n✓ No helper classes in registry")
