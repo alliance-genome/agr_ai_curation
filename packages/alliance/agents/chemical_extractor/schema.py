@@ -205,7 +205,7 @@ class ChemicalConditionPayload(ChemicalExtractorPayloadModel):
     source_chemical_mention: StrictStr
     confidence: Literal["high", "medium", "low"]
     evidence_record_ids: list[StrictStr] = Field(min_length=1)
-    source_mentions: list[StrictStr] = Field(default_factory=list)
+    source_mentions: list[StrictStr] = Field(min_length=1)
     role: Literal[
         "treatment",
         "assay_reagent",
@@ -213,7 +213,7 @@ class ChemicalConditionPayload(ChemicalExtractorPayloadModel):
         "control",
         "other",
         "unspecified",
-    ] = "unspecified"
+    ]
     condition_quantity: StrictStr | None = None
     condition_free_text: StrictStr | None = None
     condition_summary: StrictStr | None = None
@@ -251,8 +251,6 @@ class ChemicalConditionPayload(ChemicalExtractorPayloadModel):
                 "ChemicalCondition payload.condition_relation_type.name must be "
                 "'has_condition'"
             )
-        if not self.source_mentions:
-            self.source_mentions = [self.source_chemical_mention]
         return self
 
 
@@ -505,7 +503,11 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
                 "payload.curie matches payload.condition_chemical.curie"
             )
 
-        export_behavior = _optional_mapping(obj.metadata.get("export_behavior"))
+        export_behavior = obj.metadata.get("export_behavior")
+        if not isinstance(export_behavior, Mapping):
+            raise ValueError(
+                "ChemicalCondition metadata.export_behavior must be a mapping"
+            )
         if (
             export_behavior.get("status") != "blocked"
             or export_behavior.get("exportable") is not False
@@ -583,10 +585,6 @@ def _validate_evidence_payload_alignment(
                 f"EvidenceQuote payload.{field_name} must match "
                 "metadata.evidence_records[]"
             )
-
-
-def _optional_mapping(value: Any) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
 
 
 def _is_missing_value(value: Any) -> bool:

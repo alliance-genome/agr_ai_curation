@@ -317,6 +317,30 @@ def test_chemical_extractor_schema_requires_export_blocker_metadata():
         _chemical_extractor_schema().model_validate(payload)
 
 
+def test_chemical_extractor_schema_rejects_malformed_export_behavior_metadata():
+    payload = _valid_chemical_extractor_payload()
+    payload["curatable_objects"][-1]["metadata"]["export_behavior"] = "blocked"
+
+    with pytest.raises(ValidationError, match="export_behavior must be a mapping"):
+        _chemical_extractor_schema().model_validate(payload)
+
+
+def test_chemical_extractor_schema_requires_condition_source_mentions():
+    payload = _valid_chemical_extractor_payload()
+    del payload["curatable_objects"][-1]["payload"]["source_mentions"]
+
+    with pytest.raises(ValidationError, match="source_mentions"):
+        _chemical_extractor_schema().model_validate(payload)
+
+
+def test_chemical_extractor_schema_requires_condition_role():
+    payload = _valid_chemical_extractor_payload()
+    del payload["curatable_objects"][-1]["payload"]["role"]
+
+    with pytest.raises(ValidationError, match="role"):
+        _chemical_extractor_schema().model_validate(payload)
+
+
 def test_chemical_extractor_schema_requires_repair_context_in_repair_mode():
     payload = _valid_chemical_extractor_payload()
     payload["repair_mode"] = True
