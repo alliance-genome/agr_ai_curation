@@ -65,6 +65,12 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "object_type` - always `GeneExpressionAnnotation" in content
     assert "metadata.evidence_records[]" in content
     assert "Do not place `evidence_text`" in content
+    assert "payload.evidence_text" not in content
+    assert "anatomy_label" not in content
+    assert "life_stage_label" not in content
+    assert "go_cc_label" not in content
+    assert "is_negative" not in content
+    assert "negated: true" in content
     assert "repair_mode: true" in content
     assert "metadata.repair_notes[]" in content
     assert "Do not emit top-level `items[]`" in content
@@ -85,6 +91,11 @@ def test_gene_expression_wb_overlay_includes_wormbase_examples():
     assert "TIAM-1::GFP" in content
     assert "tagRFP::TBA-1" in content
     assert "UtrCH" in content
+    assert "evidence_text" not in content
+    assert "anatomy_label" not in content
+    assert "life_stage_label" not in content
+    assert "is_negative" not in content
+    assert "negated: true" in content
 
 
 def test_gene_expression_zfin_overlay_includes_zebrafish_curation_rules():
@@ -102,6 +113,8 @@ def test_gene_expression_zfin_overlay_includes_zebrafish_curation_rules():
     assert "Tg(kdrl:EGFP)" in content
     assert "morpholino" in content
     assert "rescue_experiment_not_expression" in content
+    assert "is_negative" not in content
+    assert "negated: true" in content
 
 
 def test_gene_expression_schema_accepts_tmem67_domain_envelope_output():

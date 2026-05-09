@@ -42,7 +42,7 @@ content: |
 
   ### Positive inclusion reminder
   - Retain directly supported zebrafish expression findings from this paper, including summary statements that clearly describe the paper's own results.
-  - Negative expression results are valid annotations with `is_negative: true` when the paper explicitly reports absence of signal in a tissue or stage.
+  - Negative expression results are valid annotations with payload `negated: true` when the paper explicitly reports absence of signal in a tissue or stage.
   - When anatomy or stage is incomplete but expression is clearly reported, keep the annotation with the available fields and add an `metadata.ambiguities[]` note for curator follow-up.
 
   ### Output discipline

@@ -59,17 +59,17 @@ content: |
 
   ### Incomplete annotation handling
   - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
-    - Still capture the annotation with null anatomy_label and/or life_stage_label.
+    - Still capture the annotation with null values at the relevant domain-pack payload paths, such as `expression_pattern.where_expressed.anatomical_structure.name` and/or `when_expressed_stage_name`.
     - Add a `metadata.ambiguities[]` entry noting which fields are incomplete and may require curator review of figures.
     - Example: "Expression pattern of the acox-1.1 gene." -> capture with gene but null anatomy.
   - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):
     - Capture the annotation with the tentative identities.
-    - Include the uncertainty qualifier in evidence_text verbatim.
+    - Preserve the uncertainty qualifier verbatim in the linked `metadata.evidence_records[]` quote and raw mention metadata.
     - Add a `metadata.ambiguities[]` entry noting the tentative identification.
 
   ### Negative expression results (C. elegans)
-  - Experimentally demonstrated absence of expression is a valid annotation with is_negative: true.
-    Example: "no GFP signal was observed in the pharynx" -> annotation with anatomy_label=pharynx, is_negative=true.
+  - Experimentally demonstrated absence of expression is a valid annotation with payload `negated: true`.
+    Example: "no GFP signal was observed in the pharynx" -> annotation with `expression_pattern.where_expressed.anatomical_structure.name: pharynx` and `negated: true`.
   - Expression unchanged in perturbation background (e.g., "expression of RAB-11 in acs-1(RNAi) embryos was not different from wild type") is generally NOT a new expression annotation.
     - If wild-type expression is established elsewhere in the paper, do not duplicate it.
     - If this is the ONLY evidence of the expression pattern, capture it with context.

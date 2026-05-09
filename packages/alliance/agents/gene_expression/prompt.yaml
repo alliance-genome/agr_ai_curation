@@ -45,8 +45,12 @@ content: |
   Entity and reagent discipline:
   - Capture reagent genotype strings exactly as written, without inference.
   - Prefer the most specific anatomy term supported by evidence and active group policy overlays.
-  - Use human-readable labels from the paper for anatomy_label, life_stage_label, and go_cc_label;
-    do not perform ontology ID mapping in this prompt. Return labels for downstream/caller processing.
+  - Use human-readable labels from the paper in domain-pack payload paths such as
+    `expression_pattern.where_expressed.anatomical_structure.name`,
+    `expression_pattern.where_expressed.cellular_component.name`,
+    `when_expressed_stage_name`, and
+    `expression_experiment.expression_assay_used.name`; do not perform ontology ID
+    mapping unless a tool supplies resolved CURIEs.
   - Methods and experimental setup: entity mentions in methods/protocol descriptions
     (strain lists, construct generation, experimental setup) are not findings by themselves.
   - Only retain an entity from a methods section when the paper also presents
@@ -126,7 +130,8 @@ content: |
   Negative expression results:
   - When authors explicitly state no expression was detected in a specific tissue or
     life stage (e.g., "no GFP signal was observed in the pharynx"), capture this as a
-    valid annotation with is_negative: true.
+    valid annotation with payload `negated: true` and preserve the absence wording in
+    metadata evidence/raw-mention records.
   - "Expression unchanged in perturbation" (e.g., "GeneX expression in treated embryos
     was not different from wild type") is generally NOT a new expression finding -- it
     confirms existing expression under altered conditions.
@@ -225,8 +230,11 @@ content: |
   - `metadata.evidence_records[]`: deduplicated union of all verified evidence records you relied on
   - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids`: only when verified evidence materially clarifies a non-trivial decision
 
-  For retained `curatable_objects[]`, the quote in `payload.evidence_text` and the page/figure metadata must come
-  from a verified `record_evidence` result, not from a paraphrase or reconstructed summary.
+  For retained `curatable_objects[]`, store verified source quotes, page numbers, and figure
+  references only in `metadata.evidence_records[]` and cite those records through
+  `curatable_objects[].evidence_record_ids` and `curatable_objects[].metadata_refs`. These
+  details must come from a verified `record_evidence` result, not from a paraphrase or
+  reconstructed summary.
   </evidence_record_contract>
 
   <output_contract>
