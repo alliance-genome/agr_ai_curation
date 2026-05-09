@@ -6,7 +6,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
+from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack, load_domain_pack_metadata
 from src.schemas.domain_pack_metadata import DomainPackFieldType
@@ -31,6 +33,8 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     GENE_LINKML_SCHEMA_ID,
     GENE_MENTION_EVIDENCE_MODEL_ID,
     GENE_MENTION_EVIDENCE_OBJECT_TYPE,
+    GENE_REFERENCE_TOOL_METHOD,
+    GENE_REFERENCE_TOOL_NAME,
     GENE_REFERENCE_VALIDATOR_BINDING_ID,
     tool_verified_gene_output_to_pending_envelope,
 )
@@ -71,6 +75,10 @@ def _gene_object_definition():
         for item in metadata.object_definitions
         if item.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
     )
+
+
+def _load_raw_gene_fixture() -> dict[str, Any]:
+    return yaml.safe_load(GENE_RAW_FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
 def test_gene_domain_pack_loads_from_alliance_registry():
@@ -163,8 +171,8 @@ def test_gene_pack_declares_reference_validator_binding():
         {
             "binding_id": GENE_REFERENCE_VALIDATOR_BINDING_ID,
             "validation_kind": "db_backed_reference_lookup",
-            "tool_name": "agr_curation_query",
-            "tool_method": "get_gene_by_id",
+            "tool_name": GENE_REFERENCE_TOOL_NAME,
+            "tool_method": GENE_REFERENCE_TOOL_METHOD,
             "input_fields": {"gene_id": "primary_external_id"},
             "expected_result_fields": {
                 "curie": "primary_external_id",
@@ -177,7 +185,7 @@ def test_gene_pack_declares_reference_validator_binding():
 
 
 def test_tool_verified_gene_fixture_converts_to_pending_envelope():
-    raw_fixture = yaml.safe_load(GENE_RAW_FIXTURE_PATH.read_text(encoding="utf-8"))
+    raw_fixture = _load_raw_gene_fixture()
     converted_envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
 
     fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
@@ -202,10 +210,29 @@ def test_tool_verified_gene_fixture_converts_to_pending_envelope():
 
 
 def test_converted_gene_envelope_omits_legacy_semantic_stores():
-    raw_fixture = yaml.safe_load(GENE_RAW_FIXTURE_PATH.read_text(encoding="utf-8"))
+    raw_fixture = _load_raw_gene_fixture()
     converted_envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
 
     assert LEGACY_SEMANTIC_KEYS.isdisjoint(converted_envelope.metadata)
     for obj in converted_envelope.objects:
         assert LEGACY_SEMANTIC_KEYS.isdisjoint(obj.payload)
         assert LEGACY_SEMANTIC_KEYS.isdisjoint(obj.metadata)
+
+
+def test_tool_verified_gene_fixture_requires_extractor_confidence():
+    raw_fixture = _load_raw_gene_fixture()
+    del raw_fixture["gene_mentions"][0]["confidence"]
+
+    with pytest.raises(ValidationError, match="confidence"):
+        tool_verified_gene_output_to_pending_envelope(raw_fixture)
+
+
+def test_tool_verified_gene_fixture_rejects_blank_normalization_notes():
+    raw_fixture = _load_raw_gene_fixture()
+    raw_fixture["normalization_notes"] = [
+        "Resolved against current Alliance Gene row.",
+        "  ",
+    ]
+
+    with pytest.raises(ValidationError, match="normalization_notes"):
+        tool_verified_gene_output_to_pending_envelope(raw_fixture)

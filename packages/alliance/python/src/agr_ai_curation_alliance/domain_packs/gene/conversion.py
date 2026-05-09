@@ -38,6 +38,8 @@ from .constants import (
     GENE_LINKML_SCHEMA_URI,
     GENE_MENTION_EVIDENCE_DEFINITION_NOTES,
     GENE_MENTION_EVIDENCE_OBJECT_TYPE,
+    GENE_REFERENCE_TOOL_METHOD,
+    GENE_REFERENCE_TOOL_NAME,
     GENE_REFERENCE_VALIDATOR_BINDING_ID,
 )
 
@@ -103,7 +105,7 @@ class ToolVerifiedGeneMention(BaseModel):
     gene_symbol: StrictStr
     taxon: StrictStr
     species: StrictStr | None = None
-    confidence: Literal["high", "medium", "low"] = "medium"
+    confidence: Literal["high", "medium", "low"]
     evidence_record_ids: list[StrictStr] = Field(min_length=1)
 
     @field_validator("mention", "primary_external_id", "gene_symbol", "taxon", mode="before")
@@ -159,11 +161,13 @@ class ToolVerifiedGeneOutput(BaseModel):
     @field_validator("normalization_notes")
     @classmethod
     def _validate_normalization_notes(cls, value: list[StrictStr]) -> list[StrictStr]:
-        return [
-            normalized
-            for item in value
-            if (normalized := str(item).strip())
-        ]
+        normalized_notes: list[str] = []
+        for item in value:
+            normalized = str(item).strip()
+            if not normalized:
+                raise ValueError("normalization_notes must not contain empty values")
+            normalized_notes.append(normalized)
+        return normalized_notes
 
     @model_validator(mode="after")
     def _validate_evidence_links(self) -> "ToolVerifiedGeneOutput":
@@ -267,7 +271,7 @@ def _validation_finding(pending_ref_id: str) -> ValidationFinding:
         severity=ValidationFindingSeverity.INFO,
         status=ValidationFindingStatus.RESOLVED,
         code="alliance.gene_reference.tool_verified",
-        message="Gene reference resolved by agr_curation_query before envelope conversion.",
+        message=f"Gene reference resolved by {GENE_REFERENCE_TOOL_NAME} before envelope conversion.",
         field_ref=FieldRef(
             object_ref=ObjectRef(
                 pending_ref_id=pending_ref_id,
@@ -277,8 +281,8 @@ def _validation_finding(pending_ref_id: str) -> ValidationFinding:
         ),
         details={
             "validator_binding_id": GENE_REFERENCE_VALIDATOR_BINDING_ID,
-            "source_tool": "agr_curation_query",
-            "source_method": "get_gene_by_id",
+            "source_tool": GENE_REFERENCE_TOOL_NAME,
+            "source_method": GENE_REFERENCE_TOOL_METHOD,
             "blocking": False,
             "grounded_slots": {
                 "primary_external_id": {
