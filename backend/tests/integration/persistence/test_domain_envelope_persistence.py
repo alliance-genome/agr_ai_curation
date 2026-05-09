@@ -26,6 +26,7 @@ from src.lib.domain_envelopes.persistence import (
     StaleDomainEnvelopeRevisionError,
     load_domain_envelope,
     write_domain_envelope_checkpoint,
+    _stable_object_id,
 )
 from src.models.sql.database import SessionLocal
 from src.schemas.domain_envelope import (
@@ -331,3 +332,88 @@ def test_projection_uniqueness_rolls_back_checkpoint(db_session):
         )
 
     assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
+
+
+@pytest.mark.integration
+def test_malformed_projection_metadata_rolls_back_checkpoint(db_session):
+    envelope = _envelope(include_second_object=False)
+    first_object = envelope.objects[0]
+    envelope = envelope.model_copy(
+        update={
+            "objects": [
+                first_object.model_copy(
+                    update={
+                        "metadata": {
+                            **first_object.metadata,
+                            "projections": None,
+                        }
+                    }
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(
+        DomainEnvelopePersistenceError,
+        match="projections must be a list of objects, got null",
+    ):
+        write_domain_envelope_checkpoint(
+            db_session,
+            _checkpoint_request(envelope, expected_revision=0),
+        )
+
+    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
+
+
+@pytest.mark.integration
+def test_projection_entries_require_projection_json(db_session):
+    envelope = _envelope(include_second_object=False)
+    first_object = envelope.objects[0]
+    envelope = envelope.model_copy(
+        update={
+            "objects": [
+                first_object.model_copy(
+                    update={
+                        "metadata": {
+                            **first_object.metadata,
+                            "projections": [
+                                {
+                                    "projection_type": "workspace_row",
+                                    "projection_key": "gene-1",
+                                    "projection_data": {"legacy": True},
+                                }
+                            ],
+                        }
+                    }
+                )
+            ]
+        }
+    )
+
+    with pytest.raises(
+        DomainEnvelopePersistenceError,
+        match="projection entries must provide projection_json",
+    ):
+        write_domain_envelope_checkpoint(
+            db_session,
+            _checkpoint_request(envelope, expected_revision=0),
+        )
+
+    assert db_session.get(DomainEnvelopeModel, "env-persistence-test") is None
+
+
+def test_missing_stable_object_id_fails_loudly():
+    envelope = _envelope(include_second_object=False)
+    first_object = envelope.objects[0]
+    object_without_identity = first_object.model_copy(
+        update={
+            "object_id": None,
+            "pending_ref_id": None,
+        }
+    )
+
+    with pytest.raises(
+        DomainEnvelopePersistenceError,
+        match="CuratableObjectEnvelope has neither object_id nor pending_ref_id",
+    ):
+        _stable_object_id(object_without_identity)

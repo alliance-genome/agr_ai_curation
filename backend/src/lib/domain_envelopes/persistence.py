@@ -278,7 +278,7 @@ def _regenerate_indexes_for_row(
     for object_index, domain_object in enumerate(envelope.objects):
         object_id = _stable_object_id(domain_object)
         schema_ref_json = _schema_ref_json(domain_object.schema_ref)
-        object_metadata = dict(domain_object.metadata or {})
+        object_metadata = dict(domain_object.metadata)
         db.add(
             DomainEnvelopeObject(
                 envelope_id=envelope_row.envelope_id,
@@ -288,10 +288,7 @@ def _regenerate_indexes_for_row(
                 object_index=object_index,
                 object_type=domain_object.object_type,
                 status=domain_object.status,
-                validation_state=validation_state_by_object.get(
-                    object_id,
-                    OBJECT_VALIDATION_STATE_CLEAR,
-                ),
+                validation_state=validation_state_by_object[object_id],
                 schema_provider=(
                     domain_object.schema_ref.provider
                     if domain_object.schema_ref is not None
@@ -300,7 +297,7 @@ def _regenerate_indexes_for_row(
                 schema_ref_json=schema_ref_json,
                 object_model_ref_json=_object_model_ref_json(object_metadata),
                 model_field_ref_json=_model_field_ref_json(object_metadata),
-                payload_json=dict(domain_object.payload or {}),
+                payload_json=dict(domain_object.payload),
                 object_json=domain_object.model_dump(mode="json"),
             )
         )
@@ -399,7 +396,7 @@ def _projection_rows(
 
     for domain_object in envelope.objects:
         object_id = _stable_object_id(domain_object)
-        object_metadata = dict(domain_object.metadata or {})
+        object_metadata = dict(domain_object.metadata)
         rows.append(
             _projection_row(
                 envelope_row=envelope_row,
@@ -537,7 +534,9 @@ def _metadata_projection_entries(
 ) -> list[Mapping[str, Any]]:
     entries = metadata.get(metadata_key, [])
     if entries is None:
-        return []
+        raise DomainEnvelopePersistenceError(
+            f"{metadata_key} must be a list of objects, got null"
+        )
     if not isinstance(entries, list) or not all(isinstance(item, Mapping) for item in entries):
         raise DomainEnvelopePersistenceError(f"{metadata_key} must be a list of objects")
     return entries
@@ -567,11 +566,9 @@ def _projection_entry_object_id(
 
 def _projection_json(entry: Mapping[str, Any]) -> dict[str, Any] | list[Any]:
     projection_json = entry.get("projection_json")
-    if projection_json is None:
-        projection_json = entry.get("projection_data")
     if not isinstance(projection_json, (dict, list)):
         raise DomainEnvelopePersistenceError(
-            "projection entries must provide projection_json or projection_data"
+            "projection entries must provide projection_json"
         )
     return projection_json
 
@@ -588,7 +585,13 @@ def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
 
 
 def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
-    return domain_object.object_id or domain_object.pending_ref_id or ""
+    if domain_object.object_id is not None:
+        return domain_object.object_id
+    if domain_object.pending_ref_id is not None:
+        return domain_object.pending_ref_id
+    raise DomainEnvelopePersistenceError(
+        "CuratableObjectEnvelope has neither object_id nor pending_ref_id"
+    )
 
 
 def _validation_state_by_object(
@@ -607,10 +610,7 @@ def _validation_state_by_object(
         if object_id is None:
             continue
 
-        current_state = validation_state_by_object.get(
-            object_id,
-            OBJECT_VALIDATION_STATE_CLEAR,
-        )
+        current_state = validation_state_by_object[object_id]
         candidate_state = _VALIDATION_STATE_BY_SEVERITY[finding.severity]
         if _VALIDATION_STATE_RANK[candidate_state] > _VALIDATION_STATE_RANK[current_state]:
             validation_state_by_object[object_id] = candidate_state
