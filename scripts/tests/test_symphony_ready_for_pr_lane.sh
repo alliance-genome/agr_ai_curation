@@ -210,7 +210,7 @@ This ticket updates the scripted PR lane.
 
 - [ ] Include selected Linear sections in the PR body.
 
-## Out of Scope — Do NOT Touch
+## Out of Scope - Do NOT Touch
 
 - Do not touch sibling-owned exporter code.
 
