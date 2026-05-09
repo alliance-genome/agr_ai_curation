@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -25,6 +25,7 @@ from src.schemas.domain_envelope import (
     ValidationFinding,
     ValidationFindingSeverity,
     field_path_exists,
+    parse_field_path,
 )
 
 from ..paths import get_alliance_domain_packs_dir
@@ -871,7 +872,7 @@ def _missing_export_context(
 ) -> list[str]:
     missing: list[str] = []
     for field_path in ("host_annotation_type", "host_annotation_id"):
-        if not field_path_exists(condition.payload, field_path):
+        if not _payload_required_value_present(condition.payload, field_path):
             missing.append(field_path)
 
     reference_objects = [
@@ -880,11 +881,49 @@ def _missing_export_context(
         if ref.object_type == REFERENCE_OBJECT_TYPE
     ]
     if not any(
-        reference is not None and field_path_exists(reference.payload, "reference_id")
+        reference is not None
+        and _payload_required_value_present(reference.payload, "reference_id")
         for reference in reference_objects
     ):
         missing.append("source_reference.reference_id")
     return missing
+
+
+_MISSING_PAYLOAD_VALUE = object()
+
+
+def _payload_value(
+    payload: Mapping[str, Any],
+    field_path: str,
+) -> Any:
+    current: Any = payload
+    for part in parse_field_path(field_path):
+        if isinstance(part, str):
+            if not isinstance(current, Mapping) or part not in current:
+                return _MISSING_PAYLOAD_VALUE
+            current = current[part]
+            continue
+
+        if (
+            not isinstance(current, Sequence)
+            or isinstance(current, (str, bytes, bytearray))
+            or part >= len(current)
+        ):
+            return _MISSING_PAYLOAD_VALUE
+        current = current[part]
+    return current
+
+
+def _payload_required_value_present(
+    payload: Mapping[str, Any],
+    field_path: str,
+) -> bool:
+    value = _payload_value(payload, field_path)
+    if value is _MISSING_PAYLOAD_VALUE or value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
 
 
 def _payload_string(payload: Mapping[str, Any], field_path: str) -> str | None:

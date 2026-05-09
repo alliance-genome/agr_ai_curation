@@ -342,6 +342,72 @@ def test_chemical_condition_export_context_can_be_completed_without_fake_success
     assert chemical_reference.metadata["validation_state"] == "pending_chebi_lookup"
 
 
+@pytest.mark.parametrize(
+    ("object_type", "payload_field", "value", "expected_missing_field"),
+    (
+        (
+            CHEMICAL_CONDITION_OBJECT_TYPE,
+            "host_annotation_type",
+            "",
+            "host_annotation_type",
+        ),
+        (
+            CHEMICAL_CONDITION_OBJECT_TYPE,
+            "host_annotation_type",
+            None,
+            "host_annotation_type",
+        ),
+        (
+            CHEMICAL_CONDITION_OBJECT_TYPE,
+            "host_annotation_id",
+            "",
+            "host_annotation_id",
+        ),
+        (
+            CHEMICAL_CONDITION_OBJECT_TYPE,
+            "host_annotation_id",
+            None,
+            "host_annotation_id",
+        ),
+        (REFERENCE_OBJECT_TYPE, "reference_id", "", "source_reference.reference_id"),
+        (REFERENCE_OBJECT_TYPE, "reference_id", None, "source_reference.reference_id"),
+    ),
+)
+def test_chemical_condition_export_context_requires_non_empty_values(
+    object_type: str,
+    payload_field: str,
+    value: Any,
+    expected_missing_field: str,
+):
+    raw_fixture = _load_raw_fixture_with_export_context()
+    envelope = build_pending_chemical_condition_envelope_from_tool_verified_output(
+        raw_fixture
+    )
+
+    updated_objects = []
+    for obj in envelope.objects:
+        if obj.object_type == object_type:
+            payload = dict(obj.payload)
+            payload[payload_field] = value
+            obj = obj.model_copy(update={"payload": payload})
+        updated_objects.append(obj)
+    envelope = envelope.model_copy(
+        update={"objects": updated_objects, "validation_findings": []}
+    )
+
+    export_context_findings = [
+        finding
+        for finding in validate_pending_chemical_condition_envelope(envelope)
+        if finding.code == "alliance.chemical_condition.export_context_missing"
+    ]
+
+    assert len(export_context_findings) == 1
+    assert export_context_findings[0].severity.value == "blocker"
+    assert export_context_findings[0].details["missing_export_context_fields"] == [
+        expected_missing_field
+    ]
+
+
 def test_chemical_condition_validator_checks_linked_chemical_term_curie():
     raw_fixture = _load_raw_fixture_with_export_context()
     envelope = build_pending_chemical_condition_envelope_from_tool_verified_output(
