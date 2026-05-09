@@ -1,0 +1,83 @@
+# Fixture shape: one museum artifact, one conservation action, and envelope
+# refs that all resolve without LinkML, Alliance, or curation DB assumptions.
+fixture_pack_id: smoke
+domain_pack_id: museum.catalog
+fixtures_api_version: 1.0.0
+display_name: Museum catalog smoke fixtures
+description: Provider-agnostic domain envelope examples for registry tests.
+fixtures:
+  - name: artifact_with_conservation_action
+    description: JSON Schema-backed fixture with model refs, object refs, and field refs.
+    envelope:
+      envelope_id: museum-env-1
+      domain_pack_id: museum.catalog
+      domain_pack_version: 0.1.0
+      schema_ref:
+        schema_id: museum-envelope.schema.json
+        provider: json-schema
+        name: Museum catalog envelope
+        version: draft-2020-12
+        uri: https://schemas.example.test/museum/envelope.schema.json
+      objects:
+        - object_type: MuseumArtifact
+          pending_ref_id: artifact-1
+          schema_ref:
+            schema_id: artifact.schema.json
+            provider: json-schema
+            name: Artifact payload
+            version: draft-2020-12
+            uri: https://schemas.example.test/museum/artifact.schema.json
+          payload:
+            artifact:
+              accession_id: MC-2026-0001
+              title: Blue-glazed bowl
+              material: ceramic
+              acquisition:
+                method: donation
+                date: "2026-01-12"
+            condition:
+              status: fragile
+              notes: Hairline crack on rim.
+            curator_review:
+              status: accepted
+              measurements:
+                height_cm: 12.4
+                diameter_cm: 31.2
+            related_artifacts:
+              - accession_id: MC-2026-0002
+                relation: same collection
+        - object_type: ConservationAction
+          pending_ref_id: action-1
+          schema_ref:
+            schema_id: conservation-action.schema.json
+            provider: json-schema
+            name: Conservation action payload
+            version: draft-2020-12
+            uri: https://schemas.example.test/museum/conservation-action.schema.json
+          payload:
+            action:
+              action_id: CA-2026-0007
+              summary: Stabilize rim before exhibition.
+            primary_artifact:
+              pending_ref_id: artifact-1
+          object_refs:
+            - pending_ref_id: artifact-1
+              object_type: MuseumArtifact
+          field_refs:
+            - object_ref:
+                pending_ref_id: artifact-1
+                object_type: MuseumArtifact
+              field_path: condition.status
+      validation_findings:
+        - severity: info
+          message: Measurement height resolved on the provider-agnostic artifact payload.
+          field_ref:
+            object_ref:
+              pending_ref_id: artifact-1
+              object_type: MuseumArtifact
+            field_path: curator_review.measurements.height_cm
+      history:
+        - event_type: created
+          timestamp: "2026-05-09T00:00:00Z"
+          actor_type: system
+          message: Loaded provider-agnostic fixture envelope.

@@ -11,6 +11,7 @@ from src.schemas.domain_envelope import (
     HistoryEvent,
     HistoryEventKind,
     ObjectRef,
+    SchemaRef,
     ValidationFinding,
     ValidationFindingSeverity,
     parse_field_path,
@@ -56,6 +57,42 @@ def test_envelope_validates_pending_object_and_field_refs_after_extraction():
 
     assert envelope.validation_findings[0].field_ref.field_path == "gene.identifiers[0].curie"
     assert envelope.history[0].object_ref.pending_ref_id == "pending-gene-1"
+
+
+def test_envelope_schema_provider_accepts_non_linkml_json_schema_refs():
+    envelope_schema = SchemaRef(
+        schema_id="museum-envelope.schema.json",
+        provider="json-schema",
+        name="Museum catalog envelope",
+        version="draft-2020-12",
+        uri="https://schemas.example.test/museum/envelope.schema.json",
+        metadata={"dialect": "https://json-schema.org/draft/2020-12/schema"},
+    )
+    artifact_schema = SchemaRef(
+        schema_id="artifact.schema.json",
+        provider="json-schema",
+        name="Artifact payload",
+        version="draft-2020-12",
+        uri="https://schemas.example.test/museum/artifact.schema.json",
+    )
+
+    envelope = DomainEnvelope(
+        envelope_id="museum-env-1",
+        domain_pack_id="museum.catalog",
+        schema_ref=envelope_schema,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="MuseumArtifact",
+                pending_ref_id="artifact-1",
+                schema_ref=artifact_schema,
+                payload={"artifact": {"accession_id": "MC-2026-0001"}},
+            )
+        ],
+    )
+
+    assert envelope.schema_ref.provider == "json-schema"
+    assert envelope.objects[0].schema_ref.schema_id == "artifact.schema.json"
+    assert envelope.objects[0].object_type == "MuseumArtifact"
 
 
 def test_envelope_rejects_unknown_pending_refs():

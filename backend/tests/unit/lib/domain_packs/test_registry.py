@@ -1,6 +1,7 @@
 """Unit tests for provider-agnostic domain-pack metadata loading."""
 
 from pathlib import Path
+from shutil import copytree
 
 import pytest
 
@@ -15,6 +16,14 @@ from src.lib.domain_packs.registry import (
     load_domain_pack_registry,
 )
 from src.schemas.domain_pack_metadata import DomainPackFieldType, DomainPackStatus
+
+
+PROVIDER_AGNOSTIC_PACKS_DIR = (
+    Path(__file__).resolve().parents[3]
+    / "fixtures"
+    / "domain_packs"
+    / "provider_agnostic"
+)
 
 
 def _write_domain_pack(root: Path, directory_name: str, metadata_text: str) -> Path:
@@ -66,6 +75,12 @@ fixture_packs:
 """.strip()
 
 
+def _copy_provider_agnostic_packs(tmp_path: Path) -> Path:
+    packs_dir = tmp_path / "domain_packs"
+    copytree(PROVIDER_AGNOSTIC_PACKS_DIR, packs_dir)
+    return packs_dir
+
+
 def test_load_domain_pack_metadata_parses_provider_agnostic_fixture_pack_ref(tmp_path: Path):
     pack_dir = _write_domain_pack(tmp_path, "fixture.core", _valid_metadata_text())
 
@@ -75,6 +90,28 @@ def test_load_domain_pack_metadata_parses_provider_agnostic_fixture_pack_ref(tmp
     assert metadata.status is DomainPackStatus.ACTIVE
     assert metadata.object_definitions[0].fields[1].field_type is DomainPackFieldType.ENUM
     assert metadata.fixture_packs[0].path == "fixtures/smoke.yaml"
+
+
+def test_registry_loads_provider_agnostic_fixture_pack_with_json_schema_refs():
+    registry = load_domain_pack_registry(PROVIDER_AGNOSTIC_PACKS_DIR)
+
+    pack = registry.get_pack("museum.catalog")
+    assert pack is not None
+    fixture_ref = registry.get_fixture_pack_ref("museum.catalog", "smoke")
+    assert fixture_ref is not None
+
+    fixture_pack = load_domain_fixture_pack(pack.pack_path / fixture_ref.path)
+    fixture = fixture_pack.fixtures[0]
+
+    assert pack.metadata.schema_refs[0].provider == "json-schema"
+    assert pack.metadata.model_definitions[0].model_id == "ArtifactPayload"
+    assert pack.metadata.model_definitions[0].schema_ref.provider == "json-schema"
+    assert pack.metadata.object_definitions[0].model_ref == "ArtifactPayload"
+    assert fixture_pack.domain_pack_id == "museum.catalog"
+    assert fixture.envelope.schema_ref.provider == "json-schema"
+    assert fixture.envelope.objects[0].object_type == "MuseumArtifact"
+    assert fixture.envelope.objects[0].schema_ref.provider == "json-schema"
+    assert fixture.envelope.objects[1].object_refs[0].pending_ref_id == "artifact-1"
 
 
 def test_metadata_loader_fails_on_invalid_enum_reference(tmp_path: Path):
@@ -103,6 +140,66 @@ def test_metadata_loader_fails_on_invalid_model_reference(tmp_path: Path):
         load_domain_pack_metadata(pack_dir / "domain_pack.yaml")
 
     assert "model_ref references unknown model 'MissingPayload'" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement", "expected_message"),
+    [
+        (
+            "enum_ref: ReviewStatus",
+            "enum_ref: MissingReviewStatus",
+            "enum_ref references unknown enum 'MissingReviewStatus'",
+        ),
+        (
+            "model_ref: ArtifactPayload",
+            "model_ref: MissingArtifactPayload",
+            "model_ref references unknown model 'MissingArtifactPayload'",
+        ),
+    ],
+)
+def test_registry_rejects_provider_agnostic_metadata_with_invalid_refs(
+    tmp_path: Path,
+    original: str,
+    replacement: str,
+    expected_message: str,
+):
+    packs_dir = _copy_provider_agnostic_packs(tmp_path)
+    metadata_path = packs_dir / "museum.catalog" / "domain_pack.yaml"
+    metadata_text = metadata_path.read_text(encoding="utf-8")
+    assert original in metadata_text
+    metadata_path.write_text(
+        metadata_text.replace(original, replacement, 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DomainPackRegistryValidationError) as exc_info:
+        load_domain_pack_registry(packs_dir)
+
+    message = str(exc_info.value)
+    assert "Failed to load domain pack 'museum.catalog' metadata" in message
+    assert expected_message in message
+
+
+def test_registry_can_collect_invalid_metadata_diagnostics_without_raising(
+    tmp_path: Path,
+):
+    packs_dir = _copy_provider_agnostic_packs(tmp_path)
+    metadata_path = packs_dir / "museum.catalog" / "domain_pack.yaml"
+    metadata_path.write_text(
+        metadata_path.read_text(encoding="utf-8").replace(
+            "enum_ref: ReviewStatus",
+            "enum_ref: MissingReviewStatus",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    registry = load_domain_pack_registry(packs_dir, fail_on_validation_error=False)
+
+    assert registry.loaded_packs == ()
+    assert len(registry.failed_packs) == 1
+    assert "MissingReviewStatus" in registry.failed_packs[0].reason
+    assert "MissingReviewStatus" in registry.validation_errors[0]
 
 
 def test_registry_loads_domain_pack_and_fixture_metadata_without_linkml_fields(tmp_path: Path):
