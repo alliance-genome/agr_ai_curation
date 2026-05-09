@@ -153,6 +153,12 @@ def load_domain_pack_registry(
 
     validation_errors: list[str] = []
     failed_packs: list[DomainPackDiscoveryFailure] = list(discovery_failures)
+    for failure in discovery_failures:
+        validation_errors.append(
+            "Failed to load domain pack "
+            f"'{failure.pack_id}' metadata at {failure.metadata_path}: {failure.reason}"
+        )
+
     pack_groups: dict[str, list[LoadedDomainPack]] = {}
     for pack in discovered_packs:
         pack_groups.setdefault(pack.pack_id, []).append(pack)

@@ -1,0 +1,114 @@
+# Non-Alliance fixture pack: JSON Schema refs and museum catalog models prove
+# the shared registry does not require LinkML or curation DB semantics.
+pack_id: museum.catalog
+display_name: Museum Catalog Fixture Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+description: Provider-agnostic fixtures for cataloging museum artifacts.
+status: active
+schema_refs:
+  - schema_id: museum-envelope.schema.json
+    provider: json-schema
+    name: Museum catalog envelope
+    version: draft-2020-12
+    uri: https://schemas.example.test/museum/envelope.schema.json
+enum_definitions:
+  - enum_id: ConditionStatus
+    display_name: Condition status
+    values:
+      - value: stable
+        label: Stable
+      - value: fragile
+        label: Fragile
+      - value: restoration_required
+        label: Restoration required
+  - enum_id: ReviewStatus
+    display_name: Curator review status
+    values:
+      - value: accepted
+        label: Accepted
+      - value: needs_revision
+        label: Needs revision
+      - value: rejected
+        label: Rejected
+model_definitions:
+  - model_id: ArtifactPayload
+    display_name: Artifact payload
+    schema_ref:
+      schema_id: artifact.schema.json
+      provider: json-schema
+      name: Artifact payload
+      version: draft-2020-12
+      uri: https://schemas.example.test/museum/artifact.schema.json
+  - model_id: MeasurementPayload
+    display_name: Measurement payload
+    schema_ref:
+      schema_id: measurement.schema.json
+      provider: json-schema
+      name: Measurement payload
+      version: draft-2020-12
+      uri: https://schemas.example.test/museum/measurement.schema.json
+  - model_id: ConservationActionPayload
+    display_name: Conservation action payload
+    schema_ref:
+      schema_id: conservation-action.schema.json
+      provider: json-schema
+      name: Conservation action payload
+      version: draft-2020-12
+      uri: https://schemas.example.test/museum/conservation-action.schema.json
+object_definitions:
+  - object_type: MuseumArtifact
+    display_name: Museum artifact
+    model_ref: ArtifactPayload
+    schema_ref:
+      schema_id: artifact.schema.json
+      provider: json-schema
+      name: Artifact payload
+      version: draft-2020-12
+      uri: https://schemas.example.test/museum/artifact.schema.json
+    fields:
+      - field_path: artifact.accession_id
+        field_type: string
+        display_name: Accession ID
+        required: true
+      - field_path: artifact.title
+        field_type: string
+        display_name: Title
+        required: true
+      - field_path: condition.status
+        field_type: enum
+        enum_ref: ConditionStatus
+      - field_path: curator_review.status
+        field_type: enum
+        enum_ref: ReviewStatus
+      - field_path: curator_review.measurements
+        field_type: object
+        model_ref: MeasurementPayload
+      - field_path: related_artifacts[0].accession_id
+        field_type: string
+  - object_type: ConservationAction
+    display_name: Conservation action
+    model_ref: ConservationActionPayload
+    schema_ref:
+      schema_id: conservation-action.schema.json
+      provider: json-schema
+      name: Conservation action payload
+      version: draft-2020-12
+      uri: https://schemas.example.test/museum/conservation-action.schema.json
+    fields:
+      - field_path: action.action_id
+        field_type: string
+        required: true
+      - field_path: action.summary
+        field_type: string
+      - field_path: primary_artifact
+        field_type: object_ref
+        object_type_ref: MuseumArtifact
+fixture_packs:
+  - fixture_pack_id: smoke
+    display_name: Museum catalog smoke fixtures
+    path: fixtures/smoke.yaml
+    description: Loads one artifact and one conservation action with JSON Schema refs.
+    object_types:
+      - MuseumArtifact
+      - ConservationAction
