@@ -25,6 +25,7 @@ from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
 from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E402
     GENE_EXPRESSION_DOMAIN_PACK_ID,
     GENE_EXPRESSION_FIXTURE_PACK_ID,
+    GENE_EXPRESSION_MODEL_ID,
     GENE_EXPRESSION_OBJECT_TYPE,
     GENE_EXPRESSION_VALIDATOR_STATES,
     get_gene_expression_domain_pack_metadata_path,
@@ -92,7 +93,7 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
 
     curatable_unit = metadata.object_definitions[0]
     assert curatable_unit.metadata[OBJECT_ROLE_METADATA_KEY] == "curatable_unit"
-    assert curatable_unit.model_ref == "GeneExpressionAnnotationPayload"
+    assert curatable_unit.model_ref == GENE_EXPRESSION_MODEL_ID
     assert curatable_unit.schema_ref.name == GENE_EXPRESSION_OBJECT_TYPE
 
     validators = metadata.metadata["validators"]
