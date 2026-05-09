@@ -1,0 +1,36 @@
+envelope_id: disease-tool-verified-env-1
+document_id: ZFIN-paper-disease-0001
+produced_by: disease_extractor
+produced_at: "2026-05-09T00:00:00Z"
+disease_assertions:
+  - mention: Andersen-Tawil syndrome
+    disease_curie: DOID:0050434
+    disease_name: Andersen-Tawil syndrome
+    role: model_context
+    confidence: high
+    disease_relation_name: is_model_of
+    subject:
+      subject_type: gene
+      subject_label: kcnj2
+    evidence_record_ids:
+      - ats-model-evidence-1
+      - ats-cohort-evidence-1
+evidence_records:
+  - evidence_record_id: ats-model-evidence-1
+    entity: Andersen-Tawil syndrome
+    verified_quote: loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome.
+    page: 4
+    section: Results
+    subsection: Disease model
+    chunk_id: chunk-disease-model
+    figure_reference: Figure 4A
+  - evidence_record_id: ats-cohort-evidence-1
+    entity: Andersen-Tawil syndrome
+    verified_quote: Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome.
+    page: 5
+    section: Results
+    subsection: Clinical correlation
+    chunk_id: chunk-disease-cohort
+normalization_notes:
+  - Andersen-Tawil syndrome was verified against Disease Ontology term DOID:0050434 in the read-only curation DB.
+  - The assertion remains pending because concrete disease annotation subject and reference materialization are blocked for export.
