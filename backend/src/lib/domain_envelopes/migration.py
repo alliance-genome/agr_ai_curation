@@ -53,7 +53,6 @@ MIGRATION_NAME = "legacy_curation_workspace_to_domain_envelopes"
 MIGRATION_VERSION = "0.7.0"
 DEFAULT_LEGACY_DOMAIN_PACK_ID = "legacy_curation_workspace"
 DEFAULT_LEGACY_DOMAIN_PACK_VERSION = "0.7.0"
-DEFAULT_PROJECT_KEY = "agr_ai_curation"
 LEGACY_CANDIDATE_OBJECT_TYPE = "LegacyCurationCandidate"
 LEGACY_EXTRACTION_OBJECT_TYPE = "LegacyExtractionResult"
 LEGACY_WORKSPACE_PROJECTION_TYPE = "legacy_workspace_candidate"
@@ -103,7 +102,7 @@ class LegacyMigrationBlocker:
 class LegacyCurationWorkspaceMigrationOptions:
     """Execution options for the one-off legacy workspace migration."""
 
-    project_key: str = DEFAULT_PROJECT_KEY
+    project_key: str
     domain_pack_id: str = DEFAULT_LEGACY_DOMAIN_PACK_ID
     domain_pack_version: str = DEFAULT_LEGACY_DOMAIN_PACK_VERSION
     actor_id: str = MIGRATION_NAME
@@ -147,7 +146,8 @@ class LegacyCurationWorkspaceMigrationSummary:
 
 def migrate_legacy_curation_workspace_to_domain_envelopes(
     db: Session,
-    options: LegacyCurationWorkspaceMigrationOptions | None = None,
+    *,
+    options: LegacyCurationWorkspaceMigrationOptions,
 ) -> LegacyCurationWorkspaceMigrationSummary:
     """Convert retained legacy workspace rows into domain envelopes.
 
@@ -157,7 +157,6 @@ def migrate_legacy_curation_workspace_to_domain_envelopes(
     untouched so a later retry can process them after the data issue is fixed.
     """
 
-    options = options or LegacyCurationWorkspaceMigrationOptions()
     _validate_options(options)
 
     summary = LegacyCurationWorkspaceMigrationSummary(dry_run=options.dry_run)
@@ -412,6 +411,7 @@ def _session_blockers(
         )
     )
     blockers.extend(_validation_snapshot_relationship_blockers(session_row, candidate_ids))
+    blockers.extend(_validation_status_blockers(session_row))
 
     for candidate in session_row.candidates:
         blocker = _candidate_projection_blocker(candidate, migrated_sources)
@@ -569,6 +569,51 @@ def _validation_snapshot_relationship_blockers(
                     },
                 )
             )
+    return blockers
+
+
+def _validation_status_blockers(
+    session_row: CurationReviewSession,
+) -> list[LegacyMigrationBlocker]:
+    blockers: list[LegacyMigrationBlocker] = []
+    snapshots: dict[str, CurationValidationSnapshot] = {}
+    for snapshot in session_row.validation_snapshots:
+        snapshots[str(snapshot.id)] = snapshot
+    for candidate in session_row.candidates:
+        for snapshot in candidate.validation_snapshots:
+            snapshots[str(snapshot.id)] = snapshot
+
+    for snapshot_id, snapshot in snapshots.items():
+        field_results = snapshot.field_results if isinstance(snapshot.field_results, Mapping) else {}
+        for field_key, result_payload in field_results.items():
+            try:
+                _field_validation_status(result_payload)
+            except ValueError:
+                raw_status = _raw_field_validation_status(result_payload)
+                reason = (
+                    "validation snapshot field result is missing status"
+                    if raw_status is None
+                    else "validation snapshot field result has unrecognized status"
+                )
+                blockers.append(
+                    LegacyMigrationBlocker(
+                        source_table=SOURCE_TABLE_VALIDATION,
+                        source_id=snapshot_id,
+                        reason=reason,
+                        details={
+                            "session_id": str(snapshot.session_id),
+                            "candidate_id": (
+                                str(snapshot.candidate_id)
+                                if snapshot.candidate_id is not None
+                                else None
+                            ),
+                            "scope": snapshot.scope.value,
+                            "field_key": str(field_key),
+                            "raw_status": _json_safe(raw_status),
+                            "field_result": _json_safe(result_payload),
+                        },
+                    )
+                )
     return blockers
 
 
@@ -999,7 +1044,6 @@ def _validation_findings_for_snapshot(
             FieldValidationStatus.VALIDATED,
             FieldValidationStatus.OVERRIDDEN,
             FieldValidationStatus.SKIPPED,
-            None,
         ):
             continue
         findings.append(
@@ -1060,19 +1104,19 @@ def _validation_findings_for_snapshot(
     return findings
 
 
-def _field_validation_status(value: Any) -> FieldValidationStatus | None:
-    if isinstance(value, Mapping):
-        raw_status = value.get("status")
-    else:
-        raw_status = getattr(value, "status", None)
+def _field_validation_status(value: Any) -> FieldValidationStatus:
+    raw_status = _raw_field_validation_status(value)
     if isinstance(raw_status, FieldValidationStatus):
         return raw_status
     if isinstance(raw_status, str):
-        try:
-            return FieldValidationStatus(raw_status)
-        except ValueError:
-            return None
-    return None
+        return FieldValidationStatus(raw_status)
+    raise ValueError("field validation result is missing a recognized status")
+
+
+def _raw_field_validation_status(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return value.get("status")
+    return getattr(value, "status", None)
 
 
 def _severity_for_field_status(status: FieldValidationStatus) -> ValidationFindingSeverity:
@@ -1421,12 +1465,19 @@ def _history_event(
     object_ref: ObjectRef | None = None,
     details: Mapping[str, Any] | None = None,
 ) -> HistoryEvent:
+    event_timestamp = _timestamp(timestamp)
     event_details = dict(details or {})
-    event_details["legacy_migration"] = _migration_metadata(source_records)
+    migration_metadata = _migration_metadata(source_records)
+    if timestamp is None:
+        migration_metadata["synthesized_timestamp"] = {
+            "reason": "source timestamp was null",
+            "timestamp": event_timestamp.isoformat(),
+        }
+    event_details["legacy_migration"] = migration_metadata
     return HistoryEvent(
         event_id=event_id,
         event_type=event_type,
-        timestamp=_timestamp(timestamp),
+        timestamp=event_timestamp,
         actor_type=HistoryActorType.SYSTEM,
         actor_id=actor_id,
         message=message,
@@ -1523,7 +1574,6 @@ def _json_safe(value: Any) -> Any:
 __all__ = [
     "DEFAULT_LEGACY_DOMAIN_PACK_ID",
     "DEFAULT_LEGACY_DOMAIN_PACK_VERSION",
-    "DEFAULT_PROJECT_KEY",
     "LEGACY_CANDIDATE_OBJECT_TYPE",
     "LEGACY_EXTRACTION_OBJECT_TYPE",
     "LEGACY_WORKSPACE_PROJECTION_TYPE",

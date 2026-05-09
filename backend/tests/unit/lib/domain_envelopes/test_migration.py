@@ -415,6 +415,31 @@ def test_migrates_legacy_workspace_rows_to_envelopes_projection_refs_and_history
     assert any(table == "curation_action_log" for table, _row_id in source_refs)
 
 
+def test_missing_legacy_validation_timestamp_is_marked_as_synthesized(db_session):
+    _document, _extraction_result, session_row, candidate = _create_legacy_session(db_session)
+    snapshot = candidate.validation_snapshots[0]
+    snapshot.requested_at = None
+    snapshot.completed_at = None
+    db_session.commit()
+
+    summary = _run_migration(db_session)
+
+    assert summary.blocker_count == 0
+    history_event = db_session.get(
+        DomainEnvelopeHistory,
+        (
+            f"legacy-curation-workspace:session:{session_row.id}",
+            f"legacy-validation-imported:{snapshot.id}",
+        ),
+    )
+    assert history_event is not None
+    migration_metadata = history_event.event_json["details"]["legacy_migration"]
+    assert migration_metadata["synthesized_timestamp"]["reason"] == "source timestamp was null"
+    assert migration_metadata["synthesized_timestamp"]["timestamp"] == (
+        history_event.event_json["timestamp"].replace("Z", "+00:00")
+    )
+
+
 def test_migration_is_idempotent_and_repairs_missing_candidate_projection_refs(db_session):
     _document, _extraction_result, _session_row, candidate = _create_legacy_session(db_session)
 
@@ -591,6 +616,30 @@ def test_cross_session_validation_snapshot_reports_blockers(db_session):
         "validation snapshot session_id does not match the retained "
         "candidate's review session",
     }
+    assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
+
+
+def test_unrecognized_validation_status_reports_blocker(db_session):
+    _document, _extraction_result, _session_row, candidate = _create_legacy_session(db_session)
+    snapshot = candidate.validation_snapshots[0]
+    snapshot.field_results = {
+        "entity_name": {
+            "status": "legacy_mystery",
+            "warnings": ["status was written by an old test fixture"],
+        }
+    }
+    db_session.commit()
+
+    summary = _run_migration(db_session)
+
+    assert summary.migrated_envelopes == 0
+    assert summary.blocker_count == 1
+    blocker = summary.blockers[0]
+    assert blocker.source_table == "validation_snapshots"
+    assert blocker.source_id == str(snapshot.id)
+    assert blocker.reason == "validation snapshot field result has unrecognized status"
+    assert blocker.details["field_key"] == "entity_name"
+    assert blocker.details["raw_status"] == "legacy_mystery"
     assert db_session.scalar(select(func.count()).select_from(DomainEnvelopeModel)) == 0
 
 

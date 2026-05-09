@@ -202,7 +202,7 @@ def _validate_prepared_candidate_projection_ref(candidate_input: PreparedCandida
             "Prepared candidate domain envelope projection refs must include "
             "envelope_id, object_id, and envelope_revision together."
         )
-    if candidate_input.envelope_revision is not None and candidate_input.envelope_revision < 1:
+    if candidate_input.envelope_revision < 1:
         raise ValueError("Prepared candidate envelope_revision must be greater than zero.")
 
 
