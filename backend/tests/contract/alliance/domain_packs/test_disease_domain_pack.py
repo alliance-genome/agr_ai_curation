@@ -155,6 +155,20 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     assert all(validators[state] for state in DISEASE_VALIDATOR_STATES)
 
     validator_bindings = metadata.metadata["validator_bindings"]
+    binding_ids = [binding["binding_id"] for binding in validator_bindings]
+    assert len(binding_ids) == len(set(binding_ids))
+    assert {
+        "disease_pending_envelope_validator",
+        "disease_ontology_term_lookup",
+        "disease_relation_cv_lookup",
+        "disease_experimental_condition_lookup",
+        "disease_condition_relation_lookup",
+        "disease_subject_materialization",
+        "disease_reference_materialization",
+        "disease_evidence_code_lookup",
+        "disease_data_provider_lookup",
+    }.issubset(binding_ids)
+
     pending_validator = validator_bindings[0]
     assert pending_validator == {
         "binding_id": DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
@@ -219,10 +233,31 @@ def test_disease_pack_records_db_projection_and_representative_rows():
         "condition_chemical_curie": "CHEBI:6909",
     }
 
+    curation_db_ref = object_metadata["provider_refs"]["alliance_curation_db"]
+    inspected_table_names = {
+        table_name.removeprefix("public.")
+        for table_name in curation_db_ref["inspected_tables"]
+    }
+    assert set(curation_db_ref["row_counts"]) == inspected_table_names
+    assert (
+        curation_db_ref["row_counts"]["conditionrelation_experimentalcondition"]
+        == 23532
+    )
+
 
 def test_disease_pack_declares_validatable_disease_and_condition_fields():
     disease_object = _disease_object_definition()
     fields_by_path = {field.field_path: field for field in disease_object.fields}
+    validator_bindings = {
+        binding["binding_id"]: binding
+        for binding in _disease_pack().metadata.metadata["validator_bindings"]
+    }
+    referenced_validator_binding_ids = {
+        field.metadata["validator_binding_id"]
+        for field in disease_object.fields
+        if field.metadata.get("validatable") is True
+    }
+    assert referenced_validator_binding_ids <= set(validator_bindings)
 
     required_fields = {
         field.field_path
@@ -261,6 +296,8 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.definition_state.value == "in_development"
         assert field.metadata["validatable"] is True
         assert field.metadata["validator_state"] == "planned"
+        binding = validator_bindings[field.metadata["validator_binding_id"]]
+        assert binding["status"] == "planned"
 
     blocked_fields = {
         "disease_annotation_subject",
@@ -273,6 +310,8 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.definition_state.value == "in_development"
         assert field.metadata["validator_state"] == "blocked"
         assert field.metadata["definition_state_category"] == "blocked"
+        binding = validator_bindings[field.metadata["validator_binding_id"]]
+        assert binding["status"] == "blocked"
 
 
 def test_disease_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path: Path):
@@ -395,3 +434,8 @@ def test_tool_verified_disease_fixture_rejects_malformed_required_data():
     unknown_evidence["disease_assertions"][0]["evidence_record_ids"].append("missing")
     with pytest.raises(ValidationError, match="unknown evidence_record_ids"):
         tool_verified_disease_output_to_pending_envelope(unknown_evidence)
+
+    missing_subject_type = copy.deepcopy(raw_fixture)
+    missing_subject_type["disease_assertions"][0]["subject"].pop("subject_type")
+    with pytest.raises(ValidationError, match="subject_type"):
+        tool_verified_disease_output_to_pending_envelope(missing_subject_type)

@@ -292,6 +292,7 @@ object_definitions:
             agmdiseaseannotation: 32528
             diseaseannotation_conditionrelation: 4191
             conditionrelation: 19549
+            conditionrelation_experimentalcondition: 23532
             experimentalcondition: 15338
     fields:
       - field_path: mention
@@ -815,6 +816,15 @@ metadata:
         curie: disease_annotation_object.curie
         name: disease_annotation_object.name
         ontologytermtype: DOTerm
+    - binding_id: disease_relation_cv_lookup
+      validation_kind: curation_db_reference_lookup
+      status: planned
+      table: public.vocabularyterm
+      input_fields:
+        name: disease_relation_name
+      expected_result_fields:
+        name: disease_relation_name
+        vocabulary_name: Disease Relation
     - binding_id: disease_experimental_condition_lookup
       validation_kind: curation_db_reference_lookup
       status: planned
@@ -822,10 +832,51 @@ metadata:
         - public.conditionrelation
         - public.experimentalcondition
         - public.ontologyterm
+    - binding_id: disease_condition_relation_lookup
+      validation_kind: curation_db_reference_lookup
+      status: planned
+      tables:
+        - public.conditionrelation
+        - public.vocabularyterm
+      input_fields:
+        condition_relation_type_name: condition_relations[0].condition_relation_type.name
+      expected_result_fields:
+        condition_relation_type_name: condition_relations[0].condition_relation_type.name
+        vocabulary_name: Condition Relation Type
     - binding_id: disease_subject_materialization
       validation_kind: curation_db_reference_lookup
       status: blocked
       blocked_by: ALL-410
+    - binding_id: disease_reference_materialization
+      validation_kind: curation_db_reference_lookup
+      status: blocked
+      blocked_by: ALL-425
+      table: public.informationcontententity
+      input_fields:
+        curie: single_reference.curie
+      expected_result_fields:
+        curie: single_reference.curie
+    - binding_id: disease_evidence_code_lookup
+      validation_kind: curation_db_reference_lookup
+      status: blocked
+      blocked_by: ALL-425
+      table: public.ontologyterm
+      input_fields:
+        curie: evidence_code_curies[0]
+      expected_result_fields:
+        curie: evidence_code_curies[0]
+        ontologytermtype: ECOTerm
+    - binding_id: disease_data_provider_lookup
+      validation_kind: curation_db_reference_lookup
+      status: blocked
+      blocked_by: ALL-425
+      tables:
+        - public.diseaseannotation
+        - public.organization
+      input_fields:
+        abbreviation: data_provider.abbreviation
+      expected_result_fields:
+        abbreviation: data_provider.abbreviation
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

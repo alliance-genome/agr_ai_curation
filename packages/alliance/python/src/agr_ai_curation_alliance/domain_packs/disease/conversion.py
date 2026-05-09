@@ -49,7 +49,6 @@ from .constants import (
 
 
 _CORE_SOURCE_FILE = "model/schema/core.yaml"
-_ONTOLOGY_TERM_SOURCE_FILE = "model/schema/ontologyTerm.yaml"
 
 
 def _strip_required_string(value: object, field_name: str) -> object:
@@ -104,7 +103,7 @@ class ToolVerifiedDiseaseSubject(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    subject_type: Literal["gene", "allele", "agm", "unknown"] = "unknown"
+    subject_type: Literal["gene", "allele", "agm", "unknown"]
     subject_label: StrictStr | None = None
     subject_identifier: StrictStr | None = None
 
