@@ -1,0 +1,373 @@
+pack_id: agr.alliance.base
+display_name: Alliance Base Domain Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+description: Shared Alliance domain-envelope scaffold with pinned LinkML schema references.
+status: in_development
+schema_refs:
+  - schema_id: alliance.linkml
+    provider: alliance_linkml
+    name: Alliance curation LinkML schema
+    version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+    uri: https://github.com/alliance-genome/agr_curation_schema/tree/1b11d0888f19eba4ca72022200bb7d96b30d4a52
+    definition_state: stable
+    metadata:
+      provider_refs:
+        alliance_linkml:
+          repository: https://github.com/alliance-genome/agr_curation_schema.git
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          schema_dir: model/schema
+          root_schema: model/schema/allianceModel.yaml
+          cache_script: scripts/testing/cache_agr_curation_schema.sh
+          ref_kind: schema
+model_definitions:
+  - model_id: GeneExpressionAnnotationPayload
+    display_name: Gene expression annotation payload
+    description: Provider-neutral payload shell grounded to the Alliance GeneExpressionAnnotation class.
+    schema_ref:
+      schema_id: alliance.linkml.GeneExpressionAnnotation
+      provider: alliance_linkml
+      name: GeneExpressionAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/expression.yaml
+            class: GeneExpressionAnnotation
+  - model_id: GeneReferencePayload
+    display_name: Gene validated-reference payload
+    schema_ref:
+      schema_id: alliance.linkml.Gene
+      provider: alliance_linkml
+      name: Gene
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/gene.yaml
+            class: Gene
+  - model_id: ReferencePayload
+    display_name: Reference validated-reference payload
+    schema_ref:
+      schema_id: alliance.linkml.Reference
+      provider: alliance_linkml
+      name: Reference
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/reference.yaml
+            class: Reference
+  - model_id: ExpressionPatternContextPayload
+    display_name: Expression pattern metadata payload
+    schema_ref:
+      schema_id: alliance.linkml.ExpressionPattern
+      provider: alliance_linkml
+      name: ExpressionPattern
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/expression.yaml
+            class: ExpressionPattern
+  - model_id: TemporalContextPayload
+    display_name: Temporal context metadata payload
+    schema_ref:
+      schema_id: alliance.linkml.TemporalContext
+      provider: alliance_linkml
+      name: TemporalContext
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/expression.yaml
+            class: TemporalContext
+  - model_id: AnatomicalSitePayload
+    display_name: Anatomical site metadata payload
+    schema_ref:
+      schema_id: alliance.linkml.AnatomicalSite
+      provider: alliance_linkml
+      name: AnatomicalSite
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/expression.yaml
+            class: AnatomicalSite
+object_definitions:
+  - object_type: GeneExpressionAnnotation
+    display_name: Gene expression annotation
+    description: Curatable unit scaffold for first-pass Alliance gene-expression packs.
+    model_ref: GeneExpressionAnnotationPayload
+    schema_ref:
+      schema_id: alliance.linkml.GeneExpressionAnnotation
+      provider: alliance_linkml
+      name: GeneExpressionAnnotation
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/expression.yaml
+            class: GeneExpressionAnnotation
+    definition_state: in_development
+    definition_notes:
+      - Payload fields are a scaffold for first-pass domain packs, not a complete export contract.
+    metadata:
+      object_role: curatable_unit
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/expression.yaml
+          class: GeneExpressionAnnotation
+    fields:
+      - field_path: gene
+        field_type: object_ref
+        display_name: Gene
+        required: true
+        object_type_ref: Gene
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: GeneExpressionAnnotation
+              slot: expression_annotation_subject
+              range: Gene
+      - field_path: reference
+        field_type: object_ref
+        display_name: Reference
+        required: true
+        object_type_ref: Reference
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: GeneExpressionAnnotation
+              slot: single_reference
+              range: Reference
+      - field_path: expression_pattern
+        field_type: object_ref
+        display_name: Expression pattern context
+        required: true
+        object_type_ref: ExpressionPatternContext
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: GeneExpressionAnnotation
+              slot: expression_pattern
+              range: ExpressionPattern
+      - field_path: when_expressed_stage_name
+        field_type: string
+        display_name: Stage name
+        required: true
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: GeneExpressionAnnotation
+              slot: when_expressed_stage_name
+              range: string
+      - field_path: where_expressed_statement
+        field_type: string
+        display_name: Where expressed statement
+        required: true
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: GeneExpressionAnnotation
+              slot: where_expressed_statement
+              range: string
+  - object_type: Gene
+    display_name: Gene validated reference
+    description: Validated gene reference object shared by curatable units.
+    model_ref: GeneReferencePayload
+    schema_ref:
+      schema_id: alliance.linkml.Gene
+      provider: alliance_linkml
+      name: Gene
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/gene.yaml
+            class: Gene
+    definition_state: in_development
+    metadata:
+      object_role: validated_reference
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/gene.yaml
+          class: Gene
+    fields:
+      - field_path: primary_external_id
+        field_type: string
+        display_name: Primary external ID
+        required: true
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Gene
+              slot: primary_external_id
+              range: string
+      - field_path: gene_symbol
+        field_type: string
+        display_name: Gene symbol
+        required: true
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/gene.yaml
+              class: Gene
+              slot: gene_symbol
+              range: GeneSymbolSlotAnnotation
+  - object_type: Reference
+    display_name: Reference validated reference
+    description: Validated literature/reference object shared by curatable units.
+    model_ref: ReferencePayload
+    schema_ref:
+      schema_id: alliance.linkml.Reference
+      provider: alliance_linkml
+      name: Reference
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/reference.yaml
+            class: Reference
+    definition_state: in_development
+    metadata:
+      object_role: validated_reference
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/reference.yaml
+          class: Reference
+    fields:
+      - field_path: reference_id
+        field_type: integer
+        display_name: Reference ID
+        required: true
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/reference.yaml
+              class: Reference
+              slot: reference_id
+              range: integer
+  - object_type: ExpressionPatternContext
+    display_name: Expression pattern metadata context
+    description: Metadata-only object for spatiotemporal expression context.
+    model_ref: ExpressionPatternContextPayload
+    schema_ref:
+      schema_id: alliance.linkml.ExpressionPattern
+      provider: alliance_linkml
+      name: ExpressionPattern
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/expression.yaml
+            class: ExpressionPattern
+    definition_state: in_development
+    metadata:
+      object_role: metadata_only
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/expression.yaml
+          class: ExpressionPattern
+    fields:
+      - field_path: when_expressed
+        field_type: object
+        display_name: Temporal context
+        model_ref: TemporalContextPayload
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: ExpressionPattern
+              slot: when_expressed
+              range: TemporalContext
+      - field_path: where_expressed
+        field_type: object
+        display_name: Anatomical site
+        required: true
+        model_ref: AnatomicalSitePayload
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/expression.yaml
+              class: ExpressionPattern
+              slot: where_expressed
+              range: AnatomicalSite
+metadata:
+  object_role_key: object_role
+  supported_object_roles:
+    - curatable_unit
+    - validated_reference
+    - metadata_only
+  provider_refs:
+    alliance_linkml:
+      schema_ref: alliance.linkml
+      repository: https://github.com/alliance-genome/agr_curation_schema.git
+      commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      schema_dir: model/schema
+      root_schema: model/schema/allianceModel.yaml
+      cache_script: scripts/testing/cache_agr_curation_schema.sh
