@@ -13,8 +13,10 @@ agent_id: chemical_extractor
 name: "Chemical Extraction Agent"
 
 description: >
-  Extracts chemical assertions from uploaded PDFs with evidence-first
-  inclusion/exclusion decisions and optional ontology-assisted normalization.
+  Extracts chemical-condition findings from uploaded PDFs as domain-envelope
+  curatable_objects[] containing ChemicalCondition curatable units, ChemicalTerm
+  and Reference validated references, and EvidenceQuote metadata-only objects
+  with evidence-first inclusion/exclusion decisions and ChEBI normalization.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -26,8 +28,12 @@ subcategory: "PDF Extraction"
 supervisor_routing:
   enabled: true
   description: >
-    Use for extracting chemical assertions from the loaded paper,
-    including role classification, dosage/timing context, and exclusions.
+    Use for extracting experimentally supported chemical conditions from the
+    loaded paper. Returns domain-envelope curatable_objects[] with
+    ChemicalCondition, ChemicalTerm, Reference, and EvidenceQuote objects, plus
+    non-semantic metadata for raw mentions, exclusions, ambiguities,
+    normalization notes, verified evidence, export blockers, and bounded repair
+    handoff.
   batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------
@@ -37,6 +43,7 @@ tools:
   - search_document
   - read_section
   - read_subsection
+  - record_evidence
   - agr_curation_query
 
 # -----------------------------------------------------------------------------
