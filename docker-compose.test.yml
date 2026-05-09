@@ -314,6 +314,7 @@ services:
       - ./backend:/app/backend
       - ./config:/app/config:ro
       - ./packages:/app/packages:ro
+      - ./scripts/testing:/app/scripts/testing:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DATABASE_URL=postgresql://${TEST_DB_USER:-postgres}:${TEST_DB_PASSWORD:-postgres}@postgres-test:5432/${TEST_DB_NAME:-ai_curation}
