@@ -14,6 +14,7 @@ from src.lib.curation_workspace.extraction_results import persist_extraction_res
 from src.lib.curation_workspace.prep_item_conversion import (
     compact_payload,
     normalized_evidence_record_ids,
+    normalized_optional_string,
     top_level_evidence_records_by_id,
 )
 from src.schemas.curation_prep import (
@@ -330,7 +331,7 @@ def _map_extraction_result(
 def _resolve_candidate_adapter_key(
     extraction_result: CurationExtractionResultRecord,
 ) -> str | None:
-    return _normalized_optional_string(extraction_result.adapter_key)
+    return normalized_optional_string(extraction_result.adapter_key)
 
 
 def _candidate_blueprints(
@@ -365,7 +366,7 @@ def _candidate_blueprints(
 
 
 def _prep_item_converter(*, adapter_key: str, agent_key: str | None) -> Any | None:
-    normalized_agent_key = _normalized_optional_string(agent_key)
+    normalized_agent_key = normalized_optional_string(agent_key)
     if normalized_agent_key is None:
         return None
     registry = load_curation_adapter_registry()
@@ -480,17 +481,17 @@ def _candidate_evidence_records(
 
 
 def _build_source_evidence_anchor(raw_record: Mapping[str, Any]) -> EvidenceAnchor | None:
-    verified_quote = _normalized_optional_string(raw_record.get("verified_quote"))
+    verified_quote = normalized_optional_string(raw_record.get("verified_quote"))
     if not verified_quote:
         return None
 
     figure_reference, table_reference = _split_figure_reference(
-        _normalized_optional_string(raw_record.get("figure_reference"))
+        normalized_optional_string(raw_record.get("figure_reference"))
     )
     page_number = _normalized_optional_page(raw_record.get("page"))
-    section_title = _normalized_optional_string(raw_record.get("section"))
-    subsection_title = _normalized_optional_string(raw_record.get("subsection"))
-    chunk_id = _normalized_optional_string(raw_record.get("chunk_id"))
+    section_title = normalized_optional_string(raw_record.get("section"))
+    subsection_title = normalized_optional_string(raw_record.get("subsection"))
+    chunk_id = normalized_optional_string(raw_record.get("chunk_id"))
 
     return EvidenceAnchor(
         anchor_kind=EvidenceAnchorKind.SNIPPET,
@@ -524,12 +525,12 @@ def _candidate_conversation_summary(
     extraction_result: CurationExtractionResultRecord,
     payload: Mapping[str, Any],
 ) -> str:
-    summary = _normalized_optional_string(extraction_result.conversation_summary)
+    summary = normalized_optional_string(extraction_result.conversation_summary)
     if summary is not None:
         return summary
 
-    label = _normalized_optional_string(payload.get("label"))
-    entity_type = _normalized_optional_string(payload.get("entity_type"))
+    label = normalized_optional_string(payload.get("label"))
+    entity_type = normalized_optional_string(payload.get("entity_type"))
     if label and entity_type:
         return f"Prepared deterministic {entity_type} candidate for {label}."
     if label:
@@ -662,7 +663,7 @@ def _record_matches_scope(
     record: CurationExtractionResultRecord,
     scope_confirmation: CurationPrepScopeConfirmation,
 ) -> bool:
-    adapter_key = _normalized_optional_string(record.adapter_key)
+    adapter_key = normalized_optional_string(record.adapter_key)
 
     if scope_confirmation.adapter_keys:
         if adapter_key is None or adapter_key not in scope_confirmation.adapter_keys:
@@ -715,21 +716,12 @@ def _normalized_optional_page(value: Any) -> int | None:
     return value if value >= 1 else None
 
 
-def _normalized_optional_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    return normalized or None
-
-
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:
     unique_values: list[str] = []
     seen: set[str] = set()
 
     for value in values:
-        normalized = _normalized_optional_string(value)
+        normalized = normalized_optional_string(value)
         if normalized is None or normalized in seen:
             continue
         unique_values.append(normalized)

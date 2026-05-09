@@ -98,9 +98,6 @@ class CurationAdapterRegistry:
             (str(adapter_key).strip(), str(agent_key).strip())
         )
 
-    def prep_item_converters(self) -> dict[tuple[str, str], Any]:
-        return dict(self._prep_item_converters)
-
     def export_adapters(self) -> tuple[Any, ...]:
         return tuple(
             self._export_adapters[adapter_key]
