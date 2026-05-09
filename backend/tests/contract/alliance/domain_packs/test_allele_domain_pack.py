@@ -279,3 +279,8 @@ def test_tool_verified_allele_fixture_rejects_malformed_required_data():
     missing_evidence_id["tool_cases"][0]["expected_tool_result"].pop("evidence_record_id")
     with pytest.raises(ValueError, match="evidence_record_id"):
         build_pending_allele_envelope_from_tool_verified_fixture(missing_evidence_id)
+
+    malformed_normalized_id = copy.deepcopy(fixture)
+    malformed_normalized_id["extraction"]["alleles"][0]["normalized_id"] = 42
+    with pytest.raises(ValueError, match="normalized_id must be a string"):
+        build_pending_allele_envelope_from_tool_verified_fixture(malformed_normalized_id)

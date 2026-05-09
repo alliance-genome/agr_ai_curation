@@ -86,8 +86,8 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
         status=CuratableObjectStatus.PENDING,
         definition_state=DefinitionState.IN_DEVELOPMENT,
         payload={
-            "title": _optional_string(paper.get("title")),
-            "filename": _optional_string(paper.get("filename")),
+            "title": _optional_string(paper.get("title"), "paper.title"),
+            "filename": _optional_string(paper.get("filename"), "paper.filename"),
         },
         metadata={
             "object_role": "validated_reference",
@@ -107,11 +107,14 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
 
         retained_count += 1
         label = _required_string(item.get("label") or item.get("mention"), "allele label")
-        normalized_id = _optional_string(item.get("normalized_id"))
+        normalized_id = _optional_string(
+            item.get("normalized_id"),
+            "extraction.alleles[].normalized_id",
+        )
         source_mentions = [
             value
             for value in (
-                _optional_string(value)
+                _optional_string(value, "extraction.alleles[].source_mentions[]")
                 for value in _optional_sequence(
                     item.get("source_mentions"),
                     "extraction.alleles[].source_mentions",
@@ -200,7 +203,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
                 "association_kind": "allele_paper_evidence",
                 "allele_identifier": normalized_id,
                 "allele_label": label,
-                "reference_title": _optional_string(paper.get("title")),
+                "reference_title": _optional_string(paper.get("title"), "paper.title"),
                 "evidence_record_ids": evidence_record_ids,
             },
             object_refs=association_refs,
@@ -280,7 +283,10 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             )
         ],
         metadata={
-            "source_fixture_id": _optional_string(fixture.get("fixture_id")),
+            "source_fixture_id": _optional_string(
+                fixture.get("fixture_id"),
+                "fixture_id",
+            ),
             "write_behavior": {"status": "blocked"},
         },
     )
@@ -369,13 +375,16 @@ def validate_pending_allele_envelope(
 def _iter_allele_items(extraction: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
     return tuple(
         {
-            "label": _optional_string(item.get("label"))
-            or _optional_string(item.get("mention"))
-            or _optional_string(item.get("normalized_symbol")),
+            "label": _optional_string(item.get("label"), "extraction.alleles[].label")
+            or _optional_string(item.get("mention"), "extraction.alleles[].mention")
+            or _optional_string(
+                item.get("normalized_symbol"),
+                "extraction.alleles[].normalized_symbol",
+            ),
             "normalized_id": item.get("normalized_id"),
             "source_mentions": item.get("source_mentions")
             if item.get("source_mentions") is not None
-            else [_optional_string(item.get("mention"))],
+            else [_optional_string(item.get("mention"), "extraction.alleles[].mention")],
             "evidence": item.get("evidence"),
             "evidence_records": item.get("evidence_records"),
             "evidence_record_ids": item.get("evidence_record_ids"),
@@ -405,21 +414,27 @@ def _evidence_records_for_item(
     if direct_evidence:
         return direct_evidence
 
-    records_by_id = {
-        _optional_string(record.get("evidence_record_id")): record
-        for record in (
-            _required_mapping(record, "extraction.alleles[].evidence_records[]")
-            for record in _optional_sequence(
-                item.get("evidence_records"),
-                "extraction.alleles[].evidence_records",
-            )
+    records_by_id: dict[str, Mapping[str, Any]] = {}
+    for record in (
+        _required_mapping(record, "extraction.alleles[].evidence_records[]")
+        for record in _optional_sequence(
+            item.get("evidence_records"),
+            "extraction.alleles[].evidence_records",
         )
-        if _optional_string(record.get("evidence_record_id")) is not None
-    }
+    ):
+        record_id = _optional_string(
+            record.get("evidence_record_id"),
+            "extraction.alleles[].evidence_records[].evidence_record_id",
+        )
+        if record_id is not None:
+            records_by_id[record_id] = record
     evidence_record_ids = [
         value
         for value in (
-            _optional_string(raw_id)
+            _optional_string(
+                raw_id,
+                "extraction.alleles[].evidence_record_ids[]",
+            )
             for raw_id in _optional_sequence(
                 item.get("evidence_record_ids"),
                 "extraction.alleles[].evidence_record_ids",
@@ -444,7 +459,10 @@ def _evidence_records_for_item(
     evidence_case_ids = [
         value
         for value in (
-            _optional_string(raw_id)
+            _optional_string(
+                raw_id,
+                "extraction.alleles[].evidence_case_ids[]",
+            )
             for raw_id in _optional_sequence(
                 item.get("evidence_case_ids"),
                 "extraction.alleles[].evidence_case_ids",
@@ -477,7 +495,13 @@ def _verified_evidence_record(
         tool_case.get("expected_tool_result"),
         "tool_cases[].expected_tool_result",
     )
-    if _optional_string(tool_result.get("status")) != "verified":
+    if (
+        _optional_string(
+            tool_result.get("status"),
+            "tool_cases[].expected_tool_result.status",
+        )
+        != "verified"
+    ):
         return None
 
     record: dict[str, Any] = {
@@ -492,7 +516,10 @@ def _verified_evidence_record(
         "section": tool_result.get("section"),
     }
     for optional_key in ("subsection", "figure_reference"):
-        optional_value = _optional_string(tool_result.get(optional_key))
+        optional_value = _optional_string(
+            tool_result.get(optional_key),
+            f"tool_cases[].expected_tool_result.{optional_key}",
+        )
         if optional_value is not None:
             record[optional_key] = optional_value
     return record
@@ -504,17 +531,23 @@ def _evidence_quote_payload(
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "evidence_record_id": evidence_record_id,
-        "entity": _optional_string(record.get("entity")),
+        "entity": _optional_string(record.get("entity"), "evidence_records[].entity"),
         "verified_quote": _required_string(
             record.get("verified_quote"),
             "verified_quote",
         ),
         "page": record.get("page"),
-        "section": _optional_string(record.get("section")),
-        "chunk_id": _optional_string(record.get("chunk_id")),
+        "section": _optional_string(record.get("section"), "evidence_records[].section"),
+        "chunk_id": _optional_string(
+            record.get("chunk_id"),
+            "evidence_records[].chunk_id",
+        ),
     }
     for optional_key in ("subsection", "figure_reference"):
-        optional_value = _optional_string(record.get(optional_key))
+        optional_value = _optional_string(
+            record.get(optional_key),
+            f"evidence_records[].{optional_key}",
+        )
         if optional_value is not None:
             payload[optional_key] = optional_value
     return payload
@@ -549,17 +582,17 @@ def _optional_sequence(value: Any, field_name: str) -> Sequence[Any]:
     return value
 
 
-def _optional_string(value: Any) -> str | None:
+def _optional_string(value: Any, field_name: str) -> str | None:
     if value is None:
         return None
     if not isinstance(value, str):
-        return None
+        raise ValueError(f"{field_name} must be a string")
     normalized = value.strip()
     return normalized or None
 
 
 def _required_string(value: Any, field_name: str) -> str:
-    normalized = _optional_string(value)
+    normalized = _optional_string(value, field_name)
     if normalized is None:
         raise ValueError(f"{field_name} must be a non-empty string")
     return normalized
