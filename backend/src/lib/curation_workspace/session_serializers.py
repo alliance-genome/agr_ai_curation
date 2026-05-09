@@ -51,6 +51,7 @@ from src.schemas.curation_workspace import (
     CurationSubmissionRecord,
     CurationValidationSnapshot as CurationValidationSnapshotSchema,
     CurationValidationSummary,
+    DomainEnvelopeProjectionRef,
     EvidenceAnchor,
     FieldValidationResult,
     FieldValidationStatus,
@@ -250,6 +251,31 @@ def _validation_snapshot(record: ValidationSnapshotModel) -> CurationValidationS
     )
 
 
+def _domain_envelope_projection_ref(
+    candidate: CurationCandidate,
+) -> DomainEnvelopeProjectionRef | None:
+    if (
+        candidate.envelope_id is None
+        and candidate.object_id is None
+        and candidate.envelope_revision is None
+    ):
+        return None
+    if (
+        candidate.envelope_id is None
+        or candidate.object_id is None
+        or candidate.envelope_revision is None
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Curation candidate {candidate.id} has an incomplete envelope projection ref",
+        )
+    return DomainEnvelopeProjectionRef(
+        envelope_id=candidate.envelope_id,
+        object_id=candidate.object_id,
+        envelope_revision=candidate.envelope_revision,
+    )
+
+
 def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
     draft = _draft_detail(candidate.draft)
     if draft is None:
@@ -280,6 +306,7 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
         extraction_result_id=(
             str(candidate.extraction_result_id) if candidate.extraction_result_id else None
         ),
+        projection_ref=_domain_envelope_projection_ref(candidate),
         normalized_payload=dict(candidate.normalized_payload or {}),
         draft=draft,
         evidence_anchors=[_evidence_record(record) for record in ordered_evidence],
@@ -780,6 +807,7 @@ def _entity_tag_payload(candidate: CurationCandidatePayload) -> CurationEntityTa
         decision=candidate.status,
         evidence=_entity_evidence(candidate),
         notes=candidate.draft.notes,
+        projection_ref=candidate.projection_ref,
     )
 
 
@@ -803,6 +831,7 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
             if candidate.extraction_result_id is not None
             else None
         ),
+        projection_ref=_domain_envelope_projection_ref(candidate),
         draft=_draft_payload(candidate),
         evidence_anchors=evidence_records,
         validation=_candidate_validation_summary(candidate),

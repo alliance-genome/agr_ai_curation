@@ -101,6 +101,9 @@ def _persist_prepared_candidates(
                 if candidate_input.extraction_result_id is not None
                 else None
             ),
+            envelope_id=candidate_input.envelope_id,
+            object_id=candidate_input.object_id,
+            envelope_revision=candidate_input.envelope_revision,
             normalized_payload=dict(candidate_input.normalized_payload),
             candidate_metadata=dict(candidate_input.metadata),
             created_at=prepared_at,

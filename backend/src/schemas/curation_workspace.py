@@ -762,6 +762,17 @@ class CurationValidationSnapshot(CurationWorkspaceBaseModel):
     )
 
 
+class DomainEnvelopeProjectionRef(CurationWorkspaceBaseModel):
+    """Reference to the envelope/object revision represented by a workspace projection."""
+
+    envelope_id: str = Field(description="Domain envelope identifier")
+    object_id: str = Field(description="Stable domain envelope object identifier")
+    envelope_revision: int = Field(
+        ge=1,
+        description="Envelope revision represented by this projection",
+    )
+
+
 class CurationCandidate(CurationWorkspaceBaseModel):
     """Curator-reviewable candidate with draft, evidence, and validation state."""
 
@@ -786,6 +797,10 @@ class CurationCandidate(CurationWorkspaceBaseModel):
     extraction_result_id: Optional[str] = Field(
         default=None,
         description="Extraction result that seeded this candidate when available",
+    )
+    projection_ref: Optional[DomainEnvelopeProjectionRef] = Field(
+        default=None,
+        description="Envelope/object revision represented by this workspace projection",
     )
     normalized_payload: dict[str, Any] = Field(
         default_factory=dict,
@@ -861,6 +876,10 @@ class CurationEntityTag(CurationWorkspaceBaseModel):
     notes: Optional[str] = Field(
         default=None,
         description="Draft notes associated with the underlying candidate",
+    )
+    projection_ref: Optional[DomainEnvelopeProjectionRef] = Field(
+        default=None,
+        description="Envelope/object revision represented by this workspace projection",
     )
 
 
@@ -2041,6 +2060,7 @@ __all__ = [
     "CurationWorkspace",
     "CurationWorkspaceRequest",
     "CurationWorkspaceResponse",
+    "DomainEnvelopeProjectionRef",
     "EvidenceAnchor",
     "EvidenceAnchorKind",
     "EvidenceLocatorQuality",

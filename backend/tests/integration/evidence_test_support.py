@@ -103,6 +103,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
         CurationReviewSession,
         CurationSubmissionRecord,
         CurationValidationSnapshot,
+        DomainEnvelopeModel,
     )
     from src.models.sql.database import Base
     from src.models.sql.pdf_document import PDFDocument
@@ -115,6 +116,7 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
             PDFDocument.__table__,
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
+            DomainEnvelopeModel.__table__,
             CurationCandidate.__table__,
             CurationEvidenceRecord.__table__,
             CurationDraft.__table__,
