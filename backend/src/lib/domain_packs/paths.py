@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from src.lib.packages.paths import DEFAULT_RUNTIME_ROOT
+from src.lib.packages.paths import get_runtime_root
 
 DEFAULT_DOMAIN_PACKS_DIRNAME = "domain_packs"
 DEFAULT_DOMAIN_PACK_METADATA_FILENAME = "domain_pack.yaml"
@@ -27,9 +27,9 @@ def get_domain_packs_dir() -> Path:
             raise ValueError(
                 "Relative AGR_DOMAIN_PACKS_DIR must not traverse parent directories"
             )
-        return _normalize_path(DEFAULT_RUNTIME_ROOT / candidate)
+        return _normalize_path(get_runtime_root() / candidate)
 
-    return _normalize_path(DEFAULT_RUNTIME_ROOT / DEFAULT_DOMAIN_PACKS_DIRNAME)
+    return _normalize_path(get_runtime_root() / DEFAULT_DOMAIN_PACKS_DIRNAME)
 
 
 def get_domain_pack_metadata_path(domain_pack_dir: Path) -> Path:
