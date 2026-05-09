@@ -26,7 +26,6 @@ if str(ALLIANCE_PYTHON_SRC) not in sys.path:
 from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
     ALLIANCE_LINKML_COMMIT,
     OBJECT_ROLE_METADATA_KEY,
-    PROVIDER_REFS_METADATA_KEY,
     load_alliance_domain_pack_registry,
 )
 from agr_ai_curation_alliance.domain_packs.disease import (  # noqa: E402
