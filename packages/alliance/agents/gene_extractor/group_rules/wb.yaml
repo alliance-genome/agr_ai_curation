@@ -15,3 +15,10 @@ content: |
   ### Multi-species disambiguation
   - C. elegans p53 ortholog is cep-1, NOT "p53". If a paper mentions "p53" in a C. elegans context, the gene is cep-1.
   - When a paper studies both C. elegans and another species, use strain/species mentions near each gene symbol to disambiguate.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

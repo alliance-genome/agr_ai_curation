@@ -31,6 +31,33 @@ After completing your research/queries, you MUST produce the {output_type_name} 
 """
 
 
+DOMAIN_ENVELOPE_EXTRACTION_INSTRUCTION_TEMPLATE = """
+## DOMAIN ENVELOPE EXTRACTION CONTRACT
+For {output_type_name}, `curatable_objects[]` is the only semantic object list.
+- Do not emit top-level legacy semantic lists: `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`
+- Put raw mentions, exclusions, ambiguities, verified evidence records, normalization notes, provenance, and repair notes under `metadata`
+- Each `curatable_objects[]` entry must include `object_type`, `payload`, and either `object_id` or `pending_ref_id`
+- Add `object_role`, `model_ref` and/or `schema_ref`, `definition_state`/`definition_notes`, `evidence_record_ids`, `metadata_refs`, field/object refs, and `repair_hints` whenever that information is available
+- In repair mode, keep object IDs stable, update only the affected payload fields, and preserve metadata references needed to explain the repair
+"""
+
+
+def _is_domain_envelope_extraction_output_type(output_type: Optional[Type]) -> bool:
+    if output_type is None:
+        return False
+    try:
+        from src.schemas.models.domain_envelope_extraction import (
+            DomainEnvelopeExtractionResult,
+        )
+    except Exception:
+        return False
+
+    try:
+        return issubclass(output_type, DomainEnvelopeExtractionResult)
+    except TypeError:
+        return False
+
+
 def inject_structured_output_instruction(
     instructions: str,
     output_type: Optional[Type] = None,
@@ -69,6 +96,13 @@ def inject_structured_output_instruction(
     output_instruction = STRUCTURED_OUTPUT_INSTRUCTION_TEMPLATE.format(
         output_type_name=type_name
     )
+    if _is_domain_envelope_extraction_output_type(output_type):
+        output_instruction = (
+            output_instruction
+            + DOMAIN_ENVELOPE_EXTRACTION_INSTRUCTION_TEMPLATE.format(
+                output_type_name=type_name
+            )
+        )
 
     if not insert_after_first_section:
         # Simple prepend

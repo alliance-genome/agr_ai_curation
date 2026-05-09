@@ -174,20 +174,25 @@ def test_missing_evidence_record_refs_when_kept_count_positive_and_items_missing
 def test_schema_defined_retained_collection_satisfies_evidence_guard_without_items():
     payload = {
         "summary": "Retained one focal allele with verified evidence.",
-        "alleles": [
+        "curatable_objects": [
             {
-                "mention": "Actin 5C",
-                "normalized_symbol": "Act5C",
-                "normalized_id": "FB:FBal0000001",
-                "associated_gene": "Act5C",
-                "confidence": "high",
+                "object_type": "allele",
+                "pending_ref_id": "allele-act5c",
+                "payload": {
+                    "mention": "Actin 5C",
+                    "normalized_symbol": "Act5C",
+                    "normalized_id": "FB:FBal0000001",
+                    "associated_gene": "Act5C",
+                    "confidence": "high",
+                },
                 "evidence_record_ids": ["evidence-live-a"],
             }
         ],
-        "items": [],
-        "evidence_records": [
-            {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"}
-        ],
+        "metadata": {
+            "evidence_records": [
+                {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"}
+            ]
+        },
         "run_summary": {"kept_count": 1},
     }
 
@@ -204,17 +209,18 @@ def test_schema_defined_retained_collection_satisfies_evidence_guard_without_ite
 def test_schema_defined_auxiliary_lists_do_not_satisfy_retained_evidence_guard():
     payload = {
         "summary": "Kept count drifted positive but only raw mentions survived.",
-        "raw_mentions": [
-            {
-                "mention": "Actin 5C",
-                "entity_type": "allele",
-                "evidence_record_ids": ["evidence-live-a"],
-            }
-        ],
-        "items": [],
-        "evidence_records": [
-            {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"}
-        ],
+        "metadata": {
+            "raw_mentions": [
+                {
+                    "mention": "Actin 5C",
+                    "entity_type": "allele",
+                    "evidence_record_ids": ["evidence-live-a"],
+                }
+            ],
+            "evidence_records": [
+                {**_record(entity="Actin 5C"), "evidence_record_id": "evidence-live-a"}
+            ],
+        },
         "run_summary": {"kept_count": 1},
     }
 
@@ -227,56 +233,50 @@ def test_schema_defined_auxiliary_lists_do_not_satisfy_retained_evidence_guard()
 def test_evidence_reference_report_names_retained_items_missing_refs():
     report = structured_result_evidence_reference_report(
         {
-            "genes": [
+            "curatable_objects": [
                 {
-                    "mention": "crb",
-                    "normalized_symbol": "crb",
-                    "normalized_id": "FB:FBgn0000368",
-                    "species": "Drosophila melanogaster",
-                    "confidence": "high",
+                    "object_type": "gene",
+                    "pending_ref_id": "gene-crb",
+                    "payload": {
+                        "mention": "crb",
+                        "normalized_symbol": "crb",
+                        "normalized_id": "FB:FBgn0000368",
+                        "species": "Drosophila melanogaster",
+                        "confidence": "high",
+                    },
                     "evidence_record_ids": ["evidence-live-a"],
                 },
                 {
-                    "mention": "ninaE",
-                    "normalized_symbol": "ninaE",
-                    "normalized_id": "FB:FBgn0002940",
-                    "species": "Drosophila melanogaster",
-                    "confidence": "high",
+                    "object_type": "gene",
+                    "pending_ref_id": "gene-ninae",
+                    "payload": {
+                        "mention": "ninaE",
+                        "normalized_symbol": "ninaE",
+                        "normalized_id": "FB:FBgn0002940",
+                        "species": "Drosophila melanogaster",
+                        "confidence": "high",
+                        "source_mentions": ["ninaE"],
+                    },
                     "evidence_record_ids": [],
                 },
             ],
-            "items": [
-                {
-                    "label": "ninaE",
-                    "entity_type": "gene",
-                    "normalized_id": "FB:FBgn0002940",
-                    "source_mentions": ["ninaE"],
-                    "evidence_record_ids": [],
-                }
-            ],
-            "evidence_records": [
-                {**_record(entity="crb"), "evidence_record_id": "evidence-live-a"}
-            ],
+            "metadata": {
+                "evidence_records": [
+                    {**_record(entity="crb"), "evidence_record_id": "evidence-live-a"}
+                ]
+            },
             "run_summary": {"kept_count": 2},
         },
         expected_output_type=GeneExtractionResultEnvelope,
     )
 
-    assert report["retained_item_count"] == 3
+    assert report["retained_item_count"] == 2
     assert report["evidence_record_count"] == 1
     assert report["evidence_record_ids"] == ["evidence-live-a"]
     assert report["missing_record_refs"] == [
         {
-            "collection": "genes",
+            "collection": "curatable_objects",
             "index": 1,
-            "label": "ninaE",
-            "normalized_id": "FB:FBgn0002940",
-            "entity_type": None,
-            "source_mentions": [],
-        },
-        {
-            "collection": "items",
-            "index": 0,
             "label": "ninaE",
             "normalized_id": "FB:FBgn0002940",
             "entity_type": "gene",

@@ -43,8 +43,15 @@ content: |
   ### Positive inclusion reminder
   - Retain directly supported zebrafish expression findings from this paper, including summary statements that clearly describe the paper's own results.
   - Negative expression results are valid annotations with `is_negative: true` when the paper explicitly reports absence of signal in a tissue or stage.
-  - When anatomy or stage is incomplete but expression is clearly reported, keep the annotation with the available fields and add an `ambiguities[]` note for curator follow-up.
+  - When anatomy or stage is incomplete but expression is clearly reported, keep the annotation with the available fields and add an `metadata.ambiguities[]` note for curator follow-up.
 
   ### Output discipline
-  - Every excluded zebrafish candidate must land in `exclusions[]` with a canonical reason_code and evidence.
-  - Keep only experimentally supported ZFIN-curation-relevant annotations in `annotations[]`.
+  - Every excluded zebrafish candidate must land in `metadata.exclusions[]` with a canonical reason_code and evidence refs when available.
+  - Keep only experimentally supported ZFIN-curation-relevant annotations in `curatable_objects[]`.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

@@ -8,17 +8,24 @@ content: |
   - Spontaneous mutations: gene<allele_name>.
   - ENU-induced alleles are common in rat forward genetics studies.
 
-  ### Transgene constructs (exclude from alleles[])
+  ### Transgene constructs (exclude from curatable_objects[])
   - Transgene notation follows mouse conventions: Tg(construct)###.
   - Reporter constructs are tools, not alleles.
-  - Capture in raw_mentions[] but exclude from alleles[] unless the transgene IS the experimental variable.
+  - Capture in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
 
   ### Strain disambiguation
   - Sprague-Dawley (SD), Wistar, Fischer 344 (F344), Lewis, Brown Norway (BN) are inbred/outbred rat strains — NOT alleles.
   - Congenic and consomic strain designations describe genetic background, not specific alleles.
-  - Strain names belong in strain context, not in alleles[].
+  - Strain names belong in strain context, not in curatable_objects[].
 
   ### Pharmacological models
   - Rat studies frequently use pharmacological induction rather than genetic alleles.
   - Drug treatments (streptozotocin, 6-OHDA) are experimental conditions, NOT alleles.
   - Only capture genetic alleles/variants, not pharmacological interventions.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

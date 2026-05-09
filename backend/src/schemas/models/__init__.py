@@ -21,6 +21,11 @@ from .base import (
     AmbiguityRecord,
     ExtractionRunSummary,
 )
+from .domain_envelope_extraction import (
+    DomainEnvelopeExtractionResult,
+    ExtractionEnvelopeMetadata,
+    LEGACY_SEMANTIC_LIST_FIELDS,
+)
 
 # Import envelope schemas
 from .supervisor import SupervisorEnvelope
@@ -64,7 +69,7 @@ from .ontology_mapping_item import OntologyMapping
 # IMPORTANT: Only register top-level schemas here, not helper classes.
 # Helper classes (Reagent, ExpressionPattern, etc.) are NOT schemas themselves.
 SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
-    # Envelope schemas (15 total)
+    # Envelope schemas
     'supervisor': SupervisorEnvelope,
     'direct_response': DirectResponseEnvelope,
     'no_document': NoDocumentEnvelope,
@@ -80,6 +85,7 @@ SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
     'gene_ontology': GeneOntologyEnvelope,
     'go_annotations': GoAnnotationsEnvelope,
     'alliance_orthologs': AllianceOrthologsEnvelope,
+    'domain_envelope_extraction': DomainEnvelopeExtractionResult,
 
     # Special schemas (1 total)
     'citation': Citation,
@@ -108,6 +114,9 @@ __all__ = [
     'ExclusionRecord',
     'AmbiguityRecord',
     'ExtractionRunSummary',
+    'DomainEnvelopeExtractionResult',
+    'ExtractionEnvelopeMetadata',
+    'LEGACY_SEMANTIC_LIST_FIELDS',
 
     # Envelope schemas
     'SupervisorEnvelope',

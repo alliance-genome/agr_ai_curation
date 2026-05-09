@@ -15,6 +15,7 @@ from src.schemas.models.base import (
     AmbiguityRecord,
     ExtractionRunSummary,
 )
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
 # ============================================================================
@@ -433,59 +434,8 @@ class GeneExpressionAnnotation(BaseModel):
     )
 
 
-class GeneExpressionEnvelope(BaseModel):
-    """
-    Structured output for comprehensive Gene Expression extraction.
-
-    Contains ALL gene expression annotations found in the document.
-    Each annotation represents ONE expression pattern (flat, spreadsheet-like rows).
-    If a gene has 3 expression patterns, there will be 3 annotations.
-    """
-    organism: Optional[str] = Field(
-        None,
-        description="Organism name (e.g., 'C. elegans', 'D. melanogaster'). "
-                    "Set to None if no gene expression data was found in the document."
-    )
-    annotations: List[GeneExpressionAnnotation] = Field(
-        default_factory=list,
-        description="List of gene expression annotations, one per gene+reagent combination"
-    )
-    genes_found: List[str] = Field(
-        default_factory=list,
-        description="List of all gene symbols with expression data in this document"
-    )
-    summary: Optional[str] = Field(
-        None,
-        description="Brief summary of expression findings"
-    )
-    items: List[ExtractionItem] = Field(
-        default_factory=list,
-        description="Normalized extraction items retained for curation workflows"
-    )
-    raw_mentions: List[MentionCandidate] = Field(
-        default_factory=list,
-        description="Raw mentions harvested from the paper before normalization"
-    )
-    evidence_records: List[EvidenceRecord] = Field(
-        default_factory=list,
-        description="Verified evidence records supporting retained/excluded decisions"
-    )
-    normalization_notes: List[str] = Field(
-        default_factory=list,
-        description="Normalization decisions and caveats captured during pass-B validation"
-    )
-    exclusions: List[ExclusionRecord] = Field(
-        default_factory=list,
-        description="Excluded candidates with explicit reason codes"
-    )
-    ambiguities: List[AmbiguityRecord] = Field(
-        default_factory=list,
-        description="Ambiguous candidates requiring curator follow-up"
-    )
-    run_summary: ExtractionRunSummary = Field(
-        default_factory=ExtractionRunSummary,
-        description="Run-level extraction counters and warnings"
-    )
+class GeneExpressionEnvelope(DomainEnvelopeExtractionResult):
+    """Structured output for gene-expression domain-envelope extraction."""
 
 
 # ============================================================================
@@ -536,44 +486,8 @@ class PhenotypeObservation(BaseModel):
     )
 
 
-class PhenotypeResultEnvelope(BaseModel):
-    """Structured output for phenotype extraction and normalization hints."""
-    summary: Optional[str] = Field(
-        None,
-        description="Brief run summary for phenotype extraction"
-    )
-    phenotypes: List[PhenotypeObservation] = Field(
-        default_factory=list,
-        description="Extracted phenotype assertions with normalization hints"
-    )
-    items: List[ExtractionItem] = Field(
-        default_factory=list,
-        description="Normalized extraction items retained for curation workflows"
-    )
-    raw_mentions: List[MentionCandidate] = Field(
-        default_factory=list,
-        description="Raw mentions harvested from the paper before normalization"
-    )
-    evidence_records: List[EvidenceRecord] = Field(
-        default_factory=list,
-        description="Canonical verified evidence registry populated from record_evidence tool calls"
-    )
-    normalization_notes: List[str] = Field(
-        default_factory=list,
-        description="Normalization decisions and caveats captured during extraction"
-    )
-    exclusions: List[ExclusionRecord] = Field(
-        default_factory=list,
-        description="Excluded candidates with explicit reason codes"
-    )
-    ambiguities: List[AmbiguityRecord] = Field(
-        default_factory=list,
-        description="Ambiguous candidates requiring curator follow-up"
-    )
-    run_summary: ExtractionRunSummary = Field(
-        default_factory=ExtractionRunSummary,
-        description="Run-level extraction counters and warnings"
-    )
+class PhenotypeResultEnvelope(DomainEnvelopeExtractionResult):
+    """Structured output for phenotype domain-envelope extraction."""
 
 
 # ============================================================================
@@ -608,44 +522,8 @@ class AlleleExtractionFinding(BaseModel):
     )
 
 
-class AlleleExtractionResultEnvelope(BaseModel):
-    """Structured output for allele/variant extraction workflows."""
-    summary: Optional[str] = Field(
-        None,
-        description="Brief run summary for allele/variant extraction"
-    )
-    alleles: List[AlleleExtractionFinding] = Field(
-        default_factory=list,
-        description="Retained allele/variant assertions from the paper"
-    )
-    items: List[ExtractionItem] = Field(
-        default_factory=list,
-        description="Normalized extraction items retained for curation workflows"
-    )
-    raw_mentions: List[MentionCandidate] = Field(
-        default_factory=list,
-        description="Raw mentions harvested from the paper before normalization"
-    )
-    evidence_records: List[EvidenceRecord] = Field(
-        default_factory=list,
-        description="Canonical verified evidence registry populated from record_evidence tool calls"
-    )
-    normalization_notes: List[str] = Field(
-        default_factory=list,
-        description="Normalization decisions and caveats captured during extraction"
-    )
-    exclusions: List[ExclusionRecord] = Field(
-        default_factory=list,
-        description="Excluded candidates with explicit reason codes"
-    )
-    ambiguities: List[AmbiguityRecord] = Field(
-        default_factory=list,
-        description="Ambiguous candidates requiring curator follow-up"
-    )
-    run_summary: ExtractionRunSummary = Field(
-        default_factory=ExtractionRunSummary,
-        description="Run-level extraction counters and warnings"
-    )
+class AlleleExtractionResultEnvelope(DomainEnvelopeExtractionResult):
+    """Structured output for allele/variant domain-envelope extraction."""
 
 
 # ============================================================================
@@ -680,44 +558,8 @@ class DiseaseExtractionFinding(BaseModel):
     )
 
 
-class DiseaseExtractionResultEnvelope(BaseModel):
-    """Structured output for disease extraction workflows."""
-    summary: Optional[str] = Field(
-        None,
-        description="Brief run summary for disease extraction"
-    )
-    diseases: List[DiseaseExtractionFinding] = Field(
-        default_factory=list,
-        description="Retained disease assertions from the paper"
-    )
-    items: List[ExtractionItem] = Field(
-        default_factory=list,
-        description="Normalized extraction items retained for curation workflows"
-    )
-    raw_mentions: List[MentionCandidate] = Field(
-        default_factory=list,
-        description="Raw mentions harvested from the paper before normalization"
-    )
-    evidence_records: List[EvidenceRecord] = Field(
-        default_factory=list,
-        description="Canonical verified evidence registry populated from record_evidence tool calls"
-    )
-    normalization_notes: List[str] = Field(
-        default_factory=list,
-        description="Normalization decisions and caveats captured during extraction"
-    )
-    exclusions: List[ExclusionRecord] = Field(
-        default_factory=list,
-        description="Excluded candidates with explicit reason codes"
-    )
-    ambiguities: List[AmbiguityRecord] = Field(
-        default_factory=list,
-        description="Ambiguous candidates requiring curator follow-up"
-    )
-    run_summary: ExtractionRunSummary = Field(
-        default_factory=ExtractionRunSummary,
-        description="Run-level extraction counters and warnings"
-    )
+class DiseaseExtractionResultEnvelope(DomainEnvelopeExtractionResult):
+    """Structured output for disease domain-envelope extraction."""
 
 
 # ============================================================================
@@ -760,44 +602,8 @@ class ChemicalExtractionFinding(BaseModel):
     )
 
 
-class ChemicalExtractionResultEnvelope(BaseModel):
-    """Structured output for chemical extraction workflows."""
-    summary: Optional[str] = Field(
-        None,
-        description="Brief run summary for chemical extraction"
-    )
-    chemicals: List[ChemicalExtractionFinding] = Field(
-        default_factory=list,
-        description="Retained chemical assertions from the paper"
-    )
-    items: List[ExtractionItem] = Field(
-        default_factory=list,
-        description="Normalized extraction items retained for curation workflows"
-    )
-    raw_mentions: List[MentionCandidate] = Field(
-        default_factory=list,
-        description="Raw mentions harvested from the paper before normalization"
-    )
-    evidence_records: List[EvidenceRecord] = Field(
-        default_factory=list,
-        description="Canonical verified evidence registry populated from record_evidence tool calls"
-    )
-    normalization_notes: List[str] = Field(
-        default_factory=list,
-        description="Normalization decisions and caveats captured during extraction"
-    )
-    exclusions: List[ExclusionRecord] = Field(
-        default_factory=list,
-        description="Excluded candidates with explicit reason codes"
-    )
-    ambiguities: List[AmbiguityRecord] = Field(
-        default_factory=list,
-        description="Ambiguous candidates requiring curator follow-up"
-    )
-    run_summary: ExtractionRunSummary = Field(
-        default_factory=ExtractionRunSummary,
-        description="Run-level extraction counters and warnings"
-    )
+class ChemicalExtractionResultEnvelope(DomainEnvelopeExtractionResult):
+    """Structured output for chemical-condition domain-envelope extraction."""
 
 
 # ============================================================================
@@ -832,44 +638,8 @@ class GeneExtractionFinding(BaseModel):
     )
 
 
-class GeneExtractionResultEnvelope(BaseModel):
-    """Structured output for gene extraction workflows."""
-    summary: Optional[str] = Field(
-        None,
-        description="Brief run summary for gene extraction"
-    )
-    genes: List[GeneExtractionFinding] = Field(
-        default_factory=list,
-        description="Retained gene assertions from the paper"
-    )
-    items: List[ExtractionItem] = Field(
-        default_factory=list,
-        description="Normalized extraction items retained for curation workflows"
-    )
-    raw_mentions: List[MentionCandidate] = Field(
-        default_factory=list,
-        description="Raw mentions harvested from the paper before normalization"
-    )
-    evidence_records: List[EvidenceRecord] = Field(
-        default_factory=list,
-        description="Canonical verified evidence registry populated from record_evidence tool calls"
-    )
-    normalization_notes: List[str] = Field(
-        default_factory=list,
-        description="Normalization decisions and caveats captured during extraction"
-    )
-    exclusions: List[ExclusionRecord] = Field(
-        default_factory=list,
-        description="Excluded candidates with explicit reason codes"
-    )
-    ambiguities: List[AmbiguityRecord] = Field(
-        default_factory=list,
-        description="Ambiguous candidates requiring curator follow-up"
-    )
-    run_summary: ExtractionRunSummary = Field(
-        default_factory=ExtractionRunSummary,
-        description="Run-level extraction counters and warnings"
-    )
+class GeneExtractionResultEnvelope(DomainEnvelopeExtractionResult):
+    """Structured output for gene domain-envelope extraction."""
 
 
 # ============================================================================

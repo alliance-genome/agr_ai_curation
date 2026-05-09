@@ -18,7 +18,7 @@ content: |
   # Extraction constraints
   An allele is "experimentally supported" when this paper uses it in an experiment, such as phenotype analysis, genetic cross, complementation test, molecular characterization, rescue, or another result-producing assay.
 
-  Alleles mentioned only as strain background, controls, methods inventory, or cited from prior work without new data belong in exclusions[].
+  Alleles mentioned only as strain background, controls, methods inventory, or cited from prior work without new data belong in metadata.exclusions[].
 
   Detecting previously reported findings:
   - Parenthetical author-year citations (e.g., "(Smith et al., 2018)") within a sentence are a strong signal that the finding originates from prior work, not this paper.
@@ -96,8 +96,8 @@ content: |
 
   Common false positives:
   - Strains: Group-specific rules list common strains for each organism. When a strain name also refers to a specific allele, use experimental context to decide.
-  - Transgene constructs: Reporter constructs and expression driver systems are transgenes used as tools. Capture them in raw_mentions[] but exclude from alleles[] unless they ARE the experimental variable.
-  - Balancers, deficiencies, and chromosomal tools: These maintain or map mutations but are not alleles of specific genes. Capture them in raw_mentions[] for completeness and exclude from alleles[].
+  - Transgene constructs: Reporter constructs and expression driver systems are transgenes used as tools. Capture them in metadata.raw_mentions[] but exclude from curatable_objects[] unless they ARE the experimental variable.
+  - Balancers, deficiencies, and chromosomal tools: These maintain or map mutations but are not alleles of specific genes. Capture them in metadata.raw_mentions[] for completeness and exclude from curatable_objects[].
   - Wild-type designations: "+", "wt", and "wild-type" are reference states, not alleles. Exclude with reason_code: wild_type_reference.
 
   # Exclusion reason codes
@@ -128,10 +128,9 @@ content: |
   - optional `figure_reference`
 
   Apply that shape consistently to:
-  - `alleles[].evidence`
-  - `items[].evidence`
-  - top-level `evidence_records[]`
-  - `exclusions[].evidence[]` or `ambiguities[].evidence[]` only when verified evidence materially clarifies a non-trivial decision
+  - `curatable_objects[].evidence_record_ids`
+  - `metadata.evidence_records[]`
+  - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids` only when verified evidence materially clarifies a non-trivial decision
 
   If the tool returns `status: "not_found"`, inspect the chunk preview, retry once only when the mismatch is clearly fixable, then drop that evidence if it still does not verify. Do not invent quotes or replace them with free-text summaries.
 
@@ -139,13 +138,15 @@ content: |
   Return JSON only, matching AlleleExtractionResultEnvelope.
 
   Populate:
-  - alleles[] — one entry per retained allele with mention, normalized_symbol, normalized_id, associated_gene, confidence, and evidence[]
-  - items[] — normalized extraction items for downstream curation workflows
-  - raw_mentions[] — all allele/variant candidates harvested before filtering
-  - evidence_records[] — evidence snippets supporting retained and excluded decisions
-  - normalization_notes[] — disambiguation decisions, gene associations, and caveats
-  - exclusions[] — every excluded candidate with canonical reason_code + evidence
-  - ambiguities[] — candidates where gene association or identity is unresolved
-  - run_summary — counters (harvested, retained, excluded, ambiguous) and warnings
+  - `curatable_objects[]` - the only semantic object list; one object per retained allele assertion with `object_type`, `object_role`, `payload`, and either `object_id` or `pending_ref_id`
+  - `curatable_objects[].payload` - allele-specific values such as mention, normalized_symbol, normalized_id, associated_gene, confidence, and any supported domain-pack fields
+  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
+  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
+  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
+  - `run_summary` - counters (harvested, retained, excluded, ambiguous) and warnings
+
+  Store verified evidence once in `metadata.evidence_records[]` and refer to it with `evidence_record_ids[]`.
+  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  In repair mode, preserve stable `object_id` or `pending_ref_id` values and add repair context in `repair_hints` or `metadata.repair_notes[]`.
 
   Never invent allele symbols, identifiers, gene associations, or evidence text.

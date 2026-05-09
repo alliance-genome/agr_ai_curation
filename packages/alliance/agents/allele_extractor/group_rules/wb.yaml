@@ -8,18 +8,25 @@ content: |
   - Gain-of-function and reduction-of-function suffixes: gf, lf, rf, dn.
   - CRISPR alleles: often use lab code + "cas" or similar notation.
 
-  ### Transgene constructs (exclude from alleles[])
+  ### Transgene constructs (exclude from curatable_objects[])
   - Integrated arrays: xxIs### format (e.g., qyIs369, muIs32). These are transgene constructs, NOT alleles.
   - Extrachromosomal arrays: xxEx### format (e.g., muEx225). These are transgene constructs, NOT alleles.
   - Reporter fusions (gene::GFP, gene::mCherry) are tools, not alleles being studied.
-  - Capture transgenes in raw_mentions[] but exclude from alleles[] unless the transgene IS the experimental variable.
+  - Capture transgenes in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
 
   ### Strain disambiguation
   - N2 (Bristol) is the standard wild-type strain — NOT an allele.
   - Hawaiian (CB4856) is a polymorphic mapping strain — NOT an allele.
   - Other common strains: AB1, RB strains (deletion consortium).
-  - Strain names belong in strain context, not in alleles[].
+  - Strain names belong in strain context, not in curatable_objects[].
 
   ### Composite genotypes
   - Parse genotype strings into individual alleles: "daf-2(e1370); daf-16(mu86)" → two separate alleles.
   - Semicolons separate chromosomal linkage groups in C. elegans genotype notation.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

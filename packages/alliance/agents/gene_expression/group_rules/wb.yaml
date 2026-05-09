@@ -39,8 +39,8 @@ content: |
   - Gene names like hpo-30 follow C. elegans nomenclature (lowercase, 3-letter code + hyphen + number).
 
   ### Output discipline
-  - Every excluded candidate must land in `exclusions[]` with canonical reason_code and evidence.
-  - Keep only experimentally observed WB-curation-relevant annotations in `annotations[]`.
+  - Every excluded candidate must land in `metadata.exclusions[]` with canonical reason_code and evidence refs when available.
+  - Keep only experimentally observed WB-curation-relevant annotations in `curatable_objects[]`.
 
   ### Rescue experiment language exclusion
   - Exclude sentences where "expression" refers to transgenic rescue, not endogenous expression profiling (reason_code: `rescue_experiment_not_expression`).
@@ -59,12 +59,12 @@ content: |
   ### Incomplete annotation handling
   - When expression is mentioned but key details (anatomy, life stage) are missing from the text:
     - Still capture the annotation with null anatomy_label and/or life_stage_label.
-    - Add an ambiguities[] entry noting which fields are incomplete and may require curator review of figures.
+    - Add a `metadata.ambiguities[]` entry noting which fields are incomplete and may require curator review of figures.
     - Example: "Expression pattern of the acox-1.1 gene." -> capture with gene but null anatomy.
   - When neuron or tissue identities are stated as uncertain ("possibly M3, AWB, and ASJ"):
     - Capture the annotation with the tentative identities.
     - Include the uncertainty qualifier in evidence_text verbatim.
-    - Add an ambiguities[] entry noting the tentative identification.
+    - Add a `metadata.ambiguities[]` entry noting the tentative identification.
 
   ### Negative expression results (C. elegans)
   - Experimentally demonstrated absence of expression is a valid annotation with is_negative: true.
@@ -74,8 +74,15 @@ content: |
     - If this is the ONLY evidence of the expression pattern, capture it with context.
 
   ### Ambiguity handling policy
-  - When uncertain whether a sentence reports new experimental results or summarizes prior work, err on the side of INCLUSION with an ambiguities[] entry.
+  - When uncertain whether a sentence reports new experimental results or summarizes prior work, err on the side of INCLUSION with a `metadata.ambiguities[]` entry.
   - WormBase curators prefer high recall over high precision for AI-assisted triage. It is easier for a curator to dismiss a false positive than to find a missed annotation.
 
   ### Additional WB exclusion reason_codes
   - rescue_experiment_not_expression: The sentence uses expression-related language but describes a transgenic rescue experiment, not endogenous expression profiling. Cues: "rescued", "restored", "suppressed", "complemented".
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

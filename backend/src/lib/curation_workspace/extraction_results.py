@@ -31,7 +31,9 @@ logger = logging.getLogger(__name__)
 _EXTRACTION_TOOL_NAME_PATTERN = re.compile(
     r"^ask_(?P<tool_segment>.+?)(?:_step\d+)?_specialist$"
 )
-_ENVELOPE_EXTRACTION_KEYS = frozenset({"items", "raw_mentions", "exclusions", "ambiguities"})
+_ENVELOPE_EXTRACTION_KEYS = frozenset(
+    {"curatable_objects", "items", "raw_mentions", "exclusions", "ambiguities"}
+)
 _NUL_CHARACTER = "\x00"
 
 

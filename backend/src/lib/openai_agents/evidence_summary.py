@@ -282,6 +282,11 @@ def _collect_preferred_labels(payload: Dict[str, Any]) -> Dict[str, str]:
     return preferred_labels
 
 
+def _metadata_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = payload.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
 def _evidence_record_key(record: Dict[str, Any]) -> tuple[Any, ...]:
     return (
         record.get("entity"),
@@ -706,6 +711,7 @@ def canonicalize_structured_result_payload(
     registry = _EvidenceRegistry()
     registry.add_many(preferred_evidence_records)
     registry.add_many(payload.get("evidence_records"))
+    registry.add_many(_metadata_payload(payload).get("evidence_records"))
     canonical_payload = _canonicalize_nested_evidence_references(
         payload,
         registry=registry,
@@ -753,8 +759,14 @@ def canonicalize_structured_result_payload(
         if consolidated_field is not None:
             canonical_payload[key] = consolidated_field
 
-    if "evidence_records" in payload or registry.records():
+    if "evidence_records" in payload:
         canonical_payload["evidence_records"] = registry.records()
+    elif registry.records():
+        metadata = canonical_payload.get("metadata")
+        if isinstance(metadata, dict):
+            metadata = dict(metadata)
+            metadata["evidence_records"] = registry.records()
+            canonical_payload["metadata"] = metadata
 
     return canonical_payload
 
@@ -766,7 +778,10 @@ def extract_evidence_records_from_structured_result(value: Any) -> List[Dict[str
     if not isinstance(payload, dict):
         return []
 
-    return normalize_evidence_records(payload.get("evidence_records"))
+    evidence_records = normalize_evidence_records(payload.get("evidence_records"))
+    if evidence_records:
+        return evidence_records
+    return normalize_evidence_records(_metadata_payload(payload).get("evidence_records"))
 
 
 def _coerce_dict_list(value: Any) -> List[Dict[str, Any]]:
@@ -861,20 +876,52 @@ def structured_result_missing_evidence_record_refs(value: Any, *, expected_outpu
     return False
 
 
+def _retained_record_value(record: Dict[str, Any], *keys: str) -> Optional[str]:
+    for source in (record, record.get("payload")):
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            text = str(source.get(key) or "").strip()
+            if text:
+                return text
+    return None
+
+
 def _retained_record_label(record: Dict[str, Any]) -> str:
-    for key in ("label", "mention", "normalized_symbol", "normalized_label", "normalized_id"):
-        text = str(record.get(key) or "").strip()
+    for key in (
+        "label",
+        "mention",
+        "normalized_symbol",
+        "normalized_label",
+        "normalized_id",
+        "object_id",
+        "pending_ref_id",
+        "object_type",
+    ):
+        text = _retained_record_value(record, key)
         if text:
             return text
 
-    source_mentions = record.get("source_mentions")
-    if isinstance(source_mentions, list):
-        for source_mention in source_mentions:
-            text = str(source_mention or "").strip()
-            if text:
-                return text
+    for source in (record, record.get("payload")):
+        if not isinstance(source, dict):
+            continue
+        source_mentions = source.get("source_mentions")
+        if isinstance(source_mentions, list):
+            for source_mention in source_mentions:
+                text = str(source_mention or "").strip()
+                if text:
+                    return text
 
     return "<unlabeled>"
+
+
+def _retained_record_source_mentions(record: Dict[str, Any]) -> List[str]:
+    return _merge_unique_strings(
+        record.get("source_mentions"),
+        record.get("payload", {}).get("source_mentions")
+        if isinstance(record.get("payload"), dict)
+        else None,
+    )
 
 
 def structured_result_evidence_reference_report(
@@ -910,9 +957,9 @@ def structured_result_evidence_reference_report(
                 "collection": collection_name,
                 "index": index,
                 "label": _retained_record_label(record),
-                "normalized_id": str(record.get("normalized_id") or "").strip() or None,
-                "entity_type": str(record.get("entity_type") or "").strip() or None,
-                "source_mentions": _merge_unique_strings(record.get("source_mentions")),
+                "normalized_id": _retained_record_value(record, "normalized_id"),
+                "entity_type": _retained_record_value(record, "entity_type", "object_type"),
+                "source_mentions": _retained_record_source_mentions(record),
             })
 
     run_summary = payload.get("run_summary")
@@ -923,6 +970,10 @@ def structured_result_evidence_reference_report(
             kept_count = candidate_kept_count
 
     evidence_records = normalize_evidence_records(payload.get("evidence_records"))
+    if not evidence_records:
+        evidence_records = normalize_evidence_records(
+            _metadata_payload(payload).get("evidence_records")
+        )
 
     return {
         "payload_type": type(value).__name__,

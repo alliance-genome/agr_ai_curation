@@ -8,18 +8,25 @@ content: |
   - ENU-induced alleles: typically lab code + number.
   - CRISPR/TALEN alleles: increasingly common, often with lab-specific naming.
 
-  ### Transgene constructs (exclude from alleles[])
+  ### Transgene constructs (exclude from curatable_objects[])
   - Transgene notation: Tg(promoter:reporter)labcode — e.g., Tg(fli1:EGFP)y1.
   - BAC transgenes: TgBAC(gene:reporter).
   - Reporter lines are tools for visualization, NOT alleles.
-  - Capture in raw_mentions[] but exclude from alleles[] unless the transgene IS the experimental variable.
+  - Capture in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
 
   ### Strain disambiguation
   - AB, TU (Tuebingen), and WIK are standard wild-type zebrafish strains — NOT alleles.
   - AB/TU hybrids are common backgrounds.
-  - Strain names belong in strain context, not in alleles[].
+  - Strain names belong in strain context, not in curatable_objects[].
 
   ### Morpholino/CRISPR reagents
   - Morpholinos (MOs) are knockdown reagents, NOT alleles.
   - CRISPR guide RNAs are reagents; the resulting mutations are alleles.
   - Distinguish between the CRISPR reagent and the resulting stable allele.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.
