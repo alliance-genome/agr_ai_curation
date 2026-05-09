@@ -18,7 +18,7 @@ content: |
   - Diseases may be referred to by OMIM numbers (e.g., "OMIM #606764").
   - Clinical syndromes may have eponymous names (e.g., "Lynch syndrome", "Marfan syndrome").
   - Cancer types follow WHO/ICD classification terminology.
-  - Normalize all disease mentions to DOID, MONDO, or OMIM identifiers.
+  - For retained `DiseaseAnnotation` objects, use Alliance-supported Disease Ontology terms in `disease_annotation_object.curie/name`; preserve unresolved MONDO, OMIM, synonym, or alternate ontology candidates in metadata normalization notes.
 
   ### Phenotype vs disease in clinical context
   - Individual clinical features (e.g., "aortic root dilation") are phenotypes → phenotype_extractor.

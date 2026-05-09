@@ -234,6 +234,33 @@ def test_disease_extractor_schema_requires_bounded_repair_field_refs():
     assert repaired.curatable_objects[0].field_refs[0].field_path.endswith("curie")
 
 
+def test_disease_extractor_schema_rejects_nonexistent_repair_field_ref_path():
+    payload = _valid_disease_extractor_payload()
+    payload["repair_mode"] = True
+    payload["metadata"]["repair_notes"] = [
+        "Repaired only the requested disease ontology curie field."
+    ]
+    payload["curatable_objects"][0]["field_refs"] = [
+        {
+            "object_ref": {
+                "pending_ref_id": "disease-assertion-1",
+                "object_type": DISEASE_OBJECT_TYPE,
+            },
+            "field_path": "disease_annotation_object.missing_curie",
+        }
+    ]
+
+    with pytest.raises(ValidationError) as exc_info:
+        _disease_extractor_schema().model_validate(payload)
+
+    message = str(exc_info.value)
+    assert (
+        "curatable_objects[0].field_refs[0].field_path "
+        "'disease_annotation_object.missing_curie'"
+    ) in message
+    assert "does not exist on repaired object payload" in message
+
+
 def test_disease_extractor_schema_allows_untouched_objects_in_repair_mode():
     payload = _valid_disease_extractor_payload()
     preserved_object = copy.deepcopy(payload["curatable_objects"][0])

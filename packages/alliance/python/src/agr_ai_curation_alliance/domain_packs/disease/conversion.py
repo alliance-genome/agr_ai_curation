@@ -672,6 +672,12 @@ def validate_disease_extraction_objects(
                         f"{location}.field_refs[{field_ref_index}].object_ref "
                         "must point at the repaired object"
                     )
+                if not field_path_exists(obj.payload, field_ref.field_path):
+                    errors.append(
+                        f"{location}.field_refs[{field_ref_index}].field_path "
+                        f"'{field_ref.field_path}' does not exist on repaired object "
+                        "payload"
+                    )
 
     if output.repair_mode and repair_field_ref_count == 0:
         errors.append(
