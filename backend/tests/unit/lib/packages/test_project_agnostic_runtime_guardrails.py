@@ -117,6 +117,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/contract/test_documents_get.py"),
     Path("backend/tests/contract/test_documents_status.py"),
     Path("backend/tests/contract/test_documents_upload.py"),
+    Path("backend/tests/contract/alliance/domain_packs/test_gene_expression_domain_pack.py"),
     Path("backend/tests/contract/test_list_documents.py"),
     Path("backend/tests/integration/conftest.py"),
     Path("backend/tests/integration/evidence_test_support.py"),
