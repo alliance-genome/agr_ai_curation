@@ -464,6 +464,7 @@ def _collect_validator_bindings(
         inferred_object_types, inferred_field_paths = _infer_targets_from_binding(
             raw_item,
             object_definitions,
+            source_object_type=source_object_type,
         )
         if not object_types:
             object_types = inferred_object_types
@@ -686,38 +687,97 @@ def _coerce_field_type_tuple(value: Any) -> tuple[DomainPackFieldType, ...]:
 def _infer_targets_from_binding(
     raw_item: Mapping[str, Any],
     object_definitions: Mapping[str, DomainPackObjectDefinition],
+    *,
+    source_object_type: str | None = None,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    candidate_values: list[Any] = []
+    candidate_values: list[str] = []
     for key in ("input_fields", "expected_result_fields"):
         raw_mapping = raw_item.get(key)
         if isinstance(raw_mapping, Mapping):
-            candidate_values.extend(raw_mapping.values())
+            candidate_values.extend(_iter_candidate_target_strings(raw_mapping.values()))
     raw_terms = raw_item.get("target_terms")
     if isinstance(raw_terms, list):
-        candidate_values.extend(raw_terms)
+        candidate_values.extend(_iter_candidate_target_strings(raw_terms))
 
     object_types: list[str] = []
     field_paths: list[str] = []
     seen_object_types: set[str] = set()
     seen_field_paths: set[str] = set()
     for value in candidate_values:
-        if not isinstance(value, str) or "." not in value:
-            continue
-        prefix, field_path = value.split(".", 1)
-        if prefix not in object_definitions:
-            continue
-        try:
-            validate_field_path_syntax(field_path)
-        except ValueError:
-            continue
-        if prefix not in seen_object_types:
-            object_types.append(prefix)
-            seen_object_types.add(prefix)
-        if field_path not in seen_field_paths:
-            field_paths.append(field_path)
-            seen_field_paths.add(field_path)
+        for object_type, field_path in _infer_field_targets_for_value(
+            value,
+            object_definitions,
+            source_object_type=source_object_type,
+        ):
+            if object_type not in seen_object_types:
+                object_types.append(object_type)
+                seen_object_types.add(object_type)
+            if field_path not in seen_field_paths:
+                field_paths.append(field_path)
+                seen_field_paths.add(field_path)
 
     return tuple(object_types), tuple(field_paths)
+
+
+def _iter_candidate_target_strings(values: Iterable[Any]) -> Iterable[str]:
+    for value in values:
+        if isinstance(value, str):
+            normalized = value.strip()
+            if normalized:
+                yield normalized
+            continue
+        if isinstance(value, Mapping):
+            yield from _iter_candidate_target_strings(value.values())
+            continue
+        if isinstance(value, list):
+            yield from _iter_candidate_target_strings(value)
+
+
+def _infer_field_targets_for_value(
+    value: str,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    *,
+    source_object_type: str | None,
+) -> tuple[tuple[str, str], ...]:
+    if "." in value:
+        prefix, field_path = value.split(".", 1)
+        object_definition = object_definitions.get(prefix)
+        if object_definition is not None:
+            normalized_field_path = _declared_field_path(object_definition, field_path)
+            if normalized_field_path is not None:
+                return ((prefix, normalized_field_path),)
+
+    candidate_object_definitions: Iterable[DomainPackObjectDefinition]
+    if source_object_type is not None:
+        source_object_definition = object_definitions.get(source_object_type)
+        candidate_object_definitions = (
+            (source_object_definition,) if source_object_definition is not None else ()
+        )
+    else:
+        candidate_object_definitions = object_definitions.values()
+
+    matches: list[tuple[str, str]] = []
+    for object_definition in candidate_object_definitions:
+        normalized_field_path = _declared_field_path(object_definition, value)
+        if normalized_field_path is not None:
+            matches.append((object_definition.object_type, normalized_field_path))
+    return tuple(matches)
+
+
+def _declared_field_path(
+    object_definition: DomainPackObjectDefinition,
+    field_path: str,
+) -> str | None:
+    try:
+        normalized_field_path = validate_field_path_syntax(field_path)
+    except ValueError:
+        return None
+    if any(
+        field_definition.field_path == normalized_field_path
+        for field_definition in object_definition.fields
+    ):
+        return normalized_field_path
+    return None
 
 
 def _build_field_policies(
