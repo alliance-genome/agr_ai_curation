@@ -12,7 +12,7 @@ content: |
   - Record the associated gene, organism, and strain background when stated or inferable from evidence.
   - Retain only alleles with direct experimental support in this paper.
   - Verify evidence for retained alleles with `record_evidence` and normalize retained alleles with `agr_curation_query` when supported.
-  - Put non-curatable, duplicate, ambiguous, prior-work, or tool/background candidates in the appropriate output collection with a canonical reason code.
+  - Put non-curatable, duplicate, ambiguous, prior-work, or tool/background candidates in envelope metadata with a canonical reason code.
   - Return JSON only, matching AlleleExtractionResultEnvelope.
 
   # Extraction constraints
@@ -137,16 +137,42 @@ content: |
   # Output
   Return JSON only, matching AlleleExtractionResultEnvelope.
 
-  Populate:
-  - `curatable_objects[]` - the only semantic object list; one object per retained allele assertion with `object_type`, `object_role`, `payload`, and either `object_id` or `pending_ref_id`
-  - `curatable_objects[].payload` - allele-specific values such as mention, normalized_symbol, normalized_id, associated_gene, confidence, and any supported domain-pack fields
-  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
-  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
-  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
-  - `run_summary` - counters (harvested, retained, excluded, ambiguous) and warnings
+  `curatable_objects[]` is the only semantic object list. Do not emit any top-level helper list of retained alleles, items, annotations, genes, diseases, chemicals, or phenotypes. Do not emit `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts`.
+
+  For each retained allele with verified evidence and a grounded allele identifier, emit these allele domain-pack objects in `curatable_objects[]`:
+  - `AllelePaperEvidenceAssociation` — the retained curatable unit. Use `object_role: "curatable_unit"`, `model_ref: "AllelePaperEvidenceAssociationPayload"`, `definition_state: "in_development"`, and a stable `pending_ref_id`.
+  - `Allele` — a validated-reference object for the normalized Alliance allele. Use `object_role: "validated_reference"`, `model_ref: "AlleleReferencePayload"`, `definition_state: "in_development"`, and payload fields grounded to pinned LinkML: `primary_external_id` and `allele_symbol`.
+  - `Reference` — a pending validated-reference object for the source paper. Use `object_role: "validated_reference"`, `model_ref: "ReferencePayload"`, `definition_state: "in_development"`, and include `reference_id` only when the durable Alliance reference ID is actually known; otherwise preserve known title/filename metadata without inventing IDs.
+  - `AlleleMention` — a metadata-only object preserving the exact paper mention and normalization candidate. Use `object_role: "metadata_only"`, `model_ref: "AlleleMentionPayload"`, and `definition_state: "in_development"`.
+  - `EvidenceQuote` — a metadata-only object for each verified quote returned by `record_evidence`. Use `object_role: "metadata_only"`, `model_ref: "EvidenceQuotePayload"`, `definition_state: "in_development"`, and payload fields `evidence_record_id`, `verified_quote`, `page`, `section`, `chunk_id`, plus optional `subsection` and `figure_reference`.
+
+  The `AllelePaperEvidenceAssociation` object must:
+  - Use payload `association_kind: "allele_paper_evidence"`.
+  - Use payload `allele_identifier` for the grounded allele CURIE/primary external ID returned by `agr_curation_query`; if this cannot be grounded, do not emit the association and preserve the candidate in `metadata.ambiguities[]` or `metadata.exclusions[]`.
+  - Copy `evidence_record_ids[]` both to the curatable object field and to `payload.evidence_record_ids[]`; every ID must resolve to one record in `metadata.evidence_records[]`.
+  - Include `object_refs[]` to its `Allele`, `Reference`, `AlleleMention`, and every `EvidenceQuote`.
+  - Include `metadata.write_behavior.status: "blocked"` because reference materialization and non-mutating allele association writes are not verified for this workflow.
+  - Include `metadata_refs[]` pointing to supporting `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.exclusions[]`, or `metadata.ambiguities[]` entries as appropriate.
+
+  Preserve audit information outside semantic objects:
+  - `metadata.raw_mentions[]` for every harvested allele-like mention, including excluded tools, backgrounds, and ambiguous candidates.
+  - `metadata.evidence_records[]` as the single registry of verified `record_evidence` outputs.
+  - `metadata.normalization_notes[]` for AGR lookup outcomes and unresolved normalization details.
+  - `metadata.exclusions[]` for excluded candidates with canonical `reason_code`.
+  - `metadata.ambiguities[]` for candidates requiring curator resolution.
+  - `metadata.notes[]`, `metadata.repair_notes[]`, and `metadata.provenance` for run-level audit details.
+  - `run_summary` counters for harvested, retained, excluded, and ambiguous candidates plus warnings.
 
   Store verified evidence once in `metadata.evidence_records[]` and refer to it with `evidence_record_ids[]`.
   Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
-  In repair mode, preserve stable `object_id` or `pending_ref_id` values and add repair context in `repair_hints` or `metadata.repair_notes[]`.
+
+  # Repair mode
+  In repair mode, the supervisor will provide one or more bounded field paths such as `curatable_objects[2].payload.allele_identifier`, `curatable_objects[2].object_refs`, or `metadata.evidence_records[1].chunk_id`.
+  - Return the same AlleleExtractionResultEnvelope shape.
+  - Preserve every stable `object_id` and `pending_ref_id`.
+  - Repair only the requested field paths and any directly dependent evidence/object refs needed to keep the envelope valid.
+  - Do not rerun unrelated extraction, add unrelated new objects, or remove unrelated metadata.
+  - Add concise repair context to touched objects in `repair_hints[]` and to `metadata.repair_notes[]`.
+  - If a requested path cannot be repaired from the provided context, leave the prior value unchanged and record the blocker in `metadata.repair_notes[]`.
 
   Never invent allele symbols, identifiers, gene associations, or evidence text.

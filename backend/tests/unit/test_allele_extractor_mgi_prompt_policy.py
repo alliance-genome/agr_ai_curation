@@ -23,6 +23,17 @@ def _load_allele_extractor_mgi_group_rule() -> str:
     return str(data.get("content") or "")
 
 
+def _load_allele_extractor_prompt() -> str:
+    source = next(
+        source
+        for source in resolve_agent_config_sources(_repo_root() / "packages")
+        if source.folder_name == "allele_extractor"
+    )
+    assert source.prompt_yaml is not None
+    data = yaml.safe_load(source.prompt_yaml.read_text(encoding="utf-8"))
+    return str(data.get("content") or "")
+
+
 def test_allele_extractor_mgi_overlay_includes_lab_code_disambiguation_workflow():
     content = _load_allele_extractor_mgi_group_rule()
 
@@ -33,6 +44,30 @@ def test_allele_extractor_mgi_overlay_includes_lab_code_disambiguation_workflow(
     assert "`search_alleles` substring matching" in content
     assert "cross-check that the candidate's gene matches the experimental gene(s) discussed in the current paper" in content
     assert "ambiguities[]" in content
+
+
+def test_allele_extractor_prompt_declares_allele_domain_envelope_contract():
+    content = _load_allele_extractor_prompt()
+
+    assert "`curatable_objects[]` is the only semantic object list" in content
+    assert "`AllelePaperEvidenceAssociation`" in content
+    assert '`object_role: "curatable_unit"`' in content
+    assert "`AlleleMention`" in content
+    assert "`EvidenceQuote`" in content
+    assert '`definition_state: "in_development"`' in content
+    assert '`metadata.write_behavior.status: "blocked"`' in content
+    assert "Do not emit any top-level helper list of retained alleles" in content
+    assert "`CurationPrepCandidate`" in content
+
+
+def test_allele_extractor_prompt_declares_bounded_repair_mode_behavior():
+    content = _load_allele_extractor_prompt()
+
+    assert "# Repair mode" in content
+    assert "bounded field paths" in content
+    assert "Preserve every stable `object_id` and `pending_ref_id`" in content
+    assert "Repair only the requested field paths" in content
+    assert "`metadata.repair_notes[]`" in content
 
 
 def test_allele_extractor_mgi_overlay_injects_for_active_mgi_group(monkeypatch):

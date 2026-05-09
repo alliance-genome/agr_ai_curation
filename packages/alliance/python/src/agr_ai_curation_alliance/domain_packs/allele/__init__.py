@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
@@ -25,6 +25,21 @@ from src.schemas.domain_envelope import (
 
 ALLELE_DOMAIN_PACK_ID = "agr.alliance.allele"
 ALLELE_DOMAIN_PACK_VERSION = "0.1.0"
+_FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
+    {
+        "items",
+        "annotations",
+        "genes",
+        "alleles",
+        "diseases",
+        "chemicals",
+        "phenotypes",
+        "CurationPrepCandidate",
+        "NormalizedCandidate",
+        "normalized_payload",
+        "annotation_drafts",
+    }
+)
 
 _ALLELE_SCHEMA_REF = SchemaRef(
     schema_id="alliance.linkml.Allele",
@@ -310,6 +325,20 @@ def validate_pending_allele_envelope(
             )
         )
 
+    legacy_keys = _legacy_keys_in_envelope(envelope)
+    if legacy_keys:
+        findings.append(
+            ValidationFinding(
+                severity=ValidationFindingSeverity.ERROR,
+                code="alliance.allele.legacy_semantic_store_present",
+                message=(
+                    "Allele domain envelopes must use envelope objects as the semantic "
+                    "source of truth; legacy semantic collections are not allowed."
+                ),
+                details={"legacy_keys": sorted(legacy_keys)},
+            )
+        )
+
     associations = [
         obj
         for obj in envelope.objects
@@ -370,6 +399,24 @@ def validate_pending_allele_envelope(
             )
 
     return tuple(findings)
+
+
+def _iter_mapping_keys(value: Any) -> Iterator[str]:
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if isinstance(key, str):
+                yield key
+            yield from _iter_mapping_keys(child)
+        return
+    if isinstance(value, list):
+        for child in value:
+            yield from _iter_mapping_keys(child)
+
+
+def _legacy_keys_in_envelope(envelope: DomainEnvelope) -> set[str]:
+    return _FORBIDDEN_LEGACY_COLLECTIONS.intersection(
+        _iter_mapping_keys(envelope.model_dump(mode="python"))
+    )
 
 
 def _iter_allele_items(extraction: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:

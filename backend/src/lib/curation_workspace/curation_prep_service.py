@@ -334,6 +334,21 @@ def _candidate_blueprints(
     candidate_adapter_key: str,
 ) -> list[_CandidateBlueprint]:
     evidence_records_by_id = _evidence_records_by_id(payload)
+
+    if (
+        candidate_adapter_key == "allele"
+        and _normalized_optional_string(extraction_result.agent_key) == "allele_extractor"
+    ):
+        raw_curatable_objects = payload.get("curatable_objects")
+        if not isinstance(raw_curatable_objects, list):
+            return []
+        return _build_candidate_blueprints_from_items(
+            extraction_result,
+            _allele_items_from_curatable_objects(raw_curatable_objects),
+            evidence_records_by_id=evidence_records_by_id,
+            candidate_adapter_key=candidate_adapter_key,
+        )
+
     raw_items = payload.get("items")
     blueprints = _build_candidate_blueprints_from_items(
         extraction_result,
@@ -357,6 +372,152 @@ def _candidate_blueprints(
         evidence_records_by_id=evidence_records_by_id,
         candidate_adapter_key=candidate_adapter_key,
     )
+
+
+def _allele_items_from_curatable_objects(
+    raw_curatable_objects: Sequence[Any],
+) -> list[dict[str, Any]]:
+    object_lookup = _curatable_object_lookup(raw_curatable_objects)
+    items: list[dict[str, Any]] = []
+
+    for raw_object in raw_curatable_objects:
+        if not isinstance(raw_object, Mapping):
+            continue
+        if raw_object.get("object_type") != "AllelePaperEvidenceAssociation":
+            continue
+
+        payload = raw_object.get("payload")
+        association_payload = payload if isinstance(payload, Mapping) else {}
+        mention_payloads = _referenced_object_payloads(
+            raw_object,
+            object_lookup,
+            object_type="AlleleMention",
+        )
+        allele_payloads = _referenced_object_payloads(
+            raw_object,
+            object_lookup,
+            object_type="Allele",
+        )
+
+        source_mentions = _dedupe_strings(
+            [
+                *_string_values(association_payload.get("source_mentions")),
+                *(
+                    value
+                    for mention_payload in mention_payloads
+                    for value in _string_values(mention_payload.get("source_mentions"))
+                ),
+                *(
+                    value
+                    for allele_payload in allele_payloads
+                    for value in _string_values(allele_payload.get("source_mentions"))
+                ),
+                *(
+                    value
+                    for mention_payload in mention_payloads
+                    for value in (
+                        _normalized_optional_string(mention_payload.get("mention_text")),
+                    )
+                    if value is not None
+                ),
+            ]
+        )
+        allele_label = (
+            _normalized_optional_string(association_payload.get("allele_label"))
+            or _first_payload_string(allele_payloads, "allele_symbol")
+            or (source_mentions[0] if source_mentions else None)
+            or _normalized_optional_string(association_payload.get("allele_identifier"))
+        )
+        evidence_record_ids = _normalized_evidence_record_ids(
+            raw_object.get("evidence_record_ids")
+        )
+        if not evidence_record_ids:
+            evidence_record_ids = _normalized_evidence_record_ids(
+                association_payload.get("evidence_record_ids")
+            )
+
+        item = _compact_payload(
+            {
+                "label": allele_label,
+                "entity_type": "allele",
+                "normalized_id": association_payload.get("allele_identifier"),
+                "source_mentions": source_mentions,
+                "associated_gene": association_payload.get("associated_gene"),
+                "confidence": association_payload.get("confidence"),
+                "evidence_record_ids": evidence_record_ids,
+            }
+        )
+        if isinstance(item, dict):
+            items.append(item)
+
+    return items
+
+
+def _curatable_object_lookup(
+    raw_curatable_objects: Sequence[Any],
+) -> dict[tuple[str, str], Mapping[str, Any]]:
+    object_lookup: dict[tuple[str, str], Mapping[str, Any]] = {}
+    for raw_object in raw_curatable_objects:
+        if not isinstance(raw_object, Mapping):
+            continue
+        for ref_key in ("pending_ref_id", "object_id"):
+            ref_value = _normalized_optional_string(raw_object.get(ref_key))
+            if ref_value is not None:
+                object_lookup[(ref_key, ref_value)] = raw_object
+    return object_lookup
+
+
+def _referenced_object_payloads(
+    raw_object: Mapping[str, Any],
+    object_lookup: Mapping[tuple[str, str], Mapping[str, Any]],
+    *,
+    object_type: str,
+) -> list[Mapping[str, Any]]:
+    raw_refs = raw_object.get("object_refs")
+    if not isinstance(raw_refs, list):
+        return []
+
+    payloads: list[Mapping[str, Any]] = []
+    for raw_ref in raw_refs:
+        if not isinstance(raw_ref, Mapping) or raw_ref.get("object_type") != object_type:
+            continue
+        referenced_object = None
+        for ref_key in ("pending_ref_id", "object_id"):
+            ref_value = _normalized_optional_string(raw_ref.get(ref_key))
+            if ref_value is None:
+                continue
+            referenced_object = object_lookup.get((ref_key, ref_value))
+            if referenced_object is not None:
+                break
+        if referenced_object is None:
+            continue
+        payload = referenced_object.get("payload")
+        if isinstance(payload, Mapping):
+            payloads.append(payload)
+    return payloads
+
+
+def _string_values(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [
+            normalized
+            for item in value
+            for normalized in (_normalized_optional_string(item),)
+            if normalized is not None
+        ]
+    normalized = _normalized_optional_string(value)
+    return [normalized] if normalized is not None else []
+
+
+def _first_payload_string(
+    payloads: Sequence[Mapping[str, Any]],
+    field_name: str,
+) -> str | None:
+    for payload in payloads:
+        value = _normalized_optional_string(payload.get(field_name))
+        if value is not None:
+            return value
+    return None
 
 
 def _build_candidate_blueprints_from_items(
@@ -530,6 +691,10 @@ def _evidence_records_by_id(
     payload: Mapping[str, Any],
 ) -> dict[str, Mapping[str, Any]]:
     raw_records = payload.get("evidence_records")
+    if not isinstance(raw_records, list):
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping):
+            raw_records = metadata.get("evidence_records")
     if not isinstance(raw_records, list):
         return {}
 

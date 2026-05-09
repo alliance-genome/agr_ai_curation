@@ -79,6 +79,93 @@ def _make_extraction_result(
     )
 
 
+def _make_allele_domain_extraction_payload(candidate_count: int = 3) -> dict:
+    curatable_objects: list[dict] = []
+    evidence_records: list[dict] = []
+
+    for index in range(candidate_count):
+        object_index = index + 1
+        evidence_record_id = f"evidence-{object_index}"
+        mention = f"Allele mention {object_index}"
+        mention_ref_id = f"allele-mention-{object_index}"
+        allele_ref_id = f"allele-reference-{object_index}"
+        reference_ref_id = f"paper-reference-{object_index}"
+        evidence_ref_id = f"evidence-quote-{object_index}"
+
+        curatable_objects.extend(
+            [
+                {
+                    "object_type": "Reference",
+                    "pending_ref_id": reference_ref_id,
+                    "payload": {"title": "Allele fixture paper"},
+                },
+                {
+                    "object_type": "AlleleMention",
+                    "pending_ref_id": mention_ref_id,
+                    "payload": {
+                        "mention_text": mention,
+                        "source_mentions": [mention],
+                    },
+                },
+                {
+                    "object_type": "Allele",
+                    "pending_ref_id": allele_ref_id,
+                    "payload": {
+                        "primary_external_id": f"ALL:{object_index:04d}",
+                        "allele_symbol": mention,
+                        "source_mentions": [mention],
+                    },
+                },
+                {
+                    "object_type": "EvidenceQuote",
+                    "pending_ref_id": evidence_ref_id,
+                    "payload": {
+                        "evidence_record_id": evidence_record_id,
+                        "verified_quote": f"{mention} was observed.",
+                        "page": 5 + index,
+                        "section": "Results",
+                        "chunk_id": f"allele-chunk-{object_index}",
+                    },
+                },
+                {
+                    "object_type": "AllelePaperEvidenceAssociation",
+                    "pending_ref_id": f"allele-paper-evidence-association-{object_index}",
+                    "payload": {
+                        "association_kind": "allele_paper_evidence",
+                        "allele_identifier": f"ALL:{object_index:04d}",
+                        "allele_label": mention,
+                        "associated_gene": "Crumbs",
+                        "confidence": "high",
+                        "evidence_record_ids": [evidence_record_id],
+                    },
+                    "object_refs": [
+                        {"pending_ref_id": allele_ref_id, "object_type": "Allele"},
+                        {"pending_ref_id": reference_ref_id, "object_type": "Reference"},
+                        {"pending_ref_id": mention_ref_id, "object_type": "AlleleMention"},
+                        {"pending_ref_id": evidence_ref_id, "object_type": "EvidenceQuote"},
+                    ],
+                    "evidence_record_ids": [evidence_record_id],
+                },
+            ]
+        )
+        evidence_records.append(
+            {
+                "evidence_record_id": evidence_record_id,
+                "entity": mention,
+                "verified_quote": f"{mention} was observed.",
+                "page": 5 + index,
+                "section": "Results",
+                "chunk_id": f"allele-chunk-{object_index}",
+            }
+        )
+
+    return {
+        "curatable_objects": curatable_objects,
+        "metadata": {"evidence_records": evidence_records},
+        "run_summary": {"candidate_count": candidate_count},
+    }
+
+
 def _make_prep_output(candidate_count: int = 1) -> CurationPrepAgentOutput:
     return CurationPrepAgentOutput.model_validate(
         {
@@ -365,7 +452,7 @@ def test_build_chat_curation_prep_preview_filters_to_preparable_adapters(monkeyp
     )
 
 
-def test_build_chat_curation_prep_preview_counts_specialized_allele_payloads_as_preparable(
+def test_build_chat_curation_prep_preview_counts_allele_domain_objects_as_preparable(
     monkeypatch,
 ):
     monkeypatch.setattr(
@@ -377,40 +464,7 @@ def test_build_chat_curation_prep_preview_counts_specialized_allele_payloads_as_
                 candidate_count=3,
                 adapter_key="allele",
                 agent_key="allele_extractor",
-                payload_json={
-                    "items": [
-                        {
-                            "label": None,
-                            "entity_type": None,
-                            "normalized_id": None,
-                            "source_mentions": [],
-                            "evidence_record_ids": [],
-                        }
-                    ],
-                    "alleles": [
-                        {
-                            "mention": f"Allele mention {index + 1}",
-                            "normalized_id": None,
-                            "normalized_symbol": None,
-                            "associated_gene": "Crumbs",
-                            "confidence": "high",
-                            "evidence_record_ids": [f"evidence-{index + 1}"],
-                        }
-                        for index in range(3)
-                    ],
-                    "evidence_records": [
-                        {
-                            "evidence_record_id": f"evidence-{index + 1}",
-                            "entity": f"Allele mention {index + 1}",
-                            "verified_quote": f"Allele mention {index + 1} was observed.",
-                            "page": 5 + index,
-                            "section": "Results",
-                            "chunk_id": f"allele-chunk-{index + 1}",
-                        }
-                        for index in range(3)
-                    ],
-                    "run_summary": {"candidate_count": 3},
-                },
+                payload_json=_make_allele_domain_extraction_payload(candidate_count=3),
             ),
         ],
     )
