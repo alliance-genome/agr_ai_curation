@@ -14,7 +14,8 @@ name: "Gene Expression Extractor"
 
 description: >
   Extracts gene expression patterns and experimental data from PDFs,
-  including organism, genes, annotations (anatomy, life stage, reagent, evidence).
+  emitting GeneExpressionAnnotation domain-envelope objects with evidence and
+  raw extraction detail preserved as metadata.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -26,8 +27,9 @@ subcategory: "PDF Extraction"
 supervisor_routing:
   enabled: true
   description: >
-    Extract gene expression data from the paper. Returns formatted text with
-    organism, genes, annotations (anatomy, life stage, reagent, evidence).
+    Extract gene expression data from the paper. Returns GeneExpressionAnnotation
+    curatable_objects with anatomy, life stage, assay, reagent, evidence, and
+    curation notes preserved in domain-envelope metadata.
     Use export_to_file to save results as CSV, TSV, or JSON.
   batchable: false  # Document-based agent, processes one document at a time
 
@@ -38,6 +40,7 @@ tools:
   - search_document
   - read_section
   - read_subsection
+  - record_evidence
   - agr_curation_query
 
 # -----------------------------------------------------------------------------

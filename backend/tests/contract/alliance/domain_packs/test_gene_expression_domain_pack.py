@@ -7,6 +7,9 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import pytest
+import yaml
+
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.schemas.domain_envelope import CuratableObjectStatus, field_path_exists
 from src.schemas.domain_pack_metadata import DomainPackFieldType
@@ -28,7 +31,9 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     GENE_EXPRESSION_MODEL_ID,
     GENE_EXPRESSION_OBJECT_TYPE,
     GENE_EXPRESSION_VALIDATOR_STATES,
+    gene_expression_extraction_output_to_pending_envelope,
     get_gene_expression_domain_pack_metadata_path,
+    validate_pending_gene_expression_envelope,
 )
 
 from .test_alliance_domain_pack_scaffold import (  # noqa: E402
@@ -40,14 +45,14 @@ from .test_alliance_domain_pack_scaffold import (  # noqa: E402
 )
 
 
-GENE_EXPRESSION_FIXTURE_PATH = (
+GENE_EXPRESSION_OUTPUT_FIXTURE_PATH = (
     REPO_ROOT
     / "backend"
     / "tests"
     / "fixtures"
     / "domain_packs"
     / "gene_expression"
-    / "tmem67_pending.yaml"
+    / "tmem67_gene_expression_output.yaml"
 )
 FORBIDDEN_LEGACY_COLLECTIONS = {
     "items",
@@ -103,6 +108,14 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     provider_ref = metadata.metadata[PROVIDER_REFS_METADATA_KEY]["alliance_linkml"]
     assert provider_ref["commit"] == curatable_unit.schema_ref.version
 
+    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_EXPRESSION_DOMAIN_PACK_ID,
+        GENE_EXPRESSION_FIXTURE_PACK_ID,
+    )
+    assert fixture_ref is not None
+    assert fixture_ref.path == "fixtures/tmem67_pending.yaml"
+    assert fixture_ref.object_types == [GENE_EXPRESSION_OBJECT_TYPE]
+
 
 def test_gene_expression_object_embeds_required_experiment_and_context_fields():
     metadata = _gene_expression_pack().metadata
@@ -142,7 +155,13 @@ def test_gene_expression_object_embeds_required_experiment_and_context_fields():
 
 
 def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
-    fixture_pack = load_domain_fixture_pack(GENE_EXPRESSION_FIXTURE_PATH)
+    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_EXPRESSION_DOMAIN_PACK_ID,
+        GENE_EXPRESSION_FIXTURE_PACK_ID,
+    )
+    assert fixture_ref is not None
+    fixture_path = get_gene_expression_domain_pack_metadata_path().parent / fixture_ref.path
+    fixture_pack = load_domain_fixture_pack(fixture_path)
 
     assert fixture_pack.fixture_pack_id == GENE_EXPRESSION_FIXTURE_PACK_ID
     assert fixture_pack.domain_pack_id == GENE_EXPRESSION_DOMAIN_PACK_ID
@@ -155,12 +174,25 @@ def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
     annotation = envelope.objects[0]
     assert annotation.object_type == GENE_EXPRESSION_OBJECT_TYPE
     assert annotation.status is CuratableObjectStatus.PENDING
+    assert annotation.object_role == "curatable_unit"
+    assert annotation.model_ref == GENE_EXPRESSION_MODEL_ID
     assert annotation.object_refs == []
     assert annotation.field_refs == []
+    assert annotation.evidence_record_ids == ["evidence-tmem67-metanephros-1"]
+    assert annotation.metadata_refs[0].metadata_path == "raw_mentions[0]"
     assert annotation.payload["expression_annotation_subject"] == {
         "primary_external_id": "MGI:1923928",
         "gene_symbol": "Tmem67",
     }
+    assert envelope.metadata["semantic_source"] == "domain_envelope.objects"
+    assert envelope.metadata["legacy_semantic_lists"] == []
+    assert envelope.metadata["extraction_metadata"]["raw_mentions"]
+    assert envelope.metadata["extraction_metadata"]["evidence_records"][0][
+        "evidence_record_id"
+    ] == "evidence-tmem67-metanephros-1"
+    assert envelope.metadata["extraction_metadata"]["exclusions"][0]["reason_code"] == (
+        "rescue_experiment_not_expression"
+    )
 
     curatable_unit = _gene_expression_pack().metadata.object_definitions[0]
     missing_required_fields = [
@@ -172,10 +204,17 @@ def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():
 
     observed_keys = set(_iter_mapping_keys(envelope.model_dump(mode="python")))
     assert FORBIDDEN_LEGACY_COLLECTIONS.isdisjoint(observed_keys)
+    assert validate_pending_gene_expression_envelope(envelope) == ()
 
 
 def test_tmem67_fixture_carries_anatomical_site_for_linkml_postcondition():
-    fixture_pack = load_domain_fixture_pack(GENE_EXPRESSION_FIXTURE_PATH)
+    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_EXPRESSION_DOMAIN_PACK_ID,
+        GENE_EXPRESSION_FIXTURE_PACK_ID,
+    )
+    assert fixture_ref is not None
+    fixture_path = get_gene_expression_domain_pack_metadata_path().parent / fixture_ref.path
+    fixture_pack = load_domain_fixture_pack(fixture_path)
     annotation = fixture_pack.fixtures[0].envelope.objects[0]
     where_expressed = annotation.payload["expression_pattern"]["where_expressed"]
 
@@ -183,6 +222,50 @@ def test_tmem67_fixture_carries_anatomical_site_for_linkml_postcondition():
         "anatomical_structure" in where_expressed
         or "cellular_component" in where_expressed
     )
+
+
+def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    context = raw_fixture["envelope_context"]
+
+    converted = gene_expression_extraction_output_to_pending_envelope(
+        raw_fixture["output"],
+        envelope_id=context["envelope_id"],
+        document_id=context["document_id"],
+        produced_by=context["produced_by"],
+        produced_at=context["produced_at"],
+    )
+
+    assert converted.envelope_id == "gene-expression-tmem67-mgi-206552169"
+    assert converted.domain_pack_id == GENE_EXPRESSION_DOMAIN_PACK_ID
+    assert len(converted.objects) == 1
+    annotation = converted.objects[0]
+    assert annotation.object_type == GENE_EXPRESSION_OBJECT_TYPE
+    assert annotation.status is CuratableObjectStatus.PENDING
+    assert annotation.evidence_record_ids == ["evidence-tmem67-metanephros-1"]
+    assert converted.metadata["source_document_id"] == "document-tmem67-expression-fixture"
+    assert converted.metadata["extraction_metadata"]["evidence_records"][0][
+        "verified_quote"
+    ].startswith("Tmem67 expression was detected")
+    assert validate_pending_gene_expression_envelope(converted) == ()
+
+
+def test_gene_expression_conversion_rejects_legacy_semantic_lists():
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    output = raw_fixture["output"]
+    output["items"] = []
+
+    with pytest.raises(ValueError) as exc_info:
+        gene_expression_extraction_output_to_pending_envelope(
+            output,
+            envelope_id="gene-expression-invalid",
+        )
+
+    assert "curatable_objects[]" in str(exc_info.value)
 
 
 def test_gene_expression_linkml_class_slot_and_range_refs_exist(tmp_path: Path):

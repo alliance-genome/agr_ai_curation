@@ -740,6 +740,16 @@ object_definitions:
               class: GeneExpressionAnnotation
               slot: uncertain
               range: boolean
+fixture_packs:
+  - fixture_pack_id: tmem67_pending
+    display_name: tmem67 pending gene expression fixtures
+    path: fixtures/tmem67_pending.yaml
+    description: Production-like pending GeneExpressionAnnotation envelope preserving tmem67 extraction evidence metadata.
+    object_types:
+      - GeneExpressionAnnotation
+    definition_state: in_development
+    definition_notes:
+      - Fixture values mirror grounded tmem67 curation DB shape while preserving extractor-side metadata.
 metadata:
   object_role_key: object_role
   curatable_unit_object_type: GeneExpressionAnnotation

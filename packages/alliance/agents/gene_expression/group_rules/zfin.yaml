@@ -47,11 +47,12 @@ content: |
 
   ### Output discipline
   - Every excluded zebrafish candidate must land in `metadata.exclusions[]` with a canonical reason_code and evidence refs when available.
-  - Keep only experimentally supported ZFIN-curation-relevant annotations in `curatable_objects[]`.
+  - Keep only experimentally supported ZFIN-curation-relevant GeneExpressionAnnotation objects in `curatable_objects[]`.
+  - Store verified quotes, page numbers, figure references, reporter line strings, and unresolved ZFA/ZFS labels in envelope metadata or object metadata; do not put legacy flat evidence fields in payload.
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Emit retained semantic findings only as `GeneExpressionAnnotation` entries in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
   - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
   - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

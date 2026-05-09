@@ -1,0 +1,103 @@
+envelope_context:
+  envelope_id: gene-expression-tmem67-mgi-206552169
+  document_id: document-tmem67-expression-fixture
+  produced_by: gene_expression_extraction
+  produced_at: "2026-05-09T00:00:00Z"
+output:
+  summary: Retained one tmem67 metanephros expression annotation with verified source evidence.
+  curatable_objects:
+    - object_type: GeneExpressionAnnotation
+      object_role: curatable_unit
+      pending_ref_id: gene-expression-annotation-206552169
+      model_ref: GeneExpressionAnnotationPayload
+      definition_state: in_development
+      definition_notes:
+        - The envelope carries exactly one GeneExpressionAnnotation object per annotation.
+        - Evidence and raw extraction details are preserved as envelope metadata.
+      schema_ref:
+        schema_id: alliance.linkml.GeneExpressionAnnotation
+        provider: alliance_linkml
+        name: GeneExpressionAnnotation
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+      payload:
+        unique_id: MMO:0000655|MGI:1923928|AGRKB:101000000232912|TS26|metanephros|EMAPA:17373
+        date_created: "2018-07-18T17:27:43Z"
+        internal: false
+        obsolete: false
+        data_provider:
+          abbreviation: MGI
+        expression_annotation_subject:
+          primary_external_id: MGI:1923928
+          gene_symbol: Tmem67
+        relation:
+          name: is_expressed_in
+        single_reference:
+          reference_id: 203506
+        expression_experiment:
+          unique_id: MGI:1923928|AGRKB:101000000232912|MMO:0000655
+          expression_assay_used:
+            curie: MMO:0000655
+            name: reverse transcription polymerase chain reaction assay
+        when_expressed_stage_name: TS26
+        where_expressed_statement: metanephros
+        expression_pattern:
+          where_expressed:
+            anatomical_structure:
+              curie: EMAPA:17373
+              name: metanephros
+      evidence_record_ids:
+        - evidence-tmem67-metanephros-1
+      metadata_refs:
+        - metadata_path: raw_mentions[0]
+          role: source_mention
+        - metadata_path: evidence_records[0]
+          role: verified_evidence
+      repair_hints:
+        - Preserve pending_ref_id when repairing unresolved expression payload fields.
+      metadata:
+        extraction_confidence: high
+  metadata:
+    raw_mentions:
+      - mention: Tmem67 expression in metanephros at TS26
+        entity_type: gene_expression
+        evidence_record_ids:
+          - evidence-tmem67-metanephros-1
+    evidence_records:
+      - evidence_record_id: evidence-tmem67-metanephros-1
+        entity: Tmem67
+        verified_quote: Tmem67 expression was detected in the metanephros at TS26 by reverse transcription polymerase chain reaction assay.
+        page: 4
+        section: Results
+        subsection: Gene expression analysis
+        chunk_id: chunk-tmem67-metanephros
+    normalization_notes:
+      - Gene, assay, reference, and anatomy identifiers mirror the inspected tmem67 curation DB row for this production-like fixture.
+    exclusions:
+      - mention: Tmem67 rescue construct
+        reason_code: rescue_experiment_not_expression
+        evidence_record_ids: []
+        details: Rescue construct language is preserved as non-semantic exclusion metadata.
+    ambiguities:
+      - mention: kidney
+        why_ambiguous: Paper-facing kidney wording maps to metanephros in the grounded row.
+        recommended_followup: Curator should confirm the paper label against the anatomical term if exporting.
+        evidence_record_ids:
+          - evidence-tmem67-metanephros-1
+    notes:
+      - Raw evidence, exclusions, ambiguities, and normalization notes are metadata only.
+    repair_notes: []
+    provenance:
+      source_fixture: tmem67_gene_expression_output
+      linkml_commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+  run_summary:
+    candidate_count: 2
+    kept_count: 1
+    excluded_count: 1
+    ambiguous_count: 1
+    warnings:
+      - One anatomy wording ambiguity preserved for curator review.
+  schema_ref:
+    schema_id: domain-envelope-extraction
+    provider: agr_ai_curation
+  repair_mode: false
