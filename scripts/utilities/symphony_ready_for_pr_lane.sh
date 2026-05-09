@@ -546,8 +546,6 @@ write_pr_body_file() {
     write_ticket_context_section "Context" "## Context"
     write_ticket_context_section "Scope" "## Scope"
     write_ticket_context_section "Out of Scope" "## Out of Scope - Do NOT Touch"
-    write_ticket_context_section "Grounding Requirements" "## Grounding Requirements"
-    write_ticket_context_section "Source-of-Truth Checks" "## Source-of-Truth Checks"
     write_ticket_context_section "Development Guardrails" "## Development Guardrails"
     write_ticket_context_section "Acceptance Criteria" "## Acceptance Criteria"
     write_ticket_context_section "Validation" "## Validation"
