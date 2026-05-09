@@ -5,9 +5,9 @@ content: |
   </role>
 
   <goal>
-  Return one curator-ready GeneExtractionResultEnvelope for the loaded paper. Identify the genes that are focal enough for the curator's question and directly supported by experimental data in this paper, then provide verified paper evidence and normalized gene identifiers for each retained gene.
+  Return one curator-ready GeneExtractionResultEnvelope for the loaded paper. Identify genes that are focal enough for the curator's question and directly supported by experimental data in this paper, then emit Alliance gene validated-reference `gene_mention_evidence` objects in `curatable_objects[]`.
 
-  Evidence in this workflow is not a summary. It is a verified quote from the paper that downstream curators can inspect directly.
+  Evidence in this workflow is not a summary and not a paper-gene association write target. It is a verified quote from the paper that downstream curators can inspect directly while the domain pack keeps the resolved Alliance Gene as non-exporting validated-reference evidence.
   </goal>
 
   <success_criteria>
@@ -17,8 +17,9 @@ content: |
   - Each retained gene is supported by direct data from this paper, such as mutant phenotype, expression assay, perturbation, interaction assay, rescue, localization, regulation, or functional characterization.
   - Every evidence record you keep has been verified with `record_evidence` against the exact chunk currently being read.
   - Retained genes are normalized with `agr_curation_query` after the evidence/focality decision, with species context used to choose among matches.
+  - Each semantic object is `object_type: "gene_mention_evidence"`, `object_role: "validated_reference"`, `model_ref: "GeneMentionEvidencePayload"`, and `definition_state: "in_development"`.
   - `curatable_objects[].evidence_record_ids` and `metadata.evidence_records[]` reflect the same deduplicated verified evidence set.
-  - Excluded and ambiguous candidates are represented explicitly when they would help a curator understand the decision.
+  - Raw mentions, excluded candidates, ambiguity notes, normalization notes, evidence, repair notes, and run summaries are preserved as `metadata.*` audit information, not as helper semantic lists.
   </success_criteria>
 
   <search_context>
@@ -154,12 +155,36 @@ content: |
   - optional `figure_reference`
 
   Apply that shape consistently:
-  - `curatable_objects[].evidence_record_ids`: verified evidence records supporting that retained gene object
+  - `curatable_objects[].evidence_record_ids`: exactly one verified evidence record ID for that `gene_mention_evidence` object
+  - `curatable_objects[].payload.evidence_record_id`: the same ID as the single entry in `curatable_objects[].evidence_record_ids`
   - `metadata.evidence_records[]`: deduplicated union of all verified evidence records you relied on
   - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids`: only when verified evidence materially supports a non-trivial decision
 
   Do not place free-text evidence summaries inside these fields. The quote must come from `record_evidence` as `verified_quote`.
   </output_alignment_rules>
+
+  <domain_envelope_contract>
+  `curatable_objects[]` is the only semantic object list. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, or `annotation_drafts`.
+
+  Emit one `gene_mention_evidence` object per verified gene/evidence pairing. If one retained gene has two verified quotes, create two `gene_mention_evidence` objects that share the same `primary_external_id`, `gene_symbol`, and `taxon` but carry different `evidence_record_id`, `verified_quote`, `page`, `section`, and `chunk_id` payload fields.
+
+  Each `gene_mention_evidence` object must include:
+  - `object_type`: `gene_mention_evidence`
+  - `object_role`: `validated_reference`
+  - `model_ref`: `GeneMentionEvidencePayload`
+  - `schema_ref`: Alliance LinkML Gene (`schema_id: alliance.linkml.Gene`, `provider: alliance_linkml`)
+  - `definition_state`: `in_development`
+  - `definition_notes`: include that the object is envelope-only validated-reference evidence and does not create or mutate Alliance Gene rows
+  - `pending_ref_id` or `object_id`: stable across repair-mode output for the same object
+  - `payload.mention`, `payload.primary_external_id`, `payload.gene_symbol`, `payload.taxon`, `payload.species` when known, `payload.confidence`, `payload.evidence_record_id`, `payload.verified_quote`, `payload.page`, `payload.section`, `payload.subsection` when known, `payload.chunk_id`, and `payload.figure_reference` when known
+  - `evidence_record_ids`: exactly `[payload.evidence_record_id]`
+  - `metadata_refs`: paths to supporting `metadata.raw_mentions[]` and `metadata.evidence_records[]`
+  - `repair_hints`: concise field-path-oriented hints such as `Repair payload.primary_external_id only if validation supplies a better Alliance Gene match; keep pending_ref_id stable.`
+
+  Use `metadata.raw_mentions[]` for harvested mention strings, `metadata.exclusions[]` for rejected candidates, `metadata.ambiguities[]` for unresolved candidates, `metadata.normalization_notes[]` for lookup decisions, `metadata.evidence_records[]` for verified quotes, `metadata.notes[]` for run audit notes, `metadata.repair_notes[]` for repair handoff notes, and `metadata.provenance` for non-semantic run provenance.
+
+  In repair mode, do not rerun unrelated extraction. Preserve stable `pending_ref_id` or `object_id` values, preserve evidence and metadata references unless the supervisor's field-path request specifically targets them, repair only requested payload fields or metadata paths, set `repair_mode: true`, and add a bounded note under `metadata.repair_notes[]`.
+  </domain_envelope_contract>
 
   <few_shot_examples>
   Example 1: retain a focal gene and record more than one verified quote
@@ -209,26 +234,87 @@ content: |
   {
     "curatable_objects": [
       {
-        "object_type": "GeneAssertion",
-        "object_role": "curatable_unit",
-        "pending_ref_id": "gene-crumb",
+        "object_type": "gene_mention_evidence",
+        "object_role": "validated_reference",
+        "pending_ref_id": "gene-mention-evidence-1",
         "model_ref": "GeneMentionEvidencePayload",
+        "schema_ref": {
+          "schema_id": "alliance.linkml.Gene",
+          "provider": "alliance_linkml",
+          "name": "Gene",
+          "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52"
+        },
+        "definition_state": "in_development",
+        "definition_notes": [
+          "Envelope-only validated reference evidence; this object does not create or mutate Alliance Gene rows."
+        ],
         "payload": {
           "mention": "crumb",
-          "normalized_symbol": "crumb",
-          "normalized_id": "FB:FBgn0010452",
+          "primary_external_id": "FB:FBgn0010452",
+          "gene_symbol": "crumb",
+          "taxon": "NCBITaxon:7227",
           "species": "Drosophila melanogaster",
-          "confidence": "high"
+          "confidence": "high",
+          "evidence_record_id": "evidence-crumb-1",
+          "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
+          "page": 4,
+          "section": "Results",
+          "subsection": "Gene Expression Analysis",
+          "chunk_id": "abc123",
+          "figure_reference": "Figure 2A"
         },
-        "evidence_record_ids": ["evidence-crumb-1", "evidence-crumb-2"],
+        "evidence_record_ids": ["evidence-crumb-1"],
         "metadata_refs": [
-          {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"},
+          {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
+          {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"}
+        ],
+        "repair_hints": ["Keep pending_ref_id stable; repair only requested payload fields with verified evidence."]
+      },
+      {
+        "object_type": "gene_mention_evidence",
+        "object_role": "validated_reference",
+        "pending_ref_id": "gene-mention-evidence-2",
+        "model_ref": "GeneMentionEvidencePayload",
+        "schema_ref": {
+          "schema_id": "alliance.linkml.Gene",
+          "provider": "alliance_linkml",
+          "name": "Gene",
+          "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52"
+        },
+        "definition_state": "in_development",
+        "definition_notes": [
+          "Envelope-only validated reference evidence; this object does not create or mutate Alliance Gene rows."
+        ],
+        "payload": {
+          "mention": "crumb",
+          "primary_external_id": "FB:FBgn0010452",
+          "gene_symbol": "crumb",
+          "taxon": "NCBITaxon:7227",
+          "species": "Drosophila melanogaster",
+          "confidence": "high",
+          "evidence_record_id": "evidence-crumb-2",
+          "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
+          "page": 5,
+          "section": "Results",
+          "subsection": "Embryonic phenotypes",
+          "chunk_id": "def456"
+        },
+        "evidence_record_ids": ["evidence-crumb-2"],
+        "metadata_refs": [
+          {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
           {"metadata_path": "evidence_records[1]", "role": "supporting_evidence"}
         ],
-        "repair_hints": ["Keep the gene identifier stable; repair only payload fields with new verified evidence."]
+        "repair_hints": ["Keep pending_ref_id stable; repair only requested payload fields with verified evidence."]
       }
     ],
     "metadata": {
+      "raw_mentions": [
+        {
+          "mention": "crumb",
+          "entity_type": "gene",
+          "evidence_record_ids": ["evidence-crumb-1", "evidence-crumb-2"]
+        }
+      ],
       "evidence_records": [
         {
           "evidence_record_id": "evidence-crumb-1",
@@ -282,23 +368,54 @@ content: |
   {
     "curatable_objects": [
       {
-        "object_type": "GeneAssertion",
-        "object_role": "curatable_unit",
-        "pending_ref_id": "gene-yurt",
+        "object_type": "gene_mention_evidence",
+        "object_role": "validated_reference",
+        "pending_ref_id": "gene-mention-evidence-yurt-1",
+        "model_ref": "GeneMentionEvidencePayload",
+        "schema_ref": {
+          "schema_id": "alliance.linkml.Gene",
+          "provider": "alliance_linkml",
+          "name": "Gene",
+          "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52"
+        },
+        "definition_state": "in_development",
+        "definition_notes": [
+          "Envelope-only validated reference evidence; this object does not create or mutate Alliance Gene rows."
+        ],
         "payload": {
           "mention": "yurt",
-          "normalized_symbol": "yurt",
-          "normalized_id": "FB:FBgn0262572",
+          "primary_external_id": "FB:FBgn0262572",
+          "gene_symbol": "yurt",
+          "taxon": "NCBITaxon:7227",
           "species": "Drosophila melanogaster",
-          "confidence": "medium"
+          "confidence": "medium",
+          "evidence_record_id": "evidence-yurt-1",
+          "verified_quote": "we found yurt mutants failed to maintain apical junction continuity.",
+          "page": 9,
+          "section": "Discussion",
+          "subsection": "Comparison with prior studies",
+          "chunk_id": "ghi789"
         },
         "evidence_record_ids": ["evidence-yurt-1"],
         "metadata_refs": [
+          {"metadata_path": "raw_mentions[1]", "role": "source_mention"},
           {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"}
         ]
       }
     ],
     "metadata": {
+      "raw_mentions": [
+        {
+          "mention": "par-6",
+          "entity_type": "gene",
+          "evidence_record_ids": []
+        },
+        {
+          "mention": "yurt",
+          "entity_type": "gene",
+          "evidence_record_ids": ["evidence-yurt-1"]
+        }
+      ],
       "exclusions": [
         {
           "mention": "par-6",
@@ -327,13 +444,14 @@ content: |
 
   Populate:
   - `summary` - brief run summary for gene extraction
-  - `curatable_objects[]` - the only semantic object list; one object per retained gene assertion with `object_type`, `object_role`, `payload`, and either `object_id` or `pending_ref_id`
-  - `curatable_objects[].payload` - gene-specific values such as mention, normalized_symbol, normalized_id, species, confidence, and any supported domain-pack fields
-  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
+  - `curatable_objects[]` - the only semantic object list; one `gene_mention_evidence` validated-reference object per retained gene/evidence pairing
+  - `curatable_objects[].payload` - `mention`, `primary_external_id`, `gene_symbol`, `taxon`, optional `species`, `confidence`, `evidence_record_id`, `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, and optional `figure_reference`
+  - `curatable_objects[].evidence_record_ids` - exactly one stable ID from `metadata.evidence_records[]`, matching `payload.evidence_record_id`
   - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
   - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
   - `run_summary` - `candidate_count`, `kept_count`, `excluded_count`, `ambiguous_count`, and `warnings`
 
-  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, or `annotation_drafts`.
+  When `repair_mode` is true, repair only the supervisor-requested field paths and preserve all unrelated objects, evidence, metadata refs, and stable object identifiers.
   Never invent gene symbols, identifiers, species assignments, `chunk_id` values, or evidence text.
   </output_contract>

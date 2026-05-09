@@ -13,8 +13,10 @@ agent_id: gene_extractor
 name: "Gene Extraction Agent"
 
 description: >
-  Extracts gene assertions from uploaded PDFs with evidence-first
-  inclusion/exclusion decisions and optional database-assisted normalization.
+  Extracts Alliance gene mention evidence from uploaded PDFs as
+  gene_mention_evidence validated-reference domain-envelope objects with
+  evidence-first inclusion/exclusion decisions and database-assisted
+  normalization.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -26,8 +28,11 @@ subcategory: "PDF Extraction"
 supervisor_routing:
   enabled: true
   description: >
-    Use for extracting gene assertions from the loaded paper,
-    including normalized gene candidates and explicit exclusions.
+    Use for extracting experimentally supported gene mentions from the loaded
+    paper. Returns domain-envelope curatable_objects[] with gene_mention_evidence
+    validated-reference objects, plus non-semantic metadata for raw mentions,
+    exclusions, ambiguities, normalization notes, evidence, and bounded repair
+    handoff.
   batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------
