@@ -1,0 +1,145 @@
+output:
+  summary: Retained one verified Andersen-Tawil syndrome disease assertion.
+  curatable_objects:
+    - object_type: DiseaseAnnotation
+      object_role: curatable_unit
+      pending_ref_id: disease-assertion-1
+      schema_ref:
+        schema_id: alliance.linkml.DiseaseAnnotation
+        provider: alliance_linkml
+        name: DiseaseAnnotation
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+        definition_state: in_development
+        definition_notes:
+          - Pending assertion payload grounded to abstract LinkML DiseaseAnnotation metadata.
+          - Concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation, or AGMDiseaseAnnotation materialization is blocked until subject, reference, evidence-code, and export targets are verified.
+      model_ref: PendingDiseaseAssertionPayload
+      definition_state: in_development
+      definition_notes:
+        - Pending DiseaseAnnotation assertion; concrete write materialization is blocked until subject, reference, evidence-code, and export targets are verified.
+      payload:
+        mention: Andersen-Tawil syndrome
+        disease_annotation_object:
+          curie: DOID:0050434
+          name: Andersen-Tawil syndrome
+        role: model_context
+        confidence: high
+        disease_relation_name: is_model_of
+        disease_annotation_subject:
+          subject_type: gene
+          subject_label: kcnj2
+        evidence_record_ids:
+          - ats-model-evidence-1
+          - ats-cohort-evidence-1
+        evidence_records:
+          - evidence_record_id: ats-model-evidence-1
+            entity: Andersen-Tawil syndrome
+            verified_quote: loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome.
+            page: 4
+            section: Results
+            subsection: Disease model
+            chunk_id: chunk-disease-model
+            figure_reference: Figure 4A
+            source_tool: record_evidence
+          - evidence_record_id: ats-cohort-evidence-1
+            entity: Andersen-Tawil syndrome
+            verified_quote: Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome.
+            page: 5
+            section: Results
+            subsection: Clinical correlation
+            chunk_id: chunk-disease-cohort
+            source_tool: record_evidence
+      evidence_record_ids:
+        - ats-model-evidence-1
+        - ats-cohort-evidence-1
+      metadata_refs:
+        - metadata_path: raw_mentions[0]
+          role: source_mention
+        - metadata_path: evidence_records[0]
+          role: supporting_evidence
+        - metadata_path: evidence_records[1]
+          role: supporting_evidence
+        - metadata_path: normalization_notes[0]
+          role: normalization
+      repair_hints:
+        - Preserve pending_ref_id; repair only requested disease assertion fields.
+      metadata:
+        assertion_kind: pending_disease_assertion
+        write_behavior:
+          status: blocked
+          reason: Subject identifier, durable reference, evidence-code, and concrete disease annotation write targets are not fully materialized from extractor output.
+        export_behavior:
+          status: blocked
+          reason: Disease export/submission adapters require a later verified projection.
+        definition_state_summary:
+          complete:
+            - mention
+            - disease_annotation_object
+            - role
+            - confidence
+            - evidence_record_ids
+            - evidence_records
+          under_development:
+            - disease_relation_name
+            - condition_relations
+          blocked:
+            - disease_annotation_subject
+            - single_reference
+            - evidence_code_curies
+            - data_provider
+  metadata:
+    raw_mentions:
+      - mention: Andersen-Tawil syndrome
+        entity_type: disease
+        evidence_record_ids:
+          - ats-model-evidence-1
+          - ats-cohort-evidence-1
+      - mention: ventricular arrhythmia phenotype
+        entity_type: phenotype
+        evidence_record_ids:
+          - ats-model-evidence-1
+    evidence_records:
+      - evidence_record_id: ats-model-evidence-1
+        entity: Andersen-Tawil syndrome
+        verified_quote: loss of kcnj2 produced a ventricular arrhythmia phenotype, establishing this zebrafish line as a model of Andersen-Tawil syndrome.
+        page: 4
+        section: Results
+        subsection: Disease model
+        chunk_id: chunk-disease-model
+        figure_reference: Figure 4A
+      - evidence_record_id: ats-cohort-evidence-1
+        entity: Andersen-Tawil syndrome
+        verified_quote: Patients with KCNJ2 variants in our cohort showed features consistent with Andersen-Tawil syndrome.
+        page: 5
+        section: Results
+        subsection: Clinical correlation
+        chunk_id: chunk-disease-cohort
+    normalization_notes:
+      - Andersen-Tawil syndrome was resolved to DiseaseAnnotation disease_annotation_object DOID:0050434 through AGR disease lookup.
+      - Subject, reference, data-provider, and evidence-code materialization remain blocked for pending disease assertion output.
+    exclusions:
+      - mention: ventricular arrhythmia phenotype
+        reason_code: unsupported_entity_type
+        evidence_record_ids:
+          - ats-model-evidence-1
+        details: Phenotype evidence supports the model context but is not itself a disease term.
+    ambiguities:
+      - mention: KCNJ2-related periodic paralysis
+        why_ambiguous: The source context did not resolve a distinct Disease Ontology term separate from Andersen-Tawil syndrome.
+        recommended_followup: Curator should inspect whether a separate disease assertion is intended.
+        evidence_record_ids: []
+    notes:
+      - Single retained disease assertion emitted as a pending DiseaseAnnotation object.
+    repair_notes: []
+    provenance:
+      source_agent: disease_extractor
+      linkml_commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+  run_summary:
+    candidate_count: 3
+    kept_count: 1
+    excluded_count: 1
+    ambiguous_count: 1
+    warnings:
+      - Concrete disease annotation write fields remain blocked pending materialization.
+  repair_mode: false

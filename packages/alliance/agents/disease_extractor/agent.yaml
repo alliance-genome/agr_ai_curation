@@ -13,8 +13,9 @@ agent_id: disease_extractor
 name: "Disease Extraction Agent"
 
 description: >
-  Extracts disease assertions from uploaded PDFs with evidence-first
-  inclusion/exclusion decisions and optional database-assisted normalization.
+  Extracts disease assertions from uploaded PDFs as DiseaseAnnotation pending
+  assertion domain-envelope objects with evidence-first inclusion/exclusion
+  decisions and database-assisted normalization.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -26,8 +27,11 @@ subcategory: "PDF Extraction"
 supervisor_routing:
   enabled: true
   description: >
-    Use for extracting disease assertions from the loaded paper,
-    including normalized disease candidates, context roles, and exclusions.
+    Use for extracting experimentally supported disease assertions from the
+    loaded paper. Returns DiseaseAnnotation curatable_objects[] with pending
+    disease assertion payloads, required context blockers, and non-semantic
+    metadata for raw mentions, exclusions, ambiguities, evidence,
+    normalization notes, and bounded repair handoff.
   batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------
@@ -37,6 +41,7 @@ tools:
   - search_document
   - read_section
   - read_subsection
+  - record_evidence
   - agr_curation_query
 
 # -----------------------------------------------------------------------------

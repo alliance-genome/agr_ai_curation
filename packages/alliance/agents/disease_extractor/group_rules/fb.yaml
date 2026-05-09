@@ -24,7 +24,8 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Emit retained semantic findings only as `DiseaseAnnotation` pending assertions in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Use `object_role: "curatable_unit"`, `model_ref: "PendingDiseaseAssertionPayload"`, `definition_state: "in_development"`, and payload field `disease_annotation_object.curie/name`; do not use legacy flat `normalized_id` or `normalized_label` fields.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
-  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - Surface incomplete subject, reference, evidence-code, data-provider, or concrete write-target context with blocked write behavior and definition-state notes rather than inventing values.
   - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

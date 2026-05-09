@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
@@ -25,6 +25,7 @@ from src.schemas.domain_envelope import (
     ValidationFindingStatus,
     field_path_exists,
 )
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,
@@ -41,6 +42,7 @@ from .constants import (
     DISEASE_LINKML_SCHEMA_NAME,
     DISEASE_LINKML_SCHEMA_SOURCE_FILE,
     DISEASE_LINKML_SCHEMA_URI,
+    DISEASE_MODEL_ID,
     DISEASE_OBJECT_TYPE,
     DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
     FORBIDDEN_LEGACY_COLLECTIONS,
@@ -49,6 +51,16 @@ from .constants import (
 
 
 _CORE_SOURCE_FILE = "model/schema/core.yaml"
+_DISEASE_OBJECT_ROLE = "curatable_unit"
+_DISEASE_ASSERTION_KIND = "pending_disease_assertion"
+_FORBIDDEN_DISEASE_HELPER_PAYLOAD_FIELDS = frozenset(
+    {
+        "normalized_id",
+        "normalized_label",
+        "disease_curie",
+        "disease_name",
+    }
+)
 
 
 def _strip_required_string(value: object, field_name: str) -> object:
@@ -275,23 +287,34 @@ def _disease_schema_ref() -> SchemaRef:
     )
 
 
-def _object_metadata() -> dict[str, Any]:
-    return {
-        OBJECT_ROLE_METADATA_KEY: "curatable_unit",
-        "assertion_kind": "pending_disease_assertion",
-        "validator_binding_id": DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
-        "write_behavior": {
+def _object_metadata(source_metadata: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    metadata = dict(source_metadata or {})
+    metadata.setdefault(OBJECT_ROLE_METADATA_KEY, _DISEASE_OBJECT_ROLE)
+    metadata.setdefault("assertion_kind", _DISEASE_ASSERTION_KIND)
+    metadata.setdefault(
+        "validator_binding_id",
+        DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
+    )
+    metadata.setdefault(
+        "write_behavior",
+        {
             "status": "blocked",
             "reason": (
                 "Subject, reference, evidence-code, and concrete disease annotation "
                 "write targets are not yet materialized from disease extractor output."
             ),
         },
-        "export_behavior": {
+    )
+    metadata.setdefault(
+        "export_behavior",
+        {
             "status": "blocked",
             "reason": "Disease export/submission adapters are tracked by ALL-425.",
         },
-        "provider_refs": {
+    )
+    metadata.setdefault(
+        "provider_refs",
+        {
             ALLIANCE_LINKML_PROVIDER_KEY: {
                 "schema_ref": "alliance.linkml",
                 "commit": ALLIANCE_LINKML_COMMIT,
@@ -299,7 +322,249 @@ def _object_metadata() -> dict[str, Any]:
                 "class": "DiseaseAnnotation",
             }
         },
+    )
+    return metadata
+
+
+def _object_ref(obj: CuratableObjectEnvelope) -> ObjectRef:
+    if obj.pending_ref_id:
+        return ObjectRef(
+            pending_ref_id=obj.pending_ref_id,
+            object_type=obj.object_type,
+        )
+    if obj.object_id:
+        return ObjectRef(object_id=obj.object_id, object_type=obj.object_type)
+    raise ValueError("DiseaseAnnotation object is missing an object ref")
+
+
+def _metadata_evidence_records_by_id(
+    output: DomainEnvelopeExtractionResult,
+) -> dict[str, Any]:
+    return {
+        evidence.evidence_record_id: evidence
+        for evidence in output.metadata.evidence_records
+        if evidence.evidence_record_id
     }
+
+
+def _required_evidence_field_errors(evidence_id: str, evidence: Any) -> list[str]:
+    missing_fields: list[str] = []
+    for field_name in ("entity", "verified_quote", "page", "section", "chunk_id"):
+        value = getattr(evidence, field_name, None)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            missing_fields.append(field_name)
+    if not missing_fields:
+        return []
+    return [
+        "metadata.evidence_records[] entry "
+        f"{evidence_id} must include "
+        + ", ".join(missing_fields)
+    ]
+
+
+def _validate_payload_evidence_snapshot(
+    *,
+    location: str,
+    obj: CuratableObjectEnvelope,
+    evidence_by_id: Mapping[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    payload_evidence_ids = obj.payload.get("evidence_record_ids")
+    if payload_evidence_ids != list(obj.evidence_record_ids):
+        errors.append(
+            f"{location}.payload.evidence_record_ids must match "
+            f"{location}.evidence_record_ids"
+        )
+
+    payload_records = obj.payload.get("evidence_records")
+    if not isinstance(payload_records, list) or not payload_records:
+        errors.append(
+            f"{location}.payload.evidence_records must snapshot verified "
+            "metadata.evidence_records[] entries"
+        )
+        return errors
+
+    payload_records_by_id = {
+        record.get("evidence_record_id"): record
+        for record in payload_records
+        if isinstance(record, Mapping) and record.get("evidence_record_id")
+    }
+    missing_payload_records = sorted(
+        evidence_id
+        for evidence_id in obj.evidence_record_ids
+        if evidence_id not in payload_records_by_id
+    )
+    if missing_payload_records:
+        errors.append(
+            f"{location}.payload.evidence_records is missing snapshots for "
+            + ", ".join(missing_payload_records)
+        )
+
+    for evidence_id in obj.evidence_record_ids:
+        metadata_record = evidence_by_id.get(evidence_id)
+        if metadata_record is None:
+            continue
+        errors.extend(_required_evidence_field_errors(evidence_id, metadata_record))
+
+        payload_record = payload_records_by_id.get(evidence_id)
+        if not isinstance(payload_record, Mapping):
+            continue
+        for field_name in (
+            "entity",
+            "verified_quote",
+            "page",
+            "section",
+            "subsection",
+            "chunk_id",
+            "figure_reference",
+        ):
+            metadata_value = getattr(metadata_record, field_name, None)
+            payload_value = payload_record.get(field_name)
+            if payload_value is not None and metadata_value != payload_value:
+                errors.append(
+                    f"{location}.payload.evidence_records[{evidence_id}]."
+                    f"{field_name} must match metadata.evidence_records[]"
+                )
+    return errors
+
+
+def validate_disease_extraction_objects(
+    output: DomainEnvelopeExtractionResult,
+) -> tuple[str, ...]:
+    """Return validation error messages for disease extractor output."""
+
+    errors: list[str] = []
+    evidence_by_id = _metadata_evidence_records_by_id(output)
+    metadata_payload = output.metadata.model_dump(mode="python")
+
+    if output.curatable_objects and not output.metadata.raw_mentions:
+        errors.append(
+            "disease extractor output must preserve harvested mentions in "
+            "metadata.raw_mentions[]"
+        )
+
+    for index, obj in enumerate(output.curatable_objects):
+        location = f"curatable_objects[{index}]"
+        if obj.object_type != DISEASE_OBJECT_TYPE:
+            errors.append(f"{location}.object_type must be {DISEASE_OBJECT_TYPE}")
+        if obj.object_role != _DISEASE_OBJECT_ROLE:
+            errors.append(f"{location}.object_role must be {_DISEASE_OBJECT_ROLE}")
+        if obj.model_ref != DISEASE_MODEL_ID:
+            errors.append(f"{location}.model_ref must be {DISEASE_MODEL_ID}")
+        if obj.definition_state != DefinitionState.IN_DEVELOPMENT:
+            errors.append(f"{location}.definition_state must be in_development")
+        if obj.schema_ref is None:
+            errors.append(f"{location}.schema_ref is required")
+        elif (
+            obj.schema_ref.schema_id != DISEASE_LINKML_SCHEMA_ID
+            or obj.schema_ref.provider != ALLIANCE_LINKML_PROVIDER_KEY
+            or obj.schema_ref.name != DISEASE_LINKML_SCHEMA_NAME
+            or obj.schema_ref.version != ALLIANCE_LINKML_COMMIT
+            or obj.schema_ref.uri != DISEASE_LINKML_SCHEMA_URI
+            or obj.schema_ref.definition_state != DefinitionState.IN_DEVELOPMENT
+        ):
+            errors.append(
+                f"{location}.schema_ref must identify pinned "
+                f"{DISEASE_LINKML_SCHEMA_ID} at {ALLIANCE_LINKML_COMMIT}"
+            )
+
+        forbidden_payload_fields = sorted(
+            _FORBIDDEN_DISEASE_HELPER_PAYLOAD_FIELDS.intersection(obj.payload)
+        )
+        if forbidden_payload_fields:
+            errors.append(
+                f"{location}.payload uses legacy flat disease helper fields "
+                f"{', '.join(forbidden_payload_fields)}; use "
+                "disease_annotation_object.curie/name instead"
+            )
+
+        missing_payload_fields = sorted(
+            field_path
+            for field_path in REQUIRED_DISEASE_PAYLOAD_FIELDS
+            if not field_path_exists(obj.payload, field_path)
+        )
+        if missing_payload_fields:
+            errors.append(
+                f"{location}.payload is missing required fields: "
+                + ", ".join(missing_payload_fields)
+            )
+
+        if not obj.evidence_record_ids:
+            errors.append(f"{location}.evidence_record_ids must not be empty")
+        missing_evidence_ids = sorted(
+            evidence_id
+            for evidence_id in obj.evidence_record_ids
+            if evidence_id not in evidence_by_id
+        )
+        if missing_evidence_ids:
+            errors.append(
+                f"{location}.evidence_record_ids references unknown "
+                "metadata.evidence_records IDs: "
+                + ", ".join(missing_evidence_ids)
+            )
+        errors.extend(
+            _validate_payload_evidence_snapshot(
+                location=location,
+                obj=obj,
+                evidence_by_id=evidence_by_id,
+            )
+        )
+
+        write_behavior = obj.metadata.get("write_behavior")
+        if (
+            not isinstance(write_behavior, Mapping)
+            or write_behavior.get("status") != "blocked"
+        ):
+            errors.append(
+                f"{location}.metadata.write_behavior.status must be blocked "
+                "while disease subject/reference/evidence-code materialization is incomplete"
+            )
+        if obj.metadata.get("assertion_kind") != _DISEASE_ASSERTION_KIND:
+            errors.append(
+                f"{location}.metadata.assertion_kind must be {_DISEASE_ASSERTION_KIND}"
+            )
+
+        if not obj.metadata_refs:
+            errors.append(f"{location}.metadata_refs must preserve source metadata paths")
+        missing_metadata_refs = [
+            metadata_ref.metadata_path
+            for metadata_ref in obj.metadata_refs
+            if not field_path_exists(metadata_payload, metadata_ref.metadata_path)
+        ]
+        if missing_metadata_refs:
+            errors.append(
+                f"{location}.metadata_refs must resolve in metadata: "
+                + ", ".join(missing_metadata_refs)
+            )
+
+        if output.repair_mode:
+            if not obj.field_refs:
+                errors.append(
+                    f"{location}.field_refs must identify repaired field paths "
+                    "when repair_mode is true"
+                )
+            object_ref_keys = set(obj.ref_keys())
+            for field_ref_index, field_ref in enumerate(obj.field_refs):
+                if field_ref.object_ref.ref_key() not in object_ref_keys:
+                    errors.append(
+                        f"{location}.field_refs[{field_ref_index}].object_ref "
+                        "must point at the repaired object"
+                    )
+
+    if output.repair_mode and not output.metadata.repair_notes:
+        errors.append("metadata.repair_notes must describe repair-mode changes")
+    return tuple(errors)
+
+
+class DiseaseExtractionOutput(DomainEnvelopeExtractionResult):
+    """Validated extractor output for one disease domain-envelope run."""
+
+    @model_validator(mode="after")
+    def _validate_disease_objects(self) -> "DiseaseExtractionOutput":
+        errors = validate_disease_extraction_objects(self)
+        if errors:
+            raise ValueError("; ".join(errors))
+        return self
 
 
 def _evidence_payload(evidence: ToolVerifiedDiseaseEvidenceRecord) -> dict[str, Any]:
@@ -420,6 +685,35 @@ def _validation_finding(pending_ref_id: str) -> ValidationFinding:
     )
 
 
+def _pending_object_from_extraction_object(
+    obj: CuratableObjectEnvelope,
+) -> CuratableObjectEnvelope:
+    metadata_refs = [
+        ref.model_copy(
+            update={"metadata_path": f"extraction_metadata.{ref.metadata_path}"}
+        )
+        for ref in obj.metadata_refs
+    ]
+    return CuratableObjectEnvelope(
+        object_type=DISEASE_OBJECT_TYPE,
+        object_role=_DISEASE_OBJECT_ROLE,
+        payload=dict(obj.payload),
+        object_id=obj.object_id,
+        pending_ref_id=obj.pending_ref_id,
+        schema_ref=obj.schema_ref,
+        model_ref=obj.model_ref,
+        status=CuratableObjectStatus.PENDING,
+        definition_state=DefinitionState.IN_DEVELOPMENT,
+        definition_notes=list(obj.definition_notes or []),
+        object_refs=list(obj.object_refs),
+        field_refs=list(obj.field_refs),
+        evidence_record_ids=list(obj.evidence_record_ids),
+        metadata_refs=metadata_refs,
+        repair_hints=list(obj.repair_hints),
+        metadata=_object_metadata(obj.metadata),
+    )
+
+
 def _iter_mapping_keys(value: Any) -> Iterator[str]:
     if isinstance(value, Mapping):
         for key, child in value.items():
@@ -516,6 +810,95 @@ def tool_verified_disease_output_to_pending_envelope(
             "normalization_notes": source.normalization_notes,
             "write_behavior": {"status": "blocked"},
         },
+    )
+
+
+def disease_extraction_output_to_pending_envelope(
+    payload: Mapping[str, Any] | DiseaseExtractionOutput,
+    *,
+    envelope_id: str,
+    document_id: str | None = None,
+    produced_by: str = "disease_extractor",
+    produced_at: datetime | None = None,
+) -> DomainEnvelope:
+    """Build a pending disease envelope from domain-envelope extractor output."""
+
+    source = (
+        payload
+        if isinstance(payload, DiseaseExtractionOutput)
+        else DiseaseExtractionOutput.model_validate(payload)
+    )
+    timestamp = produced_at or datetime.now(timezone.utc)
+
+    objects = [
+        _pending_object_from_extraction_object(obj)
+        for obj in source.curatable_objects
+    ]
+    history: list[HistoryEvent] = [
+        HistoryEvent(
+            event_type=HistoryEventKind.CREATED,
+            timestamp=timestamp,
+            actor_type=HistoryActorType.SYSTEM,
+            actor_id=DISEASE_DOMAIN_PACK_CONVERTER_ID,
+            message="Converted disease extraction output to a pending domain envelope.",
+            details={"source_agent": produced_by},
+        )
+    ]
+    validation_findings: list[ValidationFinding] = []
+    for obj in objects:
+        object_ref = _object_ref(obj)
+        validation_findings.append(
+            ValidationFinding(
+                severity=ValidationFindingSeverity.INFO,
+                status=ValidationFindingStatus.RESOLVED,
+                code="alliance.disease_assertion.domain_envelope_extracted",
+                message="DiseaseAnnotation was converted from domain-envelope extractor output.",
+                object_ref=object_ref,
+                details={
+                    "semantic_source": "curatable_objects[]",
+                    "validator_binding_id": DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
+                },
+            )
+        )
+        history.append(
+            HistoryEvent(
+                event_type=HistoryEventKind.OBJECT_EXTRACTED,
+                timestamp=timestamp,
+                actor_type=HistoryActorType.SYSTEM,
+                actor_id=DISEASE_DOMAIN_PACK_CONVERTER_ID,
+                message="Added pending disease assertion.",
+                object_ref=object_ref,
+                details={
+                    "evidence_record_ids": list(obj.evidence_record_ids),
+                    "write_behavior": "blocked",
+                },
+            )
+        )
+
+    metadata: dict[str, Any] = {
+        "source_agent": produced_by,
+        "conversion": "disease_extraction_output_to_pending_envelope",
+        "semantic_source": "domain_envelope.objects",
+        "legacy_semantic_lists": [],
+        "extraction_summary": source.summary,
+        "extraction_metadata": source.metadata.model_dump(mode="python"),
+        "run_summary": source.run_summary.model_dump(mode="python"),
+        "repair_mode": source.repair_mode,
+        "write_behavior": {"status": "blocked"},
+    }
+    if document_id is not None:
+        metadata["source_document_id"] = document_id
+
+    return DomainEnvelope(
+        envelope_id=envelope_id,
+        domain_pack_id=DISEASE_DOMAIN_PACK_ID,
+        domain_pack_version=DISEASE_DOMAIN_PACK_VERSION,
+        status=DomainEnvelopeStatus.EXTRACTED,
+        schema_ref=_disease_schema_ref(),
+        objects=objects,
+        validation_findings=validation_findings,
+        history=history,
+        metadata=metadata,
     )
 
 
@@ -635,11 +1018,14 @@ def validate_pending_disease_envelope(
 
 
 __all__ = [
+    "DiseaseExtractionOutput",
     "ToolVerifiedDiseaseAssertion",
     "ToolVerifiedDiseaseCondition",
     "ToolVerifiedDiseaseEvidenceRecord",
     "ToolVerifiedDiseaseOutput",
     "ToolVerifiedDiseaseSubject",
+    "disease_extraction_output_to_pending_envelope",
     "tool_verified_disease_output_to_pending_envelope",
+    "validate_disease_extraction_objects",
     "validate_pending_disease_envelope",
 ]
