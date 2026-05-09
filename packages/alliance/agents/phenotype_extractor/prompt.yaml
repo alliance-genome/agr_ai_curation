@@ -284,7 +284,6 @@ content: |
 
   Domain-envelope contract:
   - `curatable_objects[]` is the only semantic object list.
-  - Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   - Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`,
     `chemicals[]`, `phenotypes[]`, `CurationPrepCandidate`, `NormalizedCandidate`,
     `normalized_payload`, or `annotation_drafts`.

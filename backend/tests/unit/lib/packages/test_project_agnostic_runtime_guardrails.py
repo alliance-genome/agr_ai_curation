@@ -48,6 +48,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Bundled Alliance package contracts and prompt/tool policy coverage.
     Path("backend/tests/unit/test_config_loaders.py"),
     Path("backend/tests/unit/test_gene_extractor_domain_envelope_contract.py"),
+    Path("backend/tests/unit/test_phenotype_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_allele_extractor_mgi_prompt_policy.py"),
     Path("backend/tests/unit/lib/config/test_bundled_alliance_package_aware_loaders.py"),
     Path("backend/tests/unit/lib/config/test_groups_loader_identity_provider.py"),
@@ -113,6 +114,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/contract/alliance/domain_packs/test_allele_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_disease_domain_pack.py"),
     Path("backend/tests/contract/alliance/domain_packs/test_gene_expression_domain_pack.py"),
+    Path("backend/tests/contract/alliance/domain_packs/test_phenotype_domain_pack.py"),
     Path("backend/tests/contract/test_auth_logout.py"),
     Path("backend/tests/contract/test_auth_users_me.py"),
     Path("backend/tests/contract/test_documents_delete.py"),
