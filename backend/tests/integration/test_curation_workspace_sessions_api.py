@@ -135,6 +135,7 @@ def seeded_review_sessions(client: TestClient, test_db):
         CurationSavedView,
         CurationSubmissionRecord,
         CurationValidationSnapshot,
+        DomainEnvelopeModel,
     )
     from src.models.sql.database import Base
     from src.models.sql.pdf_document import PDFDocument
@@ -163,6 +164,7 @@ def seeded_review_sessions(client: TestClient, test_db):
             PDFDocument.__table__,
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
+            DomainEnvelopeModel.__table__,
             CurationCandidate.__table__,
             CurationEvidenceRecord.__table__,
             CurationDraft.__table__,

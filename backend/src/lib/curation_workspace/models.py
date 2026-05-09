@@ -16,6 +16,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -37,6 +38,14 @@ from src.schemas.curation_workspace import (
     CurationValidationScope,
     CurationValidationSnapshotState,
     SubmissionMode,
+)
+from src.schemas.domain_envelope import (
+    CuratableObjectStatus,
+    DomainEnvelopeStatus,
+    HistoryActorType,
+    HistoryEventKind,
+    ValidationFindingSeverity,
+    ValidationFindingStatus,
 )
 
 
@@ -272,6 +281,408 @@ class CurationExtractionResultRecord(Base):
     )
 
 
+class DomainEnvelopeModel(Base):
+    """Revisioned semantic source of truth for domain-pack curation state."""
+
+    __tablename__ = "domain_envelopes"
+
+    envelope_id: Mapped[str] = mapped_column(String(), primary_key=True)
+    revision: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default="1",
+    )
+    project_key: Mapped[str] = mapped_column(String(), nullable=False)
+    domain_pack_key: Mapped[str] = mapped_column(String(), nullable=False)
+    domain_pack_version: Mapped[str | None] = mapped_column(String(), nullable=True)
+    status: Mapped[DomainEnvelopeStatus] = mapped_column(
+        _enum_type(DomainEnvelopeStatus),
+        nullable=False,
+    )
+    document_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        _fk("pdf_documents.id"),
+        nullable=True,
+    )
+    session_id: Mapped[UUID | None] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        _fk("curation_review_sessions.id"),
+        nullable=True,
+    )
+    flow_run_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    schema_provider: Mapped[str | None] = mapped_column(String(), nullable=True)
+    schema_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    object_model_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    model_field_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    envelope_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    checkpointed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    objects: Mapped[list["DomainEnvelopeObject"]] = relationship(
+        "DomainEnvelopeObject",
+        back_populates="envelope",
+        order_by="DomainEnvelopeObject.object_index",
+    )
+    validation_findings: Mapped[list["DomainValidationFinding"]] = relationship(
+        "DomainValidationFinding",
+        back_populates="envelope",
+        order_by="DomainValidationFinding.finding_index",
+    )
+    history_events: Mapped[list["DomainEnvelopeHistory"]] = relationship(
+        "DomainEnvelopeHistory",
+        back_populates="envelope",
+        order_by="DomainEnvelopeHistory.occurred_at",
+    )
+    projection_index: Mapped[list["DomainEnvelopeProjectionIndex"]] = relationship(
+        "DomainEnvelopeProjectionIndex",
+        back_populates="envelope",
+        order_by="DomainEnvelopeProjectionIndex.projection_key",
+    )
+
+    __table_args__ = (
+        CheckConstraint("revision >= 1", name="ck_domain_envelopes_revision"),
+        Index("ix_domain_envelopes_document", "document_id"),
+        Index(
+            "ix_domain_envelopes_session",
+            "session_id",
+            postgresql_where=text("session_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_domain_envelopes_flow_run",
+            "flow_run_id",
+            postgresql_where=text("flow_run_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_domain_envelopes_domain_pack_status",
+            "project_key",
+            "domain_pack_key",
+            "status",
+        ),
+    )
+
+
+class DomainEnvelopeObject(Base):
+    """Regenerated object lookup row for the current envelope revision."""
+
+    __tablename__ = "domain_envelope_objects"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    envelope_id: Mapped[str] = mapped_column(
+        String(),
+        _fk("domain_envelopes.envelope_id"),
+        nullable=False,
+    )
+    object_id: Mapped[str] = mapped_column(String(), nullable=False)
+    pending_ref_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    envelope_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_type: Mapped[str] = mapped_column(String(), nullable=False)
+    status: Mapped[CuratableObjectStatus] = mapped_column(
+        _enum_type(CuratableObjectStatus),
+        nullable=False,
+    )
+    validation_state: Mapped[str] = mapped_column(String(), nullable=False)
+    schema_provider: Mapped[str | None] = mapped_column(String(), nullable=True)
+    schema_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    object_model_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    model_field_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    payload_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    object_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    envelope: Mapped[DomainEnvelopeModel] = relationship(
+        "DomainEnvelopeModel",
+        back_populates="objects",
+    )
+
+    __table_args__ = (
+        CheckConstraint("envelope_revision >= 1", name="ck_domain_envelope_objects_revision"),
+        CheckConstraint("object_index >= 0", name="ck_domain_envelope_objects_index"),
+        UniqueConstraint("envelope_id", "object_id", name="uq_domain_envelope_objects_current"),
+        Index(
+            "ix_domain_envelope_objects_lookup",
+            "envelope_id",
+            "envelope_revision",
+            "object_type",
+            "status",
+            "validation_state",
+        ),
+    )
+
+
+class DomainValidationFinding(Base):
+    """Regenerated validation finding lookup row for the current envelope revision."""
+
+    __tablename__ = "domain_validation_findings"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    envelope_id: Mapped[str] = mapped_column(
+        String(),
+        _fk("domain_envelopes.envelope_id"),
+        nullable=False,
+    )
+    finding_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    envelope_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    finding_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    field_path: Mapped[str | None] = mapped_column(String(), nullable=True)
+    severity: Mapped[ValidationFindingSeverity] = mapped_column(
+        _enum_type(ValidationFindingSeverity),
+        nullable=False,
+    )
+    status: Mapped[ValidationFindingStatus] = mapped_column(
+        _enum_type(ValidationFindingStatus),
+        nullable=False,
+    )
+    code: Mapped[str | None] = mapped_column(String(), nullable=True)
+    object_model_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    model_field_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    finding_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    envelope: Mapped[DomainEnvelopeModel] = relationship(
+        "DomainEnvelopeModel",
+        back_populates="validation_findings",
+    )
+
+    __table_args__ = (
+        CheckConstraint("envelope_revision >= 1", name="ck_domain_validation_findings_revision"),
+        CheckConstraint("finding_index >= 0", name="ck_domain_validation_findings_index"),
+        UniqueConstraint(
+            "envelope_id",
+            "envelope_revision",
+            "finding_index",
+            name="uq_domain_validation_findings_revision_index",
+        ),
+        Index(
+            "ix_domain_validation_findings_lookup",
+            "envelope_id",
+            "object_id",
+            "field_path",
+            "status",
+            "severity",
+        ),
+    )
+
+
+class DomainEnvelopeHistory(Base):
+    """Append-only history event index keyed by provider-neutral event_id."""
+
+    __tablename__ = "domain_envelope_history"
+
+    envelope_id: Mapped[str] = mapped_column(
+        String(),
+        _fk("domain_envelopes.envelope_id"),
+        primary_key=True,
+    )
+    event_id: Mapped[str] = mapped_column(String(), primary_key=True)
+    envelope_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_type: Mapped[HistoryEventKind] = mapped_column(
+        _enum_type(HistoryEventKind),
+        nullable=False,
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    actor_type: Mapped[HistoryActorType] = mapped_column(
+        _enum_type(HistoryActorType),
+        nullable=False,
+    )
+    actor_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    object_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    field_path: Mapped[str | None] = mapped_column(String(), nullable=True)
+    model_field_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    event_json: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    envelope: Mapped[DomainEnvelopeModel] = relationship(
+        "DomainEnvelopeModel",
+        back_populates="history_events",
+    )
+
+    __table_args__ = (
+        CheckConstraint("envelope_revision >= 1", name="ck_domain_envelope_history_revision"),
+        CheckConstraint("event_index >= 0", name="ck_domain_envelope_history_index"),
+        Index("ix_domain_envelope_history_time", "envelope_id", text("occurred_at DESC")),
+    )
+
+
+class DomainEnvelopeProjectionIndex(Base):
+    """Regenerated materialized projection index for workspace/export surfaces."""
+
+    __tablename__ = "domain_envelope_projection_index"
+
+    id: Mapped[UUID] = mapped_column(
+        PostgresUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+        server_default=func.gen_random_uuid(),
+    )
+    envelope_id: Mapped[str] = mapped_column(
+        String(),
+        _fk("domain_envelopes.envelope_id"),
+        nullable=False,
+    )
+    object_id: Mapped[str] = mapped_column(String(), nullable=False)
+    envelope_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    object_type: Mapped[str | None] = mapped_column(String(), nullable=True)
+    projection_type: Mapped[str] = mapped_column(String(), nullable=False)
+    projection_key: Mapped[str] = mapped_column(String(), nullable=False)
+    projection_status: Mapped[str | None] = mapped_column(String(), nullable=True)
+    schema_provider: Mapped[str | None] = mapped_column(String(), nullable=True)
+    schema_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    object_model_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    model_field_ref_json: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    projection_json: Mapped[dict[str, Any] | list[Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    envelope: Mapped[DomainEnvelopeModel] = relationship(
+        "DomainEnvelopeModel",
+        back_populates="projection_index",
+    )
+
+    __table_args__ = (
+        CheckConstraint("envelope_revision >= 1", name="ck_domain_projection_index_revision"),
+        UniqueConstraint(
+            "envelope_id",
+            "object_id",
+            "projection_type",
+            "projection_key",
+            name="uq_domain_projection_index_key",
+        ),
+        Index(
+            "ix_domain_projection_index_lookup",
+            "envelope_id",
+            "object_id",
+            "envelope_revision",
+            "projection_type",
+        ),
+    )
+
+
 class CurationCandidate(Base):
     """Curator-facing candidate record within a review session."""
 
@@ -314,6 +725,13 @@ class CurationCandidate(Base):
         _fk("extraction_results.id"),
         nullable=True,
     )
+    envelope_id: Mapped[str | None] = mapped_column(
+        String(),
+        _fk("domain_envelopes.envelope_id"),
+        nullable=True,
+    )
+    object_id: Mapped[str | None] = mapped_column(String(), nullable=True)
+    envelope_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     normalized_payload: Mapped[dict[str, Any]] = mapped_column(
         JSONB,
         nullable=False,
@@ -348,6 +766,7 @@ class CurationCandidate(Base):
         "CurationExtractionResultRecord",
         back_populates="candidates",
     )
+    domain_envelope: Mapped[DomainEnvelopeModel | None] = relationship("DomainEnvelopeModel")
     draft: Mapped["CurationDraft | None"] = relationship(
         "CurationDraft",
         back_populates="candidate",
@@ -371,8 +790,21 @@ class CurationCandidate(Base):
 
     __table_args__ = (
         CheckConstraint('"order" >= 0', name="ck_curation_candidates_order"),
+        CheckConstraint(
+            "(envelope_id IS NULL AND object_id IS NULL AND envelope_revision IS NULL) "
+            "OR (envelope_id IS NOT NULL AND object_id IS NOT NULL "
+            "AND envelope_revision IS NOT NULL AND envelope_revision >= 1)",
+            name="ck_curation_candidates_domain_projection_ref",
+        ),
         Index("ix_curation_candidates_session", "session_id", "order"),
         Index("ix_curation_candidates_status", "session_id", "status"),
+        Index(
+            "ix_curation_candidates_domain_projection",
+            "envelope_id",
+            "object_id",
+            "envelope_revision",
+            postgresql_where=text("envelope_id IS NOT NULL"),
+        ),
     )
 
 
@@ -792,4 +1224,9 @@ __all__ = [
     "CurationSavedView",
     "CurationSubmissionRecord",
     "CurationValidationSnapshot",
+    "DomainEnvelopeHistory",
+    "DomainEnvelopeModel",
+    "DomainEnvelopeObject",
+    "DomainEnvelopeProjectionIndex",
+    "DomainValidationFinding",
 ]

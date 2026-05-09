@@ -31,6 +31,7 @@ from src.lib.curation_workspace.models import (
     CurationReviewSession as ReviewSessionModel,
     CurationSubmissionRecord as SubmissionModel,
     CurationValidationSnapshot as ValidationSnapshotModel,
+    DomainEnvelopeModel,
 )
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
@@ -64,6 +65,7 @@ TEST_TABLES = [
     PDFDocument.__table__,
     ReviewSessionModel.__table__,
     ExtractionResultModel.__table__,
+    DomainEnvelopeModel.__table__,
     CurationCandidate.__table__,
     EvidenceRecordModel.__table__,
     DraftModel.__table__,

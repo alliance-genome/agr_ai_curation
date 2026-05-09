@@ -88,6 +88,9 @@ class PreparedCandidateInput:
     secondary_label: str | None = None
     conversation_summary: str | None = None
     extraction_result_id: str | None = None
+    envelope_id: str | None = None
+    object_id: str | None = None
+    envelope_revision: int | None = None
     normalized_payload: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     draft_fields: list[PreparedDraftFieldInput] = field(default_factory=list)
