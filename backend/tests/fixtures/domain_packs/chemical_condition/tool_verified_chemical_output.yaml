@@ -1,0 +1,43 @@
+envelope_id: chemical-condition-tool-verified-envelope
+document_id: test_tool_verified_chemical_paper.pdf
+produced_by: ask_chemical_extractor_specialist
+produced_at: "2026-05-09T00:00:00Z"
+reference:
+  title: Rapamycin chemical evidence fixture paper
+  filename: test_tool_verified_chemical_paper.pdf
+chemical_conditions:
+  - mention: rapamycin
+    normalized_label: sirolimus
+    normalized_id: CHEBI:9168
+    condition_class_curie: ZECO:0000111
+    condition_class_label: chemical treatment
+    role: treatment
+    confidence: high
+    condition_quantity: 100 nM
+    condition_free_text: Rapamycin treatment at 100 nM after 24 hours
+    condition_summary: chemical:sirolimus
+    timing: after 24 hours
+    source_mentions:
+      - rapamycin
+    evidence_record_ids:
+      - rapamycin-treatment-evidence-1
+      - rapamycin-treatment-evidence-2
+evidence_records:
+  - evidence_record_id: rapamycin-treatment-evidence-1
+    entity: rapamycin
+    verified_quote: Rapamycin treatment at 100 nM restored autophagy in mutant larvae after 24 hours.
+    page: 4
+    section: Results
+    subsection: Drug response
+    chunk_id: chunk-chemical-treatment
+    figure_reference: Figure 2C
+  - evidence_record_id: rapamycin-treatment-evidence-2
+    entity: rapamycin
+    verified_quote: Exposure to rapamycin reduced TOR signaling within 30 minutes.
+    page: 5
+    section: Results
+    subsection: Pathway analysis
+    chunk_id: chunk-chemical-effect
+normalization_notes:
+  - Resolved rapamycin to CHEBI:9168, the Alliance DB ChemicalTerm row named sirolimus.
+  - DMSO vehicle control was excluded from the condition fixture because it has no verified retained chemical-effect evidence.
