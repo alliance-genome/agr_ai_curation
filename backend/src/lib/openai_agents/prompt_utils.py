@@ -11,6 +11,8 @@ Do not duplicate these functions in individual agent files.
 import logging
 from typing import Optional, List, Dict, Any, Type
 
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -45,12 +47,6 @@ For {output_type_name}, `curatable_objects[]` is the only semantic object list.
 def _is_domain_envelope_extraction_output_type(output_type: Optional[Type]) -> bool:
     if output_type is None:
         return False
-    try:
-        from src.schemas.models.domain_envelope_extraction import (
-            DomainEnvelopeExtractionResult,
-        )
-    except Exception:
-        return False
 
     try:
         return issubclass(output_type, DomainEnvelopeExtractionResult)
@@ -78,7 +74,7 @@ def inject_structured_output_instruction(
         insert_after_first_section: If True, insert after the first ## section.
                                     If False, prepend to the beginning.
                                     Note: if no "## " section headers exist,
-                                    the instruction is prepended as a fallback.
+                                    the instruction is prepended at the beginning.
 
     Returns:
         Modified instructions with structured output requirement injected.
@@ -127,7 +123,7 @@ def inject_structured_output_instruction(
         lines.insert(insert_index, output_instruction)
         return '\n'.join(lines)
     else:
-        # Fallback: just prepend
+        # No section boundary found; prepend at the beginning.
         return output_instruction + "\n" + instructions
 
 
