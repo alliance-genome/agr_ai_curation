@@ -83,6 +83,7 @@ def _persist_prepared_candidates(
     candidate_ids: list[str] = []
 
     for candidate_input in sorted(candidates, key=lambda item: item.order):
+        _validate_prepared_candidate_projection_ref(candidate_input)
         candidate_row = CurationCandidate(
             session_id=session_row.id,
             source=candidate_input.source,
@@ -186,6 +187,23 @@ def _persist_candidate_evidence_records(
             evidence_anchor_ids_by_field.setdefault(field_key, []).append(anchor_id)
 
     return evidence_anchor_ids_by_field
+
+
+def _validate_prepared_candidate_projection_ref(candidate_input: PreparedCandidateInput) -> None:
+    provided = (
+        candidate_input.envelope_id is not None,
+        candidate_input.object_id is not None,
+        candidate_input.envelope_revision is not None,
+    )
+    if not any(provided):
+        return
+    if not all(provided):
+        raise ValueError(
+            "Prepared candidate domain envelope projection refs must include "
+            "envelope_id, object_id, and envelope_revision together."
+        )
+    if candidate_input.envelope_revision is not None and candidate_input.envelope_revision < 1:
+        raise ValueError("Prepared candidate envelope_revision must be greater than zero.")
 
 
 def _draft_field_payload(
