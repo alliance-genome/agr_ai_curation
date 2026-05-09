@@ -1,0 +1,124 @@
+fixture_pack_id: tool_verified
+domain_pack_id: gene
+fixtures_api_version: 1.0.0
+display_name: Tool-verified gene mention evidence fixtures
+description: Pending-ref domain envelope examples for Alliance gene mention evidence.
+fixtures:
+  - name: daf16_tool_verified_gene_mention
+    description: A verified gene mention normalized to an existing Alliance Gene reference.
+    envelope:
+      envelope_id: gene-tool-verified-env-1
+      domain_pack_id: gene
+      domain_pack_version: 0.1.0
+      schema_ref:
+        schema_id: alliance.linkml.Gene
+        provider: alliance_linkml
+        name: Gene
+        version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+        uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
+        metadata:
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/gene.yaml
+              class: Gene
+      objects:
+        - object_type: gene_mention_evidence
+          pending_ref_id: gene-mention-evidence-1
+          schema_ref:
+            schema_id: alliance.linkml.Gene
+            provider: alliance_linkml
+            name: Gene
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
+            metadata:
+              provider_refs:
+                alliance_linkml:
+                  schema_ref: alliance.linkml
+                  commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+                  source_file: model/schema/gene.yaml
+                  class: Gene
+          definition_state: in_development
+          definition_notes:
+            - Envelope-only validated reference evidence; this object does not create or mutate Alliance Gene rows.
+            - Paper-gene association write/export behavior is intentionally out of scope until a concrete target is verified.
+          payload:
+            mention: daf-16
+            primary_external_id: "WB:WBGene00000912"
+            gene_symbol: daf-16
+            taxon: "NCBITaxon:6239"
+            species: Caenorhabditis elegans
+            confidence: high
+            evidence_record_id: ev-daf16-1
+            verified_quote: DAF-16 translocated to nuclei after heat shock.
+            page: 4
+            section: Results
+            subsection: Stress response assay
+            chunk_id: chunk-daf16-1
+            figure_reference: Figure 2A
+          metadata:
+            object_role: validated_reference
+            evidence_role: gene_mention_evidence
+            validator_binding_id: alliance_gene_reference_lookup
+            blocking_validation: false
+            export_behavior: evidence_reference_only
+            write_behavior: envelope_only
+            provider_refs:
+              alliance_linkml:
+                schema_ref: alliance.linkml
+                commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+                source_file: model/schema/gene.yaml
+                class: Gene
+      validation_findings:
+        - severity: info
+          status: resolved
+          code: alliance.gene_reference.tool_verified
+          message: Gene reference resolved by agr_curation_query before envelope conversion.
+          field_ref:
+            object_ref:
+              pending_ref_id: gene-mention-evidence-1
+              object_type: gene_mention_evidence
+            field_path: primary_external_id
+          details:
+            validator_binding_id: alliance_gene_reference_lookup
+            source_tool: agr_curation_query
+            source_method: get_gene_by_id
+            blocking: false
+            grounded_slots:
+              primary_external_id:
+                source_file: model/schema/core.yaml
+                slot: primary_external_id
+                range: string
+              gene_symbol:
+                source_file: model/schema/gene.yaml
+                slot: gene_symbol
+                range: GeneSymbolSlotAnnotation
+              taxon:
+                source_file: model/schema/core.yaml
+                slot: taxon
+                range: NCBITaxonTerm
+      history:
+        - event_type: created
+          timestamp: "2026-05-09T00:00:00Z"
+          actor_type: system
+          actor_id: agr_ai_curation_alliance.domain_packs.gene
+          message: Converted tool-verified gene extraction output to pending domain envelope.
+        - event_type: object_extracted
+          timestamp: "2026-05-09T00:00:00Z"
+          actor_type: system
+          actor_id: agr_ai_curation_alliance.domain_packs.gene
+          message: Added non-blocking gene mention evidence.
+          object_ref:
+            pending_ref_id: gene-mention-evidence-1
+            object_type: gene_mention_evidence
+          details:
+            evidence_record_id: ev-daf16-1
+            validator_binding_id: alliance_gene_reference_lookup
+      metadata:
+        source_document_id: WB-paper-0001
+        source_agent: gene_extractor
+        conversion: tool_verified_gene_output_to_pending_envelope
+        non_blocking_validation: true
+        normalization_notes:
+          - Resolved daf-16 through agr_curation_query get_gene_by_id.

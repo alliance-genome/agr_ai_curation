@@ -1,0 +1,256 @@
+pack_id: gene
+display_name: Gene Validated Reference Domain Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+description: Non-blocking validated-reference evidence for extracted Alliance gene mentions.
+status: in_development
+schema_refs:
+  - schema_id: alliance.linkml
+    provider: alliance_linkml
+    name: Alliance curation LinkML schema
+    version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+    uri: https://github.com/alliance-genome/agr_curation_schema/tree/1b11d0888f19eba4ca72022200bb7d96b30d4a52
+    definition_state: stable
+    metadata:
+      provider_refs:
+        alliance_linkml:
+          repository: https://github.com/alliance-genome/agr_curation_schema.git
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          schema_dir: model/schema
+          root_schema: model/schema/allianceModel.yaml
+          cache_script: scripts/testing/cache_agr_curation_schema.sh
+          ref_kind: schema
+enum_definitions:
+  - enum_id: GeneMentionConfidence
+    display_name: Gene mention confidence
+    description: Extractor confidence in the normalized gene reference and paper-evidence match.
+    values:
+      - value: high
+        label: High
+      - value: medium
+        label: Medium
+      - value: low
+        label: Low
+model_definitions:
+  - model_id: GeneMentionEvidencePayload
+    display_name: Gene mention evidence payload
+    description: Envelope-only payload grounded to Alliance Gene reference fields plus verified paper evidence.
+    schema_ref:
+      schema_id: alliance.linkml.Gene
+      provider: alliance_linkml
+      name: Gene
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/gene.yaml
+            class: Gene
+    definition_state: in_development
+    definition_notes:
+      - Payload is evidence/reference data only and is not an Alliance Gene write DTO.
+object_definitions:
+  - object_type: gene_mention_evidence
+    display_name: Gene mention evidence
+    description: A tool-verified paper gene mention normalized to an existing Alliance Gene reference.
+    model_ref: GeneMentionEvidencePayload
+    schema_ref:
+      schema_id: alliance.linkml.Gene
+      provider: alliance_linkml
+      name: Gene
+      version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
+      metadata:
+        provider_refs:
+          alliance_linkml:
+            schema_ref: alliance.linkml
+            commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            source_file: model/schema/gene.yaml
+            class: Gene
+    definition_state: in_development
+    definition_notes:
+      - Envelope-only validated reference evidence; this object does not create or mutate Alliance Gene rows.
+      - Paper-gene association write/export behavior is intentionally out of scope until a concrete target is verified.
+    metadata:
+      object_role: validated_reference
+      evidence_role: gene_mention_evidence
+      blocking_validation: false
+      workspace_display:
+        primary_label_field: gene_symbol
+        secondary_label_field: primary_external_id
+        summary_fields:
+          - mention
+          - gene_symbol
+          - primary_external_id
+          - taxon
+          - confidence
+          - section
+          - page
+        evidence_quote_field: verified_quote
+        evidence_locator_fields:
+          - page
+          - section
+          - subsection
+          - figure_reference
+          - chunk_id
+      validator_bindings:
+        - binding_id: alliance_gene_reference_lookup
+          validation_kind: db_backed_reference_lookup
+          tool_name: agr_curation_query
+          tool_method: get_gene_by_id
+          input_fields:
+            gene_id: primary_external_id
+          expected_result_fields:
+            curie: primary_external_id
+            symbol: gene_symbol
+            taxon: taxon
+          blocking: false
+      export_behavior:
+        mode: evidence_reference_only
+        exportable: false
+        submit: false
+        reason: No verified paper-gene write target is declared for this 0.7.0 pack.
+      write_behavior:
+        mode: none
+        write_target: none
+        mutate_canonical_gene: false
+        creates_paper_gene_association: false
+        reason: Keep extracted genes as validated-reference envelope evidence until a concrete target is verified.
+      provider_refs:
+        alliance_linkml:
+          schema_ref: alliance.linkml
+          commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+          source_file: model/schema/gene.yaml
+          class: Gene
+    fields:
+      - field_path: mention
+        field_type: string
+        display_name: Paper mention
+        description: Gene mention exactly as written in the paper.
+        required: true
+        metadata:
+          evidence_source_field: true
+      - field_path: primary_external_id
+        field_type: string
+        display_name: Primary external ID
+        description: Alliance Gene primary external identifier resolved by validation tooling.
+        required: true
+        metadata:
+          validatable: true
+          validator_binding_id: alliance_gene_reference_lookup
+          validation_result_field: curie
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Gene
+              slot: primary_external_id
+              range: string
+      - field_path: gene_symbol
+        field_type: string
+        display_name: Gene symbol
+        description: Current accepted symbol for the resolved gene.
+        required: true
+        metadata:
+          validatable: true
+          validator_binding_id: alliance_gene_reference_lookup
+          validation_result_field: symbol
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/gene.yaml
+              class: Gene
+              slot: gene_symbol
+              range: GeneSymbolSlotAnnotation
+      - field_path: taxon
+        field_type: string
+        display_name: Taxon
+        description: NCBI Taxon CURIE for the resolved gene.
+        required: true
+        metadata:
+          validatable: true
+          validator_binding_id: alliance_gene_reference_lookup
+          validation_result_field: taxon
+          provider_refs:
+            alliance_linkml:
+              schema_ref: alliance.linkml
+              commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+              source_file: model/schema/core.yaml
+              class: Gene
+              slot: taxon
+              range: NCBITaxonTerm
+      - field_path: species
+        field_type: string
+        display_name: Species
+        description: Curator-facing species label when available from extraction context.
+      - field_path: confidence
+        field_type: enum
+        display_name: Confidence
+        required: true
+        enum_ref: GeneMentionConfidence
+      - field_path: evidence_record_id
+        field_type: string
+        display_name: Evidence record ID
+        description: Stable ID returned by the paper evidence verification tool.
+        required: true
+        metadata:
+          evidence_source_field: true
+      - field_path: verified_quote
+        field_type: string
+        display_name: Verified quote
+        description: Verbatim paper text verified by record_evidence.
+        required: true
+        metadata:
+          evidence_source_field: true
+      - field_path: page
+        field_type: integer
+        display_name: Page
+        required: true
+        metadata:
+          evidence_locator_field: true
+      - field_path: section
+        field_type: string
+        display_name: Section
+        required: true
+        metadata:
+          evidence_locator_field: true
+      - field_path: subsection
+        field_type: string
+        display_name: Subsection
+        metadata:
+          evidence_locator_field: true
+      - field_path: chunk_id
+        field_type: string
+        display_name: Chunk ID
+        required: true
+        metadata:
+          evidence_locator_field: true
+      - field_path: figure_reference
+        field_type: string
+        display_name: Figure/table reference
+        metadata:
+          evidence_locator_field: true
+fixture_packs:
+  - fixture_pack_id: tool_verified
+    display_name: Tool-verified gene mention evidence fixtures
+    path: fixtures/tool_verified.yaml
+    description: Pending-ref domain envelopes converted from verified gene extraction fixtures.
+    object_types:
+      - gene_mention_evidence
+metadata:
+  base_pack_id: agr.alliance.base
+  object_role_key: object_role
+  supported_object_roles:
+    - validated_reference
+  provider_refs:
+    alliance_linkml:
+      schema_ref: alliance.linkml
+      repository: https://github.com/alliance-genome/agr_curation_schema.git
+      commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+      schema_dir: model/schema
+      root_schema: model/schema/allianceModel.yaml
+      cache_script: scripts/testing/cache_agr_curation_schema.sh

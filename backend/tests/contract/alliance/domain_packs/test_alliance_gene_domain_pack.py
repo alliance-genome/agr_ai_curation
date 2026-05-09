@@ -1,0 +1,238 @@
+"""Contract tests for the Alliance gene validated-reference domain pack."""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+from typing import Any
+
+import pytest
+import yaml
+from pydantic import ValidationError
+
+from src.lib.domain_packs.loader import load_domain_fixture_pack, load_domain_pack_metadata
+from src.schemas.domain_pack_metadata import DomainPackFieldType
+
+
+REPO_ROOT = Path(__file__).resolve().parents[5]
+ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
+if str(ALLIANCE_PYTHON_SRC) not in sys.path:
+    sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
+
+from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
+    ALLIANCE_LINKML_COMMIT,
+    ALLIANCE_LINKML_PROVIDER_KEY,
+    OBJECT_ROLE_METADATA_KEY,
+    PROVIDER_REFS_METADATA_KEY,
+    get_alliance_domain_packs_dir,
+    load_alliance_domain_pack_registry,
+)
+from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
+    GENE_DOMAIN_PACK_ID,
+    GENE_DOMAIN_PACK_VERSION,
+    GENE_LINKML_SCHEMA_ID,
+    GENE_MENTION_EVIDENCE_MODEL_ID,
+    GENE_MENTION_EVIDENCE_OBJECT_TYPE,
+    GENE_REFERENCE_TOOL_METHOD,
+    GENE_REFERENCE_TOOL_NAME,
+    GENE_REFERENCE_VALIDATOR_BINDING_ID,
+    tool_verified_gene_output_to_pending_envelope,
+)
+
+
+GENE_PACK_DIR = get_alliance_domain_packs_dir() / GENE_DOMAIN_PACK_ID
+GENE_PACK_METADATA_PATH = GENE_PACK_DIR / "domain_pack.yaml"
+GENE_RAW_FIXTURE_PATH = (
+    REPO_ROOT
+    / "backend"
+    / "tests"
+    / "fixtures"
+    / "domain_packs"
+    / "gene"
+    / "tool_verified_gene_output.yaml"
+)
+LEGACY_SEMANTIC_KEYS = {
+    "items",
+    "annotations",
+    "genes",
+    "alleles",
+    "diseases",
+    "chemicals",
+    "phenotypes",
+    "normalized_payload",
+    "annotation_drafts",
+}
+
+
+def _provider_ref(metadata: dict[str, Any]) -> dict[str, Any]:
+    return metadata[PROVIDER_REFS_METADATA_KEY][ALLIANCE_LINKML_PROVIDER_KEY]
+
+
+def _gene_object_definition():
+    metadata = load_domain_pack_metadata(GENE_PACK_METADATA_PATH)
+    return next(
+        item
+        for item in metadata.object_definitions
+        if item.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+    )
+
+
+def _load_raw_gene_fixture() -> dict[str, Any]:
+    return yaml.safe_load(GENE_RAW_FIXTURE_PATH.read_text(encoding="utf-8"))
+
+
+def test_gene_domain_pack_loads_from_alliance_registry():
+    registry = load_alliance_domain_pack_registry()
+    loaded_pack = registry.get_pack(GENE_DOMAIN_PACK_ID)
+
+    assert registry.failed_packs == ()
+    assert loaded_pack is not None
+    assert loaded_pack.metadata_path == GENE_PACK_METADATA_PATH
+    assert loaded_pack.metadata.version == GENE_DOMAIN_PACK_VERSION
+
+    fixture_ref = registry.get_fixture_pack_ref(GENE_DOMAIN_PACK_ID, "tool_verified")
+    assert fixture_ref is not None
+    assert fixture_ref.path == "fixtures/tool_verified.yaml"
+
+
+def test_gene_mention_evidence_is_non_exporting_validated_reference():
+    object_definition = _gene_object_definition()
+    object_metadata = object_definition.metadata
+
+    assert object_definition.model_ref == GENE_MENTION_EVIDENCE_MODEL_ID
+    assert object_definition.definition_state.value == "in_development"
+    assert object_metadata[OBJECT_ROLE_METADATA_KEY] == "validated_reference"
+    assert object_metadata["evidence_role"] == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+    assert object_metadata["blocking_validation"] is False
+
+    export_behavior = object_metadata["export_behavior"]
+    assert export_behavior["mode"] == "evidence_reference_only"
+    assert export_behavior["exportable"] is False
+    assert export_behavior["submit"] is False
+
+    write_behavior = object_metadata["write_behavior"]
+    assert write_behavior["mode"] == "none"
+    assert write_behavior["write_target"] == "none"
+    assert write_behavior["mutate_canonical_gene"] is False
+    assert write_behavior["creates_paper_gene_association"] is False
+
+    workspace_display = object_metadata["workspace_display"]
+    assert workspace_display["primary_label_field"] == "gene_symbol"
+    assert workspace_display["evidence_quote_field"] == "verified_quote"
+
+
+def test_gene_pack_declares_validatable_linkml_grounded_gene_fields():
+    object_definition = _gene_object_definition()
+    fields_by_path = {field.field_path: field for field in object_definition.fields}
+
+    assert {
+        "mention",
+        "primary_external_id",
+        "gene_symbol",
+        "taxon",
+        "confidence",
+        "evidence_record_id",
+        "verified_quote",
+        "page",
+        "section",
+        "chunk_id",
+    }.issubset(fields_by_path)
+    assert fields_by_path["confidence"].field_type is DomainPackFieldType.ENUM
+    assert fields_by_path["confidence"].enum_ref == "GeneMentionConfidence"
+
+    expected_linkml_slots = {
+        "primary_external_id": ("model/schema/core.yaml", "primary_external_id", "string"),
+        "gene_symbol": ("model/schema/gene.yaml", "gene_symbol", "GeneSymbolSlotAnnotation"),
+        "taxon": ("model/schema/core.yaml", "taxon", "NCBITaxonTerm"),
+    }
+    validatable_fields = set()
+    for field_path, (source_file, slot, range_name) in expected_linkml_slots.items():
+        field = fields_by_path[field_path]
+        validatable_fields.add(field.field_path)
+        assert field.required is True
+        assert field.metadata["validatable"] is True
+        assert field.metadata["validator_binding_id"] == GENE_REFERENCE_VALIDATOR_BINDING_ID
+
+        provider_ref = _provider_ref(field.metadata)
+        assert provider_ref["commit"] == ALLIANCE_LINKML_COMMIT
+        assert provider_ref["source_file"] == source_file
+        assert provider_ref["class"] == "Gene"
+        assert provider_ref["slot"] == slot
+        assert provider_ref["range"] == range_name
+
+    assert validatable_fields == {"primary_external_id", "gene_symbol", "taxon"}
+
+
+def test_gene_pack_declares_reference_validator_binding():
+    object_definition = _gene_object_definition()
+    bindings = object_definition.metadata["validator_bindings"]
+
+    assert bindings == [
+        {
+            "binding_id": GENE_REFERENCE_VALIDATOR_BINDING_ID,
+            "validation_kind": "db_backed_reference_lookup",
+            "tool_name": GENE_REFERENCE_TOOL_NAME,
+            "tool_method": GENE_REFERENCE_TOOL_METHOD,
+            "input_fields": {"gene_id": "primary_external_id"},
+            "expected_result_fields": {
+                "curie": "primary_external_id",
+                "symbol": "gene_symbol",
+                "taxon": "taxon",
+            },
+            "blocking": False,
+        }
+    ]
+
+
+def test_tool_verified_gene_fixture_converts_to_pending_envelope():
+    raw_fixture = _load_raw_gene_fixture()
+    converted_envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+
+    fixture_ref = load_alliance_domain_pack_registry().get_fixture_pack_ref(
+        GENE_DOMAIN_PACK_ID,
+        "tool_verified",
+    )
+    assert fixture_ref is not None
+    fixture_pack = load_domain_fixture_pack(GENE_PACK_DIR / fixture_ref.path)
+    expected_envelope = fixture_pack.fixtures[0].envelope
+
+    assert converted_envelope.model_dump(mode="json", exclude_none=True) == (
+        expected_envelope.model_dump(mode="json", exclude_none=True)
+    )
+    assert converted_envelope.domain_pack_id == GENE_DOMAIN_PACK_ID
+    assert converted_envelope.schema_ref.schema_id == GENE_LINKML_SCHEMA_ID
+    assert converted_envelope.objects[0].pending_ref_id == "gene-mention-evidence-1"
+    assert converted_envelope.objects[0].metadata[OBJECT_ROLE_METADATA_KEY] == (
+        "validated_reference"
+    )
+    assert converted_envelope.validation_findings[0].severity.value == "info"
+    assert converted_envelope.validation_findings[0].details["blocking"] is False
+
+
+def test_converted_gene_envelope_omits_legacy_semantic_stores():
+    raw_fixture = _load_raw_gene_fixture()
+    converted_envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+
+    assert LEGACY_SEMANTIC_KEYS.isdisjoint(converted_envelope.metadata)
+    for obj in converted_envelope.objects:
+        assert LEGACY_SEMANTIC_KEYS.isdisjoint(obj.payload)
+        assert LEGACY_SEMANTIC_KEYS.isdisjoint(obj.metadata)
+
+
+def test_tool_verified_gene_fixture_requires_extractor_confidence():
+    raw_fixture = _load_raw_gene_fixture()
+    del raw_fixture["gene_mentions"][0]["confidence"]
+
+    with pytest.raises(ValidationError, match="confidence"):
+        tool_verified_gene_output_to_pending_envelope(raw_fixture)
+
+
+def test_tool_verified_gene_fixture_rejects_blank_normalization_notes():
+    raw_fixture = _load_raw_gene_fixture()
+    raw_fixture["normalization_notes"] = [
+        "Resolved against current Alliance Gene row.",
+        "  ",
+    ]
+
+    with pytest.raises(ValidationError, match="normalization_notes"):
+        tool_verified_gene_output_to_pending_envelope(raw_fixture)
