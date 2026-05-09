@@ -7,14 +7,6 @@ from typing import List, Literal, Optional
 from pydantic import BaseModel, Field, StrictStr
 
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
-from src.schemas.models.base import (
-    EvidenceRecord,
-    MentionCandidate,
-    ExtractionItem,
-    ExclusionRecord,
-    AmbiguityRecord,
-    ExtractionRunSummary,
-)
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
