@@ -307,6 +307,31 @@ def test_build_curation_adapter_registry_keeps_package_export_when_agent_bundle_
     assert normalizer.__class__.__name__ == "DemoNormalizer"
 
 
+def test_curation_adapter_registry_registers_agent_scoped_prep_item_converter():
+    registry = adapter_registry_module.CurationAdapterRegistry()
+    normalizer = object()
+    converter = object()
+
+    registry.register_adapter(
+        adapter_key="demo",
+        candidate_normalizer=normalizer,
+    )
+    registry.register_prep_item_converter(
+        adapter_key="demo",
+        agent_key="demo_extractor",
+        converter=converter,
+    )
+
+    assert registry.get_prep_item_converter(
+        adapter_key="demo",
+        agent_key="demo_extractor",
+    ) is converter
+    assert registry.get_prep_item_converter(
+        adapter_key="demo",
+        agent_key="other_extractor",
+    ) is None
+
+
 def test_json_bundle_export_adapter_builds_payload_from_candidates_and_evidence():
     adapter = JsonBundleExportAdapter(adapter_key=REFERENCE_ADAPTER_KEY)
 

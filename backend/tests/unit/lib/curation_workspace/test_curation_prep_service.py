@@ -4,12 +4,20 @@ from __future__ import annotations
 
 import pytest
 
+import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 from src.lib.curation_workspace import curation_prep_service as module
 from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import (
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_adapter_registry():
+    adapter_registry_module.load_curation_adapter_registry.cache_clear()
+    yield
+    adapter_registry_module.load_curation_adapter_registry.cache_clear()
 
 
 def _make_scope_confirmation() -> CurationPrepScopeConfirmation:
@@ -97,6 +105,93 @@ def _make_extraction_result(
             "metadata": {},
         }
     )
+
+
+def _make_allele_domain_payload(
+    *,
+    label: str,
+    normalized_id: str,
+    associated_gene: str = "Crumbs",
+    evidence_record_ids: list[str] | None = None,
+    index: int = 1,
+) -> dict:
+    evidence_record_ids = (
+        evidence_record_ids if evidence_record_ids is not None else [f"evidence-{index}"]
+    )
+    mention_ref_id = f"allele-mention-{index}"
+    allele_ref_id = f"allele-reference-{index}"
+    reference_ref_id = f"paper-reference-{index}"
+    evidence_ref_ids = [
+        f"evidence-quote-{index}-{evidence_index}"
+        for evidence_index, _evidence_id in enumerate(evidence_record_ids, start=1)
+    ]
+
+    return {
+        "supporting_objects": [
+            {
+                "object_type": "Reference",
+                "pending_ref_id": reference_ref_id,
+                "payload": {"title": "Allele extraction fixture paper"},
+            },
+            {
+                "object_type": "AlleleMention",
+                "pending_ref_id": mention_ref_id,
+                "payload": {
+                    "mention_text": label,
+                    "normalized_id": normalized_id,
+                    "source_mentions": [label],
+                },
+            },
+            {
+                "object_type": "Allele",
+                "pending_ref_id": allele_ref_id,
+                "payload": {
+                    "primary_external_id": normalized_id,
+                    "allele_symbol": label,
+                    "source_mentions": [label],
+                },
+            },
+            *[
+                {
+                    "object_type": "EvidenceQuote",
+                    "pending_ref_id": evidence_ref_id,
+                    "payload": {
+                        "evidence_record_id": evidence_record_id,
+                        "verified_quote": f"{label} has verified allele evidence.",
+                        "page": 5,
+                        "section": "Results",
+                        "chunk_id": f"chunk-{index}",
+                    },
+                }
+                for evidence_ref_id, evidence_record_id in zip(
+                    evidence_ref_ids,
+                    evidence_record_ids,
+                )
+            ],
+        ],
+        "association": {
+            "object_type": "AllelePaperEvidenceAssociation",
+            "pending_ref_id": f"allele-paper-evidence-association-{index}",
+            "payload": {
+                "association_kind": "allele_paper_evidence",
+                "allele_identifier": normalized_id,
+                "allele_label": label,
+                "associated_gene": associated_gene,
+                "confidence": "high",
+                "evidence_record_ids": evidence_record_ids,
+            },
+            "object_refs": [
+                {"pending_ref_id": allele_ref_id, "object_type": "Allele"},
+                {"pending_ref_id": reference_ref_id, "object_type": "Reference"},
+                {"pending_ref_id": mention_ref_id, "object_type": "AlleleMention"},
+                *[
+                    {"pending_ref_id": evidence_ref_id, "object_type": "EvidenceQuote"}
+                    for evidence_ref_id in evidence_ref_ids
+                ],
+            ],
+            "evidence_record_ids": evidence_record_ids,
+        },
+    }
 
 
 @pytest.mark.asyncio
@@ -209,6 +304,42 @@ async def test_run_curation_prep_does_not_fall_back_to_top_level_evidence_record
             _make_evidence_record()
         ],
     )
+
+    persist_called = False
+
+    def _fake_persist(*_args, **_kwargs):
+        nonlocal persist_called
+        persist_called = True
+
+    monkeypatch.setattr(module, "persist_extraction_result", _fake_persist)
+
+    with pytest.raises(
+        ValueError,
+        match="No evidence-verified candidates were available",
+    ):
+        await module.run_curation_prep(
+            [extraction_result],
+            scope_confirmation=_make_scope_confirmation(),
+        )
+
+    assert persist_called is False
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_items_do_not_use_metadata_evidence_records(monkeypatch):
+    extraction_result = _make_extraction_result(
+        items=[
+            _make_item(
+                evidence_record_ids=["evidence-1"],
+                evidence=[],
+            )
+        ],
+        evidence_records=[],
+    )
+    extraction_result.payload_json["evidence_records"] = []
+    extraction_result.payload_json["metadata"] = {
+        "evidence_records": [_make_evidence_record()]
+    }
 
     persist_called = False
 
@@ -369,7 +500,19 @@ def test_candidate_conversation_summary_falls_back_to_generic_item_context():
 
 
 @pytest.mark.asyncio
-async def test_run_curation_prep_synthesizes_allele_candidates_from_specialized_payload(monkeypatch):
+async def test_run_curation_prep_maps_allele_candidates_from_domain_envelope_objects(monkeypatch):
+    first = _make_allele_domain_payload(
+        label="crb11A22",
+        normalized_id="ALLELE:0000001",
+        evidence_record_ids=["evidence-1"],
+        index=1,
+    )
+    second = _make_allele_domain_payload(
+        label="crb8F105",
+        normalized_id="ALLELE:0000002",
+        evidence_record_ids=["evidence-2"],
+        index=2,
+    )
     extraction_result = CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": "extract-allele-1",
@@ -384,45 +527,33 @@ async def test_run_curation_prep_synthesizes_allele_candidates_from_specialized_
             "candidate_count": 2,
             "conversation_summary": None,
             "payload_json": {
-                "items": [
-                    {
-                        "label": None,
-                        "entity_type": None,
-                        "normalized_id": None,
-                        "source_mentions": [],
-                        "evidence_record_ids": [],
-                    }
-                ],
                 "alleles": [
                     {
-                        "mention": "crb11A22",
-                        "normalized_id": None,
-                        "normalized_symbol": None,
-                        "associated_gene": "Crumbs",
-                        "confidence": "high",
-                        "evidence_record_ids": ["evidence-1"],
-                    },
-                    {
-                        "mention": "crb8F105",
-                        "normalized_id": None,
-                        "normalized_symbol": None,
-                        "associated_gene": "Crumbs",
-                        "confidence": "high",
-                        "evidence_record_ids": ["evidence-2"],
-                    },
+                        "mention": "legacy-only-allele",
+                        "associated_gene": "Legacy",
+                        "evidence_record_ids": ["legacy-evidence"],
+                    }
                 ],
-                "evidence_records": [
-                    _make_evidence_record(
-                        evidence_record_id="evidence-1",
-                        entity="crb11A22",
-                        verified_quote="crb11A22 has fused rhabdomeres.",
-                    ),
-                    _make_evidence_record(
-                        evidence_record_id="evidence-2",
-                        entity="crb8F105",
-                        verified_quote="crb8F105 truncates the protein.",
-                    ),
+                "curatable_objects": [
+                    *first["supporting_objects"],
+                    first["association"],
+                    *second["supporting_objects"],
+                    second["association"],
                 ],
+                "metadata": {
+                    "evidence_records": [
+                        _make_evidence_record(
+                            evidence_record_id="evidence-1",
+                            entity="crb11A22",
+                            verified_quote="crb11A22 has fused rhabdomeres.",
+                        ),
+                        _make_evidence_record(
+                            evidence_record_id="evidence-2",
+                            entity="crb8F105",
+                            verified_quote="crb8F105 truncates the protein.",
+                        ),
+                    ]
+                },
                 "run_summary": {"candidate_count": 2},
             },
             "created_at": "2026-03-20T21:55:00Z",
@@ -447,16 +578,34 @@ async def test_run_curation_prep_synthesizes_allele_candidates_from_specialized_
     ]
     assert prep_output.candidates[0].payload["entity_type"] == "allele"
     assert prep_output.candidates[0].payload["source_mentions"] == ["crb11A22"]
+    assert prep_output.candidates[0].payload["normalized_id"] == "ALLELE:0000001"
     assert prep_output.candidates[0].payload["associated_gene"] == "Crumbs"
     assert prep_output.candidates[0].evidence_records[0].anchor.snippet_text == (
         "crb11A22 has fused rhabdomeres."
     )
+    assert all(
+        candidate.payload["label"] != "legacy-only-allele"
+        for candidate in prep_output.candidates
+    )
 
 
 @pytest.mark.asyncio
-async def test_run_curation_prep_synthesized_allele_candidates_still_require_evidence_ids(
+async def test_run_curation_prep_allele_domain_objects_still_require_evidence_ids(
     monkeypatch,
 ):
+    first = _make_allele_domain_payload(
+        label="crb11A22",
+        normalized_id="ALLELE:0000001",
+        evidence_record_ids=["evidence-1"],
+        index=1,
+    )
+    second = _make_allele_domain_payload(
+        label="crb8F105",
+        normalized_id="ALLELE:0000002",
+        evidence_record_ids=[],
+        index=2,
+    )
+    second["association"]["payload"]["evidence_record_ids"] = ["evidence-2"]
     extraction_result = CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": "extract-allele-2",
@@ -471,33 +620,26 @@ async def test_run_curation_prep_synthesized_allele_candidates_still_require_evi
             "candidate_count": 2,
             "conversation_summary": None,
             "payload_json": {
-                "items": [],
-                "alleles": [
-                    {
-                        "mention": "crb11A22",
-                        "associated_gene": "Crumbs",
-                        "confidence": "high",
-                        "evidence_record_ids": ["evidence-1"],
-                    },
-                    {
-                        "mention": "crb8F105",
-                        "associated_gene": "Crumbs",
-                        "confidence": "high",
-                        "evidence_record_ids": [],
-                    },
+                "curatable_objects": [
+                    *first["supporting_objects"],
+                    first["association"],
+                    *second["supporting_objects"],
+                    second["association"],
                 ],
-                "evidence_records": [
-                    _make_evidence_record(
-                        evidence_record_id="evidence-1",
-                        entity="crb11A22",
-                        verified_quote="crb11A22 has fused rhabdomeres.",
-                    ),
-                    _make_evidence_record(
-                        evidence_record_id="evidence-2",
-                        entity="crb8F105",
-                        verified_quote="crb8F105 truncates the protein.",
-                    ),
-                ],
+                "metadata": {
+                    "evidence_records": [
+                        _make_evidence_record(
+                            evidence_record_id="evidence-1",
+                            entity="crb11A22",
+                            verified_quote="crb11A22 has fused rhabdomeres.",
+                        ),
+                        _make_evidence_record(
+                            evidence_record_id="evidence-2",
+                            entity="crb8F105",
+                            verified_quote="crb8F105 truncates the protein.",
+                        ),
+                    ]
+                },
                 "run_summary": {"candidate_count": 2},
             },
             "created_at": "2026-03-20T21:55:00Z",
@@ -518,3 +660,78 @@ async def test_run_curation_prep_synthesized_allele_candidates_still_require_evi
 
     assert [candidate.payload["label"] for candidate in prep_output.candidates] == ["crb11A22"]
     assert prep_output.run_metadata.warnings == ["Skipped 1 candidate without verified evidence."]
+
+
+@pytest.mark.asyncio
+async def test_run_curation_prep_allele_domain_objects_derive_label_from_reference(
+    monkeypatch,
+):
+    first = _make_allele_domain_payload(
+        label="crb11A22",
+        normalized_id="ALLELE:0000001",
+        evidence_record_ids=["evidence-1"],
+        index=1,
+    )
+    second = _make_allele_domain_payload(
+        label="crb8F105",
+        normalized_id="ALLELE:0000002",
+        evidence_record_ids=["evidence-2"],
+        index=2,
+    )
+    second["association"]["payload"].pop("allele_label")
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": "extract-allele-3",
+            "document_id": "document-1",
+            "adapter_key": "allele",
+            "agent_key": "allele_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": "chat-session-1",
+            "trace_id": "trace-upstream",
+            "flow_run_id": None,
+            "user_id": "user-upstream",
+            "candidate_count": 2,
+            "conversation_summary": None,
+            "payload_json": {
+                "curatable_objects": [
+                    *first["supporting_objects"],
+                    first["association"],
+                    *second["supporting_objects"],
+                    second["association"],
+                ],
+                "metadata": {
+                    "evidence_records": [
+                        _make_evidence_record(
+                            evidence_record_id="evidence-1",
+                            entity="crb11A22",
+                            verified_quote="crb11A22 has fused rhabdomeres.",
+                        ),
+                        _make_evidence_record(
+                            evidence_record_id="evidence-2",
+                            entity="crb8F105",
+                            verified_quote="crb8F105 truncates the protein.",
+                        ),
+                    ]
+                },
+                "run_summary": {"candidate_count": 2},
+            },
+            "created_at": "2026-03-20T21:55:00Z",
+            "metadata": {},
+        }
+    )
+
+    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+
+    prep_output = await module.run_curation_prep(
+        [extraction_result],
+        scope_confirmation=CurationPrepScopeConfirmation(
+            confirmed=True,
+            adapter_keys=["allele"],
+            notes=["User confirmed allele prep scope."],
+        ),
+    )
+
+    assert [candidate.payload["label"] for candidate in prep_output.candidates] == [
+        "crb11A22",
+        "crb8F105",
+    ]

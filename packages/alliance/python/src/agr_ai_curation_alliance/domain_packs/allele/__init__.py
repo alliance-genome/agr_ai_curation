@@ -25,6 +25,21 @@ from src.schemas.domain_envelope import (
 
 ALLELE_DOMAIN_PACK_ID = "agr.alliance.allele"
 ALLELE_DOMAIN_PACK_VERSION = "0.1.0"
+_FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
+    {
+        "items",
+        "annotations",
+        "genes",
+        "alleles",
+        "diseases",
+        "chemicals",
+        "phenotypes",
+        "CurationPrepCandidate",
+        "NormalizedCandidate",
+        "normalized_payload",
+        "annotation_drafts",
+    }
+)
 
 _ALLELE_SCHEMA_REF = SchemaRef(
     schema_id="alliance.linkml.Allele",
@@ -310,6 +325,20 @@ def validate_pending_allele_envelope(
             )
         )
 
+    legacy_keys = _legacy_keys_in_envelope(envelope)
+    if legacy_keys:
+        findings.append(
+            ValidationFinding(
+                severity=ValidationFindingSeverity.ERROR,
+                code="alliance.allele.legacy_semantic_store_present",
+                message=(
+                    "Allele domain envelopes must use envelope objects as the semantic "
+                    "source of truth; legacy semantic collections are not allowed."
+                ),
+                details={"legacy_keys": sorted(legacy_keys)},
+            )
+        )
+
     associations = [
         obj
         for obj in envelope.objects
@@ -370,6 +399,10 @@ def validate_pending_allele_envelope(
             )
 
     return tuple(findings)
+
+
+def _legacy_keys_in_envelope(envelope: DomainEnvelope) -> set[str]:
+    return _FORBIDDEN_LEGACY_COLLECTIONS.intersection(envelope.metadata)
 
 
 def _iter_allele_items(extraction: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:

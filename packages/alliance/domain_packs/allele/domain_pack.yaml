@@ -330,7 +330,20 @@ object_definitions:
       - field_path: figure_reference
         field_type: string
         display_name: Figure reference
+fixture_packs:
+  - fixture_pack_id: tool_verified
+    display_name: Tool-verified allele paper/evidence fixtures
+    path: fixtures/tool_verified.yaml
+    description: Production-like pending allele paper/evidence envelopes converted from verified extractor output.
+    object_types:
+      - AllelePaperEvidenceAssociation
+      - Allele
+      - Reference
+      - AlleleMention
+      - EvidenceQuote
+    definition_state: in_development
 metadata:
+  semantic_source: domain_envelope.objects
   object_role_key: object_role
   supported_object_roles:
     - curatable_unit

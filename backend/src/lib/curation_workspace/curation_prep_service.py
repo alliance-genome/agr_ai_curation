@@ -8,8 +8,15 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from sqlalchemy.orm import Session
 
+from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.extraction_results import persist_extraction_result
+from src.lib.curation_workspace.prep_item_conversion import (
+    compact_payload,
+    normalized_evidence_record_ids,
+    normalized_optional_string,
+    top_level_evidence_records_by_id,
+)
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
     CurationPrepCandidate,
@@ -324,7 +331,7 @@ def _map_extraction_result(
 def _resolve_candidate_adapter_key(
     extraction_result: CurationExtractionResultRecord,
 ) -> str | None:
-    return _normalized_optional_string(extraction_result.adapter_key)
+    return normalized_optional_string(extraction_result.adapter_key)
 
 
 def _candidate_blueprints(
@@ -333,7 +340,21 @@ def _candidate_blueprints(
     *,
     candidate_adapter_key: str,
 ) -> list[_CandidateBlueprint]:
-    evidence_records_by_id = _evidence_records_by_id(payload)
+    converter = _prep_item_converter(
+        adapter_key=candidate_adapter_key,
+        agent_key=extraction_result.agent_key,
+    )
+    if converter is not None:
+        conversion_result = converter.convert(payload)
+        return _build_candidate_blueprints_from_items(
+            extraction_result,
+            conversion_result.items,
+            evidence_records_by_id=conversion_result.evidence_records_by_id,
+            candidate_adapter_key=candidate_adapter_key,
+        )
+
+    evidence_records_by_id = top_level_evidence_records_by_id(payload)
+
     raw_items = payload.get("items")
     blueprints = _build_candidate_blueprints_from_items(
         extraction_result,
@@ -341,21 +362,17 @@ def _candidate_blueprints(
         evidence_records_by_id=evidence_records_by_id,
         candidate_adapter_key=candidate_adapter_key,
     )
-    if blueprints or not isinstance(raw_items, list):
-        return blueprints
+    return blueprints
 
-    specialized_items = _specialized_source_items(
-        payload,
-        candidate_adapter_key=candidate_adapter_key,
-    )
-    if not specialized_items:
-        return blueprints
 
-    return _build_candidate_blueprints_from_items(
-        extraction_result,
-        specialized_items,
-        evidence_records_by_id=evidence_records_by_id,
-        candidate_adapter_key=candidate_adapter_key,
+def _prep_item_converter(*, adapter_key: str, agent_key: str | None) -> Any | None:
+    normalized_agent_key = normalized_optional_string(agent_key)
+    if normalized_agent_key is None:
+        return None
+    registry = load_curation_adapter_registry()
+    return registry.get_prep_item_converter(
+        adapter_key=adapter_key,
+        agent_key=normalized_agent_key,
     )
 
 
@@ -395,73 +412,10 @@ def _build_candidate_blueprints_from_items(
     return blueprints
 
 
-def _specialized_source_items(
-    payload: Mapping[str, Any],
-    *,
-    candidate_adapter_key: str,
-) -> list[dict[str, Any]]:
-    if candidate_adapter_key == "allele":
-        return _specialized_items_from_collection(
-            payload.get("alleles"),
-            entity_type="allele",
-            label_keys=("normalized_symbol", "mention"),
-            passthrough_keys=(
-                "mention",
-                "associated_gene",
-                "normalized_symbol",
-                "confidence",
-            ),
-        )
-    return []
-
-
-def _specialized_items_from_collection(
-    raw_collection: Any,
-    *,
-    entity_type: str,
-    label_keys: Sequence[str],
-    passthrough_keys: Sequence[str],
-) -> list[dict[str, Any]]:
-    if not isinstance(raw_collection, list):
-        return []
-
-    items: list[dict[str, Any]] = []
-    for raw_item in raw_collection:
-        if not isinstance(raw_item, Mapping):
-            continue
-        mention = _normalized_optional_string(raw_item.get("mention"))
-        label = _first_non_empty_string(raw_item, *label_keys)
-        evidence_record_ids = _normalized_evidence_record_ids(raw_item.get("evidence_record_ids"))
-
-        synthesized_item = {
-            "label": label or mention,
-            "entity_type": entity_type,
-            "normalized_id": raw_item.get("normalized_id"),
-            "source_mentions": [mention] if mention else [],
-            "evidence_record_ids": evidence_record_ids,
-        }
-        for key in passthrough_keys:
-            if key in {"mention", "normalized_id"}:
-                synthesized_item[key] = raw_item.get(key)
-                continue
-            synthesized_item[key] = raw_item.get(key)
-        items.append(synthesized_item)
-
-    return items
-
-
-def _first_non_empty_string(raw_item: Mapping[str, Any], *keys: str) -> str | None:
-    for key in keys:
-        value = _normalized_optional_string(raw_item.get(key))
-        if value:
-            return value
-    return None
-
-
 def _candidate_payload_from_item(
     raw_item: Mapping[str, Any],
 ) -> dict[str, Any]:
-    candidate_payload = _compact_payload(
+    candidate_payload = compact_payload(
         {
             key: value
             for key, value in raw_item.items()
@@ -482,7 +436,7 @@ def _candidate_evidence_records(
 ) -> list[_CandidateEvidence]:
     source_records: list[_CandidateEvidence] = []
     evidence_index = 0
-    for evidence_record_id in _normalized_evidence_record_ids(raw_item.get("evidence_record_ids")):
+    for evidence_record_id in normalized_evidence_record_ids(raw_item.get("evidence_record_ids")):
         raw_record = evidence_records_by_id.get(evidence_record_id)
         if not isinstance(raw_record, Mapping):
             continue
@@ -526,53 +480,18 @@ def _candidate_evidence_records(
     return source_records
 
 
-def _evidence_records_by_id(
-    payload: Mapping[str, Any],
-) -> dict[str, Mapping[str, Any]]:
-    raw_records = payload.get("evidence_records")
-    if not isinstance(raw_records, list):
-        return {}
-
-    records_by_id: dict[str, Mapping[str, Any]] = {}
-    for raw_record in raw_records:
-        if not isinstance(raw_record, Mapping):
-            continue
-        evidence_record_id = _normalized_optional_string(raw_record.get("evidence_record_id"))
-        if not evidence_record_id:
-            continue
-        records_by_id[evidence_record_id] = raw_record
-
-    return records_by_id
-
-
-def _normalized_evidence_record_ids(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-
-    evidence_record_ids: list[str] = []
-    seen: set[str] = set()
-    for candidate in value:
-        evidence_record_id = _normalized_optional_string(candidate)
-        if not evidence_record_id or evidence_record_id in seen:
-            continue
-        seen.add(evidence_record_id)
-        evidence_record_ids.append(evidence_record_id)
-
-    return evidence_record_ids
-
-
 def _build_source_evidence_anchor(raw_record: Mapping[str, Any]) -> EvidenceAnchor | None:
-    verified_quote = _normalized_optional_string(raw_record.get("verified_quote"))
+    verified_quote = normalized_optional_string(raw_record.get("verified_quote"))
     if not verified_quote:
         return None
 
     figure_reference, table_reference = _split_figure_reference(
-        _normalized_optional_string(raw_record.get("figure_reference"))
+        normalized_optional_string(raw_record.get("figure_reference"))
     )
     page_number = _normalized_optional_page(raw_record.get("page"))
-    section_title = _normalized_optional_string(raw_record.get("section"))
-    subsection_title = _normalized_optional_string(raw_record.get("subsection"))
-    chunk_id = _normalized_optional_string(raw_record.get("chunk_id"))
+    section_title = normalized_optional_string(raw_record.get("section"))
+    subsection_title = normalized_optional_string(raw_record.get("subsection"))
+    chunk_id = normalized_optional_string(raw_record.get("chunk_id"))
 
     return EvidenceAnchor(
         anchor_kind=EvidenceAnchorKind.SNIPPET,
@@ -606,38 +525,17 @@ def _candidate_conversation_summary(
     extraction_result: CurationExtractionResultRecord,
     payload: Mapping[str, Any],
 ) -> str:
-    summary = _normalized_optional_string(extraction_result.conversation_summary)
+    summary = normalized_optional_string(extraction_result.conversation_summary)
     if summary is not None:
         return summary
 
-    label = _normalized_optional_string(payload.get("label"))
-    entity_type = _normalized_optional_string(payload.get("entity_type"))
+    label = normalized_optional_string(payload.get("label"))
+    entity_type = normalized_optional_string(payload.get("entity_type"))
     if label and entity_type:
         return f"Prepared deterministic {entity_type} candidate for {label}."
     if label:
         return f"Prepared deterministic candidate for {label}."
     return "Prepared deterministic candidate from structured extraction output."
-
-
-def _compact_payload(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        compacted: dict[str, Any] = {}
-        for key, item in value.items():
-            compacted_item = _compact_payload(item)
-            if compacted_item is None:
-                continue
-            compacted[str(key)] = compacted_item
-        return compacted or None
-    if isinstance(value, list):
-        compacted_items = [_compact_payload(item) for item in value]
-        compacted_items = [item for item in compacted_items if item is not None]
-        return compacted_items or None
-    if isinstance(value, str):
-        normalized = _normalized_optional_string(value)
-        return normalized
-    if isinstance(value, bool):
-        return value
-    return value
 
 
 def _resolve_primary_extraction_result(
@@ -765,7 +663,7 @@ def _record_matches_scope(
     record: CurationExtractionResultRecord,
     scope_confirmation: CurationPrepScopeConfirmation,
 ) -> bool:
-    adapter_key = _normalized_optional_string(record.adapter_key)
+    adapter_key = normalized_optional_string(record.adapter_key)
 
     if scope_confirmation.adapter_keys:
         if adapter_key is None or adapter_key not in scope_confirmation.adapter_keys:
@@ -818,21 +716,12 @@ def _normalized_optional_page(value: Any) -> int | None:
     return value if value >= 1 else None
 
 
-def _normalized_optional_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    return normalized or None
-
-
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:
     unique_values: list[str] = []
     seen: set[str] = set()
 
     for value in values:
-        normalized = _normalized_optional_string(value)
+        normalized = normalized_optional_string(value)
         if normalized is None or normalized in seen:
             continue
         unique_values.append(normalized)

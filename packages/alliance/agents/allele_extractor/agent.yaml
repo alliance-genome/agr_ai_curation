@@ -37,6 +37,7 @@ tools:
   - search_document
   - read_section
   - read_subsection
+  - record_evidence
   - agr_curation_query
 
 # -----------------------------------------------------------------------------
