@@ -27,36 +27,36 @@ EXTRACTOR_ENVELOPE_CLASSES = (
 
 def _valid_domain_envelope_payload() -> dict[str, object]:
     return {
-        "summary": "Retained one gene object with verified evidence.",
+        "summary": "Retained one example object with verified evidence.",
         "curatable_objects": [
             {
-                "object_type": "gene",
+                "object_type": "example_object",
                 "object_role": "curatable_unit",
-                "pending_ref_id": "gene-crb-1",
+                "pending_ref_id": "object-alpha-1",
                 "schema_ref": {
-                    "schema_id": "alliance.example.gene",
+                    "schema_id": "example.domain.object",
                     "provider": "domain-pack",
                     "definition_state": "draft",
                     "definition_notes": ["Pinned by the domain pack for this run."],
                 },
-                "model_ref": "alliance.gene.v1",
+                "model_ref": "example.object.v1",
                 "definition_state": "draft",
                 "definition_notes": ["Payload fields are domain-pack owned."],
                 "payload": {
-                    "mention": "crb",
-                    "normalized_symbol": "crb",
-                    "normalized_id": "FB:FBgn0000368",
+                    "mention": "alpha",
+                    "normalized_label": "alpha",
+                    "normalized_id": "example-object-0001",
                 },
                 "field_refs": [
                     {
                         "object_ref": {
-                            "pending_ref_id": "gene-crb-1",
-                            "object_type": "gene",
+                            "pending_ref_id": "object-alpha-1",
+                            "object_type": "example_object",
                         },
                         "field_path": "normalized_id",
                     }
                 ],
-                "evidence_record_ids": ["evidence-crb"],
+                "evidence_record_ids": ["evidence-alpha"],
                 "metadata_refs": [
                     {
                         "metadata_path": "raw_mentions[0]",
@@ -79,16 +79,16 @@ def _valid_domain_envelope_payload() -> dict[str, object]:
         "metadata": {
             "raw_mentions": [
                 {
-                    "mention": "crb",
-                    "entity_type": "gene",
-                    "evidence_record_ids": ["evidence-crb"],
+                    "mention": "alpha",
+                    "entity_type": "example_object",
+                    "evidence_record_ids": ["evidence-alpha"],
                 }
             ],
             "evidence_records": [
                 {
-                    "evidence_record_id": "evidence-crb",
-                    "entity": "crb",
-                    "verified_quote": "crb was analyzed in the eye disc.",
+                    "evidence_record_id": "evidence-alpha",
+                    "entity": "alpha",
+                    "verified_quote": "alpha was analyzed in the source passage.",
                     "page": 4,
                     "section": "Results",
                     "chunk_id": "chunk-1",
@@ -97,22 +97,22 @@ def _valid_domain_envelope_payload() -> dict[str, object]:
             "normalization_notes": ["Normalized by explicit paper symbol."],
             "exclusions": [
                 {
-                    "mention": "Crb family",
-                    "reason_code": "gene_family_not_individual",
-                    "evidence_record_ids": ["evidence-crb"],
+                    "mention": "Alpha collection",
+                    "reason_code": "unsupported_entity_type",
+                    "evidence_record_ids": ["evidence-alpha"],
                 }
             ],
             "ambiguities": [
                 {
-                    "mention": "crb-like",
-                    "why_ambiguous": "The paper does not resolve the exact gene.",
+                    "mention": "alpha-like",
+                    "why_ambiguous": "The source does not resolve the exact object.",
                     "recommended_followup": "Ask curator to inspect the source figure.",
-                    "evidence_record_ids": ["evidence-crb"],
+                    "evidence_record_ids": ["evidence-alpha"],
                 }
             ],
             "notes": ["Curator-facing note."],
             "repair_notes": ["Repair should not invent new object IDs."],
-            "provenance": {"legacy_mentions": ["crb"]},
+            "provenance": {"legacy_mentions": ["alpha"]},
         },
         "run_summary": {
             "candidate_count": 2,
@@ -133,19 +133,19 @@ def _valid_domain_envelope_payload() -> dict[str, object]:
 def test_first_pass_extractor_envelopes_accept_shared_curatable_objects_contract(envelope_cls):
     envelope = envelope_cls.model_validate(_valid_domain_envelope_payload())
 
-    assert envelope.curatable_objects[0].pending_ref_id == "gene-crb-1"
+    assert envelope.curatable_objects[0].pending_ref_id == "object-alpha-1"
     assert envelope.curatable_objects[0].object_role == "curatable_unit"
-    assert envelope.curatable_objects[0].object_type == "gene"
-    assert envelope.curatable_objects[0].model_ref == "alliance.gene.v1"
+    assert envelope.curatable_objects[0].object_type == "example_object"
+    assert envelope.curatable_objects[0].model_ref == "example.object.v1"
     assert envelope.curatable_objects[0].definition_state == DefinitionState.DRAFT
     assert envelope.curatable_objects[0].field_refs[0].field_path == "normalized_id"
-    assert envelope.curatable_objects[0].evidence_record_ids == ["evidence-crb"]
+    assert envelope.curatable_objects[0].evidence_record_ids == ["evidence-alpha"]
     assert envelope.curatable_objects[0].metadata_refs[0].metadata_path == "raw_mentions[0]"
     assert envelope.curatable_objects[0].repair_hints == [
         "Preserve pending_ref_id when repairing normalization."
     ]
-    assert envelope.metadata.evidence_records[0].evidence_record_id == "evidence-crb"
-    assert envelope.metadata.exclusions[0].reason_code == "gene_family_not_individual"
+    assert envelope.metadata.evidence_records[0].evidence_record_id == "evidence-alpha"
+    assert envelope.metadata.exclusions[0].reason_code == "unsupported_entity_type"
     assert envelope.repair_mode is True
 
 
