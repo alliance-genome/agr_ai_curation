@@ -14,3 +14,10 @@ content: |
   - Zebrafish p53 ortholog is tp53 (lowercase, NOT TP53 which is human, nor Trp53 which is mouse).
   - Zebrafish gene symbols are all lowercase, so a paper mentioning "tp53" in a zebrafish context refers to the zebrafish gene.
   - When a paper studies both zebrafish and mammals, use strain (AB, TU, WIK) and species mentions to disambiguate.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

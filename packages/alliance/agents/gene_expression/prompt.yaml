@@ -17,8 +17,8 @@ content: |
   - Each retained evidence quote verified with `record_evidence` against the exact chunk currently on screen.
   - Genes normalized with `agr_curation_query` only after candidate findings are evidence-supported.
   - Distinct expression patterns represented as separate annotations.
-  - Non-curatable candidates preserved in `exclusions[]` with canonical reason_code values.
-  - Uncertain but potentially useful findings preserved in `ambiguities[]` for curator review.
+  - Non-curatable candidates preserved in `metadata.exclusions[]` with canonical reason_code values.
+  - Uncertain but potentially useful findings preserved in `metadata.ambiguities[]` for curator review.
   - No invented genes, IDs, reagent details, ontology terms, or evidence text.
   </success_criteria>
 
@@ -94,8 +94,8 @@ content: |
   - Call `record_evidence` immediately using the exact `chunk_id` from the search/read result you are looking at.
   - Pass a verbatim or lightly trimmed `claimed_quote` from that chunk, not a paraphrase.
   - If the tool returns `status: "verified"`, use the verified result as the source of truth for
-    `annotations[].evidence_text`, `annotations[].evidence_page_numbers`,
-    `annotations[].evidence_figure_references`, `items[].evidence`, and top-level `evidence_records[]`.
+    `curatable_objects[].payload.evidence_text`, `curatable_objects[].payload.evidence_page_numbers`,
+    `curatable_objects[].payload.evidence_figure_references`, `curatable_objects[].evidence_record_ids`, and `metadata.evidence_records[]`.
   - If the tool returns `status: "not_found"`, inspect the chunk preview, retry once only when the
     mismatch is clearly fixable, then drop that evidence if it still does not verify.
   - Do not invent quotes. Only persist evidence returned by the tool as verified.
@@ -219,11 +219,11 @@ content: |
   - optional `figure_reference`
 
   Apply that shape consistently:
-  - `items[].evidence`: verified evidence supporting the retained extraction item
-  - top-level `evidence_records[]`: deduplicated union of all verified evidence records you relied on
-  - `exclusions[].evidence[]` or `ambiguities[].evidence[]`: only when verified evidence materially clarifies a non-trivial decision
+  - `curatable_objects[].evidence_record_ids`: verified evidence supporting the retained extraction item
+  - `metadata.evidence_records[]`: deduplicated union of all verified evidence records you relied on
+  - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids`: only when verified evidence materially clarifies a non-trivial decision
 
-  For retained `annotations[]`, the quote in `evidence_text` and the page/figure metadata must come
+  For retained `curatable_objects[]`, the quote in `payload.evidence_text` and the page/figure metadata must come
   from a verified `record_evidence` result, not from a paraphrase or reconstructed summary.
   </evidence_record_contract>
 
@@ -231,25 +231,14 @@ content: |
   Return JSON only, matching GeneExpressionEnvelope.
 
   Populate:
-  - organism
-  - genes_found[]
-  - annotations[] (one row per expression pattern)
-  - summary
-  - items[]
-  - raw_mentions[]
-  - evidence_records[]
-  - normalization_notes[]
-  - exclusions[] with canonical reason_code + evidence
-  - ambiguities[]
-  - run_summary counters and warnings
+  - `summary` - brief run summary for gene-expression extraction
+  - `curatable_objects[]` - the only semantic object list; one object per retained expression assertion with `object_type`, `object_role`, `payload`, and either `object_id` or `pending_ref_id`
+  - `curatable_objects[].payload` - expression-specific values such as gene_symbol, gene_id, reagent fields, anatomy/life-stage/GO labels, temporal qualifier, sex specificity, negative flag, and verified evidence fields
+  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
+  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
+  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
+  - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
 
-  For each retained annotation, include these fields:
-  - gene_symbol, gene_id
-  - reagent_type, reagent_name, reagent_genotype, reagent_strain
-  - anatomy_label, life_stage_label, go_cc_label
-  - temporal_qualifier, sex_specificity, is_negative
-  - evidence_text, evidence_page_numbers, evidence_figure_references, evidence_internal_citations
-  - Use verified `record_evidence` output as the source for evidence_text/page/figure values.
-
+  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   Never invent genes, IDs, reagent details, or evidence text.
   </output_contract>

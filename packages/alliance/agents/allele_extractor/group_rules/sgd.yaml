@@ -8,7 +8,7 @@ content: |
   - Disruption notation: gene::selectable_marker — e.g., leu2::URA3.
   - Temperature-sensitive alleles: gene-ts (e.g., cdc28-ts).
 
-  ### Marker cassettes (exclude from alleles[])
+  ### Marker cassettes (exclude from curatable_objects[])
   - Selection markers used for gene deletion/disruption: kanMX, natMX, hphMX, URA3, LEU2, HIS3, TRP1.
   - These are tools used to create alleles, not alleles themselves.
   - The allele is the deletion/disruption (e.g., his3Δ::kanMX), not the kanMX marker alone.
@@ -17,8 +17,15 @@ content: |
   - BY4741, BY4742, BY4743 are standard deletion collection strains — NOT alleles.
   - W303, S288C are common laboratory strains — NOT alleles.
   - SK1, Y55, RM11 are natural/other common strains.
-  - Strain names belong in strain context, not in alleles[].
+  - Strain names belong in strain context, not in curatable_objects[].
 
   ### Systematic deletion collection
   - Yeast deletion collection alleles follow the format: geneΔ::kanMX4.
   - These are standardized alleles and should be captured when experimentally used.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

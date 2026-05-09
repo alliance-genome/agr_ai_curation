@@ -11,6 +11,8 @@ Do not duplicate these functions in individual agent files.
 import logging
 from typing import Optional, List, Dict, Any, Type
 
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +31,27 @@ After completing your research/queries, you MUST produce the {output_type_name} 
 - NEVER finish with tool calls only - ALWAYS synthesize into the final JSON response
 - The JSON must start with {{ and end with }} - no text before or after
 """
+
+
+DOMAIN_ENVELOPE_EXTRACTION_INSTRUCTION_TEMPLATE = """
+## DOMAIN ENVELOPE EXTRACTION CONTRACT
+For {output_type_name}, `curatable_objects[]` is the only semantic object list.
+- Do not emit top-level legacy semantic lists: `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`
+- Put raw mentions, exclusions, ambiguities, verified evidence records, normalization notes, provenance, and repair notes under `metadata`
+- Each `curatable_objects[]` entry must include `object_type`, `payload`, and either `object_id` or `pending_ref_id`
+- Add `object_role`, `model_ref` and/or `schema_ref`, `definition_state`/`definition_notes`, `evidence_record_ids`, `metadata_refs`, field/object refs, and `repair_hints` whenever that information is available
+- In repair mode, keep object IDs stable, update only the affected payload fields, and preserve metadata references needed to explain the repair
+"""
+
+
+def _is_domain_envelope_extraction_output_type(output_type: Optional[Type]) -> bool:
+    if output_type is None:
+        return False
+
+    try:
+        return issubclass(output_type, DomainEnvelopeExtractionResult)
+    except TypeError:
+        return False
 
 
 def inject_structured_output_instruction(
@@ -51,7 +74,7 @@ def inject_structured_output_instruction(
         insert_after_first_section: If True, insert after the first ## section.
                                     If False, prepend to the beginning.
                                     Note: if no "## " section headers exist,
-                                    the instruction is prepended as a fallback.
+                                    the instruction is prepended at the beginning.
 
     Returns:
         Modified instructions with structured output requirement injected.
@@ -69,6 +92,13 @@ def inject_structured_output_instruction(
     output_instruction = STRUCTURED_OUTPUT_INSTRUCTION_TEMPLATE.format(
         output_type_name=type_name
     )
+    if _is_domain_envelope_extraction_output_type(output_type):
+        output_instruction = (
+            output_instruction
+            + DOMAIN_ENVELOPE_EXTRACTION_INSTRUCTION_TEMPLATE.format(
+                output_type_name=type_name
+            )
+        )
 
     if not insert_after_first_section:
         # Simple prepend
@@ -93,7 +123,7 @@ def inject_structured_output_instruction(
         lines.insert(insert_index, output_instruction)
         return '\n'.join(lines)
     else:
-        # Fallback: just prepend
+        # No section boundary found; prepend at the beginning.
         return output_instruction + "\n" + instructions
 
 

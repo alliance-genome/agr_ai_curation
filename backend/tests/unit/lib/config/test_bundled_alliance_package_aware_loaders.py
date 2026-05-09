@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
+from src.schemas.models import DomainEnvelopeExtractionResult
 
 from ..packages import find_repo_root
 
@@ -114,3 +115,27 @@ def test_bundled_alliance_discover_agent_schemas_defaults_to_runtime_packages(mo
 
     assert "GeneValidationEnvelope" in schemas
     assert schema_discovery.get_schema_for_agent("gene").__name__ == "GeneValidationEnvelope"
+
+
+def test_bundled_alliance_first_pass_extractors_share_domain_envelope_schema(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    schemas = schema_discovery.discover_agent_schemas(force_reload=True)
+
+    expected = {
+        "gene_expression": "GeneExpressionEnvelope",
+        "gene_extractor": "GeneExtractionResultEnvelope",
+        "allele_extractor": "AlleleExtractionResultEnvelope",
+        "disease_extractor": "DiseaseExtractionResultEnvelope",
+        "chemical_extractor": "ChemicalExtractionResultEnvelope",
+        "phenotype_extractor": "PhenotypeResultEnvelope",
+    }
+    for agent_name, schema_name in expected.items():
+        discovered_schema = schema_discovery.get_schema_for_agent(agent_name)
+
+        assert schema_name in schemas
+        assert discovered_schema is not None
+        assert discovered_schema.__name__ == schema_name
+        assert issubclass(discovered_schema, DomainEnvelopeExtractionResult)
+        assert "curatable_objects" in discovered_schema.model_fields
+        assert "metadata" in discovered_schema.model_fields

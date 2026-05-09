@@ -8,17 +8,17 @@ content: |
   - Spontaneous/induced alleles: gene<allele> — e.g., Apc<Min>, Kit<W>.
   - Conditional alleles: gene<tm#(flox)Lab> or gene<fl> notation.
 
-  ### Transgenes (exclude from alleles[])
+  ### Transgenes (exclude from curatable_objects[])
   - Transgene notation: Tg(construct)### — e.g., Tg(Camk2a-cre)T29-1Stl.
   - Cre driver lines (Tg(promoter-Cre)) are tools for conditional genetics, NOT alleles.
   - Reporter transgenes (Tg(promoter-GFP), ROSA26 reporters) are tools.
-  - Capture in raw_mentions[] but exclude from alleles[] unless the transgene IS the experimental variable.
+  - Capture in metadata.raw_mentions[] but exclude from curatable_objects[] unless the transgene IS the experimental variable.
 
   ### Strain disambiguation
   - C57BL/6 (B6), BALB/c, 129S1, FVB/N, DBA/2 are inbred mouse strains — NOT alleles.
   - Mixed background notations (e.g., "B6;129") describe strain background.
   - Congenic/consomic strain designations are background context, not alleles.
-  - Strain names belong in strain context, not in alleles[].
+  - Strain names belong in strain context, not in curatable_objects[].
 
   ### Knockout/knockin conventions
   - "Knockout" or "KO" alleles are targeted null alleles (tm notation).
@@ -38,4 +38,11 @@ content: |
   - Suffix-only searches are discovery aids, not final answers: they often return alleles from many genes.
   - Before surfacing any candidate to the curator, cross-check that the candidate's gene matches the experimental gene(s) discussed in the current paper.
   - Do not surface unrelated-gene matches just because they share the same lab-code suffix or attribution text.
-  - If multiple same-gene candidates still remain after using `fullname_attribution`, lab-code reasoning, and allele-type matching, keep the allele in ambiguities[] rather than guessing.
+  - If multiple same-gene candidates still remain after using `fullname_attribution`, lab-code reasoning, and allele-type matching, keep the allele in metadata.ambiguities[] rather than guessing.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

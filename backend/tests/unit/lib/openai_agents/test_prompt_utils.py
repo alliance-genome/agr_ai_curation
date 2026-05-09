@@ -7,6 +7,8 @@ import sys
 
 import pytest
 
+from src.lib.openai_agents.models import GeneExtractionResultEnvelope
+
 PROMPT_UTILS_PATH = Path(__file__).resolve().parents[4] / "src/lib/openai_agents/prompt_utils.py"
 _spec = spec_from_file_location("prompt_utils_under_test", PROMPT_UTILS_PATH)
 assert _spec is not None and _spec.loader is not None
@@ -59,6 +61,21 @@ def test_inject_structured_output_instruction_inserts_before_second_section():
     assert result.index("Line B") < instruction_idx
     assert instruction_idx < second_section_idx
     assert "TestSchema structured output" in result
+
+
+def test_inject_structured_output_instruction_adds_domain_envelope_contract():
+    instructions = "## First\nLine A\n## Second\nTail"
+
+    result = inject_structured_output_instruction(
+        instructions=instructions,
+        output_type=GeneExtractionResultEnvelope,
+    )
+
+    assert "## DOMAIN ENVELOPE EXTRACTION CONTRACT" in result
+    assert "`curatable_objects[]` is the only semantic object list" in result
+    assert "Do not emit top-level legacy semantic lists" in result
+    assert "under `metadata`" in result
+    assert "In repair mode" in result
 
 
 def test_inject_structured_output_instruction_falls_back_to_prepend_without_second_section():

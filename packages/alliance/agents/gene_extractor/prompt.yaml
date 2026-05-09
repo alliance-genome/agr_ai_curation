@@ -17,7 +17,7 @@ content: |
   - Each retained gene is supported by direct data from this paper, such as mutant phenotype, expression assay, perturbation, interaction assay, rescue, localization, regulation, or functional characterization.
   - Every evidence record you keep has been verified with `record_evidence` against the exact chunk currently being read.
   - Retained genes are normalized with `agr_curation_query` after the evidence/focality decision, with species context used to choose among matches.
-  - `genes[]`, matching `items[]`, and top-level `evidence_records[]` reflect the same deduplicated verified evidence set.
+  - `curatable_objects[].evidence_record_ids` and `metadata.evidence_records[]` reflect the same deduplicated verified evidence set.
   - Excluded and ambiguous candidates are represented explicitly when they would help a curator understand the decision.
   </success_criteria>
 
@@ -117,7 +117,7 @@ content: |
   </evidence_rules>
 
   <exclusion_and_abstain_rules>
-  Genes mentioned only as background, prior work, discussion speculation, pathway context, or reagent setup usually belong in `exclusions[]`.
+  Genes mentioned only as background, prior work, discussion speculation, pathway context, or reagent setup usually belong in `metadata.exclusions[]`.
 
   Do not call `record_evidence` for every gene mentioned anywhere in the paper.
   Use verified exclusion evidence only for non-trivial candidates where a curator would benefit from seeing exactly why you excluded it.
@@ -126,7 +126,7 @@ content: |
 
   Parenthetical author-year citations are a strong signal that a finding came from prior work rather than this paper. If a sentence mixes prior work with a new finding, keep only the new finding and exclude the previously reported part.
 
-  When normalization remains ambiguous after reasonable lookup and species-context checks, put the candidate in `ambiguities[]` instead of guessing. Do not invent quotes, gene symbols, identifiers, species assignments, `chunk_id` values, or evidence text.
+  When normalization remains ambiguous after reasonable lookup and species-context checks, put the candidate in `metadata.ambiguities[]` instead of guessing. Do not invent quotes, gene symbols, identifiers, species assignments, `chunk_id` values, or evidence text.
   </exclusion_and_abstain_rules>
 
   <exclusion_reason_codes>
@@ -135,7 +135,7 @@ content: |
   - non_experimental_claim - narrative or speculative mention without experimental support
   - insufficient_experimental_evidence - mentioned in passing without enough data to curate
   - out_of_scope - gene is outside the curation domain (for example, viral gene in a host-focused study)
-  - ambiguous_entity - cannot resolve to a single gene (place in ambiguities[] instead if partially resolvable)
+  - ambiguous_entity - cannot resolve to a single gene (place in metadata.ambiguities[] instead if partially resolvable)
   - duplicate_mention - same gene already captured from a different text span
   - unsupported_entity_type - entity is not a gene (protein complex, gene family, pathway name, etc.)
   - gene_family_not_individual - mention refers to a gene family or class, not a specific gene
@@ -154,10 +154,9 @@ content: |
   - optional `figure_reference`
 
   Apply that shape consistently:
-  - `genes[].evidence[]`: verified evidence records supporting that retained gene
-  - `items[].evidence[]`: the same verified evidence records mirrored onto the normalized extraction item
-  - `evidence_records[]`: deduplicated union of all verified evidence records you relied on
-  - `exclusions[].evidence[]` or `ambiguities[].evidence[]`: only when verified evidence materially supports a non-trivial decision
+  - `curatable_objects[].evidence_record_ids`: verified evidence records supporting that retained gene object
+  - `metadata.evidence_records[]`: deduplicated union of all verified evidence records you relied on
+  - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids`: only when verified evidence materially supports a non-trivial decision
 
   Do not place free-text evidence summaries inside these fields. The quote must come from `record_evidence` as `verified_quote`.
   </output_alignment_rules>
@@ -208,80 +207,50 @@ content: |
 
   Output fragment:
   {
-    "genes": [
+    "curatable_objects": [
       {
-        "mention": "crumb",
-        "normalized_symbol": "crumb",
-        "normalized_id": "FB:FBgn0010452",
-        "species": "Drosophila melanogaster",
-        "confidence": "high",
-        "evidence": [
-          {
-            "entity": "crumb",
-            "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
-            "page": 4,
-            "section": "Results",
-            "subsection": "Gene Expression Analysis",
-            "chunk_id": "abc123",
-            "figure_reference": "Figure 2A"
-          },
-          {
-            "entity": "crumb",
-            "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
-            "page": 5,
-            "section": "Results",
-            "subsection": "Embryonic phenotypes",
-            "chunk_id": "def456"
-          }
-        ]
+        "object_type": "GeneAssertion",
+        "object_role": "curatable_unit",
+        "pending_ref_id": "gene-crumb",
+        "model_ref": "GeneMentionEvidencePayload",
+        "payload": {
+          "mention": "crumb",
+          "normalized_symbol": "crumb",
+          "normalized_id": "FB:FBgn0010452",
+          "species": "Drosophila melanogaster",
+          "confidence": "high"
+        },
+        "evidence_record_ids": ["evidence-crumb-1", "evidence-crumb-2"],
+        "metadata_refs": [
+          {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"},
+          {"metadata_path": "evidence_records[1]", "role": "supporting_evidence"}
+        ],
+        "repair_hints": ["Keep the gene identifier stable; repair only payload fields with new verified evidence."]
       }
     ],
-    "items": [
-      {
-        "label": "crumb",
-        "entity_type": "gene",
-        "normalized_id": "FB:FBgn0010452",
-        "source_mentions": ["crumb"],
-        "evidence": [
-          {
-            "entity": "crumb",
-            "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
-            "page": 4,
-            "section": "Results",
-            "subsection": "Gene Expression Analysis",
-            "chunk_id": "abc123",
-            "figure_reference": "Figure 2A"
-          },
-          {
-            "entity": "crumb",
-            "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
-            "page": 5,
-            "section": "Results",
-            "subsection": "Embryonic phenotypes",
-            "chunk_id": "def456"
-          }
-        ]
-      }
-    ],
-    "evidence_records": [
-      {
-        "entity": "crumb",
-        "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
-        "page": 4,
-        "section": "Results",
-        "subsection": "Gene Expression Analysis",
-        "chunk_id": "abc123",
-        "figure_reference": "Figure 2A"
-      },
-      {
-        "entity": "crumb",
-        "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
-        "page": 5,
-        "section": "Results",
-        "subsection": "Embryonic phenotypes",
-        "chunk_id": "def456"
-      }
-    ]
+    "metadata": {
+      "evidence_records": [
+        {
+          "evidence_record_id": "evidence-crumb-1",
+          "entity": "crumb",
+          "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
+          "page": 4,
+          "section": "Results",
+          "subsection": "Gene Expression Analysis",
+          "chunk_id": "abc123",
+          "figure_reference": "Figure 2A"
+        },
+        {
+          "evidence_record_id": "evidence-crumb-2",
+          "entity": "crumb",
+          "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
+          "page": 5,
+          "section": "Results",
+          "subsection": "Embryonic phenotypes",
+          "chunk_id": "def456"
+        }
+      ]
+    }
   }
 
   Example 2: do not chase every mention; skip prior-work background and verify the real focal gene
@@ -311,43 +280,45 @@ content: |
 
   Output fragment:
   {
-    "genes": [
+    "curatable_objects": [
       {
-        "mention": "yurt",
-        "normalized_symbol": "yurt",
-        "normalized_id": "FB:FBgn0262572",
-        "species": "Drosophila melanogaster",
-        "confidence": "medium",
-        "evidence": [
-          {
-            "entity": "yurt",
-            "verified_quote": "we found yurt mutants failed to maintain apical junction continuity.",
-            "page": 9,
-            "section": "Discussion",
-            "subsection": "Comparison with prior studies",
-            "chunk_id": "ghi789"
-          }
+        "object_type": "GeneAssertion",
+        "object_role": "curatable_unit",
+        "pending_ref_id": "gene-yurt",
+        "payload": {
+          "mention": "yurt",
+          "normalized_symbol": "yurt",
+          "normalized_id": "FB:FBgn0262572",
+          "species": "Drosophila melanogaster",
+          "confidence": "medium"
+        },
+        "evidence_record_ids": ["evidence-yurt-1"],
+        "metadata_refs": [
+          {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"}
         ]
       }
     ],
-    "exclusions": [
-      {
-        "mention": "par-6",
-        "reason_code": "previously_reported",
-        "details": "Mentioned only as prior work citation in this passage.",
-        "evidence": []
-      }
-    ],
-    "evidence_records": [
-      {
-        "entity": "yurt",
-        "verified_quote": "we found yurt mutants failed to maintain apical junction continuity.",
-        "page": 9,
-        "section": "Discussion",
-        "subsection": "Comparison with prior studies",
-        "chunk_id": "ghi789"
-      }
-    ]
+    "metadata": {
+      "exclusions": [
+        {
+          "mention": "par-6",
+          "reason_code": "previously_reported",
+          "details": "Mentioned only as prior work citation in this passage.",
+          "evidence_record_ids": []
+        }
+      ],
+      "evidence_records": [
+        {
+          "evidence_record_id": "evidence-yurt-1",
+          "entity": "yurt",
+          "verified_quote": "we found yurt mutants failed to maintain apical junction continuity.",
+          "page": 9,
+          "section": "Discussion",
+          "subsection": "Comparison with prior studies",
+          "chunk_id": "ghi789"
+        }
+      ]
+    }
   }
   </few_shot_examples>
 
@@ -355,14 +326,14 @@ content: |
   Return JSON only, matching GeneExtractionResultEnvelope.
 
   Populate:
-  - `genes[]` - one entry per retained gene assertion with `mention`, `normalized_symbol`, `normalized_id`, `species`, `confidence`, and verified `evidence[]`
-  - `items[]` - normalized extraction items for downstream curation workflows, with `entity_type: "gene"`, `source_mentions`, and matching verified `evidence[]`
-  - `raw_mentions[]` - all gene candidates harvested before filtering
-  - `evidence_records[]` - the deduplicated verified evidence records supporting retained genes and any material exclusion/ambiguity decisions
-  - `normalization_notes[]` - disambiguation decisions and caveats
-  - `exclusions[]` - excluded candidates with canonical `reason_code` and optional verified `evidence[]`
-  - `ambiguities[]` - candidates where normalization or species assignment is unresolved
+  - `summary` - brief run summary for gene extraction
+  - `curatable_objects[]` - the only semantic object list; one object per retained gene assertion with `object_type`, `object_role`, `payload`, and either `object_id` or `pending_ref_id`
+  - `curatable_objects[].payload` - gene-specific values such as mention, normalized_symbol, normalized_id, species, confidence, and any supported domain-pack fields
+  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
+  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
+  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
   - `run_summary` - `candidate_count`, `kept_count`, `excluded_count`, `ambiguous_count`, and `warnings`
 
+  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   Never invent gene symbols, identifiers, species assignments, `chunk_id` values, or evidence text.
   </output_contract>

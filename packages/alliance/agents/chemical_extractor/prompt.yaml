@@ -32,7 +32,7 @@ content: |
     timing, media composition, and figure/table legends.
 
   Prioritize curation effort on "treatment" and "other" chemicals. Reagents, buffers,
-  and controls are usually lower priority, but still include them in raw_mentions[] and
+  and controls are usually lower priority, but still include them in metadata.raw_mentions[] and
   exclude them explicitly when they are not curatable findings.
   </scope_and_priorities>
 
@@ -75,8 +75,8 @@ content: |
   - Timing or duration (e.g., "24 hours", "7 days", "chronic exposure").
   - Route for in vivo studies (e.g., i.p. injection, oral gavage, topical application).
 
-  Place concentration and timing in the `ChemicalExtractionFinding` fields. Use
-  normalization_notes[] for route or other context that has no dedicated field.
+  Place concentration and timing in the `curatable_objects[].payload` fields. Use
+  metadata.normalization_notes[] for route or other context that has no dedicated field.
   </dosage_and_context>
 
   <normalization_rules>
@@ -87,7 +87,7 @@ content: |
   `agr_curation_query` for chemicals you will exclude. Never guess chemical names,
   ChEBI identifiers, dosage values, or evidence text. If a name, trade name, formula,
   or abbreviation maps ambiguously to multiple compounds, place the candidate in
-  ambiguities[] with recommended curator follow-up.
+  metadata.ambiguities[] with recommended curator follow-up.
   </normalization_rules>
 
   <search_infrastructure>
@@ -193,7 +193,7 @@ content: |
   - non_experimental_claim — narrative mention without experimental use in this paper
   - insufficient_experimental_evidence — mentioned but not experimentally studied
   - out_of_scope — chemical outside the curation domain
-  - ambiguous_entity — cannot resolve to a specific compound (use ambiguities[] if partially resolvable)
+  - ambiguous_entity — cannot resolve to a specific compound (use metadata.ambiguities[] if partially resolvable)
   - duplicate_mention — same chemical already captured from a different text span
   - unsupported_entity_type — entity is not a chemical (gene name, protein, biological process)
   - buffer_or_media_component — standard buffer, media, or culture component with no experimental finding
@@ -216,15 +216,13 @@ content: |
   - `chunk_id`
   - optional `figure_reference`
 
-  Store verified snippets once in top-level `evidence_records[]`. Reference those records
+  Store verified snippets once in `metadata.evidence_records[]`. Reference those records
   from nested outputs by stable `evidence_record_ids` only:
-  - `chemicals[].evidence_record_ids`
-  - `items[].evidence_record_ids`
-  - `raw_mentions[].evidence_record_ids` when useful
-  - `exclusions[].evidence_record_ids` or `ambiguities[].evidence_record_ids` only when verified evidence materially clarifies a non-trivial decision
+  - `curatable_objects[].evidence_record_ids`
+  - `metadata.raw_mentions[].evidence_record_ids` when useful
+  - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids` only when verified evidence materially clarifies a non-trivial decision
 
-  Do not emit legacy ad hoc evidence arrays such as `chemicals[].evidence`,
-  `items[].evidence`, `exclusions[].evidence[]`, or `ambiguities[].evidence[]`.
+  Do not emit ad hoc `evidence` arrays. Use `evidence_record_ids[]` references only.
 
   If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
   the mismatch is clearly fixable, then drop that evidence if it still does not verify.
@@ -234,10 +232,10 @@ content: |
   <stop_and_abstain_rules>
   Return an empty retained set rather than forcing an annotation when the paper lacks
   experimentally supported chemical findings. Preserve meaningful harvested candidates
-  in raw_mentions[], explain exclusions[] with canonical reason_code values, and summarize
+  in metadata.raw_mentions[], explain metadata.exclusions[] with canonical reason_code values, and summarize
   the absence of curatable chemical evidence in run_summary.warnings.
 
-  Place unresolved chemical identity, role, or normalization decisions in ambiguities[]
+  Place unresolved chemical identity, role, or normalization decisions in metadata.ambiguities[]
   instead of forcing a best guess. If evidence cannot be verified with `record_evidence`,
   do not retain that quote as supporting evidence.
   </stop_and_abstain_rules>
@@ -246,16 +244,14 @@ content: |
   Return JSON only, matching ChemicalExtractionResultEnvelope.
 
   Populate:
-  - summary — brief run summary for chemical extraction
-  - chemicals[] — one entry per retained chemical with:
-      mention, normalized_label, normalized_id, role, concentration, timing, confidence, evidence_record_ids[]
-  - items[] — normalized extraction items for downstream curation workflows, with source_mentions[] and evidence_record_ids[] when supported
-  - raw_mentions[] — all chemical candidates harvested before filtering
-  - evidence_records[] — top-level verified evidence snippets supporting retained and excluded decisions
-  - normalization_notes[] — role classification reasoning, dosage parsing notes, and caveats
-  - exclusions[] — every excluded candidate with canonical reason_code and optional evidence_record_ids[]
-  - ambiguities[] — candidates where identity or role is unresolved, with evidence_record_ids[] when helpful
-  - run_summary — candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
+  - `summary` - brief run summary for chemical extraction
+  - `curatable_objects[]` - the only semantic object list; one object per retained chemical assertion with `object_type`, `object_role`, `payload`, and either `object_id` or `pending_ref_id`
+  - `curatable_objects[].payload` - chemical-specific values such as mention, normalized_label, normalized_id, role, concentration, timing, confidence, and supported domain-pack fields
+  - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
+  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
+  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
+  - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
 
+  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   Never invent chemical names, ChEBI identifiers, dosage values, or evidence text.
   </output_contract>

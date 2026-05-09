@@ -14,3 +14,10 @@ content: |
   ### Multi-species disambiguation
   - Drosophila p53 is referred to as "p53" or "Dmp53" — NOT Trp53 (mouse) or TP53 (human).
   - Drosophila uses gene symbols like Dl (Delta), not DLL (human). Verify species context carefully.
+
+
+  ### Shared domain-envelope output contract
+  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
+  - Each curatable object should include `object_type`, `object_role`, `payload`, `evidence_record_ids`, `metadata_refs`, and either `object_id` or `pending_ref_id`; include `schema_ref` or `model_ref`, definition-state notes, field/object refs, and `repair_hints` when available.
+  - In repair mode, keep object IDs stable and repair only the affected payload fields while preserving evidence and metadata references.

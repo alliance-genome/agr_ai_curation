@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
 
 
 _FIELD_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*")
@@ -267,10 +267,46 @@ class FieldRef(DomainEnvelopeBaseModel):
         return validate_field_path_syntax(value)
 
 
+class EnvelopeMetadataRef(DomainEnvelopeBaseModel):
+    """Reference to supporting metadata carried outside semantic objects."""
+
+    metadata_path: str = Field(
+        description=(
+            "Relative JSON path inside envelope metadata, such as "
+            "raw_mentions[0] or evidence_records[2]"
+        )
+    )
+    role: Optional[str] = Field(
+        default=None,
+        description="Provider-owned role for the metadata reference",
+    )
+    description: Optional[str] = Field(
+        default=None,
+        description="Optional curator-facing description of why this metadata is linked",
+    )
+
+    @field_validator("metadata_path")
+    @classmethod
+    def _validate_metadata_path(cls, value: str) -> str:
+        return validate_field_path_syntax(value)
+
+    @field_validator("role", "description")
+    @classmethod
+    def _validate_optional_strings(cls, value: Optional[str], info) -> Optional[str]:
+        return _validate_non_empty_identifier(value, info.field_name)
+
+
 class CuratableObjectEnvelope(DomainEnvelopeBaseModel):
     """One curatable object carried by a domain envelope."""
 
     object_type: str = Field(description="Domain-pack object type key")
+    object_role: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider-owned role for this object within the envelope, such as "
+            "curatable_unit, supporting_reference, or evidence_quote"
+        ),
+    )
     payload: dict[str, Any] = Field(
         default_factory=dict,
         description="Provider-neutral JSON payload extracted for this object",
@@ -286,6 +322,10 @@ class CuratableObjectEnvelope(DomainEnvelopeBaseModel):
     schema_ref: Optional[SchemaRef] = Field(
         default=None,
         description="Optional schema ref that defines this object's payload contract",
+    )
+    model_ref: Optional[str] = Field(
+        default=None,
+        description="Optional domain-pack model_id that defines this object's payload contract",
     )
     status: CuratableObjectStatus = Field(default=CuratableObjectStatus.EXTRACTED)
     definition_state: DefinitionState = Field(
@@ -304,12 +344,24 @@ class CuratableObjectEnvelope(DomainEnvelopeBaseModel):
         default_factory=list,
         description="Field-level references to fields in objects in the same envelope",
     )
+    evidence_record_ids: list[StrictStr] = Field(
+        default_factory=list,
+        description="Stable evidence record IDs supporting this curatable object",
+    )
+    metadata_refs: list[EnvelopeMetadataRef] = Field(
+        default_factory=list,
+        description="References to raw mentions, exclusions, ambiguities, notes, or evidence in envelope metadata",
+    )
+    repair_hints: list[str] = Field(
+        default_factory=list,
+        description="Provider-owned hints downstream validators may use when requesting repairs",
+    )
     metadata: dict[str, Any] = Field(
         default_factory=dict,
         description="Domain-pack-owned metadata that does not affect core validation",
     )
 
-    @field_validator("object_type", "object_id", "pending_ref_id")
+    @field_validator("object_type", "object_role", "object_id", "pending_ref_id", "model_ref")
     @classmethod
     def _validate_object_identifiers(cls, value: Optional[str], info) -> Optional[str]:
         return _validate_non_empty_identifier(value, info.field_name)
@@ -580,6 +632,7 @@ __all__ = [
     "DefinitionState",
     "DomainEnvelope",
     "DomainEnvelopeStatus",
+    "EnvelopeMetadataRef",
     "FieldRef",
     "HistoryActorType",
     "HistoryEvent",

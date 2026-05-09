@@ -47,6 +47,40 @@ def _sample_legacy_envelope_payload() -> dict:
     return payload
 
 
+def _sample_domain_envelope_payload() -> dict:
+    return {
+        "summary": "Domain-envelope extraction completed.",
+        "curatable_objects": [
+            {
+                "object_type": "gene",
+                "pending_ref_id": "gene-notch",
+                "payload": {"mention": "notch", "normalized_symbol": "N"},
+                "evidence_record_ids": ["evidence-notch"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-notch",
+                    "entity": "notch",
+                    "verified_quote": "notch was experimentally analyzed.",
+                    "page": 4,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                }
+            ],
+            "raw_mentions": [{"mention": "notch", "entity_type": "gene"}],
+        },
+        "run_summary": {
+            "candidate_count": 1,
+            "kept_count": 1,
+            "excluded_count": 0,
+            "ambiguous_count": 0,
+            "warnings": [],
+        },
+    }
+
+
 class _FakeSession:
     def __init__(self, *, fail_commit: bool = False, fail_flush: bool = False):
         self.fail_commit = fail_commit
@@ -297,6 +331,23 @@ def test_build_extraction_envelope_candidate_with_evidence_prefers_candidate_pay
     assert observed_payloads == [candidate.payload_json]
     assert evidence_metadata["evidence_count"] == 1
     assert evidence_metadata["evidence_records"] == [{"entity": "notch"}]
+
+
+def test_build_extraction_envelope_candidate_accepts_domain_envelope_curatable_objects():
+    candidate, evidence_metadata = build_extraction_envelope_candidate_with_evidence(
+        json.dumps(_sample_domain_envelope_payload()),
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        conversation_summary="Extract domain-envelope gene findings",
+    )
+
+    assert candidate is not None
+    assert candidate.agent_key == "gene_extractor"
+    assert candidate.adapter_key == "gene"
+    assert candidate.candidate_count == 1
+    assert candidate.payload_json["curatable_objects"][0]["pending_ref_id"] == "gene-notch"
+    assert evidence_metadata["evidence_count"] == 1
+    assert evidence_metadata["evidence_records"][0]["evidence_record_id"] == "evidence-notch"
 
 
 def test_build_extraction_envelope_candidate_preserves_caller_adapter_when_envelope_omits_one(

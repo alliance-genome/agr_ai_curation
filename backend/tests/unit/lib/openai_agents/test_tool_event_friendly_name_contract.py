@@ -816,18 +816,21 @@ async def test_runner_accepts_schema_defined_retained_collection_without_items(m
             fake_events,
             final_output={
                 "summary": "Retained one focal allele with verified evidence.",
-                "alleles": [
+                "curatable_objects": [
                     {
-                        "mention": "Actin 5C",
-                        "normalized_symbol": "Act5C",
-                        "normalized_id": "FB:FBal0000001",
-                        "associated_gene": "Act5C",
-                        "confidence": "high",
+                        "object_type": "allele",
+                        "pending_ref_id": "allele-act5c",
+                        "payload": {
+                            "mention": "Actin 5C",
+                            "normalized_symbol": "Act5C",
+                            "normalized_id": "FB:FBal0000001",
+                            "associated_gene": "Act5C",
+                            "confidence": "high",
+                        },
                         "evidence_record_ids": [expected_record["evidence_record_id"]],
                     }
                 ],
-                "items": [],
-                "evidence_records": [],
+                "metadata": {"evidence_records": []},
                 "run_summary": {"kept_count": 1},
             },
         ),
@@ -1605,26 +1608,33 @@ async def test_allele_specialist_rejects_empty_evidence_after_section_label_reco
             final_output=_FakeStructuredOutput(
                 {
                     "summary": "Found plausible alleles but evidence verification failed.",
-                    "alleles": [
+                    "curatable_objects": [
                         {
-                            "mention": "Trp53 fl/fl",
-                            "normalized_symbol": "Trp53<sup>tm1Brn</sup>",
-                            "normalized_id": "MGI:1931011",
-                            "associated_gene": "Trp53",
-                            "confidence": "medium",
+                            "object_type": "allele",
+                            "pending_ref_id": "allele-trp53",
+                            "payload": {
+                                "mention": "Trp53 fl/fl",
+                                "normalized_symbol": "Trp53<sup>tm1Brn</sup>",
+                                "normalized_id": "MGI:1931011",
+                                "associated_gene": "Trp53",
+                                "confidence": "medium",
+                            },
                             "evidence_record_ids": [],
                         },
                         {
-                            "mention": "Wwox fl/fl",
-                            "normalized_symbol": "Wwox<sup>tm1Ria</sup>",
-                            "normalized_id": "MGI:3704944",
-                            "associated_gene": "Wwox",
-                            "confidence": "medium",
+                            "object_type": "allele",
+                            "pending_ref_id": "allele-wwox",
+                            "payload": {
+                                "mention": "Wwox fl/fl",
+                                "normalized_symbol": "Wwox<sup>tm1Ria</sup>",
+                                "normalized_id": "MGI:3704944",
+                                "associated_gene": "Wwox",
+                                "confidence": "medium",
+                            },
                             "evidence_record_ids": [],
                         },
                     ],
-                    "items": [],
-                    "evidence_records": [],
+                    "metadata": {"evidence_records": []},
                     "run_summary": {"kept_count": 2},
                 }
             ),
@@ -1698,18 +1708,21 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
             final_output=_FakeStructuredOutput(
                 {
                     "summary": "Retained one focal allele with verified evidence.",
-                    "alleles": [
+                    "curatable_objects": [
                         {
-                            "mention": "Actin 5C",
-                            "normalized_symbol": "Act5C",
-                            "normalized_id": "FB:FBal0000001",
-                            "associated_gene": "Act5C",
-                            "confidence": "high",
+                            "object_type": "allele",
+                            "pending_ref_id": "allele-act5c",
+                            "payload": {
+                                "mention": "Actin 5C",
+                                "normalized_symbol": "Act5C",
+                                "normalized_id": "FB:FBal0000001",
+                                "associated_gene": "Act5C",
+                                "confidence": "high",
+                            },
                             "evidence_record_ids": [expected_record["evidence_record_id"]],
                         }
                     ],
-                    "items": [],
-                    "evidence_records": [],
+                    "metadata": {"evidence_records": []},
                     "run_summary": {"kept_count": 1},
                 }
             ),
@@ -1734,7 +1747,9 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
 
     assert not any(event.get("type") == "SPECIALIST_ERROR" for event in captured_events)
     assert any(event.get("type") == "evidence_summary" for event in captured_events)
-    assert json.loads(result)["alleles"][0]["evidence_record_ids"] == [expected_record["evidence_record_id"]]
+    assert json.loads(result)["curatable_objects"][0]["evidence_record_ids"] == [
+        expected_record["evidence_record_id"]
+    ]
 
 
 @pytest.mark.asyncio

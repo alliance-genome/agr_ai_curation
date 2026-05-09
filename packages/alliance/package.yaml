@@ -30,6 +30,7 @@ agent_bundles:
     has_schema: true
   - name: chemical_extractor
     has_schema: true
+    group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
   - name: csv_formatter
   - name: disease
     has_schema: true
