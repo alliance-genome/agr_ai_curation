@@ -1,6 +1,7 @@
 """Domain-pack metadata loading and registry helpers."""
 
 from .loader import (
+    DomainPackContractError,
     DomainFixturePackError,
     DomainPackMetadataError,
     load_domain_fixture_pack,
@@ -16,6 +17,7 @@ from .registry import (
 
 __all__ = [
     "DomainFixturePackError",
+    "DomainPackContractError",
     "DomainPackDiscoveryFailure",
     "DomainPackMetadataError",
     "DomainPackRegistry",

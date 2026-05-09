@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import cached_property
 from pathlib import Path
 
 from src.schemas.domain_pack_metadata import DomainPackFixturePackRef, DomainPackMetadata
@@ -46,13 +47,13 @@ class DomainPackRegistry:
     failed_packs: tuple[DomainPackDiscoveryFailure, ...]
     validation_errors: tuple[str, ...] = ()
 
-    @property
+    @cached_property
     def packs_by_id(self) -> dict[str, LoadedDomainPack]:
         """Return loaded packs keyed by pack ID."""
 
         return {pack.pack_id: pack for pack in self.loaded_packs}
 
-    @property
+    @cached_property
     def fixture_packs_by_id(self) -> dict[tuple[str, str], DomainPackFixturePackRef]:
         """Return fixture-pack refs keyed by ``(pack_id, fixture_pack_id)``."""
 
