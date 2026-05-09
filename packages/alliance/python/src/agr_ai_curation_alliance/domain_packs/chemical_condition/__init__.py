@@ -644,6 +644,9 @@ def validate_pending_chemical_condition_envelope(
         for obj in envelope.objects
         if obj.object_type == CHEMICAL_CONDITION_OBJECT_TYPE
     ]
+    chemical_terms = [
+        obj for obj in envelope.objects if obj.object_type == CHEMICAL_TERM_OBJECT_TYPE
+    ]
     if not conditions:
         findings.append(
             ValidationFinding(
@@ -658,6 +661,8 @@ def validate_pending_chemical_condition_envelope(
     }
     for condition in conditions:
         findings.extend(_validate_condition_object(condition, objects_by_ref))
+    for chemical_term in chemical_terms:
+        findings.extend(_validate_chemical_term_object(chemical_term))
 
     return tuple(findings)
 
@@ -769,6 +774,55 @@ def _validate_condition_object(
                 code="alliance.chemical_condition.export_behavior_not_blocked",
                 message="ChemicalCondition export behavior must remain blocked in this pack.",
                 object_ref=condition_ref,
+            )
+        )
+
+    return findings
+
+
+def _validate_chemical_term_object(
+    chemical_term: CuratableObjectEnvelope,
+) -> list[ValidationFinding]:
+    findings: list[ValidationFinding] = []
+    chemical_term_ref = _ref_for_object(chemical_term)
+
+    missing_payload_fields = sorted(
+        field_path
+        for field_path in ("curie", "name")
+        if not field_path_exists(chemical_term.payload, field_path)
+    )
+    if missing_payload_fields:
+        findings.append(
+            ValidationFinding(
+                severity=ValidationFindingSeverity.ERROR,
+                code="alliance.chemical_condition.chemical_term_required_payload_missing",
+                message=(
+                    "ChemicalTerm is missing required payload fields: "
+                    + ", ".join(missing_payload_fields)
+                ),
+                object_ref=chemical_term_ref,
+                details={"missing_payload_fields": missing_payload_fields},
+            )
+        )
+
+    chemical_curie = _payload_string(chemical_term.payload, "curie")
+    if chemical_curie is not None and _CHEBI_CURIE_PATTERN.match(chemical_curie) is None:
+        findings.append(
+            ValidationFinding(
+                severity=ValidationFindingSeverity.ERROR,
+                code="alliance.chemical_condition.invalid_chebi_curie",
+                message=(
+                    "ChemicalTerm.curie must be a CHEBI CURIE for this "
+                    "chemical-condition pack."
+                ),
+                field_ref=FieldRef(
+                    object_ref=chemical_term_ref,
+                    field_path="curie",
+                ),
+                details={
+                    "validator_binding_id": CHEMICAL_CONDITION_CHEBI_FORMAT_VALIDATOR_ID,
+                    "observed_value": chemical_curie,
+                },
             )
         )
 

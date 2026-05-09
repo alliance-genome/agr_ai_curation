@@ -562,7 +562,7 @@ metadata:
       - validator_id: chemical_condition.required_payload_fields
         description: Required chemical-condition field paths declared in this pack must be present in each pending object payload.
       - validator_id: chemical_condition.chebi_curie_format
-        description: Require CHEBI CURIE syntax for condition_chemical.curie until external ChEBI lookup is wired.
+        description: Require CHEBI CURIE syntax for condition_chemical.curie and ChemicalTerm.curie until external ChEBI lookup is wired.
       - validator_id: chemical_condition.export_context_blocker
         description: Emit blocker findings when host annotation or source reference materialization is missing.
     planned:

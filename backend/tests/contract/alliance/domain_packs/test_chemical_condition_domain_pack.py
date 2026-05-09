@@ -96,6 +96,16 @@ def _load_raw_fixture() -> dict[str, Any]:
     return yaml.safe_load(RAW_CHEMICAL_FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
+def _load_raw_fixture_with_export_context() -> dict[str, Any]:
+    raw_fixture = _load_raw_fixture()
+    raw_fixture["reference"]["reference_id"] = 12345
+    raw_fixture["chemical_conditions"][0]["host_annotation_type"] = (
+        "PhenotypeAnnotation"
+    )
+    raw_fixture["chemical_conditions"][0]["host_annotation_id"] = "200000001"
+    return raw_fixture
+
+
 def _iter_mapping_keys(value: Any):
     if isinstance(value, Mapping):
         yield from value.keys()
@@ -312,10 +322,7 @@ def test_converted_chemical_condition_envelope_omits_legacy_semantic_stores():
 
 
 def test_chemical_condition_export_context_can_be_completed_without_fake_success():
-    raw_fixture = _load_raw_fixture()
-    raw_fixture["reference"]["reference_id"] = 12345
-    raw_fixture["chemical_conditions"][0]["host_annotation_type"] = "PhenotypeAnnotation"
-    raw_fixture["chemical_conditions"][0]["host_annotation_id"] = "200000001"
+    raw_fixture = _load_raw_fixture_with_export_context()
 
     envelope = build_pending_chemical_condition_envelope_from_tool_verified_output(
         raw_fixture
@@ -333,6 +340,37 @@ def test_chemical_condition_export_context_can_be_completed_without_fake_success
         obj for obj in envelope.objects if obj.object_type == CHEMICAL_TERM_OBJECT_TYPE
     )
     assert chemical_reference.metadata["validation_state"] == "pending_chebi_lookup"
+
+
+def test_chemical_condition_validator_checks_linked_chemical_term_curie():
+    raw_fixture = _load_raw_fixture_with_export_context()
+    envelope = build_pending_chemical_condition_envelope_from_tool_verified_output(
+        raw_fixture
+    )
+
+    updated_objects = []
+    for obj in envelope.objects:
+        if obj.object_type == CHEMICAL_TERM_OBJECT_TYPE:
+            payload = dict(obj.payload)
+            payload["curie"] = "ZECO:0000111"
+            obj = obj.model_copy(update={"payload": payload})
+        updated_objects.append(obj)
+    envelope = envelope.model_copy(
+        update={"objects": updated_objects, "validation_findings": []}
+    )
+
+    invalid_curie_findings = [
+        finding
+        for finding in validate_pending_chemical_condition_envelope(envelope)
+        if finding.code == "alliance.chemical_condition.invalid_chebi_curie"
+    ]
+
+    assert len(invalid_curie_findings) == 1
+    finding = invalid_curie_findings[0]
+    assert finding.field_ref is not None
+    assert finding.field_ref.object_ref.object_type == CHEMICAL_TERM_OBJECT_TYPE
+    assert finding.field_ref.field_path == "curie"
+    assert finding.details["observed_value"] == "ZECO:0000111"
 
 
 def test_tool_verified_chemical_fixture_rejects_malformed_required_data():
@@ -359,8 +397,19 @@ def test_tool_verified_chemical_fixture_rejects_malformed_required_data():
     envelope = build_pending_chemical_condition_envelope_from_tool_verified_output(
         invalid_chebi
     )
-    assert [
-        finding.code
+    invalid_curie_findings = [
+        finding
         for finding in validate_pending_chemical_condition_envelope(envelope)
         if finding.code == "alliance.chemical_condition.invalid_chebi_curie"
-    ] == ["alliance.chemical_condition.invalid_chebi_curie"]
+    ]
+    assert sorted(
+        (
+            finding.field_ref.object_ref.object_type,
+            finding.field_ref.field_path,
+        )
+        for finding in invalid_curie_findings
+        if finding.field_ref is not None
+    ) == [
+        (CHEMICAL_CONDITION_OBJECT_TYPE, "condition_chemical.curie"),
+        (CHEMICAL_TERM_OBJECT_TYPE, "curie"),
+    ]
