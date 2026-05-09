@@ -118,4 +118,4 @@ def test_no_helper_classes_in_registry():
             f"Helper class '{name}' should NOT be in SCHEMA_REGISTRY"
         )
 
-    print(f"\n✓ No helper classes in registry")
+    print("\n✓ No helper classes in registry")
