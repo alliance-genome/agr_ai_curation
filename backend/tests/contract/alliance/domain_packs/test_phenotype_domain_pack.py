@@ -386,6 +386,59 @@ def test_tool_verified_phenotype_fixture_rejects_malformed_required_data():
     with pytest.raises(ValueError, match="normalized_id"):
         build_pending_phenotype_envelope_from_tool_verified_fixture(missing_normalized_id)
 
+    missing_label = copy.deepcopy(fixture)
+    missing_label["extraction"]["items"][0].pop("label")
+    with pytest.raises(ValueError, match="extraction.items\\[\\].label"):
+        build_pending_phenotype_envelope_from_tool_verified_fixture(missing_label)
+
+    missing_source_mentions = copy.deepcopy(fixture)
+    missing_source_mentions["extraction"]["items"][0].pop("source_mentions")
+    with pytest.raises(ValueError, match="extraction.items\\[\\].source_mentions"):
+        build_pending_phenotype_envelope_from_tool_verified_fixture(
+            missing_source_mentions
+        )
+
+    empty_source_mentions = copy.deepcopy(fixture)
+    empty_source_mentions["extraction"]["items"][0]["source_mentions"] = []
+    with pytest.raises(ValueError, match="source_mentions must include at least one"):
+        build_pending_phenotype_envelope_from_tool_verified_fixture(
+            empty_source_mentions
+        )
+
+    missing_tool_evidence_id = copy.deepcopy(fixture)
+    missing_tool_evidence_id["tool_cases"][0]["expected_tool_result"].pop(
+        "evidence_record_id"
+    )
+    with pytest.raises(
+        ValueError,
+        match="tool_cases\\[\\].expected_tool_result.evidence_record_id",
+    ):
+        build_pending_phenotype_envelope_from_tool_verified_fixture(
+            missing_tool_evidence_id
+        )
+
+    missing_embedded_evidence_id = copy.deepcopy(fixture)
+    first_item = missing_embedded_evidence_id["extraction"]["items"][0]
+    first_item.pop("evidence_case_ids")
+    first_item["evidence_records"] = [
+        {
+            "verified_quote": (
+                "daf-2(e1370) adults produced 40% fewer progeny than wild type."
+            ),
+            "page": 5,
+            "section": "Results",
+            "chunk_id": "chunk-phenotype-count",
+        }
+    ]
+    first_item["evidence_record_ids"] = ["missing-id"]
+    with pytest.raises(
+        ValueError,
+        match="extraction.items\\[\\].evidence_records\\[\\].evidence_record_id",
+    ):
+        build_pending_phenotype_envelope_from_tool_verified_fixture(
+            missing_embedded_evidence_id
+        )
+
     unknown_evidence_case = copy.deepcopy(fixture)
     unknown_evidence_case["extraction"]["items"][0]["evidence_case_ids"] = ["missing-case"]
     with pytest.raises(ValueError, match="unknown tool case"):

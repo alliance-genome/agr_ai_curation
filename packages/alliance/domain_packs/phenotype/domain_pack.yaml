@@ -256,6 +256,10 @@ object_definitions:
       - field_path: negated
         field_type: boolean
         display_name: Negated
+        description: >-
+          Missing negation in the extractor output is intentionally represented
+          as false; true must be supplied explicitly when the source states
+          negation.
         metadata:
           provider_refs:
             alliance_linkml:

@@ -98,15 +98,12 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
             continue
 
         retained_count += 1
-        label = _required_string(
-            item.get("label") or item.get("mention"),
-            "extraction.items[].label",
-        )
+        label = _required_string(item.get("label"), "extraction.items[].label")
         normalized_id = _required_string(
             item.get("normalized_id"),
             "extraction.items[].normalized_id",
         )
-        source_mentions = _source_mentions(item, label)
+        source_mentions = _source_mentions(item)
         negated = _optional_bool(item.get("negated"), "extraction.items[].negated")
         subject_payload = _subject_payload(item)
         subject_resolution_state = subject_payload["resolution_state"]
@@ -572,25 +569,17 @@ def _blocker_findings_for_annotation(
 
 
 def _subject_payload(item: Mapping[str, Any]) -> dict[str, Any]:
-    subject_identifier = _first_optional_string(
-        item,
-        "subject_identifier",
-        "subject_id",
-        "entity_identifier",
-        "entity_id",
+    subject_identifier = _optional_string(
+        item.get("subject_identifier"),
+        "extraction.items[].subject_identifier",
     )
-    subject_label = _first_optional_string(
-        item,
-        "subject_label",
-        "subject",
-        "genotype",
-        "allele",
-        "entity",
+    subject_label = _optional_string(
+        item.get("subject_label"),
+        "extraction.items[].subject_label",
     )
-    subject_type = _first_optional_string(
-        item,
-        "subject_type",
-        "entity_type_context",
+    subject_type = _optional_string(
+        item.get("subject_type"),
+        "extraction.items[].subject_type",
     )
 
     if subject_identifier and subject_type:
@@ -613,19 +602,20 @@ def _subject_payload(item: Mapping[str, Any]) -> dict[str, Any]:
     return payload
 
 
-def _source_mentions(item: Mapping[str, Any], label: str) -> list[str]:
+def _source_mentions(item: Mapping[str, Any]) -> list[str]:
     mentions = [
-        value
-        for value in (
-            _optional_string(value, "extraction.items[].source_mentions[]")
-            for value in _optional_sequence(
-                item.get("source_mentions"),
-                "extraction.items[].source_mentions",
-            )
+        _required_string(value, "extraction.items[].source_mentions[]")
+        for value in _required_sequence(
+            item.get("source_mentions"),
+            "extraction.items[].source_mentions",
         )
-        if value is not None
     ]
-    return mentions or [label]
+    if not mentions:
+        raise ValueError(
+            "extraction.items[].source_mentions must include at least one "
+            "non-empty string"
+        )
+    return mentions
 
 
 def _evidence_records_for_item(
@@ -633,33 +623,30 @@ def _evidence_records_for_item(
     case_lookup: Mapping[str, Mapping[str, Any]],
 ) -> tuple[Mapping[str, Any], ...]:
     direct_evidence = tuple(
-        _record_with_generated_id(record, f"phenotype-evidence-{index}")
-        for index, record in enumerate(
-            (
-                _required_mapping(record, "extraction.items[].evidence[]")
-                for record in _optional_sequence(
-                    item.get("evidence"),
-                    "extraction.items[].evidence",
-                )
-            ),
-            start=1,
+        _record_with_required_id(
+            _required_mapping(record, "extraction.items[].evidence[]"),
+            "extraction.items[].evidence[].evidence_record_id",
+        )
+        for record in _optional_sequence(
+            item.get("evidence"),
+            "extraction.items[].evidence",
         )
     )
     if direct_evidence:
         return direct_evidence
 
     records_by_id: dict[str, Mapping[str, Any]] = {}
-    for index, record in enumerate(
-        (
-            _required_mapping(record, "extraction.items[].evidence_records[]")
-            for record in _optional_sequence(
-                item.get("evidence_records"),
-                "extraction.items[].evidence_records",
-            )
-        ),
-        start=1,
+    for record in (
+        _required_mapping(record, "extraction.items[].evidence_records[]")
+        for record in _optional_sequence(
+            item.get("evidence_records"),
+            "extraction.items[].evidence_records",
+        )
     ):
-        normalized = _record_with_generated_id(record, f"phenotype-evidence-{index}")
+        normalized = _record_with_required_id(
+            record,
+            "extraction.items[].evidence_records[].evidence_record_id",
+        )
         records_by_id[str(normalized["evidence_record_id"])] = normalized
     evidence_record_ids = [
         value
@@ -702,14 +689,13 @@ def _evidence_records_for_item(
                 "extraction.items[].evidence_case_ids references unknown "
                 f"tool case: {case_id}"
             )
-        record = _verified_evidence_record(case_id, tool_case)
+        record = _verified_evidence_record(tool_case)
         if record is not None:
             records.append(record)
     return tuple(records)
 
 
 def _verified_evidence_record(
-    case_id: str,
     tool_case: Mapping[str, Any],
 ) -> Mapping[str, Any] | None:
     tool_input = _required_mapping(tool_case.get("tool_input"), "tool_cases[].tool_input")
@@ -727,11 +713,10 @@ def _verified_evidence_record(
         return None
 
     record: dict[str, Any] = {
-        "evidence_record_id": _optional_string(
+        "evidence_record_id": _required_string(
             tool_result.get("evidence_record_id"),
             "tool_cases[].expected_tool_result.evidence_record_id",
-        )
-        or case_id,
+        ),
         "entity": tool_input.get("entity"),
         "chunk_id": tool_input.get("chunk_id"),
         "verified_quote": tool_result.get("verified_quote"),
@@ -748,17 +733,14 @@ def _verified_evidence_record(
     return record
 
 
-def _record_with_generated_id(
+def _record_with_required_id(
     record: Mapping[str, Any],
-    generated_id: str,
+    field_name: str,
 ) -> Mapping[str, Any]:
     normalized = dict(record)
-    normalized["evidence_record_id"] = (
-        _optional_string(
-            normalized.get("evidence_record_id"),
-            "evidence_records[].evidence_record_id",
-        )
-        or generated_id
+    normalized["evidence_record_id"] = _required_string(
+        normalized.get("evidence_record_id"),
+        field_name,
     )
     return normalized
 
@@ -833,17 +815,6 @@ def _first_phenotype_term_curie(payload: Mapping[str, Any]) -> str | None:
     if not isinstance(first_term, Mapping):
         return None
     return _optional_string(first_term.get("curie"), "phenotype_terms[0].curie")
-
-
-def _first_optional_string(
-    item: Mapping[str, Any],
-    *keys: str,
-) -> str | None:
-    for key in keys:
-        value = _optional_string(item.get(key), f"extraction.items[].{key}")
-        if value is not None:
-            return value
-    return None
 
 
 def _required_mapping(value: Any, field_name: str) -> Mapping[str, Any]:
