@@ -108,6 +108,139 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
             }
         ]
 
+    def _make_domain_envelope(self):
+        return {
+            "envelope_id": "env-domain-1",
+            "domain_pack_id": "agr.test.gene",
+            "domain_pack_version": "0.7.0",
+            "status": "validating",
+            "schema_ref": {
+                "schema_id": "gene-expression",
+                "definition_state": "stable",
+            },
+            "objects": [
+                {
+                    "object_id": "gene-expression-object-1",
+                    "object_type": "gene_expression",
+                    "status": "needs_review",
+                    "definition_state": "in_development",
+                    "payload": {
+                        "gene": {"symbol": "tmem67"},
+                        "evidence": [{"snippet": "tmem67 expression"}],
+                    },
+                    "metadata": {"validation_state": "pending_reference_resolution"},
+                }
+            ],
+            "validation_findings": [
+                {
+                    "finding_id": "finding-required-symbol",
+                    "severity": "blocker",
+                    "status": "open",
+                    "code": "domain_envelope.required_field_missing",
+                    "message": "Required export field is missing: gene.symbol.",
+                    "field_ref": {
+                        "object_ref": {
+                            "object_id": "gene-expression-object-1",
+                            "object_type": "gene_expression",
+                        },
+                        "field_path": "gene.symbol",
+                    },
+                }
+            ],
+            "history": [
+                {
+                    "event_id": "repair-request-1",
+                    "event_type": "repair_requested",
+                    "actor_type": "system",
+                    "message": "Repair requested for gene.symbol.",
+                    "field_ref": {
+                        "object_ref": {
+                            "object_id": "gene-expression-object-1",
+                            "object_type": "gene_expression",
+                        },
+                        "field_path": "gene.symbol",
+                    },
+                    "details": {
+                        "finding_id": "finding-required-symbol",
+                        "retry_budget": {
+                            "max_attempts": 2,
+                            "used_attempts": 1,
+                            "remaining_attempts": 1,
+                            "exhausted": False,
+                        },
+                    },
+                },
+                {
+                    "event_id": "curator-edit-1",
+                    "event_type": "curator_field_patch_accepted",
+                    "actor_type": "human",
+                    "actor_id": "curator@example.org",
+                    "message": "Curator accepted field patch.",
+                    "field_ref": {
+                        "object_ref": {
+                            "object_id": "gene-expression-object-1",
+                            "object_type": "gene_expression",
+                        },
+                        "field_path": "gene.symbol",
+                    },
+                },
+            ],
+        }
+
+    def _make_domain_envelope_tool_observations(self):
+        return [
+            {
+                "id": "gen-domain",
+                "type": "GENERATION",
+                "name": "OpenAI-generation",
+                "startTime": "2026-03-26T00:00:03Z",
+                "model": "gpt-4o",
+                "input": [
+                    {"role": "user", "content": "Prepare these for curation."},
+                    {
+                        "type": "function_call",
+                        "call_id": "call-domain-prep",
+                        "name": "curation_prep",
+                        "arguments": json.dumps({
+                            "envelope_id": "env-domain-1",
+                            "expected_revision": 1,
+                        }),
+                        "status": "completed",
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call-domain-prep",
+                        "output": json.dumps({
+                            "envelope_refs": [
+                                {
+                                    "envelope_id": "env-domain-1",
+                                    "envelope_revision": 2,
+                                    "domain_pack_id": "agr.test.gene",
+                                    "review_row_count": 1,
+                                }
+                            ],
+                            "readiness_blockers": [
+                                {
+                                    "envelope_id": "env-domain-1",
+                                    "object_id": "gene-expression-object-1",
+                                    "field_path": "gene.symbol",
+                                    "severity": "blocker",
+                                    "status": "open",
+                                    "code": "domain_envelope.required_field_missing",
+                                    "message": "Required export field is missing: gene.symbol.",
+                                }
+                            ],
+                            "submission_state": {
+                                "target": "preview",
+                                "status": "blocked",
+                            },
+                        }),
+                    },
+                ],
+                "output": {},
+            }
+        ]
+
     def test_tool_calls_extract_from_generation_inputs_and_dedupe_repeated_calls(self):
         data = ToolCallAnalyzer.extract_tool_calls(self._make_observations())
 
@@ -289,6 +422,42 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
             summary["tool_summary"]["unique_tools"],
             ["search_document", "read_section"],
         )
+
+    def test_trace_summary_reports_domain_envelope_identifiers_and_repair_loop(self):
+        envelope = self._make_domain_envelope()
+        summary = TraceSummaryAnalyzer.analyze(
+            {"raw_trace": self._make_trace({"domain_envelopes": [envelope]})},
+            self._make_domain_envelope_tool_observations(),
+        )
+        domain = summary["domain_envelope"]
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-domain-1"])
+        self.assertIn("gene-expression-object-1", domain["object_ids"])
+        self.assertIn("finding-required-symbol", domain["finding_ids"])
+        self.assertIn("gene.symbol", domain["field_paths"])
+        self.assertEqual(domain["summary"]["repair_attempt_count"], 1)
+        self.assertEqual(domain["summary"]["blocker_count"], 2)
+        self.assertEqual(domain["validation_state_counts"]["pending_reference_resolution"], 1)
+        self.assertEqual(domain["definition_state_counts"]["in_development"], 1)
+        self.assertEqual(domain["definition_state_flags"][0]["object_id"], "gene-expression-object-1")
+        self.assertEqual(domain["curator_edits"][0]["field_path"], "gene.symbol")
+        self.assertEqual(summary["tool_summary"]["domain_envelope_tool_call_count"], 1)
+
+    def test_tool_calls_report_domain_envelope_projection_blocker_and_submission_state(self):
+        data = ToolCallAnalyzer.extract_tool_calls(self._make_domain_envelope_tool_observations())
+
+        self.assertEqual(data["total_count"], 1)
+        call = data["tool_calls"][0]
+        domain = call["domain_envelope"]
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-domain-1"])
+        self.assertEqual(domain["object_ids"], ["gene-expression-object-1"])
+        self.assertIn("gene.symbol", domain["field_paths"])
+        self.assertEqual(domain["summary"]["projection_count"], 1)
+        self.assertEqual(domain["summary"]["blocker_count"], 1)
+        self.assertEqual(domain["summary"]["submission_state_count"], 1)
 
     def test_cache_policy_only_caches_finished_trace_outputs(self):
         self.assertTrue(is_trace_output_cacheable({"response": "final answer"}))

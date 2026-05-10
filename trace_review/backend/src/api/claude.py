@@ -107,6 +107,7 @@ async def _ensure_trace_analyzed(
         token_analysis = TokenAnalysisAnalyzer.analyze(trace_data, observations)
         agent_context = AgentContextAnalyzer.analyze(trace_data, observations)
         trace_summary = TraceSummaryAnalyzer.analyze(trace_data, observations)
+        domain_envelope = trace_summary.get("domain_envelope", {})
         document_hierarchy = DocumentHierarchyAnalyzer.analyze(trace_data, observations)
         agent_configs = AgentConfigAnalyzer.extract_agent_configs(observations)
 
@@ -124,7 +125,15 @@ async def _ensure_trace_analyzed(
             "observation_count": trace_data["metadata"]["observation_count"],
             "score_count": trace_data["metadata"]["score_count"],
             "timestamp": trace_data["metadata"]["timestamp"],
-            "system_domain": system_domain
+            "system_domain": system_domain,
+            "domain_envelope": trace_data["metadata"].get("domain_envelope") or {
+                "found": domain_envelope.get("found", False),
+                "summary": domain_envelope.get("summary", {}),
+                "envelope_ids": domain_envelope.get("envelope_ids", []),
+                "object_ids": domain_envelope.get("object_ids", []),
+                "finding_ids": domain_envelope.get("finding_ids", []),
+                "field_paths": domain_envelope.get("field_paths", []),
+            },
         }
 
         # Group context
@@ -149,6 +158,7 @@ async def _ensure_trace_analyzed(
                 "token_analysis": token_analysis,
                 "agent_context": agent_context,
                 "trace_summary": trace_summary,
+                "domain_envelope": domain_envelope,
                 "document_hierarchy": document_hierarchy,
                 "agent_configs": agent_configs,
                 "group_context": group_context
@@ -217,6 +227,8 @@ async def get_trace_summary(
         "has_errors": trace_summary.get("has_errors", False),
         "context_overflow_detected": trace_summary.get("context_overflow_detected", False),
         "timestamp": summary.get("timestamp"),
+        "domain_envelope": summary.get("domain_envelope")
+        or trace_summary.get("domain_envelope", {}),
     }
 
     token_info = create_token_info_dict(response_data)
@@ -267,7 +279,8 @@ async def get_tool_calls_summary(
             duration=lightweight["duration"],
             status=lightweight["status"],
             input_summary=lightweight["input_summary"],
-            result_summary=lightweight["result_summary"]
+            result_summary=lightweight["result_summary"],
+            domain_envelope=lightweight.get("domain_envelope"),
         ))
 
     duplicates = tool_calls_data.get("duplicates", {})
@@ -460,7 +473,8 @@ async def get_trace_conversation(
     response_data = ConversationData(
         user_query=conversation.get("user_input"),  # ConversationAnalyzer returns "user_input" key
         assistant_response=conversation.get("assistant_response"),
-        response_length=len(conversation.get("assistant_response", "") or "")
+        response_length=len(conversation.get("assistant_response", "") or ""),
+        domain_envelope=conversation.get("domain_envelope"),
     )
 
     token_info = create_token_info_dict(response_data.model_dump())
@@ -499,7 +513,8 @@ async def get_trace_view(
     """Get specific trace view with token metadata."""
     valid_views = [
         "token_analysis", "agent_context", "pdf_citations",
-        "document_hierarchy", "agent_configs", "mod_context", "trace_summary"
+        "document_hierarchy", "agent_configs", "mod_context", "trace_summary",
+        "domain_envelope",
     ]
 
     if view_name not in valid_views:

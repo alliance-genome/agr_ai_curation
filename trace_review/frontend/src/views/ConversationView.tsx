@@ -6,6 +6,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import { useState } from 'react';
 import { alpha } from '@mui/material/styles';
 import { ConversationData } from '../types';
+import { DomainEnvelopeSignalPanel } from './DomainEnvelopeSignalPanel';
 
 interface ConversationViewProps {
   data: ConversationData;
@@ -60,6 +61,8 @@ export function ConversationView({ data }: ConversationViewProps) {
       <Typography variant="h5" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         Conversation
       </Typography>
+
+      <DomainEnvelopeSignalPanel summary={data.domain_envelope} title="Domain Envelope Context" />
 
       {/* User Input */}
       <Paper

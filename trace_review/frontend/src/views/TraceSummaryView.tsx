@@ -7,6 +7,7 @@ import QuestionAnswerIcon from '@mui/icons-material/QuestionAnswer';
 import BiotechIcon from '@mui/icons-material/Biotech';
 import { alpha } from '@mui/material/styles';
 import { TraceSummaryData } from '../types';
+import { DomainEnvelopeSignalPanel } from './DomainEnvelopeSignalPanel';
 
 interface TraceSummaryViewProps {
   data: TraceSummaryData;
@@ -46,6 +47,8 @@ export function TraceSummaryView({ data }: TraceSummaryViewProps) {
           ))}
         </Alert>
       )}
+
+      <DomainEnvelopeSignalPanel summary={data.domain_envelope} />
 
       {/* Query and Response */}
       <Paper sx={{ p: 2, mb: 3 }}>

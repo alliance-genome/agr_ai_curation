@@ -9,6 +9,7 @@ from ..utils.trace_output import (
     extract_observation_response_text,
     extract_trace_response_text,
 )
+from .domain_envelopes import DomainEnvelopeTraceAnalyzer
 
 
 class ConversationAnalyzer:
@@ -195,9 +196,12 @@ class ConversationAnalyzer:
                             final_response = extracted
                             break
 
+        domain_envelope = DomainEnvelopeTraceAnalyzer.analyze(trace, observations)
+
         return {
             "user_input": user_message,
             "assistant_response": final_response,
+            "domain_envelope": DomainEnvelopeTraceAnalyzer.compact(domain_envelope),
             "trace_id": trace.get("id"),
             "trace_name": trace.get("name"),
             "session_id": trace.get("sessionId"),

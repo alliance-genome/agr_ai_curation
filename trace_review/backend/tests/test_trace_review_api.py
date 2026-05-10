@@ -259,6 +259,74 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["errors"], [])
 
     @patch("src.api.traces.TraceExtractor")
+    async def test_export_session_bundle_includes_domain_envelope_summary(
+        self,
+        extractor_cls: Mock,
+    ):
+        request = self._make_request()
+        extractor = extractor_cls.return_value
+        extractor.list_session_traces.return_value = {
+            "session_id": "session-domain",
+            "source": "local",
+            "traces": [
+                {
+                    "id": "trace-domain",
+                    "name": "curation_prep",
+                    "timestamp": "2026-03-26T00:00:00Z",
+                    "sessionId": "session-domain",
+                },
+            ],
+            "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
+        }
+        extractor.extract_complete_trace.return_value = self._make_trace_data(
+            {
+                "domain_envelopes": [
+                    {
+                        "envelope_id": "env-domain-1",
+                        "domain_pack_id": "agr.test.gene",
+                        "objects": [
+                            {
+                                "object_id": "gene-expression-object-1",
+                                "object_type": "gene_expression",
+                                "payload": {"gene": {"symbol": "tmem67"}},
+                                "definition_state": "stable",
+                            }
+                        ],
+                        "validation_findings": [
+                            {
+                                "finding_id": "finding-1",
+                                "severity": "blocker",
+                                "status": "open",
+                                "code": "domain_envelope.required_field_missing",
+                                "message": "Required export field is missing: gene.symbol.",
+                                "field_ref": {
+                                    "object_ref": {
+                                        "object_id": "gene-expression-object-1",
+                                        "object_type": "gene_expression",
+                                    },
+                                    "field_path": "gene.symbol",
+                                },
+                            }
+                        ],
+                    }
+                ]
+            },
+            trace_id="trace-domain",
+            name="curation_prep",
+        )
+
+        response = await traces.export_session("session-domain", request, source="local")
+        item = response["traces"][0]
+
+        self.assertTrue(item["summary"]["domain_envelope"]["found"])
+        self.assertEqual(item["summary"]["domain_envelope"]["envelope_ids"], ["env-domain-1"])
+        self.assertIn("domain_envelope", item["analyzer_outputs"])
+        self.assertEqual(
+            item["analyzer_outputs"]["domain_envelope"]["summary"]["blocker_count"],
+            1,
+        )
+
+    @patch("src.api.traces.TraceExtractor")
     async def test_export_session_bundle_keeps_partial_trace_failures(
         self,
         extractor_cls: Mock,

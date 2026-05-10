@@ -61,6 +61,37 @@ class TraceExtractorTests(unittest.TestCase):
         self.assertEqual(data["metadata"]["observation_count"], 1)
         self.assertEqual(data["metadata"]["score_count"], 1)
 
+    def test_extract_complete_trace_metadata_includes_domain_envelope_signals(self):
+        extractor = self._make_extractor()
+        trace = {
+            "id": "trace-domain",
+            "name": "domain trace",
+            "latency": 1.25,
+            "timestamp": "2026-03-25T23:00:00Z",
+            "output": {
+                "envelope_id": "env-domain-1",
+                "domain_pack_id": "agr.test.gene",
+                "objects": [
+                    {
+                        "object_id": "gene-expression-object-1",
+                        "object_type": "gene_expression",
+                        "payload": {"gene": {"symbol": "tmem67"}},
+                    }
+                ],
+            },
+            "observations": [],
+            "scores": [],
+        }
+        extractor.get_trace_details = Mock(return_value=trace)
+
+        data = extractor.extract_complete_trace("trace-domain")
+
+        domain = data["metadata"]["domain_envelope"]
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-domain-1"])
+        self.assertEqual(domain["object_ids"], ["gene-expression-object-1"])
+        self.assertEqual(domain["summary"]["object_count"], 1)
+
     def test_get_observations_falls_back_to_get_many(self):
         extractor = self._make_extractor()
         extractor.client.api.observations.get_many.return_value = SimpleNamespace(

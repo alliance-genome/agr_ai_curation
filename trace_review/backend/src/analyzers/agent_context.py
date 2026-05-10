@@ -7,6 +7,8 @@ tools they had available during execution.
 """
 from typing import Dict, List, Any, Optional
 
+from .domain_envelopes import DomainEnvelopeTraceAnalyzer
+
 
 class AgentContextAnalyzer:
     """Analyzes agent configuration and context from traces"""
@@ -29,6 +31,7 @@ class AgentContextAnalyzer:
         """
         # Extract raw_trace if wrapped
         raw_trace = trace.get("raw_trace", trace)
+        domain_envelope = DomainEnvelopeTraceAnalyzer.analyze(raw_trace, observations)
 
         # Get trace-level metadata
         trace_metadata = raw_trace.get("metadata", {})
@@ -43,7 +46,8 @@ class AgentContextAnalyzer:
                 "supervisor": None,
                 "specialists": [],
                 "all_tools": [],
-                "model_configs": {}
+                "model_configs": {},
+                "domain_envelope_context": DomainEnvelopeTraceAnalyzer.compact(domain_envelope),
             }
 
         # Extract unique agent contexts from generations
@@ -103,6 +107,12 @@ class AgentContextAnalyzer:
             else:
                 specialists.append(agent)
 
+        domain_tools = [
+            tool
+            for tool in all_tools
+            if cls._tool_mentions_domain_envelopes(tool)
+        ]
+
         return {
             "found": True,
             "trace_metadata": {
@@ -120,7 +130,12 @@ class AgentContextAnalyzer:
                     "reasoning": agent["reasoning"]
                 }
                 for agent in agents.values()
-            }
+            },
+            "domain_envelope_context": {
+                **DomainEnvelopeTraceAnalyzer.compact(domain_envelope),
+                "tool_names": [tool["name"] for tool in domain_tools],
+                "tool_count": len(domain_tools),
+            },
         }
 
     @staticmethod
@@ -169,6 +184,27 @@ class AgentContextAnalyzer:
             return "ontology_mapping_specialist"
 
         return "unknown"
+
+    @staticmethod
+    def _tool_mentions_domain_envelopes(tool: Dict[str, Any]) -> bool:
+        text = " ".join(
+            str(value or "")
+            for value in (
+                tool.get("name"),
+                tool.get("description"),
+                tool.get("parameters"),
+            )
+        ).lower()
+        return any(
+            phrase in text
+            for phrase in (
+                "domain_envelope",
+                "domain envelope",
+                "envelope_id",
+                "validation finding",
+                "field_path",
+            )
+        )
 
     @classmethod
     def extract_full_instructions(cls, observations: List[Dict]) -> Dict[str, str]:

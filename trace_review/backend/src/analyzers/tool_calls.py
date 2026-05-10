@@ -15,6 +15,8 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 from collections import defaultdict
 
+from .domain_envelopes import DomainEnvelopeTraceAnalyzer
+
 
 class ToolResultParser:
     """
@@ -816,6 +818,27 @@ class ToolCallAnalyzer:
             else:
                 tc["tool_result"] = None
                 tc["tool_result_length"] = 0
+
+            tool_result_for_domain = tc.get("tool_result")
+            if isinstance(tool_result_for_domain, dict):
+                parsed = tool_result_for_domain.get("parsed")
+                if isinstance(parsed, dict) and "json_data" in parsed:
+                    tool_result_for_domain = {
+                        "summary": tool_result_for_domain.get("summary"),
+                        "parsed": {"json_data": parsed["json_data"]},
+                        "parse_status": tool_result_for_domain.get("parse_status"),
+                    }
+
+            domain_payload = {
+                "input": tc.get("input"),
+                "output": tc.get("output"),
+                "tool_result": tool_result_for_domain,
+            }
+            domain_summary = DomainEnvelopeTraceAnalyzer.analyze_payload(
+                domain_payload,
+                source_name=f"tool_calls[{tc.get('call_id') or tc.get('id') or tc.get('name')}]",
+            )
+            tc["domain_envelope"] = DomainEnvelopeTraceAnalyzer.compact(domain_summary)
 
         # Detect duplicates
         duplicates_info = ToolCallAnalyzer._detect_duplicates(tool_calls)

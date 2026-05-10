@@ -55,6 +55,10 @@ class TraceSummaryData(BaseModel):
     has_errors: bool = False
     context_overflow_detected: bool = False
     timestamp: Optional[str] = None
+    domain_envelope: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Compact domain-envelope signal summary when present",
+    )
 
 
 class ToolCallSummaryItem(BaseModel):
@@ -67,6 +71,10 @@ class ToolCallSummaryItem(BaseModel):
     status: str = Field(default="N/A", description="Call status")
     input_summary: str = Field(default="", description="Brief summary of input parameters")
     result_summary: str = Field(default="N/A", description="Brief summary of result")
+    domain_envelope: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Compact domain-envelope signal summary for this call when present",
+    )
 
 
 class ToolCallsSummaryData(BaseModel):
@@ -109,6 +117,10 @@ class ConversationData(BaseModel):
     user_query: Optional[str] = None
     assistant_response: Optional[str] = None
     response_length: int = 0
+    domain_envelope: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Compact domain-envelope signal summary when present",
+    )
 
 
 class ConversationResponse(BaseModel):

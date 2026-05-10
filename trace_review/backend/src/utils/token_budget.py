@@ -227,6 +227,9 @@ def create_lightweight_tool_call_summary(tool_call: Dict) -> Dict:
         "duration": tool_call.get("duration", "N/A"),
         "status": tool_call.get("status", "N/A"),
     }
+    domain_envelope = tool_call.get("domain_envelope")
+    if isinstance(domain_envelope, dict) and domain_envelope.get("found"):
+        summary["domain_envelope"] = domain_envelope
 
     # Add input summary (truncate if too long)
     input_data = tool_call.get("input", {})
@@ -250,5 +253,20 @@ def create_lightweight_tool_call_summary(tool_call: Dict) -> Dict:
         summary["result_summary"] = tool_result.get("summary", "N/A")
     else:
         summary["result_summary"] = "N/A"
+
+    if isinstance(domain_envelope, dict) and domain_envelope.get("found"):
+        envelope_ids = ", ".join(domain_envelope.get("envelope_ids", [])[:3])
+        counts = domain_envelope.get("summary", {})
+        repair_count = counts.get("repair_attempt_count", 0)
+        blocker_count = counts.get("blocker_count", 0)
+        domain_bits = []
+        if envelope_ids:
+            domain_bits.append(f"envelopes={envelope_ids}")
+        if repair_count:
+            domain_bits.append(f"repairs={repair_count}")
+        if blocker_count:
+            domain_bits.append(f"blockers={blocker_count}")
+        if domain_bits:
+            summary["result_summary"] = f"{summary['result_summary']} | Domain envelope: {', '.join(domain_bits)}"
 
     return summary
