@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -20,6 +20,7 @@ const serviceMocks = vi.hoisted(() => ({
   fetchCurationWorkspace: vi.fn(),
   fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
   fetchSubmissionPreview: vi.fn(),
+  patchCurationEnvelopeField: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
   renderPdfViewer: vi.fn(),
   submitCurationCandidateDecision: vi.fn(),
@@ -53,6 +54,7 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
   fetchCurationWorkspaceEnvelopeReviewRows: serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
   fetchSubmissionPreview: serviceMocks.fetchSubmissionPreview,
+  patchCurationEnvelopeField: serviceMocks.patchCurationEnvelopeField,
   submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
   updateCurationSession: serviceMocks.updateCurationSession,
   validateCurationCandidate: serviceMocks.validateCurationCandidate,
@@ -588,6 +590,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReset()
     serviceMocks.fetchSubmissionPreview.mockReset()
+    serviceMocks.patchCurationEnvelopeField.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
     serviceMocks.renderPdfViewer.mockReset()
     serviceMocks.submitCurationCandidateDecision.mockReset()
@@ -886,6 +889,109 @@ describe('CurationWorkspacePage', () => {
     ).toBeInTheDocument()
     expect(screen.getByText(/2 evidence quotes/)).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Highlight evidence on PDF:/i })).toHaveLength(2)
+  })
+
+  it('patches active envelope fields from the field editor with revision and before value', async () => {
+    const workspace = buildWorkspace()
+    const envelopeCandidate = {
+      ...workspace.candidates[0],
+      projection_ref: {
+        envelope_id: 'envelope-1',
+        object_id: 'object-1',
+        envelope_revision: 5,
+      },
+      draft: {
+        ...workspace.candidates[0].draft,
+        fields: [
+          {
+            ...workspace.candidates[0].draft.fields[0],
+            metadata: {
+              source_field_path: 'gene.symbol',
+            },
+          },
+        ],
+      },
+    }
+    const patchedCandidate = {
+      ...envelopeCandidate,
+      projection_ref: {
+        envelope_id: 'envelope-1',
+        object_id: 'object-1',
+        envelope_revision: 6,
+      },
+      draft: {
+        ...envelopeCandidate.draft,
+        version: 2,
+        fields: [
+          {
+            ...envelopeCandidate.draft.fields[0],
+            value: 'BRCA2',
+            seed_value: 'BRCA2',
+            dirty: false,
+            stale_validation: true,
+          },
+        ],
+      },
+    }
+    const envelopeWorkspace: CurationWorkspace = {
+      ...workspace,
+      candidates: [patchedCandidate, workspace.candidates[1]],
+      active_candidate_id: 'candidate-accepted',
+    }
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue({
+      ...workspace,
+      candidates: [envelopeCandidate, workspace.candidates[1]],
+      active_candidate_id: 'candidate-accepted',
+    })
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValue({
+      accepted: true,
+      envelope_id: 'envelope-1',
+      previous_revision: 5,
+      envelope_revision: 6,
+      object_id: 'object-1',
+      object_type: 'gene',
+      field_path: 'gene.symbol',
+      operation: 'replace',
+      before: 'BRCA1',
+      value: 'BRCA2',
+      projection_ref: patchedCandidate.projection_ref,
+      candidate: patchedCandidate,
+      session: envelopeWorkspace.session,
+      action_log_entry: null,
+      history_event_ids: ['history-1'],
+      projection_candidate_ids: ['candidate-accepted'],
+    })
+
+    renderPage('/curation/session-1/candidate-accepted')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('candidate-field-editor')).toBeInTheDocument()
+    })
+
+    vi.useFakeTimers()
+    fireEvent.change(screen.getByLabelText('Gene symbol'), {
+      target: { value: 'BRCA2' },
+    })
+
+    await act(async () => {
+      vi.advanceTimersByTime(2600)
+      await Promise.resolve()
+    })
+
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      envelope_id: 'envelope-1',
+      expected_revision: 5,
+      object_id: 'object-1',
+      field_path: 'gene.symbol',
+      operation: 'replace',
+      before: 'BRCA1',
+      value: 'BRCA2',
+    }, {
+      keepalive: undefined,
+    })
+    expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
   })
 
   it('submits inline accept actions through the workspace decision service', async () => {

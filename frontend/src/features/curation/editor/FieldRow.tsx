@@ -8,7 +8,10 @@ import {
 } from '@mui/material'
 
 import type { CurationDraftField } from '../types'
-import { areDraftFieldValuesEqual } from '../workspace/workspaceState'
+import {
+  areDraftFieldValuesEqual,
+  resolveEnvelopeFieldPath,
+} from '../workspace/workspaceState'
 
 interface ResolvedFieldOption {
   key: string
@@ -265,6 +268,7 @@ export default function FieldRow({
   return (
     <Box
       data-field-key={field.field_key}
+      data-field-path={resolveEnvelopeFieldPath(field)}
       data-testid={`field-row-${field.field_key}`}
       sx={{
         display: 'grid',

@@ -66,6 +66,10 @@ describe('FieldRow', () => {
       'data-field-key',
       'gene_symbol',
     )
+    expect(screen.getByTestId('field-row-gene_symbol')).toHaveAttribute(
+      'data-field-path',
+      'gene_symbol',
+    )
     expect(screen.getByText('Gene symbol')).toBeInTheDocument()
     expect(screen.getByLabelText('Gene symbol')).toHaveValue('BRCA1')
     expect(screen.getByText('Validated')).toBeInTheDocument()

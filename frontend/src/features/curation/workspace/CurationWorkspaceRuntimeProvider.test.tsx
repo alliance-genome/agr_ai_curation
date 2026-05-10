@@ -16,11 +16,13 @@ import { CurationWorkspaceRuntimeProvider } from './CurationWorkspaceRuntimeProv
 
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
+  patchCurationEnvelopeField: vi.fn(),
   updateCurationSession: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
+  patchCurationEnvelopeField: serviceMocks.patchCurationEnvelopeField,
   updateCurationSession: serviceMocks.updateCurationSession,
 }))
 
@@ -204,6 +206,7 @@ function createWrapper(initialWorkspace: CurationWorkspace) {
 describe('CurationWorkspaceRuntimeProvider', () => {
   beforeEach(() => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
+    serviceMocks.patchCurationEnvelopeField.mockReset()
     serviceMocks.updateCurationSession.mockReset()
   })
 

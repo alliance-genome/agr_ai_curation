@@ -10,6 +10,8 @@ import type {
   CurationCandidateDraftUpdateRequest,
   CurationCandidateDraftUpdateResponse,
   DomainEnvelopeReviewRowsResponse,
+  CurationEnvelopeFieldPatchRequest,
+  CurationEnvelopeFieldPatchResponse,
   CurationSessionValidationRequest,
   CurationSessionValidationResponse,
   CurationSubmissionExecuteRequest,
@@ -154,6 +156,25 @@ export async function autosaveCurationCandidateDraft(
     {
       method: 'PATCH',
       body: JSON.stringify(request),
+      keepalive: options.keepalive,
+    },
+  )
+}
+
+export async function patchCurationEnvelopeField(
+  request: CurationEnvelopeFieldPatchRequest,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<CurationEnvelopeFieldPatchResponse> {
+  return fetchCurationWorkspaceJson<CurationEnvelopeFieldPatchResponse>(
+    `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/envelopes/${
+      encodeURIComponent(request.envelope_id)
+    }/field`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify({
+        ...request,
+        operation: request.operation ?? 'replace',
+      }),
       keepalive: options.keepalive,
     },
   )

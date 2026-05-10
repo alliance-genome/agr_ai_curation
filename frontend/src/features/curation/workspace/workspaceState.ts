@@ -2,6 +2,7 @@ import type {
   CurationActionLogEntry,
   CurationCandidate,
   CurationCandidateDraftUpdateResponse,
+  CurationEnvelopeFieldPatchResponse,
   CurationDraftField,
   CurationDraftFieldChange,
   CurationReviewSession,
@@ -35,6 +36,13 @@ export function areDraftFieldValuesEqual(left: unknown, right: unknown): boolean
   }
 
   return stableSerialize(left) === stableSerialize(right)
+}
+
+export function resolveEnvelopeFieldPath(field: CurationDraftField): string {
+  const sourceFieldPath = field.metadata.source_field_path
+  return typeof sourceFieldPath === 'string' && sourceFieldPath.trim().length > 0
+    ? sourceFieldPath.trim()
+    : field.field_key
 }
 
 function applyDraftFieldChange(
@@ -244,4 +252,25 @@ export function mergeSubmissionExecutionIntoWorkspace(
     },
     response.action_log_entry,
   )
+}
+
+export function mergeEnvelopeFieldPatchIntoWorkspace(
+  workspace: CurationWorkspace,
+  response: CurationEnvelopeFieldPatchResponse,
+): CurationWorkspace {
+  let nextWorkspace = workspace
+
+  if (response.session) {
+    nextWorkspace = replaceWorkspaceSession(nextWorkspace, response.session)
+  }
+
+  if (response.candidate) {
+    nextWorkspace = replaceWorkspaceCandidate(nextWorkspace, response.candidate)
+  }
+
+  if (response.action_log_entry) {
+    nextWorkspace = appendWorkspaceActionLogEntry(nextWorkspace, response.action_log_entry)
+  }
+
+  return nextWorkspace
 }

@@ -77,6 +77,13 @@ export const CURATION_CANDIDATE_ACTIONS = [
 
 export type CurationCandidateAction = (typeof CURATION_CANDIDATE_ACTIONS)[number]
 
+export const CURATION_ENVELOPE_FIELD_PATCH_OPERATIONS = [
+  'replace',
+] as const
+
+export type CurationEnvelopeFieldPatchOperation =
+  (typeof CURATION_ENVELOPE_FIELD_PATCH_OPERATIONS)[number]
+
 export const CURATION_VALIDATION_SNAPSHOT_STATES = [
   'not_requested',
   'pending',
@@ -102,6 +109,7 @@ export const CURATION_ACTION_TYPES = [
   'candidate_created',
   'candidate_deleted',
   'candidate_updated',
+  'envelope_field_patched',
   'candidate_accepted',
   'candidate_rejected',
   'candidate_reset',
@@ -708,6 +716,38 @@ export interface CurationCandidateDraftUpdateResponse {
   draft: CurationDraft
   validation_snapshot?: CurationValidationSnapshot | null
   action_log_entry?: CurationActionLogEntry | null
+}
+
+export interface CurationEnvelopeFieldPatchRequest {
+  session_id: string
+  envelope_id: string
+  expected_revision: number
+  object_id: string
+  field_path: string
+  operation?: CurationEnvelopeFieldPatchOperation
+  before?: unknown | null
+  value?: unknown | null
+  reason?: string | null
+  patch_id?: string | null
+}
+
+export interface CurationEnvelopeFieldPatchResponse {
+  accepted: boolean
+  envelope_id: string
+  previous_revision: number
+  envelope_revision: number
+  object_id: string
+  object_type?: string | null
+  field_path: string
+  operation: CurationEnvelopeFieldPatchOperation
+  before?: unknown | null
+  value?: unknown | null
+  projection_ref: DomainEnvelopeProjectionRef
+  candidate?: CurationCandidate | null
+  session?: CurationReviewSession | null
+  action_log_entry?: CurationActionLogEntry | null
+  history_event_ids: string[]
+  projection_candidate_ids: string[]
 }
 
 export interface CurationCandidateDecisionRequest {
