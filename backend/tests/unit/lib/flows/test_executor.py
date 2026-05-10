@@ -1384,7 +1384,7 @@ class TestBuildSupervisorCustomInstructions:
 
         result = build_supervisor_instructions(flow)
 
-        assert "[schedule 1 validation validator(s)]" in result
+        assert "[schedule 1 validator(s)]" in result
         assert "[validation opt-outs recorded: 1]" in result
         assert "[planned validators visible: 1]" in result
         assert "[blocked validators visible: 1]" in result

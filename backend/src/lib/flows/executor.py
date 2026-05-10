@@ -1356,7 +1356,7 @@ def build_supervisor_instructions(
             if item.get("state") == "blocked"
         )
         if scheduled_count:
-            step_desc += f" [schedule {scheduled_count} validation validator(s)]"
+            step_desc += f" [schedule {scheduled_count} validator(s)]"
         if opt_out_count:
             step_desc += f" [validation opt-outs recorded: {opt_out_count}]"
         if planned_count:
