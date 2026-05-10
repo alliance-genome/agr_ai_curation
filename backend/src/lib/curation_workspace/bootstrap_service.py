@@ -448,6 +448,8 @@ def _replayable_prep_output(extraction_result: ExtractionResultModel) -> Curatio
     try:
         return CurationPrepAgentOutput.model_validate(
             {
+                "envelope_refs": payload.get("envelope_refs", []),
+                "review_row_count": payload.get("review_row_count", 0),
                 "candidates": payload.get("candidates", []),
                 "run_metadata": run_metadata,
             }
