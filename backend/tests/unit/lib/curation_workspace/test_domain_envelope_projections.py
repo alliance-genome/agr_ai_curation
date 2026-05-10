@@ -224,6 +224,109 @@ def test_evidence_anchor_projection_preserves_navigation_context():
     assert projection.anchor.viewer_search_text == projection.quote
 
 
+def test_evidence_anchor_projection_reads_nested_extraction_metadata_records():
+    envelope = DomainEnvelope(
+        envelope_id="env-nested",
+        domain_pack_id="fixture-pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneExpressionAnnotation",
+                object_id="gene-expression-1",
+                payload={"expression_annotation_subject": {"gene_symbol": "Tmem67"}},
+                evidence_record_ids=["evidence-nested-1"],
+                metadata_refs=[
+                    {
+                        "metadata_path": "extraction_metadata.evidence_records[0]",
+                        "role": "verified_evidence",
+                    }
+                ],
+            )
+        ],
+        metadata={
+            "source_document_id": "document-from-envelope",
+            "extraction_metadata": {
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "evidence-nested-1",
+                        "verified_quote": "Tmem67 expression was detected.",
+                        "page": 2,
+                        "chunk_id": "chunk-2",
+                        "field_paths": ["expression_annotation_subject.gene_symbol"],
+                    }
+                ]
+            },
+        },
+    )
+
+    projections = project_evidence_anchor_projections(
+        envelope,
+        envelope_revision=4,
+        object_id="gene-expression-1",
+    )
+
+    assert len(projections) == 1
+    projection = projections[0]
+    assert projection.envelope_id == "env-nested"
+    assert projection.envelope_revision == 4
+    assert projection.object_id == "gene-expression-1"
+    assert projection.field_path == "expression_annotation_subject.gene_symbol"
+    assert projection.evidence_record_id == "evidence-nested-1"
+    assert projection.quote == "Tmem67 expression was detected."
+    assert projection.page_number == 2
+    assert projection.chunk_id == "chunk-2"
+    assert projection.chunk_ids == ["chunk-2"]
+    assert projection.document_id == "document-from-envelope"
+
+
+def test_evidence_anchor_projection_resolves_object_metadata_refs():
+    envelope = DomainEnvelope(
+        envelope_id="env-metadata-ref",
+        domain_pack_id="fixture-pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                object_id="gene-1",
+                payload={"gene": {"symbol": "abc-1"}},
+                metadata_refs=[
+                    {
+                        "metadata_path": "extraction_metadata.evidence_records[0]",
+                        "role": "verified_evidence",
+                    }
+                ],
+            )
+        ],
+        metadata={
+            "extraction_metadata": {
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "evidence-from-metadata-ref",
+                        "verified_quote": "abc-1 appeared in the source text.",
+                        "page": 5,
+                        "chunk_id": "chunk-5",
+                        "field_path": "gene.symbol",
+                    }
+                ]
+            },
+        },
+    )
+
+    projections = project_evidence_anchor_projections(
+        envelope,
+        envelope_revision=2,
+        document_id="document-from-session",
+        object_id="gene-1",
+    )
+
+    assert len(projections) == 1
+    projection = projections[0]
+    assert projection.evidence_record_id == "evidence-from-metadata-ref"
+    assert projection.field_path == "gene.symbol"
+    assert projection.quote == "abc-1 appeared in the source text."
+    assert projection.page_number == 5
+    assert projection.chunk_id == "chunk-5"
+    assert projection.document_id == "document-from-session"
+
+
 def test_validation_summary_projection_groups_states_by_object_and_field():
     summaries = project_validation_summary_projections(
         _envelope(),

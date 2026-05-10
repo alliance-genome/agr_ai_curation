@@ -53,7 +53,9 @@ def project_evidence_anchor_projections(
 ) -> list[DomainEnvelopeEvidenceAnchorProjection]:
     """Project curator evidence navigation anchors from envelope metadata records."""
 
-    records_by_id = _evidence_records_by_id(envelope.metadata)
+    records_by_id, record_ids_by_metadata_path = _evidence_record_indexes(
+        envelope.metadata
+    )
     projections: list[DomainEnvelopeEvidenceAnchorProjection] = []
 
     for domain_object in envelope.objects:
@@ -65,6 +67,7 @@ def project_evidence_anchor_projections(
         for evidence_record_id in _object_evidence_record_ids(
             domain_object,
             records_by_id,
+            record_ids_by_metadata_path,
         ):
             evidence_record = records_by_id.get(evidence_record_id)
             if evidence_record is None:
@@ -151,29 +154,60 @@ def project_validation_summary_projections(
     )
 
 
-def _evidence_records_by_id(
+def _evidence_record_indexes(
     metadata: Mapping[str, Any],
-) -> dict[str, Mapping[str, Any]]:
-    raw_records = metadata.get("evidence_records")
-    if not isinstance(raw_records, list):
-        return {}
-
+) -> tuple[dict[str, Mapping[str, Any]], dict[str, str]]:
     records_by_id: dict[str, Mapping[str, Any]] = {}
-    for raw_record in raw_records:
-        if not isinstance(raw_record, Mapping):
-            continue
-        evidence_record_id = _optional_string(raw_record.get("evidence_record_id"))
-        if evidence_record_id is None:
-            continue
-        records_by_id[evidence_record_id] = raw_record
-    return records_by_id
+    record_ids_by_metadata_path: dict[str, str] = {}
+
+    for metadata_path, raw_records in _metadata_evidence_record_lists(metadata):
+        for record_index, raw_record in enumerate(raw_records):
+            if not isinstance(raw_record, Mapping):
+                continue
+            evidence_record_id = _optional_string(raw_record.get("evidence_record_id"))
+            if evidence_record_id is None:
+                continue
+            records_by_id[evidence_record_id] = raw_record
+            record_ids_by_metadata_path[
+                f"{metadata_path}[{record_index}]"
+            ] = evidence_record_id
+
+    return records_by_id, record_ids_by_metadata_path
+
+
+def _metadata_evidence_record_lists(
+    metadata: Mapping[str, Any],
+) -> list[tuple[str, list[Any]]]:
+    evidence_record_lists: list[tuple[str, list[Any]]] = []
+
+    raw_records = metadata.get("evidence_records")
+    if isinstance(raw_records, list):
+        evidence_record_lists.append(("evidence_records", raw_records))
+
+    extraction_metadata = metadata.get("extraction_metadata")
+    if isinstance(extraction_metadata, Mapping):
+        raw_nested_records = extraction_metadata.get("evidence_records")
+        if isinstance(raw_nested_records, list):
+            evidence_record_lists.append(
+                ("extraction_metadata.evidence_records", raw_nested_records)
+            )
+
+    return evidence_record_lists
 
 
 def _object_evidence_record_ids(
     domain_object: CuratableObjectEnvelope,
     records_by_id: Mapping[str, Mapping[str, Any]],
+    record_ids_by_metadata_path: Mapping[str, str],
 ) -> list[str]:
     evidence_record_ids = _unique_strings(domain_object.evidence_record_ids)
+    for metadata_ref in domain_object.metadata_refs:
+        evidence_record_id = record_ids_by_metadata_path.get(metadata_ref.metadata_path)
+        if (
+            evidence_record_id is not None
+            and evidence_record_id not in evidence_record_ids
+        ):
+            evidence_record_ids.append(evidence_record_id)
     for evidence_record_id, evidence_record in records_by_id.items():
         if evidence_record_id in evidence_record_ids:
             continue
@@ -226,7 +260,12 @@ def _evidence_anchor_projection(
         "source_document_id",
         "pdf_document_id",
     )
-    projection_document_id = source_document_id or document_id
+    envelope_document_id = _first_string(
+        envelope.metadata,
+        "source_document_id",
+        "document_id",
+    )
+    projection_document_id = source_document_id or envelope_document_id or document_id
     chunk_ids = list(anchor.chunk_ids)
     return DomainEnvelopeEvidenceAnchorProjection(
         anchor_id=_projection_id(
