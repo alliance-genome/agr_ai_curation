@@ -209,6 +209,9 @@ object_definitions:
         display_name: Condition relation type name
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -240,6 +243,9 @@ object_definitions:
         display_name: Condition class CURIE
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -255,6 +261,9 @@ object_definitions:
         display_name: Condition class name
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -288,6 +297,9 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: chemical_condition.chebi_curie_format
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -304,6 +316,9 @@ object_definitions:
         required: true
         metadata:
           validatable: true
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -318,6 +333,9 @@ object_definitions:
         field_type: string
         display_name: Condition quantity
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -332,6 +350,9 @@ object_definitions:
         field_type: string
         display_name: Condition free text
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -346,6 +367,9 @@ object_definitions:
         field_type: string
         display_name: Condition summary
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -362,6 +386,9 @@ object_definitions:
         required: true
         metadata:
           evidence_source_field: true
+          repair:
+            protected: true
+            reason: Source mention text is a paper evidence anchor, not a normalized repair target.
       - field_path: source_mentions[0]
         field_type: string
         display_name: First source mention

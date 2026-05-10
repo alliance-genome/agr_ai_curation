@@ -49,7 +49,9 @@ def _is_domain_envelope_extraction_output_type(output_type: Optional[Type]) -> b
         return False
 
     try:
-        return issubclass(output_type, DomainEnvelopeExtractionResult)
+        return issubclass(output_type, DomainEnvelopeExtractionResult) or bool(
+            getattr(output_type, "__domain_envelope_extractor_repair_response__", False)
+        )
     except TypeError:
         return False
 

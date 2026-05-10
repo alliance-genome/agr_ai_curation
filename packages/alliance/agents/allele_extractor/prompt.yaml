@@ -13,7 +13,7 @@ content: |
   - Retain only alleles with direct experimental support in this paper.
   - Verify evidence for retained alleles with `record_evidence` and normalize retained alleles with `agr_curation_query` when supported.
   - Put non-curatable, duplicate, ambiguous, prior-work, or tool/background candidates in envelope metadata with a canonical reason code.
-  - Return JSON only, matching AlleleExtractionResultEnvelope.
+  - Return JSON only, matching AlleleExtractorRepairResponse.
 
   # Extraction constraints
   An allele is "experimentally supported" when this paper uses it in an experiment, such as phenotype analysis, genetic cross, complementation test, molecular characterization, rescue, or another result-producing assay.
@@ -135,7 +135,7 @@ content: |
   If the tool returns `status: "not_found"`, inspect the chunk preview, retry once only when the mismatch is clearly fixable, then drop that evidence if it still does not verify. Do not invent quotes or replace them with free-text summaries.
 
   # Output
-  Return JSON only, matching AlleleExtractionResultEnvelope.
+  Return JSON only, matching AlleleExtractorRepairResponse.
 
   `curatable_objects[]` is the only semantic object list. Do not emit any top-level helper list of retained alleles, items, annotations, genes, diseases, chemicals, or phenotypes. Do not emit `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts`.
 
@@ -168,7 +168,10 @@ content: |
 
   # Repair mode
   In repair mode, the supervisor will provide one or more bounded field paths such as `curatable_objects[2].payload.allele_identifier`, `curatable_objects[2].object_refs`, or `metadata.evidence_records[1].chunk_id`.
-  - Return the same AlleleExtractionResultEnvelope shape.
+  - For first-pass extraction, return the AlleleExtractionResultEnvelope branch
+    of AlleleExtractorRepairResponse.
+  - For supervisor repair requests, return the bounded `repair_action` branch
+    of AlleleExtractorRepairResponse.
   - Preserve every stable `object_id` and `pending_ref_id`.
   - Repair only the requested field paths and any directly dependent evidence/object refs needed to keep the envelope valid.
   - Do not rerun unrelated extraction, add unrelated new objects, or remove unrelated metadata.
@@ -184,10 +187,12 @@ content: |
   - When verifying new repair evidence with `record_evidence`, pass `object_id`
     or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
     and `repair_attempt_id` so the repair target is preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` when the field is defined but the
-    available paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` when the requested object or
-    field is not fully defined for this domain pack.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the field is defined but the available
+    paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
   - Never patch protected fields, stable object identifiers, schema/model refs,
     object type, status, or unrelated payload paths.
 

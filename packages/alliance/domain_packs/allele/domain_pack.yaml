@@ -123,6 +123,10 @@ object_definitions:
         field_type: string
         display_name: Association kind
         required: true
+        metadata:
+          repair:
+            protected: true
+            reason: Association kind is a domain-pack routing invariant.
       - field_path: allele
         field_type: object_ref
         display_name: Allele
@@ -175,6 +179,9 @@ object_definitions:
         display_name: Allele identifier
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -218,6 +225,9 @@ object_definitions:
         display_name: Primary external ID
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -231,6 +241,9 @@ object_definitions:
         display_name: Allele symbol
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -294,6 +307,10 @@ object_definitions:
         field_type: string
         display_name: Mention text
         required: true
+        metadata:
+          repair:
+            protected: true
+            reason: Mention text is the source evidence anchor, not a normalized repair target.
       - field_path: normalized_id
         field_type: string
         display_name: Normalized ID

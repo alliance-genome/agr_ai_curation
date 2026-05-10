@@ -4,6 +4,12 @@ from pathlib import Path
 
 import yaml
 
+from src.lib.domain_packs.repair_patches import (
+    DomainEnvelopeExtractorFinalClassification,
+    DomainEnvelopeRepairPatch,
+)
+from src.lib.openai_agents import models as agent_models
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -15,6 +21,15 @@ EXTRACTOR_PROMPTS = [
     "packages/alliance/agents/gene_extractor/prompt.yaml",
     "packages/alliance/agents/phenotype_extractor/prompt.yaml",
 ]
+
+EXTRACTOR_OUTPUT_SCHEMAS = {
+    "packages/alliance/agents/allele_extractor/agent.yaml": "AlleleExtractorRepairResponse",
+    "packages/alliance/agents/chemical_extractor/agent.yaml": "ChemicalExtractorRepairResponse",
+    "packages/alliance/agents/disease_extractor/agent.yaml": "DiseaseExtractorRepairResponse",
+    "packages/alliance/agents/gene_expression/agent.yaml": "GeneExpressionExtractorRepairResponse",
+    "packages/alliance/agents/gene_extractor/agent.yaml": "GeneExtractorRepairResponse",
+    "packages/alliance/agents/phenotype_extractor/agent.yaml": "PhenotypeExtractorRepairResponse",
+}
 
 VALIDATOR_PROMPTS = [
     "packages/alliance/agents/allele/prompt.yaml",
@@ -35,6 +50,12 @@ def _content(relative_path: str) -> str:
     content = data.get("content")
     assert isinstance(content, str)
     return content
+
+
+def _yaml(relative_path: str) -> dict:
+    data = yaml.safe_load((REPO_ROOT / relative_path).read_text(encoding="utf-8"))
+    assert isinstance(data, dict)
+    return data
 
 
 def test_supervisor_prompt_declares_repair_loop_outcomes():
@@ -65,7 +86,9 @@ def test_extractor_prompts_declare_bounded_patch_contracts():
             "`validation_finding_id`",
             "`repair_attempt_id`",
             'repair_action: "no_repair_possible"',
+            '`status: "no_repair_possible"`',
             'repair_action: "mark_under_development"',
+            '`status: "under_development"`',
             "Never patch protected fields",
         ]:
             assert fragment in content, f"{relative_path} missing {fragment}"
@@ -83,3 +106,54 @@ def test_validator_prompts_keep_validation_separate_from_patching():
             'Only an extractor may return `repair_action: "extractor_patch"`',
         ]:
             assert fragment in content, f"{relative_path} missing {fragment}"
+
+
+def test_extractor_agents_use_repair_capable_output_schemas():
+    for relative_path, schema_name in EXTRACTOR_OUTPUT_SCHEMAS.items():
+        agent_payload = _yaml(relative_path)
+        assert agent_payload["output_schema"] == schema_name
+
+        schema_cls = getattr(agent_models, schema_name)
+        assert getattr(schema_cls, "__domain_envelope_extractor_repair_response__")
+
+        patch_response = schema_cls.model_validate(
+            {
+                "repair_action": "extractor_patch",
+                "patch_id": "repair-patch:test",
+                "envelope_id": "env-1",
+                "expected_revision": 1,
+                "source_finding_ids": ["validation:1"],
+                "operations": [
+                    {
+                        "op": "replace",
+                        "object_ref": {
+                            "pending_ref_id": "object-1",
+                            "object_type": "Gene",
+                        },
+                        "field_path": "primary_external_id",
+                        "expected_before": "OLD:1",
+                        "after": "NEW:1",
+                        "reason": "Validator supplied the grounded identifier.",
+                    }
+                ],
+                "rationale": "Bounded repair against the requested field path.",
+            }
+        )
+        assert isinstance(patch_response.root, DomainEnvelopeRepairPatch)
+
+        final_response = schema_cls.model_validate(
+            {
+                "repair_action": "mark_under_development",
+                "envelope_id": "env-1",
+                "expected_revision": 1,
+                "status": "under_development",
+                "reason": "The domain-pack field is not fully defined.",
+                "finding_ids": ["validation:1"],
+                "object_ref": {
+                    "pending_ref_id": "object-1",
+                    "object_type": "Gene",
+                },
+                "field_path": "primary_external_id",
+            }
+        )
+        assert isinstance(final_response.root, DomainEnvelopeExtractorFinalClassification)

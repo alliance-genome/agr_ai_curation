@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from src.lib.openai_agents.models import GeneExtractionResultEnvelope
+from src.lib.openai_agents.models import GeneExtractionResultEnvelope, GeneExtractorRepairResponse
 
 PROMPT_UTILS_PATH = Path(__file__).resolve().parents[4] / "src/lib/openai_agents/prompt_utils.py"
 _spec = spec_from_file_location("prompt_utils_under_test", PROMPT_UTILS_PATH)
@@ -76,6 +76,18 @@ def test_inject_structured_output_instruction_adds_domain_envelope_contract():
     assert "Do not emit top-level legacy semantic lists" in result
     assert "under `metadata`" in result
     assert "In repair mode" in result
+
+
+def test_inject_structured_output_instruction_adds_contract_for_repair_response():
+    instructions = "## First\nLine A\n## Second\nTail"
+
+    result = inject_structured_output_instruction(
+        instructions=instructions,
+        output_type=GeneExtractorRepairResponse,
+    )
+
+    assert "## DOMAIN ENVELOPE EXTRACTION CONTRACT" in result
+    assert "GeneExtractorRepairResponse" in result
 
 
 def test_inject_structured_output_instruction_falls_back_to_prepend_without_second_section():

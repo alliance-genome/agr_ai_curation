@@ -32,6 +32,7 @@ from .validation_supervisor import (
 from .repair_patches import (
     DEFAULT_REPAIR_RETRY_BUDGET,
     REPAIR_CONTEXT_METADATA_KEY,
+    DomainEnvelopeExtractorFinalClassification,
     DomainEnvelopeRepairPatch,
     DomainEnvelopeRepairRequest,
     RepairFinalClassification,
@@ -60,6 +61,7 @@ __all__ = [
     "LoadedDomainPack",
     "DEFAULT_REPAIR_RETRY_BUDGET",
     "REPAIR_CONTEXT_METADATA_KEY",
+    "DomainEnvelopeExtractorFinalClassification",
     "DomainEnvelopeRepairPatch",
     "DomainEnvelopeRepairRequest",
     "RepairFinalClassification",

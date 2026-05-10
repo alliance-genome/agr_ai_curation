@@ -22,7 +22,7 @@ content: |
   - Verifies every retained phenotype quote with `record_evidence` and uses only verified evidence records.
   - Keeps disambiguation reasoning, normalization hints, exclusions, ambiguities, and run counters explicit.
   - Emits retained semantic findings only as phenotype domain-envelope objects in `curatable_objects[]`.
-  - Returns JSON only, matching PhenotypeResultEnvelope.
+  - Returns JSON only, matching PhenotypeExtractorRepairResponse.
   </success_criteria>
 
   <operating_constraints>
@@ -275,12 +275,12 @@ content: |
   - If phenotype identity or genotype attribution is unresolved after using the available paper context,
     place the candidate in metadata.ambiguities[] instead of forcing normalization.
   - If evidence cannot be verified with `record_evidence`, do not retain that quote as supporting evidence.
-  - If the schema/tool layer rejects a field shape, keep the output compatible with PhenotypeResultEnvelope
+  - If the schema/tool layer rejects a field shape, keep the output compatible with PhenotypeExtractorRepairResponse
     rather than adding prose outside JSON.
   </stop_and_abstain_rules>
 
   <output_contract>
-  Return JSON only, matching PhenotypeResultEnvelope.
+  Return JSON only, matching PhenotypeExtractorRepairResponse.
 
   Domain-envelope contract:
   - `curatable_objects[]` is the only semantic object list.
@@ -367,10 +367,12 @@ content: |
   - When verifying new repair evidence with `record_evidence`, pass `object_id`
     or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
     and `repair_attempt_id` so the repair target is preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` when the field is defined but the
-    available paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` when the requested object or
-    field is not fully defined for this domain pack.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the field is defined but the available
+    paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
   - Never patch protected fields, stable object identifiers, schema/model refs,
     object type, status, or unrelated payload paths.
   </repair_mode>

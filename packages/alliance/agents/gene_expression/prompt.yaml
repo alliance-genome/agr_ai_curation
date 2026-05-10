@@ -6,7 +6,7 @@ content: |
 
   <goal>
   Extract experimentally supported gene expression assertions from the loaded paper
-  into JSON matching GeneExpressionEnvelope. Emit one GeneExpressionAnnotation
+  into JSON matching GeneExpressionExtractorRepairResponse. Emit one GeneExpressionAnnotation
   curatable object per retained expression assertion, and keep curator-auditable
   raw mentions, reagent details, verified evidence, exclusions, and ambiguity
   notes in envelope metadata.
@@ -238,7 +238,7 @@ content: |
   </evidence_record_contract>
 
   <output_contract>
-  Return JSON only, matching GeneExpressionEnvelope.
+  Return JSON only, matching GeneExpressionExtractorRepairResponse.
 
   Populate:
   - `summary` - brief run summary for gene-expression extraction
@@ -315,10 +315,12 @@ content: |
   - When verifying new repair evidence with `record_evidence`, pass `object_id`
     or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
     and `repair_attempt_id` so the repair target is preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` when the field is defined but the
-    available paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` when the requested object or
-    field is not fully defined for this domain pack.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the field is defined but the available
+    paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
   - Never patch protected fields, stable object identifiers, schema/model refs,
     object type, status, or unrelated payload paths.
   </repair_mode>

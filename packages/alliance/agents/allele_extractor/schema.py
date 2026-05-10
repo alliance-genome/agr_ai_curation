@@ -5,8 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from pydantic import model_validator
+from pydantic import RootModel, model_validator
 
+from src.lib.domain_packs.repair_patches import (
+    DomainEnvelopeExtractorFinalClassification,
+    DomainEnvelopeRepairPatch,
+)
 from src.lib.openai_agents.models import (
     AlleleExtractionResultEnvelope as RuntimeAlleleExtractionResultEnvelope,
 )
@@ -167,6 +171,19 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
                 f"{obj.object_type} payload is missing required field(s): "
                 + ", ".join(missing_fields)
             )
+
+
+class AlleleExtractorRepairResponse(
+    RootModel[
+        AlleleExtractionResultEnvelope
+        | DomainEnvelopeRepairPatch
+        | DomainEnvelopeExtractorFinalClassification
+    ]
+):
+    """Allele first-pass extraction or repair_action response schema."""
+
+    __envelope_class__ = True
+    __domain_envelope_extractor_repair_response__ = True
 
 
 def _optional_mapping(value: Any) -> Mapping[str, Any]:

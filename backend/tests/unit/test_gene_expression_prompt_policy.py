@@ -52,7 +52,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     data = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
     content = str(data.get("content") or "")
 
-    assert "Return JSON only, matching GeneExpressionEnvelope." in content
+    assert "Return JSON only, matching GeneExpressionExtractorRepairResponse." in content
     assert "previously_reported" in content
     assert "non_experimental_claim" in content
     assert "marker_only_visualization" in content

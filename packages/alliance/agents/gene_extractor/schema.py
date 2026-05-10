@@ -7,7 +7,19 @@ from typing import Literal
 from src.lib.openai_agents.models import (
     GeneExtractionResultEnvelope as RuntimeGeneExtractionResultEnvelope,
 )
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
+from src.lib.domain_packs.repair_patches import (
+    DomainEnvelopeExtractorFinalClassification,
+    DomainEnvelopeRepairPatch,
+)
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState, SchemaRef
 
 
@@ -214,8 +226,22 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
         return self
 
 
+class GeneExtractorRepairResponse(
+    RootModel[
+        GeneExtractionResultEnvelope
+        | DomainEnvelopeRepairPatch
+        | DomainEnvelopeExtractorFinalClassification
+    ]
+):
+    """Gene first-pass extraction or repair_action response schema."""
+
+    __envelope_class__ = True
+    __domain_envelope_extractor_repair_response__ = True
+
+
 __all__ = [
     "GeneExtractionResultEnvelope",
+    "GeneExtractorRepairResponse",
     "GeneMentionEvidenceObjectEnvelope",
     "GeneMentionEvidencePayload",
 ]

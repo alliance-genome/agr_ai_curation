@@ -159,18 +159,18 @@ def test_bundled_alliance_discover_agent_schemas_defaults_to_runtime_packages(mo
     assert schema_discovery.get_schema_for_agent("gene").__name__ == "GeneValidationEnvelope"
 
 
-def test_bundled_alliance_first_pass_extractors_share_domain_envelope_schema(monkeypatch):
+def test_bundled_alliance_extractors_use_repair_response_schema(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 
     schemas = schema_discovery.discover_agent_schemas(force_reload=True)
 
     expected = {
-        "gene_expression": "GeneExpressionEnvelope",
-        "gene_extractor": "GeneExtractionResultEnvelope",
-        "allele_extractor": "AlleleExtractionResultEnvelope",
-        "disease_extractor": "DiseaseExtractionResultEnvelope",
-        "chemical_extractor": "ChemicalExtractionResultEnvelope",
-        "phenotype_extractor": "PhenotypeResultEnvelope",
+        "gene_expression": "GeneExpressionExtractorRepairResponse",
+        "gene_extractor": "GeneExtractorRepairResponse",
+        "allele_extractor": "AlleleExtractorRepairResponse",
+        "disease_extractor": "DiseaseExtractorRepairResponse",
+        "chemical_extractor": "ChemicalExtractorRepairResponse",
+        "phenotype_extractor": "PhenotypeExtractorRepairResponse",
     }
     for agent_name, schema_name in expected.items():
         discovered_schema = schema_discovery.get_schema_for_agent(agent_name)
@@ -178,6 +178,30 @@ def test_bundled_alliance_first_pass_extractors_share_domain_envelope_schema(mon
         assert schema_name in schemas
         assert discovered_schema is not None
         assert discovered_schema.__name__ == schema_name
+        assert getattr(
+            discovered_schema,
+            "__domain_envelope_extractor_repair_response__",
+        )
+
+
+def test_bundled_alliance_first_pass_extractors_still_register_domain_envelope_schema(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    schemas = schema_discovery.discover_agent_schemas(force_reload=True)
+
+    expected = (
+        "GeneExpressionEnvelope",
+        "GeneExtractionResultEnvelope",
+        "AlleleExtractionResultEnvelope",
+        "DiseaseExtractionResultEnvelope",
+        "ChemicalExtractionResultEnvelope",
+        "PhenotypeResultEnvelope",
+    )
+    for schema_name in expected:
+        discovered_schema = schemas[schema_name]
+
         assert issubclass(discovered_schema, DomainEnvelopeExtractionResult)
         assert "curatable_objects" in discovered_schema.model_fields
         assert "metadata" in discovered_schema.model_fields

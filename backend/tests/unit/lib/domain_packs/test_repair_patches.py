@@ -10,6 +10,7 @@ from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.repair_patches import (
     REPAIR_CONTEXT_METADATA_KEY,
+    DomainEnvelopeExtractorFinalClassification,
     DomainEnvelopeRepairPatch,
     RepairFinalClassification,
     RepairFinalStatus,
@@ -29,6 +30,9 @@ from src.schemas.domain_envelope import (
     ValidationFinding,
     ValidationFindingSeverity,
 )
+
+
+REPO_ROOT = Path(__file__).resolve().parents[5]
 
 
 def _pack_text() -> str:
@@ -81,6 +85,34 @@ def _loaded_pack(tmp_path: Path) -> LoadedDomainPack:
     )
 
 
+def _loaded_alliance_pack(relative_path: str) -> LoadedDomainPack:
+    metadata_path = REPO_ROOT / relative_path
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=metadata_path.parent,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+
+def _field_metadata(
+    pack: LoadedDomainPack,
+    *,
+    object_type: str,
+    field_path: str,
+) -> dict:
+    object_definition = next(
+        item for item in pack.metadata.object_definitions if item.object_type == object_type
+    )
+    field_definition = next(
+        item for item in object_definition.fields if item.field_path == field_path
+    )
+    return field_definition.metadata
+
+
 def _object_ref() -> ObjectRef:
     return ObjectRef(pending_ref_id="gene-assertion-1", object_type="GeneAssertion")
 
@@ -112,6 +144,36 @@ def _finding() -> ValidationFinding:
         code="fixture.symbol_mismatch",
         message="Gene symbol does not match validator result.",
         field_ref=FieldRef(object_ref=_object_ref(), field_path="gene.symbol"),
+    )
+
+
+def _alliance_envelope(object_type: str) -> DomainEnvelope:
+    return DomainEnvelope(
+        envelope_id="env-alliance",
+        domain_pack_id="agr.alliance.fixture",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type=object_type,
+                pending_ref_id="alliance-object-1",
+                payload={},
+            )
+        ],
+    )
+
+
+def _alliance_finding(object_type: str, field_path: str) -> ValidationFinding:
+    return ValidationFinding(
+        finding_id=f"validation:{object_type}:{field_path}",
+        severity=ValidationFindingSeverity.ERROR,
+        code="alliance.fixture",
+        message="Alliance field needs repair.",
+        field_ref=FieldRef(
+            object_ref=ObjectRef(
+                pending_ref_id="alliance-object-1",
+                object_type=object_type,
+            ),
+            field_path=field_path,
+        ),
     )
 
 
@@ -156,6 +218,135 @@ def test_build_and_record_repair_request_tracks_budget_and_context(tmp_path: Pat
     assert "Repair requested" in updated.metadata[REPAIR_CONTEXT_METADATA_KEY][
         "latest_chat_summary"
     ]
+
+
+@pytest.mark.parametrize(
+    ("pack_path", "object_type", "field_path"),
+    [
+        (
+            "packages/alliance/domain_packs/gene/domain_pack.yaml",
+            "gene_mention_evidence",
+            "primary_external_id",
+        ),
+        (
+            "packages/alliance/domain_packs/disease/domain_pack.yaml",
+            "DiseaseAnnotation",
+            "disease_annotation_object.curie",
+        ),
+        (
+            "packages/alliance/domain_packs/chemical_condition/domain_pack.yaml",
+            "ChemicalCondition",
+            "condition_chemical.curie",
+        ),
+        (
+            "packages/alliance/domain_packs/allele/domain_pack.yaml",
+            "AllelePaperEvidenceAssociation",
+            "allele_identifier",
+        ),
+        (
+            "packages/alliance/domain_packs/phenotype/domain_pack.yaml",
+            "PhenotypeAnnotation",
+            "phenotype_terms[0].curie",
+        ),
+        (
+            "packages/alliance/domain_packs/gene_expression/domain_pack.yaml",
+            "GeneExpressionAnnotation",
+            "expression_annotation_subject.primary_external_id",
+        ),
+    ],
+)
+def test_alliance_repairable_fields_are_declared_in_domain_pack_metadata(
+    pack_path: str,
+    object_type: str,
+    field_path: str,
+):
+    pack = _loaded_alliance_pack(pack_path)
+    request = build_repair_request(
+        _alliance_envelope(object_type),
+        pack,
+        findings=[_alliance_finding(object_type, field_path)],
+        expected_revision=1,
+    )
+
+    assert request.targets[0].repairable is True
+    repair_metadata = _field_metadata(
+        pack,
+        object_type=object_type,
+        field_path=field_path,
+    )["repair"]
+    assert repair_metadata["repairable"] is True
+    assert repair_metadata["source_of_truth"] == "alliance_linkml"
+
+
+@pytest.mark.parametrize(
+    ("pack_path", "object_type", "field_path"),
+    [
+        (
+            "packages/alliance/domain_packs/gene/domain_pack.yaml",
+            "gene_mention_evidence",
+            "mention",
+        ),
+        (
+            "packages/alliance/domain_packs/disease/domain_pack.yaml",
+            "DiseaseAnnotation",
+            "disease_annotation_subject.subject_identifier",
+        ),
+        (
+            "packages/alliance/domain_packs/chemical_condition/domain_pack.yaml",
+            "ChemicalCondition",
+            "source_chemical_mention",
+        ),
+        (
+            "packages/alliance/domain_packs/allele/domain_pack.yaml",
+            "AllelePaperEvidenceAssociation",
+            "association_kind",
+        ),
+        (
+            "packages/alliance/domain_packs/phenotype/domain_pack.yaml",
+            "PhenotypeAnnotation",
+            "annotation_kind",
+        ),
+        (
+            "packages/alliance/domain_packs/gene_expression/domain_pack.yaml",
+            "GeneExpressionAnnotation",
+            "unique_id",
+        ),
+    ],
+)
+def test_alliance_protected_fields_are_rejected_by_repair_patch_validation(
+    pack_path: str,
+    object_type: str,
+    field_path: str,
+):
+    pack = _loaded_alliance_pack(pack_path)
+    patch = DomainEnvelopeRepairPatch(
+        patch_id="repair-patch:protected-alliance",
+        envelope_id="env-alliance",
+        expected_revision=1,
+        operations=[
+            {
+                "object_ref": {
+                    "pending_ref_id": "alliance-object-1",
+                    "object_type": object_type,
+                },
+                "field_path": field_path,
+                "expected_before": None,
+                "after": "new-value",
+                "reason": "Attempted patch of a protected field.",
+            }
+        ],
+        rationale="Protected field test.",
+    )
+
+    result = apply_repair_patch(
+        _alliance_envelope(object_type),
+        pack,
+        patch,
+        current_revision=1,
+    )
+
+    assert result.status is RepairPatchStatus.REJECTED
+    assert any("protected" in error for error in result.errors)
 
 
 def test_apply_repair_patch_accepts_repairable_field_and_records_history(tmp_path: Path):
@@ -319,6 +510,17 @@ def test_final_classifications_are_visible_in_history_and_context(
     assert updated.history[-1].event_type is HistoryEventKind.REPAIR_FINAL_CLASSIFIED
     assert updated.history[-1].details["status"] == status.value
     assert updated.metadata[REPAIR_CONTEXT_METADATA_KEY]["latest_status"] == status.value
+
+
+def test_extractor_final_classification_rejects_action_status_mismatch():
+    with pytest.raises(ValueError, match="mark_under_development"):
+        DomainEnvelopeExtractorFinalClassification(
+            repair_action="mark_under_development",
+            envelope_id="env-1",
+            expected_revision=1,
+            status=RepairFinalStatus.NO_REPAIR_POSSIBLE,
+            reason="Mismatched status must not be accepted.",
+        )
 
 
 def test_validator_rerun_request_uses_dedicated_history_event():

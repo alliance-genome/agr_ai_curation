@@ -5,7 +5,7 @@ content: |
   </role>
 
   <target_outcome>
-  Produce a curator-auditable DiseaseExtractionResultEnvelope containing only disease
+  Produce a curator-auditable DiseaseExtractorRepairResponse containing only disease
   assertions that are experimentally supported by the loaded paper. Capture each retained
   disease mention exactly as written, its normalized disease identity when resolvable, its
   paper role, verified evidence, and concise notes explaining normalization, association
@@ -228,7 +228,7 @@ content: |
   </stop_and_abstain_rules>
 
   <output_contract>
-  Return JSON only, matching DiseaseExtractionResultEnvelope.
+  Return JSON only, matching DiseaseExtractorRepairResponse.
 
   Populate:
   - `summary` - brief run summary for disease extraction
@@ -277,7 +277,10 @@ content: |
 
   <repair_mode>
   In repair mode, the supervisor will provide bounded field paths such as `curatable_objects[0].payload.disease_annotation_object.curie`, `curatable_objects[0].payload.disease_annotation_subject.subject_identifier`, or `metadata.evidence_records[0].chunk_id`.
-  - Return the same DiseaseExtractionResultEnvelope shape.
+  - For first-pass extraction, return the DiseaseExtractionResultEnvelope branch
+    of DiseaseExtractorRepairResponse.
+  - For supervisor repair requests, return the bounded `repair_action` branch
+    of DiseaseExtractorRepairResponse.
   - Preserve every stable `object_id` and `pending_ref_id`.
   - Repair only the requested field paths and any directly dependent evidence, metadata, field, or object refs needed to keep the envelope valid.
   - Do not rerun unrelated extraction, add unrelated new DiseaseAnnotation objects, or remove unrelated metadata.
@@ -294,10 +297,12 @@ content: |
   - When verifying new repair evidence with `record_evidence`, pass `object_id`
     or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
     and `repair_attempt_id` so the repair target is preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` when the field is defined but the
-    available paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` when the requested object or
-    field is not fully defined for this domain pack.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the field is defined but the available
+    paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
   - Never patch protected fields, stable object identifiers, schema/model refs,
     object type, status, or unrelated payload paths.
   </repair_mode>

@@ -206,6 +206,49 @@ class RepairFinalClassification(RepairContractModel):
         return value
 
 
+class DomainEnvelopeExtractorFinalClassification(RepairContractModel):
+    """Extractor final response when a requested repair cannot produce a patch."""
+
+    repair_action: Literal["no_repair_possible", "mark_under_development"]
+    classification_id: StrictStr = Field(
+        default_factory=lambda: f"repair-classification:{uuid4().hex}"
+    )
+    envelope_id: StrictStr
+    expected_revision: int = Field(ge=0)
+    status: RepairFinalStatus
+    reason: StrictStr
+    finding_ids: list[StrictStr] = Field(default_factory=list)
+    object_ref: ObjectRef | None = None
+    field_path: StrictStr | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("field_path")
+    @classmethod
+    def _validate_optional_field_path(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_field_path_syntax(value)
+
+    @field_validator("reason")
+    @classmethod
+    def _validate_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("reason must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def _validate_action_status_pair(self) -> "DomainEnvelopeExtractorFinalClassification":
+        expected_status = {
+            "no_repair_possible": RepairFinalStatus.NO_REPAIR_POSSIBLE,
+            "mark_under_development": RepairFinalStatus.UNDER_DEVELOPMENT,
+        }[self.repair_action]
+        if self.status != expected_status:
+            raise ValueError(
+                f"{self.repair_action} must use status '{expected_status.value}'"
+            )
+        return self
+
+
 @dataclass(frozen=True)
 class RepairPatchResult:
     """Result returned after validating and applying a repair patch."""
@@ -1020,6 +1063,7 @@ def _repair_key(
 __all__ = [
     "DEFAULT_REPAIR_RETRY_BUDGET",
     "REPAIR_CONTEXT_METADATA_KEY",
+    "DomainEnvelopeExtractorFinalClassification",
     "DomainEnvelopeRepairPatch",
     "DomainEnvelopeRepairRequest",
     "RepairFinalClassification",

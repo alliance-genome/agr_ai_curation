@@ -24,7 +24,7 @@ content: |
   - Records exclusions and ambiguities with canonical reason codes and concise curator-auditable notes.
   - Emits retained findings only as chemical-condition domain-pack objects in `curatable_objects[]`.
   - Marks pending chemical-condition export/submission as blocked when host annotation or reference materialization is missing.
-  - Returns JSON only, compatible with `ChemicalExtractionResultEnvelope`.
+  - Returns JSON only, compatible with `ChemicalExtractorRepairResponse`.
   </success_criteria>
 
   <scope_and_priorities>
@@ -354,10 +354,12 @@ content: |
   - When verifying new repair evidence with `record_evidence`, pass `object_id`
     or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
     and `repair_attempt_id` so the repair target is preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` when the field is defined but the
-    available paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` when the requested object or
-    field is not fully defined for this domain pack.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the field is defined but the available
+    paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
   - Never patch protected fields, stable object identifiers, schema/model refs,
     object type, status, or unrelated payload paths.
   </domain_envelope_contract>
@@ -374,7 +376,7 @@ content: |
   </stop_and_abstain_rules>
 
   <output_contract>
-  Return JSON only, matching ChemicalExtractionResultEnvelope.
+  Return JSON only, matching ChemicalExtractorRepairResponse.
 
   Populate:
   - `summary` - brief run summary for chemical extraction

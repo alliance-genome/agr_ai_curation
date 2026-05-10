@@ -26,6 +26,7 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Type, Any
 
+import yaml
 from pydantic import BaseModel
 
 from .agent_sources import get_default_agent_search_path, resolve_agent_config_sources
@@ -141,6 +142,19 @@ def _load_schema_module(
     return envelope_classes
 
 
+def _configured_output_schema_name(agent_yaml: Path | None) -> str | None:
+    if agent_yaml is None or not agent_yaml.exists():
+        return None
+    try:
+        data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    schema_name = str(data.get("output_schema") or "").strip()
+    return schema_name or None
+
+
 def discover_agent_schemas(
     agents_path: Optional[Path] = None,
     force_reload: bool = False,
@@ -205,10 +219,16 @@ def discover_agent_schemas(
                     _schema_registry[class_name] = cls
                     logger.info('Registered schema: %s from %s/schema.py', class_name, source.folder_name)
 
-                # Also map by agent folder for convenience
-                # Use the first envelope class found as the "primary" schema
+                # Also map by agent folder for convenience. Prefer the schema
+                # named in agent.yaml when the bundle defines multiple schemas.
                 if envelope_classes:
-                    primary_class = list(envelope_classes.values())[0]
+                    configured_schema = _configured_output_schema_name(
+                        source.agent_yaml
+                    )
+                    primary_class = envelope_classes.get(
+                        configured_schema or "",
+                        list(envelope_classes.values())[0],
+                    )
                     _schema_by_agent[source.folder_name] = primary_class
 
             except Exception as e:

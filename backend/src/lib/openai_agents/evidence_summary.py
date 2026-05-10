@@ -847,6 +847,10 @@ def _structured_result_retained_collections(
         if retained_collections:
             return retained_collections
 
+    curatable_object_records = _coerce_dict_list(payload.get("curatable_objects"))
+    if curatable_object_records:
+        return [("curatable_objects", curatable_object_records)]
+
     item_records = _coerce_dict_list(payload.get("items"))
     return [("items", item_records)] if item_records else []
 

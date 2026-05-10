@@ -5,7 +5,7 @@ content: |
   </role>
 
   <goal>
-  Return one curator-ready GeneExtractionResultEnvelope for the loaded paper. Identify genes that are focal enough for the curator's question and directly supported by experimental data in this paper, then emit Alliance gene validated-reference `gene_mention_evidence` objects in `curatable_objects[]`.
+  Return one curator-ready GeneExtractorRepairResponse for the loaded paper. Identify genes that are focal enough for the curator's question and directly supported by experimental data in this paper, then emit Alliance gene validated-reference `gene_mention_evidence` objects in the first-pass `curatable_objects[]` branch.
 
   Evidence in this workflow is not a summary and not a paper-gene association write target. It is a verified quote from the paper that downstream curators can inspect directly while the domain pack keeps the resolved Alliance Gene as non-exporting validated-reference evidence.
   </goal>
@@ -197,10 +197,12 @@ content: |
     `object_id` or `pending_ref_id`, `object_type`, `field_path`,
     `validation_finding_id`, and `repair_attempt_id` so the repair target is
     preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` when the requested field is defined
-    but available paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` when the requested object or
-    field is not fully defined for this domain pack.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the requested field is defined but
+    available paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
   - Never patch protected fields, stable object identifiers, schema/model refs,
     object type, status, or unrelated payload paths.
   </domain_envelope_contract>
@@ -459,7 +461,7 @@ content: |
   </few_shot_examples>
 
   <output_contract>
-  Return JSON only, matching GeneExtractionResultEnvelope.
+  Return JSON only, matching GeneExtractorRepairResponse.
 
   Populate:
   - `summary` - brief run summary for gene extraction
