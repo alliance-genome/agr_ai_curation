@@ -26,17 +26,19 @@ class CurationDbClient:
     """Public adapter around a published curation DB client."""
 
     def __init__(self, delegate: Any):
-        self._delegate = delegate
+        self.__delegate = delegate
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._delegate, name)
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self.__delegate, name)
 
     def create_session(self) -> Any:
         """Return a SQLAlchemy session from the wrapped client."""
-        return self._delegate._create_session()
+        return self.__delegate._create_session()
 
     def close(self) -> None:
-        close = getattr(self._delegate, "close", None)
+        close = getattr(self.__delegate, "close", None)
         if callable(close):
             close()
 

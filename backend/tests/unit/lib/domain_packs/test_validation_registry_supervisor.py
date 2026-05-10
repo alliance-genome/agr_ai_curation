@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from agr_ai_curation_runtime import agr_lookup
+from src.lib import lookup_status
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
@@ -22,6 +24,22 @@ from src.schemas.domain_envelope import (
     ValidationFinding,
     ValidationFindingSeverity,
 )
+
+
+def test_lookup_status_constants_are_shared_with_agr_lookup_contract():
+    assert (
+        validation_supervisor.LOOKUP_STATUS_BLOCKED
+        == lookup_status.LOOKUP_STATUS_BLOCKED
+    )
+    assert (
+        validation_supervisor.LOOKUP_STATUS_UNDER_DEVELOPMENT
+        == lookup_status.LOOKUP_STATUS_UNDER_DEVELOPMENT
+    )
+    assert agr_lookup.LOOKUP_STATUS_BLOCKED == lookup_status.LOOKUP_STATUS_BLOCKED
+    assert (
+        agr_lookup.LOOKUP_STATUS_UNDER_DEVELOPMENT
+        == lookup_status.LOOKUP_STATUS_UNDER_DEVELOPMENT
+    )
 
 
 def _validation_pack_text() -> str:

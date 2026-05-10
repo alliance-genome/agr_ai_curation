@@ -28,6 +28,10 @@ from src.schemas.domain_envelope import (
     field_path_exists,
     parse_field_path,
 )
+from src.lib.lookup_status import (
+    LOOKUP_STATUS_BLOCKED,
+    LOOKUP_STATUS_UNDER_DEVELOPMENT,
+)
 
 from .registry import LoadedDomainPack
 from .validation_registry import (
@@ -40,8 +44,6 @@ from .validation_registry import (
 
 
 _CURIE_PATTERN_TEMPLATE = r"^{prefix}:.+"
-LOOKUP_STATUS_BLOCKED = "blocked"
-LOOKUP_STATUS_UNDER_DEVELOPMENT = "under_development"
 
 
 @dataclass(frozen=True)

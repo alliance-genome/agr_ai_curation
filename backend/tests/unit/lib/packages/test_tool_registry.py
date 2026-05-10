@@ -438,6 +438,9 @@ def test_repo_alliance_package_copies_tool_implementations_locally():
 
     agr_source = (ALLIANCE_TOOLS_DIR / "agr_curation.py").read_text(encoding="utf-8")
     assert "agr_ai_curation_runtime" in agr_source
+    assert "from agr_ai_curation_runtime.agr_lookup import" in agr_source
+    assert "def _lookup_attempt(" not in agr_source
+    assert "LOOKUP_STATUS_BLOCKED = " not in agr_source
 
 
 def test_repo_alliance_package_runtime_requirements_include_file_output_driver():
