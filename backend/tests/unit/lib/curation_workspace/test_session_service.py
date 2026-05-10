@@ -20,6 +20,7 @@ from sqlalchemy.pool import StaticPool
 from src.lib.curation_adapters.reference import REFERENCE_ADAPTER_KEY
 from src.lib.curation_workspace.export_adapters import DEFAULT_JSON_BUNDLE_TARGET_KEY
 from src.lib.curation_workspace import session_queries as query_module
+from src.lib.curation_workspace import session_serializers as serializer_module
 from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
 from src.lib.curation_workspace import session_service as module
 from src.lib.curation_workspace import session_submission_service as submission_module
@@ -760,6 +761,24 @@ def _create_domain_envelope_submission_session(
         "envelope_id": envelope.envelope_id,
         "envelope_revision": str(envelope_revision),
     }
+
+
+def test_loaded_domain_pack_for_envelope_propagates_registry_errors(monkeypatch):
+    def raise_registry_error():
+        raise RuntimeError("registry exploded")
+
+    monkeypatch.setattr(
+        submission_module,
+        "load_domain_pack_registry",
+        raise_registry_error,
+    )
+    envelope = DomainEnvelope(
+        envelope_id="museum-envelope-1",
+        domain_pack_id="museum.catalog",
+    )
+
+    with pytest.raises(RuntimeError, match="registry exploded"):
+        submission_module._loaded_domain_pack_for_envelope(envelope)
 
 
 def test_find_reusable_prepared_session_returns_only_matching_extraction_result(db_session):
@@ -2561,6 +2580,29 @@ def test_execute_submission_preserves_payload_warnings_across_reload(db_session,
     assert session_detail.latest_submission.payload is not None
     assert session_detail.latest_submission.payload.warnings == [payload_warning]
     assert session_detail.latest_submission.warnings == [payload_warning, transport_warning]
+
+
+def test_submission_record_rejects_malformed_persisted_target_history():
+    now = _now()
+    record = SubmissionModel(
+        id=uuid4(),
+        session_id=uuid4(),
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        mode=SubmissionMode.DIRECT_SUBMIT,
+        target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        status=CurationSubmissionStatus.ACCEPTED,
+        readiness=[],
+        payload=None,
+        validation_errors=[],
+        warnings=[],
+        submission_state={},
+        target_result_history=[1],
+        requested_at=now,
+        completed_at=now,
+    )
+
+    with pytest.raises(TypeError):
+        serializer_module._submission_record(record)
 
 
 def test_execute_submission_records_target_submission_state_and_history(

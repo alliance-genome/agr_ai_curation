@@ -488,7 +488,6 @@ def _submission_record(record: SubmissionModel) -> CurationSubmissionRecord:
         target_result_history=[
             dict(item)
             for item in (record.target_result_history or [])
-            if isinstance(item, dict)
         ],
     )
 

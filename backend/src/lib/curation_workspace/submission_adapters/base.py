@@ -146,7 +146,7 @@ def coerce_submission_transport_result(
         warnings=result.get("warnings") or (),
         completed_at=result.get("completed_at"),
         submission_state=result.get("submission_state"),
-        target_result_history=result.get("target_result_history") or (),
+        target_result_history=result.get("target_result_history", ()),
     )
 
 
@@ -159,10 +159,11 @@ def normalize_submission_transport_result(
     warnings: Sequence[str] = (),
     completed_at: datetime | None = None,
     submission_state: Mapping[str, Any] | None = None,
-    target_result_history: Sequence[Mapping[str, Any]] = (),
+    target_result_history: Sequence[Mapping[str, Any]] | None = (),
 ) -> SubmissionTransportResult:
     """Normalize one adapter response into the shared transport result contract."""
 
+    history_items = () if target_result_history is None else target_result_history
     return SubmissionTransportResult(
         status=CurationSubmissionStatus(status),
         external_reference=_normalize_optional_string(external_reference),
@@ -170,9 +171,10 @@ def normalize_submission_transport_result(
         validation_errors=tuple(_dedupe_preserve_order(validation_errors)),
         warnings=tuple(_dedupe_preserve_order(warnings)),
         completed_at=completed_at or datetime.now(timezone.utc),
-        submission_state=_normalize_mapping(submission_state),
+        submission_state=_normalize_mapping(submission_state, field_name="submission_state"),
         target_result_history=tuple(
-            _normalize_mapping(item) for item in target_result_history
+            _normalize_mapping(item, field_name="target_result_history item")
+            for item in history_items
         ),
     )
 
@@ -190,7 +192,9 @@ def _normalize_string(value: object) -> str:
     return str(value or "").strip()
 
 
-def _normalize_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(value, Mapping):
+def _normalize_mapping(value: Mapping[str, Any] | None, *, field_name: str) -> dict[str, Any]:
+    if value is None:
         return {}
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{field_name} must be a mapping")
     return dict(value)

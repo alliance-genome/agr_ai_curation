@@ -355,15 +355,7 @@ def _projection_refs_by_object(
 
 
 def _loaded_domain_pack_for_envelope(envelope: DomainEnvelope) -> LoadedDomainPack | None:
-    try:
-        return load_domain_pack_registry().get_pack(envelope.domain_pack_id)
-    except Exception:
-        logger.warning(
-            "Could not load domain-pack registry while preparing envelope '%s' for submission",
-            envelope.envelope_id,
-            exc_info=True,
-        )
-        return None
+    return load_domain_pack_registry().get_pack(envelope.domain_pack_id)
 
 
 def _field_definitions_for(
@@ -1279,7 +1271,7 @@ def _domain_envelope_candidate_bundle(
     }
 
 
-def _legacy_ready_candidates(
+def _non_envelope_ready_candidates(
     ready_candidates: Sequence[CurationCandidate],
     domain_context: _DomainEnvelopeSubmissionContext | None,
 ) -> list[CurationCandidate]:
@@ -1338,16 +1330,10 @@ class _SharedSubmissionPreviewAdapter:
             "target_key": target_key,
             "candidate_count": payload_context["candidate_count"],
             "candidates": payload_context["candidates"],
+            "domain_envelope_candidates": payload_context["domain_envelope_candidates"],
+            "domain_envelopes": payload_context["domain_envelopes"],
+            "readiness_blockers": payload_context["readiness_blockers"],
         }
-        domain_envelope_candidates = payload_context.get("domain_envelope_candidates")
-        if domain_envelope_candidates:
-            payload_json["domain_envelope_candidates"] = domain_envelope_candidates
-        domain_envelopes = payload_context.get("domain_envelopes")
-        if domain_envelopes:
-            payload_json["domain_envelopes"] = domain_envelopes
-        readiness_blockers = payload_context.get("readiness_blockers")
-        if readiness_blockers:
-            payload_json["readiness_blockers"] = readiness_blockers
         document = payload_context.get("document")
         if document is not None:
             payload_json["document"] = document
@@ -1498,13 +1484,16 @@ def _submission_payload_context(
         ready_candidates=ready_candidates,
         session_validation=session_validation,
     )
-    legacy_candidates = _legacy_ready_candidates(ready_candidates, domain_context)
+    non_envelope_candidates = _non_envelope_ready_candidates(
+        ready_candidates,
+        domain_context,
+    )
     domain_candidates = _domain_envelope_candidate_bundles(
         ready_candidates,
         domain_context,
     )
     candidate_ids = [
-        str(candidate.id) for candidate in legacy_candidates
+        str(candidate.id) for candidate in non_envelope_candidates
     ] + [
         str(item["candidate_id"]) for item in domain_candidates
     ]
@@ -1515,7 +1504,7 @@ def _submission_payload_context(
         "candidate_count": len(candidate_ids),
         "candidates": [
             _submission_candidate_bundle(candidate)
-            for candidate in legacy_candidates
+            for candidate in non_envelope_candidates
         ],
         "domain_envelope_candidates": domain_candidates,
         "domain_envelopes": (
@@ -1542,10 +1531,13 @@ def _export_submission_payload_context(
         ready_candidates=ready_candidates,
         session_validation=session_validation,
     )
-    legacy_candidates = _legacy_ready_candidates(ready_candidates, domain_context)
+    non_envelope_candidates = _non_envelope_ready_candidates(
+        ready_candidates,
+        domain_context,
+    )
     export_candidates = [
         _candidate_payload(candidate).model_dump(mode="json")
-        for candidate in legacy_candidates
+        for candidate in non_envelope_candidates
     ]
     domain_candidates = _domain_envelope_candidate_bundles(
         ready_candidates,
@@ -1768,7 +1760,6 @@ def _execute_direct_submission_attempt(
         target_result_history=[
             dict(item)
             for item in result.target_result_history
-            if isinstance(item, Mapping)
         ],
         requested_at=requested_at,
         completed_at=completed_at,
