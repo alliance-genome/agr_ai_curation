@@ -346,6 +346,42 @@ def test_validation_summary_projection_groups_states_by_object_and_field():
     assert all(summary.object_id == "gene-1" for summary in summaries)
 
 
+def test_validation_summary_projection_keeps_active_blocker_findings_unresolved():
+    envelope = DomainEnvelope(
+        envelope_id="env-active-blocker",
+        domain_pack_id="fixture-pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                object_id="gene-1",
+                payload={"gene": {"symbol": "abc-1"}},
+            )
+        ],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                code="domain_pack.required_field_missing",
+                message="GeneAssertion.gene.curie is required.",
+                field_ref=_field_ref("gene.curie"),
+                details={"validation_metadata": {"binding_state": "active"}},
+            )
+        ],
+    )
+
+    summaries = project_validation_summary_projections(
+        envelope,
+        envelope_revision=5,
+        object_id="gene-1",
+    )
+
+    assert len(summaries) == 1
+    summary = summaries[0]
+    assert summary.status is DomainEnvelopeValidationStatus.UNRESOLVED
+    assert summary.highest_severity == ValidationFindingSeverity.BLOCKER.value
+    assert summary.open_finding_count == 1
+    assert summary.findings[0].summary_status is DomainEnvelopeValidationStatus.UNRESOLVED
+
+
 def test_workspace_response_includes_domain_envelope_projections():
     session_iter = _db_session()
     db_session = next(session_iter)

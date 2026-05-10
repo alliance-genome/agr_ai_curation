@@ -470,8 +470,6 @@ def _validation_status(finding: ValidationFinding) -> DomainEnvelopeValidationSt
         if "under_development" in lookup_statuses:
             return DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT
 
-    if finding.severity is ValidationFindingSeverity.BLOCKER:
-        return DomainEnvelopeValidationStatus.BLOCKED
     return DomainEnvelopeValidationStatus.UNRESOLVED
 
 
