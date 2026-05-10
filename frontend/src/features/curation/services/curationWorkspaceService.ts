@@ -9,6 +9,7 @@ import type {
   CurationManualCandidateCreateResponse,
   CurationCandidateDraftUpdateRequest,
   CurationCandidateDraftUpdateResponse,
+  DomainEnvelopeReviewRowsResponse,
   CurationSessionValidationRequest,
   CurationSessionValidationResponse,
   CurationSessionUpdateRequest,
@@ -22,6 +23,11 @@ import { readCurationApiError } from './api'
 
 interface CurationWorkspaceRequestOptions {
   keepalive?: boolean
+}
+
+export interface DomainEnvelopeReviewRowsRequest {
+  envelope_id: string
+  envelope_revision?: number | null
 }
 
 async function fetchCurationWorkspaceJson<T>(
@@ -44,6 +50,59 @@ async function fetchCurationWorkspaceJson<T>(
   }
 
   return response.json() as Promise<T>
+}
+
+export function buildDomainEnvelopeReviewRowsPath(
+  request: DomainEnvelopeReviewRowsRequest,
+): string {
+  const query = new URLSearchParams()
+  if (typeof request.envelope_revision === 'number') {
+    query.set('revision', String(request.envelope_revision))
+  }
+
+  const encodedEnvelopeId = encodeURIComponent(request.envelope_id)
+  const queryString = query.toString()
+  return `/api/curation-workspace/domain-envelopes/${encodedEnvelopeId}/review-rows${
+    queryString ? `?${queryString}` : ''
+  }`
+}
+
+export function buildCurationWorkspaceEnvelopeReviewRowsRequests(
+  workspace: CurationWorkspace,
+): DomainEnvelopeReviewRowsRequest[] {
+  const requestsByKey = new Map<string, DomainEnvelopeReviewRowsRequest>()
+
+  for (const candidate of workspace.candidates) {
+    const projectionRef = candidate.projection_ref
+    if (!projectionRef) {
+      continue
+    }
+
+    const key = `${projectionRef.envelope_id}:${projectionRef.envelope_revision}`
+    if (!requestsByKey.has(key)) {
+      requestsByKey.set(key, {
+        envelope_id: projectionRef.envelope_id,
+        envelope_revision: projectionRef.envelope_revision,
+      })
+    }
+  }
+
+  return Array.from(requestsByKey.values())
+}
+
+export async function fetchDomainEnvelopeReviewRows(
+  request: DomainEnvelopeReviewRowsRequest,
+): Promise<DomainEnvelopeReviewRowsResponse> {
+  return fetchCurationWorkspaceJson<DomainEnvelopeReviewRowsResponse>(
+    buildDomainEnvelopeReviewRowsPath(request),
+  )
+}
+
+export async function fetchCurationWorkspaceEnvelopeReviewRows(
+  workspace: CurationWorkspace,
+): Promise<DomainEnvelopeReviewRowsResponse[]> {
+  const requests = buildCurationWorkspaceEnvelopeReviewRowsRequests(workspace)
+  return Promise.all(requests.map((request) => fetchDomainEnvelopeReviewRows(request)))
 }
 
 export async function fetchCurationWorkspace(sessionId: string): Promise<CurationWorkspace> {

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest'
 
 import {
   CURATION_CANDIDATE_ACTIONS,
+  DOMAIN_ENVELOPE_VALIDATION_STATUSES,
   CURATION_SESSION_SORT_FIELDS,
   CURATION_SESSION_STATUSES,
   CURATION_SUBMISSION_STATUSES,
+  type DomainEnvelopeReviewRowsResponse,
   type CurationWorkspaceResponse,
 } from './types'
 
@@ -47,6 +49,60 @@ describe('curation workspace substrate types', () => {
       'manual_review_required',
       'failed',
     ])
+
+    expect(DOMAIN_ENVELOPE_VALIDATION_STATUSES).toEqual([
+      'unresolved',
+      'planned',
+      'blocked',
+      'under_development',
+      'resolved',
+      'waived',
+    ])
+  })
+
+  it('mirrors provider-neutral domain envelope review-row payloads', () => {
+    const reviewRowsResponse: DomainEnvelopeReviewRowsResponse = {
+      envelope_id: 'tmem67-envelope',
+      envelope_revision: 2,
+      row_count: 1,
+      rows: [
+        {
+          envelope_id: 'tmem67-envelope',
+          object_id: 'tmem67-object-1',
+          envelope_revision: 2,
+          domain_pack_id: 'fixture.alliance.gene',
+          domain_pack_version: '0.7.0',
+          object_type: 'GeneAssertion',
+          object_role: 'curatable_unit',
+          status: 'draft',
+          validation_state: 'unresolved',
+          projection_type: 'workspace_review_row',
+          projection_key: 'tmem67-object-1',
+          display_label: 'TMEM67',
+          secondary_label: 'Gene assertion',
+          summary_fields: [
+            {
+              field_path: 'gene.symbol',
+              label: 'Symbol',
+              value: 'TMEM67',
+              field_type: 'string',
+              metadata: {},
+            },
+          ],
+          schema_provider: 'fixture-schema',
+          schema_ref: {},
+          object_model_ref: {},
+          model_field_ref: {},
+          metadata: {
+            semantic_source: 'domain_envelope.objects',
+          },
+        },
+      ],
+    }
+
+    expect(reviewRowsResponse.rows[0].object_id).toBe('tmem67-object-1')
+    expect(reviewRowsResponse.rows[0].domain_pack_id).toBe('fixture.alliance.gene')
+    expect(reviewRowsResponse.rows[0].summary_fields[0].field_path).toBe('gene.symbol')
   })
 
   it('mirrors the backend workspace payload shape', () => {

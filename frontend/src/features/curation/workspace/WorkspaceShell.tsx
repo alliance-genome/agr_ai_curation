@@ -6,6 +6,7 @@ import { alpha, styled, useTheme } from '@mui/material/styles'
 export interface WorkspaceShellProps {
   headerSlot?: ReactNode
   entityTableSlot: ReactNode
+  reviewTableLabel?: string
 }
 
 const ShellRoot = styled(Box)(() => ({
@@ -89,6 +90,7 @@ function WorkspacePane({
 export default function WorkspaceShell({
   headerSlot,
   entityTableSlot,
+  reviewTableLabel = 'Entity table panel',
 }: WorkspaceShellProps) {
   const theme = useTheme()
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'))
@@ -101,7 +103,7 @@ export default function WorkspaceShell({
 
       {isCompactLayout ? (
         <MobilePanels spacing={1.5}>
-          <WorkspacePane label="Entity table panel" testId="workspace-shell-entity-table-panel">
+          <WorkspacePane label={reviewTableLabel} testId="workspace-shell-entity-table-panel">
             {entityTableSlot}
           </WorkspacePane>
         </MobilePanels>
@@ -109,7 +111,7 @@ export default function WorkspaceShell({
         <DesktopPanels>
           <PanelSection>
             <WorkspacePane
-              label="Entity table panel"
+              label={reviewTableLabel}
               testId="workspace-shell-entity-table-panel"
             >
               {entityTableSlot}

@@ -1,4 +1,5 @@
 import type { EntityTypeCode } from './literatureEntityTypeCatalog'
+import type { DomainEnvelopeProjectionRef } from '../contracts'
 
 export const ENTITY_TAG_DECISIONS = ['pending', 'accepted', 'rejected'] as const
 export type EntityTagDecision = (typeof ENTITY_TAG_DECISIONS)[number]
@@ -37,4 +38,5 @@ export interface EntityTag {
   decision: EntityTagDecision
   evidence: EntityTagEvidence | null
   notes: string | null
+  projection_ref?: DomainEnvelopeProjectionRef | null
 }
