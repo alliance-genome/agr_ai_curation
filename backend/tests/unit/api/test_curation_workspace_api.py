@@ -17,6 +17,7 @@ from src.schemas.curation_workspace import (
     CurationCandidateValidationRequest,
     CurationDocumentBootstrapAvailabilityResponse,
     CurationDocumentBootstrapRequest,
+    CurationEnvelopeFieldPatchRequest,
     CurationEvidenceRecomputeRequest,
     CurationEvidenceResolveRequest,
     CurationFlowRunListRequest,
@@ -659,6 +660,78 @@ async def test_patch_review_candidate_draft_delegates_to_service(monkeypatch):
         "request": request,
         "actor_claims": user,
     }
+
+
+@pytest.mark.asyncio
+async def test_patch_review_envelope_field_delegates_to_service(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = object()
+    captured: dict[str, object] = {}
+
+    def _patch_envelope_field(db, session_id, request, actor_claims):
+        captured["db"] = db
+        captured["session_id"] = session_id
+        captured["request"] = request
+        captured["actor_claims"] = actor_claims
+        return expected
+
+    monkeypatch.setattr(module, "patch_envelope_field", _patch_envelope_field)
+
+    session_id = uuid4()
+    request = CurationEnvelopeFieldPatchRequest(
+        session_id=str(session_id),
+        envelope_id="env-1",
+        expected_revision=1,
+        object_id="gene-1",
+        field_path="gene.symbol",
+        before="abc-1",
+        value="abc-2",
+        reason="Curator correction.",
+    )
+    db = object()
+    user = {"sub": "user-1", "email": "user-1@example.org"}
+
+    response = await module.patch_review_envelope_field(
+        session_id,
+        "env-1",
+        request,
+        user=user,
+        db=db,
+    )
+
+    assert response is expected
+    assert captured == {
+        "db": db,
+        "session_id": session_id,
+        "request": request,
+        "actor_claims": user,
+    }
+
+
+@pytest.mark.asyncio
+async def test_patch_review_envelope_field_rejects_path_body_mismatch(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    session_id = uuid4()
+
+    with pytest.raises(module.HTTPException) as exc:
+        await module.patch_review_envelope_field(
+            session_id,
+            "env-2",
+            CurationEnvelopeFieldPatchRequest(
+                session_id=str(session_id),
+                envelope_id="env-1",
+                expected_revision=1,
+                object_id="gene-1",
+                field_path="gene.symbol",
+                before="abc-1",
+                value="abc-2",
+            ),
+            user={"sub": "user-1"},
+            db=object(),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Path envelope_id does not match request body envelope_id"
 
 
 @pytest.mark.asyncio

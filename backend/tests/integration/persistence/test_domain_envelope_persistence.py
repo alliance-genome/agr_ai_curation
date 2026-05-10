@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
@@ -11,8 +12,10 @@ import pytest
 from sqlalchemy import delete, select
 
 from src.lib.curation_workspace.models import (
+    CurationActionLogEntry,
     CurationCandidate,
     CurationDraft,
+    CurationReviewSession,
     DomainEnvelopeHistory,
     DomainEnvelopeModel,
     DomainEnvelopeObject,
@@ -29,6 +32,12 @@ from src.lib.domain_envelopes.persistence import (
     _stable_object_id,
 )
 from src.models.sql.database import SessionLocal
+from src.models.sql.pdf_document import PDFDocument
+from src.schemas.curation_workspace import (
+    CurationActionType,
+    CurationActorType,
+    CurationSessionStatus,
+)
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     CuratableObjectStatus,
@@ -72,9 +81,14 @@ def _clean_domain_tables(session):
         DomainEnvelopeHistory,
         DomainValidationFinding,
         DomainEnvelopeObject,
+        CurationActionLogEntry,
         DomainEnvelopeModel,
+        CurationReviewSession,
     ):
         session.execute(delete(model))
+    session.execute(
+        delete(PDFDocument).where(PDFDocument.filename.like("field_patch_constraint_%"))
+    )
     session.commit()
 
 
@@ -98,6 +112,45 @@ def _legacy_semantic_row_counts(session) -> dict[str, int]:
         "curation_candidates": len(session.scalars(select(CurationCandidate)).all()),
         "annotation_drafts": len(session.scalars(select(CurationDraft)).all()),
     }
+
+
+def _create_review_session_for_action_log(session) -> CurationReviewSession:
+    document = PDFDocument(
+        id=uuid4(),
+        filename=f"field_patch_constraint_{uuid4()}.pdf",
+        title="Field patch constraint paper",
+        file_path=f"/tmp/field_patch_constraint_{uuid4()}.pdf",
+        file_hash=uuid4().hex + uuid4().hex,
+        file_size=2048,
+        page_count=2,
+        upload_timestamp=datetime(2026, 5, 10, 12, 45, tzinfo=timezone.utc),
+        last_accessed=datetime(2026, 5, 10, 12, 45, tzinfo=timezone.utc),
+        status="processed",
+    )
+    session.add(document)
+    session.flush()
+
+    review_session = CurationReviewSession(
+        id=uuid4(),
+        status=CurationSessionStatus.IN_PROGRESS,
+        adapter_key="fixture_adapter",
+        document_id=document.id,
+        session_version=1,
+        tags=[],
+        total_candidates=0,
+        reviewed_candidates=0,
+        pending_candidates=0,
+        accepted_candidates=0,
+        rejected_candidates=0,
+        manual_candidates=0,
+        warnings=[],
+        prepared_at=datetime(2026, 5, 10, 12, 45, tzinfo=timezone.utc),
+        created_at=datetime(2026, 5, 10, 12, 45, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 5, 10, 12, 45, tzinfo=timezone.utc),
+    )
+    session.add(review_session)
+    session.flush()
+    return review_session
 
 
 def _envelope(*, include_second_object: bool = True, symbol: str = "ABC-1") -> DomainEnvelope:
@@ -194,6 +247,78 @@ def _envelope(*, include_second_object: bool = True, symbol: str = "ABC-1") -> D
             ]
         },
     )
+
+
+@pytest.mark.integration
+def test_migrated_constraints_accept_curator_field_patch_history_and_action_log(db_session):
+    base_envelope = _envelope(include_second_object=False)
+    envelope = base_envelope.model_copy(
+        update={
+            "history": [
+                *base_envelope.history,
+                HistoryEvent(
+                    event_id="evt-curator-patch-accepted",
+                    event_type=HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED,
+                    timestamp=datetime(2026, 5, 10, 12, 45, tzinfo=timezone.utc),
+                    actor_type=HistoryActorType.HUMAN,
+                    actor_id="curator-1",
+                    object_ref=ObjectRef(object_id="gene-1"),
+                    field_ref=FieldRef(
+                        object_ref=ObjectRef(object_id="gene-1"),
+                        field_path="gene.symbol",
+                    ),
+                    message="Accepted curator field patch.",
+                    details={"patch_id": "patch-accepted"},
+                ),
+                HistoryEvent(
+                    event_id="evt-curator-patch-rejected",
+                    event_type=HistoryEventKind.CURATOR_FIELD_PATCH_REJECTED,
+                    timestamp=datetime(2026, 5, 10, 12, 46, tzinfo=timezone.utc),
+                    actor_type=HistoryActorType.HUMAN,
+                    actor_id="curator-1",
+                    object_ref=ObjectRef(object_id="gene-1"),
+                    field_ref=FieldRef(
+                        object_ref=ObjectRef(object_id="gene-1"),
+                        field_path="gene.symbol",
+                    ),
+                    message="Rejected curator field patch.",
+                    details={"patch_id": "patch-rejected"},
+                ),
+            ]
+        }
+    )
+
+    checkpoint = write_domain_envelope_checkpoint(
+        db_session,
+        _checkpoint_request(envelope, expected_revision=0),
+    )
+
+    assert checkpoint.inserted_history_event_count == 4
+    history_event_types = {
+        row.event_type
+        for row in db_session.scalars(select(DomainEnvelopeHistory)).all()
+    }
+    assert HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED in history_event_types
+    assert HistoryEventKind.CURATOR_FIELD_PATCH_REJECTED in history_event_types
+
+    review_session = _create_review_session_for_action_log(db_session)
+    action = CurationActionLogEntry(
+        id=uuid4(),
+        session_id=review_session.id,
+        action_type=CurationActionType.ENVELOPE_FIELD_PATCHED,
+        actor_type=CurationActorType.USER,
+        actor={"sub": "curator-1"},
+        occurred_at=datetime(2026, 5, 10, 12, 47, tzinfo=timezone.utc),
+        changed_field_keys=["gene.symbol"],
+        evidence_anchor_ids=[],
+        message="Patched envelope field.",
+        action_metadata={"accepted": True, "envelope_id": envelope.envelope_id},
+    )
+    db_session.add(action)
+    db_session.commit()
+
+    persisted_action = db_session.scalars(select(CurationActionLogEntry)).one()
+    assert persisted_action.action_type == CurationActionType.ENVELOPE_FIELD_PATCHED
 
 
 @pytest.mark.integration

@@ -85,6 +85,8 @@ class HistoryEventKind(str, Enum):
     OBJECT_EXTRACTED = "object_extracted"
     OBJECT_UPDATED = "object_updated"
     FIELD_UPDATED = "field_updated"
+    CURATOR_FIELD_PATCH_ACCEPTED = "curator_field_patch_accepted"
+    CURATOR_FIELD_PATCH_REJECTED = "curator_field_patch_rejected"
     VALIDATION_FINDING_ADDED = "validation_finding_added"
     REPAIR_REQUESTED = "repair_requested"
     REPAIR_PATCH_ACCEPTED = "repair_patch_accepted"

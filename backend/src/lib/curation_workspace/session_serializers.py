@@ -44,6 +44,8 @@ from src.schemas.curation_workspace import (
     CurationEntityTypeCode,
     CurationEvidenceRecord as CurationEvidenceRecordPayload,
     CurationEvidenceSummary,
+    CurationEnvelopeFieldPatchOperation,
+    CurationEnvelopeFieldPatchResponse,
     CurationExtractionResultRecord,
     CurationReviewSession,
     CurationSessionProgress,
@@ -525,6 +527,63 @@ def build_action_log_entry(
 
     return _action_log_entry(record)
 
+
+def build_envelope_field_patch_response(
+    *,
+    db: Session,
+    accepted: bool,
+    envelope_id: str,
+    previous_revision: int,
+    envelope_revision: int,
+    object_id: str,
+    object_type: str | None,
+    field_path: str,
+    operation: CurationEnvelopeFieldPatchOperation,
+    before: Any,
+    value: Any,
+    projection_candidate_ids: Sequence[str],
+    history_event_ids: Sequence[str],
+    candidate: CurationCandidate | None,
+    session: ReviewSessionModel | None,
+    action_log_entry: SessionActionLogModel | None,
+    document_map: dict[UUID, PDFDocument] | None = None,
+    user_map: dict[str, User] | None = None,
+) -> CurationEnvelopeFieldPatchResponse:
+    """Build the accepted field-patch response from current workspace rows."""
+
+    response_candidate = _candidate_payload(candidate) if candidate is not None else None
+    response_session = None
+    if session is not None:
+        response_session = _session_detail(
+            db=db,
+            session=session,
+            document_map=document_map or {},
+            user_map=user_map or {},
+        )
+    return CurationEnvelopeFieldPatchResponse(
+        accepted=accepted,
+        envelope_id=envelope_id,
+        previous_revision=previous_revision,
+        envelope_revision=envelope_revision,
+        object_id=object_id,
+        object_type=object_type,
+        field_path=field_path,
+        operation=operation,
+        before=before,
+        value=value,
+        projection_ref=DomainEnvelopeProjectionRef(
+            envelope_id=envelope_id,
+            object_id=object_id,
+            envelope_revision=envelope_revision,
+        ),
+        candidate=response_candidate,
+        session=response_session,
+        action_log_entry=_action_log_entry(action_log_entry),
+        history_event_ids=[event_id for event_id in history_event_ids if event_id],
+        projection_candidate_ids=list(projection_candidate_ids),
+    )
+
+
 def _draft_payload(candidate: CurationCandidate) -> CurationDraftPayload:
     if candidate.draft is None:
         raise HTTPException(
@@ -832,6 +891,7 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
             else None
         ),
         projection_ref=_domain_envelope_projection_ref(candidate),
+        normalized_payload=dict(candidate.normalized_payload or {}),
         draft=_draft_payload(candidate),
         evidence_anchors=evidence_records,
         validation=_candidate_validation_summary(candidate),
@@ -844,5 +904,6 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
 
 __all__ = [
     "build_action_log_entry",
+    "build_envelope_field_patch_response",
     "build_evidence_record",
 ]

@@ -17,6 +17,7 @@ from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
     CurationReviewSession as ReviewSessionModel,
     CurationValidationSnapshot as ValidationSnapshotModel,
+    DomainEnvelopeModel,
 )
 from src.lib.curation_workspace.session_common import (
     LIKE_ESCAPE_CHAR,
@@ -598,6 +599,42 @@ def get_candidate_detail(
         )
 
     return _candidate_detail(candidate)
+
+
+def load_domain_envelope_row_for_patch(
+    db: Session,
+    envelope_id: str,
+) -> DomainEnvelopeModel | None:
+    """Return the persisted envelope row targeted by a curator field patch."""
+
+    return db.scalars(
+        select(DomainEnvelopeModel).where(DomainEnvelopeModel.envelope_id == envelope_id)
+    ).first()
+
+
+def load_projection_candidates_for_patch(
+    db: Session,
+    *,
+    session_id: str | UUID,
+    envelope_id: str,
+    object_id: str,
+) -> list[CurationCandidate]:
+    """Return workspace candidates that project the patched envelope object."""
+
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    return list(
+        db.scalars(
+            select(CurationCandidate)
+            .where(CurationCandidate.session_id == normalized_session_id)
+            .where(CurationCandidate.envelope_id == envelope_id)
+            .where(CurationCandidate.object_id == object_id)
+            .options(*CANDIDATE_DETAIL_LOAD_OPTIONS)
+            .order_by(CurationCandidate.order.asc(), CurationCandidate.id.asc())
+        )
+        .unique()
+        .all()
+    )
+
 
 def get_session_stats(
     db: Session,
