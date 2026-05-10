@@ -22,22 +22,37 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
 )
 
-from ..paths import get_alliance_domain_packs_dir
 from ..schema_refs import ALLIANCE_LINKML_COMMIT, ALLIANCE_LINKML_PROVIDER_KEY
-
-
-PHENOTYPE_DOMAIN_PACK_ID = "agr.alliance.phenotype"
-PHENOTYPE_DOMAIN_PACK_DIR_NAME = "phenotype"
-PHENOTYPE_DOMAIN_PACK_VERSION = "0.1.0"
-PHENOTYPE_OBJECT_TYPE = "PhenotypeAnnotation"
-PHENOTYPE_SUBJECT_OBJECT_TYPE = "PhenotypeSubject"
-PHENOTYPE_TERM_OBJECT_TYPE = "PhenotypeTerm"
-PHENOTYPE_FIXTURE_PACK_ID = "tool_verified_pending"
-PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID = (
-    "phenotype_pending_envelope_validator"
+from .constants import (
+    PHENOTYPE_CORE_SCHEMA_SOURCE_FILE,
+    PHENOTYPE_DOMAIN_PACK_DIR_NAME,
+    PHENOTYPE_DOMAIN_PACK_ID,
+    PHENOTYPE_DOMAIN_PACK_VERSION,
+    PHENOTYPE_FIXTURE_PACK_ID,
+    PHENOTYPE_LINKML_SCHEMA_SOURCE_FILE,
+    PHENOTYPE_OBJECT_TYPE,
+    PHENOTYPE_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE,
+    PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
+    PHENOTYPE_REFERENCE_SCHEMA_SOURCE_FILE,
+    PHENOTYPE_SUBJECT_OBJECT_TYPE,
+    PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID,
+    PHENOTYPE_TERM_OBJECT_TYPE,
+    PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
+    get_phenotype_domain_pack_metadata_path,
 )
-PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID = "phenotype_subject_entity_validator"
-PHENOTYPE_TERM_VALIDATOR_BINDING_ID = "phenotype_term_ontology_validator"
+from .export import (
+    PHENOTYPE_EXPORT_SCHEMA_VERSION,
+    PHENOTYPE_EXPORT_TARGET_ID,
+    PhenotypeAnnotationExportAdapter,
+    build_phenotype_annotation_export_payload,
+)
+from .submit import (
+    PHENOTYPE_REQUIRED_BEFORE_WRITE,
+    PHENOTYPE_SUBMISSION_BLOCKED_OPERATIONS,
+    PhenotypeAnnotationSubmissionBlockerAdapter,
+)
+
+
 _FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
     {
         "items",
@@ -53,21 +68,6 @@ _FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
         "annotation_drafts",
     }
 )
-
-_PHENOTYPE_SOURCE_FILE = "model/schema/phenotypeAndDiseaseAnnotation.yaml"
-_ONTOLOGY_TERM_SOURCE_FILE = "model/schema/ontologyTerm.yaml"
-_REFERENCE_SOURCE_FILE = "model/schema/reference.yaml"
-_CORE_SOURCE_FILE = "model/schema/core.yaml"
-
-
-def get_phenotype_domain_pack_metadata_path():
-    """Return the bundled phenotype domain-pack metadata path."""
-
-    return (
-        get_alliance_domain_packs_dir()
-        / PHENOTYPE_DOMAIN_PACK_DIR_NAME
-        / "domain_pack.yaml"
-    )
 
 
 def build_pending_phenotype_envelope_from_tool_verified_fixture(
@@ -464,7 +464,7 @@ def _phenotype_annotation_schema_ref() -> SchemaRef:
         version=ALLIANCE_LINKML_COMMIT,
         uri=(
             "https://github.com/alliance-genome/agr_curation_schema/blob/"
-            f"{ALLIANCE_LINKML_COMMIT}/{_PHENOTYPE_SOURCE_FILE}"
+            f"{ALLIANCE_LINKML_COMMIT}/{PHENOTYPE_LINKML_SCHEMA_SOURCE_FILE}"
         ),
         definition_state=DefinitionState.IN_DEVELOPMENT,
         definition_notes=[
@@ -481,7 +481,7 @@ def _phenotype_subject_schema_ref() -> SchemaRef:
         version=ALLIANCE_LINKML_COMMIT,
         uri=(
             "https://github.com/alliance-genome/agr_curation_schema/blob/"
-            f"{ALLIANCE_LINKML_COMMIT}/{_CORE_SOURCE_FILE}"
+            f"{ALLIANCE_LINKML_COMMIT}/{PHENOTYPE_CORE_SCHEMA_SOURCE_FILE}"
         ),
         definition_state=DefinitionState.IN_DEVELOPMENT,
         definition_notes=[
@@ -498,7 +498,7 @@ def _phenotype_term_schema_ref() -> SchemaRef:
         version=ALLIANCE_LINKML_COMMIT,
         uri=(
             "https://github.com/alliance-genome/agr_curation_schema/blob/"
-            f"{ALLIANCE_LINKML_COMMIT}/{_ONTOLOGY_TERM_SOURCE_FILE}"
+            f"{ALLIANCE_LINKML_COMMIT}/{PHENOTYPE_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE}"
         ),
     )
 
@@ -511,7 +511,7 @@ def _reference_schema_ref() -> SchemaRef:
         version=ALLIANCE_LINKML_COMMIT,
         uri=(
             "https://github.com/alliance-genome/agr_curation_schema/blob/"
-            f"{ALLIANCE_LINKML_COMMIT}/{_REFERENCE_SOURCE_FILE}"
+            f"{ALLIANCE_LINKML_COMMIT}/{PHENOTYPE_REFERENCE_SCHEMA_SOURCE_FILE}"
         ),
     )
 
@@ -895,19 +895,6 @@ def _optional_bool(value: Any, field_name: str) -> bool | None:
     if not isinstance(value, bool):
         raise ValueError(f"{field_name} must be a boolean")
     return value
-
-
-from .export import (  # noqa: E402
-    PHENOTYPE_EXPORT_SCHEMA_VERSION,
-    PHENOTYPE_EXPORT_TARGET_ID,
-    PhenotypeAnnotationExportAdapter,
-    build_phenotype_annotation_export_payload,
-)
-from .submit import (  # noqa: E402
-    PHENOTYPE_REQUIRED_BEFORE_WRITE,
-    PHENOTYPE_SUBMISSION_BLOCKED_OPERATIONS,
-    PhenotypeAnnotationSubmissionBlockerAdapter,
-)
 
 
 __all__ = [

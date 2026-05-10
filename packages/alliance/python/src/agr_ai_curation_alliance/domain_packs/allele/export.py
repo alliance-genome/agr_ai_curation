@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 from src.lib.curation_workspace.export_adapters.base import (
@@ -17,7 +17,12 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import DomainEnvelope
 
-from . import ALLELE_DOMAIN_PACK_ID
+from .._export_utils import (
+    canonical_json,
+    domain_envelope_from_snapshot,
+    selected_object_ids,
+)
+from .constants import ALLELE_DOMAIN_PACK_ID
 from .submit import (
     ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
     build_allele_association_submission_plan,
@@ -25,17 +30,6 @@ from .submit import (
 
 
 ALLELE_ASSOCIATION_EXPORT_SCHEMA_VERSION = 1
-_DOMAIN_ENVELOPE_KEYS = (
-    "envelope_id",
-    "domain_pack_id",
-    "domain_pack_version",
-    "status",
-    "schema_ref",
-    "objects",
-    "validation_findings",
-    "history",
-    "metadata",
-)
 
 
 def build_allele_association_export(
@@ -87,17 +81,17 @@ class AllelePaperEvidenceExportAdapter(DeterministicExportAdapter):
     ) -> ExportBundleArtifact:
         plans: list[dict[str, Any]] = []
         for raw_snapshot in export_context.domain_envelopes:
-            envelope = _domain_envelope_from_snapshot(raw_snapshot)
-            selected_object_ids = _selected_object_ids(raw_snapshot)
+            envelope = domain_envelope_from_snapshot(raw_snapshot)
+            selected_object_ids_for_snapshot = selected_object_ids(raw_snapshot)
             plans.append(
                 build_allele_association_export(
                     envelope,
-                    selected_object_ids=selected_object_ids,
+                    selected_object_ids=selected_object_ids_for_snapshot,
                     target_key=target_key,
                 )
             )
 
-        payload_json = _canonicalize_json_payload(
+        payload_json = canonical_json(
             {
                 "schema_version": ALLELE_ASSOCIATION_EXPORT_SCHEMA_VERSION,
                 "bundle_type": "alliance_allele_paper_evidence_association",
@@ -120,23 +114,6 @@ class AllelePaperEvidenceExportAdapter(DeterministicExportAdapter):
             content_type="application/json",
             filename=f"{self.adapter_key}-{export_context.session_id}-allele-plan.json",
         )
-
-
-def _domain_envelope_from_snapshot(snapshot: Mapping[str, Any]) -> DomainEnvelope:
-    return DomainEnvelope.model_validate(
-        {key: snapshot[key] for key in _DOMAIN_ENVELOPE_KEYS if key in snapshot}
-    )
-
-
-def _selected_object_ids(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
-    raw_selected = snapshot.get("selected_object_ids") or ()
-    if not isinstance(raw_selected, Sequence) or isinstance(raw_selected, str):
-        return ()
-    return tuple(str(value) for value in raw_selected)
-
-
-def _canonicalize_json_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    return json.loads(json.dumps(payload, sort_keys=True))
 
 
 __all__ = [

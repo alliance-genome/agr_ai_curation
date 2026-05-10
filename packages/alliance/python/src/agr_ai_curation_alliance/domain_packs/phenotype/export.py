@@ -28,12 +28,14 @@ from .._export_utils import (
     string_value,
 )
 from ..schema_refs import ALLIANCE_LINKML_COMMIT
-from . import PHENOTYPE_OBJECT_TYPE
+from .constants import (
+    PHENOTYPE_LINKML_SCHEMA_SOURCE_FILE,
+    PHENOTYPE_OBJECT_TYPE,
+)
 
 
 PHENOTYPE_EXPORT_TARGET_ID = "alliance.phenotype_annotation.v1"
 PHENOTYPE_EXPORT_SCHEMA_VERSION = 1
-PHENOTYPE_LINKML_SCHEMA_SOURCE_FILE = "model/schema/phenotypeAndDiseaseAnnotation.yaml"
 
 _SUBJECT_TARGETS = {
     "gene": {

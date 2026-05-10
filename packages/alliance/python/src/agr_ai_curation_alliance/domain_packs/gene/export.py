@@ -21,6 +21,12 @@ from src.schemas.domain_envelope import (
     ValidationFindingStatus,
 )
 
+from .._export_utils import (
+    canonical_json,
+    domain_envelope_from_snapshot,
+    selected_object_ids,
+    stable_object_id,
+)
 from ..schema_refs import ALLIANCE_LINKML_COMMIT, ALLIANCE_LINKML_PROVIDER_KEY
 from .constants import (
     GENE_DOMAIN_PACK_ID,
@@ -47,17 +53,6 @@ _REQUIRED_EVIDENCE_FIELDS = (
 )
 _OPTIONAL_REFERENCE_FIELDS = ("species",)
 _OPTIONAL_EVIDENCE_FIELDS = ("subsection", "figure_reference")
-_DOMAIN_ENVELOPE_KEYS = (
-    "envelope_id",
-    "domain_pack_id",
-    "domain_pack_version",
-    "status",
-    "schema_ref",
-    "objects",
-    "validation_findings",
-    "history",
-    "metadata",
-)
 
 
 def build_gene_mention_evidence_export(
@@ -78,7 +73,7 @@ def build_gene_mention_evidence_export(
         _gene_evidence_record(domain_object, verified_object_ids=verified_object_ids)
         for domain_object in envelope.objects
         if domain_object.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
-        and (not selected or _stable_object_id(domain_object) in selected)
+        and (not selected or stable_object_id(domain_object) in selected)
     ]
 
     return {
@@ -123,15 +118,15 @@ class GeneMentionEvidenceExportAdapter(DeterministicExportAdapter):
     ) -> ExportBundleArtifact:
         records: list[dict[str, Any]] = []
         for raw_snapshot in export_context.domain_envelopes:
-            envelope = _domain_envelope_from_snapshot(raw_snapshot)
-            selected_object_ids = _selected_object_ids(raw_snapshot)
+            envelope = domain_envelope_from_snapshot(raw_snapshot)
+            selected_object_ids_for_snapshot = selected_object_ids(raw_snapshot)
             export_payload = build_gene_mention_evidence_export(
                 envelope,
-                selected_object_ids=selected_object_ids,
+                selected_object_ids=selected_object_ids_for_snapshot,
             )
             records.extend(export_payload["records"])
 
-        payload_json = _canonicalize_json_payload(
+        payload_json = canonical_json(
             {
                 "schema_version": GENE_VALIDATED_REFERENCE_EXPORT_SCHEMA_VERSION,
                 "bundle_type": "alliance_gene_validated_reference_evidence",
@@ -168,7 +163,7 @@ def _gene_evidence_record(
     *,
     verified_object_ids: set[str],
 ) -> dict[str, Any]:
-    object_id = _stable_object_id(domain_object)
+    object_id = stable_object_id(domain_object)
     if object_id not in verified_object_ids:
         raise ValueError(
             f"gene_mention_evidence object {object_id} is missing resolved tool verification"
@@ -236,20 +231,12 @@ def _tool_verified_gene_object_ids(envelope: DomainEnvelope) -> set[str]:
 def _object_ids_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     by_ref: dict[tuple[str, str], str] = {}
     for domain_object in envelope.objects:
-        stable_object_id = _stable_object_id(domain_object)
+        object_id = stable_object_id(domain_object)
         if domain_object.object_id is not None:
-            by_ref[("object_id", domain_object.object_id)] = stable_object_id
+            by_ref[("object_id", domain_object.object_id)] = object_id
         if domain_object.pending_ref_id is not None:
-            by_ref[("pending_ref_id", domain_object.pending_ref_id)] = stable_object_id
+            by_ref[("pending_ref_id", domain_object.pending_ref_id)] = object_id
     return by_ref
-
-
-def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
-    if domain_object.object_id is not None:
-        return domain_object.object_id
-    if domain_object.pending_ref_id is not None:
-        return domain_object.pending_ref_id
-    raise ValueError("Domain envelope object is missing object_id and pending_ref_id")
 
 
 def _required_payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
@@ -275,23 +262,6 @@ def _optional_payload_values(
 def _provider_refs(metadata: Mapping[str, Any]) -> dict[str, Any]:
     raw_provider_refs = metadata.get("provider_refs")
     return dict(raw_provider_refs) if isinstance(raw_provider_refs, Mapping) else {}
-
-
-def _domain_envelope_from_snapshot(snapshot: Mapping[str, Any]) -> DomainEnvelope:
-    return DomainEnvelope.model_validate(
-        {key: snapshot[key] for key in _DOMAIN_ENVELOPE_KEYS if key in snapshot}
-    )
-
-
-def _selected_object_ids(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
-    raw_selected = snapshot.get("selected_object_ids") or ()
-    if not isinstance(raw_selected, Sequence) or isinstance(raw_selected, str):
-        return ()
-    return tuple(str(value) for value in raw_selected)
-
-
-def _canonicalize_json_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    return json.loads(json.dumps(payload, sort_keys=True))
 
 
 __all__ = [

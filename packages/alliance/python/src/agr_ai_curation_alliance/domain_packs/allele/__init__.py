@@ -22,9 +22,17 @@ from src.schemas.domain_envelope import (
     ValidationFinding,
     ValidationFindingSeverity,
 )
+from .constants import ALLELE_DOMAIN_PACK_ID, ALLELE_DOMAIN_PACK_VERSION
+from .export import (
+    AllelePaperEvidenceExportAdapter,
+    build_allele_association_export,
+)
+from .submit import (
+    ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+    VERIFIED_ALLELE_ASSOCIATION_TARGETS,
+    build_allele_association_submission_plan,
+)
 
-ALLELE_DOMAIN_PACK_ID = "agr.alliance.allele"
-ALLELE_DOMAIN_PACK_VERSION = "0.1.0"
 _FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
     {
         "items",
@@ -675,17 +683,6 @@ def _required_string(value: Any, field_name: str) -> str:
     if normalized is None:
         raise ValueError(f"{field_name} must be a non-empty string")
     return normalized
-
-
-from .export import (  # noqa: E402
-    AllelePaperEvidenceExportAdapter,
-    build_allele_association_export,
-)
-from .submit import (  # noqa: E402
-    ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
-    VERIFIED_ALLELE_ASSOCIATION_TARGETS,
-    build_allele_association_submission_plan,
-)
 
 
 __all__ = [
