@@ -8,7 +8,11 @@ from src.lib.openai_agents.evidence_summary import (
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
-from src.lib.openai_agents.models import AlleleExtractionResultEnvelope, GeneExtractionResultEnvelope
+from src.lib.openai_agents.models import (
+    AlleleExtractionResultEnvelope,
+    GeneExtractionResultEnvelope,
+    GeneExtractorRepairResponse,
+)
 
 
 def _record(
@@ -283,6 +287,33 @@ def test_evidence_reference_report_names_retained_items_missing_refs():
             "source_mentions": ["ninaE"],
         },
     ]
+
+
+def test_repair_response_output_type_still_detects_curatable_object_evidence():
+    payload = {
+        "curatable_objects": [
+            {
+                "object_type": "gene",
+                "pending_ref_id": "gene-crb",
+                "payload": {"mention": "crb", "normalized_id": "FB:FBgn0000368"},
+                "evidence_record_ids": ["evidence-live-a"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {**_record(entity="crb"), "evidence_record_id": "evidence-live-a"}
+            ]
+        },
+    }
+
+    assert structured_result_requires_evidence(
+        payload,
+        expected_output_type=GeneExtractorRepairResponse,
+    ) is True
+    assert structured_result_missing_evidence_record_refs(
+        payload,
+        expected_output_type=GeneExtractorRepairResponse,
+    ) is False
 
 
 def test_record_evidence_summary_uses_resolved_output_chunk_id():

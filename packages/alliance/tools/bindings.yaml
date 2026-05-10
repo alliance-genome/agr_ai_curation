@@ -37,7 +37,7 @@ tools:
     required_context:
       - document_id
       - user_id
-    description: Verify exact source text against a document chunk and optionally echo envelope target refs
+    description: Verify exact source text against a document chunk and optionally echo envelope repair target refs
     source_file: python/src/agr_ai_curation_alliance/tools/documents.py
   - tool_id: curation_db_sql
     binding_kind: context_factory

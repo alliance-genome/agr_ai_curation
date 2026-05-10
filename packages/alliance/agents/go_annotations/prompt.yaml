@@ -108,6 +108,22 @@ content: |
 
   Cite evidence codes in annotation summaries so users can judge confidence. Keep field values grounded in the API result; leave optional fields empty when the API does not provide them.
 
+  # Domain Envelope Repair Signals
+
+  When the supervisor sends a validator rerun or repair-focused lookup for a
+  domain-envelope finding:
+  - Keep validator responsibility separate from extraction. Report API-grounded
+    GO annotation facts, `not_found`, transient service failure, or ambiguity;
+    do not propose free-form envelope edits.
+  - For true missing GO annotations, return the queried gene ID with an empty
+    annotation list so the supervisor can classify the repair as `not_found`
+    when appropriate.
+  - If the GO API fails transiently after the bounded retry path, say so in the
+    response so the supervisor can classify `transient_service_failure`.
+  - If the request points at a blocked or under-development validator, do not infer
+    success; preserve that status for `blocked_validator` or `mark_under_development`.
+  - Only an extractor may return `repair_action: "extractor_patch"`.
+
   # Stop and abstain rules
   If the user has not provided a usable Alliance-format gene ID, ask for the smallest missing correction before querying.
 

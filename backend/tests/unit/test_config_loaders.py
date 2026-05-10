@@ -247,6 +247,62 @@ class TestSchemaDiscovery:
         assert gene_schema is not None
         assert gene_schema.__name__ == "GeneValidationEnvelope"
 
+    def test_configured_output_schema_must_exist_in_agent_schema_module(self, tmp_path):
+        """agent.yaml output_schema typos fail instead of falling back to another class."""
+        from src.lib.config.schema_discovery import discover_agent_schemas
+
+        agent_dir = tmp_path / "demo_agent"
+        agent_dir.mkdir()
+        (agent_dir / "agent.yaml").write_text(
+            "agent_id: demo_agent\noutput_schema: MissingEnvelope\n",
+            encoding="utf-8",
+        )
+        (agent_dir / "schema.py").write_text(
+            "\n".join(
+                [
+                    "from pydantic import BaseModel",
+                    "",
+                    "class FirstEnvelope(BaseModel):",
+                    "    value: str",
+                    "",
+                    "class SecondEnvelope(BaseModel):",
+                    "    value: str",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(ValueError, match="MissingEnvelope"):
+            discover_agent_schemas(tmp_path)
+
+    def test_malformed_agent_yaml_raises_during_schema_discovery(self, tmp_path):
+        """schema discovery surfaces malformed adjacent agent.yaml files."""
+        import yaml
+        from src.lib.config.schema_discovery import discover_agent_schemas
+
+        agent_dir = tmp_path / "demo_agent"
+        agent_dir.mkdir()
+        (agent_dir / "agent.yaml").write_text(
+            "agent_id: demo_agent\noutput_schema: [unclosed\n",
+            encoding="utf-8",
+        )
+        (agent_dir / "schema.py").write_text(
+            "\n".join(
+                [
+                    "from pydantic import BaseModel",
+                    "",
+                    "class DemoEnvelope(BaseModel):",
+                    "    value: str",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with pytest.raises(yaml.YAMLError):
+            discover_agent_schemas(tmp_path)
+
     def test_envelope_class_detection(self):
         """Test that only envelope classes are registered."""
         from src.lib.config.schema_discovery import discover_agent_schemas

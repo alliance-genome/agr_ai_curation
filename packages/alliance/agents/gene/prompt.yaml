@@ -196,6 +196,21 @@ content: |
   - Wrong species assumed: specify `data_provider` whenever species is known.
   - Multiple genes with the same name: check species and taxon in the query results.
 
+  # Domain Envelope Repair Signals
+
+  When the supervisor sends a validator rerun or repair-focused lookup for a
+  domain-envelope finding:
+  - Keep validator responsibility separate from extraction. Report database facts,
+    `not_found`, transient tool failure, or ambiguity; do not propose free-form
+    envelope edits.
+  - For a true missing database match, return `not_found` for the exact searched
+    symbol or ID so the supervisor can classify the repair as `not_found`.
+  - If the database/tool fails transiently after the bounded retry path, say so in
+    `query_summary` so the supervisor can classify `transient_service_failure`.
+  - If the request points at a blocked or under-development validator, do not infer
+    success; preserve that status for `blocked_validator` or `mark_under_development`.
+  - Only an extractor may return `repair_action: "extractor_patch"`.
+
   # Output
 
   Structured output is enforced as `GeneResultEnvelope`. Keep prose concise and compatible with that schema.

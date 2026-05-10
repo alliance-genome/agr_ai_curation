@@ -98,6 +98,7 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
     monkeypatch.setattr(tool_introspection, "introspect_tool", _fake_introspect)
     monkeypatch.setattr(catalog_service, "TOOL_OVERRIDES", {"search_document": {"category": "Document"}})
 
+    catalog_service.clear_package_tool_runtime_caches()
     registry = catalog_service.get_tool_registry()
     assert "search_document" in registry
     assert registry["search_document"]["category"] == "Document"
@@ -493,6 +494,40 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
     assert built.tools == ["csv-tool"]
     assert captured["settings"]["reasoning_effort"] is None
     assert captured["settings"]["parallel_tool_calls"] is False
+
+
+def test_create_db_agent_wraps_domain_repair_schema_for_runtime(monkeypatch):
+    from agents.agent_output import AgentOutputSchema
+    from src.lib.openai_agents.models import GeneExtractorRepairResponse
+
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="gene_extractor",
+        instructions="BASE",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source=None,
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="medium",
+        output_schema_key="GeneExtractorRepairResponse",
+        tool_ids=[],
+        name="Gene Extractor",
+    )
+
+    from src.lib.openai_agents import config as agent_config
+
+    monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
+    monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
+    monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    built = catalog_service._create_db_agent(fake_row)
+
+    assert "GeneExtractorRepairResponse" in built.instructions
+    assert isinstance(built.output_type, AgentOutputSchema)
+    assert built.output_type.output_type is GeneExtractorRepairResponse
+    assert built.output_type.is_strict_json_schema() is False
 
 
 def test_create_db_agent_applies_model_overrides(monkeypatch):

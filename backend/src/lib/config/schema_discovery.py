@@ -26,6 +26,7 @@ import threading
 from pathlib import Path
 from typing import Dict, List, Optional, Type, Any
 
+import yaml
 from pydantic import BaseModel
 
 from .agent_sources import get_default_agent_search_path, resolve_agent_config_sources
@@ -141,6 +142,16 @@ def _load_schema_module(
     return envelope_classes
 
 
+def _configured_output_schema_name(agent_yaml: Path | None) -> str | None:
+    if agent_yaml is None or not agent_yaml.exists():
+        return None
+    data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        return None
+    schema_name = str(data.get("output_schema") or "").strip()
+    return schema_name or None
+
+
 def discover_agent_schemas(
     agents_path: Optional[Path] = None,
     force_reload: bool = False,
@@ -205,10 +216,26 @@ def discover_agent_schemas(
                     _schema_registry[class_name] = cls
                     logger.info('Registered schema: %s from %s/schema.py', class_name, source.folder_name)
 
-                # Also map by agent folder for convenience
-                # Use the first envelope class found as the "primary" schema
+                # Also map by agent folder for convenience. Prefer the schema
+                # named in agent.yaml when the bundle defines multiple schemas.
                 if envelope_classes:
-                    primary_class = list(envelope_classes.values())[0]
+                    configured_schema = _configured_output_schema_name(
+                        source.agent_yaml
+                    )
+                    if configured_schema and configured_schema in envelope_classes:
+                        primary_class = envelope_classes[configured_schema]
+                    elif configured_schema and len(envelope_classes) > 1:
+                        # Single-schema validation bundles may name a shared
+                        # runtime output model; multiple local envelope classes
+                        # require an exact agent.yaml selector.
+                        available_schemas = ", ".join(sorted(envelope_classes))
+                        raise ValueError(
+                            f"agent.yaml output_schema '{configured_schema}' not found "
+                            f"in {source.folder_name}/schema.py; available schemas: "
+                            f"{available_schemas}"
+                        )
+                    else:
+                        primary_class = list(envelope_classes.values())[0]
                     _schema_by_agent[source.folder_name] = primary_class
 
             except Exception as e:

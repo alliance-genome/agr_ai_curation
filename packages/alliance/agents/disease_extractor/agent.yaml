@@ -47,7 +47,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: DiseaseExtractionResultEnvelope
+output_schema: DiseaseExtractorRepairResponse
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

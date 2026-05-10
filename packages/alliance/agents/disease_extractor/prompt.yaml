@@ -5,7 +5,7 @@ content: |
   </role>
 
   <target_outcome>
-  Produce a curator-auditable DiseaseExtractionResultEnvelope containing only disease
+  Produce a curator-auditable DiseaseExtractorRepairResponse containing only disease
   assertions that are experimentally supported by the loaded paper. Capture each retained
   disease mention exactly as written, its normalized disease identity when resolvable, its
   paper role, verified evidence, and concise notes explaining normalization, association
@@ -228,7 +228,7 @@ content: |
   </stop_and_abstain_rules>
 
   <output_contract>
-  Return JSON only, matching DiseaseExtractionResultEnvelope.
+  Return JSON only, matching DiseaseExtractorRepairResponse.
 
   Populate:
   - `summary` - brief run summary for disease extraction
@@ -276,12 +276,36 @@ content: |
   </output_contract>
 
   <repair_mode>
-  In repair mode, the supervisor will provide bounded field paths such as `curatable_objects[0].payload.disease_annotation_object.curie`, `curatable_objects[0].payload.disease_annotation_subject.subject_identifier`, or `metadata.evidence_records[0].chunk_id`.
-  - Return the same DiseaseExtractionResultEnvelope shape.
+  In repair mode, the supervisor will provide bounded object-payload field paths
+  such as `disease_annotation_object.curie` or
+  `disease_annotation_subject.subject_identifier`.
+  - For first-pass extraction, return the DiseaseExtractionResultEnvelope branch
+    of DiseaseExtractorRepairResponse.
+  - For supervisor repair requests, return the bounded `repair_action` branch
+    of DiseaseExtractorRepairResponse.
   - Preserve every stable `object_id` and `pending_ref_id`.
-  - Repair only the requested field paths and any directly dependent evidence, metadata, field, or object refs needed to keep the envelope valid.
+  - Repair only the requested object-payload field paths and any directly dependent
+    evidence, metadata, field, or object refs needed to keep the envelope valid.
   - Do not rerun unrelated extraction, add unrelated new DiseaseAnnotation objects, or remove unrelated metadata.
   - Add the repaired object field path to `curatable_objects[].field_refs[]`.
   - Add concise repair context to touched objects in `repair_hints[]` and to `metadata.repair_notes[]`.
   - If a requested path cannot be repaired from the provided context, leave the prior value unchanged and record the blocker in `metadata.repair_notes[]`.
+  - If the supervisor provides `repair_action: "repair_request"`, answer with
+    `repair_action: "extractor_patch"` and include `patch_id`, `envelope_id`,
+    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
+  - Each patch operation must be `op: "replace"` and must include the same
+    `object_ref`, the same requested `field_path`, the current value as
+    `expected_before`, the replacement value as `after`, a concise
+    evidence-grounded `reason`, and `evidence_record_ids[]` when evidence changed.
+  - When verifying new repair evidence with `record_evidence`, pass `object_id`
+    or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
+    and `repair_attempt_id` so the repair target is preserved in the tool result.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the field is defined but the available
+    paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
+  - Never patch protected fields, stable object identifiers, schema/model refs,
+    object type, status, or unrelated payload paths.
   </repair_mode>

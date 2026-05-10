@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    StrictStr,
+    model_validator,
+)
 
+from src.lib.domain_packs.repair_patches import (
+    DomainEnvelopeExtractorFinalClassification,
+    DomainEnvelopeRepairPatch,
+)
 from src.lib.openai_agents.models import (
     PhenotypeResultEnvelope as RuntimePhenotypeResultEnvelope,
 )
@@ -665,11 +676,25 @@ def _has_missing_strings(values: list[str]) -> bool:
     return any(_is_missing(value) for value in values)
 
 
+class PhenotypeExtractorRepairResponse(
+    RootModel[
+        PhenotypeResultEnvelope
+        | DomainEnvelopeRepairPatch
+        | DomainEnvelopeExtractorFinalClassification
+    ]
+):
+    """Phenotype first-pass extraction or repair_action response schema."""
+
+    __envelope_class__ = True
+    __domain_envelope_extractor_repair_response__ = True
+
+
 __all__ = [
     "EvidenceQuoteObject",
     "EvidenceQuotePayload",
     "PhenotypeAnnotationObject",
     "PhenotypeAnnotationPayload",
+    "PhenotypeExtractorRepairResponse",
     "PhenotypeResultEnvelope",
     "PhenotypeSubjectObject",
     "PhenotypeSubjectPayload",

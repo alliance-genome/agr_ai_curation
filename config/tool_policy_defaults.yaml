@@ -28,7 +28,7 @@ tool_policies:
 
   record_evidence:
     display_name: Record Evidence
-    description: Verify exact source text against a specific chunk before evidence is persisted, with optional envelope target refs.
+    description: Verify exact source text against a specific chunk before evidence is persisted, with optional envelope repair target refs.
     category: Document
     curator_visible: false
     allow_attach: false

@@ -157,12 +157,19 @@ object_definitions:
         field_type: string
         display_name: Annotation kind
         required: true
+        metadata:
+          repair:
+            protected: true
+            reason: Annotation kind is a domain-pack routing invariant.
       - field_path: phenotype_annotation_object
         field_type: string
         display_name: Phenotype statement
         description: Free-text phenotype statement carried by the LinkML PhenotypeAnnotation attribute.
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -180,6 +187,9 @@ object_definitions:
         object_type_ref: PhenotypeSubject
         metadata:
           validator_binding_id: phenotype_subject_entity_validator
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -199,6 +209,9 @@ object_definitions:
         object_type_ref: PhenotypeTerm
         metadata:
           validator_binding_id: phenotype_term_ontology_validator
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -214,6 +227,9 @@ object_definitions:
         required: true
         metadata:
           validator_binding_id: phenotype_term_ontology_validator
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -227,6 +243,15 @@ object_definitions:
       - field_path: phenotype_terms[0].label
         field_type: string
         display_name: First phenotype term label
+        description: >-
+          Display-only ontology label retained for curator review; Alliance
+          LinkML PhenotypeTerm has no label slot.
+        metadata:
+          repair:
+            protected: true
+            reason: >-
+              Display-only label is not a LinkML repair target; repair grounded
+              phenotype term fields such as phenotype_terms[0].curie.
       - field_path: single_reference
         field_type: object_ref
         display_name: Evidence reference
@@ -234,6 +259,9 @@ object_definitions:
         object_type_ref: Reference
         metadata:
           validator_binding_id: phenotype_reference_validator
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -273,6 +301,10 @@ object_definitions:
       - field_path: source_mentions[0]
         field_type: string
         display_name: First source mention
+        metadata:
+          repair:
+            protected: true
+            reason: Source mentions are paper evidence anchors, not normalized repair targets.
   - object_type: PhenotypeSubject
     display_name: Phenotype subject
     description: Pending biological entity subject for a phenotype annotation.
@@ -315,6 +347,9 @@ object_definitions:
         display_name: Subject identifier
         metadata:
           validator_binding_id: phenotype_subject_entity_validator
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -346,6 +381,9 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: phenotype_subject_entity_validator
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml

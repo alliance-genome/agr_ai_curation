@@ -52,7 +52,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     data = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
     content = str(data.get("content") or "")
 
-    assert "Return JSON only, matching GeneExpressionEnvelope." in content
+    assert "Return JSON only, matching GeneExpressionExtractorRepairResponse." in content
     assert "previously_reported" in content
     assert "non_experimental_claim" in content
     assert "marker_only_visualization" in content
@@ -120,7 +120,8 @@ def test_gene_expression_zfin_overlay_includes_zebrafish_curation_rules():
 def test_gene_expression_schema_accepts_tmem67_domain_envelope_output():
     schema = _load_gene_expression_schema()
 
-    envelope = schema.model_validate(_load_tmem67_output())
+    response = schema.model_validate(_load_tmem67_output())
+    envelope = response.root
 
     assert envelope.curatable_objects[0].object_type == "GeneExpressionAnnotation"
     assert envelope.curatable_objects[0].model_ref == "GeneExpressionAnnotationPayload"
@@ -173,7 +174,8 @@ def test_gene_expression_schema_requires_bounded_repair_field_refs():
             "field_path": "expression_pattern.where_expressed.anatomical_structure.name",
         }
     ]
-    repaired = schema.model_validate(payload)
+    response = schema.model_validate(payload)
+    repaired = response.root
 
     assert repaired.repair_mode is True
     assert repaired.curatable_objects[0].field_refs[0].field_path.endswith("name")

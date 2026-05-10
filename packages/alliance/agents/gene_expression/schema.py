@@ -2,9 +2,14 @@
 
 import sys
 from pathlib import Path
+from typing import Union
 
-from pydantic import model_validator
+from pydantic import RootModel, model_validator
 
+from src.lib.domain_packs.repair_patches import (
+    DomainEnvelopeExtractorFinalClassification,
+    DomainEnvelopeRepairPatch,
+)
 from src.lib.openai_agents.models import (
     GeneExpressionEnvelope as RuntimeGeneExpressionEnvelope,
 )
@@ -29,3 +34,18 @@ class GeneExpressionEnvelope(RuntimeGeneExpressionEnvelope):
         if errors:
             raise ValueError("; ".join(errors))
         return self
+
+
+class GeneExpressionExtractorRepairResponse(
+    RootModel[
+        Union[
+            GeneExpressionEnvelope,
+            DomainEnvelopeRepairPatch,
+            DomainEnvelopeExtractorFinalClassification,
+        ]
+    ]
+):
+    """Gene-expression first-pass extraction or repair_action response schema."""
+
+    __envelope_class__ = True
+    __domain_envelope_extractor_repair_response__ = True

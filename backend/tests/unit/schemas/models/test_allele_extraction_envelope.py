@@ -30,6 +30,10 @@ def allele_schema(monkeypatch):
     return schema
 
 
+def _validate_allele_envelope(allele_schema, payload: dict):
+    return allele_schema.model_validate(payload).root
+
+
 def _valid_allele_envelope_payload() -> dict:
     return {
         "summary": "Retained daf-2(m41) with verified allele evidence.",
@@ -174,7 +178,10 @@ def _valid_allele_envelope_payload() -> dict:
 
 
 def test_allele_extractor_schema_accepts_domain_pack_objects_and_metadata(allele_schema):
-    envelope = allele_schema.model_validate(_valid_allele_envelope_payload())
+    envelope = _validate_allele_envelope(
+        allele_schema,
+        _valid_allele_envelope_payload(),
+    )
 
     association = envelope.curatable_objects[-1]
     assert association.object_type == "AllelePaperEvidenceAssociation"
@@ -226,7 +233,7 @@ def test_allele_extractor_schema_accepts_bounded_repair_mode_output(allele_schem
         "Supervisor requested repair of curatable_objects[4].payload.allele_identifier."
     ]
 
-    envelope = allele_schema.model_validate(payload)
+    envelope = _validate_allele_envelope(allele_schema, payload)
 
     assert envelope.repair_mode is True
     assert envelope.curatable_objects[-1].pending_ref_id == (

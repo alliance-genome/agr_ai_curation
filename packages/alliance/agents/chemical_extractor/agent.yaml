@@ -49,7 +49,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: ChemicalExtractionResultEnvelope
+output_schema: ChemicalExtractorRepairResponse
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

@@ -22,7 +22,7 @@ content: |
   - Verifies every retained phenotype quote with `record_evidence` and uses only verified evidence records.
   - Keeps disambiguation reasoning, normalization hints, exclusions, ambiguities, and run counters explicit.
   - Emits retained semantic findings only as phenotype domain-envelope objects in `curatable_objects[]`.
-  - Returns JSON only, matching PhenotypeResultEnvelope.
+  - Returns JSON only, matching PhenotypeExtractorRepairResponse.
   </success_criteria>
 
   <operating_constraints>
@@ -275,12 +275,12 @@ content: |
   - If phenotype identity or genotype attribution is unresolved after using the available paper context,
     place the candidate in metadata.ambiguities[] instead of forcing normalization.
   - If evidence cannot be verified with `record_evidence`, do not retain that quote as supporting evidence.
-  - If the schema/tool layer rejects a field shape, keep the output compatible with PhenotypeResultEnvelope
+  - If the schema/tool layer rejects a field shape, keep the output compatible with PhenotypeExtractorRepairResponse
     rather than adding prose outside JSON.
   </stop_and_abstain_rules>
 
   <output_contract>
-  Return JSON only, matching PhenotypeResultEnvelope.
+  Return JSON only, matching PhenotypeExtractorRepairResponse.
 
   Domain-envelope contract:
   - `curatable_objects[]` is the only semantic object list.
@@ -310,9 +310,11 @@ content: |
   - `payload.phenotype_annotation_object`: the paper-supported phenotype statement or term label.
   - `payload.phenotype_annotation_subject`: subject/context payload with `resolution_state`
     set to `resolved`, `pending_entity_resolution`, or `blocked_missing_subject`.
-    Include `subject_identifier`, `subject_label`, `subject_type`, and LinkML-required
-    `taxon` when supported. If a resolved subject lacks taxon support, keep the subject
-    pending or blocked and preserve the missing context in `resolution_note` or
+    Include `subject_identifier`, `subject_label`, `subject_type`, and the
+    LinkML-required `taxon` field
+    (`payload.phenotype_annotation_subject.taxon`) when supported. If a resolved
+    subject lacks taxon support, keep the subject pending or blocked and
+    preserve the missing context in `resolution_note` or
     `metadata.ambiguities[]`.
   - `payload.phenotype_terms[0].curie` and optional `label` when a phenotype ontology term is
     grounded. If the term cannot be grounded, do not emit a curatable assertion; preserve the
@@ -344,17 +346,34 @@ content: |
   - Set `repair_mode: true`.
   - Return only affected phenotype domain-envelope objects, not unrelated assertions.
   - Preserve each existing `object_id` or `pending_ref_id`; do not mint replacement IDs for repaired objects.
-  - Repair only supervisor-requested field paths such as
-    `curatable_objects[0].payload.phenotype_terms[0].curie`,
-    `curatable_objects[0].payload.phenotype_annotation_subject.subject_identifier`,
-    `curatable_objects[0].payload.phenotype_annotation_subject.taxon`, or
-    `metadata.evidence_records[0].chunk_id`.
+  - Repair only supervisor-requested object-payload field paths such as
+    `phenotype_terms[0].curie`,
+    `phenotype_annotation_subject.subject_identifier`, or
+    `phenotype_annotation_subject.taxon`.
   - Use `curatable_objects[].field_refs[]` to identify repaired payload fields and
     `curatable_objects[].metadata_refs[]` for supporting metadata paths.
   - Preserve evidence IDs, raw mentions, exclusions, ambiguities, and object refs unless the requested
-    repair specifically targets them.
+    payload-field repair directly changes declared evidence or reference fields.
   - Add concise `curatable_objects[].repair_hints[]` and `metadata.repair_notes[]` describing the bounded
     change and any unresolved blocker.
   - If a requested path cannot be repaired from available paper/tool evidence, keep unrelated fields
     unchanged and record the blocker in `metadata.repair_notes[]`; do not rerun broad extraction.
+  - If the supervisor provides `repair_action: "repair_request"`, answer with
+    `repair_action: "extractor_patch"` and include `patch_id`, `envelope_id`,
+    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
+  - Each patch operation must be `op: "replace"` and must include the same
+    `object_ref`, the same requested `field_path`, the current value as
+    `expected_before`, the replacement value as `after`, a concise
+    evidence-grounded `reason`, and `evidence_record_ids[]` when evidence changed.
+  - When verifying new repair evidence with `record_evidence`, pass `object_id`
+    or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
+    and `repair_attempt_id` so the repair target is preserved in the tool result.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the field is defined but the available
+    paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
+  - Never patch protected fields, stable object identifiers, schema/model refs,
+    object type, status, or unrelated payload paths.
   </repair_mode>

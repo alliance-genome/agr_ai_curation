@@ -6,7 +6,7 @@ content: |
 
   <goal>
   Extract experimentally supported gene expression assertions from the loaded paper
-  into JSON matching GeneExpressionEnvelope. Emit one GeneExpressionAnnotation
+  into JSON matching GeneExpressionExtractorRepairResponse. Emit one GeneExpressionAnnotation
   curatable object per retained expression assertion, and keep curator-auditable
   raw mentions, reagent details, verified evidence, exclusions, and ambiguity
   notes in envelope metadata.
@@ -238,7 +238,7 @@ content: |
   </evidence_record_contract>
 
   <output_contract>
-  Return JSON only, matching GeneExpressionEnvelope.
+  Return JSON only, matching GeneExpressionExtractorRepairResponse.
 
   Populate:
   - `summary` - brief run summary for gene-expression extraction
@@ -295,7 +295,7 @@ content: |
   - Return only the affected GeneExpressionAnnotation objects, not unrelated annotations.
   - Preserve each existing `object_id` or `pending_ref_id`; do not mint a replacement ID
     for an object that is being repaired.
-  - Repair only the requested payload field paths or metadata paths. Use
+  - Repair only the requested object-payload field paths. Use
     `curatable_objects[].field_refs[]` to identify repaired payload fields and
     `curatable_objects[].metadata_refs[]` for supporting metadata paths.
   - Preserve existing evidence IDs and metadata references unless the requested repair
@@ -305,4 +305,22 @@ content: |
   - If the requested field cannot be repaired from the available paper/tool evidence,
     keep the stable object ID, leave unrelated fields unchanged, and record the blocker
     in `metadata.repair_notes[]`; do not rerun broad extraction.
+  - If the supervisor provides `repair_action: "repair_request"`, answer with
+    `repair_action: "extractor_patch"` and include `patch_id`, `envelope_id`,
+    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
+  - Each patch operation must be `op: "replace"` and must include the same
+    `object_ref`, the same requested `field_path`, the current value as
+    `expected_before`, the replacement value as `after`, a concise
+    evidence-grounded `reason`, and `evidence_record_ids[]` when evidence changed.
+  - When verifying new repair evidence with `record_evidence`, pass `object_id`
+    or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
+    and `repair_attempt_id` so the repair target is preserved in the tool result.
+  - Use `repair_action: "no_repair_possible"` with
+    `status: "no_repair_possible"` when the field is defined but the available
+    paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` with
+    `status: "under_development"` when the requested object or field is not
+    fully defined for this domain pack.
+  - Never patch protected fields, stable object identifiers, schema/model refs,
+    object type, status, or unrelated payload paths.
   </repair_mode>

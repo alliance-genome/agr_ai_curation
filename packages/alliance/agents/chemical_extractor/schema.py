@@ -6,8 +6,20 @@ import re
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
+from src.lib.domain_packs.repair_patches import (
+    DomainEnvelopeExtractorFinalClassification,
+    DomainEnvelopeRepairPatch,
+)
 from src.lib.openai_agents.models import (
     ChemicalExtractionResultEnvelope as RuntimeChemicalExtractionResultEnvelope,
 )
@@ -595,10 +607,24 @@ def _is_missing_value(value: Any) -> bool:
     return False
 
 
+class ChemicalExtractorRepairResponse(
+    RootModel[
+        ChemicalExtractionResultEnvelope
+        | DomainEnvelopeRepairPatch
+        | DomainEnvelopeExtractorFinalClassification
+    ]
+):
+    """Chemical first-pass extraction or repair_action response schema."""
+
+    __envelope_class__ = True
+    __domain_envelope_extractor_repair_response__ = True
+
+
 __all__ = [
     "ChemicalConditionCuratableObject",
     "ChemicalConditionPayload",
     "ChemicalExtractionResultEnvelope",
+    "ChemicalExtractorRepairResponse",
     "ChemicalTermCuratableObject",
     "ChemicalTermPayload",
     "EvidenceQuoteCuratableObject",

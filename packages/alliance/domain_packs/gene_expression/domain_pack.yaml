@@ -227,6 +227,9 @@ object_definitions:
         field_type: string
         display_name: Unique ID
         metadata:
+          repair:
+            protected: true
+            reason: Unique IDs are stable persistence identifiers.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -242,6 +245,9 @@ object_definitions:
         display_name: Date assigned
         required: true
         metadata:
+          repair:
+            protected: true
+            reason: Creation timestamps are persistence metadata, not extraction repair targets.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -257,6 +263,9 @@ object_definitions:
         display_name: Internal
         required: true
         metadata:
+          repair:
+            protected: true
+            reason: Internal visibility is a curation policy flag.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -271,6 +280,9 @@ object_definitions:
         field_type: boolean
         display_name: Obsolete
         metadata:
+          repair:
+            protected: true
+            reason: Obsolete state is lifecycle metadata, not an extraction repair target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -287,6 +299,9 @@ object_definitions:
         required: true
         model_ref: OrganizationSnapshotPayload
         metadata:
+          repair:
+            protected: true
+            reason: Data provider is workflow context, not an extractor-repair target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -302,6 +317,9 @@ object_definitions:
         display_name: Data provider abbreviation
         required: true
         metadata:
+          repair:
+            protected: true
+            reason: Data provider is workflow context, not an extractor-repair target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -333,6 +351,9 @@ object_definitions:
         display_name: Gene primary external ID
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -350,6 +371,9 @@ object_definitions:
         definition_notes:
           - Flattened from the Gene.gene_symbol slot annotation display text for pending envelope review.
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -381,6 +405,9 @@ object_definitions:
         display_name: Relation name
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -412,6 +439,9 @@ object_definitions:
         display_name: Reference ID
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -441,6 +471,9 @@ object_definitions:
         display_name: Expression experiment unique ID
         required: true
         metadata:
+          repair:
+            protected: true
+            reason: Experiment unique IDs are stable persistence identifiers.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -472,6 +505,9 @@ object_definitions:
         display_name: Expression assay CURIE
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -486,6 +522,9 @@ object_definitions:
         field_type: string
         display_name: Expression assay name
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -501,6 +540,9 @@ object_definitions:
         display_name: When expressed stage name
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -516,6 +558,9 @@ object_definitions:
         display_name: Where expressed statement
         required: true
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -621,6 +666,9 @@ object_definitions:
         field_type: string
         display_name: Anatomical structure CURIE
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -635,6 +683,9 @@ object_definitions:
         field_type: string
         display_name: Anatomical structure name
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -678,6 +729,9 @@ object_definitions:
         field_type: string
         display_name: Cellular component CURIE
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -692,6 +746,9 @@ object_definitions:
         field_type: string
         display_name: Cellular component name
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -720,6 +777,9 @@ object_definitions:
         field_type: boolean
         display_name: Negated
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -732,6 +792,9 @@ object_definitions:
         field_type: boolean
         display_name: Uncertain
         metadata:
+          repair:
+            repairable: true
+            source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
