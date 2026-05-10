@@ -545,6 +545,54 @@ def test_apply_repair_patch_rejects_expected_before_mismatch(tmp_path: Path):
     assert "expected_before" in result.errors[0]
 
 
+def test_apply_repair_patch_validates_expected_before_against_staged_operations(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+    patch = DomainEnvelopeRepairPatch(
+        patch_id="repair-patch:duplicate-target",
+        envelope_id="env-1",
+        expected_revision=1,
+        source_finding_ids=["validation:symbol"],
+        operations=[
+            {
+                "object_ref": _object_ref(),
+                "field_path": "gene.symbol",
+                "expected_before": "abc-1",
+                "after": "abc-2",
+                "reason": "Apply the validator-proposed symbol.",
+            },
+            {
+                "object_ref": _object_ref(),
+                "field_path": "gene.symbol",
+                "expected_before": "abc-1",
+                "after": "abc-3",
+                "reason": "This operation should be stale after the first update.",
+            },
+        ],
+        rationale="Duplicate target expected-before validation.",
+    )
+
+    result = apply_repair_patch(
+        _envelope(),
+        pack,
+        patch,
+        current_revision=1,
+    )
+
+    assert result.status is RepairPatchStatus.REJECTED
+    assert result.envelope.objects[0].payload["gene"]["symbol"] == "abc-1"
+    assert (
+        result.envelope.history[-1].event_type
+        is HistoryEventKind.REPAIR_PATCH_REJECTED
+    )
+    assert not any(
+        event.event_type is HistoryEventKind.FIELD_UPDATED
+        for event in result.envelope.history
+    )
+    assert any("operations[1].expected_before" in error for error in result.errors)
+
+
 def test_rejected_multi_target_patch_consumes_budget_for_each_target(
     tmp_path: Path,
 ):

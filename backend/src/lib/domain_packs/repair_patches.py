@@ -490,25 +490,25 @@ def apply_repair_patch(
             retry_budget=result.retry_budget,
         )
 
-    validated_operations: list[
-        tuple[RepairPatchOperation, int, CuratableObjectEnvelope, Any]
-    ] = []
+    staged_objects = list(envelope.objects)
+    validated_operations: list[tuple[RepairPatchOperation, int, Any]] = []
     errors: list[str] = []
     for index, operation in enumerate(repair_patch.operations):
-        object_index, target_object = _object_index_for_ref(envelope, operation.object_ref)
-        if target_object is None or object_index is None:
+        object_index, _ = _object_index_for_ref(envelope, operation.object_ref)
+        if object_index is None:
             errors.append(f"operations[{index}] references an unknown object")
             continue
 
+        staged_object = staged_objects[object_index]
         field_definition = _field_definition_for(
             validation_registry,
-            target_object.object_type,
+            staged_object.object_type,
             operation.field_path,
         )
         if field_definition is None:
             errors.append(
                 f"operations[{index}].field_path '{operation.field_path}' is not "
-                f"declared for object_type '{target_object.object_type}'"
+                f"declared for object_type '{staged_object.object_type}'"
             )
             continue
 
@@ -527,7 +527,7 @@ def apply_repair_patch(
             )
             continue
 
-        before_value = _payload_value(target_object.payload, operation.field_path)
+        before_value = _payload_value(staged_object.payload, operation.field_path)
         comparable_before = None if before_value is _MISSING else before_value
         if comparable_before != operation.expected_before:
             errors.append(
@@ -536,9 +536,12 @@ def apply_repair_patch(
             )
             continue
 
-        validated_operations.append(
-            (operation, object_index, target_object, comparable_before)
+        staged_payload = copy.deepcopy(staged_object.payload)
+        _set_payload_value(staged_payload, operation.field_path, operation.after)
+        staged_objects[object_index] = staged_object.model_copy(
+            update={"payload": staged_payload}
         )
+        validated_operations.append((operation, object_index, comparable_before))
 
     if errors:
         return _rejected_patch_result(
@@ -555,16 +558,11 @@ def apply_repair_patch(
             consumes_retry=True,
         )
 
-    updated_objects = list(envelope.objects)
+    updated_objects = staged_objects
     history_events = list(envelope.history)
     field_update_details: list[dict[str, Any]] = []
-    for operation, object_index, target_object, before_value in validated_operations:
-        updated_payload = copy.deepcopy(updated_objects[object_index].payload)
-        _set_payload_value(updated_payload, operation.field_path, operation.after)
-        updated_object = updated_objects[object_index].model_copy(
-            update={"payload": updated_payload}
-        )
-        updated_objects[object_index] = updated_object
+    for operation, object_index, before_value in validated_operations:
+        updated_object = updated_objects[object_index]
         field_ref = FieldRef(
             object_ref=_object_ref_for(updated_object),
             field_path=operation.field_path,
