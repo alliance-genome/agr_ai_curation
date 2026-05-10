@@ -42,6 +42,7 @@ from .constants import (
     GENE_REFERENCE_TOOL_NAME,
     GENE_REFERENCE_VALIDATOR_BINDING_ID,
 )
+from .export import GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY
 
 
 _GENE_SOURCE_FILE = "model/schema/gene.yaml"
@@ -228,7 +229,14 @@ def _object_metadata() -> dict[str, Any]:
         "evidence_role": GENE_MENTION_EVIDENCE_OBJECT_TYPE,
         "validator_binding_id": GENE_REFERENCE_VALIDATOR_BINDING_ID,
         "blocking_validation": False,
-        "export_behavior": "evidence_reference_only",
+        "export_behavior": {
+            "status": "ready",
+            "mode": "validated_reference_evidence",
+            "target_key": GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
+            "exportable": True,
+            "mutates_base_gene": False,
+            "creates_paper_gene_association": False,
+        },
         "write_behavior": "envelope_only",
         "provider_refs": {
             ALLIANCE_LINKML_PROVIDER_KEY: {
@@ -346,7 +354,7 @@ def tool_verified_gene_output_to_pending_envelope(
                     object_type=GENE_MENTION_EVIDENCE_OBJECT_TYPE,
                     pending_ref_id=pending_ref_id,
                     schema_ref=_gene_schema_ref(),
-                    definition_state=DefinitionState.IN_DEVELOPMENT,
+                    definition_state=DefinitionState.STABLE,
                     definition_notes=list(GENE_MENTION_EVIDENCE_DEFINITION_NOTES),
                     payload=_payload_for_gene_evidence(gene, evidence),
                     metadata=_object_metadata(),

@@ -1166,10 +1166,15 @@ def _domain_envelope_snapshot(
 ) -> dict[str, Any]:
     selected = set(selected_object_ids)
     object_id_by_ref = _object_id_by_ref(envelope)
+    included_object_ids = _selected_object_ids_with_references(
+        envelope,
+        selected,
+        object_id_by_ref,
+    )
     selected_objects = [
         domain_object.model_dump(mode="json")
         for domain_object in envelope.objects
-        if _stable_object_id(domain_object) in selected
+        if _stable_object_id(domain_object) in included_object_ids
     ]
     return {
         "envelope_id": envelope.envelope_id,
@@ -1190,6 +1195,38 @@ def _domain_envelope_snapshot(
         ],
         "metadata": dict(envelope.metadata or {}),
     }
+
+
+def _selected_object_ids_with_references(
+    envelope: DomainEnvelope,
+    selected_object_ids: set[str],
+    object_id_by_ref: dict[tuple[str, str], str],
+) -> set[str]:
+    objects_by_id = {
+        _stable_object_id(domain_object): domain_object
+        for domain_object in envelope.objects
+    }
+    included = {
+        object_id for object_id in selected_object_ids if object_id in objects_by_id
+    }
+    pending = list(included)
+
+    while pending:
+        object_id = pending.pop()
+        domain_object = objects_by_id[object_id]
+        referenced_ids = [
+            object_id_by_ref.get(ref.ref_key()) for ref in domain_object.object_refs
+        ]
+        referenced_ids.extend(
+            object_id_by_ref.get(field_ref.object_ref.ref_key())
+            for field_ref in domain_object.field_refs
+        )
+        for referenced_id in referenced_ids:
+            if referenced_id is not None and referenced_id not in included:
+                included.add(referenced_id)
+                pending.append(referenced_id)
+
+    return included
 
 
 def _candidate_submission_readiness(

@@ -36,6 +36,9 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     GENE_REFERENCE_TOOL_METHOD,
     GENE_REFERENCE_TOOL_NAME,
     GENE_REFERENCE_VALIDATOR_BINDING_ID,
+    GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
+    build_gene_mention_evidence_export,
+    build_gene_mention_evidence_submission_plan,
     tool_verified_gene_output_to_pending_envelope,
 )
 
@@ -95,20 +98,23 @@ def test_gene_domain_pack_loads_from_alliance_registry():
     assert fixture_ref.path == "fixtures/tool_verified.yaml"
 
 
-def test_gene_mention_evidence_is_non_exporting_validated_reference():
+def test_gene_mention_evidence_is_exporting_validated_reference():
     object_definition = _gene_object_definition()
     object_metadata = object_definition.metadata
 
     assert object_definition.model_ref == GENE_MENTION_EVIDENCE_MODEL_ID
-    assert object_definition.definition_state.value == "in_development"
+    assert object_definition.definition_state.value == "stable"
     assert object_metadata[OBJECT_ROLE_METADATA_KEY] == "validated_reference"
     assert object_metadata["evidence_role"] == GENE_MENTION_EVIDENCE_OBJECT_TYPE
     assert object_metadata["blocking_validation"] is False
 
     export_behavior = object_metadata["export_behavior"]
-    assert export_behavior["mode"] == "evidence_reference_only"
-    assert export_behavior["exportable"] is False
-    assert export_behavior["submit"] is False
+    assert export_behavior["status"] == "ready"
+    assert export_behavior["mode"] == "validated_reference_evidence"
+    assert export_behavior["target_key"] == GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY
+    assert export_behavior["exportable"] is True
+    assert export_behavior["mutates_base_gene"] is False
+    assert export_behavior["creates_paper_gene_association"] is False
 
     write_behavior = object_metadata["write_behavior"]
     assert write_behavior["mode"] == "none"
@@ -203,6 +209,7 @@ def test_tool_verified_gene_fixture_converts_to_pending_envelope():
     assert converted_envelope.domain_pack_id == GENE_DOMAIN_PACK_ID
     assert converted_envelope.schema_ref.schema_id == GENE_LINKML_SCHEMA_ID
     assert converted_envelope.objects[0].pending_ref_id == "gene-mention-evidence-1"
+    assert converted_envelope.objects[0].definition_state.value == "stable"
     assert converted_envelope.objects[0].metadata[OBJECT_ROLE_METADATA_KEY] == (
         "validated_reference"
     )
@@ -237,3 +244,51 @@ def test_tool_verified_gene_fixture_rejects_blank_normalization_notes():
 
     with pytest.raises(ValidationError, match="normalization_notes"):
         tool_verified_gene_output_to_pending_envelope(raw_fixture)
+
+
+def test_gene_mention_evidence_exports_validated_reference_evidence_payload():
+    raw_fixture = _load_raw_gene_fixture()
+    envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+
+    payload = build_gene_mention_evidence_export(envelope)
+
+    assert payload["export_type"] == "alliance_gene_validated_reference_evidence"
+    assert payload["write_behavior"] == {
+        "mode": "non_mutating_validated_reference_evidence",
+        "mutates_base_gene": False,
+        "creates_paper_gene_association": False,
+        "write_targets": [],
+    }
+    assert len(payload["records"]) == 1
+    record = payload["records"][0]
+    assert record["validated_reference"] == {
+        "mention": "daf-16",
+        "primary_external_id": "WB:WBGene00000912",
+        "gene_symbol": "daf-16",
+        "taxon": "NCBITaxon:6239",
+        "confidence": "high",
+        "species": "Caenorhabditis elegans",
+    }
+    assert record["evidence"]["evidence_record_id"] == "ev-daf16-1"
+    assert record["write_behavior"] == {
+        "mutates_base_gene": False,
+        "creates_paper_gene_association": False,
+        "write_target": None,
+    }
+
+
+def test_gene_submission_plan_is_non_mutating_and_has_no_paper_gene_target():
+    raw_fixture = _load_raw_gene_fixture()
+    envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+
+    plan = build_gene_mention_evidence_submission_plan(envelope)
+
+    assert plan["status"] == "ready"
+    assert plan["submission_kind"] == "validated_reference_evidence"
+    assert plan["record_count"] == 1
+    assert plan["write_targets"] == []
+    assert plan["blocked_targets"] == []
+    assert plan["mutations"] == {
+        "public.gene": False,
+        "paper_gene_association": False,
+    }

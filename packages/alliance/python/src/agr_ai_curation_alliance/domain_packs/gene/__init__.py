@@ -16,6 +16,12 @@ from .conversion import (
     ToolVerifiedGeneOutput,
     tool_verified_gene_output_to_pending_envelope,
 )
+from .export import (
+    GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
+    GeneMentionEvidenceExportAdapter,
+    build_gene_mention_evidence_export,
+)
+from .submit import build_gene_mention_evidence_submission_plan
 
 __all__ = [
     "GENE_DOMAIN_PACK_ID",
@@ -26,8 +32,12 @@ __all__ = [
     "GENE_REFERENCE_TOOL_METHOD",
     "GENE_REFERENCE_TOOL_NAME",
     "GENE_REFERENCE_VALIDATOR_BINDING_ID",
+    "GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY",
+    "GeneMentionEvidenceExportAdapter",
     "ToolVerifiedGeneEvidenceRecord",
     "ToolVerifiedGeneMention",
     "ToolVerifiedGeneOutput",
+    "build_gene_mention_evidence_export",
+    "build_gene_mention_evidence_submission_plan",
     "tool_verified_gene_output_to_pending_envelope",
 ]
