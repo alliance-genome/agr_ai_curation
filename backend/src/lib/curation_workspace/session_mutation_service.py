@@ -1011,6 +1011,7 @@ def _payload_value(payload: dict[str, Any], field_path: str) -> Any:
         current = current[part]
     return current
 
+
 def delete_candidate(
     db: Session,
     session_id: str | UUID,

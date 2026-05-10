@@ -583,6 +583,7 @@ def build_envelope_field_patch_response(
         projection_candidate_ids=list(projection_candidate_ids),
     )
 
+
 def _draft_payload(candidate: CurationCandidate) -> CurationDraftPayload:
     if candidate.draft is None:
         raise HTTPException(

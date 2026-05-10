@@ -635,6 +635,7 @@ def load_projection_candidates_for_patch(
         .all()
     )
 
+
 def get_session_stats(
     db: Session,
     request: CurationSessionStatsRequest,
