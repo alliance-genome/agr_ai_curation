@@ -345,11 +345,7 @@ async def _dispatch_curation_prep_from_chat_context(
     except ValueError as exc:
         return _tool_response("unable_to_prepare", str(exc))
 
-    candidate_count = (
-        prep_output.review_row_count
-        if getattr(prep_output, "envelope_refs", None)
-        else len(prep_output.candidates)
-    )
+    candidate_count = prep_output.review_row_count
     return _tool_response(
         "prepared",
         (

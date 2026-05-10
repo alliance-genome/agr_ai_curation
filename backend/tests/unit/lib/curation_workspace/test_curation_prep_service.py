@@ -136,7 +136,7 @@ def _make_domain_envelope_extraction_result(
                         "payload": {
                             "mention": "abc-1",
                             "gene_symbol": "ABC-1",
-                            "primary_external_id": "RGD:1",
+                            "primary_external_id": "EXAMPLE:1",
                             "taxon": "NCBITaxon:10116",
                             "confidence": "high",
                             "evidence_record_id": "evidence-1",
@@ -359,15 +359,8 @@ def test_summarize_curation_prep_scope_counts_materialized_envelope_rows(monkeyp
     assert summary.warnings == []
 
 
-def test_summarize_curation_prep_scope_rejects_legacy_items_as_semantic_source(
-    monkeypatch,
-):
+def test_summarize_curation_prep_scope_rejects_legacy_items_as_semantic_source():
     extraction_result = _make_extraction_result(adapter_key="gene")
-
-    def _raise_legacy_mapper(*_args, **_kwargs):
-        raise AssertionError("legacy prep candidates must not determine prep readiness")
-
-    monkeypatch.setattr(module, "_map_extraction_results_to_candidates", _raise_legacy_mapper)
 
     summary = module.summarize_curation_prep_scope(
         [extraction_result],
@@ -376,7 +369,7 @@ def test_summarize_curation_prep_scope_rejects_legacy_items_as_semantic_source(
 
     assert summary.candidate_count == 0
     assert summary.adapter_keys == []
-    assert any("curatable_objects[]" in warning for warning in summary.warnings)
+    assert any("curatable_objects" in warning for warning in summary.warnings)
 
 
 @pytest.mark.asyncio
@@ -407,98 +400,6 @@ def test_curation_prep_persistence_context_keeps_optional_fields():
     assert context.document_id == "document-1"
     assert context.source_kind is CurationExtractionSourceKind.CHAT
     assert context.flow_run_id == "flow-1"
-
-
-def test_candidate_blueprints_skip_empty_compacted_payload_without_error():
-    extraction_result = _make_extraction_result(
-        items=[
-            _make_item(
-                label=None,
-                entity_type=None,
-                normalized_id=None,
-                source_mentions=[],
-                evidence=[],
-            )
-        ],
-        conversation_summary=None,
-    )
-
-    blueprints = module._candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-        candidate_adapter_key="observation",
-    )
-
-    assert blueprints == []
-
-
-def test_candidate_conversation_summary_falls_back_to_generic_item_context():
-    extraction_result = _make_extraction_result(conversation_summary=None)
-
-    blueprints = module._candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-        candidate_adapter_key="observation",
-    )
-
-    assert len(blueprints) == 1
-    assert (
-        blueprints[0].conversation_context_summary
-        == "Prepared deterministic observation candidate for Candidate Alpha."
-    )
-
-
-def test_candidate_blueprints_preserve_domain_envelope_projection_ref():
-    extraction_result = _make_extraction_result(
-        items=[
-            {
-                **_make_item(label="Projected Candidate"),
-                "domain_envelope_projection_ref": {
-                    "envelope_id": "env-1",
-                    "object_id": "object-1",
-                    "envelope_revision": 4,
-                },
-            }
-        ]
-    )
-
-    blueprints = module._candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-        candidate_adapter_key="observation",
-    )
-
-    assert len(blueprints) == 1
-    assert blueprints[0].envelope_id == "env-1"
-    assert blueprints[0].object_id == "object-1"
-    assert blueprints[0].envelope_revision == 4
-    assert "domain_envelope_projection_ref" not in blueprints[0].payload
-
-
-def test_candidate_blueprints_do_not_accept_projection_ref_alias():
-    extraction_result = _make_extraction_result(
-        items=[
-            {
-                **_make_item(label="Projected Candidate"),
-                "projection_ref": {
-                    "envelope_id": "env-1",
-                    "object_id": "object-1",
-                    "envelope_revision": 4,
-                },
-            }
-        ]
-    )
-
-    blueprints = module._candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-        candidate_adapter_key="observation",
-    )
-
-    assert len(blueprints) == 1
-    assert blueprints[0].envelope_id is None
-    assert blueprints[0].object_id is None
-    assert blueprints[0].envelope_revision is None
 
 
 @pytest.mark.asyncio
@@ -542,7 +443,7 @@ async def test_run_curation_prep_allele_scope_uses_envelope_refs_not_prep_candid
             envelope_id="env-allele-1",
             envelope_revision=1,
             source_extraction_result_id="extract-allele-1",
-            domain_pack_id="agr.alliance.allele",
+            domain_pack_id="fixture.alliance.allele",
             review_row_count=2,
         )
 
@@ -565,5 +466,5 @@ async def test_run_curation_prep_allele_scope_uses_envelope_refs_not_prep_candid
 
     assert prep_output.candidates == []
     assert prep_output.review_row_count == 2
-    assert prep_output.envelope_refs[0].domain_pack_id == "agr.alliance.allele"
+    assert prep_output.envelope_refs[0].domain_pack_id == "fixture.alliance.allele"
     assert captured["request"].candidate_count == 2

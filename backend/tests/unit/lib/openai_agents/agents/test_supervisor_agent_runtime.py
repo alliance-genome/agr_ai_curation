@@ -793,7 +793,9 @@ async def test_dispatch_curation_prep_runs_deterministic_prep_with_confirmed_sco
         captured["persistence_context"] = persistence_context
         captured["db"] = db
         return SimpleNamespace(
-            candidates=[SimpleNamespace(adapter_key="disease")],
+            candidates=[],
+            envelope_refs=[SimpleNamespace(review_row_count=1)],
+            review_row_count=1,
             run_metadata=SimpleNamespace(
                 warnings=[],
                 processing_notes=["Prepared from confirmed chat extraction context."],
@@ -957,7 +959,9 @@ async def test_dispatch_curation_prep_still_filters_loaded_document_before_runni
         captured["run_scope_confirmation"] = scope_confirmation
         captured["run_persistence_context"] = persistence_context
         return SimpleNamespace(
-            candidates=[SimpleNamespace(adapter_key="disease")],
+            candidates=[],
+            envelope_refs=[SimpleNamespace(review_row_count=1)],
+            review_row_count=1,
             run_metadata=SimpleNamespace(warnings=[], processing_notes=[]),
         )
 

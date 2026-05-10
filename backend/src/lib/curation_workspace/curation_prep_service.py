@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -19,29 +18,19 @@ from src.lib.domain_envelopes.persistence import (
 from src.lib.domain_packs.materialization import DomainEnvelopeMaterializationError
 from src.models.sql.database import SessionLocal
 from src.lib.curation_workspace.prep_item_conversion import (
-    compact_payload,
-    normalized_evidence_record_ids,
     normalized_optional_string,
-    top_level_evidence_records_by_id,
 )
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
-    CurationPrepCandidate,
     CurationPrepEnvelopeRef,
-    CurationPrepEvidenceRecord,
     CurationPrepRunMetadata,
     CurationPrepScopeConfirmation,
     CurationPrepTokenUsage,
 )
 from src.schemas.curation_workspace import (
-    CurationEvidenceSource,
     CurationExtractionPersistenceRequest,
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
-    EvidenceAnchor,
-    EvidenceAnchorKind,
-    EvidenceLocatorQuality,
-    EvidenceSupportsDecision,
 )
 from src.schemas.domain_envelope import (
     DomainEnvelope,
@@ -54,8 +43,6 @@ from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtracti
 
 
 _DETERMINISTIC_PREP_MODEL_NAME = "deterministic_programmatic_mapper_v1"
-_FIGURE_REFERENCE_PATTERN = re.compile(r"\bfig(?:ure)?\b", re.IGNORECASE)
-_TABLE_REFERENCE_PATTERN = re.compile(r"\btable\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -69,40 +56,6 @@ class CurationPrepPersistenceContext:
     flow_run_id: str | None = None
     user_id: str | None = None
     conversation_summary: str | None = None
-
-
-@dataclass(frozen=True)
-class _CandidateBlueprint:
-    adapter_key: str
-    payload: dict[str, Any]
-    evidence_records: list["_CandidateEvidence"]
-    conversation_context_summary: str
-    envelope_id: str | None = None
-    object_id: str | None = None
-    envelope_revision: int | None = None
-
-
-@dataclass(frozen=True)
-class _CandidateEvidence:
-    evidence_record_id: str
-    extraction_result_id: str
-    anchor: EvidenceAnchor
-
-
-@dataclass(frozen=True)
-class _RecordMappingOutcome:
-    candidates: list[CurationPrepCandidate] = field(default_factory=list)
-    warnings: list[str] = field(default_factory=list)
-    skipped_without_evidence: int = 0
-    skipped_unmappable: int = 0
-
-
-@dataclass(frozen=True)
-class _DeterministicMapperResult:
-    candidates: list[CurationPrepCandidate]
-    processing_notes: list[str]
-    warnings: list[str]
-    selected_extraction_results: list[CurationExtractionResultRecord]
 
 
 @dataclass(frozen=True)
@@ -158,7 +111,6 @@ async def run_curation_prep(
             envelope_ref.review_row_count
             for envelope_ref in materialization_result.envelope_refs
         ),
-        candidates=[],
         run_metadata=CurationPrepRunMetadata(
             model_name=_DETERMINISTIC_PREP_MODEL_NAME,
             token_usage=CurationPrepTokenUsage(),
@@ -168,7 +120,6 @@ async def run_curation_prep(
     )
 
     adapter_key = _resolve_required_adapter_key(
-        prep_output.candidates,
         extraction_results=scoped_results,
         scope_confirmation=scope_confirmation,
     )
@@ -240,54 +191,6 @@ def summarize_curation_prep_scope(
         warnings=_dedupe_strings(warnings),
     )
 
-
-def _map_extraction_results_to_candidates(
-    extraction_results: Sequence[CurationExtractionResultRecord],
-    *,
-    scope_notes: Sequence[str] = (),
-) -> _DeterministicMapperResult:
-    candidates: list[CurationPrepCandidate] = []
-    warnings: list[str] = list(scope_notes)
-    mapped_candidate_count = 0
-    skipped_without_evidence = 0
-    skipped_unmappable = 0
-
-    for extraction_result in extraction_results:
-        outcome = _map_extraction_result(extraction_result)
-        candidates.extend(outcome.candidates)
-        warnings.extend(outcome.warnings)
-        mapped_candidate_count += len(outcome.candidates)
-        skipped_without_evidence += outcome.skipped_without_evidence
-        skipped_unmappable += outcome.skipped_unmappable
-
-    processing_notes = [
-        (
-            "Deterministic prep mapper prepared "
-            f"{mapped_candidate_count} evidence-backed candidate"
-            f"{'s' if mapped_candidate_count != 1 else ''} from "
-            f"{len(extraction_results)} extraction result"
-            f"{'s' if len(extraction_results) != 1 else ''}."
-        )
-    ]
-    if skipped_without_evidence:
-        warnings.append(
-            f"Skipped {skipped_without_evidence} candidate"
-            f"{'s' if skipped_without_evidence != 1 else ''} without verified evidence."
-        )
-    if skipped_unmappable:
-        warnings.append(
-            f"Skipped {skipped_unmappable} extraction candidate"
-            f"{'s' if skipped_unmappable != 1 else ''} because the payload could not be mapped."
-        )
-
-    return _DeterministicMapperResult(
-        candidates=candidates,
-        processing_notes=_dedupe_strings(processing_notes),
-        warnings=_dedupe_strings(warnings),
-        selected_extraction_results=list(extraction_results),
-    )
-
-
 def _materialize_extraction_results_to_envelope_refs(
     extraction_results: Sequence[CurationExtractionResultRecord],
     *,
@@ -350,89 +253,7 @@ def _materialize_extraction_results_to_envelope_refs(
         selected_extraction_results=list(extraction_results),
     )
 
-
-def _map_extraction_result(
-    extraction_result: CurationExtractionResultRecord,
-) -> _RecordMappingOutcome:
-    payload = extraction_result.payload_json
-    if not isinstance(payload, dict):
-        return _RecordMappingOutcome(
-            warnings=[
-                (
-                    "Skipped extraction result "
-                    f"{extraction_result.extraction_result_id} because its payload is not a JSON object."
-                )
-            ],
-            skipped_unmappable=max(int(extraction_result.candidate_count), 1),
-        )
-
-    candidate_adapter_key = _resolve_candidate_adapter_key(extraction_result)
-    if candidate_adapter_key is None:
-        return _RecordMappingOutcome(
-            warnings=[
-                (
-                    "Skipped extraction result "
-                    f"{extraction_result.extraction_result_id} because it did not include a "
-                    "target adapter or domain key for prep mapping."
-                )
-            ],
-            skipped_unmappable=max(int(extraction_result.candidate_count), 1),
-        )
-
-    blueprints = _candidate_blueprints(
-        extraction_result,
-        payload,
-        candidate_adapter_key=candidate_adapter_key,
-    )
-    if not blueprints:
-        return _RecordMappingOutcome(
-            warnings=[
-                (
-                    "Skipped extraction result "
-                    f"{extraction_result.extraction_result_id} because it did not contain any "
-                    "mappable extraction items."
-                )
-            ],
-            skipped_unmappable=max(int(extraction_result.candidate_count), 1),
-        )
-
-    candidates: list[CurationPrepCandidate] = []
-    skipped_without_evidence = 0
-
-    for blueprint in blueprints:
-        if not blueprint.evidence_records:
-            skipped_without_evidence += 1
-            continue
-
-        field_paths = _payload_field_paths(blueprint.payload)
-        candidates.append(
-            CurationPrepCandidate(
-                adapter_key=blueprint.adapter_key,
-                envelope_id=blueprint.envelope_id,
-                object_id=blueprint.object_id,
-                envelope_revision=blueprint.envelope_revision,
-                payload=blueprint.payload,
-                evidence_records=[
-                    CurationPrepEvidenceRecord(
-                        evidence_record_id=source_record.evidence_record_id,
-                        source=CurationEvidenceSource.EXTRACTED,
-                        extraction_result_id=source_record.extraction_result_id,
-                        field_paths=field_paths,
-                        anchor=source_record.anchor,
-                    )
-                    for source_record in blueprint.evidence_records
-                ],
-                conversation_context_summary=blueprint.conversation_context_summary,
-            )
-        )
-
-    return _RecordMappingOutcome(
-        candidates=candidates,
-        skipped_without_evidence=skipped_without_evidence,
-    )
-
-
-def _resolve_candidate_adapter_key(
+def _resolve_extraction_adapter_key(
     extraction_result: CurationExtractionResultRecord,
 ) -> str | None:
     return normalized_optional_string(extraction_result.adapter_key)
@@ -508,7 +329,7 @@ def _domain_envelope_from_extraction_result(
         return DomainEnvelope.model_validate(payload)
 
     source = DomainEnvelopeExtractionResult.model_validate(payload)
-    adapter_key = _resolve_candidate_adapter_key(extraction_result)
+    adapter_key = _resolve_extraction_adapter_key(extraction_result)
     if adapter_key is None:
         raise ValueError("extraction result does not declare adapter ownership")
 
@@ -559,7 +380,7 @@ def _review_row_materializer_for_extraction_result(
     domain_pack_id: str,
 ) -> Any:
     registry = load_curation_adapter_registry()
-    adapter_key = _resolve_candidate_adapter_key(extraction_result)
+    adapter_key = _resolve_extraction_adapter_key(extraction_result)
     materializer = (
         registry.get_review_row_materializer(adapter_key)
         if adapter_key is not None
@@ -593,249 +414,10 @@ def _checkpoint_project_key(
     domain_prefix = envelope.domain_pack_id.split(".", 1)[0]
     if domain_prefix:
         return domain_prefix
-    adapter_key = _resolve_candidate_adapter_key(extraction_result)
+    adapter_key = _resolve_extraction_adapter_key(extraction_result)
     if adapter_key is not None:
         return adapter_key
     raise ValueError("Unable to resolve project_key for domain envelope checkpoint")
-
-
-def _candidate_blueprints(
-    extraction_result: CurationExtractionResultRecord,
-    payload: Mapping[str, Any],
-    *,
-    candidate_adapter_key: str,
-) -> list[_CandidateBlueprint]:
-    converter = _prep_item_converter(
-        adapter_key=candidate_adapter_key,
-        agent_key=extraction_result.agent_key,
-    )
-    if converter is not None:
-        conversion_result = converter.convert(payload)
-        return _build_candidate_blueprints_from_items(
-            extraction_result,
-            conversion_result.items,
-            evidence_records_by_id=conversion_result.evidence_records_by_id,
-            candidate_adapter_key=candidate_adapter_key,
-        )
-
-    evidence_records_by_id = top_level_evidence_records_by_id(payload)
-
-    raw_items = payload.get("items")
-    blueprints = _build_candidate_blueprints_from_items(
-        extraction_result,
-        raw_items if isinstance(raw_items, list) else [],
-        evidence_records_by_id=evidence_records_by_id,
-        candidate_adapter_key=candidate_adapter_key,
-    )
-    return blueprints
-
-
-def _prep_item_converter(*, adapter_key: str, agent_key: str | None) -> Any | None:
-    normalized_agent_key = normalized_optional_string(agent_key)
-    if normalized_agent_key is None:
-        return None
-    registry = load_curation_adapter_registry()
-    return registry.get_prep_item_converter(
-        adapter_key=adapter_key,
-        agent_key=normalized_agent_key,
-    )
-
-
-def _build_candidate_blueprints_from_items(
-    extraction_result: CurationExtractionResultRecord,
-    raw_items: Sequence[Mapping[str, Any]],
-    *,
-    evidence_records_by_id: Mapping[str, Mapping[str, Any]],
-    candidate_adapter_key: str,
-) -> list[_CandidateBlueprint]:
-    blueprints: list[_CandidateBlueprint] = []
-
-    for candidate_index, raw_item in enumerate(raw_items, start=1):
-        if not isinstance(raw_item, Mapping):
-            continue
-        candidate_payload = _candidate_payload_from_item(raw_item)
-        if not candidate_payload:
-            continue
-        envelope_id, object_id, envelope_revision = _projection_ref_from_item(raw_item)
-
-        blueprints.append(
-            _CandidateBlueprint(
-                adapter_key=candidate_adapter_key,
-                payload=candidate_payload,
-                evidence_records=_candidate_evidence_records(
-                    extraction_result,
-                    raw_item,
-                    candidate_index=candidate_index,
-                    evidence_records_by_id=evidence_records_by_id,
-                ),
-                conversation_context_summary=_candidate_conversation_summary(
-                    extraction_result,
-                    candidate_payload,
-                ),
-                envelope_id=envelope_id,
-                object_id=object_id,
-                envelope_revision=envelope_revision,
-            )
-        )
-
-    return blueprints
-
-
-def _candidate_payload_from_item(
-    raw_item: Mapping[str, Any],
-) -> dict[str, Any]:
-    candidate_payload = compact_payload(
-        {
-            key: value
-            for key, value in raw_item.items()
-            if key
-            not in {
-                "evidence",
-                "evidence_record_ids",
-                "projection_ref",
-                "domain_envelope_projection_ref",
-            }
-        }
-    )
-    if not isinstance(candidate_payload, dict):
-        return {}
-    return candidate_payload
-
-
-def _projection_ref_from_item(
-    raw_item: Mapping[str, Any],
-) -> tuple[str | None, str | None, int | None]:
-    raw_projection_ref = raw_item.get("domain_envelope_projection_ref")
-    if raw_projection_ref is None:
-        return None, None, None
-    if not isinstance(raw_projection_ref, Mapping):
-        raise ValueError("domain envelope projection_ref must be a JSON object")
-
-    envelope_id = normalized_optional_string(raw_projection_ref.get("envelope_id"))
-    object_id = normalized_optional_string(raw_projection_ref.get("object_id"))
-    envelope_revision = raw_projection_ref.get("envelope_revision")
-    if isinstance(envelope_revision, bool) or not isinstance(envelope_revision, int):
-        envelope_revision = None
-
-    if envelope_id is None or object_id is None or envelope_revision is None:
-        raise ValueError(
-            "domain envelope projection_ref must include envelope_id, object_id, "
-            "and envelope_revision"
-        )
-    if envelope_revision < 1:
-        raise ValueError("domain envelope projection_ref.envelope_revision must be positive")
-    return envelope_id, object_id, envelope_revision
-
-
-def _candidate_evidence_records(
-    extraction_result: CurationExtractionResultRecord,
-    raw_item: Mapping[str, Any],
-    *,
-    candidate_index: int,
-    evidence_records_by_id: Mapping[str, Mapping[str, Any]],
-) -> list[_CandidateEvidence]:
-    source_records: list[_CandidateEvidence] = []
-    evidence_index = 0
-    for evidence_record_id in normalized_evidence_record_ids(raw_item.get("evidence_record_ids")):
-        raw_record = evidence_records_by_id.get(evidence_record_id)
-        if not isinstance(raw_record, Mapping):
-            continue
-        anchor = _build_source_evidence_anchor(raw_record)
-        if anchor is None:
-            continue
-        evidence_index += 1
-        source_records.append(
-            _CandidateEvidence(
-                evidence_record_id=evidence_record_id,
-                extraction_result_id=extraction_result.extraction_result_id,
-                anchor=anchor,
-            )
-        )
-
-    if source_records:
-        return source_records
-
-    raw_records = raw_item.get("evidence")
-    if not isinstance(raw_records, list):
-        return []
-
-    for evidence_index, raw_record in enumerate(raw_records, start=1):
-        if not isinstance(raw_record, Mapping):
-            continue
-        anchor = _build_source_evidence_anchor(raw_record)
-        if anchor is None:
-            continue
-
-        source_records.append(
-            _CandidateEvidence(
-                evidence_record_id=(
-                    f"{extraction_result.extraction_result_id}:"
-                    f"candidate:{candidate_index}:evidence:{evidence_index}"
-                ),
-                extraction_result_id=extraction_result.extraction_result_id,
-                anchor=anchor,
-            )
-        )
-
-    return source_records
-
-
-def _build_source_evidence_anchor(raw_record: Mapping[str, Any]) -> EvidenceAnchor | None:
-    verified_quote = normalized_optional_string(raw_record.get("verified_quote"))
-    if not verified_quote:
-        return None
-
-    figure_reference, table_reference = _split_figure_reference(
-        normalized_optional_string(raw_record.get("figure_reference"))
-    )
-    page_number = _normalized_optional_page(raw_record.get("page"))
-    section_title = normalized_optional_string(raw_record.get("section"))
-    subsection_title = normalized_optional_string(raw_record.get("subsection"))
-    chunk_id = normalized_optional_string(raw_record.get("chunk_id"))
-
-    return EvidenceAnchor(
-        anchor_kind=EvidenceAnchorKind.SNIPPET,
-        locator_quality=EvidenceLocatorQuality.EXACT_QUOTE,
-        supports_decision=EvidenceSupportsDecision.SUPPORTS,
-        snippet_text=verified_quote,
-        sentence_text=verified_quote,
-        normalized_text=None,
-        viewer_search_text=verified_quote,
-        page_number=page_number,
-        page_label=None,
-        section_title=section_title,
-        subsection_title=subsection_title,
-        figure_reference=figure_reference,
-        table_reference=table_reference,
-        chunk_ids=[chunk_id] if chunk_id else [],
-    )
-
-
-def _split_figure_reference(value: str | None) -> tuple[str | None, str | None]:
-    if value is None:
-        return None, None
-    if _TABLE_REFERENCE_PATTERN.search(value):
-        return None, value
-    if _FIGURE_REFERENCE_PATTERN.search(value):
-        return value, None
-    return value, None
-
-
-def _candidate_conversation_summary(
-    extraction_result: CurationExtractionResultRecord,
-    payload: Mapping[str, Any],
-) -> str:
-    summary = normalized_optional_string(extraction_result.conversation_summary)
-    if summary is not None:
-        return summary
-
-    label = normalized_optional_string(payload.get("label"))
-    entity_type = normalized_optional_string(payload.get("entity_type"))
-    if label and entity_type:
-        return f"Prepared deterministic {entity_type} candidate for {label}."
-    if label:
-        return f"Prepared deterministic candidate for {label}."
-    return "Prepared deterministic candidate from structured extraction output."
 
 
 def _resolve_primary_extraction_result(
@@ -870,15 +452,10 @@ def _resolve_document_id(
 
 
 def _resolve_adapter_key(
-    candidates: Sequence[CurationPrepCandidate],
     *,
     extraction_results: Sequence[CurationExtractionResultRecord],
     scope_confirmation: CurationPrepScopeConfirmation,
 ) -> str | None:
-    candidate_adapter_key = _resolve_single_value(candidate.adapter_key for candidate in candidates)
-    if candidate_adapter_key is not None:
-        return candidate_adapter_key
-
     return _resolve_single_value(
         [
             *scope_confirmation.adapter_keys,
@@ -888,13 +465,11 @@ def _resolve_adapter_key(
 
 
 def _resolve_required_adapter_key(
-    candidates: Sequence[CurationPrepCandidate],
     *,
     extraction_results: Sequence[CurationExtractionResultRecord],
     scope_confirmation: CurationPrepScopeConfirmation,
 ) -> str:
     adapter_key = _resolve_adapter_key(
-        candidates,
         extraction_results=extraction_results,
         scope_confirmation=scope_confirmation,
     )
@@ -996,28 +571,6 @@ def _resolve_single_value(values: Iterable[str | None]) -> str | None:
     if len(distinct_values) == 1:
         return distinct_values[0]
     return None
-
-
-def _payload_field_paths(payload: Any, *, prefix: str = "") -> list[str]:
-    if isinstance(payload, Mapping):
-        field_paths: list[str] = []
-        for key, value in payload.items():
-            field_key = f"{prefix}.{key}" if prefix else str(key)
-            field_paths.extend(_payload_field_paths(value, prefix=field_key))
-        return field_paths
-    if isinstance(payload, list):
-        field_paths: list[str] = []
-        for index, value in enumerate(payload):
-            field_key = f"{prefix}.{index}" if prefix else str(index)
-            field_paths.extend(_payload_field_paths(value, prefix=field_key))
-        return field_paths
-    return [prefix] if prefix else []
-
-
-def _normalized_optional_page(value: Any) -> int | None:
-    if value is None or isinstance(value, bool) or not isinstance(value, int):
-        return None
-    return value if value >= 1 else None
 
 
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:

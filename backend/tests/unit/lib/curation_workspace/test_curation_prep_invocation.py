@@ -104,7 +104,7 @@ def _make_domain_envelope_extraction_payload(candidate_count: int = 2) -> dict:
                 "payload": {
                     "mention": f"Candidate {index + 1}",
                     "gene_symbol": f"GENE{index + 1}",
-                    "primary_external_id": f"RGD:{index + 1}",
+                    "primary_external_id": f"EXAMPLE:{index + 1}",
                     "taxon": "NCBITaxon:10116",
                     "confidence": "high",
                     "evidence_record_id": f"evidence-{index + 1}",

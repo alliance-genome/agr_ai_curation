@@ -13,15 +13,10 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from src.lib.curation_adapters.reference import (
-    REFERENCE_ADAPTER_KEY,
-    REFERENCE_VALIDATION_PLAN_KEY,
-)
 from src.lib.curation_adapters.structured_payload import (
     StructuredPayloadCandidateNormalizer,
 )
 from src.lib.curation_workspace import pipeline as module
-from src.lib.curation_workspace import session_service
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -39,7 +34,6 @@ from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepCandi
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
-    CurationEvidenceSource,
     CurationExtractionSourceKind,
     CurationActionType,
     CurationSessionStatus,
@@ -134,50 +128,49 @@ def _create_document(db_session):
 
 
 def _make_prep_output(*, candidate_count: int = 1) -> CurationPrepAgentOutput:
-    candidates = []
-    for index in range(candidate_count):
-        gene_symbol = f"GENE{index + 1}"
-        disease_label = f"Disease {index + 1}"
-        candidates.append(
-            {
-                "adapter_key": "disease",
-                "payload": {
-                    "gene": {"symbol": gene_symbol},
-                    "condition": {"label": disease_label},
-                    "evidence": {"score": 0.8 + (index * 0.05)},
-                },
-                "evidence_records": [
-                    {
-                        "evidence_record_id": f"evidence-{index + 1}",
-                        "source": "extracted",
-                        "extraction_result_id": "prep-extract",
-                        "field_paths": ["gene.symbol"],
-                        "anchor": {
-                            "anchor_kind": "snippet",
-                            "locator_quality": "exact_quote",
-                            "supports_decision": "supports",
-                            "snippet_text": f"{gene_symbol} was linked to the reported phenotype.",
-                            "sentence_text": f"{gene_symbol} was linked to the reported phenotype.",
-                            "normalized_text": None,
-                            "viewer_search_text": f"{gene_symbol} was linked to the reported phenotype.",
-                            "page_number": 3,
-                            "page_label": None,
-                            "section_title": "Results",
-                            "subsection_title": "Association",
-                            "figure_reference": None,
-                            "table_reference": None,
-                            "chunk_ids": [f"chunk-{index + 1}"],
-                        },
-                        "notes": ["The paper names the gene directly in the finding."],
-                    }
-                ],
-                "conversation_context_summary": f"Conversation narrowed to {gene_symbol}.",
-            }
-        )
+    return _make_envelope_prep_output(review_row_count=candidate_count)
 
+
+def _make_legacy_candidate() -> CurationPrepCandidate:
+    gene_symbol = "GENE1"
     return CurationPrepAgentOutput.model_validate(
         {
-            "candidates": candidates,
+            "candidates": [
+                {
+                    "adapter_key": "disease",
+                    "payload": {
+                        "gene": {"symbol": gene_symbol},
+                        "condition": {"label": "Disease 1"},
+                        "evidence": {"score": 0.8},
+                    },
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "evidence-1",
+                            "source": "extracted",
+                            "extraction_result_id": "prep-extract",
+                            "field_paths": ["gene.symbol"],
+                            "anchor": {
+                                "anchor_kind": "snippet",
+                                "locator_quality": "exact_quote",
+                                "supports_decision": "supports",
+                                "snippet_text": f"{gene_symbol} was linked to the reported phenotype.",
+                                "sentence_text": f"{gene_symbol} was linked to the reported phenotype.",
+                                "normalized_text": None,
+                                "viewer_search_text": f"{gene_symbol} was linked to the reported phenotype.",
+                                "page_number": 3,
+                                "page_label": None,
+                                "section_title": "Results",
+                                "subsection_title": "Association",
+                                "figure_reference": None,
+                                "table_reference": None,
+                                "chunk_ids": ["chunk-1"],
+                            },
+                            "notes": ["The paper names the gene directly in the finding."],
+                        }
+                    ],
+                    "conversation_context_summary": f"Conversation narrowed to {gene_symbol}.",
+                }
+            ],
             "run_metadata": {
                 "model_name": "gpt-5.4-mini",
                 "token_usage": {
@@ -189,23 +182,22 @@ def _make_prep_output(*, candidate_count: int = 1) -> CurationPrepAgentOutput:
                 "warnings": ["Prep run warning."],
             },
         }
-    )
+    ).candidates[0]
 
 
-def _make_envelope_prep_output() -> CurationPrepAgentOutput:
+def _make_envelope_prep_output(*, review_row_count: int = 1) -> CurationPrepAgentOutput:
     return CurationPrepAgentOutput.model_validate(
         {
             "envelope_refs": [
                 {
-                    "envelope_id": "env-review-1",
+                    "envelope_id": f"env-review-{review_row_count}",
                     "envelope_revision": 4,
                     "source_extraction_result_id": "extract-domain-1",
                     "domain_pack_id": "fixture.pack",
-                    "review_row_count": 1,
+                    "review_row_count": review_row_count,
                 }
             ],
-            "review_row_count": 1,
-            "candidates": [],
+            "review_row_count": review_row_count,
             "run_metadata": {
                 "model_name": "deterministic_programmatic_mapper_v1",
                 "token_usage": {
@@ -217,6 +209,65 @@ def _make_envelope_prep_output() -> CurationPrepAgentOutput:
                 "warnings": [],
             },
         }
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_domain_envelope_review_row_materializer(monkeypatch):
+    def _fake_materialize(_db, envelope_id, *, revision=None, materializer=None):
+        row_count = int(str(envelope_id).rsplit("-", 1)[-1])
+        envelope_revision = revision or 1
+        rows = []
+        for index in range(row_count):
+            row_number = index + 1
+            rows.append(
+                DomainEnvelopeReviewRow(
+                    envelope_id=envelope_id,
+                    object_id=f"object-{row_number}",
+                    envelope_revision=envelope_revision,
+                    domain_pack_id="fixture.pack",
+                    domain_pack_version="0.1.0",
+                    object_type="GeneAssertion",
+                    object_role="curatable_unit",
+                    status="pending",
+                    validation_state="clear",
+                    projection_type="workspace_review_row",
+                    projection_key=f"object-{row_number}",
+                    display_label=f"GENE{row_number}",
+                    secondary_label=f"Disease {row_number}",
+                    summary_fields=[
+                        DomainEnvelopeReviewRowSummaryField(
+                            field_path="gene.symbol",
+                            label="Gene symbol",
+                            value=f"GENE{row_number}",
+                            field_type="string",
+                        ),
+                        DomainEnvelopeReviewRowSummaryField(
+                            field_path="condition.label",
+                            label="Condition label",
+                            value=f"Disease {row_number}",
+                            field_type="string",
+                        ),
+                        DomainEnvelopeReviewRowSummaryField(
+                            field_path="evidence.score",
+                            label="Evidence score",
+                            value=0.8 + (index * 0.05),
+                            field_type="number",
+                        ),
+                    ],
+                )
+            )
+        return DomainEnvelopeReviewRowsResponse(
+            envelope_id=envelope_id,
+            envelope_revision=envelope_revision,
+            row_count=len(rows),
+            rows=rows,
+        )
+
+    monkeypatch.setattr(
+        module,
+        "materialize_persisted_envelope_review_rows",
+        _fake_materialize,
     )
 
 
@@ -238,11 +289,7 @@ def _persist_matching_prep_result(
         trace_id="trace-1",
         flow_run_id="flow-1",
         user_id="user-1",
-        candidate_count=(
-            prep_output.review_row_count
-            if prep_output.envelope_refs
-            else len(prep_output.candidates)
-        ),
+        candidate_count=prep_output.review_row_count,
         conversation_summary="Prep conversation summary.",
         payload_json=prep_output.model_dump(mode="json"),
         extraction_metadata={
@@ -272,173 +319,14 @@ def _make_request(prep_output: CurationPrepAgentOutput, *, document_id: str, rev
     )
 
 
-def _make_reference_prep_output() -> CurationPrepAgentOutput:
-    return CurationPrepAgentOutput.model_validate(
-        {
-            "candidates": [
-                {
-                    "adapter_key": REFERENCE_ADAPTER_KEY,
-                    "payload": {
-                        "citation": {
-                            "title": "  Adapter-owned reference scaffold in practice  ",
-                            "authors": ["Ada Lovelace", " Grace Hopper "],
-                            "journal": "  Journal of Adapter Boundaries  ",
-                            "publication_year": "2025",
-                        },
-                        "identifiers": {
-                            "doi": " DOI:10.1000/Reference-1 ",
-                        },
-                    },
-                    "evidence_records": [
-                        {
-                            "evidence_record_id": "reference-evidence-title",
-                            "source": "extracted",
-                            "extraction_result_id": "prep-extract-reference",
-                            "field_paths": ["citation.title"],
-                            "anchor": {
-                                "anchor_kind": "snippet",
-                                "locator_quality": "exact_quote",
-                                "supports_decision": "supports",
-                                "snippet_text": "Adapter-owned reference scaffold in practice",
-                                "sentence_text": "Adapter-owned reference scaffold in practice",
-                                "normalized_text": None,
-                                "viewer_search_text": "Adapter-owned reference scaffold in practice",
-                                "page_number": 2,
-                                "page_label": None,
-                                "section_title": "Results",
-                                "subsection_title": None,
-                                "figure_reference": None,
-                                "table_reference": None,
-                                "chunk_ids": ["chunk-reference-title"],
-                            },
-                            "notes": ["The title is quoted directly from the manuscript."],
-                        },
-                        {
-                            "evidence_record_id": "reference-evidence-doi",
-                            "source": "extracted",
-                            "extraction_result_id": "prep-extract-reference",
-                            "field_paths": ["identifiers.doi"],
-                            "anchor": {
-                                "anchor_kind": "snippet",
-                                "locator_quality": "exact_quote",
-                                "supports_decision": "supports",
-                                "snippet_text": "doi:10.1000/Reference-1",
-                                "sentence_text": "doi:10.1000/Reference-1",
-                                "normalized_text": None,
-                                "viewer_search_text": "doi:10.1000/Reference-1",
-                                "page_number": 4,
-                                "page_label": None,
-                                "section_title": "References",
-                                "subsection_title": None,
-                                "figure_reference": None,
-                                "table_reference": None,
-                                "chunk_ids": ["chunk-reference-doi"],
-                            },
-                            "notes": ["The DOI is present in the reference block."],
-                        },
-                    ],
-                    "conversation_context_summary": (
-                        "Conversation narrowed the workspace to a single supporting reference."
-                    ),
-                }
-            ],
-            "run_metadata": {
-                "model_name": "gpt-5.4-mini",
-                "token_usage": {
-                    "input_tokens": 90,
-                    "output_tokens": 35,
-                    "total_tokens": 125,
-                },
-                "processing_notes": ["Reference candidate normalized by the adapter scaffold."],
-                "warnings": [],
-            },
-        }
-    )
-
-
-def _make_reference_request(prep_output: CurationPrepAgentOutput, *, document_id: str):
-    return module.PostCurationPipelineRequest(
-        prep_output=prep_output,
-        document_id=document_id,
-        source_kind=CurationExtractionSourceKind.CHAT,
-        adapter_key=REFERENCE_ADAPTER_KEY,
-        flow_run_id="flow-1",
-        origin_session_id="chat-session-1",
-        trace_id="trace-1",
-        user_id="user-1",
-        notes="Reference adapter pipeline bootstrap.",
-        tags=("wave-11",),
-        prepared_at=_now(),
-    )
-
-
-def _passthrough_dependencies() -> module.PostCurationPipelineDependencies:
-    return module.PostCurationPipelineDependencies(
-        evidence_resolver=module.PassthroughEvidenceAnchorResolver(),
-    )
-
-
-def test_default_evidence_resolver_resolves_against_document():
-    resolver = module._default_evidence_resolver()
-
-    assert isinstance(resolver, module.DeterministicEvidenceAnchorResolver)
-    assert resolver._resolve_against_document is True
-
-
-def test_default_pipeline_dependencies_enable_document_backed_evidence_resolution():
+def test_pipeline_dependencies_configure_async_scheduler_only():
     dependencies = module.PostCurationPipelineDependencies()
 
-    assert isinstance(dependencies.evidence_resolver, module.DeterministicEvidenceAnchorResolver)
-    assert dependencies.evidence_resolver._resolve_against_document is True
-
-
-def test_execute_post_curation_pipeline_default_dependencies_use_document_resolver_with_current_user(
-    db_session,
-    monkeypatch,
-):
-    document = _create_document(db_session)
-    prep_output = _make_prep_output()
-    _persist_matching_prep_result(
-        db_session,
-        document_id=str(document.id),
-        prep_output=prep_output,
-    )
-
-    observed: dict[str, object] = {}
-
-    class _SpyResolver:
-        def __init__(self, *args, **kwargs):
-            observed["kwargs"] = kwargs
-
-        def resolve(self, candidate, *, normalized_candidate, context):
-            observed["current_user_id"] = context.current_user_id
-            source_record = candidate.evidence_records[0]
-            return [
-                module.PreparedEvidenceRecordInput(
-                    source=CurationEvidenceSource.EXTRACTED,
-                    field_keys=list(source_record.field_paths),
-                    field_group_keys=[],
-                    is_primary=True,
-                    anchor=source_record.anchor.model_dump(mode="json"),
-                    warnings=[],
-                )
-            ]
-
-    monkeypatch.setattr(module, "DeterministicEvidenceAnchorResolver", _SpyResolver)
-
-    result = module.execute_post_curation_pipeline(
-        _make_request(prep_output, document_id=str(document.id)),
-        db=db_session,
-    )
-
-    assert result.status is module.PipelineRunStatus.COMPLETED
-    assert observed["kwargs"] == {"resolve_against_document": True}
-    assert observed["current_user_id"] == "user-1"
+    assert isinstance(dependencies.task_scheduler, module.AsyncioPipelineTaskScheduler)
 
 
 def test_structured_payload_candidate_normalizer_builds_payload_and_draft_fields():
-    prep_output = _make_prep_output()
-    candidate: CurationPrepCandidate = prep_output.candidates[0]
+    candidate = _make_legacy_candidate()
 
     normalized = StructuredPayloadCandidateNormalizer().normalize(
         candidate.payload,
@@ -474,7 +362,6 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     result = module.execute_post_curation_pipeline(
         _make_request(prep_output, document_id=str(document.id)),
         db=db_session,
-        dependencies=_passthrough_dependencies(),
     )
 
     assert result.status is module.PipelineRunStatus.COMPLETED
@@ -490,8 +377,7 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert session_row.pending_candidates == 1
     assert session_row.current_candidate_id is not None
     assert session_row.warnings == [
-        "Prep run warning.",
-        "Deterministic structural validation completed; downstream adapter validation is pending.",
+        "Domain-envelope review-row projection validation completed from persisted envelope fields.",
     ]
 
     candidate_row = db_session.scalars(
@@ -500,30 +386,17 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert candidate_row.source is CurationCandidateSource.EXTRACTED
     assert candidate_row.status is CurationCandidateStatus.PENDING
     assert candidate_row.extraction_result_id == prep_record.id
-    assert candidate_row.normalized_payload["gene"]["symbol"] == "GENE1"
-    assert candidate_row.candidate_metadata["prep_evidence_records"][0]["field_paths"] == ["gene.symbol"]
-    assert candidate_row.candidate_metadata["evidence_summary"] == {
-        "total_anchor_count": 1,
-        "resolved_anchor_count": 1,
-        "viewer_highlightable_anchor_count": 1,
-        "quality_counts": {
-            "exact_quote": 1,
-            "normalized_quote": 0,
-            "section_only": 0,
-            "page_only": 0,
-            "document_only": 0,
-            "unresolved": 0,
-        },
-        "degraded": False,
-        "warnings": [],
-    }
+    assert candidate_row.envelope_id == "env-review-1"
+    assert candidate_row.object_id == "object-1"
+    assert candidate_row.envelope_revision == 4
+    assert candidate_row.normalized_payload == {}
+    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate_row.candidate_metadata["projection_key"] == "object-1"
 
-    evidence_row = db_session.scalars(
+    evidence_rows = db_session.scalars(
         select(EvidenceRecordModel).where(EvidenceRecordModel.candidate_id == candidate_row.id)
-    ).one()
-    assert evidence_row.field_keys == ["gene.symbol"]
-    assert evidence_row.anchor["chunk_ids"] == ["chunk-1"]
-    assert evidence_row.anchor["viewer_highlightable"] is True
+    ).all()
+    assert evidence_rows == []
 
     draft_row = db_session.scalars(
         select(DraftModel).where(DraftModel.candidate_id == candidate_row.id)
@@ -531,8 +404,9 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     assert "normalized_payload" not in candidate_row.candidate_metadata
     assert draft_row.fields[0]["field_key"] == "gene.symbol"
     assert draft_row.fields[0]["validation_result"]["status"] == FieldValidationStatus.SKIPPED.value
-    assert draft_row.fields[0]["evidence_anchor_ids"] == [str(evidence_row.id)]
+    assert draft_row.fields[0]["evidence_anchor_ids"] == []
     assert "normalized_payload" not in draft_row.draft_metadata
+    assert draft_row.draft_metadata["semantic_source"] == "domain_envelope.objects"
 
     session_snapshots = db_session.scalars(
         select(ValidationSnapshotModel).where(
@@ -649,10 +523,6 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
             ],
         )
 
-    class RaisingNormalizer:
-        def normalize(self, *_args, **_kwargs):
-            raise AssertionError("candidate normalizer should not be used for envelope refs")
-
     monkeypatch.setattr(
         module,
         "materialize_persisted_envelope_review_rows",
@@ -662,11 +532,6 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
     result = module.execute_post_curation_pipeline(
         _make_request(prep_output, document_id=str(document.id)),
         db=db_session,
-        dependencies=module.PostCurationPipelineDependencies(
-            candidate_normalizers={"disease": RaisingNormalizer()},
-            evidence_resolver=module.PassthroughEvidenceAnchorResolver(),
-            validation_service=module.DeterministicStructuralValidationService(),
-        ),
     )
 
     assert result.status is module.PipelineRunStatus.COMPLETED
@@ -689,76 +554,6 @@ def test_execute_post_curation_pipeline_materializes_envelope_rows_without_norma
         "object_id": "object-1",
         "envelope_revision": 4,
     }
-
-
-def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists_adapter_owned_layout(
-    db_session,
-):
-    document = _create_document(db_session)
-    prep_output = _make_reference_prep_output()
-    prep_record = _persist_matching_prep_result(
-        db_session,
-        document_id=str(document.id),
-        prep_output=prep_output,
-        adapter_key=REFERENCE_ADAPTER_KEY,
-    )
-
-    result = module.execute_post_curation_pipeline(
-        _make_reference_request(prep_output, document_id=str(document.id)),
-        db=db_session,
-        dependencies=module.PostCurationPipelineDependencies(
-            evidence_resolver=module.PassthroughEvidenceAnchorResolver(),
-        ),
-    )
-
-    assert result.status is module.PipelineRunStatus.COMPLETED
-    assert result.prep_extraction_result_id == str(prep_record.id)
-
-    draft_row = db_session.scalars(select(DraftModel)).one()
-    assert [field["field_key"] for field in draft_row.fields] == [
-        "citation.title",
-        "citation.authors",
-        "citation.journal",
-        "citation.publication_year",
-        "citation.reference_type",
-        "identifiers.doi",
-        "identifiers.pmid",
-    ]
-    assert [field["group_key"] for field in draft_row.fields[:5]] == [
-        "citation_details",
-        "citation_details",
-        "citation_details",
-        "citation_details",
-        "citation_details",
-    ]
-    assert draft_row.fields[1]["value"] == ["Ada Lovelace", "Grace Hopper"]
-    assert draft_row.fields[1]["metadata"]["widget"] == "reference_author_list"
-    assert draft_row.fields[1]["metadata"]["validation"]["plan_key"] == REFERENCE_VALIDATION_PLAN_KEY
-    assert draft_row.fields[4]["value"] == "journal_article"
-    assert draft_row.fields[4]["metadata"]["default_applied"] is True
-    assert draft_row.fields[5]["value"] == "10.1000/reference-1"
-    assert draft_row.fields[5]["evidence_anchor_ids"]
-
-    candidate_row = db_session.scalars(select(CurationCandidate)).one()
-    assert candidate_row.normalized_payload == {
-        "citation": {
-            "title": "Adapter-owned reference scaffold in practice",
-            "authors": ["Ada Lovelace", "Grace Hopper"],
-            "journal": "Journal of Adapter Boundaries",
-            "publication_year": 2025,
-            "reference_type": "journal_article",
-        },
-        "identifiers": {
-            "doi": "10.1000/reference-1",
-            "pmid": None,
-        },
-    }
-    assert candidate_row.candidate_metadata["reference_adapter"]["adapter_key"] == REFERENCE_ADAPTER_KEY
-
-    workspace = session_service.get_session_workspace(db_session, result.session_id)
-    assert workspace.workspace.session.adapter.adapter_key == REFERENCE_ADAPTER_KEY
-    assert workspace.workspace.session.adapter.display_label == "Reference Adapter"
-    assert workspace.workspace.entity_tags == []
 
 
 def test_execute_post_curation_pipeline_updates_existing_unreviewed_session(db_session):
@@ -850,7 +645,6 @@ def test_execute_post_curation_pipeline_updates_existing_unreviewed_session(db_s
             review_session_id=str(existing_session.id),
         ),
         db=db_session,
-        dependencies=_passthrough_dependencies(),
     )
 
     assert result.session_id == str(existing_session.id)
@@ -862,7 +656,8 @@ def test_execute_post_curation_pipeline_updates_existing_unreviewed_session(db_s
     ).all()
     assert len(remaining_candidates) == 1
     assert remaining_candidates[0].id != old_candidate.id
-    assert remaining_candidates[0].normalized_payload["gene"]["symbol"] == "GENE1"
+    assert remaining_candidates[0].normalized_payload == {}
+    assert remaining_candidates[0].envelope_id == "env-review-1"
     assert "normalized_payload" not in remaining_candidates[0].candidate_metadata
     assert existing_session.session_version == 2
 
@@ -883,7 +678,6 @@ def test_execute_post_curation_pipeline_requires_persisted_prep_result(db_sessio
         module.execute_post_curation_pipeline(
             _make_request(prep_output, document_id=str(document.id)),
             db=db_session,
-            dependencies=_passthrough_dependencies(),
         )
 
 
@@ -907,7 +701,6 @@ def test_execute_post_curation_pipeline_with_owned_session_commits_results(db_se
 
     result = module.execute_post_curation_pipeline(
         _make_request(prep_output, document_id=str(document.id)),
-        dependencies=_passthrough_dependencies(),
     )
 
     verification_session = session_factory()
@@ -932,7 +725,6 @@ def test_execute_post_curation_pipeline_with_external_session_leaves_commit_to_c
     result = module.execute_post_curation_pipeline(
         _make_request(prep_output, document_id=str(document.id)),
         db=db_session,
-        dependencies=_passthrough_dependencies(),
     )
 
     pending_session = db_session.scalars(

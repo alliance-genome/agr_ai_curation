@@ -395,39 +395,16 @@ def test_replayable_prep_output_uses_persisted_final_run_metadata(db_session):
         created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
     )
     extraction_result.payload_json = {
-        "candidates": [
+        "envelope_refs": [
             {
-                "adapter_key": "reference_adapter",
-                "payload": {"title": "APOE"},
-                "evidence_records": [
-                    {
-                        "evidence_record_id": "extract-1:candidate:1:evidence:1",
-                        "source": "extracted",
-                        "extraction_result_id": "extract-1",
-                        "field_paths": ["title"],
-                        "anchor": {
-                            "anchor_kind": "snippet",
-                            "locator_quality": "exact_quote",
-                            "supports_decision": "supports",
-                            "snippet_text": "APOE finding.",
-                            "sentence_text": "APOE finding.",
-                            "normalized_text": None,
-                            "viewer_search_text": "APOE finding.",
-                            "viewer_highlightable": False,
-                            "page_number": 2,
-                            "page_label": None,
-                            "section_title": "Results",
-                            "subsection_title": None,
-                            "figure_reference": None,
-                            "table_reference": None,
-                            "chunk_ids": ["chunk-1"],
-                        },
-                        "notes": [],
-                    }
-                ],
-                "conversation_context_summary": "Prepared from persisted prep output.",
+                "envelope_id": "env-review-1",
+                "envelope_revision": 2,
+                "source_extraction_result_id": "extract-1",
+                "domain_pack_id": "fixture.pack",
+                "review_row_count": 1,
             }
         ],
+        "review_row_count": 1,
         "run_metadata": {
             "model_name": "stale-model-name",
             "token_usage": {
@@ -456,7 +433,8 @@ def test_replayable_prep_output_uses_persisted_final_run_metadata(db_session):
 
     prep_output = module._replayable_prep_output(extraction_result)
 
-    assert len(prep_output.candidates) == 1
+    assert prep_output.candidates == []
+    assert prep_output.envelope_refs[0].envelope_id == "env-review-1"
     assert prep_output.run_metadata.model_name == "deterministic_programmatic_mapper_v1"
     assert prep_output.run_metadata.processing_notes == [
         "Persisted prep metadata should win during replay."
@@ -479,7 +457,7 @@ def test_replayable_prep_output_preserves_persisted_envelope_refs(db_session):
                 "envelope_id": "env-gene-1",
                 "envelope_revision": 4,
                 "source_extraction_result_id": "extract-domain-1",
-                "domain_pack_id": "agr.alliance.gene",
+                "domain_pack_id": "fixture.alliance.gene",
                 "review_row_count": 2,
             }
         ],
@@ -511,7 +489,7 @@ def test_replayable_prep_output_preserves_persisted_envelope_refs(db_session):
     assert envelope_ref.envelope_id == "env-gene-1"
     assert envelope_ref.envelope_revision == 4
     assert envelope_ref.source_extraction_result_id == "extract-domain-1"
-    assert envelope_ref.domain_pack_id == "agr.alliance.gene"
+    assert envelope_ref.domain_pack_id == "fixture.alliance.gene"
     assert envelope_ref.review_row_count == 2
 
 
@@ -617,7 +595,7 @@ async def test_bootstrap_document_session_replays_envelope_refs_into_pipeline(mo
                 "envelope_id": "env-gene-1",
                 "envelope_revision": 4,
                 "source_extraction_result_id": "extract-domain-1",
-                "domain_pack_id": "agr.alliance.gene",
+                "domain_pack_id": "fixture.alliance.gene",
                 "review_row_count": 2,
             }
         ],

@@ -7,18 +7,12 @@ import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
-from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
-from src.lib.curation_workspace.evidence_quality import (
-    evidence_anchor_payload_with_quality,
-    summarize_evidence_records,
-)
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
@@ -62,21 +56,6 @@ from src.lib.domain_packs.materialization import materialize_persisted_envelope_
 logger = logging.getLogger(__name__)
 
 DEFAULT_ASYNC_CANDIDATE_THRESHOLD = 25
-PREP_EVIDENCE_RECORDS_METADATA_KEY = "prep_evidence_records"
-NORMALIZER_METADATA_KEY = "normalizer"
-EVIDENCE_SUMMARY_METADATA_KEY = "evidence_summary"
-
-
-def _default_candidate_normalizers() -> Mapping[str, CurationCandidateNormalizer]:
-    """Build the package-driven adapter registry for candidate normalization."""
-
-    return load_curation_adapter_registry().candidate_normalizers()
-
-
-def _default_evidence_resolver() -> "EvidenceAnchorResolver":
-    """Resolve prep evidence against PDFX chunks during initial workspace bootstrap."""
-
-    return DeterministicEvidenceAnchorResolver(resolve_against_document=True)
 
 
 class PipelineExecutionMode(str, Enum):
@@ -359,17 +338,8 @@ class AsyncioPipelineTaskScheduler:
 
 @dataclass(frozen=True)
 class PostCurationPipelineDependencies:
-    """Replaceable collaborators for normalization, evidence, validation, and async dispatch."""
+    """Replaceable collaborators for post-prep pipeline dispatch."""
 
-    candidate_normalizers: Mapping[str, CurationCandidateNormalizer] = field(
-        default_factory=_default_candidate_normalizers
-    )
-    evidence_resolver: EvidenceAnchorResolver = field(
-        default_factory=_default_evidence_resolver
-    )
-    validation_service: BatchValidationService = field(
-        default_factory=DeterministicStructuralValidationService
-    )
     task_scheduler: PipelineTaskScheduler = field(
         default_factory=AsyncioPipelineTaskScheduler
     )
@@ -389,14 +359,12 @@ async def run_post_curation_pipeline(
         return execute_post_curation_pipeline(
             request,
             db=db,
-            dependencies=dependencies,
         )
 
     task_name = _task_name_for_request(request)
     scheduled_task_name = dependencies.task_scheduler.schedule(
         lambda: execute_post_curation_pipeline(
             request,
-            dependencies=dependencies,
         ),
         task_name=task_name,
     )
@@ -413,11 +381,9 @@ def execute_post_curation_pipeline(
     request: PostCurationPipelineRequest,
     *,
     db: Session | None = None,
-    dependencies: PostCurationPipelineDependencies | None = None,
 ) -> PostCurationPipelineResult:
     """Execute the deterministic post-agent pipeline synchronously."""
 
-    dependencies = dependencies or PostCurationPipelineDependencies()
     owns_session = db is None
     session = db or SessionLocal()
 
@@ -425,7 +391,6 @@ def execute_post_curation_pipeline(
         persistence_result, prep_extraction_result_id = _execute_pipeline_steps(
             session,
             request,
-            dependencies,
         )
         if owns_session:
             session.commit()
@@ -449,28 +414,18 @@ def execute_post_curation_pipeline(
 def _execute_pipeline_steps(
     db: Session,
     request: PostCurationPipelineRequest,
-    dependencies: PostCurationPipelineDependencies,
 ) -> tuple[PreparedSessionUpsertResult, str]:
     prep_extraction_result = _resolve_prep_extraction_result(db, request)
     adapter_key = _resolve_pipeline_adapter_key(request)
 
     validated_at = request.prepared_at or datetime.now(timezone.utc)
-    if request.prep_output.envelope_refs:
-        prepared_candidates, validation_outcome = _prepared_candidates_from_envelope_refs(
-            db,
-            request,
-            adapter_key=adapter_key,
-            prep_extraction_result_id=str(prep_extraction_result.id),
-            validated_at=validated_at,
-        )
-    else:
-        prepared_candidates, validation_outcome = _prepared_candidates_from_legacy_prep_candidates(
-            request,
-            dependencies,
-            adapter_key=adapter_key,
-            prep_extraction_result_id=str(prep_extraction_result.id),
-            validated_at=validated_at,
-        )
+    prepared_candidates, validation_outcome = _prepared_candidates_from_envelope_refs(
+        db,
+        request,
+        adapter_key=adapter_key,
+        prep_extraction_result_id=str(prep_extraction_result.id),
+        validated_at=validated_at,
+    )
 
     session_warnings = _dedupe(
         [
@@ -536,90 +491,6 @@ def _prepared_candidates_from_envelope_refs(
                 validation_snapshot=validation_outcome.candidate_snapshots[index],
             )
             for index, candidate in enumerate(prepared_candidates)
-        ],
-        validation_outcome,
-    )
-
-
-def _prepared_candidates_from_legacy_prep_candidates(
-    request: PostCurationPipelineRequest,
-    dependencies: PostCurationPipelineDependencies,
-    *,
-    adapter_key: str,
-    prep_extraction_result_id: str,
-    validated_at: datetime,
-) -> tuple[list[PreparedCandidateInput], BatchValidationOutcome]:
-    normalized_candidates: list[NormalizedCandidate] = []
-    evidence_records_by_candidate: list[list[PreparedEvidenceRecordInput]] = []
-
-    for candidate_index, candidate in enumerate(request.prep_output.candidates):
-        _validate_candidate_scope(
-            candidate,
-            adapter_key=adapter_key,
-        )
-        normalizer = dependencies.candidate_normalizers.get(candidate.adapter_key)
-        if normalizer is None:
-            raise LookupError(
-                "No package-owned curation adapter normalizer is registered for "
-                f"adapter_key={candidate.adapter_key!r}."
-            )
-        normalized_candidate = normalizer.normalize(
-            candidate.payload,
-            prep_candidate=candidate,
-            context=CandidateNormalizationContext(
-                document_id=request.document_id,
-                adapter_key=adapter_key,
-                prep_extraction_result_id=prep_extraction_result_id,
-                candidate_index=candidate_index,
-                flow_run_id=request.flow_run_id,
-            ),
-        )
-        normalized_candidates.append(normalized_candidate)
-        resolved_records = dependencies.evidence_resolver.resolve(
-            candidate,
-            normalized_candidate=normalized_candidate,
-            context=EvidenceResolutionContext(
-                document_id=request.document_id,
-                adapter_key=adapter_key,
-                prep_extraction_result_id=prep_extraction_result_id,
-                candidate_index=candidate_index,
-                current_user_id=request.user_id,
-            ),
-        )
-        evidence_records_by_candidate.append(
-            [
-                replace(
-                    record,
-                    anchor=evidence_anchor_payload_with_quality(record.anchor),
-                )
-                for record in resolved_records
-            ]
-        )
-
-    validation_outcome = dependencies.validation_service.validate(
-        normalized_candidates,
-        context=BatchValidationContext(
-            document_id=request.document_id,
-            adapter_key=adapter_key,
-            validated_at=validated_at,
-        ),
-    )
-    if len(validation_outcome.candidate_snapshots) != len(normalized_candidates):
-        raise ValueError(
-            "Validation service must return one candidate snapshot per normalized candidate"
-        )
-
-    return (
-        [
-            _prepared_candidate_input(
-                normalized_candidate=normalized_candidate,
-                evidence_records=evidence_records_by_candidate[index],
-                validation_snapshot=validation_outcome.candidate_snapshots[index],
-                prep_extraction_result_id=prep_extraction_result_id,
-                prep_output=request.prep_output,
-                candidate_index=index,
-            )
-            for index, normalized_candidate in enumerate(normalized_candidates)
         ],
         validation_outcome,
     )
@@ -806,51 +677,6 @@ def _validate_prepared_review_rows(
     )
 
 
-def _prepared_candidate_input(
-    *,
-    normalized_candidate: NormalizedCandidate,
-    evidence_records: Sequence[PreparedEvidenceRecordInput],
-    validation_snapshot: PreparedValidationSnapshotInput,
-    prep_extraction_result_id: str,
-    prep_output: CurationPrepAgentOutput,
-    candidate_index: int,
-) -> PreparedCandidateInput:
-    prep_candidate = normalized_candidate.prep_candidate
-    metadata = dict(normalized_candidate.metadata)
-    evidence_summary = summarize_evidence_records(evidence_records)
-    metadata[PREP_EVIDENCE_RECORDS_METADATA_KEY] = [
-        evidence_record.model_dump(mode="json")
-        for evidence_record in prep_candidate.evidence_records
-    ]
-    metadata["prep_candidate_index"] = candidate_index
-    if evidence_summary is not None:
-        metadata[EVIDENCE_SUMMARY_METADATA_KEY] = evidence_summary.model_dump(mode="json")
-
-    return PreparedCandidateInput(
-        source=CurationCandidateSource.EXTRACTED,
-        status=CurationCandidateStatus.PENDING,
-        order=candidate_index,
-        adapter_key=prep_candidate.adapter_key,
-        display_label=normalized_candidate.display_label,
-        secondary_label=normalized_candidate.secondary_label,
-        conversation_summary=prep_candidate.conversation_context_summary,
-        extraction_result_id=prep_extraction_result_id,
-        envelope_id=prep_candidate.envelope_id,
-        object_id=prep_candidate.object_id,
-        envelope_revision=prep_candidate.envelope_revision,
-        normalized_payload=normalized_candidate.normalized_payload,
-        metadata=metadata,
-        draft_fields=normalized_candidate.draft_fields,
-        draft_title=normalized_candidate.display_label,
-        draft_summary=prep_candidate.conversation_context_summary,
-        draft_metadata={
-            "prep_run_metadata": prep_output.run_metadata.model_dump(mode="json"),
-        },
-        evidence_records=list(evidence_records),
-        validation_snapshot=validation_snapshot,
-    )
-
-
 def _resolve_prep_extraction_result(
     db: Session,
     request: PostCurationPipelineRequest,
@@ -895,12 +721,9 @@ def _resolve_prep_extraction_result(
     for record in db.scalars(statement).all():
         payload = record.payload_json if isinstance(record.payload_json, dict) else {}
         metadata = dict(record.extraction_metadata or {})
-        if request.prep_output.envelope_refs:
-            if payload.get("envelope_refs") != expected_payload.get("envelope_refs"):
-                continue
-            if payload.get("review_row_count") != expected_payload.get("review_row_count"):
-                continue
-        elif payload.get("candidates") != expected_payload["candidates"]:
+        if payload.get("envelope_refs") != expected_payload.get("envelope_refs"):
+            continue
+        if payload.get("review_row_count") != expected_payload.get("review_row_count"):
             continue
         if metadata.get("final_run_metadata") != run_metadata_payload:
             continue
@@ -922,13 +745,10 @@ def _validate_prep_extraction_result(
         raise ValueError("prep_extraction_result_id document_id does not match pipeline request")
     payload = record.payload_json if isinstance(record.payload_json, dict) else {}
     expected_payload = request.prep_output.model_dump(mode="json")
-    if request.prep_output.envelope_refs:
-        if payload.get("envelope_refs") != expected_payload.get("envelope_refs"):
-            raise ValueError("prep_extraction_result_id payload does not match the supplied prep output")
-        if payload.get("review_row_count") != expected_payload.get("review_row_count"):
-            raise ValueError("prep_extraction_result_id row count does not match the supplied prep output")
-    elif payload.get("candidates") != expected_payload["candidates"]:
+    if payload.get("envelope_refs") != expected_payload.get("envelope_refs"):
         raise ValueError("prep_extraction_result_id payload does not match the supplied prep output")
+    if payload.get("review_row_count") != expected_payload.get("review_row_count"):
+        raise ValueError("prep_extraction_result_id row count does not match the supplied prep output")
     metadata = dict(record.extraction_metadata or {})
     if metadata.get("final_run_metadata") != request.prep_output.run_metadata.model_dump(mode="json"):
         raise ValueError(
@@ -940,21 +760,7 @@ def _resolve_pipeline_adapter_key(request: PostCurationPipelineRequest) -> str:
     if request.adapter_key is not None:
         return request.adapter_key
 
-    adapter_keys = sorted({candidate.adapter_key for candidate in request.prep_output.candidates})
-    if len(adapter_keys) == 1:
-        return adapter_keys[0]
-    if not adapter_keys:
-        raise ValueError("adapter_key is required when prep_output contains no candidates")
-    raise ValueError("Deterministic pipeline requires prep candidates for exactly one adapter")
-
-
-def _validate_candidate_scope(
-    candidate: CurationPrepCandidate,
-    *,
-    adapter_key: str,
-) -> None:
-    if candidate.adapter_key != adapter_key:
-        raise ValueError("Deterministic pipeline requires prep candidates for exactly one adapter")
+    raise ValueError("adapter_key is required for domain-envelope review-row materialization")
 
 
 def _select_execution_mode(
@@ -973,9 +779,11 @@ def _select_execution_mode(
 
 
 def _prep_review_row_count(prep_output: CurationPrepAgentOutput) -> int:
-    if prep_output.envelope_refs:
-        return prep_output.review_row_count
-    return len(prep_output.candidates)
+    if not prep_output.envelope_refs:
+        raise ValueError(
+            "Domain-envelope post-curation pipeline requires prep_output.envelope_refs"
+        )
+    return prep_output.review_row_count
 
 
 def _task_name_for_request(request: PostCurationPipelineRequest) -> str:
@@ -1038,7 +846,6 @@ __all__ = [
     "CandidateNormalizationContext",
     "CurationCandidateNormalizer",
     "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
-    "DeterministicEvidenceAnchorResolver",
     "DeterministicStructuralValidationService",
     "EvidenceAnchorResolver",
     "EvidenceResolutionContext",
