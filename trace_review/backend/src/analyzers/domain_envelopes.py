@@ -631,12 +631,34 @@ class DomainEnvelopeTraceAnalyzer:
     ) -> None:
         action = _as_string(payload.get("repair_action")) or _state_value(payload.get("event_type")) or "repair"
         details = payload.get("details") if isinstance(payload.get("details"), Mapping) else {}
-        target_items = list(_iter_mappings(payload.get("targets")))
-        operation_items = list(_iter_mappings(payload.get("operations")))
+        patch = details.get("patch") if isinstance(details.get("patch"), Mapping) else {}
+        target_items = [
+            *list(_iter_mappings(payload.get("targets"))),
+            *list(_iter_mappings(details.get("targets"))),
+        ]
+        operation_items = [
+            *list(_iter_mappings(payload.get("operations"))),
+            *list(_iter_mappings(details.get("operations"))),
+            *list(_iter_mappings(patch.get("operations"))),
+        ]
+        field_update_items = [
+            *list(_iter_mappings(payload.get("field_updates"))),
+            *list(_iter_mappings(details.get("field_updates"))),
+        ]
 
         field_paths = cls._extract_field_paths(payload)
         finding_ids = cls._extract_finding_ids(payload)
         object_refs = cls._extract_object_refs(payload)
+
+        if isinstance(details, Mapping):
+            field_paths.extend(cls._extract_field_paths(details))
+            finding_ids.extend(cls._extract_finding_ids(details))
+            object_refs.extend(cls._extract_object_refs(details))
+
+        if isinstance(patch, Mapping):
+            field_paths.extend(cls._extract_field_paths(patch))
+            finding_ids.extend(cls._extract_finding_ids(patch))
+            object_refs.extend(cls._extract_object_refs(patch))
 
         for target in target_items:
             field_paths.extend(cls._extract_field_paths(target))
@@ -648,10 +670,10 @@ class DomainEnvelopeTraceAnalyzer:
             finding_ids.extend(cls._extract_finding_ids(operation))
             object_refs.extend(cls._extract_object_refs(operation))
 
-        if isinstance(details, Mapping):
-            field_paths.extend(cls._extract_field_paths(details))
-            finding_ids.extend(cls._extract_finding_ids(details))
-            object_refs.extend(cls._extract_object_refs(details))
+        for field_update in field_update_items:
+            field_paths.extend(cls._extract_field_paths(field_update))
+            finding_ids.extend(cls._extract_finding_ids(field_update))
+            object_refs.extend(cls._extract_object_refs(field_update))
 
         field_paths = cls._dedupe(field_paths)
         finding_ids = cls._dedupe(finding_ids)
@@ -669,6 +691,10 @@ class DomainEnvelopeTraceAnalyzer:
 
         retry_budget = payload.get("retry_budget")
         if not isinstance(retry_budget, Mapping):
+            retry_budget = details.get("retry_budget")
+        if not isinstance(retry_budget, Mapping):
+            retry_budget = patch.get("retry_budget")
+        if not isinstance(retry_budget, Mapping):
             retry_budget = None
             for target in target_items:
                 if isinstance(target.get("retry_budget"), Mapping):
@@ -677,11 +703,16 @@ class DomainEnvelopeTraceAnalyzer:
 
         detail = {
             "repair_action": action,
-            "envelope_id": envelope_id or _as_string(payload.get("envelope_id")),
-            "expected_revision": _as_string(payload.get("expected_revision")),
-            "patch_id": _as_string(payload.get("patch_id")),
+            "envelope_id": envelope_id
+            or _as_string(payload.get("envelope_id"))
+            or _as_string(details.get("envelope_id"))
+            or _as_string(patch.get("envelope_id")),
+            "expected_revision": _as_string(payload.get("expected_revision"))
+            or _as_string(details.get("expected_revision"))
+            or _as_string(patch.get("expected_revision")),
+            "patch_id": _as_string(payload.get("patch_id")) or _as_string(patch.get("patch_id")),
             "event_id": _as_string(payload.get("event_id")),
-            "status": _state_value(payload.get("status")),
+            "status": _state_value(payload.get("status")) or _state_value(details.get("status")),
             "classification": _state_value(payload.get("classification"))
             or _state_value(details.get("classification") if isinstance(details, Mapping) else None),
             "finding_ids": finding_ids,
