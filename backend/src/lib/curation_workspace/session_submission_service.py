@@ -1529,7 +1529,10 @@ def _default_direct_submission_target_key(
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Submission target is required when multiple direct-submit transports are configured",
+        detail=(
+            "Submission target is required when multiple direct-submit transports "
+            "are configured"
+        ),
     )
 
 

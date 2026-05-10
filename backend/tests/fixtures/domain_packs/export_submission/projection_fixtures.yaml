@@ -1,0 +1,77 @@
+disease:
+  candidate:
+    candidate_id: disease-candidate-1
+    adapter_key: disease
+    display_label: RAD52 disease annotation
+    envelope_id: disease-envelope-1
+    envelope_revision: 1
+    domain_pack_id: agr.alliance.disease
+    object_id: disease-annotation-1
+    object_type: DiseaseAnnotation
+    payload:
+      disease_annotation_subject:
+        subject_type: gene
+        subject_identifier: SGD:S000004578
+        subject_label: RAD52
+      disease_annotation_object:
+        curie: DOID:0050730
+        name: breast cancer
+      relation:
+        name: is_implicated_in
+      single_reference:
+        reference_id: 508744
+      evidence_code_curies:
+        - ECO:0000314
+      data_provider:
+        abbreviation: SGD
+      negated: false
+phenotype:
+  candidate:
+    candidate_id: phenotype-candidate-1
+    adapter_key: phenotype
+    display_label: retina phenotype annotation
+    envelope_id: phenotype-envelope-1
+    envelope_revision: 1
+    domain_pack_id: agr.alliance.phenotype
+    object_id: phenotype-annotation-1
+    object_type: PhenotypeAnnotation
+    payload:
+      phenotype_annotation_subject:
+        subject_type: agm
+        subject_identifier: MGI:6288847
+        subject_label: retina model
+        taxon: NCBITaxon:10090
+      phenotype_annotation_object: abnormal retina inner nuclear layer morphology
+      phenotype_terms:
+        - curie: MP:0003733
+          label: abnormal retina inner nuclear layer morphology
+      single_reference:
+        reference_id: 296935
+      data_provider:
+        abbreviation: MGI
+      negated: false
+chemical_condition:
+  candidate:
+    candidate_id: chemical-candidate-1
+    adapter_key: chemical
+    display_label: sirolimus condition
+    envelope_id: chemical-envelope-1
+    envelope_revision: 1
+    domain_pack_id: agr.alliance.chemical_condition
+    object_id: chemical-condition-1
+    object_type: ChemicalCondition
+    payload:
+      host_annotation_type: PhenotypeAnnotation
+      host_annotation_id: "210270365"
+      source_reference:
+        reference_id: 296935
+      condition_relation_type:
+        name: has_condition
+      condition_class:
+        curie: ZECO:0000111
+        name: chemical treatment
+      condition_chemical:
+        curie: CHEBI:9168
+        name: sirolimus
+      condition_quantity: 3 pM
+      condition_summary: chemical:sirolimus

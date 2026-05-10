@@ -261,6 +261,17 @@ def test_build_default_export_adapter_registry_exposes_reference_adapter():
     assert adapter.supported_target_keys == (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
 
 
+def test_curation_adapter_registry_rejects_none_submission_transport_entries():
+    registry = adapter_registry_module.CurationAdapterRegistry()
+
+    with pytest.raises(ValueError, match="must not contain None"):
+        registry.register_adapter(
+            adapter_key="demo",
+            candidate_normalizer=object(),
+            submission_transport_adapters=[None],
+        )
+
+
 def test_build_default_export_adapter_registry_keeps_package_export_when_agent_bundle_is_undeclared(
     tmp_path,
     monkeypatch,

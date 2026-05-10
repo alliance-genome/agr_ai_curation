@@ -21,6 +21,7 @@ class RegisteredCurationAdapter:
     adapter_key: str
     candidate_normalizer: Any
     export_adapter: Any | None = None
+    submission_transport_adapters: tuple[Any, ...] = ()
     domain_pack: Any | None = None
     review_row_materializer: Any | None = None
 
@@ -31,6 +32,7 @@ class CurationAdapterRegistry:
     def __init__(self) -> None:
         self._candidate_normalizers: dict[str, Any] = {}
         self._export_adapters: dict[str, Any] = {}
+        self._submission_transport_adapters: list[Any] = []
         self._domain_packs: dict[str, Any] = {}
         self._review_row_materializers: dict[str, Any] = {}
         self._review_row_materializers_by_domain_pack: dict[str, Any] = {}
@@ -41,6 +43,7 @@ class CurationAdapterRegistry:
         adapter_key: str,
         candidate_normalizer: Any,
         export_adapter: Any | None = None,
+        submission_transport_adapters: Any | None = None,
         domain_pack: Any | None = None,
         review_row_materializer: Any | None = None,
     ) -> None:
@@ -58,6 +61,12 @@ class CurationAdapterRegistry:
             if existing_export_adapter is not None and existing_export_adapter is not export_adapter:
                 raise ValueError(f"Curation export adapter '{normalized_key}' is already registered")
             self._export_adapters[normalized_key] = export_adapter
+
+        for submission_adapter in _normalize_submission_transport_adapters(
+            submission_transport_adapters,
+        ):
+            if submission_adapter not in self._submission_transport_adapters:
+                self._submission_transport_adapters.append(submission_adapter)
 
         if domain_pack is not None:
             existing_domain_pack = self._domain_packs.get(normalized_key)
@@ -123,8 +132,22 @@ class CurationAdapterRegistry:
             for adapter_key in sorted(self._export_adapters)
         )
 
+    def submission_transport_adapters(self) -> tuple[Any, ...]:
+        return tuple(self._submission_transport_adapters)
+
     def adapter_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self._candidate_normalizers))
+
+
+def _normalize_submission_transport_adapters(value: Any | None) -> tuple[Any, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        normalized = tuple(value)
+        if any(item is None for item in normalized):
+            raise ValueError("submission_transport_adapters must not contain None")
+        return normalized
+    return (value,)
 
 
 def _domain_pack_id(domain_pack: Any | None) -> str | None:

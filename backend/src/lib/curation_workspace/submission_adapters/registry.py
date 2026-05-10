@@ -56,8 +56,11 @@ class SubmissionAdapterRegistry:
 def build_default_submission_adapter_registry() -> SubmissionAdapterRegistry:
     """Build the default submission registry for workspace-backed transports."""
 
+    from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
+
     return SubmissionAdapterRegistry(
         adapters=(
             NoOpSubmissionAdapter(target_key=DEFAULT_NOOP_SUBMISSION_TARGET_KEY),
+            *load_curation_adapter_registry().submission_transport_adapters(),
         )
     )

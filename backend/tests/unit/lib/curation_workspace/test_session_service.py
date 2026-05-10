@@ -1795,10 +1795,23 @@ def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_se
     assert response.submission.payload.payload_text is None
 
 
-def test_direct_submission_preview_defaults_to_configured_transport_target(db_session):
+def test_direct_submission_preview_defaults_when_one_transport_target_is_configured(
+    db_session,
+    monkeypatch,
+):
     seeded = _create_decision_session(
         db_session,
         first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+
+    class StubSubmissionAdapterRegistry:
+        def target_keys(self):
+            return (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
+
+    monkeypatch.setattr(
+        submission_module,
+        "_submission_adapter_registry",
+        lambda: StubSubmissionAdapterRegistry(),
     )
 
     response = module.submission_preview(
@@ -1816,6 +1829,41 @@ def test_direct_submission_preview_defaults_to_configured_transport_target(db_se
     assert response.submission.payload.mode == SubmissionMode.DIRECT_SUBMIT
     assert response.submission.payload.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
     assert response.submission.payload.candidate_ids == [seeded["first_candidate_id"]]
+
+
+def test_direct_submission_preview_requires_target_when_multiple_transports_are_configured(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+
+    class StubSubmissionAdapterRegistry:
+        def target_keys(self):
+            return (DEFAULT_JSON_BUNDLE_TARGET_KEY, "verified_downstream_target")
+
+    monkeypatch.setattr(
+        submission_module,
+        "_submission_adapter_registry",
+        lambda: StubSubmissionAdapterRegistry(),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.submission_preview(
+            db_session,
+            seeded["session_id"],
+            CurationSubmissionPreviewRequest(
+                session_id=seeded["session_id"],
+                mode=SubmissionMode.DIRECT_SUBMIT,
+            ),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == (
+        "Submission target is required when multiple direct-submit transports are configured"
+    )
 
 
 def test_submission_preview_routes_payload_generation_through_submission_adapter(
