@@ -11,6 +11,10 @@ exports:
     name: default
     path: tools/bindings.yaml
     description: Default AGR Alliance specialist tool bindings
+  - kind: tool_policy_defaults
+    name: default_tool_policies
+    path: config/tool_policy_defaults.yaml
+    description: Default AGR Alliance specialist tool policy defaults
   - kind: curation_adapter
     name: default
     path: python/src/agr_ai_curation_alliance/curation_adapters.py

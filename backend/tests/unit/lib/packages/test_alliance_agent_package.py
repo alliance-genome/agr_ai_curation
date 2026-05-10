@@ -72,6 +72,11 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
     expected_exports = {
         (ExportKind.TOOL_BINDING, "default", "tools/bindings.yaml"),
         (
+            ExportKind.TOOL_POLICY_DEFAULTS,
+            "default_tool_policies",
+            "config/tool_policy_defaults.yaml",
+        ),
+        (
             ExportKind.CURATION_ADAPTER,
             "default",
             "python/src/agr_ai_curation_alliance/curation_adapters.py",

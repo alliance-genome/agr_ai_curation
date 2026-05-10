@@ -532,6 +532,7 @@ metadata:
       definition_state: in_development
     - binding_id: phenotype_subject_entity_validator
       validation_kind: db_backed_entity_lookup
+      provider: alliance_curation_db
       input_fields:
         subject_identifier: PhenotypeSubject.subject_identifier
         subject_type: PhenotypeSubject.subject_type
@@ -544,6 +545,7 @@ metadata:
       definition_state: in_development
     - binding_id: phenotype_term_ontology_validator
       validation_kind: db_backed_ontology_lookup
+      provider: alliance_curation_db
       input_fields:
         term_curie: PhenotypeTerm.curie
       expected_db_target: public.phenotypeannotation_ontologyterm.phenotypeterms_id
@@ -551,6 +553,7 @@ metadata:
       definition_state: in_development
     - binding_id: phenotype_reference_validator
       validation_kind: db_backed_reference_lookup
+      provider: alliance_curation_db
       input_fields:
         reference_id: Reference.reference_id
       expected_db_target: public.phenotypeannotation.evidenceitem_id

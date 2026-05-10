@@ -598,7 +598,6 @@ def _lookup_attempt_for_match(
     if input_fields:
         attempted_query["input_fields"] = input_fields
     provider_projection = dict(binding.provider_projection)
-    provider = provider_projection.get("provider") or _provider_for_binding(binding)
     return {
         "source": {
             "validator_binding_id": binding.binding_id,
@@ -606,7 +605,7 @@ def _lookup_attempt_for_match(
             "tool_method": binding.tool_method,
             "validator": binding.validator,
         },
-        "provider": provider,
+        "provider": provider_projection.get("provider"),
         "target_projection": provider_projection or None,
         "attempted_query": {
             key: value for key, value in attempted_query.items() if value is not None
@@ -617,14 +616,6 @@ def _lookup_attempt_for_match(
         "resolved_label": None,
         "explanation": explanation,
     }
-
-
-def _provider_for_binding(binding: ValidatorBinding) -> str | None:
-    if binding.validation_kind and (
-        "curation_db" in binding.validation_kind or "db_backed" in binding.validation_kind
-    ):
-        return "alliance_curation_db"
-    return None
 
 
 def _attempt_input_fields(match: ValidatorBindingMatch) -> dict[str, Any]:

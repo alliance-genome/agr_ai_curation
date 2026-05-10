@@ -807,6 +807,7 @@ metadata:
       definition_state: in_development
     - binding_id: disease_ontology_term_lookup
       validation_kind: curation_db_reference_lookup
+      provider: alliance_curation_db
       status: planned
       table: public.ontologyterm
       input_fields:
@@ -818,6 +819,7 @@ metadata:
         ontologytermtype: DOTerm
     - binding_id: disease_relation_cv_lookup
       validation_kind: curation_db_reference_lookup
+      provider: alliance_curation_db
       status: planned
       table: public.vocabularyterm
       input_fields:
@@ -827,6 +829,7 @@ metadata:
         vocabulary_name: Disease Relation
     - binding_id: disease_experimental_condition_lookup
       validation_kind: curation_db_reference_lookup
+      provider: alliance_curation_db
       status: planned
       tables:
         - public.conditionrelation
@@ -834,6 +837,7 @@ metadata:
         - public.ontologyterm
     - binding_id: disease_condition_relation_lookup
       validation_kind: curation_db_reference_lookup
+      provider: alliance_curation_db
       status: planned
       tables:
         - public.conditionrelation
@@ -845,10 +849,12 @@ metadata:
         vocabulary_name: Condition Relation Type
     - binding_id: disease_subject_materialization
       validation_kind: curation_db_reference_lookup
+      provider: alliance_curation_db
       status: blocked
       blocked_by: ALL-410
     - binding_id: disease_reference_materialization
       validation_kind: curation_db_reference_lookup
+      provider: alliance_curation_db
       status: blocked
       blocked_by: ALL-425
       table: public.informationcontententity
@@ -858,6 +864,7 @@ metadata:
         curie: single_reference.curie
     - binding_id: disease_evidence_code_lookup
       validation_kind: curation_db_reference_lookup
+      provider: alliance_curation_db
       status: blocked
       blocked_by: ALL-425
       table: public.ontologyterm
@@ -868,6 +875,7 @@ metadata:
         ontologytermtype: ECOTerm
     - binding_id: disease_data_provider_lookup
       validation_kind: curation_db_reference_lookup
+      provider: alliance_curation_db
       status: blocked
       blocked_by: ALL-425
       tables:

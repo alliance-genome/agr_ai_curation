@@ -619,19 +619,29 @@ def _chunk_values(values: List[str], chunk_size: int = 200) -> List[List[str]]:
     return [values[i:i + chunk_size] for i in range(0, len(values), chunk_size)]
 
 
+def _create_db_session(db: Any) -> Any | None:
+    create_session = getattr(db, "create_session", None)
+    if not callable(create_session):
+        return None
+    return create_session()
+
+
 def _fetch_gene_details_bulk(db: Any, gene_curies: List[str]) -> Dict[str, Dict[str, Any]]:
     """Fetch gene details in one query when possible, fallback to per-CURIE fetches."""
     unique_curies = list(dict.fromkeys(curie for curie in gene_curies if curie))
     if not unique_curies:
         return {}
 
-    # Best path: one SQL batch lookup via db_methods session internals.
-    if hasattr(db, "_create_session"):
+    try:
+        session = _create_db_session(db)
+    except Exception as exc:
+        logger.warning("Batch gene detail session creation failed: %s", exc)
+        session = None
+    if session is not None:
         try:
             from sqlalchemy import text
 
             details: Dict[str, Dict[str, Any]] = {}
-            session = db._create_session()
             try:
                 sql_query = text(
                     """
@@ -701,13 +711,16 @@ def _fetch_allele_details_bulk(db: Any, allele_curies: List[str]) -> Dict[str, D
     if not unique_curies:
         return {}
 
-    # Best path: one SQL batch lookup via db_methods session internals.
-    if hasattr(db, "_create_session"):
+    try:
+        session = _create_db_session(db)
+    except Exception as exc:
+        logger.warning("Batch allele detail session creation failed: %s", exc)
+        session = None
+    if session is not None:
         try:
             from sqlalchemy import text
 
             details: Dict[str, Dict[str, Any]] = {}
-            session = db._create_session()
             try:
                 sql_query = text(
                     """
@@ -2149,7 +2162,8 @@ def agr_curation_query(
                         ontology_term_type=ontology_term_type,
                     ),
                 )
-            if not hasattr(db, "_create_session"):
+            session = _create_db_session(db)
+            if session is None:
                 return _err(
                     "get_ontology_term_by_curie requires a curation DB client with SQL session support.",
                     method=method,
@@ -2163,7 +2177,6 @@ def agr_curation_query(
 
             from sqlalchemy import text
 
-            session = db._create_session()
             try:
                 rows = session.execute(
                     text(

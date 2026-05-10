@@ -678,7 +678,7 @@ def _collect_validator_bindings(
 
 def _provider_projection(raw_item: Mapping[str, Any]) -> dict[str, Any]:
     validation_kind = _optional_string(raw_item.get("validation_kind"))
-    provider = _projection_provider(raw_item, validation_kind)
+    provider = _projection_provider(raw_item)
     provider_fields = _provider_projection_fields(raw_item)
     target: dict[str, Any] = {}
     input_fields = _optional_mapping(raw_item.get("input_fields"), "input_fields")
@@ -703,28 +703,8 @@ def _provider_projection(raw_item: Mapping[str, Any]) -> dict[str, Any]:
     return projection
 
 
-def _projection_provider(
-    raw_item: Mapping[str, Any],
-    validation_kind: str | None,
-) -> str | None:
-    raw_provider = _optional_string(raw_item.get("provider"))
-    if raw_provider:
-        return raw_provider
-    provider_keys = {
-        "table",
-        "tables",
-        "expected_db_target",
-        "expected_db_targets",
-    }
-    if provider_keys.intersection(raw_item):
-        return "alliance_curation_db"
-    if validation_kind and (
-        "curation_db" in validation_kind or "db_backed" in validation_kind
-    ):
-        return "alliance_curation_db"
-    if validation_kind and "ontology" in validation_kind:
-        return "ontology_provider"
-    return None
+def _projection_provider(raw_item: Mapping[str, Any]) -> str | None:
+    return _optional_string(raw_item.get("provider"))
 
 
 def _provider_projection_fields(raw_item: Mapping[str, Any]) -> dict[str, Any]:

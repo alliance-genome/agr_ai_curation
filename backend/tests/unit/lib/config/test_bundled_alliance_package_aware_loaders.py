@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
+from src.lib.config.tool_policy_defaults_loader import load_tool_policy_defaults
 from src.schemas.models import DomainEnvelopeExtractionResult
 
 from ..packages import find_repo_root
@@ -79,6 +80,17 @@ def test_bundled_alliance_allele_extractor_declares_record_evidence(monkeypatch)
         "record_evidence",
         "agr_curation_query",
     ]
+
+
+def test_bundled_alliance_owns_agr_curation_tool_policy(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    policies = load_tool_policy_defaults(packages_dir=REPO_PACKAGES_DIR)
+
+    policy = policies["agr_curation_query"]
+    assert policy.display_name == "AGR Curation Query"
+    assert policy.source_label is not None
+    assert "package default 'agr.alliance'" in policy.source_label
 
 
 def test_bundled_alliance_gene_extractor_prompt_teaches_verified_evidence_flow(monkeypatch):

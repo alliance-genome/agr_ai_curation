@@ -455,7 +455,7 @@ def test_query_ontology_term_by_curie_uses_structured_lookup(monkeypatch):
 
     class FakeDb:
         @staticmethod
-        def _create_session():
+        def create_session():
             return FakeSession()
 
     class Resolver:
