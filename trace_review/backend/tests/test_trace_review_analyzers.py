@@ -2,6 +2,7 @@ import json
 import unittest
 
 from src.analyzers.conversation import ConversationAnalyzer
+from src.analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from src.analyzers.pdf_citations import PDFCitationsAnalyzer
 from src.analyzers.tool_calls import ToolCallAnalyzer
 from src.analyzers.trace_summary import TraceSummaryAnalyzer
@@ -443,6 +444,34 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(domain["definition_state_flags"][0]["object_id"], "gene-expression-object-1")
         self.assertEqual(domain["curator_edits"][0]["field_path"], "gene.symbol")
         self.assertEqual(summary["tool_summary"]["domain_envelope_tool_call_count"], 1)
+
+    def test_domain_envelope_analyzer_reports_top_level_curatable_objects(self):
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload({
+            "curatable_objects": [
+                {
+                    "pending_ref_id": "pending-gene-expression-1",
+                    "object_type": "gene_expression",
+                    "payload": {"gene": {"symbol": "tmem67"}},
+                    "field_refs": [
+                        {
+                            "object_ref": {
+                                "pending_ref_id": "pending-gene-expression-1",
+                                "object_type": "gene_expression",
+                            },
+                            "field_path": "gene.symbol",
+                        }
+                    ],
+                }
+            ]
+        })
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["summary"]["object_count"], 1)
+        self.assertEqual(domain["object_ids"], [])
+        self.assertEqual(domain["pending_ref_ids"], ["pending-gene-expression-1"])
+        self.assertIn("gene.symbol", domain["field_paths"])
+        self.assertEqual(domain["objects"][0]["pending_ref_id"], "pending-gene-expression-1")
+        self.assertEqual(domain["objects"][0]["source_path"], "payload.curatable_objects[0]")
 
     def test_tool_calls_report_domain_envelope_projection_blocker_and_submission_state(self):
         data = ToolCallAnalyzer.extract_tool_calls(self._make_domain_envelope_tool_observations())

@@ -186,6 +186,9 @@ class DomainEnvelopeTraceAnalyzer:
             "_seen": {},
             "_definition_state_counter": Counter(),
             "_validation_state_counter": Counter(),
+            "_nested_envelope_object_paths": set(),
+            "_nested_envelope_finding_paths": set(),
+            "_nested_envelope_history_paths": set(),
         }
 
     @classmethod
@@ -222,17 +225,17 @@ class DomainEnvelopeTraceAnalyzer:
         object_id, pending_ref_id, object_type = cls._object_reference(payload)
         finding_id = _as_string(payload.get("finding_id"))
         field_path = cls._field_path(payload)
-        nested_envelope_object = (
-            envelope_id is None
-            and _path_contains(source_path, ".objects[", ".curatable_objects[")
+        nested_envelope_object = cls._is_marked_nested_path(
+            source_path,
+            accumulator["_nested_envelope_object_paths"],
         )
-        nested_envelope_finding = (
-            envelope_id is None
-            and _path_contains(source_path, ".validation_findings[")
+        nested_envelope_finding = cls._is_marked_nested_path(
+            source_path,
+            accumulator["_nested_envelope_finding_paths"],
         )
-        nested_envelope_history = (
-            envelope_id is None
-            and _path_contains(source_path, ".history[")
+        nested_envelope_history = cls._is_marked_nested_path(
+            source_path,
+            accumulator["_nested_envelope_history_paths"],
         )
 
         cls._add_unique(accumulator, "envelope_ids", envelope_id)
@@ -263,7 +266,7 @@ class DomainEnvelopeTraceAnalyzer:
         if cls._looks_like_envelope(payload):
             cls._record_envelope(accumulator, payload, source_path)
 
-        if cls._looks_like_object(payload) and not nested_envelope_object:
+        if cls._looks_like_object(payload, source_path) and not nested_envelope_object:
             cls._record_object(
                 accumulator,
                 payload,
@@ -305,16 +308,43 @@ class DomainEnvelopeTraceAnalyzer:
         )
 
     @staticmethod
-    def _looks_like_object(payload: Mapping[str, Any]) -> bool:
+    def _is_collection_item_path(source_path: str, *collection_names: str) -> bool:
+        for collection_name in collection_names:
+            marker = f".{collection_name}["
+            marker_index = source_path.rfind(marker)
+            if marker_index == -1:
+                continue
+            suffix = source_path[marker_index + len(marker):]
+            if suffix.endswith("]") and suffix[:-1].isdigit():
+                return True
+        return False
+
+    @staticmethod
+    def _is_marked_nested_path(source_path: str, marker_paths: set[str]) -> bool:
+        return any(
+            source_path == marker_path or source_path.startswith(f"{marker_path}.")
+            for marker_path in marker_paths
+        )
+
+    @classmethod
+    def _looks_like_object(cls, payload: Mapping[str, Any], source_path: str) -> bool:
         has_identity = "object_id" in payload or "pending_ref_id" in payload
         has_object_shape = (
-            "object_type" in payload
-            or "payload" in payload
+            "payload" in payload
+            or "object_role" in payload
+            or "schema_ref" in payload
+            or "model_ref" in payload
+            or "status" in payload
+            or "definition_state" in payload
+            or "object_refs" in payload
+            or "metadata_refs" in payload
             or "evidence_record_ids" in payload
             or "field_refs" in payload
             or "repair_hints" in payload
             or "validation_state" in payload
         )
+        if has_identity and cls._is_collection_item_path(source_path, "objects", "curatable_objects"):
+            return True
         return has_identity and has_object_shape
 
     @staticmethod
@@ -392,9 +422,11 @@ class DomainEnvelopeTraceAnalyzer:
         if envelope_id is None:
             return
 
-        objects = envelope.get("objects")
+        objects_key = "objects"
+        objects = envelope.get(objects_key)
         if not isinstance(objects, list):
-            objects = envelope.get("curatable_objects")
+            objects_key = "curatable_objects"
+            objects = envelope.get(objects_key)
         object_items = list(_iter_mappings(objects))
 
         findings = list(_iter_mappings(envelope.get("validation_findings")))
@@ -442,23 +474,28 @@ class DomainEnvelopeTraceAnalyzer:
                 )
 
         for index, obj in enumerate(object_items):
+            object_path = f"{source_path}.{objects_key}[{index}]"
+            accumulator["_nested_envelope_object_paths"].add(object_path)
             cls._record_object(
                 accumulator,
                 obj,
-                source_path=f"{source_path}.objects[{index}]",
+                source_path=object_path,
                 envelope_id=envelope_id,
             )
 
         for index, finding in enumerate(findings):
+            finding_path = f"{source_path}.validation_findings[{index}]"
+            accumulator["_nested_envelope_finding_paths"].add(finding_path)
             cls._record_finding(
                 accumulator,
                 finding,
-                source_path=f"{source_path}.validation_findings[{index}]",
+                source_path=finding_path,
                 envelope_id=envelope_id,
             )
 
         for index, event in enumerate(history):
             event_path = f"{source_path}.history[{index}]"
+            accumulator["_nested_envelope_history_paths"].add(event_path)
             if cls._looks_like_repair(event):
                 cls._record_repair_attempt(accumulator, event, event_path, envelope_id=envelope_id)
             if cls._looks_like_curator_edit(event):
@@ -996,4 +1033,7 @@ class DomainEnvelopeTraceAnalyzer:
         accumulator.pop("_seen", None)
         accumulator.pop("_definition_state_counter", None)
         accumulator.pop("_validation_state_counter", None)
+        accumulator.pop("_nested_envelope_object_paths", None)
+        accumulator.pop("_nested_envelope_finding_paths", None)
+        accumulator.pop("_nested_envelope_history_paths", None)
         return accumulator
