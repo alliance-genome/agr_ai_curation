@@ -66,11 +66,11 @@ from src.schemas.curation_workspace import (
     CurationSessionStatus,
     CurationSessionSummary,
     CurationSortDirection,
+    CurationValidationSnapshotState,
     CurationWorkspace as CurationWorkspacePayload,
     CurationWorkspaceResponse,
     DomainEnvelopeEvidenceAnchorProjection,
     DomainEnvelopeValidationSummaryProjection,
-    CurationValidationSnapshotState,
 )
 
 STATUS_SORT_ORDER = case(

@@ -300,6 +300,18 @@ def _candidate_domain_envelope(candidate: CurationCandidate) -> DomainEnvelope |
 def _candidate_envelope_revision(candidate: CurationCandidate) -> int:
     envelope_row = candidate.domain_envelope
     if envelope_row is not None:
+        if (
+            candidate.envelope_revision is not None
+            and candidate.envelope_revision != envelope_row.revision
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=(
+                    f"Curation candidate {candidate.id} envelope revision "
+                    f"{candidate.envelope_revision} does not match domain envelope "
+                    f"revision {envelope_row.revision}"
+                ),
+            )
         return envelope_row.revision
     if candidate.envelope_revision is None:
         raise HTTPException(

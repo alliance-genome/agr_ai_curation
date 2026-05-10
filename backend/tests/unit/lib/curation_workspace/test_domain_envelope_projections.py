@@ -5,6 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from fastapi import HTTPException
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import create_engine
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgresUUID
@@ -129,7 +132,7 @@ def _envelope() -> DomainEnvelope:
                 object_type="GeneAssertion",
                 object_id="gene-1",
                 payload={
-                    "gene": {"symbol": "abc-1", "curie": "WB:WBGene00000001"},
+                    "gene": {"symbol": "abc-1", "curie": "TEST:Gene00000001"},
                     "evidence": {"score": 0.95},
                 },
                 evidence_record_ids=["evidence-1"],
@@ -327,6 +330,43 @@ def test_evidence_anchor_projection_resolves_object_metadata_refs():
     assert projection.document_id == "document-from-session"
 
 
+def test_evidence_anchor_projection_rejects_invalid_structured_anchor():
+    envelope = DomainEnvelope(
+        envelope_id="env-invalid-anchor",
+        domain_pack_id="fixture-pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                object_id="gene-1",
+                payload={"gene": {"symbol": "abc-1"}},
+                evidence_record_ids=["evidence-invalid-anchor"],
+            )
+        ],
+        metadata={
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-invalid-anchor",
+                    "verified_quote": "abc-1 appeared in the source text.",
+                    "field_path": "gene.symbol",
+                    "anchor": {
+                        "anchor_kind": "snippet",
+                        "locator_quality": "exact_quote",
+                        "supports_decision": "supports",
+                        "unexpected": "not part of the evidence anchor contract",
+                    },
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(ValidationError, match="unexpected"):
+        project_evidence_anchor_projections(
+            envelope,
+            envelope_revision=2,
+            object_id="gene-1",
+        )
+
+
 def test_validation_summary_projection_groups_states_by_object_and_field():
     summaries = project_validation_summary_projections(
         _envelope(),
@@ -475,6 +515,11 @@ def test_workspace_response_includes_domain_envelope_projections():
         }
         assert candidate_payload.projection_ref is not None
         assert candidate_payload.projection_ref.envelope_revision == 3
+
+        candidate.envelope_revision = 4
+        db_session.commit()
+        with pytest.raises(HTTPException, match="does not match domain envelope revision"):
+            session_service.get_session_workspace(db_session, str(review_session.id))
     finally:
         try:
             next(session_iter)

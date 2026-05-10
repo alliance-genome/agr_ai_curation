@@ -448,8 +448,6 @@ def _projection_ref_from_item(
 ) -> tuple[str | None, str | None, int | None]:
     raw_projection_ref = raw_item.get("domain_envelope_projection_ref")
     if raw_projection_ref is None:
-        raw_projection_ref = raw_item.get("projection_ref")
-    if raw_projection_ref is None:
         return None, None, None
     if not isinstance(raw_projection_ref, Mapping):
         raise ValueError("domain envelope projection_ref must be a JSON object")

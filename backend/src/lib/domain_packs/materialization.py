@@ -306,10 +306,7 @@ def _evidence_anchor_projection(
 def _evidence_anchor(evidence_record: Mapping[str, Any]) -> EvidenceAnchor:
     raw_anchor = evidence_record.get("anchor")
     if isinstance(raw_anchor, Mapping):
-        try:
-            return EvidenceAnchor.model_validate(dict(raw_anchor))
-        except Exception:
-            pass
+        return EvidenceAnchor.model_validate(dict(raw_anchor))
 
     quote = _first_string(
         evidence_record,

@@ -526,6 +526,32 @@ def test_candidate_blueprints_preserve_domain_envelope_projection_ref():
     assert "domain_envelope_projection_ref" not in blueprints[0].payload
 
 
+def test_candidate_blueprints_do_not_accept_projection_ref_alias():
+    extraction_result = _make_extraction_result(
+        items=[
+            {
+                **_make_item(label="Projected Candidate"),
+                "projection_ref": {
+                    "envelope_id": "env-1",
+                    "object_id": "object-1",
+                    "envelope_revision": 4,
+                },
+            }
+        ]
+    )
+
+    blueprints = module._candidate_blueprints(  # noqa: SLF001
+        extraction_result,
+        extraction_result.payload_json,
+        candidate_adapter_key="observation",
+    )
+
+    assert len(blueprints) == 1
+    assert blueprints[0].envelope_id is None
+    assert blueprints[0].object_id is None
+    assert blueprints[0].envelope_revision is None
+
+
 @pytest.mark.asyncio
 async def test_run_curation_prep_maps_allele_candidates_from_domain_envelope_objects(monkeypatch):
     first = _make_allele_domain_payload(
