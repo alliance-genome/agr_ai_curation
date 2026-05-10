@@ -229,19 +229,7 @@ def summarize_curation_prep_scope(
             envelope_ref.review_row_count
             for envelope_ref in materialization_result.envelope_refs
         )
-        if candidate_count == 0:
-            legacy_mapper_result = _map_extraction_results_to_candidates(
-                scoped_results,
-                scope_notes=scope_notes,
-            )
-            candidate_count = len(legacy_mapper_result.candidates)
-            if candidate_count > 0:
-                warnings.extend(legacy_mapper_result.warnings)
-            else:
-                warnings.extend(materialization_result.warnings)
-                warnings.extend(legacy_mapper_result.warnings)
-        else:
-            warnings.extend(materialization_result.warnings)
+        warnings.extend(materialization_result.warnings)
         if candidate_count > 0:
             preparable_adapter_keys.append(adapter_key)
             total_candidate_count += candidate_count

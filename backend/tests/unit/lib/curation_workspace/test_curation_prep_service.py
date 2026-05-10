@@ -359,6 +359,26 @@ def test_summarize_curation_prep_scope_counts_materialized_envelope_rows(monkeyp
     assert summary.warnings == []
 
 
+def test_summarize_curation_prep_scope_rejects_legacy_items_as_semantic_source(
+    monkeypatch,
+):
+    extraction_result = _make_extraction_result(adapter_key="gene")
+
+    def _raise_legacy_mapper(*_args, **_kwargs):
+        raise AssertionError("legacy prep candidates must not determine prep readiness")
+
+    monkeypatch.setattr(module, "_map_extraction_results_to_candidates", _raise_legacy_mapper)
+
+    summary = module.summarize_curation_prep_scope(
+        [extraction_result],
+        adapter_keys=["gene"],
+    )
+
+    assert summary.candidate_count == 0
+    assert summary.adapter_keys == []
+    assert any("curatable_objects[]" in warning for warning in summary.warnings)
+
+
 @pytest.mark.asyncio
 async def test_run_curation_prep_rejects_mismatched_document_id_override(monkeypatch):
     extraction_result = _make_domain_envelope_extraction_result()
