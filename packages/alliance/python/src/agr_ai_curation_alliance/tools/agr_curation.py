@@ -298,6 +298,72 @@ def _lookup_attempt(
     return payload
 
 
+def _detail_fetch_failure(
+    lookup_status: str,
+    *,
+    error: Optional[BaseException] = None,
+) -> Dict[str, Any]:
+    failure: Dict[str, Any] = {"lookup_status": lookup_status}
+    if error is not None:
+        failure["error"] = error
+    return failure
+
+
+def _entity_detail_lookup_attempt(
+    *,
+    method: str,
+    entity_kind: str,
+    input_symbol: str,
+    curie: str,
+    taxon_id: str,
+    matched_entity: Optional[str],
+    match_type: Optional[str],
+    lookup_status: str,
+    error: Optional[BaseException] = None,
+) -> Dict[str, Any]:
+    symbol_field = f"{entity_kind}_symbol"
+    id_field = f"{entity_kind}_id"
+    lookup_stage = f"fetch_{entity_kind}_details"
+    target_projection = _projection_from_result(
+        method,
+        _clean_mapping(
+            {
+                "curie": curie,
+                "symbol": matched_entity,
+                "taxon": taxon_id,
+                "match_type": match_type,
+            }
+        ),
+    )
+    explanation = (
+        f"{entity_kind.title()} search for {input_symbol!r} matched {curie!r} "
+        f"in taxon {taxon_id}, but no resolved {entity_kind} details were returned."
+    )
+    if lookup_status == LOOKUP_STATUS_TRANSIENT:
+        explanation = (
+            f"{entity_kind.title()} search for {input_symbol!r} matched {curie!r} "
+            f"in taxon {taxon_id}, but fetching resolved {entity_kind} details failed."
+        )
+    return _lookup_attempt(
+        method=method,
+        attempted_query=_attempt_query(
+            method,
+            **{
+                symbol_field: input_symbol,
+                id_field: curie,
+                "taxon_id": taxon_id,
+                "data_provider": TAXON_TO_PROVIDER.get(taxon_id),
+                "lookup_stage": lookup_stage,
+            },
+        ),
+        lookup_status=lookup_status,
+        explanation=explanation,
+        candidate_count=1,
+        target_projection=target_projection,
+        error=error,
+    )
+
+
 def _lookup_status_from_count(
     count: int,
     *,
@@ -652,21 +718,25 @@ def _create_db_session(db: Any) -> Any | None:
     return create_session()
 
 
-def _fetch_gene_details_bulk(db: Any, gene_curies: List[str]) -> Dict[str, Dict[str, Any]]:
-    """Fetch gene details in one query when possible, fallback to per-CURIE fetches."""
+def _fetch_gene_details_bulk(
+    db: Any,
+    gene_curies: List[str],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """Fetch gene details and classify unresolved per-CURIE detail lookups."""
     unique_curies = list(dict.fromkeys(curie for curie in gene_curies if curie))
     if not unique_curies:
-        return {}
+        return {}, {}
 
+    detail_failures: Dict[str, Dict[str, Any]] = {}
     try:
+        from sqlalchemy import text
+
         session = _create_db_session(db)
     except Exception as exc:
-        logger.warning("Batch gene detail session creation failed: %s", exc)
+        logger.warning("Batch gene detail setup failed: %s", exc)
         session = None
     if session is not None:
         try:
-            from sqlalchemy import text
-
             details: Dict[str, Dict[str, Any]] = {}
             try:
                 sql_query = text(
@@ -704,7 +774,12 @@ def _fetch_gene_details_bulk(db: Any, gene_curies: List[str]) -> Dict[str, Dict[
                 session.close()
 
             if details:
-                return details
+                for curie in unique_curies:
+                    if curie not in details:
+                        detail_failures[curie] = _detail_fetch_failure(
+                            LOOKUP_STATUS_NOT_FOUND
+                        )
+                return details, detail_failures
         except Exception as exc:
             logger.warning("Batch gene detail fetch failed, falling back to per-CURIE lookups: %s", exc)
 
@@ -714,8 +789,13 @@ def _fetch_gene_details_bulk(db: Any, gene_curies: List[str]) -> Dict[str, Dict[
             gene = db.get_gene(curie)
         except Exception as exc:
             logger.warning("Failed to fetch gene details for %s: %s", curie, exc)
+            detail_failures[curie] = _detail_fetch_failure(
+                LOOKUP_STATUS_TRANSIENT,
+                error=exc,
+            )
             continue
         if not gene:
+            detail_failures[curie] = _detail_fetch_failure(LOOKUP_STATUS_NOT_FOUND)
             continue
         details[curie] = {
             "curie": getattr(gene, "primaryExternalId", curie),
@@ -728,24 +808,28 @@ def _fetch_gene_details_bulk(db: Any, gene_curies: List[str]) -> Dict[str, Dict[
                 else str(gene.geneType) if getattr(gene, "geneType", None) else None
             ),
         }
-    return details
+    return details, detail_failures
 
 
-def _fetch_allele_details_bulk(db: Any, allele_curies: List[str]) -> Dict[str, Dict[str, Any]]:
-    """Fetch allele details in one query when possible, fallback to per-CURIE fetches."""
+def _fetch_allele_details_bulk(
+    db: Any,
+    allele_curies: List[str],
+) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
+    """Fetch allele details and classify unresolved per-CURIE detail lookups."""
     unique_curies = list(dict.fromkeys(curie for curie in allele_curies if curie))
     if not unique_curies:
-        return {}
+        return {}, {}
 
+    detail_failures: Dict[str, Dict[str, Any]] = {}
     try:
+        from sqlalchemy import text
+
         session = _create_db_session(db)
     except Exception as exc:
-        logger.warning("Batch allele detail session creation failed: %s", exc)
+        logger.warning("Batch allele detail setup failed: %s", exc)
         session = None
     if session is not None:
         try:
-            from sqlalchemy import text
-
             details: Dict[str, Dict[str, Any]] = {}
             try:
                 sql_query = text(
@@ -780,7 +864,12 @@ def _fetch_allele_details_bulk(db: Any, allele_curies: List[str]) -> Dict[str, D
                 session.close()
 
             if details:
-                return details
+                for curie in unique_curies:
+                    if curie not in details:
+                        detail_failures[curie] = _detail_fetch_failure(
+                            LOOKUP_STATUS_NOT_FOUND
+                        )
+                return details, detail_failures
         except Exception as exc:
             logger.warning("Batch allele detail fetch failed, falling back to per-CURIE lookups: %s", exc)
 
@@ -790,8 +879,13 @@ def _fetch_allele_details_bulk(db: Any, allele_curies: List[str]) -> Dict[str, D
             allele = db.get_allele(curie)
         except Exception as exc:
             logger.warning("Failed to fetch allele details for %s: %s", curie, exc)
+            detail_failures[curie] = _detail_fetch_failure(
+                LOOKUP_STATUS_TRANSIENT,
+                error=exc,
+            )
             continue
         if not allele:
+            detail_failures[curie] = _detail_fetch_failure(LOOKUP_STATUS_NOT_FOUND)
             continue
         details[curie] = {
             "curie": getattr(allele, "primaryExternalId", curie),
@@ -799,7 +893,7 @@ def _fetch_allele_details_bulk(db: Any, allele_curies: List[str]) -> Dict[str, D
             "name": allele.alleleFullName.displayText if getattr(allele, "alleleFullName", None) else None,
             "taxon": getattr(allele, "taxon", None),
         }
-    return details
+    return details, detail_failures
 
 
 @function_tool(strict_mode=False)
@@ -1257,12 +1351,32 @@ def agr_curation_query(
                     )
 
             gene_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            gene_detail_failures_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
             for tid, curies in gene_curies_by_taxon.items():
-                gene_details_by_taxon[tid] = _fetch_gene_details_bulk(db, curies)
+                details, detail_failures = _fetch_gene_details_bulk(db, curies)
+                gene_details_by_taxon[tid] = details
+                gene_detail_failures_by_taxon[tid] = detail_failures
 
             for match in pending_matches:
                 detail = gene_details_by_taxon.get(match["taxon"], {}).get(match["curie"])
                 if not detail:
+                    detail_failure = gene_detail_failures_by_taxon.get(
+                        match["taxon"], {}
+                    ).get(match["curie"])
+                    if detail_failure:
+                        lookup_attempts.append(
+                            _entity_detail_lookup_attempt(
+                                method=method,
+                                entity_kind="gene",
+                                input_symbol=gene_symbol,
+                                curie=match["curie"],
+                                taxon_id=match["taxon"],
+                                matched_entity=match["matched_entity"],
+                                match_type=match["match_type"],
+                                lookup_status=detail_failure["lookup_status"],
+                                error=detail_failure.get("error"),
+                            )
+                        )
                     continue
                 matched_entity = match["matched_entity"]
                 primary_symbol = detail.get("symbol") or matched_entity
@@ -1445,8 +1559,11 @@ def agr_curation_query(
                 pending_matches[symbol] = symbol_matches
 
             gene_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            gene_detail_failures_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
             for tid, curies in gene_curies_by_taxon.items():
-                gene_details_by_taxon[tid] = _fetch_gene_details_bulk(db, curies)
+                details, detail_failures = _fetch_gene_details_bulk(db, curies)
+                gene_details_by_taxon[tid] = details
+                gene_detail_failures_by_taxon[tid] = detail_failures
 
             bulk_items: List[Dict[str, Any]] = []
             total_matches = 0
@@ -1471,6 +1588,23 @@ def agr_curation_query(
                 for match in pending_matches.get(symbol, []):
                     detail = gene_details_by_taxon.get(match["taxon"], {}).get(match["curie"])
                     if not detail:
+                        detail_failure = gene_detail_failures_by_taxon.get(
+                            match["taxon"], {}
+                        ).get(match["curie"])
+                        if detail_failure:
+                            lookup_attempts_by_symbol[symbol].append(
+                                _entity_detail_lookup_attempt(
+                                    method=method,
+                                    entity_kind="gene",
+                                    input_symbol=symbol,
+                                    curie=match["curie"],
+                                    taxon_id=match["taxon"],
+                                    matched_entity=match["matched_entity"],
+                                    match_type=match["match_type"],
+                                    lookup_status=detail_failure["lookup_status"],
+                                    error=detail_failure.get("error"),
+                                )
+                            )
                         continue
                     primary_symbol = detail.get("symbol") or match["matched_entity"]
                     gene_entry = {
@@ -1915,8 +2049,11 @@ def agr_curation_query(
                     )
 
             allele_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            allele_detail_failures_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
             for tid, curies in allele_curies_by_taxon.items():
-                allele_details_by_taxon[tid] = _fetch_allele_details_bulk(db, curies)
+                details, detail_failures = _fetch_allele_details_bulk(db, curies)
+                allele_details_by_taxon[tid] = details
+                allele_detail_failures_by_taxon[tid] = detail_failures
 
             for match in pending_matches:
                 curie = match["curie"]
@@ -1926,6 +2063,23 @@ def agr_curation_query(
 
                 detail = allele_details_by_taxon.get(match["taxon"], {}).get(curie)
                 if not detail:
+                    detail_failure = allele_detail_failures_by_taxon.get(
+                        match["taxon"], {}
+                    ).get(curie)
+                    if detail_failure:
+                        lookup_attempts.append(
+                            _entity_detail_lookup_attempt(
+                                method=method,
+                                entity_kind="allele",
+                                input_symbol=allele_symbol,
+                                curie=curie,
+                                taxon_id=match["taxon"],
+                                matched_entity=match["matched_entity"],
+                                match_type=match["match_type"],
+                                lookup_status=detail_failure["lookup_status"],
+                                error=detail_failure.get("error"),
+                            )
+                        )
                     continue
 
                 matched_entity = match["matched_entity"]
@@ -2116,8 +2270,11 @@ def agr_curation_query(
                 pending_matches[symbol] = symbol_matches
 
             allele_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            allele_detail_failures_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
             for tid, curies in allele_curies_by_taxon.items():
-                allele_details_by_taxon[tid] = _fetch_allele_details_bulk(db, curies)
+                details, detail_failures = _fetch_allele_details_bulk(db, curies)
+                allele_details_by_taxon[tid] = details
+                allele_detail_failures_by_taxon[tid] = detail_failures
 
             bulk_items: List[Dict[str, Any]] = []
             total_matches = 0
@@ -2148,6 +2305,23 @@ def agr_curation_query(
 
                     detail = allele_details_by_taxon.get(match["taxon"], {}).get(curie)
                     if not detail:
+                        detail_failure = allele_detail_failures_by_taxon.get(
+                            match["taxon"], {}
+                        ).get(curie)
+                        if detail_failure:
+                            lookup_attempts_by_symbol[symbol].append(
+                                _entity_detail_lookup_attempt(
+                                    method=method,
+                                    entity_kind="allele",
+                                    input_symbol=symbol,
+                                    curie=curie,
+                                    taxon_id=match["taxon"],
+                                    matched_entity=match["matched_entity"],
+                                    match_type=match["match_type"],
+                                    lookup_status=detail_failure["lookup_status"],
+                                    error=detail_failure.get("error"),
+                                )
+                            )
                         continue
 
                     primary_symbol = detail.get("symbol") or match["matched_entity"]

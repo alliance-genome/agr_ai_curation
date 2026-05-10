@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 class CurationDbClient:
-    """Public adapter around the published AGR curation DB client."""
+    """Public adapter around a published curation DB client."""
 
     def __init__(self, delegate: Any):
         self._delegate = delegate
@@ -32,7 +32,7 @@ class CurationDbClient:
         return getattr(self._delegate, name)
 
     def create_session(self) -> Any:
-        """Return a SQLAlchemy session from the wrapped AGR client."""
+        """Return a SQLAlchemy session from the wrapped client."""
         return self._delegate._create_session()
 
     def close(self) -> None:
