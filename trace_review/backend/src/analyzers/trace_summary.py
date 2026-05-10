@@ -116,7 +116,7 @@ class TraceSummaryAnalyzer:
             "unique_tools": tool_calls_analysis.get("unique_tools", []),
             "domain_envelope_tool_call_count": sum(
                 1 for call in tool_calls_analysis.get("tool_calls", [])
-                if call.get("domain_envelope", {}).get("found")
+                if call["domain_envelope"].get("found")
             ),
         }
 

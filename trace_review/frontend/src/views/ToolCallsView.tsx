@@ -474,7 +474,7 @@ export function ToolCallsView({ data }: ToolCallsViewProps) {
             Domain-envelope calls:
           </Typography>
           <Chip label={`${domainEnvelopeCalls.length} calls`} size="small" color="info" />
-          {domainEnvelopeCalls.flatMap(call => call.domain_envelope?.envelope_ids || []).slice(0, 6).map((envelopeId, index) => (
+          {domainEnvelopeCalls.flatMap(call => call.domain_envelope?.envelope_ids ?? []).slice(0, 6).map((envelopeId, index) => (
             <Chip key={`${envelopeId}-${index}`} label={envelopeId} size="small" variant="outlined" color="primary" sx={{ fontFamily: 'monospace' }} />
           ))}
         </Box>
