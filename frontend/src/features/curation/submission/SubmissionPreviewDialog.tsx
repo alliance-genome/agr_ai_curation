@@ -24,6 +24,7 @@ import {
 import { fetchSubmissionPreview } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
+  CurationCandidateSubmissionReadiness,
   CurationReviewSession,
   CurationSubmissionReadinessBlocker,
   CurationSubmissionPreviewResponse,
@@ -110,6 +111,24 @@ function payloadPreview(response: CurationSubmissionPreviewResponse | null): str
   return JSON.stringify(payload.payload_json, null, 2)
 }
 
+function formatSubmitError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message
+  }
+  if (error === null || error === undefined) {
+    return 'Unable to submit this curation session.'
+  }
+  if (typeof error === 'string') {
+    return error
+  }
+
+  try {
+    return JSON.stringify(error) ?? String(error)
+  } catch {
+    return String(error)
+  }
+}
+
 function downloadPayload(response: CurationSubmissionPreviewResponse) {
   const payload = response.submission.payload
   if (!payload) {
@@ -138,15 +157,12 @@ function blockerAllowsCuratorOverride(
   blocker: CurationSubmissionReadinessBlocker,
 ): boolean {
   return blocker.details.allow_opt_out === true
-    || blocker.details.allow_curator_override === true
-    || blocker.details.allow_override === true
 }
 
 function blockerRequiresOverrideReason(
   blocker: CurationSubmissionReadinessBlocker,
 ): boolean {
   return blocker.details.opt_out_reason_required === true
-    || blocker.details.reason_required === true
 }
 
 function blockerPolicyLabels(blocker: CurationSubmissionReadinessBlocker): string[] {
@@ -178,14 +194,8 @@ function blockerPolicyLabels(blocker: CurationSubmissionReadinessBlocker): strin
   return labels
 }
 
-interface ReadinessActionGate {
-  ready: boolean
-  blocking_reasons: string[]
-  blockers?: CurationSubmissionReadinessBlocker[]
-}
-
-function readinessItemBlocksAction(item: ReadinessActionGate): boolean {
-  return !item.ready || item.blocking_reasons.length > 0 || (item.blockers?.length ?? 0) > 0
+function readinessItemBlocksAction(item: CurationCandidateSubmissionReadiness): boolean {
+  return !item.ready || item.blocking_reasons.length > 0 || item.blockers.length > 0
 }
 
 function BlockerList({
@@ -414,11 +424,7 @@ export default function SubmissionPreviewDialog({
     try {
       await onSubmit(response)
     } catch (submitError) {
-      setError(
-        submitError instanceof Error
-          ? submitError.message
-          : 'Unable to submit this curation session.',
-      )
+      setError(formatSubmitError(submitError))
     } finally {
       setSubmitting(false)
     }
@@ -580,7 +586,7 @@ export default function SubmissionPreviewDialog({
                         {item.blocking_reasons.join(' ')}
                       </Typography>
                     ) : null}
-                    <BlockerList blockers={item.blockers ?? []} />
+                    <BlockerList blockers={item.blockers} />
                     {item.warnings.length > 0 ? (
                       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
                         {item.warnings.join(' ')}

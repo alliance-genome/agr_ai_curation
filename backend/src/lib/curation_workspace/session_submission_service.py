@@ -304,8 +304,33 @@ def _readiness_blocker(
         message=message,
         provider_refs=dict(provider_refs or {}),
         projection_ref=dict(projection_ref or {}),
-        details=dict(details or {}),
+        details=_readiness_blocker_details(details),
     )
+
+
+def _readiness_blocker_details(
+    details: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    normalized = dict(details or {})
+    metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
+    if any(_metadata_allows_curator_override(metadata) for metadata in metadata_sources):
+        normalized["allow_opt_out"] = True
+    if any(_metadata_override_requires_reason(metadata) for metadata in metadata_sources):
+        normalized["opt_out_reason_required"] = True
+    return normalized
+
+
+def _readiness_blocker_policy_metadata_sources(
+    details: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    metadata_sources: list[Mapping[str, Any]] = [details]
+    raw_validation_metadata = details.get("validation_metadata")
+    if isinstance(raw_validation_metadata, Mapping):
+        metadata_sources.append(raw_validation_metadata)
+        raw_field_policy = raw_validation_metadata.get("field_policy")
+        if isinstance(raw_field_policy, Mapping):
+            metadata_sources.append(raw_field_policy)
+    return tuple(metadata_sources)
 
 
 def _projection_ref_payload(row: DomainEnvelopeProjectionIndex) -> dict[str, Any]:
@@ -414,6 +439,8 @@ def _metadata_allows_curator_override(metadata: Mapping[str, Any]) -> bool:
 
 def _metadata_override_requires_reason(metadata: Mapping[str, Any]) -> bool:
     if metadata.get("opt_out_reason_required") is True:
+        return True
+    if metadata.get("reason_required") is True:
         return True
     for key in ("curator_override", "override", "validation"):
         raw_policy = metadata.get(key)

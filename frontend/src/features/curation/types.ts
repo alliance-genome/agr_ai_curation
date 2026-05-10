@@ -268,6 +268,15 @@ export interface CurationCandidateSubmissionReadiness {
   blockers: CurationSubmissionReadinessBlocker[]
 }
 
+export interface CurationSubmissionReadinessBlockerDetails {
+  [key: string]: unknown
+  allow_opt_out?: boolean
+  opt_out_reason_required?: boolean
+  required?: boolean
+  export_blocking?: boolean
+  finding_id?: string
+}
+
 export interface CurationSubmissionReadinessBlocker {
   envelope_id: string
   object_id?: string | null
@@ -278,7 +287,7 @@ export interface CurationSubmissionReadinessBlocker {
   message: string
   provider_refs: Record<string, unknown>
   projection_ref: Record<string, unknown>
-  details: Record<string, unknown>
+  details: CurationSubmissionReadinessBlockerDetails
 }
 
 export interface DomainEnvelopeProjectionRef {

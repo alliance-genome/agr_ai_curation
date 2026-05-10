@@ -2381,7 +2381,11 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
                 details={
                     "provider_refs": {
                         "catalog_schema": {"class": "Artifact", "field": "title"}
-                    }
+                    },
+                    "validation_metadata": {
+                        "allow_curator_override": True,
+                        "reason_required": True,
+                    },
                 },
             )
         ],
@@ -2407,6 +2411,8 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
     assert blocker.provider_refs == {
         "catalog_schema": {"class": "Artifact", "field": "title"}
     }
+    assert blocker.details["allow_opt_out"] is True
+    assert blocker.details["opt_out_reason_required"] is True
 
 
 def test_submission_export_allows_waived_finding_with_field_override_policy(

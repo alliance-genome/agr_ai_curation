@@ -5,6 +5,7 @@ import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
+  CurationSubmissionPreviewResponse,
   CurationWorkspace,
   DomainEnvelopeReviewRowsResponse,
 } from '@/features/curation/types'
@@ -481,7 +482,9 @@ function buildEnvelopeReviewRows(): DomainEnvelopeReviewRowsResponse {
   }
 }
 
-function buildSubmissionPreviewResponse(mode: 'preview' | 'direct_submit' = 'preview') {
+function buildSubmissionPreviewResponse(
+  mode: 'preview' | 'direct_submit' = 'preview',
+): CurationSubmissionPreviewResponse {
   return {
     submission: {
       submission_id: `submission-${mode}`,
@@ -796,6 +799,46 @@ describe('CurationWorkspacePage', () => {
         },
       })
     })
+  })
+
+  it('surfaces missing direct-submit preview payloads instead of deriving candidate IDs', async () => {
+    const workspace = buildWorkspace()
+    workspace.candidates = workspace.candidates.map((candidate) => ({
+      ...candidate,
+      status: 'accepted',
+      projection_ref: {
+        envelope_id: 'envelope-1',
+        object_id: candidate.candidate_id,
+        envelope_revision: 5,
+      },
+    }))
+    const directSubmitPreview = buildSubmissionPreviewResponse('direct_submit')
+    directSubmitPreview.submission.payload = null
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.fetchSubmissionPreview
+      .mockResolvedValueOnce(buildSubmissionPreviewResponse('preview'))
+      .mockResolvedValueOnce(directSubmitPreview)
+
+    renderPage('/curation/session-1')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Preview submission' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview submission' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Submit mode' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    expect(await screen.findByText(
+      'Direct submission requires a preview payload. Refresh the submission preview and try again.',
+    )).toBeInTheDocument()
+    expect(serviceMocks.executeCurationSubmission).not.toHaveBeenCalled()
   })
 
   it('initializes the PDF viewer document after hydration', async () => {

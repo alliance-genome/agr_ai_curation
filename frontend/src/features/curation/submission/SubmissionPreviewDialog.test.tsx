@@ -416,6 +416,41 @@ describe('SubmissionPreviewDialog', () => {
     )).toBeInTheDocument()
   })
 
+  it('ignores non-canonical frontend override metadata keys', async () => {
+    const blocker: CurationSubmissionReadinessBlocker = {
+      envelope_id: 'envelope-1',
+      object_id: 'artifact-1',
+      field_path: 'artifact.title',
+      severity: 'blocker',
+      status: 'open',
+      code: 'domain_envelope.required_field_missing',
+      message: 'Required export field is missing: artifact.title.',
+      provider_refs: {},
+      projection_ref: {},
+      details: {
+        required: true,
+        export_blocking: true,
+        allow_curator_override: true,
+        reason_required: true,
+      },
+    }
+
+    serviceMocks.fetchSubmissionPreview.mockResolvedValue(
+      buildResponse({
+        readyCandidateIds: ['candidate-pending'],
+        readyCandidateBlockers: [blocker],
+      }),
+    )
+
+    renderDialog()
+
+    expect(
+      await screen.findByText('Required export field is missing: artifact.title.'),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('Curator override allowed')).not.toBeInTheDocument()
+    expect(screen.queryByText('Reason required')).not.toBeInTheDocument()
+  })
+
   it('prevents direct submit when any readiness item is blocked', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn()
@@ -497,6 +532,42 @@ describe('SubmissionPreviewDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Submit' }))
 
     expect(onSubmit).toHaveBeenCalledWith(submitResponse)
+  })
+
+  it('renders non-Error submit failures with their original details', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn().mockRejectedValue({
+      code: 'transport_denied',
+      message: 'Transport denied by downstream target.',
+    })
+    const submitResponse = buildResponse({
+      mode: 'direct_submit',
+      readyCandidateIds: ['candidate-ready', 'candidate-pending'],
+    })
+
+    serviceMocks.fetchSubmissionPreview
+      .mockResolvedValueOnce(buildResponse())
+      .mockResolvedValueOnce(submitResponse)
+
+    renderDialog({
+      onSubmit,
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledTimes(1)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Submit mode' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled()
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Submit' }))
+
+    expect(
+      await screen.findByText(/Transport denied by downstream target/),
+    ).toBeInTheDocument()
   })
 
   it('renders service errors when preview loading fails', async () => {
