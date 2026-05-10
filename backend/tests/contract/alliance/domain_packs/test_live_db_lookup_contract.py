@@ -117,6 +117,72 @@ def test_live_db_representative_gene_and_allele_lookup_rows(live_db_engine):
     assert all(row["symbol"] and row["taxon"] for row in allele_rows)
 
 
+def test_live_db_allele_reference_and_evidence_association_targets(live_db_engine):
+    with live_db_engine.connect() as conn:
+        constraints = conn.execute(
+            text(
+                """
+                SELECT conrelid::regclass::text AS table_name,
+                       conname,
+                       pg_get_constraintdef(oid) AS definition
+                FROM pg_constraint
+                WHERE conrelid IN (
+                    'public.allele_reference'::regclass,
+                    'public.allelegeneassociation'::regclass,
+                    'public.allelegeneassociation_informationcontententity'::regclass
+                )
+                ORDER BY table_name, conname
+                """
+            )
+        ).mappings().all()
+        allele_reference_rows = conn.execute(
+            text(
+                """
+                SELECT ar.allele_id,
+                       be.primaryexternalid AS allele_primary_external_id,
+                       ar.references_id,
+                       ice.curie AS reference_curie
+                FROM public.allele_reference ar
+                JOIN public.allele a ON a.id = ar.allele_id
+                JOIN public.genomicentity ge ON ge.id = a.id
+                JOIN public.biologicalentity be ON be.id = ge.id
+                JOIN public.reference r ON r.id = ar.references_id
+                JOIN public.informationcontententity ice ON ice.id = r.id
+                LIMIT 5
+                """
+            )
+        ).mappings().all()
+        evidence_rows = conn.execute(
+            text(
+                """
+                SELECT agaice.association_id,
+                       agaice.evidence_id,
+                       ice.curie AS evidence_curie
+                FROM public.allelegeneassociation_informationcontententity agaice
+                JOIN public.informationcontententity ice ON ice.id = agaice.evidence_id
+                LIMIT 5
+                """
+            )
+        ).mappings().all()
+
+    constraint_defs = {row["definition"] for row in constraints}
+    assert "FOREIGN KEY (allele_id) REFERENCES allele(id)" in constraint_defs
+    assert "FOREIGN KEY (references_id) REFERENCES reference(id)" in constraint_defs
+    assert (
+        "FOREIGN KEY (association_id) REFERENCES allelegeneassociation(id)"
+        in constraint_defs
+    )
+    assert (
+        "FOREIGN KEY (evidence_id) REFERENCES informationcontententity(id)"
+        in constraint_defs
+    )
+    assert allele_reference_rows
+    assert evidence_rows
+    assert all(row["allele_primary_external_id"] for row in allele_reference_rows)
+    assert all(row["reference_curie"] for row in allele_reference_rows)
+    assert all(row["evidence_curie"] for row in evidence_rows)
+
+
 def test_live_db_representative_disease_chemical_and_phenotype_projection_rows(live_db_engine):
     with live_db_engine.connect() as conn:
         ontology_terms = conn.execute(

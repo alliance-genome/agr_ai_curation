@@ -109,6 +109,17 @@ object_definitions:
     metadata:
       object_role: curatable_unit
       association_kind: allele_paper_evidence
+      export_behavior:
+        status: blocked
+        mode: verified_association_targets_only
+        reason: Allele association export requires durable allele, reference, and evidence IDs before any verified target operation can be emitted.
+        verified_targets:
+          - public.allele_reference
+          - public.allelegeneassociation
+          - public.allelegeneassociation_informationcontententity
+        blocked_targets:
+          - public.allele_reference
+          - public.allelegeneassociation_informationcontententity
       write_behavior:
         status: blocked
         reason: The allele_reference table shape is verified, but this pack only emits pending envelopes because reference IDs and a non-mutating write path are not yet verified for this workflow.
@@ -409,7 +420,7 @@ metadata:
         source_file: model/schema/reference.yaml
     curation_db_grounding:
       verified_with: read_only_curation_db
-      verified_date: "2026-05-09"
+      verified_date: "2026-05-10"
       tables:
         - table: public.allele
           key_columns:
@@ -447,6 +458,10 @@ metadata:
     write_behavior:
       status: blocked
       reason: Write behavior is blocked because this issue verifies target shape only; it does not verify reference materialization or a non-mutating submission path for allele_reference or evidence association writes.
+      verified_targets:
+        - public.allele_reference
+        - public.allelegeneassociation
+        - public.allelegeneassociation_informationcontententity
       blocked_operations:
         - insert public.allele_reference
         - insert public.allelegeneassociation

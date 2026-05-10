@@ -132,6 +132,17 @@ fixtures:
           metadata:
             object_role: curatable_unit
             association_kind: allele_paper_evidence
+            export_behavior:
+              status: blocked
+              mode: verified_association_targets_only
+              reason: Allele association export requires durable allele, reference, and evidence IDs before any verified target operation can be emitted.
+              verified_targets:
+                - public.allele_reference
+                - public.allelegeneassociation
+                - public.allelegeneassociation_informationcontententity
+              blocked_targets:
+                - public.allele_reference
+                - public.allelegeneassociation_informationcontententity
             write_behavior:
               status: blocked
               reason: Reference materialization and non-mutating allele association writes are not verified for this pack.
@@ -149,6 +160,13 @@ fixtures:
               - public.allele_reference
               - public.allelegeneassociation
               - public.allelegeneassociation_informationcontententity
+            verified_targets:
+              - public.allele_reference
+              - public.allelegeneassociation
+              - public.allelegeneassociation_informationcontententity
+            mutates_base_rows:
+              public.allele: false
+              public.gene: false
       history:
         - event_type: created
           timestamp: "2026-05-09T00:00:00Z"

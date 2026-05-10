@@ -23,7 +23,7 @@ GENE_LINKML_SCHEMA_URI = (
 GENE_MENTION_EVIDENCE_DEFINITION_NOTES = (
     "Envelope-only validated reference evidence; this object does not create or "
     "mutate Alliance Gene rows.",
-    "Paper-gene association write/export behavior is intentionally out of scope "
+    "Paper-gene association write behavior is intentionally out of scope "
     "until a concrete target is verified.",
 )
 

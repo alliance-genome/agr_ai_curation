@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from src.schemas.domain_envelope import CuratableObjectStatus
+from src.schemas.domain_envelope import CuratableObjectStatus, DefinitionState
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 
 
@@ -27,7 +27,11 @@ from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
     load_alliance_domain_pack_registry,
 )
 from agr_ai_curation_alliance.domain_packs.allele import (  # noqa: E402
+    ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
     ALLELE_DOMAIN_PACK_ID,
+    VERIFIED_ALLELE_ASSOCIATION_TARGETS,
+    build_allele_association_export,
+    build_allele_association_submission_plan,
     build_pending_allele_envelope_from_tool_verified_fixture,
     validate_pending_allele_envelope,
 )
@@ -138,6 +142,11 @@ def test_allele_pack_records_grounded_metadata_and_blocks_writes():
 
     write_behavior = association_metadata["write_behavior"]
     assert write_behavior["status"] == "blocked"
+    assert write_behavior["verified_targets"] == [
+        "public.allele_reference",
+        "public.allelegeneassociation",
+        "public.allelegeneassociation_informationcontententity",
+    ]
     assert "update public.allele" in write_behavior["blocked_operations"]
     assert "Resolve source papers to durable public.reference.id values." in write_behavior[
         "required_before_write"
@@ -222,6 +231,10 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         "daf-2-m41-evidence-1",
         "daf-2-m41-evidence-2",
     ]
+    assert association.metadata["export_behavior"]["status"] == "blocked"
+    assert association.metadata["export_behavior"]["mode"] == (
+        "verified_association_targets_only"
+    )
     assert association.metadata["write_behavior"]["status"] == "blocked"
 
     allele_payloads = [
@@ -244,6 +257,15 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         "alliance.allele.write_blocked",
         "alliance.allele.skipped_without_verified_evidence",
     ]
+    assert envelope.validation_findings[0].details["verified_targets"] == [
+        "public.allele_reference",
+        "public.allelegeneassociation",
+        "public.allelegeneassociation_informationcontententity",
+    ]
+    assert envelope.validation_findings[0].details["mutates_base_rows"] == {
+        "public.allele": False,
+        "public.gene": False,
+    }
 
     expected_path = (
         REPO_ROOT
@@ -284,3 +306,125 @@ def test_tool_verified_allele_fixture_rejects_malformed_required_data():
     malformed_normalized_id["extraction"]["alleles"][0]["normalized_id"] = 42
     with pytest.raises(ValueError, match="normalized_id must be a string"):
         build_pending_allele_envelope_from_tool_verified_fixture(malformed_normalized_id)
+
+
+def test_allele_submission_plan_blocks_until_durable_targets_resolve():
+    fixture = load_evidence_fixture("tool_verified_allele_paper")
+    envelope = build_pending_allele_envelope_from_tool_verified_fixture(
+        fixture,
+        envelope_id="allele-tool-verified-envelope",
+        created_at=datetime(2026, 5, 9, tzinfo=timezone.utc),
+    )
+
+    plan = build_allele_association_submission_plan(envelope)
+
+    assert plan["status"] == "blocked"
+    assert plan["target_key"] == ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY
+    assert plan["verified_targets"] == VERIFIED_ALLELE_ASSOCIATION_TARGETS
+    assert plan["operations"] == []
+    assert plan["mutates_base_rows"] == {
+        "public.allele": False,
+        "public.gene": False,
+    }
+    blocker_codes = {blocker["code"] for blocker in plan["blockers"]}
+    assert {
+        "alliance.allele.definition_state_blocked",
+        "alliance.allele.write_behavior_blocked",
+        "alliance.allele.allele_db_id_unresolved",
+        "alliance.allele.reference_id_unresolved",
+        "alliance.allele.evidence_target_unresolved",
+    }.issubset(blocker_codes)
+
+
+def test_allele_submission_plan_blocks_unknown_write_target_loudly():
+    fixture = load_evidence_fixture("tool_verified_allele_paper")
+    envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
+
+    plan = build_allele_association_submission_plan(
+        envelope,
+        target_key="public.allele",
+    )
+
+    assert plan["status"] == "blocked"
+    assert plan["operations"] == []
+    assert plan["blockers"] == [
+        {
+            "object_id": None,
+            "severity": "blocker",
+            "status": "blocked",
+            "code": "alliance.allele.unknown_write_target",
+            "message": "Allele submission target is not verified: public.allele.",
+            "details": {
+                "requested_target_key": "public.allele",
+                "supported_target_key": ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+                "verified_targets": sorted(VERIFIED_ALLELE_ASSOCIATION_TARGETS),
+            },
+        }
+    ]
+
+
+def test_allele_submission_plan_emits_only_verified_non_mutating_operations_when_resolved():
+    fixture = load_evidence_fixture("tool_verified_allele_paper")
+    envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
+
+    resolved_objects = []
+    for obj in envelope.objects:
+        payload = dict(obj.payload)
+        metadata = dict(obj.metadata)
+        definition_state = obj.definition_state
+        if obj.object_type == "Allele":
+            payload["allele_id"] = 4749192
+        elif obj.object_type == "Reference":
+            payload["reference_id"] = 247320
+        elif obj.object_type == "EvidenceQuote":
+            payload["information_content_entity_id"] = 269867
+        elif obj.object_type == "AllelePaperEvidenceAssociation":
+            payload["association_id"] = 210252399
+            metadata.pop("write_behavior", None)
+            metadata.pop("export_behavior", None)
+            definition_state = DefinitionState.STABLE
+        resolved_objects.append(
+            obj.model_copy(
+                update={
+                    "payload": payload,
+                    "metadata": metadata,
+                    "definition_state": definition_state,
+                }
+            )
+        )
+    resolved_envelope = envelope.model_copy(
+        update={"objects": resolved_objects, "validation_findings": []}
+    )
+
+    plan = build_allele_association_submission_plan(resolved_envelope)
+
+    assert plan["status"] == "ready"
+    assert plan["blockers"] == []
+    assert [operation["target_table"] for operation in plan["operations"]] == [
+        "public.allele_reference",
+        "public.allelegeneassociation_informationcontententity",
+        "public.allelegeneassociation_informationcontententity",
+    ]
+    assert all(operation["mutates_base_rows"] is False for operation in plan["operations"])
+    assert plan["mutates_base_rows"] == {
+        "public.allele": False,
+        "public.gene": False,
+    }
+
+
+def test_allele_export_carries_submission_plan_and_never_base_row_mutations():
+    fixture = load_evidence_fixture("tool_verified_allele_paper")
+    envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
+
+    export_payload = build_allele_association_export(envelope)
+
+    assert export_payload["export_type"] == (
+        "alliance_allele_paper_evidence_association"
+    )
+    plan = export_payload["submission_plan"]
+    assert plan["status"] == "blocked"
+    assert plan["operations"] == []
+    assert plan["mutates_base_rows"] == {
+        "public.allele": False,
+        "public.gene": False,
+    }

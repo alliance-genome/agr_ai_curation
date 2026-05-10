@@ -119,6 +119,17 @@ envelope:
           object_type: EvidenceQuote
       metadata:
         object_role: curatable_unit
+        export_behavior:
+          status: blocked
+          mode: verified_association_targets_only
+          reason: Allele association export requires durable allele, reference, and evidence IDs before any verified target operation can be emitted.
+          verified_targets:
+            - public.allele_reference
+            - public.allelegeneassociation
+            - public.allelegeneassociation_informationcontententity
+          blocked_targets:
+            - public.allele_reference
+            - public.allelegeneassociation_informationcontententity
         write_behavior:
           status: blocked
           reason: Reference materialization and non-mutating allele association writes are not verified for this pack.
@@ -135,6 +146,13 @@ envelope:
           - public.allele_reference
           - public.allelegeneassociation
           - public.allelegeneassociation_informationcontententity
+        verified_targets:
+          - public.allele_reference
+          - public.allelegeneassociation
+          - public.allelegeneassociation_informationcontententity
+        mutates_base_rows:
+          public.allele: false
+          public.gene: false
     - severity: warning
       message: Skipped 1 allele candidate(s) without verified evidence records.
       code: alliance.allele.skipped_without_verified_evidence

@@ -224,6 +224,24 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             object_refs=association_refs,
             metadata={
                 "object_role": "curatable_unit",
+                "export_behavior": {
+                    "status": "blocked",
+                    "mode": "verified_association_targets_only",
+                    "reason": (
+                        "Allele association export requires durable allele, "
+                        "reference, and evidence IDs before any verified target "
+                        "operation can be emitted."
+                    ),
+                    "verified_targets": [
+                        "public.allele_reference",
+                        "public.allelegeneassociation",
+                        "public.allelegeneassociation_informationcontententity",
+                    ],
+                    "blocked_targets": [
+                        "public.allele_reference",
+                        "public.allelegeneassociation_informationcontententity",
+                    ],
+                },
                 "write_behavior": {
                     "status": "blocked",
                     "reason": (
@@ -254,6 +272,15 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
                         "public.allelegeneassociation",
                         "public.allelegeneassociation_informationcontententity",
                     ],
+                    "verified_targets": [
+                        "public.allele_reference",
+                        "public.allelegeneassociation",
+                        "public.allelegeneassociation_informationcontententity",
+                    ],
+                    "mutates_base_rows": {
+                        "public.allele": False,
+                        "public.gene": False,
+                    },
                 },
             )
         )
@@ -389,6 +416,25 @@ def validate_pending_allele_envelope(
                     severity=ValidationFindingSeverity.BLOCKER,
                     code="alliance.allele.write_behavior_not_blocked",
                     message="Allele association write behavior must remain blocked in this pack.",
+                    object_ref=ObjectRef(
+                        pending_ref_id=association.pending_ref_id,
+                        object_type=association.object_type,
+                    )
+                    if association.pending_ref_id
+                    else None,
+                )
+            )
+
+        export_behavior = association.metadata.get("export_behavior")
+        if (
+            not isinstance(export_behavior, Mapping)
+            or export_behavior.get("status") != "blocked"
+        ):
+            findings.append(
+                ValidationFinding(
+                    severity=ValidationFindingSeverity.BLOCKER,
+                    code="alliance.allele.export_behavior_not_blocked",
+                    message="Allele association export behavior must remain blocked until targets resolve.",
                     object_ref=ObjectRef(
                         pending_ref_id=association.pending_ref_id,
                         object_type=association.object_type,
@@ -631,9 +677,25 @@ def _required_string(value: Any, field_name: str) -> str:
     return normalized
 
 
+from .export import (  # noqa: E402
+    AllelePaperEvidenceExportAdapter,
+    build_allele_association_export,
+)
+from .submit import (  # noqa: E402
+    ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+    VERIFIED_ALLELE_ASSOCIATION_TARGETS,
+    build_allele_association_submission_plan,
+)
+
+
 __all__ = [
+    "ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY",
     "ALLELE_DOMAIN_PACK_ID",
     "ALLELE_DOMAIN_PACK_VERSION",
+    "AllelePaperEvidenceExportAdapter",
+    "VERIFIED_ALLELE_ASSOCIATION_TARGETS",
+    "build_allele_association_export",
+    "build_allele_association_submission_plan",
     "build_pending_allele_envelope_from_tool_verified_fixture",
     "validate_pending_allele_envelope",
 ]
