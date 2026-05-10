@@ -499,6 +499,33 @@ def test_candidate_conversation_summary_falls_back_to_generic_item_context():
     )
 
 
+def test_candidate_blueprints_preserve_domain_envelope_projection_ref():
+    extraction_result = _make_extraction_result(
+        items=[
+            {
+                **_make_item(label="Projected Candidate"),
+                "domain_envelope_projection_ref": {
+                    "envelope_id": "env-1",
+                    "object_id": "object-1",
+                    "envelope_revision": 4,
+                },
+            }
+        ]
+    )
+
+    blueprints = module._candidate_blueprints(  # noqa: SLF001
+        extraction_result,
+        extraction_result.payload_json,
+        candidate_adapter_key="observation",
+    )
+
+    assert len(blueprints) == 1
+    assert blueprints[0].envelope_id == "env-1"
+    assert blueprints[0].object_id == "object-1"
+    assert blueprints[0].envelope_revision == 4
+    assert "domain_envelope_projection_ref" not in blueprints[0].payload
+
+
 @pytest.mark.asyncio
 async def test_run_curation_prep_maps_allele_candidates_from_domain_envelope_objects(monkeypatch):
     first = _make_allele_domain_payload(

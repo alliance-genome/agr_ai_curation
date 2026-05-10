@@ -29,6 +29,10 @@ from .validation_supervisor import (
     append_validation_findings_to_envelope,
     run_validation_supervisor,
 )
+from .materialization import (
+    project_evidence_anchor_projections,
+    project_validation_summary_projections,
+)
 from .repair_patches import (
     DEFAULT_REPAIR_RETRY_BUDGET,
     REPAIR_CONTEXT_METADATA_KEY,
@@ -84,6 +88,8 @@ __all__ = [
     "load_domain_fixture_pack",
     "load_domain_pack_metadata",
     "load_domain_pack_registry",
+    "project_evidence_anchor_projections",
+    "project_validation_summary_projections",
     "record_repair_final_classification",
     "record_repair_request",
     "record_validator_rerun_request",

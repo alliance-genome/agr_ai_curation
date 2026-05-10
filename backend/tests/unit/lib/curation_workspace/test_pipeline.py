@@ -543,6 +543,42 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
     }
 
 
+def test_execute_post_curation_pipeline_persists_domain_envelope_projection_ref(db_session):
+    document = _create_document(db_session)
+    prep_output = _make_prep_output()
+    prep_output = prep_output.model_copy(
+        update={
+            "candidates": [
+                prep_output.candidates[0].model_copy(
+                    update={
+                        "envelope_id": "env-1",
+                        "object_id": "object-1",
+                        "envelope_revision": 5,
+                    }
+                )
+            ]
+        }
+    )
+    _persist_matching_prep_result(
+        db_session,
+        document_id=str(document.id),
+        prep_output=prep_output,
+    )
+
+    result = module.execute_post_curation_pipeline(
+        _make_request(prep_output, document_id=str(document.id)),
+        db=db_session,
+        dependencies=_passthrough_dependencies(),
+    )
+
+    candidate_row = db_session.scalars(
+        select(CurationCandidate).where(CurationCandidate.session_id == UUID(result.session_id))
+    ).one()
+    assert candidate_row.envelope_id == "env-1"
+    assert candidate_row.object_id == "object-1"
+    assert candidate_row.envelope_revision == 5
+
+
 def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists_adapter_owned_layout(
     db_session,
 ):

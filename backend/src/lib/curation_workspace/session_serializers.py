@@ -16,6 +16,10 @@ from src.lib.curation_adapters.entity_tag_bridge import (
     TOPIC_FIELD_KEYS,
 )
 from src.lib.curation_workspace.evidence_quality import summarize_evidence_records
+from src.lib.domain_packs.materialization import (
+    project_evidence_anchor_projections,
+    project_validation_summary_projections,
+)
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -52,11 +56,14 @@ from src.schemas.curation_workspace import (
     CurationValidationSnapshot as CurationValidationSnapshotSchema,
     CurationValidationSummary,
     DomainEnvelopeProjectionRef,
+    DomainEnvelopeEvidenceAnchorProjection,
+    DomainEnvelopeValidationSummaryProjection,
     EvidenceAnchor,
     FieldValidationResult,
     FieldValidationStatus,
     SubmissionPayloadContract,
 )
+from src.schemas.domain_envelope import DomainEnvelope
 
 ENTITY_TAG_FIELD_KEYS: tuple[str, ...] = (
     *ENTITY_FIELD_KEYS,
@@ -276,6 +283,62 @@ def _domain_envelope_projection_ref(
     )
 
 
+def _candidate_domain_envelope(candidate: CurationCandidate) -> DomainEnvelope | None:
+    projection_ref = _domain_envelope_projection_ref(candidate)
+    if projection_ref is None:
+        return None
+
+    envelope_row = candidate.domain_envelope
+    if envelope_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Curation candidate {candidate.id} is missing its domain envelope row",
+        )
+    return DomainEnvelope.model_validate(envelope_row.envelope_json)
+
+
+def _candidate_envelope_revision(candidate: CurationCandidate) -> int:
+    envelope_row = candidate.domain_envelope
+    if envelope_row is not None:
+        return envelope_row.revision
+    if candidate.envelope_revision is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Curation candidate {candidate.id} is missing envelope revision",
+        )
+    return candidate.envelope_revision
+
+
+def _domain_evidence_anchor_projections(
+    candidate: CurationCandidate,
+) -> list[DomainEnvelopeEvidenceAnchorProjection]:
+    envelope = _candidate_domain_envelope(candidate)
+    if envelope is None or candidate.object_id is None:
+        return []
+    document_id = None
+    if candidate.domain_envelope is not None and candidate.domain_envelope.document_id is not None:
+        document_id = str(candidate.domain_envelope.document_id)
+    return project_evidence_anchor_projections(
+        envelope,
+        envelope_revision=_candidate_envelope_revision(candidate),
+        document_id=document_id,
+        object_id=candidate.object_id,
+    )
+
+
+def _domain_validation_summary_projections(
+    candidate: CurationCandidate,
+) -> list[DomainEnvelopeValidationSummaryProjection]:
+    envelope = _candidate_domain_envelope(candidate)
+    if envelope is None or candidate.object_id is None:
+        return []
+    return project_validation_summary_projections(
+        envelope,
+        envelope_revision=_candidate_envelope_revision(candidate),
+        object_id=candidate.object_id,
+    )
+
+
 def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
     draft = _draft_detail(candidate.draft)
     if draft is None:
@@ -310,7 +373,9 @@ def _candidate_detail(candidate: CurationCandidate) -> CurationCandidatePayload:
         normalized_payload=dict(candidate.normalized_payload or {}),
         draft=draft,
         evidence_anchors=[_evidence_record(record) for record in ordered_evidence],
+        evidence_anchor_projections=_domain_evidence_anchor_projections(candidate),
         validation=_validation_summary(candidate.validation_snapshots),
+        validation_summary_projections=_domain_validation_summary_projections(candidate),
         evidence_summary=_evidence_summary_from_records(candidate.evidence_anchors),
         created_at=candidate.created_at,
         updated_at=candidate.updated_at,
@@ -834,7 +899,9 @@ def _candidate_payload(candidate: CurationCandidate) -> CurationCandidatePayload
         projection_ref=_domain_envelope_projection_ref(candidate),
         draft=_draft_payload(candidate),
         evidence_anchors=evidence_records,
+        evidence_anchor_projections=_domain_evidence_anchor_projections(candidate),
         validation=_candidate_validation_summary(candidate),
+        validation_summary_projections=_domain_validation_summary_projections(candidate),
         evidence_summary=_evidence_summary_from_records(candidate.evidence_anchors),
         created_at=candidate.created_at,
         updated_at=candidate.updated_at,
