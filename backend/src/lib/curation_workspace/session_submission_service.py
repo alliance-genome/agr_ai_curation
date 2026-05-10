@@ -1166,7 +1166,11 @@ def _domain_envelope_snapshot(
 ) -> dict[str, Any]:
     selected = set(selected_object_ids)
     object_id_by_ref = _object_id_by_ref(envelope)
-    included_object_ids = _selected_object_ids_with_references(envelope, selected)
+    included_object_ids = _selected_object_ids_with_references(
+        envelope,
+        selected,
+        object_id_by_ref,
+    )
     selected_objects = [
         domain_object.model_dump(mode="json")
         for domain_object in envelope.objects
@@ -1196,8 +1200,8 @@ def _domain_envelope_snapshot(
 def _selected_object_ids_with_references(
     envelope: DomainEnvelope,
     selected_object_ids: set[str],
+    object_id_by_ref: dict[tuple[str, str], str],
 ) -> set[str]:
-    object_id_by_ref = _object_id_by_ref(envelope)
     objects_by_id = {
         _stable_object_id(domain_object): domain_object
         for domain_object in envelope.objects
