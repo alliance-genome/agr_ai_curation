@@ -5,6 +5,7 @@ import type {
   CurationDraftField,
   CurationDraftFieldChange,
   CurationReviewSession,
+  CurationSubmissionExecuteResponse,
   CurationWorkspace,
 } from '@/features/curation/types'
 
@@ -199,4 +200,48 @@ export function mergeSavedDraftIntoWorkspace(
   }
 
   return replaceWorkspaceCandidate(workspace, savedCandidate)
+}
+
+export function buildWorkspaceExpectedEnvelopeRevisions(
+  candidates: CurationCandidate[],
+): Record<string, number> {
+  return candidates.reduce<Record<string, number>>((revisions, candidate) => {
+    const projectionRef = candidate.projection_ref
+    if (!projectionRef) {
+      return revisions
+    }
+
+    const revision = Number(projectionRef.envelope_revision)
+    if (!projectionRef.envelope_id || !Number.isInteger(revision) || revision < 1) {
+      return revisions
+    }
+
+    const existingRevision = revisions[projectionRef.envelope_id]
+    revisions[projectionRef.envelope_id] = existingRevision === undefined
+      ? revision
+      : Math.min(existingRevision, revision)
+
+    return revisions
+  }, {})
+}
+
+export function mergeSubmissionExecutionIntoWorkspace(
+  workspace: CurationWorkspace,
+  response: CurationSubmissionExecuteResponse,
+): CurationWorkspace {
+  const nextSubmissionHistory = [
+    response.submission,
+    ...workspace.submission_history.filter(
+      (submission) => submission.submission_id !== response.submission.submission_id,
+    ),
+  ]
+
+  return appendWorkspaceActionLogEntry(
+    {
+      ...workspace,
+      session: response.session,
+      submission_history: nextSubmissionHistory,
+    },
+    response.action_log_entry,
+  )
 }

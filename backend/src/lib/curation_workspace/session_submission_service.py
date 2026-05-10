@@ -304,8 +304,33 @@ def _readiness_blocker(
         message=message,
         provider_refs=dict(provider_refs or {}),
         projection_ref=dict(projection_ref or {}),
-        details=dict(details or {}),
+        details=_readiness_blocker_details(details),
     )
+
+
+def _readiness_blocker_details(
+    details: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    normalized = dict(details or {})
+    metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
+    if any(_metadata_allows_curator_override(metadata) for metadata in metadata_sources):
+        normalized["allow_opt_out"] = True
+    if any(_metadata_override_requires_reason(metadata) for metadata in metadata_sources):
+        normalized["opt_out_reason_required"] = True
+    return normalized
+
+
+def _readiness_blocker_policy_metadata_sources(
+    details: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    metadata_sources: list[Mapping[str, Any]] = [details]
+    raw_validation_metadata = details.get("validation_metadata")
+    if isinstance(raw_validation_metadata, Mapping):
+        metadata_sources.append(raw_validation_metadata)
+        raw_field_policy = raw_validation_metadata.get("field_policy")
+        if isinstance(raw_field_policy, Mapping):
+            metadata_sources.append(raw_field_policy)
+    return tuple(metadata_sources)
 
 
 def _projection_ref_payload(row: DomainEnvelopeProjectionIndex) -> dict[str, Any]:
@@ -414,6 +439,8 @@ def _metadata_allows_curator_override(metadata: Mapping[str, Any]) -> bool:
 
 def _metadata_override_requires_reason(metadata: Mapping[str, Any]) -> bool:
     if metadata.get("opt_out_reason_required") is True:
+        return True
+    if metadata.get("reason_required") is True:
         return True
     for key in ("curator_override", "override", "validation"):
         raw_policy = metadata.get(key)
@@ -1408,6 +1435,7 @@ def _default_submission_target_key(adapter_key: str) -> str:
 def _resolve_submission_preview_target_key(
     *,
     adapter_key: str,
+    mode: SubmissionMode,
     requested_target_key: str | None,
 ) -> tuple[SubmissionDomainAdapter, str]:
     submission_adapter = _resolve_submission_domain_adapter(adapter_key)
@@ -1424,7 +1452,15 @@ def _resolve_submission_preview_target_key(
                 ),
             )
 
+        if mode == SubmissionMode.DIRECT_SUBMIT:
+            _resolve_submission_transport_adapter(requested_target_key)
+
         return submission_adapter, requested_target_key
+
+    if mode == SubmissionMode.DIRECT_SUBMIT:
+        return submission_adapter, _default_direct_submission_target_key(
+            supported_target_keys=supported_target_keys,
+        )
 
     if supported_target_keys:
         return submission_adapter, supported_target_keys[0]
@@ -1432,6 +1468,32 @@ def _resolve_submission_preview_target_key(
     # Keep the shared substrate target-agnostic even before adapters publish
     # explicit target identifiers for preview/export flows.
     return submission_adapter, _default_submission_target_key(adapter_key)
+
+
+def _default_direct_submission_target_key(
+    *,
+    supported_target_keys: Sequence[str],
+) -> str:
+    transport_target_keys = _submission_adapter_registry().target_keys()
+    eligible_target_keys = tuple(
+        target_key
+        for target_key in transport_target_keys
+        if not supported_target_keys or target_key in supported_target_keys
+    )
+
+    if len(eligible_target_keys) == 1:
+        return eligible_target_keys[0]
+
+    if not eligible_target_keys:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Submission target is not configured",
+        )
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Submission target is required when multiple direct-submit transports are configured",
+    )
 
 
 def _resolve_export_preview_target_key(
@@ -1907,6 +1969,7 @@ def submission_preview(
     else:
         submission_adapter, target_key = _resolve_submission_preview_target_key(
             adapter_key=session_row.adapter_key,
+            mode=request.mode,
             requested_target_key=request.target_key,
         )
     candidate_map = {str(candidate.id): candidate for candidate in session_row.candidates}

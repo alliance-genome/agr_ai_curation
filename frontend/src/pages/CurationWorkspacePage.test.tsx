@@ -5,6 +5,7 @@ import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type {
+  CurationSubmissionPreviewResponse,
   CurationWorkspace,
   DomainEnvelopeReviewRowsResponse,
 } from '@/features/curation/types'
@@ -15,6 +16,7 @@ const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
   createManualCurationCandidate: vi.fn(),
   deleteCurationCandidate: vi.fn(),
+  executeCurationSubmission: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
   fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
   fetchSubmissionPreview: vi.fn(),
@@ -47,6 +49,7 @@ vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   },
   createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
   deleteCurationCandidate: serviceMocks.deleteCurationCandidate,
+  executeCurationSubmission: serviceMocks.executeCurationSubmission,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
   fetchCurationWorkspaceEnvelopeReviewRows: serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
   fetchSubmissionPreview: serviceMocks.fetchSubmissionPreview,
@@ -479,6 +482,53 @@ function buildEnvelopeReviewRows(): DomainEnvelopeReviewRowsResponse {
   }
 }
 
+function buildSubmissionPreviewResponse(
+  mode: 'preview' | 'direct_submit' = 'preview',
+): CurationSubmissionPreviewResponse {
+  return {
+    submission: {
+      submission_id: `submission-${mode}`,
+      session_id: 'session-1',
+      adapter_key: 'entity_adapter',
+      mode,
+      target_key: 'review_export_bundle',
+      status: 'preview_ready',
+      readiness: [
+        {
+          candidate_id: 'candidate-accepted',
+          ready: true,
+          blocking_reasons: [],
+          warnings: [],
+          blockers: [],
+        },
+        {
+          candidate_id: 'candidate-pending',
+          ready: true,
+          blocking_reasons: [],
+          warnings: [],
+          blockers: [],
+        },
+      ],
+      payload: {
+        mode,
+        target_key: 'review_export_bundle',
+        adapter_key: 'entity_adapter',
+        candidate_ids: ['candidate-accepted', 'candidate-pending'],
+        payload_json: {
+          candidate_count: 2,
+        },
+        warnings: [],
+      },
+      requested_at: '2026-03-20T13:00:00Z',
+      validation_errors: [],
+      warnings: [],
+      submission_state: {},
+      target_result_history: [],
+    },
+    session_validation: null,
+  }
+}
+
 function LocationProbe() {
   const location = useLocation()
   return (
@@ -534,6 +584,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
     serviceMocks.createManualCurationCandidate.mockReset()
     serviceMocks.deleteCurationCandidate.mockReset()
+    serviceMocks.executeCurationSubmission.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
     serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReset()
     serviceMocks.fetchSubmissionPreview.mockReset()
@@ -657,6 +708,137 @@ describe('CurationWorkspacePage', () => {
     expect(
       screen.getByRole('link', { name: /back to inventory/i }),
     ).toHaveAttribute('href', '/curation')
+  })
+
+  it('passes envelope revisions into previews and submits with the preview-resolved target', async () => {
+    const workspace = buildWorkspace()
+    workspace.candidates = workspace.candidates.map((candidate) => ({
+      ...candidate,
+      status: 'accepted',
+      projection_ref: {
+        envelope_id: 'envelope-1',
+        object_id: candidate.candidate_id,
+        envelope_revision: 5,
+      },
+    }))
+    const directSubmitPreview = buildSubmissionPreviewResponse('direct_submit')
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.fetchSubmissionPreview
+      .mockResolvedValueOnce(buildSubmissionPreviewResponse('preview'))
+      .mockResolvedValueOnce(directSubmitPreview)
+    serviceMocks.executeCurationSubmission.mockResolvedValue({
+      submission: {
+        ...directSubmitPreview.submission,
+        status: 'accepted',
+        external_reference: 'noop:review_export_bundle:2',
+        completed_at: '2026-03-20T13:01:00Z',
+      },
+      session: {
+        ...workspace.session,
+        status: 'submitted',
+        submitted_at: '2026-03-20T13:01:00Z',
+      },
+      action_log_entry: {
+        action_id: 'action-submit-1',
+        session_id: 'session-1',
+        action_type: 'submission_executed',
+        actor_type: 'user',
+        occurred_at: '2026-03-20T13:01:00Z',
+        changed_field_keys: [],
+        evidence_anchor_ids: [],
+        metadata: {},
+      },
+    })
+
+    renderPage('/curation/session-1')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Preview submission' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview submission' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        mode: 'preview',
+        include_payload: true,
+        expected_envelope_revisions: {
+          'envelope-1': 5,
+        },
+      })
+    })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Submit mode' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
+        session_id: 'session-1',
+        mode: 'direct_submit',
+        include_payload: true,
+        expected_envelope_revisions: {
+          'envelope-1': 5,
+        },
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.executeCurationSubmission).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        target_key: 'review_export_bundle',
+        candidate_ids: ['candidate-accepted', 'candidate-pending'],
+        mode: 'direct_submit',
+        expected_envelope_revisions: {
+          'envelope-1': 5,
+        },
+      })
+    })
+  })
+
+  it('surfaces missing direct-submit preview payloads instead of deriving candidate IDs', async () => {
+    const workspace = buildWorkspace()
+    workspace.candidates = workspace.candidates.map((candidate) => ({
+      ...candidate,
+      status: 'accepted',
+      projection_ref: {
+        envelope_id: 'envelope-1',
+        object_id: candidate.candidate_id,
+        envelope_revision: 5,
+      },
+    }))
+    const directSubmitPreview = buildSubmissionPreviewResponse('direct_submit')
+    directSubmitPreview.submission.payload = null
+
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.fetchSubmissionPreview
+      .mockResolvedValueOnce(buildSubmissionPreviewResponse('preview'))
+      .mockResolvedValueOnce(directSubmitPreview)
+
+    renderPage('/curation/session-1')
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Preview submission' })).toBeInTheDocument()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview submission' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Submit mode' }))
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    expect(await screen.findByText(
+      'Direct submission requires a preview payload. Refresh the submission preview and try again.',
+    )).toBeInTheDocument()
+    expect(serviceMocks.executeCurationSubmission).not.toHaveBeenCalled()
   })
 
   it('initializes the PDF viewer document after hydration', async () => {

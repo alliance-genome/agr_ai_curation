@@ -1795,6 +1795,29 @@ def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_se
     assert response.submission.payload.payload_text is None
 
 
+def test_direct_submission_preview_defaults_to_configured_transport_target(db_session):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.DIRECT_SUBMIT,
+        ),
+    )
+
+    assert response.submission.status == CurationSubmissionStatus.PREVIEW_READY
+    assert response.submission.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
+    assert response.submission.payload is not None
+    assert response.submission.payload.mode == SubmissionMode.DIRECT_SUBMIT
+    assert response.submission.payload.target_key == DEFAULT_JSON_BUNDLE_TARGET_KEY
+    assert response.submission.payload.candidate_ids == [seeded["first_candidate_id"]]
+
+
 def test_submission_preview_routes_payload_generation_through_submission_adapter(
     db_session,
     monkeypatch,
@@ -2358,7 +2381,11 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
                 details={
                     "provider_refs": {
                         "catalog_schema": {"class": "Artifact", "field": "title"}
-                    }
+                    },
+                    "validation_metadata": {
+                        "allow_curator_override": True,
+                        "reason_required": True,
+                    },
                 },
             )
         ],
@@ -2384,6 +2411,8 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
     assert blocker.provider_refs == {
         "catalog_schema": {"class": "Artifact", "field": "title"}
     }
+    assert blocker.details["allow_opt_out"] is True
+    assert blocker.details["opt_out_reason_required"] is True
 
 
 def test_submission_export_allows_waived_finding_with_field_override_policy(

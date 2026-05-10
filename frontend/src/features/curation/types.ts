@@ -265,6 +265,29 @@ export interface CurationCandidateSubmissionReadiness {
   ready: boolean
   blocking_reasons: string[]
   warnings: string[]
+  blockers: CurationSubmissionReadinessBlocker[]
+}
+
+export interface CurationSubmissionReadinessBlockerDetails {
+  [key: string]: unknown
+  allow_opt_out?: boolean
+  opt_out_reason_required?: boolean
+  required?: boolean
+  export_blocking?: boolean
+  finding_id?: string
+}
+
+export interface CurationSubmissionReadinessBlocker {
+  envelope_id: string
+  object_id?: string | null
+  field_path?: string | null
+  severity: string
+  status: string
+  code?: string | null
+  message: string
+  provider_refs: Record<string, unknown>
+  projection_ref: Record<string, unknown>
+  details: CurationSubmissionReadinessBlockerDetails
 }
 
 export interface CurationDraftField {
@@ -452,6 +475,8 @@ export interface CurationSubmissionRecord {
   response_message?: string | null
   validation_errors: string[]
   warnings: string[]
+  submission_state: Record<string, unknown>
+  target_result_history: Record<string, unknown>[]
 }
 
 export interface CurationExtractionResultRecord {
@@ -796,6 +821,7 @@ export interface CurationSubmissionPreviewRequest {
   target_key?: SubmissionTargetKey
   candidate_ids?: string[]
   include_payload?: boolean
+  expected_envelope_revisions?: Record<string, number>
 }
 
 export interface CurationSubmissionPreviewResponse {
@@ -808,6 +834,7 @@ export interface CurationSubmissionExecuteRequest {
   target_key: SubmissionTargetKey
   candidate_ids?: string[]
   mode?: SubmissionMode
+  expected_envelope_revisions?: Record<string, number>
 }
 
 export interface CurationSubmissionExecuteResponse {
@@ -819,6 +846,7 @@ export interface CurationSubmissionExecuteResponse {
 export interface CurationSubmissionRetryRequest {
   submission_id: string
   reason?: string | null
+  expected_envelope_revisions?: Record<string, number>
 }
 
 export interface CurationSubmissionRetryResponse {

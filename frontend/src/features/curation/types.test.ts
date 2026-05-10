@@ -205,6 +205,7 @@ describe('curation workspace substrate types', () => {
                 ready: true,
                 blocking_reasons: [],
                 warnings: [],
+                blockers: [],
               },
             ],
             payload: {
@@ -218,6 +219,8 @@ describe('curation workspace substrate types', () => {
             requested_at: '2026-03-20T22:18:00Z',
             validation_errors: [],
             warnings: [],
+            submission_state: {},
+            target_result_history: [],
           },
         },
         entity_tags: [
