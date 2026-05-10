@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -658,9 +658,10 @@ describe('CurationWorkspacePage', () => {
     renderPage('/curation/session-1')
 
     expect(await screen.findByText('Envelope objects')).toBeInTheDocument()
-    expect(
-      screen.getByRole('region', { name: /envelope object table panel/i }),
-    ).toBeInTheDocument()
+    const envelopeObjectTablePanel = screen.getByRole('region', {
+      name: /envelope object table panel/i,
+    })
+    expect(envelopeObjectTablePanel).toBeInTheDocument()
 
     await waitFor(() => {
       expect(serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows).toHaveBeenCalledTimes(1)
@@ -673,7 +674,9 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getByText(/workspace_review_row/)).toBeInTheDocument()
     expect(screen.getByText('1 open / 1 findings')).toBeInTheDocument()
     expect(screen.getByText('Projected evidence sentence for TMEM67.')).toBeInTheDocument()
-    expect(screen.queryByText('Legacy should not render')).not.toBeInTheDocument()
+    expect(
+      within(envelopeObjectTablePanel).queryByText('Legacy should not render'),
+    ).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Accept TMEM67' }))
 

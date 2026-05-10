@@ -157,6 +157,29 @@ function updatePendingEnvelopeRevision(
   }
 }
 
+function envelopePatchesToDraftFieldChanges(
+  fieldPatches: PendingEnvelopeFieldPatch[],
+): CurationDraftFieldChange[] {
+  return fieldPatches.map((fieldPatch) => ({
+    field_key: fieldPatch.fieldKey,
+    value: fieldPatch.value,
+  }))
+}
+
+function collectPendingEnvelopeDraftFieldChanges(
+  inFlightFieldPatches: PendingEnvelopeFieldPatch[],
+  pendingEnvelope?: PendingEnvelopeAutosave,
+): CurationDraftFieldChange[] {
+  const pendingFieldPatches = pendingEnvelope
+    ? Array.from(pendingEnvelope.fieldPatches.values())
+    : []
+
+  return envelopePatchesToDraftFieldChanges([
+    ...inFlightFieldPatches,
+    ...pendingFieldPatches,
+  ])
+}
+
 function buildEnvelopeFieldPatch(args: {
   candidate: CurationCandidate
   fieldChange: CurationDraftFieldChange
@@ -406,11 +429,28 @@ export function useAutosave(
           latestRevision = response.envelope_revision
           remainingFieldPatches = fieldPatches.slice(index + 1)
           envelopeRevisionsRef.current.set(response.envelope_id, response.envelope_revision)
+          const nextPendingEnvelope = pendingEnvelopesRef.current.get(candidateId)
 
           if (options?.updateState !== false && mountedRef.current) {
-            setWorkspace((currentWorkspace) =>
-              mergeEnvelopeFieldPatchIntoWorkspace(currentWorkspace, response),
-            )
+            setWorkspace((currentWorkspace) => {
+              const mergedWorkspace = mergeEnvelopeFieldPatchIntoWorkspace(
+                currentWorkspace,
+                response,
+              )
+              const pendingFieldChanges = collectPendingEnvelopeDraftFieldChanges(
+                remainingFieldPatches,
+                nextPendingEnvelope,
+              )
+              if (pendingFieldChanges.length === 0) {
+                return mergedWorkspace
+              }
+
+              return applyDraftFieldChangesToWorkspace(
+                mergedWorkspace,
+                candidateId,
+                pendingFieldChanges,
+              )
+            })
           }
         }
 
