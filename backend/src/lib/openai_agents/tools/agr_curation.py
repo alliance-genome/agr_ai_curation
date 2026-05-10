@@ -821,6 +821,73 @@ def agr_curation_query(
     Returns:
         AgrQueryResult with status='ok', 'error', or 'validation_warning'
     """
+    limit_value: Optional[int] = None
+
+    def _transient_attempt_query() -> Dict[str, Any]:
+        if method == "get_gene_by_id":
+            return _attempt_query(method, gene_id=gene_id)
+        if method == "get_allele_by_id":
+            return _attempt_query(method, allele_id=allele_id)
+        if method == "get_ontology_term_by_curie":
+            return _attempt_query(
+                method,
+                term=term,
+                ontology_term_type=ontology_term_type,
+            )
+        if method in {"search_anatomy_terms", "search_life_stage_terms"}:
+            return _attempt_query(
+                method,
+                term=term,
+                data_provider=data_provider,
+                exact_match=exact_match,
+                include_synonyms=include_synonyms,
+                limit=limit_value,
+            )
+        if method == "search_go_terms":
+            return _attempt_query(
+                method,
+                term=term,
+                go_aspect=go_aspect,
+                exact_match=exact_match,
+                include_synonyms=include_synonyms,
+                limit=limit_value,
+            )
+        if method in {"get_gene_by_exact_symbol", "search_genes"}:
+            return _attempt_query(
+                method,
+                gene_symbol=gene_symbol,
+                data_provider=data_provider,
+                include_synonyms=include_synonyms if method == "search_genes" else None,
+                limit=limit_value if method == "search_genes" else None,
+            )
+        if method == "search_genes_bulk":
+            return _attempt_query(
+                method,
+                gene_symbols=gene_symbols,
+                data_provider=data_provider,
+                include_synonyms=include_synonyms,
+                limit=limit_value,
+                force=force or None,
+            )
+        if method in {"get_allele_by_exact_symbol", "search_alleles"}:
+            return _attempt_query(
+                method,
+                allele_symbol=allele_symbol,
+                data_provider=data_provider,
+                include_synonyms=include_synonyms if method == "search_alleles" else None,
+                limit=limit_value if method == "search_alleles" else None,
+            )
+        if method == "search_alleles_bulk":
+            return _attempt_query(
+                method,
+                allele_symbols=allele_symbols,
+                data_provider=data_provider,
+                include_synonyms=include_synonyms,
+                limit=limit_value,
+                force=force or None,
+            )
+        return _attempt_query(method)
+
     try:
         resolver = get_curation_resolver()
         db = resolver.get_db_client()
@@ -2275,7 +2342,7 @@ def agr_curation_query(
         return _err(
             f"Query error: {str(e)}",
             method=method,
-            attempted_query=_attempt_query(method),
+            attempted_query=_transient_attempt_query(),
             failure_classification=LOOKUP_STATUS_TRANSIENT,
             error=e,
         )

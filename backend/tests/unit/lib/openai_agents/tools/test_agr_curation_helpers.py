@@ -257,6 +257,57 @@ def test_query_branch_unknown_and_exception(monkeypatch):
     assert "Query error: db init failed" in (failed.message or "")
 
 
+def test_transient_lookup_exception_preserves_attempted_query(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def get_gene(_gene_id):
+            raise TimeoutError("gene lookup timed out")
+
+        @staticmethod
+        def search_go_terms(**_kwargs):
+            raise TimeoutError("GO lookup timed out")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+
+    gene_result = query_fn(
+        method="get_gene_by_id",
+        gene_id="WB:WBGene00000001",
+    )
+    assert gene_result.status == "error"
+    assert gene_result.lookup_status == "transient"
+    assert gene_result.lookup_attempts[0]["attempted_query"] == {
+        "method": "get_gene_by_id",
+        "gene_id": "WB:WBGene00000001",
+    }
+
+    go_result = query_fn(
+        method="search_go_terms",
+        term="kinase activity",
+        go_aspect="molecular_function",
+        exact_match=True,
+        include_synonyms=False,
+        limit=7,
+    )
+    assert go_result.status == "error"
+    assert go_result.lookup_status == "transient"
+    assert go_result.lookup_attempts[0]["attempted_query"] == {
+        "method": "search_go_terms",
+        "term": "kinase activity",
+        "go_aspect": "molecular_function",
+        "exact_match": True,
+        "include_synonyms": False,
+        "limit": 7,
+    }
+
+
 def test_query_simple_methods(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
 
