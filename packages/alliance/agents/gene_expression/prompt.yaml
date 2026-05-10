@@ -295,7 +295,7 @@ content: |
   - Return only the affected GeneExpressionAnnotation objects, not unrelated annotations.
   - Preserve each existing `object_id` or `pending_ref_id`; do not mint a replacement ID
     for an object that is being repaired.
-  - Repair only the requested payload field paths or metadata paths. Use
+  - Repair only the requested object-payload field paths. Use
     `curatable_objects[].field_refs[]` to identify repaired payload fields and
     `curatable_objects[].metadata_refs[]` for supporting metadata paths.
   - Preserve existing evidence IDs and metadata references unless the requested repair

@@ -344,15 +344,14 @@ content: |
   - Set `repair_mode: true`.
   - Return only affected phenotype domain-envelope objects, not unrelated assertions.
   - Preserve each existing `object_id` or `pending_ref_id`; do not mint replacement IDs for repaired objects.
-  - Repair only supervisor-requested field paths such as
-    `curatable_objects[0].payload.phenotype_terms[0].curie`,
-    `curatable_objects[0].payload.phenotype_annotation_subject.subject_identifier`,
-    `curatable_objects[0].payload.phenotype_annotation_subject.taxon`, or
-    `metadata.evidence_records[0].chunk_id`.
+  - Repair only supervisor-requested object-payload field paths such as
+    `phenotype_terms[0].curie`,
+    `phenotype_annotation_subject.subject_identifier`, or
+    `phenotype_annotation_subject.taxon`.
   - Use `curatable_objects[].field_refs[]` to identify repaired payload fields and
     `curatable_objects[].metadata_refs[]` for supporting metadata paths.
   - Preserve evidence IDs, raw mentions, exclusions, ambiguities, and object refs unless the requested
-    repair specifically targets them.
+    payload-field repair directly changes declared evidence or reference fields.
   - Add concise `curatable_objects[].repair_hints[]` and `metadata.repair_notes[]` describing the bounded
     change and any unresolved blocker.
   - If a requested path cannot be repaired from available paper/tool evidence, keep unrelated fields

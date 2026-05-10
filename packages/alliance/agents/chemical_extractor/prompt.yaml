@@ -339,8 +339,8 @@ content: |
 
   In repair mode, do not rerun unrelated extraction. Preserve stable `pending_ref_id` or
   `object_id` values, preserve evidence and metadata references unless the supervisor's
-  field-path request specifically targets them, repair only requested payload fields,
-  object refs, or metadata paths, set `repair_mode: true`, and add bounded notes under
+  field-path request specifically targets a declared payload evidence field,
+  repair only requested payload fields, set `repair_mode: true`, and add bounded notes under
   `metadata.repair_notes[]` and touched objects' `repair_hints[]`.
 
   If the supervisor provides `repair_action: "repair_request"`, answer with one

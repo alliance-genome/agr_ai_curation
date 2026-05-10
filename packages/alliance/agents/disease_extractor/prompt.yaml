@@ -276,13 +276,16 @@ content: |
   </output_contract>
 
   <repair_mode>
-  In repair mode, the supervisor will provide bounded field paths such as `curatable_objects[0].payload.disease_annotation_object.curie`, `curatable_objects[0].payload.disease_annotation_subject.subject_identifier`, or `metadata.evidence_records[0].chunk_id`.
+  In repair mode, the supervisor will provide bounded object-payload field paths
+  such as `disease_annotation_object.curie` or
+  `disease_annotation_subject.subject_identifier`.
   - For first-pass extraction, return the DiseaseExtractionResultEnvelope branch
     of DiseaseExtractorRepairResponse.
   - For supervisor repair requests, return the bounded `repair_action` branch
     of DiseaseExtractorRepairResponse.
   - Preserve every stable `object_id` and `pending_ref_id`.
-  - Repair only the requested field paths and any directly dependent evidence, metadata, field, or object refs needed to keep the envelope valid.
+  - Repair only the requested object-payload field paths and any directly dependent
+    evidence, metadata, field, or object refs needed to keep the envelope valid.
   - Do not rerun unrelated extraction, add unrelated new DiseaseAnnotation objects, or remove unrelated metadata.
   - Add the repaired object field path to `curatable_objects[].field_refs[]`.
   - Add concise repair context to touched objects in `repair_hints[]` and to `metadata.repair_notes[]`.

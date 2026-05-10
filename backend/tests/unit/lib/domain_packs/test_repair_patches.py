@@ -147,6 +147,16 @@ def _finding() -> ValidationFinding:
     )
 
 
+def _identifier_finding() -> ValidationFinding:
+    return ValidationFinding(
+        finding_id="validation:identifier",
+        severity=ValidationFindingSeverity.ERROR,
+        code="fixture.identifier_missing",
+        message="Gene identifier is missing.",
+        field_ref=FieldRef(object_ref=_object_ref(), field_path="gene.identifier"),
+    )
+
+
 def _alliance_envelope(object_type: str) -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="env-alliance",
@@ -420,6 +430,89 @@ def test_apply_repair_patch_rejects_expected_before_mismatch(tmp_path: Path):
     assert result.status is RepairPatchStatus.REJECTED
     assert result.envelope.objects[0].payload["gene"]["symbol"] == "abc-1"
     assert "expected_before" in result.errors[0]
+
+
+def test_rejected_multi_target_patch_consumes_budget_for_each_target(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+    envelope = _envelope().model_copy(
+        update={"validation_findings": [_finding(), _identifier_finding()]}
+    )
+    patch = DomainEnvelopeRepairPatch(
+        patch_id="repair-patch:multi-target",
+        envelope_id="env-1",
+        expected_revision=1,
+        source_finding_ids=["validation:symbol", "validation:identifier"],
+        operations=[
+            {
+                "object_ref": _object_ref(),
+                "field_path": "gene.symbol",
+                "expected_before": "stale-symbol",
+                "after": "abc-2",
+                "reason": "Try the validator-proposed symbol.",
+            },
+            {
+                "object_ref": _object_ref(),
+                "field_path": "gene.identifier",
+                "expected_before": None,
+                "after": "AGR:0000001",
+                "reason": "Fill the missing validator-proposed identifier.",
+            },
+        ],
+        rationale="Multi-target validator repair.",
+    )
+
+    before_request = build_repair_request(
+        envelope,
+        pack,
+        findings=envelope.validation_findings,
+        expected_revision=1,
+    )
+    result = apply_repair_patch(
+        envelope,
+        pack,
+        patch,
+        current_revision=1,
+        max_attempts=2,
+    )
+    after_request = build_repair_request(
+        result.envelope,
+        pack,
+        findings=result.envelope.validation_findings,
+        expected_revision=1,
+    )
+
+    before_budget = [
+        (target.finding_id, target.retry_budget.used_attempts)
+        for target in before_request.targets
+    ]
+    assert before_budget == [
+        ("validation:symbol", 0),
+        ("validation:identifier", 0),
+    ]
+    assert result.status is RepairPatchStatus.REJECTED
+    assert result.retry_budget.used_attempts == 1
+    assert [
+        (
+            target.finding_id,
+            target.retry_budget.used_attempts,
+            target.retry_budget.remaining_attempts,
+        )
+        for target in after_request.targets
+    ] == [
+        ("validation:symbol", 1, 1),
+        ("validation:identifier", 1, 1),
+    ]
+
+    attempt = result.envelope.metadata[REPAIR_CONTEXT_METADATA_KEY]["attempts"][-1]
+    assert attempt["retry_consumed"] is True
+    assert len(attempt["target_retry_keys"]) == 2
+    assert set(attempt["target_retry_keys"]).issubset(set(attempt["retry_keys"]))
+    assert {
+        budget["used_attempts"]
+        for budget in attempt["retry_budgets_by_key"].values()
+    } == {1}
 
 
 def test_apply_repair_patch_rejects_stale_revision_without_consuming_retry(

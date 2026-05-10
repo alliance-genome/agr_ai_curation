@@ -298,14 +298,10 @@ def build_repair_request(
         current_value = _payload_value(target_object.payload, finding.field_ref.field_path)
         if current_value is _MISSING:
             current_value = None
-        repair_key = _repair_key(
+        repair_key = _target_repair_key(
             finding_ids=[finding.finding_id] if finding.finding_id else [],
-            operations=[
-                {
-                    "object_ref": finding.field_ref.object_ref.model_dump(mode="json"),
-                    "field_path": finding.field_ref.field_path,
-                }
-            ],
+            object_ref=finding.field_ref.object_ref,
+            field_path=finding.field_ref.field_path,
         )
         used_attempts = _used_attempts(envelope, repair_key)
         targets.append(
@@ -397,7 +393,7 @@ def apply_repair_patch(
     validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(
         domain_pack
     )
-    repair_key = _repair_key(
+    patch_retry_key = _repair_key(
         finding_ids=repair_patch.source_finding_ids,
         operations=[
             {
@@ -407,7 +403,22 @@ def apply_repair_patch(
             for operation in repair_patch.operations
         ],
     )
-    used_before = _used_attempts(envelope, repair_key)
+    target_retry_keys = _target_retry_keys_for_patch(envelope, repair_patch)
+    consumed_retry_keys = _retry_keys_for_attempt(patch_retry_key, target_retry_keys)
+    budget_retry_keys = consumed_retry_keys
+    used_before = _max_used_attempts(envelope, budget_retry_keys)
+    retry_budgets_current = _retry_budgets_by_key(
+        envelope,
+        budget_retry_keys,
+        max_attempts=max_attempts,
+        consumed=False,
+    )
+    retry_budgets_after_consumption = _retry_budgets_by_key(
+        envelope,
+        budget_retry_keys,
+        max_attempts=max_attempts,
+        consumed=True,
+    )
 
     if repair_patch.envelope_id != envelope.envelope_id:
         return _rejected_patch_result(
@@ -417,7 +428,10 @@ def apply_repair_patch(
             errors=("patch envelope_id does not match envelope",),
             retry_budget=_retry_budget(max_attempts, used_before + 1),
             actor_id=actor_id,
-            repair_key=repair_key,
+            repair_key=patch_retry_key,
+            target_retry_keys=target_retry_keys,
+            consumed_retry_keys=consumed_retry_keys,
+            retry_budgets_by_key=retry_budgets_after_consumption,
             consumes_retry=True,
         )
 
@@ -433,7 +447,10 @@ def apply_repair_patch(
             ),
             retry_budget=_retry_budget(max_attempts, used_before),
             actor_id=actor_id,
-            repair_key=repair_key,
+            repair_key=patch_retry_key,
+            target_retry_keys=target_retry_keys,
+            consumed_retry_keys=(),
+            retry_budgets_by_key=retry_budgets_current,
             consumes_retry=False,
             extra_details={"current_revision": current_revision},
         )
@@ -446,7 +463,10 @@ def apply_repair_patch(
             errors=("repair retry budget is exhausted",),
             retry_budget=_retry_budget(max_attempts, used_before),
             actor_id=actor_id,
-            repair_key=repair_key,
+            repair_key=patch_retry_key,
+            target_retry_keys=target_retry_keys,
+            consumed_retry_keys=(),
+            retry_budgets_by_key=retry_budgets_current,
             consumes_retry=False,
         )
         classified = record_repair_final_classification(
@@ -526,7 +546,10 @@ def apply_repair_patch(
             errors=tuple(errors),
             retry_budget=_retry_budget(max_attempts, used_before + 1),
             actor_id=actor_id,
-            repair_key=repair_key,
+            repair_key=patch_retry_key,
+            target_retry_keys=target_retry_keys,
+            consumed_retry_keys=consumed_retry_keys,
+            retry_budgets_by_key=retry_budgets_after_consumption,
             consumes_retry=True,
         )
 
@@ -573,8 +596,11 @@ def apply_repair_patch(
         "patch": repair_patch.model_dump(mode="json"),
         "status": RepairPatchStatus.ACCEPTED.value,
         "current_revision": current_revision,
-        "retry_key": repair_key,
+        "retry_key": patch_retry_key,
+        "target_retry_keys": list(target_retry_keys),
+        "retry_keys": list(consumed_retry_keys),
         "retry_budget": retry_budget.model_dump(mode="json"),
+        "retry_budgets_by_key": retry_budgets_after_consumption,
         "field_updates": field_update_details,
     }
     history_events.append(
@@ -591,13 +617,17 @@ def apply_repair_patch(
         {
             "kind": "extractor_patch",
             "patch_id": repair_patch.patch_id,
-            "retry_key": repair_key,
+            "retry_key": patch_retry_key,
+            "target_retry_keys": list(target_retry_keys),
+            "retry_keys": list(consumed_retry_keys),
+            "retry_consumed": True,
             "status": RepairPatchStatus.ACCEPTED.value,
             "source_finding_ids": list(repair_patch.source_finding_ids),
             "operation_count": len(validated_operations),
             "expected_revision": repair_patch.expected_revision,
             "current_revision": current_revision,
             "retry_budget": retry_budget.model_dump(mode="json"),
+            "retry_budgets_by_key": retry_budgets_after_consumption,
             "chat_summary": (
                 f"Accepted repair patch {repair_patch.patch_id} for "
                 f"{len(validated_operations)} field(s)."
@@ -757,16 +787,27 @@ def _rejected_patch_result(
     retry_budget: RepairRetryBudget,
     actor_id: str,
     repair_key: str,
+    target_retry_keys: Iterable[str],
+    consumed_retry_keys: Iterable[str],
+    retry_budgets_by_key: Mapping[str, Mapping[str, Any]],
     consumes_retry: bool,
     extra_details: Mapping[str, Any] | None = None,
 ) -> RepairPatchResult:
+    target_retry_key_list = list(target_retry_keys)
+    consumed_retry_key_list = list(consumed_retry_keys)
+    retry_budget_payloads = {
+        key: dict(budget) for key, budget in retry_budgets_by_key.items()
+    }
     details = {
         "patch": patch.model_dump(mode="json"),
         "status": status.value,
         "errors": list(errors),
         "retry_key": repair_key,
+        "target_retry_keys": target_retry_key_list,
+        "retry_keys": consumed_retry_key_list,
         "retry_consumed": consumes_retry,
         "retry_budget": retry_budget.model_dump(mode="json"),
+        "retry_budgets_by_key": retry_budget_payloads,
     }
     if extra_details:
         details.update(dict(extra_details))
@@ -783,11 +824,15 @@ def _rejected_patch_result(
             "kind": "extractor_patch",
             "patch_id": patch.patch_id,
             "retry_key": repair_key,
+            "target_retry_keys": target_retry_key_list,
+            "retry_keys": consumed_retry_key_list,
             "status": status.value,
             "source_finding_ids": list(patch.source_finding_ids),
             "operation_count": len(patch.operations),
             "expected_revision": patch.expected_revision,
             "retry_budget": retry_budget.model_dump(mode="json"),
+            "retry_consumed": consumes_retry,
+            "retry_budgets_by_key": retry_budget_payloads,
             "errors": list(errors),
             "chat_summary": (
                 f"Rejected repair patch {patch.patch_id}: {status.value}."
@@ -830,13 +875,41 @@ def _used_attempts(envelope: DomainEnvelope, repair_key: str) -> int:
         1
         for item in attempts
         if isinstance(item, Mapping)
-        and item.get("retry_key") == repair_key
+        and _attempt_consumed_retry_key(item, repair_key)
         and item.get("kind") == "extractor_patch"
         and item.get("status") in {
             RepairPatchStatus.ACCEPTED.value,
             RepairPatchStatus.REJECTED.value,
         }
     )
+
+
+def _attempt_consumed_retry_key(attempt: Mapping[str, Any], repair_key: str) -> bool:
+    retry_keys = attempt.get("retry_keys")
+    if isinstance(retry_keys, list):
+        return repair_key in {str(item) for item in retry_keys if str(item)}
+    return attempt.get("retry_key") == repair_key
+
+
+def _max_used_attempts(envelope: DomainEnvelope, repair_keys: Iterable[str]) -> int:
+    return max((_used_attempts(envelope, key) for key in repair_keys), default=0)
+
+
+def _retry_budgets_by_key(
+    envelope: DomainEnvelope,
+    repair_keys: Iterable[str],
+    *,
+    max_attempts: int,
+    consumed: bool,
+) -> dict[str, dict[str, Any]]:
+    increment = 1 if consumed else 0
+    return {
+        key: _retry_budget(
+            max_attempts,
+            _used_attempts(envelope, key) + increment,
+        ).model_dump(mode="json")
+        for key in repair_keys
+    }
 
 
 def _append_repair_context(
@@ -1077,6 +1150,75 @@ def _repair_event(
 
 def _jsonable(value: Any) -> Any:
     return json.loads(json.dumps(value, sort_keys=True, default=str))
+
+
+def _target_retry_keys_for_patch(
+    envelope: DomainEnvelope,
+    patch: DomainEnvelopeRepairPatch,
+) -> tuple[str, ...]:
+    target_keys = [
+        _target_repair_key(
+            finding_ids=_operation_finding_ids(envelope, patch, operation),
+            object_ref=operation.object_ref,
+            field_path=operation.field_path,
+        )
+        for operation in patch.operations
+    ]
+    return tuple(dict.fromkeys(target_keys))
+
+
+def _operation_finding_ids(
+    envelope: DomainEnvelope,
+    patch: DomainEnvelopeRepairPatch,
+    operation: RepairPatchOperation,
+) -> tuple[str, ...]:
+    if operation.finding_id:
+        return (operation.finding_id,)
+
+    source_finding_ids = tuple(dict.fromkeys(patch.source_finding_ids))
+    matched_finding_ids = tuple(
+        finding.finding_id
+        for finding in envelope.validation_findings
+        if finding.finding_id is not None
+        and finding.field_ref is not None
+        and (
+            not source_finding_ids
+            or finding.finding_id in source_finding_ids
+        )
+        and finding.field_ref.object_ref.ref_key() == operation.object_ref.ref_key()
+        and finding.field_ref.field_path == operation.field_path
+    )
+    if matched_finding_ids:
+        return matched_finding_ids
+
+    if len(source_finding_ids) == 1:
+        return source_finding_ids
+
+    return ()
+
+
+def _target_repair_key(
+    *,
+    finding_ids: Iterable[str],
+    object_ref: ObjectRef,
+    field_path: str,
+) -> str:
+    return _repair_key(
+        finding_ids=finding_ids,
+        operations=[
+            {
+                "object_ref": object_ref.model_dump(mode="json"),
+                "field_path": field_path,
+            }
+        ],
+    )
+
+
+def _retry_keys_for_attempt(
+    patch_retry_key: str,
+    target_retry_keys: Iterable[str],
+) -> tuple[str, ...]:
+    return tuple(dict.fromkeys((patch_retry_key, *target_retry_keys)))
 
 
 def _repair_key(

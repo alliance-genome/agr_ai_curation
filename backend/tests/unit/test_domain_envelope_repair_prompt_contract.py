@@ -1,5 +1,6 @@
 """Prompt contract checks for validation-driven domain-envelope repair."""
 
+import re
 from pathlib import Path
 
 import yaml
@@ -92,6 +93,25 @@ def test_extractor_prompts_declare_bounded_patch_contracts():
             "Never patch protected fields",
         ]:
             assert fragment in content, f"{relative_path} missing {fragment}"
+
+
+def test_extractor_repair_prompt_examples_use_payload_relative_patch_paths():
+    forbidden_patterns = [
+        r"curatable_objects\[\d+\]\.payload\.",
+        r"metadata\.evidence_records\[\d+\]\.chunk_id",
+    ]
+    forbidden_fragments = [
+        "payload field paths or metadata paths",
+        "payload fields or metadata paths",
+        "object refs, or metadata paths",
+    ]
+
+    for relative_path in EXTRACTOR_PROMPTS:
+        content = _content(relative_path)
+        for pattern in forbidden_patterns:
+            assert re.search(pattern, content) is None, f"{relative_path} has {pattern}"
+        for fragment in forbidden_fragments:
+            assert fragment not in content, f"{relative_path} has {fragment}"
 
 
 def test_validator_prompts_keep_validation_separate_from_patching():
