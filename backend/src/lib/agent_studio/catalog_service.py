@@ -31,6 +31,7 @@ import re
 from dataclasses import dataclass, replace
 
 from agents import Agent
+from agents.agent_output import AgentOutputSchema
 from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
 from src.lib.file_outputs import FileValidationError, sanitize_output_descriptor
 
@@ -2098,6 +2099,18 @@ def _resolve_output_schema(schema_key: str) -> Optional[Any]:
     return schema
 
 
+def _runtime_output_type_for_schema(output_schema: Optional[Any]) -> Optional[Any]:
+    """Convert a resolved schema class into the output_type Agents should run."""
+
+    if output_schema is None:
+        return None
+    if getattr(output_schema, "__domain_envelope_extractor_repair_response__", False):
+        # These responses intentionally carry provider-owned envelope payloads
+        # and repair metadata; Pydantic and the patch engine remain authoritative.
+        return AgentOutputSchema(output_schema, strict_json_schema=False)
+    return output_schema
+
+
 def validate_active_agent_output_schemas(db: Any) -> None:
     """Fail fast when active agents reference unknown output schema keys."""
     from src.models.sql.agent import Agent as DBAgent
@@ -2151,6 +2164,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             raise ValueError(
                 f"Unknown output schema '{output_schema_key}' for agent '{db_agent.agent_key}'"
             )
+    runtime_output_type = _runtime_output_type_for_schema(output_schema)
 
     # Resolve tools from explicit binding metadata (no runtime fallbacks).
     output_guardrails: List[Any] = []
@@ -2237,7 +2251,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         model=get_model_for_agent(effective_model_id, provider_override=model_provider),
         model_settings=model_settings,
         tools=tools,
-        output_type=output_schema,
+        output_type=runtime_output_type,
         output_guardrails=output_guardrails,
     )
 
