@@ -10,7 +10,11 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from src.schemas.flows import CreateFlowRequest, UpdateFlowRequest
+from src.schemas.flows import (
+    CreateFlowRequest,
+    FlowValidationAttachmentSelection,
+    UpdateFlowRequest,
+)
 
 flows = importlib.import_module("src.api.flows")
 
@@ -102,6 +106,40 @@ async def test_get_flow_uses_verify_ownership(monkeypatch):
     response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
     assert response.id == owned.id
     assert response.name == "Owned"
+
+
+@pytest.mark.asyncio
+async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeypatch):
+    owned = _flow(name="Owned")
+    calls = []
+
+    def _hydrate(flow_definition):
+        calls.append(flow_definition.nodes[1].data.agent_id)
+        hydrated = flow_definition.model_copy(deep=True)
+        hydrated.nodes[1].data.validation_attachments = [
+            FlowValidationAttachmentSelection(
+                attachment_id="fixture.validation:binding:shape:pack",
+                domain_pack_id="fixture.validation",
+                validator_id="shape",
+                validator_binding_id="shape",
+                state="active",
+                scope="pack",
+                required=True,
+                export_blocking=True,
+                default_enabled=True,
+                enabled=True,
+            )
+        ]
+        return hydrated
+
+    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(flows, "apply_flow_validation_attachment_defaults", _hydrate)
+
+    response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
+
+    assert calls == ["gene_expression"]
+    attachments = response.flow_definition.nodes[1].data.validation_attachments
+    assert attachments[0].attachment_id == "fixture.validation:binding:shape:pack"
 
 
 @pytest.mark.asyncio

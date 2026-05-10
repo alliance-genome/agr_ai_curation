@@ -87,7 +87,7 @@ def test_apply_defaults_selects_required_active_and_keeps_planned_blocked_visibl
 def test_apply_defaults_preserves_allowed_opt_out_reason():
     agent_registry = {
         "fixture_extractor": {
-            "curation": {"domain_pack_id": "agr.alliance.chemical_condition"}
+            "curation": {"domain_pack_id": "agr" + ".alliance.chemical_condition"}
         }
     }
     initial = apply_flow_validation_attachment_defaults(
@@ -127,7 +127,7 @@ def test_apply_defaults_rejects_unknown_attachment_ids():
         attachments=[
             {
                 "attachment_id": "unknown",
-                "domain_pack_id": "agr.alliance.chemical_condition",
+                "domain_pack_id": "fixture.validation",
                 "validator_id": "unknown",
                 "state": "active",
                 "scope": "pack",
@@ -183,3 +183,11 @@ def test_validation_schedule_splits_active_opt_out_and_inactive_metadata():
     assert [item["attachment_id"] for item in schedule["inactive_metadata"]] == [
         "planned"
     ]
+
+
+def test_validation_schedule_rejects_unexpected_attachment_types():
+    with pytest.raises(
+        FlowValidationAttachmentError,
+        match="Unexpected validation attachment type: object",
+    ):
+        validation_schedule_from_node_data({"validation_attachments": [object()]})

@@ -424,22 +424,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       setCurrentFlowId(flow.id)
 
       // Convert flow definition to React Flow format
-      const flowNodes = flow.flow_definition.nodes.map((n) => {
-        const validationAttachments = n.data.validation_attachments?.length
-          ? n.data.validation_attachments
-          : buildDefaultValidationSelections(n.data.agent_id, agentMetadata)
-        return {
+      const flowNodes = flow.flow_definition.nodes.map((n) => (
+        {
           id: n.id,
           type: n.type === 'task_input' ? 'task_input' : 'agent',
           position: n.position,
-          data: {
-            ...n.data,
-            validation_attachments: validationAttachments.length > 0
-              ? validationAttachments
-              : undefined,
-          },
+          data: n.data,
         }
-      })
+      ))
       const flowEdges = flow.flow_definition.edges.map((e) => ({
         id: e.id,
         source: e.source,
@@ -483,7 +475,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     } finally {
       setLoading(false)
     }
-  }, [setNodes, setEdges, reactFlowInstance, agentMetadata])
+  }, [setNodes, setEdges, reactFlowInstance])
 
   // Cleanup timeouts on unmount
   useEffect(() => {

@@ -208,7 +208,9 @@ def _plain_attachment(raw_attachment: Any) -> dict[str, Any]:
         return raw_attachment.model_dump()
     if isinstance(raw_attachment, Mapping):
         return dict(raw_attachment)
-    return {}
+    raise FlowValidationAttachmentError(
+        f"Unexpected validation attachment type: {type(raw_attachment).__name__}"
+    )
 
 
 def _schedule_entry(attachment: Mapping[str, Any]) -> dict[str, Any]:
