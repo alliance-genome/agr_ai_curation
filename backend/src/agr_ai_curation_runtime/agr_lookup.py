@@ -586,7 +586,7 @@ def fetch_gene_details_bulk(
                 return details, detail_failures
         except Exception as exc:
             logger.warning(
-                "Batch gene detail fetch failed, falling back to per-CURIE lookups: %s",
+                "Batch gene detail fetch failed; retrying per-CURIE: %s",
                 exc,
             )
             _append_batch_detail_failures(
@@ -713,7 +713,7 @@ def fetch_allele_details_bulk(
                 return details, detail_failures
         except Exception as exc:
             logger.warning(
-                "Batch allele detail fetch failed, falling back to per-CURIE lookups: %s",
+                "Batch allele detail fetch failed; retrying per-CURIE: %s",
                 exc,
             )
             _append_batch_detail_failures(
