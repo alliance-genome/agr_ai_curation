@@ -23,6 +23,7 @@ import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import Tooltip from '@mui/material/Tooltip';
 import { alpha } from '@mui/material/styles';
 import { ToolCallsData, ToolResultParsed } from '../types';
+import { DomainEnvelopeSignalPanel, hasDomainEnvelopeSignals } from './DomainEnvelopeSignalPanel';
 
 interface ToolCallsViewProps {
   data: ToolCallsData;
@@ -436,6 +437,7 @@ export function ToolCallsView({ data }: ToolCallsViewProps) {
   const hasExternalCalls = data.tool_calls.some(
     call => (call.url && call.url !== 'N/A') || (call.status_code && call.status_code !== 'N/A')
   );
+  const domainEnvelopeCalls = data.tool_calls.filter(call => hasDomainEnvelopeSignals(call.domain_envelope));
 
   return (
     <Box>
@@ -462,6 +464,18 @@ export function ToolCallsView({ data }: ToolCallsViewProps) {
           </Typography>
           {data.unique_tools.map(tool => (
             <Chip key={tool} label={tool} size="small" variant="outlined" />
+          ))}
+        </Box>
+      )}
+
+      {domainEnvelopeCalls.length > 0 && (
+        <Box sx={{ mb: 3, display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mr: 1 }}>
+            Domain-envelope calls:
+          </Typography>
+          <Chip label={`${domainEnvelopeCalls.length} calls`} size="small" color="info" />
+          {domainEnvelopeCalls.flatMap(call => call.domain_envelope?.envelope_ids ?? []).slice(0, 6).map((envelopeId, index) => (
+            <Chip key={`${envelopeId}-${index}`} label={envelopeId} size="small" variant="outlined" color="primary" sx={{ fontFamily: 'monospace' }} />
           ))}
         </Box>
       )}
@@ -515,10 +529,25 @@ export function ToolCallsView({ data }: ToolCallsViewProps) {
                       color={getStatusColor(call.status)}
                     />
                   )}
+                  {hasDomainEnvelopeSignals(call.domain_envelope) && (
+                    <Chip
+                      label="Domain envelope"
+                      size="small"
+                      color="info"
+                      variant="outlined"
+                    />
+                  )}
                 </Box>
               </AccordionSummary>
               <AccordionDetails>
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  <DomainEnvelopeSignalPanel
+                    summary={call.domain_envelope}
+                    title="Domain Envelope Signals"
+                    dense
+                    variant="inline"
+                  />
+
                   {/* Metadata row */}
                   <Grid container spacing={3}>
                     <Grid item xs={12} sm={6} md={3}>

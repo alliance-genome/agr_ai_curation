@@ -30,11 +30,13 @@ export interface SummaryData {
   score_count: number;
   timestamp: string;
   system_domain?: string;
+  domain_envelope?: DomainEnvelopeTraceSummary;
 }
 
 export interface ConversationData {
   user_input: string;
   assistant_response: string;
+  domain_envelope?: DomainEnvelopeTraceSummary;
   trace_id: string;
   trace_name: string;
   session_id?: string;
@@ -85,6 +87,7 @@ export interface ToolCall {
   output?: any;
   tool_result?: ToolResultParsed | null;
   tool_result_length?: number;
+  domain_envelope?: DomainEnvelopeTraceSummary;
 }
 
 export interface ToolCallsData {
@@ -288,6 +291,132 @@ export interface GroupContextData {
 export type ModContextData = GroupContextData;
 export type ModDetail = GroupDetail;
 
+// Domain-envelope TraceReview diagnostics
+export interface DomainEnvelopeTraceSummaryCounts {
+  envelope_count: number;
+  object_count: number;
+  finding_count: number;
+  field_path_count: number;
+  repair_attempt_count: number;
+  definition_state_flag_count: number;
+  blocker_count: number;
+  curator_edit_count: number;
+  projection_count: number;
+  submission_state_count: number;
+}
+
+export interface DomainEnvelopeObjectSignal {
+  envelope_id?: string;
+  object_id?: string;
+  pending_ref_id?: string;
+  object_type?: string;
+  object_role?: string;
+  status?: string;
+  validation_state?: string;
+  definition_state?: string;
+  model_ref?: string;
+  source_path?: string;
+}
+
+export interface DomainEnvelopeFindingSignal {
+  envelope_id?: string;
+  finding_id?: string;
+  severity?: string;
+  status?: string;
+  code?: string;
+  message?: string;
+  object_id?: string;
+  pending_ref_id?: string;
+  object_type?: string;
+  field_path?: string;
+  source_path?: string;
+}
+
+export interface DomainEnvelopeRepairAttempt {
+  repair_action: string;
+  envelope_id?: string;
+  expected_revision?: string;
+  patch_id?: string;
+  event_id?: string;
+  status?: string;
+  classification?: string;
+  finding_ids: string[];
+  object_ids: string[];
+  pending_ref_ids: string[];
+  field_paths: string[];
+  operation_count: number;
+  target_count: number;
+  retry_budget?: Record<string, unknown> | null;
+  message?: string;
+  source_path?: string;
+}
+
+export interface DomainEnvelopeDefinitionStateFlag {
+  source: string;
+  definition_state: string;
+  envelope_id?: string;
+  object_id?: string;
+  pending_ref_id?: string;
+  object_type?: string;
+  field_path?: string;
+  message?: string;
+  source_path?: string;
+}
+
+export interface DomainEnvelopeBlockerSignal {
+  envelope_id?: string;
+  object_id?: string;
+  pending_ref_id?: string;
+  object_type?: string;
+  field_path?: string;
+  severity?: string;
+  status?: string;
+  code?: string;
+  message?: string;
+  finding_id?: string;
+  projection_ref?: Record<string, unknown>;
+  details?: Record<string, unknown>;
+  source_path?: string;
+}
+
+export interface DomainEnvelopeProjectionSignal {
+  envelope_id?: string;
+  object_id?: string;
+  field_path?: string;
+  envelope_revision?: string;
+  projection_type?: string;
+  projection_key?: string;
+  projection_status?: string;
+  candidate_id?: string;
+  review_row_count?: string;
+  source_path?: string;
+}
+
+export interface DomainEnvelopeTraceSummary {
+  found: boolean;
+  summary: Partial<DomainEnvelopeTraceSummaryCounts>;
+  envelope_ids: string[];
+  object_ids: string[];
+  pending_ref_ids?: string[];
+  finding_ids: string[];
+  field_paths: string[];
+  validation_states?: string[];
+  validation_state_counts?: Record<string, number>;
+  definition_state_counts?: Record<string, number>;
+  envelopes?: Array<Record<string, unknown>>;
+  objects?: DomainEnvelopeObjectSignal[];
+  validation_findings?: DomainEnvelopeFindingSignal[];
+  repair_attempts?: DomainEnvelopeRepairAttempt[];
+  definition_state_flags?: DomainEnvelopeDefinitionStateFlag[];
+  blockers?: DomainEnvelopeBlockerSignal[];
+  curator_edits?: Array<Record<string, unknown>>;
+  projections?: DomainEnvelopeProjectionSignal[];
+  submission_states?: Array<Record<string, unknown>>;
+  has_repair_loop?: boolean;
+  has_blockers?: boolean;
+  has_definition_state_flags?: boolean;
+}
+
 // Trace Summary Types
 export interface TraceSummaryData {
   trace_info: {
@@ -327,7 +456,9 @@ export interface TraceSummaryData {
     total_tool_calls: number;
     tool_counts: { [tool: string]: number };
     unique_tools: string[];
+    domain_envelope_tool_call_count?: number;
   };
+  domain_envelope?: DomainEnvelopeTraceSummary;
   errors: Array<{
     type: string;
     message: string;

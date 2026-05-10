@@ -2,6 +2,7 @@ import json
 import unittest
 
 from src.analyzers.conversation import ConversationAnalyzer
+from src.analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from src.analyzers.pdf_citations import PDFCitationsAnalyzer
 from src.analyzers.tool_calls import ToolCallAnalyzer
 from src.analyzers.trace_summary import TraceSummaryAnalyzer
@@ -102,6 +103,139 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
                         "type": "function_call_output",
                         "call_id": "call-pdf",
                         "output": json.dumps(payload),
+                    },
+                ],
+                "output": {},
+            }
+        ]
+
+    def _make_domain_envelope(self):
+        return {
+            "envelope_id": "env-domain-1",
+            "domain_pack_id": "agr.test.gene",
+            "domain_pack_version": "0.7.0",
+            "status": "validating",
+            "schema_ref": {
+                "schema_id": "gene-expression",
+                "definition_state": "stable",
+            },
+            "objects": [
+                {
+                    "object_id": "gene-expression-object-1",
+                    "object_type": "gene_expression",
+                    "status": "needs_review",
+                    "definition_state": "in_development",
+                    "payload": {
+                        "gene": {"symbol": "tmem67"},
+                        "evidence": [{"snippet": "tmem67 expression"}],
+                    },
+                    "metadata": {"validation_state": "pending_reference_resolution"},
+                }
+            ],
+            "validation_findings": [
+                {
+                    "finding_id": "finding-required-symbol",
+                    "severity": "blocker",
+                    "status": "open",
+                    "code": "domain_envelope.required_field_missing",
+                    "message": "Required export field is missing: gene.symbol.",
+                    "field_ref": {
+                        "object_ref": {
+                            "object_id": "gene-expression-object-1",
+                            "object_type": "gene_expression",
+                        },
+                        "field_path": "gene.symbol",
+                    },
+                }
+            ],
+            "history": [
+                {
+                    "event_id": "repair-request-1",
+                    "event_type": "repair_requested",
+                    "actor_type": "system",
+                    "message": "Repair requested for gene.symbol.",
+                    "field_ref": {
+                        "object_ref": {
+                            "object_id": "gene-expression-object-1",
+                            "object_type": "gene_expression",
+                        },
+                        "field_path": "gene.symbol",
+                    },
+                    "details": {
+                        "finding_id": "finding-required-symbol",
+                        "retry_budget": {
+                            "max_attempts": 2,
+                            "used_attempts": 1,
+                            "remaining_attempts": 1,
+                            "exhausted": False,
+                        },
+                    },
+                },
+                {
+                    "event_id": "curator-edit-1",
+                    "event_type": "curator_field_patch_accepted",
+                    "actor_type": "human",
+                    "actor_id": "curator@example.org",
+                    "message": "Curator accepted field patch.",
+                    "field_ref": {
+                        "object_ref": {
+                            "object_id": "gene-expression-object-1",
+                            "object_type": "gene_expression",
+                        },
+                        "field_path": "gene.symbol",
+                    },
+                },
+            ],
+        }
+
+    def _make_domain_envelope_tool_observations(self):
+        return [
+            {
+                "id": "gen-domain",
+                "type": "GENERATION",
+                "name": "OpenAI-generation",
+                "startTime": "2026-03-26T00:00:03Z",
+                "model": "gpt-4o",
+                "input": [
+                    {"role": "user", "content": "Prepare these for curation."},
+                    {
+                        "type": "function_call",
+                        "call_id": "call-domain-prep",
+                        "name": "curation_prep",
+                        "arguments": json.dumps({
+                            "envelope_id": "env-domain-1",
+                            "expected_revision": 1,
+                        }),
+                        "status": "completed",
+                    },
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call-domain-prep",
+                        "output": json.dumps({
+                            "envelope_refs": [
+                                {
+                                    "envelope_id": "env-domain-1",
+                                    "envelope_revision": 2,
+                                    "domain_pack_id": "agr.test.gene",
+                                    "review_row_count": 1,
+                                }
+                            ],
+                            "readiness_blockers": [
+                                {
+                                    "envelope_id": "env-domain-1",
+                                    "object_id": "gene-expression-object-1",
+                                    "field_path": "gene.symbol",
+                                    "severity": "blocker",
+                                    "status": "open",
+                                    "code": "domain_envelope.required_field_missing",
+                                    "message": "Required export field is missing: gene.symbol.",
+                                }
+                            ],
+                            "submission_state": {
+                                "target": "preview",
+                                "status": "blocked",
+                            },
+                        }),
                     },
                 ],
                 "output": {},
@@ -289,6 +423,240 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
             summary["tool_summary"]["unique_tools"],
             ["search_document", "read_section"],
         )
+
+    def test_trace_summary_reports_domain_envelope_identifiers_and_repair_loop(self):
+        envelope = self._make_domain_envelope()
+        summary = TraceSummaryAnalyzer.analyze(
+            {"raw_trace": self._make_trace({"domain_envelopes": [envelope]})},
+            self._make_domain_envelope_tool_observations(),
+        )
+        domain = summary["domain_envelope"]
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-domain-1"])
+        self.assertIn("gene-expression-object-1", domain["object_ids"])
+        self.assertIn("finding-required-symbol", domain["finding_ids"])
+        self.assertIn("gene.symbol", domain["field_paths"])
+        self.assertEqual(domain["summary"]["repair_attempt_count"], 1)
+        self.assertEqual(domain["summary"]["blocker_count"], 2)
+        self.assertEqual(domain["validation_state_counts"]["pending_reference_resolution"], 1)
+        self.assertEqual(domain["definition_state_counts"]["in_development"], 1)
+        self.assertEqual(domain["definition_state_flags"][0]["object_id"], "gene-expression-object-1")
+        self.assertEqual(domain["curator_edits"][0]["field_path"], "gene.symbol")
+        self.assertEqual(summary["tool_summary"]["domain_envelope_tool_call_count"], 1)
+
+    def test_trace_summary_includes_score_domain_envelope_signals(self):
+        summary = TraceSummaryAnalyzer.analyze(
+            {
+                "raw_trace": self._make_trace({}),
+                "scores": [
+                    {
+                        "id": "score-submission-state",
+                        "metadata": {
+                            "envelope_id": "env-score-1",
+                            "object_id": "object-score-1",
+                            "submission_state": {
+                                "target": "production",
+                                "status": "blocked",
+                            },
+                        },
+                    }
+                ],
+            },
+            [],
+        )
+
+        domain = summary["domain_envelope"]
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-score-1"])
+        self.assertEqual(domain["object_ids"], ["object-score-1"])
+        self.assertGreaterEqual(domain["summary"]["submission_state_count"], 1)
+
+    def test_domain_envelope_analyzer_reports_top_level_curatable_objects(self):
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload({
+            "curatable_objects": [
+                {
+                    "pending_ref_id": "pending-gene-expression-1",
+                    "object_type": "gene_expression",
+                    "payload": {"gene": {"symbol": "tmem67"}},
+                    "field_refs": [
+                        {
+                            "object_ref": {
+                                "pending_ref_id": "pending-gene-expression-1",
+                                "object_type": "gene_expression",
+                            },
+                            "field_path": "gene.symbol",
+                        }
+                    ],
+                }
+            ]
+        })
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["summary"]["object_count"], 1)
+        self.assertEqual(domain["object_ids"], [])
+        self.assertEqual(domain["pending_ref_ids"], ["pending-gene-expression-1"])
+        self.assertIn("gene.symbol", domain["field_paths"])
+        self.assertEqual(domain["objects"][0]["pending_ref_id"], "pending-gene-expression-1")
+        self.assertEqual(domain["objects"][0]["source_path"], "payload.curatable_objects[0]")
+
+    def test_domain_envelope_analyzer_reports_nested_repair_contract_metadata(self):
+        domain = DomainEnvelopeTraceAnalyzer.analyze_payload({
+            "domain_envelopes": [
+                {
+                    "envelope_id": "env-repair-1",
+                    "history": [
+                        {
+                            "event_id": "repair-requested-1",
+                            "event_type": "repair_requested",
+                            "details": {
+                                "repair_action": "repair_request",
+                                "request_id": "request-1",
+                                "envelope_id": "env-repair-1",
+                                "expected_revision": 3,
+                                "targets": [
+                                    {
+                                        "finding_id": "finding-1",
+                                        "object_ref": {
+                                            "object_id": "object-1",
+                                            "object_type": "gene_expression",
+                                        },
+                                        "field_path": "gene.symbol",
+                                        "message": "Required export field is missing.",
+                                        "retry_budget": {
+                                            "max_attempts": 2,
+                                            "used_attempts": 1,
+                                            "remaining_attempts": 1,
+                                            "exhausted": False,
+                                        },
+                                    }
+                                ],
+                            },
+                        },
+                        {
+                            "event_id": "repair-accepted-1",
+                            "event_type": "repair_patch_accepted",
+                            "details": {
+                                "patch": {
+                                    "repair_action": "extractor_patch",
+                                    "patch_id": "patch-1",
+                                    "envelope_id": "env-repair-1",
+                                    "expected_revision": 3,
+                                    "source_finding_ids": ["finding-1"],
+                                    "operations": [
+                                        {
+                                            "object_ref": {
+                                                "object_id": "object-1",
+                                                "object_type": "gene_expression",
+                                            },
+                                            "field_path": "gene.symbol",
+                                            "finding_id": "finding-1",
+                                            "reason": "Found the missing symbol.",
+                                        }
+                                    ],
+                                },
+                                "status": "accepted",
+                                "retry_budget": {
+                                    "max_attempts": 2,
+                                    "used_attempts": 2,
+                                    "remaining_attempts": 0,
+                                    "exhausted": True,
+                                },
+                                "field_updates": [
+                                    {
+                                        "field_path": "gene.symbol",
+                                        "source_finding_ids": ["finding-1"],
+                                    }
+                                ],
+                            },
+                        },
+                        {
+                            "event_id": "repair-rejected-1",
+                            "event_type": "repair_patch_rejected",
+                            "details": {
+                                "patch": {
+                                    "repair_action": "extractor_patch",
+                                    "patch_id": "patch-2",
+                                    "envelope_id": "env-repair-1",
+                                    "expected_revision": 4,
+                                    "source_finding_ids": ["finding-2"],
+                                    "operations": [
+                                        {
+                                            "object_ref": {
+                                                "object_id": "object-2",
+                                                "object_type": "gene_expression",
+                                            },
+                                            "field_path": "evidence[0].publication_id",
+                                            "finding_id": "finding-2",
+                                            "reason": "Publication mismatch.",
+                                        }
+                                    ],
+                                },
+                                "status": "rejected",
+                                "retry_budget": {
+                                    "max_attempts": 2,
+                                    "used_attempts": 1,
+                                    "remaining_attempts": 1,
+                                    "exhausted": False,
+                                },
+                            },
+                        },
+                    ],
+                }
+            ]
+        })
+
+        repairs = {
+            repair["repair_action"]: repair
+            for repair in domain["repair_attempts"]
+        }
+
+        self.assertEqual(domain["summary"]["repair_attempt_count"], 3)
+        self.assertEqual(domain["envelope_ids"], ["env-repair-1"])
+        self.assertCountEqual(domain["object_ids"], ["object-1", "object-2"])
+        self.assertCountEqual(domain["finding_ids"], ["finding-1", "finding-2"])
+        self.assertCountEqual(domain["field_paths"], ["gene.symbol", "evidence[0].publication_id"])
+
+        request = repairs["repair_requested"]
+        self.assertEqual(request["finding_ids"], ["finding-1"])
+        self.assertEqual(request["object_ids"], ["object-1"])
+        self.assertEqual(request["field_paths"], ["gene.symbol"])
+        self.assertEqual(request["expected_revision"], "3")
+        self.assertEqual(request["target_count"], 1)
+        self.assertEqual(request["retry_budget"]["remaining_attempts"], 1)
+
+        accepted = repairs["repair_patch_accepted"]
+        self.assertEqual(accepted["patch_id"], "patch-1")
+        self.assertEqual(accepted["status"], "accepted")
+        self.assertEqual(accepted["finding_ids"], ["finding-1"])
+        self.assertEqual(accepted["object_ids"], ["object-1"])
+        self.assertEqual(accepted["field_paths"], ["gene.symbol"])
+        self.assertEqual(accepted["operation_count"], 1)
+        self.assertEqual(accepted["retry_budget"]["exhausted"], True)
+
+        rejected = repairs["repair_patch_rejected"]
+        self.assertEqual(rejected["patch_id"], "patch-2")
+        self.assertEqual(rejected["status"], "rejected")
+        self.assertEqual(rejected["finding_ids"], ["finding-2"])
+        self.assertEqual(rejected["object_ids"], ["object-2"])
+        self.assertEqual(rejected["field_paths"], ["evidence[0].publication_id"])
+        self.assertEqual(rejected["operation_count"], 1)
+        self.assertEqual(rejected["retry_budget"]["remaining_attempts"], 1)
+
+    def test_tool_calls_report_domain_envelope_projection_blocker_and_submission_state(self):
+        data = ToolCallAnalyzer.extract_tool_calls(self._make_domain_envelope_tool_observations())
+
+        self.assertEqual(data["total_count"], 1)
+        call = data["tool_calls"][0]
+        domain = call["domain_envelope"]
+
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-domain-1"])
+        self.assertEqual(domain["object_ids"], ["gene-expression-object-1"])
+        self.assertIn("gene.symbol", domain["field_paths"])
+        self.assertEqual(domain["summary"]["projection_count"], 1)
+        self.assertEqual(domain["summary"]["blocker_count"], 1)
+        self.assertEqual(domain["summary"]["submission_state_count"], 1)
 
     def test_cache_policy_only_caches_finished_trace_outputs(self):
         self.assertTrue(is_trace_output_cacheable({"response": "final answer"}))

@@ -9,6 +9,7 @@ from typing import Dict, List, Any
 from collections import defaultdict
 
 from .conversation import ConversationAnalyzer
+from .domain_envelopes import DomainEnvelopeTraceAnalyzer
 from .tool_calls import ToolCallAnalyzer
 
 
@@ -113,7 +114,19 @@ class TraceSummaryAnalyzer:
             "total_tool_calls": tool_calls_analysis.get("total_count", 0),
             "tool_counts": tool_counts,
             "unique_tools": tool_calls_analysis.get("unique_tools", []),
+            "domain_envelope_tool_call_count": sum(
+                1 for call in tool_calls_analysis.get("tool_calls", [])
+                if call["domain_envelope"].get("found")
+            ),
         }
+
+        trace_scores = trace.get("scores")
+        raw_scores = trace_scores if isinstance(trace_scores, list) else None
+        domain_envelope = DomainEnvelopeTraceAnalyzer.analyze(
+            raw_trace,
+            observations,
+            scores=raw_scores,
+        )
 
         # Error detection
         errors = []
@@ -188,6 +201,7 @@ class TraceSummaryAnalyzer:
             "cost": cost,
             "generation_stats": generation_stats,
             "tool_summary": tool_summary,
+            "domain_envelope": domain_envelope,
             "errors": errors,
             "has_errors": len(errors) > 0,
             "context_overflow_detected": context_overflow,

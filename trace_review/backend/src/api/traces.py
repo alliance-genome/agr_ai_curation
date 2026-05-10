@@ -20,6 +20,7 @@ from ..analyzers.agent_config import AgentConfigAnalyzer
 from ..utils.token_budget import create_lightweight_tool_call_summary
 from ..utils.trace_output import is_trace_output_cacheable
 from .auth import get_auth_dependency
+from .domain_envelope_responses import domain_envelope_response_views
 
 
 logger = logging.getLogger(__name__)
@@ -28,7 +29,7 @@ TRANSIENT_CACHE_TTL_SECONDS = 15
 ALL_VIEWS = [
     "summary", "conversation", "tool_calls",
     "pdf_citations", "token_analysis", "agent_context", "trace_summary",
-    "document_hierarchy", "agent_configs", "group_context"
+    "document_hierarchy", "agent_configs", "group_context", "domain_envelope"
 ]
 
 # Group descriptions for display (Alliance MODs as default groups)
@@ -82,6 +83,7 @@ def _build_trace_cache_data(trace_id: str, trace_data: Dict[str, Any]) -> Dict[s
     token_analysis = TokenAnalysisAnalyzer.analyze(trace_data, observations)
     agent_context = AgentContextAnalyzer.analyze(trace_data, observations)
     trace_summary = TraceSummaryAnalyzer.analyze(trace_data, observations)
+    domain_envelope, compact_domain_envelope = domain_envelope_response_views(trace_summary)
     document_hierarchy = DocumentHierarchyAnalyzer.analyze(trace_data, observations)
     agent_configs = AgentConfigAnalyzer.extract_agent_configs(observations)
 
@@ -98,7 +100,8 @@ def _build_trace_cache_data(trace_id: str, trace_data: Dict[str, Any]) -> Dict[s
         "observation_count": trace_data["metadata"]["observation_count"],
         "score_count": trace_data["metadata"]["score_count"],
         "timestamp": trace_data["metadata"]["timestamp"],
-        "system_domain": system_domain
+        "system_domain": system_domain,
+        "domain_envelope": compact_domain_envelope,
     }
 
     return {
@@ -113,6 +116,7 @@ def _build_trace_cache_data(trace_id: str, trace_data: Dict[str, Any]) -> Dict[s
             "token_analysis": token_analysis,
             "agent_context": agent_context,
             "trace_summary": trace_summary,
+            "domain_envelope": domain_envelope,
             "document_hierarchy": document_hierarchy,
             "agent_configs": agent_configs,
             "group_context": _group_context_from_metadata(metadata)
@@ -210,6 +214,7 @@ def _compact_trace_bundle(trace_id: str, listed_trace: Dict[str, Any], cache_dat
             "token_analysis": analysis["token_analysis"],
             "agent_context": analysis["agent_context"],
             "trace_summary": analysis["trace_summary"],
+            "domain_envelope": analysis["domain_envelope"],
             "document_hierarchy": analysis["document_hierarchy"],
             "agent_configs": analysis["agent_configs"],
             "group_context": analysis["group_context"],

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from langfuse import Langfuse
 import requests
 from requests.auth import HTTPBasicAuth
+from ..analyzers.domain_envelopes import DomainEnvelopeTraceAnalyzer
 from ..config import get_trace_source_runtime_config
 
 logger = logging.getLogger(__name__)
@@ -173,6 +174,11 @@ class TraceExtractor:
         trace = self.get_trace_details(trace_id)
         observations = self.get_observations(trace_id, trace=trace)
         scores = self.get_scores(trace_id, trace=trace)
+        domain_envelope = DomainEnvelopeTraceAnalyzer.analyze(
+            trace,
+            observations,
+            scores=scores,
+        )
 
         # Build structured response
         trace_fragment = trace_id[:8] if len(trace_id) >= 8 else trace_id
@@ -215,6 +221,7 @@ class TraceExtractor:
                 "total_tokens": total_tokens,
                 "observation_count": len(observations),
                 "score_count": len(scores),
-                "timestamp": trace.get("timestamp")
+                "timestamp": trace.get("timestamp"),
+                "domain_envelope": DomainEnvelopeTraceAnalyzer.compact(domain_envelope),
             }
         }
