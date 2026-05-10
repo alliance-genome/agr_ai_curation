@@ -210,8 +210,12 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
     assert by_binding["fixture.callable_validator"].object_type == "GeneAssertion"
     assert by_binding["fixture.identifier_prefix"].field_path == "gene.identifier"
     assert by_binding["fixture.identifier_prefix"].field_definition.field_type.value == "string"
-    assert registry.policy_for("GeneAssertion", "gene.identifier").required is True
-    assert registry.policy_for("GeneAssertion", "gene.identifier").export_blocking is True
+    identifier_policy = registry.policy_for("GeneAssertion", "gene.identifier")
+    assert identifier_policy is not None
+    assert identifier_policy.required is True
+    assert identifier_policy.export_blocking is True
+    assert identifier_policy.allow_opt_out is True
+    assert identifier_policy.opt_out_reason_required is True
 
     metadata_only_matches = registry.match_bindings(
         _envelope(object_role="metadata_only"),

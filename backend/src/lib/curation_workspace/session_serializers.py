@@ -484,6 +484,11 @@ def _submission_record(record: SubmissionModel) -> CurationSubmissionRecord:
         response_message=record.response_message,
         validation_errors=list(record.validation_errors or []),
         warnings=list(record.warnings or []),
+        submission_state=dict(record.submission_state or {}),
+        target_result_history=[
+            dict(item)
+            for item in (record.target_result_history or [])
+        ],
     )
 
 

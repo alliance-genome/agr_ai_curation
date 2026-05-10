@@ -621,6 +621,43 @@ class CurationCandidateSubmissionReadiness(CurationWorkspaceBaseModel):
         default_factory=list,
         description="Non-blocking submission warnings",
     )
+    blockers: list["CurationSubmissionReadinessBlocker"] = Field(
+        default_factory=list,
+        description="Object/field-addressable domain-envelope blockers for export or submission",
+    )
+
+
+class CurationSubmissionReadinessBlocker(CurationWorkspaceBaseModel):
+    """Provider-neutral readiness blocker for domain-envelope export/submission."""
+
+    envelope_id: str = Field(description="Domain envelope containing the blocker")
+    object_id: Optional[str] = Field(
+        default=None,
+        description="Stable envelope object identifier when the blocker is object-scoped",
+    )
+    field_path: Optional[str] = Field(
+        default=None,
+        description="Object-local field path when the blocker is field-scoped",
+    )
+    severity: str = Field(description="Provider-neutral blocker severity")
+    status: str = Field(description="Resolution/status value for the blocker")
+    code: Optional[str] = Field(
+        default=None,
+        description="Framework, validator, or domain-pack blocker code",
+    )
+    message: str = Field(description="Curator-facing blocker message")
+    provider_refs: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Provider or schema references available for this blocker",
+    )
+    projection_ref: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Projection metadata available for the target object or field",
+    )
+    details: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured framework or adapter-owned blocker details",
+    )
 
 
 class CurationDraftField(CurationWorkspaceBaseModel):
@@ -1139,7 +1176,19 @@ class CurationExportPayloadContext(CurationWorkspaceBaseModel):
     )
     candidates: list[CurationCandidate] = Field(
         default_factory=list,
-        description="Ordered approved candidates with draft and evidence payloads",
+        description="Ordered approved legacy candidates with draft and evidence payloads",
+    )
+    domain_envelope_candidates: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Ordered approved candidates whose semantic source is a domain envelope object",
+    )
+    domain_envelopes: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Persisted domain envelope snapshots used to build this export",
+    )
+    readiness_blockers: list[CurationSubmissionReadinessBlocker] = Field(
+        default_factory=list,
+        description="Domain-envelope blockers evaluated before export payload generation",
     )
     warnings: list[str] = Field(
         default_factory=list,
@@ -1150,12 +1199,20 @@ class CurationExportPayloadContext(CurationWorkspaceBaseModel):
     def validate_candidates(self) -> "CurationExportPayloadContext":
         """Keep candidate identifiers and approved-candidate invariants aligned."""
 
-        if self.candidate_count != len(self.candidates):
+        domain_candidate_ids = [
+            item.get("candidate_id")
+            for item in self.domain_envelope_candidates
+            if isinstance(item.get("candidate_id"), str)
+        ]
+        exported_candidate_count = len(self.candidates) + len(domain_candidate_ids)
+        if self.candidate_count != exported_candidate_count:
             raise ValueError("Export candidate count must match the number of candidates")
         if len(self.candidate_ids) != self.candidate_count:
             raise ValueError("Export candidate_ids must align with candidate_count")
 
-        expected_candidate_ids = [candidate.candidate_id for candidate in self.candidates]
+        expected_candidate_ids = [
+            candidate.candidate_id for candidate in self.candidates
+        ] + domain_candidate_ids
         if self.candidate_ids != expected_candidate_ids:
             raise ValueError(
                 "Export candidate_ids must preserve the ordered candidate identifiers"
@@ -1386,6 +1443,14 @@ class CurationSubmissionRecord(CurationWorkspaceBaseModel):
     warnings: list[str] = Field(
         default_factory=list,
         description="Non-fatal submission warnings",
+    )
+    submission_state: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Provider-neutral state returned by the submission target",
+    )
+    target_result_history: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Append-only target result history returned by the submission adapter",
     )
 
 
@@ -2157,6 +2222,10 @@ class CurationSubmissionPreviewRequest(CurationWorkspaceBaseModel):
         default=True,
         description="Whether to include the generated payload in the response",
     )
+    expected_envelope_revisions: dict[str, int] = Field(
+        default_factory=dict,
+        description="Optional optimistic revision checks keyed by domain envelope identifier",
+    )
 
 
 class CurationSubmissionPreviewResponse(CurationWorkspaceBaseModel):
@@ -2186,6 +2255,10 @@ class CurationSubmissionExecuteRequest(CurationWorkspaceBaseModel):
         default=SubmissionMode.DIRECT_SUBMIT,
         description="Submission mode, defaulting to direct submission",
     )
+    expected_envelope_revisions: dict[str, int] = Field(
+        default_factory=dict,
+        description="Optional optimistic revision checks keyed by domain envelope identifier",
+    )
 
 
 class CurationSubmissionExecuteResponse(CurationWorkspaceBaseModel):
@@ -2205,6 +2278,10 @@ class CurationSubmissionRetryRequest(CurationWorkspaceBaseModel):
     reason: Optional[str] = Field(
         default=None,
         description="Optional human-readable retry note",
+    )
+    expected_envelope_revisions: dict[str, int] = Field(
+        default_factory=dict,
+        description="Optional optimistic revision checks keyed by domain envelope identifier",
     )
 
 

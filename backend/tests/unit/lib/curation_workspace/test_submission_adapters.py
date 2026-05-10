@@ -10,6 +10,7 @@ from src.lib.curation_workspace.submission_adapters import (
     SubmissionAdapterRegistry,
     SubmissionTransportError,
     build_default_submission_adapter_registry,
+    coerce_submission_transport_result,
     normalize_submission_transport_result,
 )
 from src.schemas.curation_workspace import (
@@ -80,6 +81,24 @@ def test_normalize_submission_transport_result_supports_each_submission_status(s
     assert result.validation_errors == ("first", "second")
     assert result.warnings == ("warning",)
     assert result.completed_at is not None
+
+
+def test_normalize_submission_transport_result_rejects_malformed_history_entries():
+    with pytest.raises(TypeError, match="target_result_history item must be a mapping"):
+        normalize_submission_transport_result(
+            status=CurationSubmissionStatus.ACCEPTED,
+            target_result_history=["not a mapping"],
+        )
+
+
+def test_coerce_submission_transport_result_rejects_malformed_history_entries():
+    with pytest.raises(TypeError, match="target_result_history item must be a mapping"):
+        coerce_submission_transport_result(
+            {
+                "status": CurationSubmissionStatus.ACCEPTED,
+                "target_result_history": ["not a mapping"],
+            }
+        )
 
 
 def test_submission_transport_error_produces_failed_result_payload():
