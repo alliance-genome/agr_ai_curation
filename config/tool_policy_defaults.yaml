@@ -1,7 +1,7 @@
 tool_policies:
   agr_curation_query:
     display_name: AGR Curation Query
-    description: Query Alliance curation data for genes, alleles, ontology terms, and validator reference lookups.
+    description: Query Alliance curation data for genes, alleles, ontology terms, and validator reference lookups with structured attempts and provider projections.
     category: Database
     curator_visible: true
     allow_attach: true

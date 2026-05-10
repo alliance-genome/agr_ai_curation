@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LIMIT = int(os.getenv("AGR_DEFAULT_LIMIT", "100"))
 HARD_MAX = int(os.getenv("AGR_HARD_MAX", "500"))
+AGR_CURATION_DB_PROVIDER = "alliance_curation_db"
+AGR_CURATION_TOOL_NAME = "agr_curation_query"
+LOOKUP_STATUS_SUCCESS = "success"
+LOOKUP_STATUS_NOT_FOUND = "not_found"
+LOOKUP_STATUS_AMBIGUOUS = "ambiguous"
+LOOKUP_STATUS_TRANSIENT = "transient"
+LOOKUP_STATUS_BLOCKED = "blocked"
+LOOKUP_STATUS_UNDER_DEVELOPMENT = "under_development"
 
 
 class AgrQueryResult(BaseModel):
@@ -36,6 +44,12 @@ class AgrQueryResult(BaseModel):
     count: Optional[int] = None
     warnings: Optional[List[str]] = None
     message: Optional[str] = None
+    lookup_status: Optional[str] = None
+    failure_classification: Optional[str] = None
+    explanation: Optional[str] = None
+    lookup_attempts: Optional[List[Dict[str, Any]]] = None
+    candidate_matches: Optional[List[Dict[str, Any]]] = None
+    result_projections: Optional[List[Dict[str, Any]]] = None
 
 
 # Group-to-taxon mapping — loaded from config/groups.yaml via groups_loader
@@ -52,8 +66,6 @@ _GROUP_MAPPING_LOAD_ERROR: Optional[str] = None
 try:
     PROVIDER_TO_TAXON = _load_group_taxon_mappings()
 except Exception as exc:
-    # Preserve the long-standing degraded mode for package imports: provider
-    # lookups fail closed, while non-provider methods still remain importable.
     _GROUP_MAPPING_LOAD_ERROR = str(exc)
     PROVIDER_TO_TAXON = {}
     logger.error("Failed to load group-to-taxon mappings: %s", exc)
@@ -85,6 +97,280 @@ def _validate_curie_list(results: List[Dict[str, Any]], curie_field: str = "curi
         if not result.get("curie_validated", False):
             invalid_count += 1
     return results, invalid_count
+
+
+def _clean_mapping(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a dict without null or empty-list values."""
+    return {
+        key: value
+        for key, value in raw.items()
+        if value is not None and value != []
+    }
+
+
+def _method_projection_type(method: str) -> str:
+    if "gene" in method:
+        return "gene_reference"
+    if "allele" in method:
+        return "allele_reference"
+    if "ontology" in method or method in {
+        "search_anatomy_terms",
+        "search_life_stage_terms",
+        "search_go_terms",
+    }:
+        return "ontology_term_reference"
+    if "species" in method:
+        return "species_reference"
+    if "data_provider" in method:
+        return "data_provider_reference"
+    return "curation_db_reference"
+
+
+def _method_entity_type(method: str) -> Optional[str]:
+    if "gene" in method:
+        return "Gene"
+    if "allele" in method:
+        return "Allele"
+    if "ontology" in method or method in {
+        "search_anatomy_terms",
+        "search_life_stage_terms",
+        "search_go_terms",
+    }:
+        return "OntologyTerm"
+    if "species" in method:
+        return "Species"
+    if "data_provider" in method:
+        return "DataProvider"
+    return None
+
+
+def _attempt_query(method: str, **values: Any) -> Dict[str, Any]:
+    return _clean_mapping({"method": method, **values})
+
+
+def _projection_from_result(
+    method: str,
+    result: Dict[str, Any],
+    *,
+    projection_status: str = "resolved",
+) -> Dict[str, Any]:
+    resolved_id = (
+        result.get("curie")
+        or result.get("primary_external_id")
+        or result.get("abbreviation")
+    )
+    resolved_label = (
+        result.get("symbol")
+        or result.get("name")
+        or result.get("display_name")
+        or result.get("abbreviation")
+    )
+    projection_key = str(resolved_id or resolved_label or _method_projection_type(method))
+    provider_data = {
+        key: result.get(key)
+        for key in (
+            "curie",
+            "symbol",
+            "name",
+            "taxon",
+            "gene_type",
+            "match_type",
+            "matched_variant",
+            "ontology_type",
+            "namespace",
+            "abbreviation",
+            "display_name",
+        )
+        if result.get(key) is not None
+    }
+    return _clean_mapping(
+        {
+            "provider": AGR_CURATION_DB_PROVIDER,
+            "projection_type": _method_projection_type(method),
+            "projection_key": projection_key,
+            "projection_status": projection_status,
+            "object_type": _method_entity_type(method),
+            "resolved_id": resolved_id,
+            "resolved_label": resolved_label,
+            "source": {
+                "tool_name": AGR_CURATION_TOOL_NAME,
+                "method": method,
+            },
+            "provider_data": provider_data or None,
+        }
+    )
+
+
+def _candidate_from_result(method: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    projection = _projection_from_result(method, result)
+    return _clean_mapping(
+        {
+            "provider": AGR_CURATION_DB_PROVIDER,
+            "candidate_id": projection.get("resolved_id"),
+            "candidate_label": projection.get("resolved_label"),
+            "match_type": result.get("match_type") or result.get("matched_variant"),
+            "projection": projection,
+        }
+    )
+
+
+def _is_projection_result(result: Dict[str, Any]) -> bool:
+    return any(
+        result.get(key) is not None
+        for key in (
+            "curie",
+            "primary_external_id",
+            "abbreviation",
+            "symbol",
+            "name",
+            "display_name",
+        )
+    )
+
+
+def _lookup_attempt(
+    *,
+    method: str,
+    attempted_query: Dict[str, Any],
+    lookup_status: str,
+    explanation: str,
+    candidate_count: int = 0,
+    target_projection: Optional[Dict[str, Any]] = None,
+    resolved: Optional[Dict[str, Any]] = None,
+    error: Optional[BaseException] = None,
+) -> Dict[str, Any]:
+    resolved_projection = (
+        _projection_from_result(method, resolved)
+        if resolved is not None
+        else target_projection
+    )
+    payload = _clean_mapping(
+        {
+            "source": {
+                "tool_name": AGR_CURATION_TOOL_NAME,
+                "method": method,
+            },
+            "provider": AGR_CURATION_DB_PROVIDER,
+            "attempted_query": attempted_query,
+            "target_projection": resolved_projection,
+            "lookup_status": lookup_status,
+            "candidate_count": candidate_count,
+            "resolved_id": resolved_projection.get("resolved_id")
+            if resolved_projection
+            else None,
+            "resolved_label": resolved_projection.get("resolved_label")
+            if resolved_projection
+            else None,
+            "explanation": explanation,
+        }
+    )
+    if error is not None:
+        payload["error"] = {
+            "type": type(error).__name__,
+            "message": str(error),
+        }
+    return payload
+
+
+def _lookup_status_from_count(
+    count: int,
+    *,
+    exact_lookup: bool,
+    attempts: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    if count > 1 and exact_lookup:
+        return LOOKUP_STATUS_AMBIGUOUS
+    if count > 0:
+        return LOOKUP_STATUS_SUCCESS
+    if attempts and any(
+        attempt.get("lookup_status") == LOOKUP_STATUS_TRANSIENT
+        for attempt in attempts
+    ):
+        return LOOKUP_STATUS_TRANSIENT
+    return LOOKUP_STATUS_NOT_FOUND
+
+
+def _lookup_explanation(
+    *,
+    method: str,
+    lookup_status: str,
+    count: int,
+    attempted_query: Dict[str, Any],
+) -> str:
+    target = attempted_query.get("gene_id") or attempted_query.get("allele_id")
+    target = target or attempted_query.get("gene_symbol") or attempted_query.get("allele_symbol")
+    target = target or attempted_query.get("term") or attempted_query.get("method") or method
+    if lookup_status == LOOKUP_STATUS_SUCCESS:
+        return f"{method} resolved {target!r} to {count} curation DB result(s)."
+    if lookup_status == LOOKUP_STATUS_AMBIGUOUS:
+        return f"{method} found {count} candidate curation DB results for {target!r}; curator or repair logic must choose one."
+    if lookup_status == LOOKUP_STATUS_TRANSIENT:
+        return f"{method} could not complete for {target!r} because one or more curation DB calls failed transiently."
+    if lookup_status == LOOKUP_STATUS_BLOCKED:
+        return f"{method} was not executed for {target!r} because a required validator or runtime prerequisite is blocked."
+    if lookup_status == LOOKUP_STATUS_UNDER_DEVELOPMENT:
+        return f"{method} is declared for {target!r} but is still under development."
+    return f"{method} tried the curation DB for {target!r} and found no matching result."
+
+
+def _lookup_response(
+    *,
+    method: str,
+    data: Any = None,
+    count: Optional[int] = None,
+    warnings: Optional[List[str]] = None,
+    message: Optional[str] = None,
+    attempted_query: Optional[Dict[str, Any]] = None,
+    exact_lookup: bool = False,
+    attempts: Optional[List[Dict[str, Any]]] = None,
+) -> AgrQueryResult:
+    rows: List[Dict[str, Any]]
+    if isinstance(data, list):
+        rows = [row for row in data if isinstance(row, dict)]
+    elif isinstance(data, dict) and _is_projection_result(data):
+        rows = [data]
+    else:
+        rows = []
+
+    count_value = count if count is not None else len(rows)
+    lookup_status = _lookup_status_from_count(
+        count_value,
+        exact_lookup=exact_lookup,
+        attempts=attempts,
+    )
+    query = attempted_query or _attempt_query(method)
+    explanation = message or _lookup_explanation(
+        method=method,
+        lookup_status=lookup_status,
+        count=count_value,
+        attempted_query=query,
+    )
+    projections = [_projection_from_result(method, row) for row in rows]
+    candidates = [_candidate_from_result(method, row) for row in rows]
+    lookup_attempts = attempts or [
+        _lookup_attempt(
+            method=method,
+            attempted_query=query,
+            lookup_status=lookup_status,
+            explanation=explanation,
+            candidate_count=count_value,
+            target_projection=projections[0] if len(projections) == 1 else None,
+        )
+    ]
+    return _ok(
+        data=data,
+        count=count,
+        warnings=warnings,
+        message=message,
+        lookup_status=lookup_status,
+        failure_classification=(
+            None if lookup_status == LOOKUP_STATUS_SUCCESS else lookup_status
+        ),
+        explanation=explanation,
+        lookup_attempts=lookup_attempts,
+        candidate_matches=candidates or None,
+        result_projections=projections or None,
+    )
 
 
 def _normalize_allele_symbol_for_db(symbol: str) -> List[str]:
@@ -213,23 +499,90 @@ def _extract_fullname_attribution(fullname: Optional[str], taxon_id: str) -> Opt
     return None
 
 
-def _ok(data: Any = None, count: Optional[int] = None, warnings: Optional[List[str]] = None, message: Optional[str] = None) -> AgrQueryResult:
+def _ok(
+    data: Any = None,
+    count: Optional[int] = None,
+    warnings: Optional[List[str]] = None,
+    message: Optional[str] = None,
+    lookup_status: Optional[str] = None,
+    failure_classification: Optional[str] = None,
+    explanation: Optional[str] = None,
+    lookup_attempts: Optional[List[Dict[str, Any]]] = None,
+    candidate_matches: Optional[List[Dict[str, Any]]] = None,
+    result_projections: Optional[List[Dict[str, Any]]] = None,
+) -> AgrQueryResult:
     return AgrQueryResult(
         status="ok",
         data=data,
         count=count,
         warnings=warnings or None,
-        message=message
+        message=message,
+        lookup_status=lookup_status,
+        failure_classification=failure_classification,
+        explanation=explanation,
+        lookup_attempts=lookup_attempts,
+        candidate_matches=candidate_matches,
+        result_projections=result_projections,
     )
 
 
-def _err(message: str) -> AgrQueryResult:
-    return AgrQueryResult(status="error", message=message)
+def _err(
+    message: str,
+    *,
+    method: Optional[str] = None,
+    attempted_query: Optional[Dict[str, Any]] = None,
+    failure_classification: str = LOOKUP_STATUS_BLOCKED,
+    error: Optional[BaseException] = None,
+) -> AgrQueryResult:
+    lookup_attempts = None
+    explanation = message
+    if method is not None:
+        query = attempted_query or _attempt_query(method)
+        lookup_attempts = [
+            _lookup_attempt(
+                method=method,
+                attempted_query=query,
+                lookup_status=failure_classification,
+                explanation=message,
+                error=error,
+            )
+        ]
+    return AgrQueryResult(
+        status="error",
+        message=message,
+        lookup_status=failure_classification,
+        failure_classification=failure_classification,
+        explanation=explanation,
+        lookup_attempts=lookup_attempts,
+    )
 
 
-def _validation_warning(message: str) -> AgrQueryResult:
+def _validation_warning(
+    message: str,
+    *,
+    method: Optional[str] = None,
+    attempted_query: Optional[Dict[str, Any]] = None,
+) -> AgrQueryResult:
     """Return a validation warning response (not an error, but search not executed)."""
-    return AgrQueryResult(status="validation_warning", message=message)
+    lookup_attempts = None
+    if method is not None:
+        query = attempted_query or _attempt_query(method)
+        lookup_attempts = [
+            _lookup_attempt(
+                method=method,
+                attempted_query=query,
+                lookup_status=LOOKUP_STATUS_BLOCKED,
+                explanation=message,
+            )
+        ]
+    return AgrQueryResult(
+        status="validation_warning",
+        message=message,
+        lookup_status=LOOKUP_STATUS_BLOCKED,
+        failure_classification=LOOKUP_STATUS_BLOCKED,
+        explanation=message,
+        lookup_attempts=lookup_attempts,
+    )
 
 
 def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
@@ -253,7 +606,12 @@ def _ensure_provider_mappings(method: str) -> Optional[AgrQueryResult]:
     )
     if _GROUP_MAPPING_LOAD_ERROR:
         msg += f" Load error: {_GROUP_MAPPING_LOAD_ERROR}"
-    return _err(msg)
+    return _err(
+        msg,
+        method=method,
+        attempted_query=_attempt_query(method),
+        failure_classification=LOOKUP_STATUS_BLOCKED,
+    )
 
 
 def _chunk_values(values: List[str], chunk_size: int = 200) -> List[List[str]]:
@@ -417,6 +775,7 @@ def agr_curation_query(
     data_provider: Optional[str] = None,
     taxon_id: Optional[str] = None,
     term: Optional[str] = None,
+    ontology_term_type: Optional[str] = None,
     go_aspect: Optional[str] = None,
     exact_match: bool = False,
     include_synonyms: bool = True,
@@ -449,6 +808,7 @@ def agr_curation_query(
         data_provider: Filter by species (MGI, FB, WB, ZFIN, RGD, SGD, HGNC)
         taxon_id: Alternative to data_provider (NCBITaxon:XXXXX format)
         term: Search term for ontology searches
+        ontology_term_type: Optional curation DB ontologytermtype filter for get_ontology_term_by_curie
         go_aspect: GO aspect filter (molecular_function, biological_process, cellular_component)
         exact_match: Require exact match for ontology searches
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
@@ -464,16 +824,20 @@ def agr_curation_query(
         db = resolver.get_db_client()
         if db is None:
             if resolver.get_connection_url():
-                return AgrQueryResult(
-                    status='error',
-                    message=(
+                return _err(
+                    (
                         'AGR Curation Database client is unavailable in this runtime. '
                         'The database is configured, but the dependency is missing or failed to initialize.'
-                    )
+                    ),
+                    method=method,
+                    attempted_query=_attempt_query(method),
+                    failure_classification=LOOKUP_STATUS_BLOCKED,
                 )
-            return AgrQueryResult(
-                status='error',
-                message='AGR Curation Database is not configured. This tool is unavailable.'
+            return _err(
+                'AGR Curation Database is not configured. This tool is unavailable.',
+                method=method,
+                attempted_query=_attempt_query(method),
+                failure_classification=LOOKUP_STATUS_BLOCKED,
             )
         provider_mapping_error = _ensure_provider_mappings(method)
         if provider_mapping_error:
@@ -493,7 +857,11 @@ def agr_curation_query(
         # GET GENE BY EXACT SYMBOL (uses SQL IN clause - requires exact match)
         if method == "get_gene_by_exact_symbol":
             if not gene_symbol:
-                return _err("get_gene_by_exact_symbol requires gene_symbol")
+                return _err(
+                    "get_gene_by_exact_symbol requires gene_symbol",
+                    method=method,
+                    attempted_query=_attempt_query(method, gene_symbol=gene_symbol),
+                )
 
             if ':' in gene_symbol:
                 prefix, symbol = gene_symbol.split(':', 1)
@@ -505,18 +873,50 @@ def agr_curation_query(
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
-                    return _err(f"Unknown data_provider: {data_provider}. Valid: {list(PROVIDER_TO_TAXON.keys())}")
+                    return _err(
+                        f"Unknown data_provider: {data_provider}. Valid: {list(PROVIDER_TO_TAXON.keys())}",
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            gene_symbol=gene_symbol,
+                            data_provider=data_provider,
+                        ),
+                    )
                 taxon_ids = [taxon]
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
             genes_data: List[Dict[str, Any]] = []
+            lookup_attempts: List[Dict[str, Any]] = []
             for tid in taxon_ids:
                 try:
                     results = db.map_entity_names_to_curies(
                         entity_type='gene',
                         entity_names=[gene_symbol],
                         taxon_curie=tid
+                    )
+                    lookup_attempts.append(
+                        _lookup_attempt(
+                            method=method,
+                            attempted_query=_attempt_query(
+                                method,
+                                gene_symbol=gene_symbol,
+                                taxon_id=tid,
+                                data_provider=TAXON_TO_PROVIDER.get(tid),
+                            ),
+                            lookup_status=(
+                                LOOKUP_STATUS_SUCCESS
+                                if len(results) == 1
+                                else LOOKUP_STATUS_AMBIGUOUS
+                                if len(results) > 1
+                                else LOOKUP_STATUS_NOT_FOUND
+                            ),
+                            explanation=(
+                                f"Tried exact gene symbol {gene_symbol!r} in taxon {tid}; "
+                                f"the curation DB returned {len(results)} candidate(s)."
+                            ),
+                            candidate_count=len(results),
+                        )
                     )
                     for result in results:
                         try:
@@ -533,41 +933,102 @@ def agr_curation_query(
                             logger.warning('Failed to fetch gene %s: %s', result.get('entity_curie'), e)
                 except Exception as e:
                     logger.warning('Failed to search taxon %s: %s', tid, e)
+                    lookup_attempts.append(
+                        _lookup_attempt(
+                            method=method,
+                            attempted_query=_attempt_query(
+                                method,
+                                gene_symbol=gene_symbol,
+                                taxon_id=tid,
+                                data_provider=TAXON_TO_PROVIDER.get(tid),
+                            ),
+                            lookup_status=LOOKUP_STATUS_TRANSIENT,
+                            explanation=(
+                                f"Exact gene symbol lookup for {gene_symbol!r} in taxon {tid} "
+                                "failed while querying the curation DB."
+                            ),
+                            error=e,
+                        )
+                    )
 
             validated_data = genes_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
             if invalid_curie_count > 0:
                 warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
-            return _ok(data=validated_data, count=len(validated_data), warnings=warnings)
+            return _lookup_response(
+                method=method,
+                data=validated_data,
+                count=len(validated_data),
+                warnings=warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    gene_symbol=gene_symbol,
+                    data_provider=data_provider,
+                ),
+                exact_lookup=True,
+                attempts=lookup_attempts,
+            )
 
         # SEARCH GENES (uses LIKE search - supports partial matches)
         elif method == "search_genes":
             if not gene_symbol:
-                return _err("search_genes requires gene_symbol")
+                return _err(
+                    "search_genes requires gene_symbol",
+                    method=method,
+                    attempted_query=_attempt_query(method, gene_symbol=gene_symbol),
+                )
 
             # Validate symbol before searching (unless force=True)
             if not force:
                 validation = validate_search_symbol(gene_symbol, 'gene')
                 if not validation.is_valid:
-                    return _validation_warning(validation.warning_message)
+                    return _validation_warning(
+                        validation.warning_message,
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            gene_symbol=gene_symbol,
+                            data_provider=data_provider,
+                            include_synonyms=include_synonyms,
+                        ),
+                    )
             else:
                 # Check force_reason is provided
                 force_valid, force_error = check_force_parameters(force, force_reason)
                 if not force_valid:
-                    return _err(force_error)
+                    return _err(
+                        force_error,
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            gene_symbol=gene_symbol,
+                            force=force,
+                        ),
+                    )
                 # Log the override for tracing
                 log_validation_override(gene_symbol, 'gene', force_reason)
 
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
-                    return _err(f"Unknown data_provider: {data_provider}")
+                    return _err(
+                        f"Unknown data_provider: {data_provider}",
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            gene_symbol=gene_symbol,
+                            data_provider=data_provider,
+                        ),
+                    )
                 taxon_ids = [taxon]
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
+            pending_matches: List[Dict[str, Any]] = []
+            gene_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
             genes_data: List[Dict[str, Any]] = []
+            lookup_attempts: List[Dict[str, Any]] = []
             for tid in taxon_ids:
                 try:
                     results = db.search_entities(
@@ -577,42 +1038,112 @@ def agr_curation_query(
                         include_synonyms=include_synonyms,
                         limit=limit_value
                     )
+                    lookup_attempts.append(
+                        _lookup_attempt(
+                            method=method,
+                            attempted_query=_attempt_query(
+                                method,
+                                gene_symbol=gene_symbol,
+                                taxon_id=tid,
+                                data_provider=TAXON_TO_PROVIDER.get(tid),
+                                include_synonyms=include_synonyms,
+                                limit=limit_value,
+                            ),
+                            lookup_status=(
+                                LOOKUP_STATUS_SUCCESS
+                                if results
+                                else LOOKUP_STATUS_NOT_FOUND
+                            ),
+                            explanation=(
+                                f"Searched gene symbol {gene_symbol!r} in taxon {tid}; "
+                                f"the curation DB returned {len(results)} candidate(s)."
+                            ),
+                            candidate_count=len(results),
+                        )
+                    )
                     for result in results:
-                        try:
-                            gene = db.get_gene(result['entity_curie'])
-                            if gene:
-                                # Preserve what entity matched the search (may differ from primary symbol)
-                                matched_entity = result['entity']
-                                primary_symbol = gene.geneSymbol.displayText if gene.geneSymbol else matched_entity
-
-                                gene_entry = {
-                                    "curie": gene.primaryExternalId,
-                                    "symbol": primary_symbol,
-                                    "name": gene.geneFullName.displayText if gene.geneFullName else None,
-                                    "taxon": tid,
-                                    "match_type": result.get('match_type', 'unknown'),
-                                }
-
-                                # Add matched_on field if search matched a synonym
-                                enrich_with_match_context(gene_entry, matched_entity, primary_symbol, 'gene')
-
-                                genes_data.append(gene_entry)
-                        except Exception as e:
-                            logger.warning('Failed to fetch gene details: %s', e)
+                        curie = result.get('entity_curie')
+                        if not curie:
+                            continue
+                        pending_matches.append({
+                            "curie": curie,
+                            "taxon": tid,
+                            "matched_entity": result.get('entity', gene_symbol),
+                            "match_type": result.get('match_type', 'unknown'),
+                        })
+                        gene_curies_by_taxon[tid].append(curie)
                 except Exception as e:
                     logger.warning('Failed to fuzzy search taxon %s: %s', tid, e)
+                    lookup_attempts.append(
+                        _lookup_attempt(
+                            method=method,
+                            attempted_query=_attempt_query(
+                                method,
+                                gene_symbol=gene_symbol,
+                                taxon_id=tid,
+                                data_provider=TAXON_TO_PROVIDER.get(tid),
+                                include_synonyms=include_synonyms,
+                                limit=limit_value,
+                            ),
+                            lookup_status=LOOKUP_STATUS_TRANSIENT,
+                            explanation=(
+                                f"Gene search for {gene_symbol!r} in taxon {tid} failed "
+                                "while querying the curation DB."
+                            ),
+                            error=e,
+                        )
+                    )
+
+            gene_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            for tid, curies in gene_curies_by_taxon.items():
+                gene_details_by_taxon[tid] = _fetch_gene_details_bulk(db, curies)
+
+            for match in pending_matches:
+                detail = gene_details_by_taxon.get(match["taxon"], {}).get(match["curie"])
+                if not detail:
+                    continue
+                matched_entity = match["matched_entity"]
+                primary_symbol = detail.get("symbol") or matched_entity
+                gene_entry = {
+                    "curie": detail.get("curie", match["curie"]),
+                    "symbol": primary_symbol,
+                    "name": detail.get("name"),
+                    "taxon": match["taxon"],
+                    "match_type": match["match_type"],
+                }
+                if detail.get("gene_type"):
+                    gene_entry["gene_type"] = detail["gene_type"]
+                enrich_with_match_context(gene_entry, matched_entity, primary_symbol, 'gene')
+                genes_data.append(gene_entry)
 
             validated_data = genes_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
             if invalid_curie_count > 0:
                 warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
-            return _ok(data=validated_data, count=len(validated_data), warnings=warnings)
+            return _lookup_response(
+                method=method,
+                data=validated_data,
+                count=len(validated_data),
+                warnings=warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    gene_symbol=gene_symbol,
+                    data_provider=data_provider,
+                    include_synonyms=include_synonyms,
+                    limit=limit_value,
+                ),
+                attempts=lookup_attempts,
+            )
 
         # SEARCH GENES BULK (single tool call, multiple symbols)
         elif method == "search_genes_bulk":
             if not isinstance(gene_symbols, list) or not gene_symbols:
-                return _err("search_genes_bulk requires gene_symbols (list of symbols)")
+                return _err(
+                    "search_genes_bulk requires gene_symbols (list of symbols)",
+                    method=method,
+                    attempted_query=_attempt_query(method, gene_symbols=gene_symbols),
+                )
 
             normalized_symbols: List[str] = []
             seen_inputs: set[str] = set()
@@ -627,17 +1158,37 @@ def agr_curation_query(
                 normalized_symbols.append(symbol)
 
             if not normalized_symbols:
-                return _err("search_genes_bulk received no valid symbols")
+                return _err(
+                    "search_genes_bulk received no valid symbols",
+                    method=method,
+                    attempted_query=_attempt_query(method, gene_symbols=gene_symbols),
+                )
 
             if force:
                 force_valid, force_error = check_force_parameters(force, force_reason)
                 if not force_valid:
-                    return _err(force_error)
+                    return _err(
+                        force_error,
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            gene_symbols=normalized_symbols,
+                            force=force,
+                        ),
+                    )
 
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
-                    return _err(f"Unknown data_provider: {data_provider}")
+                    return _err(
+                        f"Unknown data_provider: {data_provider}",
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            gene_symbols=normalized_symbols,
+                            data_provider=data_provider,
+                        ),
+                    )
                 taxon_ids = [taxon]
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
@@ -645,12 +1196,21 @@ def agr_curation_query(
             pending_matches: Dict[str, List[Dict[str, Any]]] = {}
             validation_messages: Dict[str, str] = {}
             gene_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
+            lookup_attempts_by_symbol: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
             for symbol in normalized_symbols:
                 if not force:
                     validation = validate_search_symbol(symbol, 'gene')
                     if not validation.is_valid:
                         validation_messages[symbol] = validation.warning_message
+                        lookup_attempts_by_symbol[symbol].append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(method, gene_symbol=symbol),
+                                lookup_status=LOOKUP_STATUS_BLOCKED,
+                                explanation=validation.warning_message,
+                            )
+                        )
                         continue
                 else:
                     log_validation_override(symbol, 'gene', force_reason)
@@ -665,6 +1225,29 @@ def agr_curation_query(
                             include_synonyms=include_synonyms,
                             limit=limit_value
                         )
+                        lookup_attempts_by_symbol[symbol].append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    gene_symbol=symbol,
+                                    taxon_id=tid,
+                                    data_provider=TAXON_TO_PROVIDER.get(tid),
+                                    include_synonyms=include_synonyms,
+                                    limit=limit_value,
+                                ),
+                                lookup_status=(
+                                    LOOKUP_STATUS_SUCCESS
+                                    if results
+                                    else LOOKUP_STATUS_NOT_FOUND
+                                ),
+                                explanation=(
+                                    f"Searched gene symbol {symbol!r} in taxon {tid}; "
+                                    f"the curation DB returned {len(results)} candidate(s)."
+                                ),
+                                candidate_count=len(results),
+                            )
+                        )
                         for result in results:
                             curie = result.get('entity_curie')
                             if not curie:
@@ -678,6 +1261,25 @@ def agr_curation_query(
                             gene_curies_by_taxon[tid].append(curie)
                     except Exception as e:
                         logger.warning("Failed to fuzzy search genes in bulk for '%s' taxon %s: %s", symbol, tid, e)
+                        lookup_attempts_by_symbol[symbol].append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    gene_symbol=symbol,
+                                    taxon_id=tid,
+                                    data_provider=TAXON_TO_PROVIDER.get(tid),
+                                    include_synonyms=include_synonyms,
+                                    limit=limit_value,
+                                ),
+                                lookup_status=LOOKUP_STATUS_TRANSIENT,
+                                explanation=(
+                                    f"Gene search for {symbol!r} in taxon {tid} failed "
+                                    "while querying the curation DB."
+                                ),
+                                error=e,
+                            )
+                        )
                 pending_matches[symbol] = symbol_matches
 
             gene_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -695,6 +1297,10 @@ def agr_curation_query(
                         "message": validation_messages[symbol],
                         "results": [],
                         "count": 0,
+                        "lookup_status": LOOKUP_STATUS_BLOCKED,
+                        "failure_classification": LOOKUP_STATUS_BLOCKED,
+                        "explanation": validation_messages[symbol],
+                        "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
                     })
                     continue
 
@@ -728,17 +1334,43 @@ def agr_curation_query(
                     item_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
                 total_matches += len(validated_data)
+                item_lookup_status = _lookup_status_from_count(
+                    len(validated_data),
+                    exact_lookup=False,
+                    attempts=lookup_attempts_by_symbol.get(symbol),
+                )
+                item_explanation = _lookup_explanation(
+                    method=method,
+                    lookup_status=item_lookup_status,
+                    count=len(validated_data),
+                    attempted_query=_attempt_query(method, gene_symbol=symbol),
+                )
                 item_payload: Dict[str, Any] = {
                     "input": symbol,
                     "status": "ok",
                     "results": validated_data,
                     "count": len(validated_data),
+                    "lookup_status": item_lookup_status,
+                    "failure_classification": (
+                        None
+                        if item_lookup_status == LOOKUP_STATUS_SUCCESS
+                        else item_lookup_status
+                    ),
+                    "explanation": item_explanation,
+                    "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
+                    "candidate_matches": [
+                        _candidate_from_result(method, row) for row in validated_data
+                    ] or None,
+                    "result_projections": [
+                        _projection_from_result(method, row) for row in validated_data
+                    ] or None,
                 }
                 if item_warnings:
                     item_payload["warnings"] = item_warnings
                 bulk_items.append(item_payload)
 
-            return _ok(
+            return _lookup_response(
+                method=method,
                 data={
                     "items": bulk_items,
                     "requested_count": len(normalized_symbols),
@@ -747,16 +1379,39 @@ def agr_curation_query(
                 },
                 count=len(bulk_items),
                 warnings=warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    gene_symbols=normalized_symbols,
+                    data_provider=data_provider,
+                    include_synonyms=include_synonyms,
+                    limit=limit_value,
+                ),
+                attempts=[
+                    attempt
+                    for symbol in normalized_symbols
+                    for attempt in lookup_attempts_by_symbol.get(symbol, [])
+                ],
             )
 
         # GET GENE BY ID
         elif method == "get_gene_by_id":
             if not gene_id:
-                return _err("get_gene_by_id requires gene_id")
+                return _err(
+                    "get_gene_by_id requires gene_id",
+                    method=method,
+                    attempted_query=_attempt_query(method, gene_id=gene_id),
+                )
 
             gene = db.get_gene(gene_id)
             if not gene:
-                return _ok(data=None, message=f"Gene not found: {gene_id}")
+                return _lookup_response(
+                    method=method,
+                    data=None,
+                    count=0,
+                    message=f"Gene not found: {gene_id}",
+                    attempted_query=_attempt_query(method, gene_id=gene_id),
+                    exact_lookup=True,
+                )
 
             gene_dict = {
                 "curie": gene.primaryExternalId,
@@ -777,17 +1432,34 @@ def agr_curation_query(
                 }
 
             _validate_curie_in_result(gene_dict)
-            return _ok(data=gene_dict)
+            return _lookup_response(
+                method=method,
+                data=gene_dict,
+                attempted_query=_attempt_query(method, gene_id=gene_id),
+                exact_lookup=True,
+            )
 
         # GET ALLELE BY EXACT SYMBOL (uses SQL IN clause - requires exact match)
         elif method == "get_allele_by_exact_symbol":
             if not allele_symbol:
-                return _err("get_allele_by_exact_symbol requires allele_symbol")
+                return _err(
+                    "get_allele_by_exact_symbol requires allele_symbol",
+                    method=method,
+                    attempted_query=_attempt_query(method, allele_symbol=allele_symbol),
+                )
 
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
-                    return _err(f"Unknown data_provider: {data_provider}")
+                    return _err(
+                        f"Unknown data_provider: {data_provider}",
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            allele_symbol=allele_symbol,
+                            data_provider=data_provider,
+                        ),
+                    )
                 taxon_ids = [taxon]
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
@@ -799,6 +1471,7 @@ def agr_curation_query(
 
             alleles_data: List[Dict[str, Any]] = []
             seen_curies = set()  # Avoid duplicates across variants
+            lookup_attempts: List[Dict[str, Any]] = []
             for tid in taxon_ids:
                 for symbol_variant in symbol_variants:
                     try:
@@ -806,6 +1479,30 @@ def agr_curation_query(
                             entity_type='allele',
                             entity_names=[symbol_variant],
                             taxon_curie=tid
+                        )
+                        lookup_attempts.append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    allele_symbol=symbol_variant,
+                                    original_allele_symbol=allele_symbol,
+                                    taxon_id=tid,
+                                    data_provider=TAXON_TO_PROVIDER.get(tid),
+                                ),
+                                lookup_status=(
+                                    LOOKUP_STATUS_SUCCESS
+                                    if len(results) == 1
+                                    else LOOKUP_STATUS_AMBIGUOUS
+                                    if len(results) > 1
+                                    else LOOKUP_STATUS_NOT_FOUND
+                                ),
+                                explanation=(
+                                    f"Tried exact allele symbol {symbol_variant!r} in taxon {tid}; "
+                                    f"the curation DB returned {len(results)} candidate(s)."
+                                ),
+                                candidate_count=len(results),
+                            )
                         )
                         for result in results:
                             try:
@@ -829,42 +1526,104 @@ def agr_curation_query(
                                 logger.warning('Failed to fetch allele details: %s', e)
                     except Exception as e:
                         logger.warning("Failed to search alleles in taxon %s with variant '%s': %s", tid, symbol_variant, e)
+                        lookup_attempts.append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    allele_symbol=symbol_variant,
+                                    original_allele_symbol=allele_symbol,
+                                    taxon_id=tid,
+                                    data_provider=TAXON_TO_PROVIDER.get(tid),
+                                ),
+                                lookup_status=LOOKUP_STATUS_TRANSIENT,
+                                explanation=(
+                                    f"Exact allele symbol lookup for {symbol_variant!r} in taxon {tid} "
+                                    "failed while querying the curation DB."
+                                ),
+                                error=e,
+                            )
+                        )
 
             validated_data = alleles_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
             if invalid_curie_count > 0:
                 warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
-            return _ok(data=validated_data, count=len(validated_data), warnings=warnings)
+            return _lookup_response(
+                method=method,
+                data=validated_data,
+                count=len(validated_data),
+                warnings=warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    allele_symbol=allele_symbol,
+                    data_provider=data_provider,
+                ),
+                exact_lookup=True,
+                attempts=lookup_attempts,
+            )
 
         # SEARCH ALLELES (uses LIKE search - supports partial matches)
         elif method == "search_alleles":
             if not allele_symbol:
-                return _err("search_alleles requires allele_symbol")
+                return _err(
+                    "search_alleles requires allele_symbol",
+                    method=method,
+                    attempted_query=_attempt_query(method, allele_symbol=allele_symbol),
+                )
 
             # Validate symbol before searching (unless force=True)
             if not force:
                 validation = validate_search_symbol(allele_symbol, 'allele')
                 if not validation.is_valid:
-                    return _validation_warning(validation.warning_message)
+                    return _validation_warning(
+                        validation.warning_message,
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            allele_symbol=allele_symbol,
+                            data_provider=data_provider,
+                            include_synonyms=include_synonyms,
+                        ),
+                    )
             else:
                 # Check force_reason is provided
                 force_valid, force_error = check_force_parameters(force, force_reason)
                 if not force_valid:
-                    return _err(force_error)
+                    return _err(
+                        force_error,
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            allele_symbol=allele_symbol,
+                            force=force,
+                        ),
+                    )
                 # Log the override for tracing
                 log_validation_override(allele_symbol, 'allele', force_reason)
 
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
-                    return _err(f"Unknown data_provider: {data_provider}")
+                    return _err(
+                        f"Unknown data_provider: {data_provider}",
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            allele_symbol=allele_symbol,
+                            data_provider=data_provider,
+                        ),
+                    )
                 taxon_ids = [taxon]
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
+            pending_matches: List[Dict[str, Any]] = []
+            allele_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
             alleles_data: List[Dict[str, Any]] = []
             seen_curies = set()  # Avoid duplicates
+            lookup_attempts: List[Dict[str, Any]] = []
             for tid in taxon_ids:
                 try:
                     results = db.search_entities(
@@ -874,37 +1633,89 @@ def agr_curation_query(
                         include_synonyms=include_synonyms,
                         limit=limit_value
                     )
+                    lookup_attempts.append(
+                        _lookup_attempt(
+                            method=method,
+                            attempted_query=_attempt_query(
+                                method,
+                                allele_symbol=allele_symbol,
+                                taxon_id=tid,
+                                data_provider=TAXON_TO_PROVIDER.get(tid),
+                                include_synonyms=include_synonyms,
+                                limit=limit_value,
+                            ),
+                            lookup_status=(
+                                LOOKUP_STATUS_SUCCESS
+                                if results
+                                else LOOKUP_STATUS_NOT_FOUND
+                            ),
+                            explanation=(
+                                f"Searched allele symbol {allele_symbol!r} in taxon {tid}; "
+                                f"the curation DB returned {len(results)} candidate(s)."
+                            ),
+                            candidate_count=len(results),
+                        )
+                    )
                     for result in results:
-                        try:
-                            curie = result['entity_curie']
-                            if curie in seen_curies:
-                                continue  # Skip duplicates
-                            seen_curies.add(curie)
-
-                            allele = db.get_allele(curie)
-                            if allele:
-                                # Preserve what entity matched the search (may differ from primary symbol)
-                                matched_entity = result['entity']
-                                primary_symbol = allele.alleleSymbol.displayText if allele.alleleSymbol else matched_entity
-
-                                fullname = allele.alleleFullName.displayText if allele.alleleFullName else None
-                                allele_entry = {
-                                    "curie": allele.primaryExternalId,
-                                    "symbol": primary_symbol,
-                                    "name": fullname,
-                                    "taxon": tid,
-                                    "match_type": result.get('match_type', 'unknown'),
-                                    "fullname_attribution": _extract_fullname_attribution(fullname, tid),
-                                }
-
-                                # Add matched_on field if search matched a synonym
-                                enrich_with_match_context(allele_entry, matched_entity, primary_symbol, 'allele')
-
-                                alleles_data.append(allele_entry)
-                        except Exception as e:
-                            logger.warning('Failed to fetch allele details: %s', e)
+                        curie = result.get('entity_curie')
+                        if not curie:
+                            continue
+                        pending_matches.append({
+                            "curie": curie,
+                            "taxon": tid,
+                            "matched_entity": result.get('entity', allele_symbol),
+                            "match_type": result.get('match_type', 'unknown'),
+                        })
+                        allele_curies_by_taxon[tid].append(curie)
                 except Exception as e:
                     logger.warning('Failed to fuzzy search alleles in taxon %s: %s', tid, e)
+                    lookup_attempts.append(
+                        _lookup_attempt(
+                            method=method,
+                            attempted_query=_attempt_query(
+                                method,
+                                allele_symbol=allele_symbol,
+                                taxon_id=tid,
+                                data_provider=TAXON_TO_PROVIDER.get(tid),
+                                include_synonyms=include_synonyms,
+                                limit=limit_value,
+                            ),
+                            lookup_status=LOOKUP_STATUS_TRANSIENT,
+                            explanation=(
+                                f"Allele search for {allele_symbol!r} in taxon {tid} failed "
+                                "while querying the curation DB."
+                            ),
+                            error=e,
+                        )
+                    )
+
+            allele_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
+            for tid, curies in allele_curies_by_taxon.items():
+                allele_details_by_taxon[tid] = _fetch_allele_details_bulk(db, curies)
+
+            for match in pending_matches:
+                curie = match["curie"]
+                if curie in seen_curies:
+                    continue
+                seen_curies.add(curie)
+
+                detail = allele_details_by_taxon.get(match["taxon"], {}).get(curie)
+                if not detail:
+                    continue
+
+                matched_entity = match["matched_entity"]
+                primary_symbol = detail.get("symbol") or matched_entity
+                fullname = detail.get("name")
+                allele_entry = {
+                    "curie": detail.get("curie", curie),
+                    "symbol": primary_symbol,
+                    "name": fullname,
+                    "taxon": match["taxon"],
+                    "match_type": match["match_type"],
+                    "fullname_attribution": _extract_fullname_attribution(fullname, match["taxon"]),
+                }
+                enrich_with_match_context(allele_entry, matched_entity, primary_symbol, 'allele')
+                alleles_data.append(allele_entry)
 
             validated_data = alleles_data[:limit_value]
             validated_data, invalid_curie_count = _validate_curie_list(validated_data)
@@ -918,12 +1729,29 @@ def agr_curation_query(
                 [d.get('curie') for d in validated_data[:5]],
             )
 
-            return _ok(data=validated_data, count=len(validated_data), warnings=warnings)
+            return _lookup_response(
+                method=method,
+                data=validated_data,
+                count=len(validated_data),
+                warnings=warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    allele_symbol=allele_symbol,
+                    data_provider=data_provider,
+                    include_synonyms=include_synonyms,
+                    limit=limit_value,
+                ),
+                attempts=lookup_attempts,
+            )
 
         # SEARCH ALLELES BULK (single tool call, multiple symbols)
         elif method == "search_alleles_bulk":
             if not isinstance(allele_symbols, list) or not allele_symbols:
-                return _err("search_alleles_bulk requires allele_symbols (list of symbols)")
+                return _err(
+                    "search_alleles_bulk requires allele_symbols (list of symbols)",
+                    method=method,
+                    attempted_query=_attempt_query(method, allele_symbols=allele_symbols),
+                )
 
             normalized_symbols: List[str] = []
             seen_inputs: set[str] = set()
@@ -938,17 +1766,37 @@ def agr_curation_query(
                 normalized_symbols.append(symbol)
 
             if not normalized_symbols:
-                return _err("search_alleles_bulk received no valid symbols")
+                return _err(
+                    "search_alleles_bulk received no valid symbols",
+                    method=method,
+                    attempted_query=_attempt_query(method, allele_symbols=allele_symbols),
+                )
 
             if force:
                 force_valid, force_error = check_force_parameters(force, force_reason)
                 if not force_valid:
-                    return _err(force_error)
+                    return _err(
+                        force_error,
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            allele_symbols=normalized_symbols,
+                            force=force,
+                        ),
+                    )
 
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
-                    return _err(f"Unknown data_provider: {data_provider}")
+                    return _err(
+                        f"Unknown data_provider: {data_provider}",
+                        method=method,
+                        attempted_query=_attempt_query(
+                            method,
+                            allele_symbols=normalized_symbols,
+                            data_provider=data_provider,
+                        ),
+                    )
                 taxon_ids = [taxon]
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
@@ -956,12 +1804,21 @@ def agr_curation_query(
             pending_matches: Dict[str, List[Dict[str, Any]]] = {}
             validation_messages: Dict[str, str] = {}
             allele_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
+            lookup_attempts_by_symbol: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
             for symbol in normalized_symbols:
                 if not force:
                     validation = validate_search_symbol(symbol, 'allele')
                     if not validation.is_valid:
                         validation_messages[symbol] = validation.warning_message
+                        lookup_attempts_by_symbol[symbol].append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(method, allele_symbol=symbol),
+                                lookup_status=LOOKUP_STATUS_BLOCKED,
+                                explanation=validation.warning_message,
+                            )
+                        )
                         continue
                 else:
                     log_validation_override(symbol, 'allele', force_reason)
@@ -976,6 +1833,29 @@ def agr_curation_query(
                             include_synonyms=include_synonyms,
                             limit=limit_value
                         )
+                        lookup_attempts_by_symbol[symbol].append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    allele_symbol=symbol,
+                                    taxon_id=tid,
+                                    data_provider=TAXON_TO_PROVIDER.get(tid),
+                                    include_synonyms=include_synonyms,
+                                    limit=limit_value,
+                                ),
+                                lookup_status=(
+                                    LOOKUP_STATUS_SUCCESS
+                                    if results
+                                    else LOOKUP_STATUS_NOT_FOUND
+                                ),
+                                explanation=(
+                                    f"Searched allele symbol {symbol!r} in taxon {tid}; "
+                                    f"the curation DB returned {len(results)} candidate(s)."
+                                ),
+                                candidate_count=len(results),
+                            )
+                        )
                         for result in results:
                             curie = result.get('entity_curie')
                             if not curie:
@@ -989,6 +1869,25 @@ def agr_curation_query(
                             allele_curies_by_taxon[tid].append(curie)
                     except Exception as e:
                         logger.warning("Failed to fuzzy search alleles in bulk for '%s' taxon %s: %s", symbol, tid, e)
+                        lookup_attempts_by_symbol[symbol].append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    allele_symbol=symbol,
+                                    taxon_id=tid,
+                                    data_provider=TAXON_TO_PROVIDER.get(tid),
+                                    include_synonyms=include_synonyms,
+                                    limit=limit_value,
+                                ),
+                                lookup_status=LOOKUP_STATUS_TRANSIENT,
+                                explanation=(
+                                    f"Allele search for {symbol!r} in taxon {tid} failed "
+                                    "while querying the curation DB."
+                                ),
+                                error=e,
+                            )
+                        )
                 pending_matches[symbol] = symbol_matches
 
             allele_details_by_taxon: Dict[str, Dict[str, Dict[str, Any]]] = {}
@@ -1006,6 +1905,10 @@ def agr_curation_query(
                         "message": validation_messages[symbol],
                         "results": [],
                         "count": 0,
+                        "lookup_status": LOOKUP_STATUS_BLOCKED,
+                        "failure_classification": LOOKUP_STATUS_BLOCKED,
+                        "explanation": validation_messages[symbol],
+                        "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
                     })
                     continue
 
@@ -1046,17 +1949,43 @@ def agr_curation_query(
                     item_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
                 total_matches += len(validated_data)
+                item_lookup_status = _lookup_status_from_count(
+                    len(validated_data),
+                    exact_lookup=False,
+                    attempts=lookup_attempts_by_symbol.get(symbol),
+                )
+                item_explanation = _lookup_explanation(
+                    method=method,
+                    lookup_status=item_lookup_status,
+                    count=len(validated_data),
+                    attempted_query=_attempt_query(method, allele_symbol=symbol),
+                )
                 item_payload: Dict[str, Any] = {
                     "input": symbol,
                     "status": "ok",
                     "results": validated_data,
                     "count": len(validated_data),
+                    "lookup_status": item_lookup_status,
+                    "failure_classification": (
+                        None
+                        if item_lookup_status == LOOKUP_STATUS_SUCCESS
+                        else item_lookup_status
+                    ),
+                    "explanation": item_explanation,
+                    "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
+                    "candidate_matches": [
+                        _candidate_from_result(method, row) for row in validated_data
+                    ] or None,
+                    "result_projections": [
+                        _projection_from_result(method, row) for row in validated_data
+                    ] or None,
                 }
                 if item_warnings:
                     item_payload["warnings"] = item_warnings
                 bulk_items.append(item_payload)
 
-            return _ok(
+            return _lookup_response(
+                method=method,
                 data={
                     "items": bulk_items,
                     "requested_count": len(normalized_symbols),
@@ -1065,16 +1994,39 @@ def agr_curation_query(
                 },
                 count=len(bulk_items),
                 warnings=warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    allele_symbols=normalized_symbols,
+                    data_provider=data_provider,
+                    include_synonyms=include_synonyms,
+                    limit=limit_value,
+                ),
+                attempts=[
+                    attempt
+                    for symbol in normalized_symbols
+                    for attempt in lookup_attempts_by_symbol.get(symbol, [])
+                ],
             )
 
         # GET ALLELE BY ID
         elif method == "get_allele_by_id":
             if not allele_id:
-                return _err("get_allele_by_id requires allele_id")
+                return _err(
+                    "get_allele_by_id requires allele_id",
+                    method=method,
+                    attempted_query=_attempt_query(method, allele_id=allele_id),
+                )
 
             allele = db.get_allele(allele_id)
             if not allele:
-                return _ok(data=None, message=f"Allele not found: {allele_id}")
+                return _lookup_response(
+                    method=method,
+                    data=None,
+                    count=0,
+                    message=f"Allele not found: {allele_id}",
+                    attempted_query=_attempt_query(method, allele_id=allele_id),
+                    exact_lookup=True,
+                )
 
             fullname = allele.alleleFullName.displayText if allele.alleleFullName else None
             taxon = allele.taxon if hasattr(allele, 'taxon') else None
@@ -1086,7 +2038,12 @@ def agr_curation_query(
                 "fullname_attribution": _extract_fullname_attribution(fullname, taxon) if taxon else None,
             }
             _validate_curie_in_result(allele_dict)
-            return _ok(data=allele_dict)
+            return _lookup_response(
+                method=method,
+                data=allele_dict,
+                attempted_query=_attempt_query(method, allele_id=allele_id),
+                exact_lookup=True,
+            )
 
         # GET SPECIES
         elif method == "get_species":
@@ -1095,18 +2052,109 @@ def agr_curation_query(
                 "abbreviation": s.abbreviation,
                 "display_name": s.display_name,
             } for s in species_list]
-            return _ok(data=species_data, count=len(species_data))
+            return _lookup_response(
+                method=method,
+                data=species_data,
+                count=len(species_data),
+                attempted_query=_attempt_query(method),
+            )
 
         # GET DATA PROVIDERS
         elif method == "get_data_providers":
             providers = db.get_data_providers()
             providers_data = [{"abbreviation": abbr, "taxon_id": taxon} for abbr, taxon in providers]
-            return _ok(data=providers_data, count=len(providers_data))
+            return _lookup_response(
+                method=method,
+                data=providers_data,
+                count=len(providers_data),
+                attempted_query=_attempt_query(method),
+            )
+
+        # GET ONTOLOGY TERM BY CURIE
+        elif method == "get_ontology_term_by_curie":
+            if not term:
+                return _err(
+                    "get_ontology_term_by_curie requires term",
+                    method=method,
+                    attempted_query=_attempt_query(
+                        method,
+                        term=term,
+                        ontology_term_type=ontology_term_type,
+                    ),
+                )
+            if not hasattr(db, "_create_session"):
+                return _err(
+                    "get_ontology_term_by_curie requires a curation DB client with SQL session support.",
+                    method=method,
+                    attempted_query=_attempt_query(
+                        method,
+                        term=term,
+                        ontology_term_type=ontology_term_type,
+                    ),
+                    failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
+                )
+
+            from sqlalchemy import text
+
+            session = db._create_session()
+            try:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT curie, name, ontologytermtype
+                        FROM ontologyterm
+                        WHERE curie = :curie
+                          AND (:ontologytermtype IS NULL OR ontologytermtype = :ontologytermtype)
+                        ORDER BY curie
+                        """
+                    ),
+                    {
+                        "curie": term,
+                        "ontologytermtype": ontology_term_type,
+                    },
+                ).fetchall()
+            finally:
+                session.close()
+
+            results_data = [
+                {
+                    "curie": row[0],
+                    "name": row[1],
+                    "ontology_type": row[2],
+                }
+                for row in rows
+            ]
+            results_data, invalid_curie_count = _validate_curie_list(results_data)
+            validation_warnings = (
+                [f"invalid_curie_prefixes:{invalid_curie_count}"]
+                if invalid_curie_count > 0
+                else []
+            )
+            return _lookup_response(
+                method=method,
+                data=results_data,
+                count=len(results_data),
+                warnings=validation_warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    term=term,
+                    ontology_term_type=ontology_term_type,
+                ),
+                exact_lookup=True,
+            )
 
         # ANATOMY TERMS SEARCH
         elif method == "search_anatomy_terms":
             if not term or not data_provider:
-                return _err("search_anatomy_terms requires term and data_provider")
+                return _err(
+                    "search_anatomy_terms requires term and data_provider",
+                    method=method,
+                    attempted_query=_attempt_query(
+                        method,
+                        term=term,
+                        data_provider=data_provider,
+                    ),
+                )
 
             results = db.search_anatomy_terms(
                 term=term,
@@ -1119,12 +2167,33 @@ def agr_curation_query(
             results_data, invalid_curie_count = _validate_curie_list(results_data)
             validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
 
-            return _ok(data=results_data, count=len(results_data), warnings=validation_warnings)
+            return _lookup_response(
+                method=method,
+                data=results_data,
+                count=len(results_data),
+                warnings=validation_warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    term=term,
+                    data_provider=data_provider,
+                    exact_match=exact_match,
+                    include_synonyms=include_synonyms,
+                    limit=limit_value,
+                ),
+            )
 
         # LIFE STAGE TERMS SEARCH
         elif method == "search_life_stage_terms":
             if not term or not data_provider:
-                return _err("search_life_stage_terms requires term and data_provider")
+                return _err(
+                    "search_life_stage_terms requires term and data_provider",
+                    method=method,
+                    attempted_query=_attempt_query(
+                        method,
+                        term=term,
+                        data_provider=data_provider,
+                    ),
+                )
 
             results = db.search_life_stage_terms(
                 term=term,
@@ -1137,12 +2206,29 @@ def agr_curation_query(
             results_data, invalid_curie_count = _validate_curie_list(results_data)
             validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
 
-            return _ok(data=results_data, count=len(results_data), warnings=validation_warnings)
+            return _lookup_response(
+                method=method,
+                data=results_data,
+                count=len(results_data),
+                warnings=validation_warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    term=term,
+                    data_provider=data_provider,
+                    exact_match=exact_match,
+                    include_synonyms=include_synonyms,
+                    limit=limit_value,
+                ),
+            )
 
         # GO TERMS SEARCH
         elif method == "search_go_terms":
             if not term:
-                return _err("search_go_terms requires term")
+                return _err(
+                    "search_go_terms requires term",
+                    method=method,
+                    attempted_query=_attempt_query(method, term=term),
+                )
 
             results = db.search_go_terms(
                 term=term,
@@ -1155,7 +2241,20 @@ def agr_curation_query(
             results_data, invalid_curie_count = _validate_curie_list(results_data)
             validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
 
-            return _ok(data=results_data, count=len(results_data), warnings=validation_warnings)
+            return _lookup_response(
+                method=method,
+                data=results_data,
+                count=len(results_data),
+                warnings=validation_warnings,
+                attempted_query=_attempt_query(
+                    method,
+                    term=term,
+                    go_aspect=go_aspect,
+                    exact_match=exact_match,
+                    include_synonyms=include_synonyms,
+                    limit=limit_value,
+                ),
+            )
 
         else:
             return _err(
@@ -1163,12 +2262,21 @@ def agr_curation_query(
                 "search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id, "
                 "search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id, "
                 "get_species, get_data_providers, "
-                "search_anatomy_terms, search_life_stage_terms, search_go_terms".format(method=method)
+                "get_ontology_term_by_curie, search_anatomy_terms, "
+                "search_life_stage_terms, search_go_terms".format(method=method),
+                method=method,
+                attempted_query=_attempt_query(method),
             )
 
     except Exception as e:
         logger.error("AGR query error: %s", e, exc_info=True)
-        return _err(f"Query error: {str(e)}")
+        return _err(
+            f"Query error: {str(e)}",
+            method=method,
+            attempted_query=_attempt_query(method),
+            failure_classification=LOOKUP_STATUS_TRANSIENT,
+            error=e,
+        )
 
 
 
