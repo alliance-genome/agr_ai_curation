@@ -61,6 +61,9 @@ class _CandidateBlueprint:
     payload: dict[str, Any]
     evidence_records: list["_CandidateEvidence"]
     conversation_context_summary: str
+    envelope_id: str | None = None
+    object_id: str | None = None
+    envelope_revision: int | None = None
 
 
 @dataclass(frozen=True)
@@ -307,6 +310,9 @@ def _map_extraction_result(
         candidates.append(
             CurationPrepCandidate(
                 adapter_key=blueprint.adapter_key,
+                envelope_id=blueprint.envelope_id,
+                object_id=blueprint.object_id,
+                envelope_revision=blueprint.envelope_revision,
                 payload=blueprint.payload,
                 evidence_records=[
                     CurationPrepEvidenceRecord(
@@ -391,6 +397,7 @@ def _build_candidate_blueprints_from_items(
         candidate_payload = _candidate_payload_from_item(raw_item)
         if not candidate_payload:
             continue
+        envelope_id, object_id, envelope_revision = _projection_ref_from_item(raw_item)
 
         blueprints.append(
             _CandidateBlueprint(
@@ -406,6 +413,9 @@ def _build_candidate_blueprints_from_items(
                     extraction_result,
                     candidate_payload,
                 ),
+                envelope_id=envelope_id,
+                object_id=object_id,
+                envelope_revision=envelope_revision,
             )
         )
 
@@ -419,12 +429,43 @@ def _candidate_payload_from_item(
         {
             key: value
             for key, value in raw_item.items()
-            if key not in {"evidence", "evidence_record_ids"}
+            if key
+            not in {
+                "evidence",
+                "evidence_record_ids",
+                "projection_ref",
+                "domain_envelope_projection_ref",
+            }
         }
     )
     if not isinstance(candidate_payload, dict):
         return {}
     return candidate_payload
+
+
+def _projection_ref_from_item(
+    raw_item: Mapping[str, Any],
+) -> tuple[str | None, str | None, int | None]:
+    raw_projection_ref = raw_item.get("domain_envelope_projection_ref")
+    if raw_projection_ref is None:
+        return None, None, None
+    if not isinstance(raw_projection_ref, Mapping):
+        raise ValueError("domain envelope projection_ref must be a JSON object")
+
+    envelope_id = normalized_optional_string(raw_projection_ref.get("envelope_id"))
+    object_id = normalized_optional_string(raw_projection_ref.get("object_id"))
+    envelope_revision = raw_projection_ref.get("envelope_revision")
+    if isinstance(envelope_revision, bool) or not isinstance(envelope_revision, int):
+        envelope_revision = None
+
+    if envelope_id is None or object_id is None or envelope_revision is None:
+        raise ValueError(
+            "domain envelope projection_ref must include envelope_id, object_id, "
+            "and envelope_revision"
+        )
+    if envelope_revision < 1:
+        raise ValueError("domain envelope projection_ref.envelope_revision must be positive")
+    return envelope_id, object_id, envelope_revision
 
 
 def _candidate_evidence_records(

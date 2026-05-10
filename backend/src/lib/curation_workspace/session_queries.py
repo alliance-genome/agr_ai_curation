@@ -67,9 +67,11 @@ from src.schemas.curation_workspace import (
     CurationSessionStatus,
     CurationSessionSummary,
     CurationSortDirection,
+    CurationValidationSnapshotState,
     CurationWorkspace as CurationWorkspacePayload,
     CurationWorkspaceResponse,
-    CurationValidationSnapshotState,
+    DomainEnvelopeEvidenceAnchorProjection,
+    DomainEnvelopeValidationSummaryProjection,
 )
 
 STATUS_SORT_ORDER = case(
@@ -545,6 +547,12 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
             if _candidate_has_entity_tag_fields(candidate)
         ],
         candidates=candidate_payloads,
+        evidence_anchor_projections=_workspace_evidence_anchor_projections(
+            candidate_payloads
+        ),
+        validation_summary_projections=_workspace_validation_summary_projections(
+            candidate_payloads
+        ),
         active_candidate_id=(
             str(session.current_candidate_id)
             if session.current_candidate_id is not None
@@ -564,6 +572,34 @@ def get_session_workspace(db: Session, session_id: str | UUID) -> CurationWorksp
         saved_view_context=None,
     )
     return CurationWorkspaceResponse(workspace=workspace)
+
+
+def _workspace_evidence_anchor_projections(
+    candidates: Sequence[CurationCandidatePayload],
+) -> list[DomainEnvelopeEvidenceAnchorProjection]:
+    projections: list[DomainEnvelopeEvidenceAnchorProjection] = []
+    seen_anchor_ids: set[str] = set()
+    for candidate in candidates:
+        for projection in candidate.evidence_anchor_projections:
+            if projection.anchor_id in seen_anchor_ids:
+                continue
+            seen_anchor_ids.add(projection.anchor_id)
+            projections.append(projection)
+    return projections
+
+
+def _workspace_validation_summary_projections(
+    candidates: Sequence[CurationCandidatePayload],
+) -> list[DomainEnvelopeValidationSummaryProjection]:
+    projections: list[DomainEnvelopeValidationSummaryProjection] = []
+    seen_summary_ids: set[str] = set()
+    for candidate in candidates:
+        for projection in candidate.validation_summary_projections:
+            if projection.summary_id in seen_summary_ids:
+                continue
+            seen_summary_ids.add(projection.summary_id)
+            projections.append(projection)
+    return projections
 
 
 def get_candidate_detail(

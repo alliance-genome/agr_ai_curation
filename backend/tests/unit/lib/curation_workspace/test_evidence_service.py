@@ -421,10 +421,16 @@ def test_resolve_anchor_against_document_uses_public_resolver_surface(db_session
         assert candidate.adapter_key == "reference_adapter"
         assert set(candidate.model_dump(mode="json").keys()) == {
             "adapter_key",
+            "envelope_id",
+            "object_id",
+            "envelope_revision",
             "payload",
             "evidence_records",
             "conversation_context_summary",
         }
+        assert candidate.envelope_id is None
+        assert candidate.object_id is None
+        assert candidate.envelope_revision is None
         assert normalized_candidate.normalized_payload["gene"]["symbol"] == "Example quote."
         assert context.document_id == str(document.id)
         assert context.prep_extraction_result_id == str(extraction_result.id)

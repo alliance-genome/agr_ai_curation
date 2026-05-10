@@ -20,6 +20,7 @@ DETAIL_LOAD_OPTIONS = (
     selectinload(ReviewSessionModel.action_log_entries),
     selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.draft),
     selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.extraction_result),
+    selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.domain_envelope),
     selectinload(ReviewSessionModel.candidates).selectinload(CurationCandidate.validation_snapshots),
     selectinload(ReviewSessionModel.submissions),
 )
@@ -33,6 +34,7 @@ PREPARED_SESSION_LOAD_OPTIONS = (
 CANDIDATE_DETAIL_LOAD_OPTIONS = (
     selectinload(CurationCandidate.draft),
     selectinload(CurationCandidate.evidence_anchors),
+    selectinload(CurationCandidate.domain_envelope),
     selectinload(CurationCandidate.validation_snapshots),
 )
 

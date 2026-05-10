@@ -789,6 +789,130 @@ class DomainEnvelopeProjectionRef(CurationWorkspaceBaseModel):
     )
 
 
+class DomainEnvelopeValidationStatus(str, Enum):
+    """Curator-facing validation projection status derived from envelope findings."""
+
+    UNRESOLVED = "unresolved"
+    PLANNED = "planned"
+    BLOCKED = "blocked"
+    UNDER_DEVELOPMENT = "under_development"
+    RESOLVED = "resolved"
+    WAIVED = "waived"
+
+
+class DomainEnvelopeEvidenceAnchorProjection(CurationWorkspaceBaseModel):
+    """Regenerable evidence navigation anchor projected from a domain envelope."""
+
+    anchor_id: str = Field(description="Stable projection identifier for this evidence anchor")
+    evidence_record_id: str = Field(description="Envelope evidence record identifier")
+    envelope_id: str = Field(description="Source domain envelope identifier")
+    object_id: str = Field(description="Stable envelope object identifier supported by the anchor")
+    object_type: Optional[str] = Field(default=None, description="Envelope object type")
+    field_path: Optional[str] = Field(
+        default=None,
+        description="Relative object payload field path supported by this anchor",
+    )
+    envelope_revision: int = Field(
+        ge=1,
+        description="Envelope revision represented by this projection",
+    )
+    document_id: Optional[str] = Field(
+        default=None,
+        description="Workspace or source document identifier used for viewer navigation",
+    )
+    quote: Optional[str] = Field(
+        default=None,
+        description="Best available quote or snippet text for curator display",
+    )
+    page_number: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="1-based PDF page number for the evidence location",
+    )
+    page_label: Optional[str] = Field(default=None, description="Viewer-facing page label")
+    chunk_id: Optional[str] = Field(default=None, description="Primary source chunk identifier")
+    chunk_ids: list[str] = Field(
+        default_factory=list,
+        description="Source chunk identifiers contributing to this anchor",
+    )
+    section_title: Optional[str] = Field(default=None, description="Source section title")
+    subsection_title: Optional[str] = Field(default=None, description="Source subsection title")
+    figure_reference: Optional[str] = Field(default=None, description="Source figure locator")
+    table_reference: Optional[str] = Field(default=None, description="Source table locator")
+    source_id: Optional[str] = Field(default=None, description="Provider-owned source identifier")
+    source_title: Optional[str] = Field(default=None, description="Provider-owned source title")
+    source_url: Optional[str] = Field(default=None, description="Provider-owned source URL")
+    anchor: EvidenceAnchor = Field(description="Reusable evidence anchor payload")
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Projection metadata retained from the envelope evidence record",
+    )
+
+
+class DomainEnvelopeValidationFindingProjection(CurationWorkspaceBaseModel):
+    """One envelope validation finding projected for workspace display."""
+
+    finding_id: str = Field(description="Stable validation finding identifier")
+    envelope_id: str = Field(description="Source domain envelope identifier")
+    object_id: Optional[str] = Field(
+        default=None,
+        description="Stable target object identifier when the finding is object-scoped",
+    )
+    object_type: Optional[str] = Field(default=None, description="Target object type")
+    field_path: Optional[str] = Field(
+        default=None,
+        description="Relative object payload field path when the finding is field-scoped",
+    )
+    envelope_revision: int = Field(
+        ge=1,
+        description="Envelope revision represented by this finding projection",
+    )
+    severity: str = Field(description="Envelope validation finding severity")
+    finding_status: str = Field(description="Raw envelope validation finding status")
+    summary_status: DomainEnvelopeValidationStatus = Field(
+        description="Workspace validation state derived from finding metadata",
+    )
+    code: Optional[str] = Field(default=None, description="Validator-owned code")
+    message: str = Field(description="Curator-facing validation message")
+    details: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Validator-owned structured finding details",
+    )
+
+
+class DomainEnvelopeValidationSummaryProjection(CurationWorkspaceBaseModel):
+    """Validation summary grouped by envelope object and field path."""
+
+    summary_id: str = Field(description="Stable summary projection identifier")
+    envelope_id: str = Field(description="Source domain envelope identifier")
+    object_id: Optional[str] = Field(
+        default=None,
+        description="Stable target object identifier when scoped to an object",
+    )
+    object_type: Optional[str] = Field(default=None, description="Target object type")
+    field_path: Optional[str] = Field(
+        default=None,
+        description="Relative object payload field path when scoped to a field",
+    )
+    envelope_revision: int = Field(
+        ge=1,
+        description="Envelope revision represented by this summary projection",
+    )
+    status: DomainEnvelopeValidationStatus = Field(
+        description="Highest-priority validation status in this object/field group",
+    )
+    highest_severity: Optional[str] = Field(
+        default=None,
+        description="Highest validation finding severity in this object/field group",
+    )
+    finding_count: int = Field(default=0, ge=0)
+    open_finding_count: int = Field(default=0, ge=0)
+    finding_ids: list[str] = Field(default_factory=list)
+    codes: list[str] = Field(default_factory=list)
+    messages: list[str] = Field(default_factory=list)
+    findings: list[DomainEnvelopeValidationFindingProjection] = Field(default_factory=list)
+
+
 class CurationCandidate(CurationWorkspaceBaseModel):
     """Curator-reviewable candidate with draft, evidence, and validation state."""
 
@@ -827,9 +951,17 @@ class CurationCandidate(CurationWorkspaceBaseModel):
         default_factory=list,
         description="Evidence anchors linked to this candidate",
     )
+    evidence_anchor_projections: list[DomainEnvelopeEvidenceAnchorProjection] = Field(
+        default_factory=list,
+        description="Regenerable evidence anchors projected from the represented envelope object",
+    )
     validation: Optional[CurationValidationSummary] = Field(
         default=None,
         description="Current validation summary for the candidate",
+    )
+    validation_summary_projections: list[DomainEnvelopeValidationSummaryProjection] = Field(
+        default_factory=list,
+        description="Regenerable validation summaries projected from envelope findings",
     )
     evidence_summary: Optional[CurationEvidenceSummary] = Field(
         default=None,
@@ -1308,6 +1440,14 @@ class CurationWorkspace(CurationWorkspaceBaseModel):
     candidates: list[CurationCandidate] = Field(
         default_factory=list,
         description="Ordered candidate queue for the session",
+    )
+    evidence_anchor_projections: list[DomainEnvelopeEvidenceAnchorProjection] = Field(
+        default_factory=list,
+        description="Session-scoped evidence anchors regenerated from domain envelopes",
+    )
+    validation_summary_projections: list[DomainEnvelopeValidationSummaryProjection] = Field(
+        default_factory=list,
+        description="Session-scoped validation summaries regenerated from domain envelopes",
     )
     active_candidate_id: Optional[str] = Field(
         default=None,
@@ -2157,7 +2297,11 @@ __all__ = [
     "CurationWorkspace",
     "CurationWorkspaceRequest",
     "CurationWorkspaceResponse",
+    "DomainEnvelopeEvidenceAnchorProjection",
     "DomainEnvelopeProjectionRef",
+    "DomainEnvelopeValidationFindingProjection",
+    "DomainEnvelopeValidationStatus",
+    "DomainEnvelopeValidationSummaryProjection",
     "EvidenceAnchor",
     "EvidenceAnchorKind",
     "EvidenceLocatorQuality",

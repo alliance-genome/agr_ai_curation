@@ -229,6 +229,19 @@ class CurationPrepCandidate(CurationPrepBaseModel):
     """Structured candidate prepared for deterministic normalization."""
 
     adapter_key: NonEmptyString = Field(description="Adapter key this candidate targets")
+    envelope_id: NonEmptyString | None = Field(
+        default=None,
+        description="Domain envelope identifier represented by this candidate",
+    )
+    object_id: NonEmptyString | None = Field(
+        default=None,
+        description="Stable domain envelope object identifier represented by this candidate",
+    )
+    envelope_revision: int | None = Field(
+        default=None,
+        ge=1,
+        description="Domain envelope revision represented by this candidate",
+    )
     payload: dict[str, Any] = Field(
         description="Adapter-owned candidate payload carried directly as JSON",
     )
@@ -253,6 +266,17 @@ class CurationPrepCandidate(CurationPrepBaseModel):
     @model_validator(mode="after")
     def validate_candidate_shape(self) -> "CurationPrepCandidate":
         """Require evidence records to resolve against the candidate payload."""
+
+        projection_ref_fields = (
+            self.envelope_id is not None,
+            self.object_id is not None,
+            self.envelope_revision is not None,
+        )
+        if any(projection_ref_fields) and not all(projection_ref_fields):
+            raise ValueError(
+                "Domain envelope prep candidates must include envelope_id, object_id, "
+                "and envelope_revision together"
+            )
 
         if not self.evidence_records:
             raise ValueError("evidence_records must contain at least one record")
