@@ -633,6 +633,17 @@ describe('CurationWorkspacePage', () => {
     })
   })
 
+  it('surfaces non-Error domain-envelope review row query failures', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildEnvelopeWorkspace())
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockRejectedValue(
+      'review rows unavailable',
+    )
+
+    renderPage('/curation/session-1')
+
+    expect(await screen.findByText('review rows unavailable')).toBeInTheDocument()
+  })
+
   it('renders the workspace header with document info', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
 

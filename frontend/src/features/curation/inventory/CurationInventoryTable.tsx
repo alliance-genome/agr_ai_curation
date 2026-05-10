@@ -436,11 +436,11 @@ export default function CurationInventoryTable({
                     <Typography variant="h6">
                       {tableIsLoading ? 'Loading inventory...' : 'No curation sessions match these filters.'}
                     </Typography>
-                      <Typography color="text.secondary" variant="body2">
-                        {hasActiveFilters
-                          ? 'Try clearing one or more filters to broaden the queue.'
-                          : 'Prepared object review sessions will appear here once they are ready for review.'}
-                      </Typography>
+                    <Typography color="text.secondary" variant="body2">
+                      {hasActiveFilters
+                        ? 'Try clearing one or more filters to broaden the queue.'
+                        : 'Prepared object review sessions will appear here once they are ready for review.'}
+                    </Typography>
                     {hasActiveFilters && !tableIsLoading && (
                       <Button onClick={onClearFilters} variant="outlined">
                         Clear filters

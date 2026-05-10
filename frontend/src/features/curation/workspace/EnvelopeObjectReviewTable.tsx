@@ -26,6 +26,7 @@ import type {
   DomainEnvelopeReviewRowSummaryField,
   DomainEnvelopeValidationStatus,
 } from '@/features/curation/types'
+import { DOMAIN_ENVELOPE_VALIDATION_STATUSES } from '@/features/curation/types'
 import type { WorkspaceEnvelopeObjectReviewRow } from './envelopeObjectReviewRows'
 
 interface EnvelopeObjectReviewTableProps {
@@ -48,6 +49,8 @@ const VALIDATION_STATUS_COLOR: Record<DomainEnvelopeValidationStatus, ChipProps[
   waived: 'default',
 }
 
+const VALIDATION_STATUS_VALUES = new Set<string>(DOMAIN_ENVELOPE_VALIDATION_STATUSES)
+
 function formatStatusLabel(value: string): string {
   return value
     .split(/[_-]+/)
@@ -56,7 +59,7 @@ function formatStatusLabel(value: string): string {
     .join(' ')
 }
 
-function formatJsonValue(value: unknown): string {
+export function formatProjectedSummaryValue(value: unknown): string {
   if (value === null || value === undefined) {
     return 'Empty'
   }
@@ -71,17 +74,18 @@ function formatJsonValue(value: unknown): string {
 
   if (Array.isArray(value)) {
     const compactItems = value
-      .map((item) => formatJsonValue(item))
+      .map((item) => formatProjectedSummaryValue(item))
       .filter((item) => item !== 'Empty')
 
     return compactItems.length > 0 ? compactItems.join(', ') : 'Empty'
   }
 
-  try {
-    return JSON.stringify(value)
-  } catch {
-    return 'Structured value'
+  const serialized = JSON.stringify(value)
+  if (typeof serialized !== 'string') {
+    throw new TypeError(`Unable to serialize projected summary field value of type ${typeof value}.`)
   }
+
+  return serialized
 }
 
 function truncateValue(value: string, maxLength = 96): string {
@@ -103,9 +107,33 @@ function decisionColor(status: CurationCandidateStatus): ChipProps['color'] {
   return 'warning'
 }
 
-function validationColor(row: DomainEnvelopeReviewRow): ChipProps['color'] {
-  const status = row.validation_state as DomainEnvelopeValidationStatus
-  return VALIDATION_STATUS_COLOR[status] ?? 'default'
+function isDomainEnvelopeValidationStatus(value: unknown): value is DomainEnvelopeValidationStatus {
+  return typeof value === 'string' && VALIDATION_STATUS_VALUES.has(value)
+}
+
+function formatUnknownValidationState(value: unknown): string {
+  if (typeof value !== 'string') {
+    return String(value)
+  }
+
+  return value.trim() || 'empty value'
+}
+
+function validationChipPresentation(row: DomainEnvelopeReviewRow): {
+  color: ChipProps['color']
+  label: string
+} {
+  if (!isDomainEnvelopeValidationStatus(row.validation_state)) {
+    return {
+      color: 'error',
+      label: `Unknown validation state: ${formatUnknownValidationState(row.validation_state)}`,
+    }
+  }
+
+  return {
+    color: VALIDATION_STATUS_COLOR[row.validation_state],
+    label: formatStatusLabel(row.validation_state),
+  }
 }
 
 function renderSummaryFields(fields: DomainEnvelopeReviewRowSummaryField[]) {
@@ -132,7 +160,7 @@ function renderSummaryFields(fields: DomainEnvelopeReviewRowSummaryField[]) {
             {field.label}
           </Box>
           {': '}
-          {truncateValue(formatJsonValue(field.value))}
+          {truncateValue(formatProjectedSummaryValue(field.value))}
         </Typography>
       ))}
       {hiddenCount > 0 ? (
@@ -169,8 +197,36 @@ function evidenceLabel(anchors: DomainEnvelopeEvidenceAnchorProjection[]): strin
   return `${anchors.length} projected evidence anchor${anchors.length === 1 ? '' : 's'}`
 }
 
+function reviewRowDisplayLabel(reviewRow: DomainEnvelopeReviewRow): string | null {
+  const displayLabel = reviewRow.display_label?.trim()
+  return displayLabel && displayLabel.length > 0 ? displayLabel : null
+}
+
 function selectedRowLabel(row: WorkspaceEnvelopeObjectReviewRow): string {
-  return row.reviewRow?.display_label || row.reviewRow?.projection_key || row.projectionRef.object_id
+  if (!row.reviewRow) {
+    return `object ${row.projectionRef.object_id} with missing review row`
+  }
+
+  return reviewRowDisplayLabel(row.reviewRow) ?? 'review row with missing display label'
+}
+
+function evidenceAnchorText(anchor: DomainEnvelopeEvidenceAnchorProjection): string | null {
+  for (const text of [
+    anchor.quote,
+    anchor.anchor.snippet_text,
+    anchor.anchor.sentence_text,
+  ]) {
+    if (typeof text !== 'string') {
+      continue
+    }
+
+    const trimmedText = text.trim()
+    if (trimmedText.length > 0) {
+      return trimmedText
+    }
+  }
+
+  return null
 }
 
 function EnvelopeObjectRow({
@@ -188,8 +244,10 @@ function EnvelopeObjectRow({
 }) {
   const theme = useTheme()
   const reviewRow = row.reviewRow
+  const displayLabel = reviewRow ? reviewRowDisplayLabel(reviewRow) : null
   const rowLabel = selectedRowLabel(row)
   const decision = row.candidate.status
+  const validationChip = reviewRow ? validationChipPresentation(reviewRow) : null
 
   return (
     <TableRow
@@ -211,9 +269,21 @@ function EnvelopeObjectRow({
     >
       <TableCell sx={{ minWidth: 250, py: 0.85 }}>
         <Stack spacing={0.4}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            {reviewRow?.display_label || row.projectionRef.object_id}
-          </Typography>
+          {reviewRow ? (
+            displayLabel ? (
+              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                {displayLabel}
+              </Typography>
+            ) : (
+              <Typography color="warning.main" variant="body2" sx={{ fontWeight: 600 }}>
+                Display label missing
+              </Typography>
+            )
+          ) : (
+            <Typography color="warning.main" variant="body2" sx={{ fontWeight: 600 }}>
+              Review row missing
+            </Typography>
+          )}
           {reviewRow?.secondary_label ? (
             <Typography color="text.secondary" variant="caption">
               {reviewRow.secondary_label}
@@ -264,12 +334,14 @@ function EnvelopeObjectRow({
                 size="small"
                 variant="outlined"
               />
-              <Chip
-                color={validationColor(reviewRow)}
-                label={formatStatusLabel(reviewRow.validation_state)}
-                size="small"
-                variant="outlined"
-              />
+              {validationChip ? (
+                <Chip
+                  color={validationChip.color}
+                  label={validationChip.label}
+                  size="small"
+                  variant="outlined"
+                />
+              ) : null}
             </>
           ) : null}
         </Stack>
@@ -401,20 +473,30 @@ function EvidenceProjectionPanel({
           </Typography>
         ) : (
           <Stack spacing={0.75}>
-            {row.evidenceAnchors.slice(0, 5).map((anchor) => (
-              <Box key={anchor.anchor_id}>
-                <Typography variant="body2">
-                  {anchor.quote || anchor.anchor.snippet_text || anchor.anchor.sentence_text || 'Evidence anchor'}
-                </Typography>
-                <Typography color="text.secondary" variant="caption">
-                  {[
-                    anchor.field_path,
-                    anchor.page_label || (anchor.page_number ? `page ${anchor.page_number}` : null),
-                    anchor.section_title,
-                  ].filter(Boolean).join(' / ') || anchor.anchor_id}
-                </Typography>
-              </Box>
-            ))}
+            {row.evidenceAnchors.slice(0, 5).map((anchor) => {
+              const projectedText = evidenceAnchorText(anchor)
+
+              return (
+                <Box key={anchor.anchor_id}>
+                  {projectedText ? (
+                    <Typography variant="body2">
+                      {projectedText}
+                    </Typography>
+                  ) : (
+                    <Typography color="text.secondary" variant="body2" sx={{ fontStyle: 'italic' }}>
+                      No evidence text projected.
+                    </Typography>
+                  )}
+                  <Typography color="text.secondary" variant="caption">
+                    {[
+                      anchor.field_path,
+                      anchor.page_label || (anchor.page_number ? `page ${anchor.page_number}` : null),
+                      anchor.section_title,
+                    ].filter(Boolean).join(' / ') || anchor.anchor_id}
+                  </Typography>
+                </Box>
+              )
+            })}
           </Stack>
         )}
       </Stack>

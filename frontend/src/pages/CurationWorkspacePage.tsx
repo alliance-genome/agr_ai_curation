@@ -55,6 +55,18 @@ import {
 
 const WORKSPACE_STALE_TIME_MS = 60_000
 
+function queryErrorMessage(error: unknown): string | null {
+  if (error === null || error === undefined) {
+    return null
+  }
+
+  if (error instanceof Error) {
+    return error.message
+  }
+
+  return String(error)
+}
+
 function findCandidate(
   candidates: CurationCandidate[],
   candidateId?: string | null,
@@ -446,9 +458,7 @@ function CurationWorkspacePageContent({
         entityTableSlot={(
           hasEnvelopeObjectRows ? (
             <EnvelopeObjectReviewTable
-              errorMessage={envelopeRowsQuery.error instanceof Error
-                ? envelopeRowsQuery.error.message
-                : null}
+              errorMessage={queryErrorMessage(envelopeRowsQuery.error)}
               isLoading={envelopeRowsQuery.isLoading || envelopeRowsQuery.isFetching}
               onAcceptRow={handleAcceptTag}
               onRejectRow={handleRejectTag}
