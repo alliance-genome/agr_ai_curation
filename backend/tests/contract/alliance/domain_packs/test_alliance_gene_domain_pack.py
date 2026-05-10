@@ -11,6 +11,7 @@ import yaml
 from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack, load_domain_pack_metadata
+from src.schemas.curation_workspace import SubmissionMode
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 
 
@@ -37,6 +38,7 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     GENE_REFERENCE_TOOL_NAME,
     GENE_REFERENCE_VALIDATOR_BINDING_ID,
     GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
+    GeneMentionEvidenceExportAdapter,
     build_gene_mention_evidence_export,
     build_gene_mention_evidence_submission_plan,
     tool_verified_gene_output_to_pending_envelope,
@@ -275,6 +277,32 @@ def test_gene_mention_evidence_exports_validated_reference_evidence_payload():
         "creates_paper_gene_association": False,
         "write_target": None,
     }
+
+
+def test_gene_export_adapter_rehydrates_selected_domain_envelope_snapshot():
+    raw_fixture = _load_raw_gene_fixture()
+    envelope = tool_verified_gene_output_to_pending_envelope(raw_fixture)
+    selected_object_id = envelope.objects[0].pending_ref_id
+    assert selected_object_id is not None
+    snapshot = envelope.model_dump(mode="json")
+    snapshot["selected_object_ids"] = [selected_object_id]
+    adapter = GeneMentionEvidenceExportAdapter()
+
+    payload = adapter.build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
+        payload_context={
+            "session_id": "session-1",
+            "candidate_ids": ["candidate-1"],
+            "candidate_count": 1,
+            "domain_envelope_candidates": [{"candidate_id": "candidate-1"}],
+            "domain_envelopes": [snapshot],
+        },
+    )
+
+    assert payload.payload_json is not None
+    assert payload.payload_json["record_count"] == 1
+    assert payload.payload_json["records"][0]["object_id"] == selected_object_id
 
 
 def test_gene_submission_plan_is_non_mutating_and_has_no_paper_gene_target():

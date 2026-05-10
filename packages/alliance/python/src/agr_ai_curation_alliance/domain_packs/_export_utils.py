@@ -6,16 +6,62 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from src.schemas.domain_envelope import parse_field_path
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    DomainEnvelope,
+    parse_field_path,
+)
 
 
 MISSING = object()
+DOMAIN_ENVELOPE_SNAPSHOT_KEYS = (
+    "envelope_id",
+    "domain_pack_id",
+    "domain_pack_version",
+    "status",
+    "schema_ref",
+    "objects",
+    "validation_findings",
+    "history",
+    "metadata",
+)
 
 
 def canonical_json(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Return a deterministic JSON-compatible mapping."""
 
     return json.loads(json.dumps(payload, sort_keys=True))
+
+
+def stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
+    """Return the durable or pending identifier for a domain-envelope object."""
+
+    if domain_object.object_id is not None:
+        return domain_object.object_id
+    if domain_object.pending_ref_id is not None:
+        return domain_object.pending_ref_id
+    raise ValueError("Domain envelope object is missing object_id and pending_ref_id")
+
+
+def domain_envelope_from_snapshot(snapshot: Mapping[str, Any]) -> DomainEnvelope:
+    """Rehydrate the domain-envelope portion of a workspace export snapshot."""
+
+    return DomainEnvelope.model_validate(
+        {
+            key: snapshot[key]
+            for key in DOMAIN_ENVELOPE_SNAPSHOT_KEYS
+            if key in snapshot
+        }
+    )
+
+
+def selected_object_ids(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return selected object IDs carried alongside a domain-envelope snapshot."""
+
+    raw_selected = snapshot.get("selected_object_ids") or ()
+    if not isinstance(raw_selected, Sequence) or isinstance(raw_selected, str):
+        return ()
+    return tuple(str(value) for value in raw_selected)
 
 
 def payload_value(payload: Mapping[str, Any], field_path: str) -> Any:

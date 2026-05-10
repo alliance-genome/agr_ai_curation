@@ -12,6 +12,8 @@ from src.schemas.domain_envelope import (
     ObjectRef,
 )
 
+from .._export_utils import stable_object_id
+
 
 ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY = "allele_verified_association_targets"
 ALLELE_PAPER_EVIDENCE_ASSOCIATION_OBJECT_TYPE = "AllelePaperEvidenceAssociation"
@@ -81,7 +83,7 @@ def build_allele_association_submission_plan(
         domain_object
         for domain_object in envelope.objects
         if domain_object.object_type == ALLELE_PAPER_EVIDENCE_ASSOCIATION_OBJECT_TYPE
-        and (not selected or _stable_object_id(domain_object) in selected)
+        and (not selected or stable_object_id(domain_object) in selected)
     ]
     if not association_objects:
         blockers.append(
@@ -107,7 +109,7 @@ def _association_submission_operations(
     association: CuratableObjectEnvelope,
     objects_by_ref: Mapping[tuple[str, str], CuratableObjectEnvelope],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    object_id = _stable_object_id(association)
+    object_id = stable_object_id(association)
     blockers: list[dict[str, Any]] = []
     candidate_operations: list[dict[str, Any]] = []
 
@@ -334,14 +336,6 @@ def _object_for_ref(
     objects_by_ref: Mapping[tuple[str, str], CuratableObjectEnvelope],
 ) -> CuratableObjectEnvelope | None:
     return objects_by_ref.get(ref.ref_key())
-
-
-def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
-    if domain_object.object_id is not None:
-        return domain_object.object_id
-    if domain_object.pending_ref_id is not None:
-        return domain_object.pending_ref_id
-    raise ValueError("Domain envelope object is missing object_id and pending_ref_id")
 
 
 def _db_id(payload: Mapping[str, Any], *field_names: str) -> int | None:

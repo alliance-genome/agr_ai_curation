@@ -28,14 +28,14 @@ from .._export_utils import (
     string_value,
 )
 from ..schema_refs import ALLIANCE_LINKML_COMMIT
-from . import CHEMICAL_CONDITION_OBJECT_TYPE
+from .constants import (
+    CHEMICAL_CONDITION_LINKML_SCHEMA_SOURCE_FILE,
+    CHEMICAL_CONDITION_OBJECT_TYPE,
+)
 
 
 CHEMICAL_CONDITION_EXPORT_TARGET_ID = "alliance.chemical_condition.v1"
 CHEMICAL_CONDITION_EXPORT_SCHEMA_VERSION = 1
-CHEMICAL_CONDITION_LINKML_SCHEMA_SOURCE_FILE = (
-    "model/schema/phenotypeAndDiseaseAnnotation.yaml"
-)
 
 _HOST_JOIN_TABLES = {
     "DiseaseAnnotation": "public.diseaseannotation_conditionrelation",

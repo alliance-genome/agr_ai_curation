@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
@@ -28,53 +27,44 @@ from src.schemas.domain_envelope import (
     parse_field_path,
 )
 
-from ..paths import get_alliance_domain_packs_dir
 from ..schema_refs import (
     ALLIANCE_LINKML_COMMIT,
     ALLIANCE_LINKML_PROVIDER_KEY,
     OBJECT_ROLE_METADATA_KEY,
     PROVIDER_REFS_METADATA_KEY,
 )
-
-
-CHEMICAL_CONDITION_DOMAIN_PACK_ID = "agr.alliance.chemical_condition"
-CHEMICAL_CONDITION_DOMAIN_PACK_DIR_NAME = "chemical_condition"
-CHEMICAL_CONDITION_DOMAIN_PACK_VERSION = "0.1.0"
-CHEMICAL_CONDITION_MODEL_ID = "ChemicalConditionPayload"
-CHEMICAL_CONDITION_OBJECT_TYPE = "ChemicalCondition"
-CHEMICAL_TERM_OBJECT_TYPE = "ChemicalTerm"
-REFERENCE_OBJECT_TYPE = "Reference"
-EVIDENCE_QUOTE_OBJECT_TYPE = "EvidenceQuote"
-CHEMICAL_CONDITION_VALIDATOR_STATES = ("active", "planned", "blocked")
-CHEMICAL_CONDITION_PENDING_VALIDATOR_ID = (
-    "chemical_condition.pending_envelope_validator"
+from .constants import (
+    CHEMICAL_CONDITION_CHEBI_FORMAT_VALIDATOR_ID,
+    CHEMICAL_CONDITION_CONVERTER_ID,
+    CHEMICAL_CONDITION_DOMAIN_PACK_DIR_NAME,
+    CHEMICAL_CONDITION_DOMAIN_PACK_ID,
+    CHEMICAL_CONDITION_DOMAIN_PACK_VERSION,
+    CHEMICAL_CONDITION_EXPORT_CONTEXT_FIELDS,
+    CHEMICAL_CONDITION_LINKML_SCHEMA_SOURCE_FILE,
+    CHEMICAL_CONDITION_MODEL_ID,
+    CHEMICAL_CONDITION_OBJECT_TYPE,
+    CHEMICAL_CONDITION_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE,
+    CHEMICAL_CONDITION_PENDING_VALIDATOR_ID,
+    CHEMICAL_CONDITION_REFERENCE_SCHEMA_SOURCE_FILE,
+    CHEMICAL_CONDITION_VALIDATOR_STATES,
+    CHEMICAL_TERM_OBJECT_TYPE,
+    EVIDENCE_QUOTE_OBJECT_TYPE,
+    REFERENCE_OBJECT_TYPE,
+    get_chemical_condition_domain_pack_metadata_path,
 )
-CHEMICAL_CONDITION_CHEBI_FORMAT_VALIDATOR_ID = "chemical_condition.chebi_curie_format"
-CHEMICAL_CONDITION_CONVERTER_ID = (
-    "agr_ai_curation_alliance.domain_packs.chemical_condition"
+from .export import (
+    CHEMICAL_CONDITION_EXPORT_SCHEMA_VERSION,
+    CHEMICAL_CONDITION_EXPORT_TARGET_ID,
+    ChemicalConditionExportAdapter,
+    build_chemical_condition_export_payload,
 )
-CHEMICAL_CONDITION_EXPORT_CONTEXT_FIELDS = (
-    "host_annotation_type",
-    "host_annotation_id",
-    "source_reference.reference_id",
+from .submit import (
+    CHEMICAL_CONDITION_REQUIRED_BEFORE_WRITE,
+    CHEMICAL_CONDITION_SUBMISSION_BLOCKED_OPERATIONS,
+    ChemicalConditionSubmissionBlockerAdapter,
 )
 
 _CHEBI_CURIE_PATTERN = re.compile(r"^CHEBI:\d+$")
-_PHENOTYPE_DISEASE_SOURCE_FILE = "model/schema/phenotypeAndDiseaseAnnotation.yaml"
-_ONTOLOGY_TERM_SOURCE_FILE = "model/schema/ontologyTerm.yaml"
-_CONTROLLED_VOCABULARY_SOURCE_FILE = "model/schema/controlledVocabulary.yaml"
-_REFERENCE_SOURCE_FILE = "model/schema/reference.yaml"
-_CORE_SOURCE_FILE = "model/schema/core.yaml"
-
-
-def get_chemical_condition_domain_pack_metadata_path() -> Path:
-    """Return the bundled chemical-condition domain-pack metadata path."""
-
-    return (
-        get_alliance_domain_packs_dir()
-        / CHEMICAL_CONDITION_DOMAIN_PACK_DIR_NAME
-        / "domain_pack.yaml"
-    )
 
 
 def _strip_required_string(value: object, field_name: str) -> object:
@@ -129,7 +119,7 @@ def _schema_ref(
 _CHEMICAL_CONDITION_SCHEMA_REF = _schema_ref(
     schema_id="alliance.linkml.ExperimentalCondition",
     name="ExperimentalCondition",
-    source_file=_PHENOTYPE_DISEASE_SOURCE_FILE,
+    source_file=CHEMICAL_CONDITION_LINKML_SCHEMA_SOURCE_FILE,
     class_name="ExperimentalCondition",
     definition_state=DefinitionState.IN_DEVELOPMENT,
     definition_notes=[
@@ -140,13 +130,13 @@ _CHEMICAL_CONDITION_SCHEMA_REF = _schema_ref(
 _CHEMICAL_TERM_SCHEMA_REF = _schema_ref(
     schema_id="alliance.linkml.ChemicalTerm",
     name="ChemicalTerm",
-    source_file=_ONTOLOGY_TERM_SOURCE_FILE,
+    source_file=CHEMICAL_CONDITION_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE,
     class_name="ChemicalTerm",
 )
 _REFERENCE_SCHEMA_REF = _schema_ref(
     schema_id="alliance.linkml.Reference",
     name="Reference",
-    source_file=_REFERENCE_SOURCE_FILE,
+    source_file=CHEMICAL_CONDITION_REFERENCE_SCHEMA_SOURCE_FILE,
     class_name="Reference",
 )
 
@@ -440,7 +430,7 @@ def _chemical_condition_metadata() -> dict[str, Any]:
             ALLIANCE_LINKML_PROVIDER_KEY: {
                 "schema_ref": "alliance.linkml",
                 "commit": ALLIANCE_LINKML_COMMIT,
-                "source_file": _PHENOTYPE_DISEASE_SOURCE_FILE,
+                "source_file": CHEMICAL_CONDITION_LINKML_SCHEMA_SOURCE_FILE,
                 "class": "ExperimentalCondition",
             }
         },
@@ -456,7 +446,7 @@ def _chemical_term_metadata() -> dict[str, Any]:
             ALLIANCE_LINKML_PROVIDER_KEY: {
                 "schema_ref": "alliance.linkml",
                 "commit": ALLIANCE_LINKML_COMMIT,
-                "source_file": _ONTOLOGY_TERM_SOURCE_FILE,
+                "source_file": CHEMICAL_CONDITION_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE,
                 "class": "ChemicalTerm",
             }
         },
@@ -933,19 +923,6 @@ def _payload_string(payload: Mapping[str, Any], field_path: str) -> str | None:
             return None
         current = current[part]
     return current if isinstance(current, str) else None
-
-
-from .export import (  # noqa: E402
-    CHEMICAL_CONDITION_EXPORT_SCHEMA_VERSION,
-    CHEMICAL_CONDITION_EXPORT_TARGET_ID,
-    ChemicalConditionExportAdapter,
-    build_chemical_condition_export_payload,
-)
-from .submit import (  # noqa: E402
-    CHEMICAL_CONDITION_REQUIRED_BEFORE_WRITE,
-    CHEMICAL_CONDITION_SUBMISSION_BLOCKED_OPERATIONS,
-    ChemicalConditionSubmissionBlockerAdapter,
-)
 
 
 __all__ = [
