@@ -18,8 +18,8 @@ from conftest import MOCK_USERS
 from tests.chat_api_test_support import patch_chat_impl
 from tests.fixtures.evidence.harness import (
     DEFAULT_FIXTURE_NAME,
+    build_domain_envelope_extraction_payload,
     build_expected_sse_records,
-    build_extraction_payload,
     load_evidence_fixture,
 )
 
@@ -103,7 +103,11 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
         CurationReviewSession,
         CurationSubmissionRecord,
         CurationValidationSnapshot,
+        DomainEnvelopeHistory,
         DomainEnvelopeModel,
+        DomainEnvelopeObject,
+        DomainEnvelopeProjectionIndex,
+        DomainValidationFinding,
     )
     from src.models.sql.database import Base
     from src.models.sql.pdf_document import PDFDocument
@@ -117,6 +121,10 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
             DomainEnvelopeModel.__table__,
+            DomainEnvelopeObject.__table__,
+            DomainValidationFinding.__table__,
+            DomainEnvelopeHistory.__table__,
+            DomainEnvelopeProjectionIndex.__table__,
             CurationCandidate.__table__,
             CurationEvidenceRecord.__table__,
             CurationDraft.__table__,
@@ -209,6 +217,31 @@ def evidence_integration_context(client: TestClient, evidence_fixture, test_db):
             CurationReviewSession.id.in_(session_ids)
         ).delete(synchronize_session=False)
 
+    envelope_ids = [
+        row[0]
+        for row in (
+            test_db.query(DomainEnvelopeModel.envelope_id)
+            .filter(DomainEnvelopeModel.document_id == document_id)
+            .all()
+        )
+    ]
+    if envelope_ids:
+        test_db.query(DomainEnvelopeProjectionIndex).filter(
+            DomainEnvelopeProjectionIndex.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeHistory).filter(
+            DomainEnvelopeHistory.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainValidationFinding).filter(
+            DomainValidationFinding.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeObject).filter(
+            DomainEnvelopeObject.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeModel).filter(
+            DomainEnvelopeModel.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+
     test_db.query(CurationExtractionResultRecord).filter(
         CurationExtractionResultRecord.document_id == document_id
     ).delete(synchronize_session=False)
@@ -288,7 +321,7 @@ def configure_chat_stream_mocks(
 def make_fixture_runner(evidence_fixture: dict[str, object]):
     extraction = evidence_fixture["extraction"]
     expected_sse_records = build_expected_sse_records(evidence_fixture)
-    extraction_payload = build_extraction_payload(evidence_fixture)
+    extraction_payload = build_domain_envelope_extraction_payload(evidence_fixture)
 
     async def _run_agent_streamed(**_kwargs):
         yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-evidence-fixture"}}
@@ -305,6 +338,9 @@ def make_fixture_runner(evidence_fixture: dict[str, object]):
             figure_reference = evidence_record.get("figure_reference")
             if figure_reference:
                 tool_output["figure_reference"] = figure_reference
+            evidence_record_id = evidence_record.get("evidence_record_id")
+            if evidence_record_id:
+                tool_output["evidence_record_id"] = evidence_record_id
 
             yield {
                 "type": "TOOL_COMPLETE",

@@ -80,7 +80,11 @@ def submission_e2e_context(client: TestClient, test_db):
         CurationReviewSession,
         CurationSubmissionRecord,
         CurationValidationSnapshot,
+        DomainEnvelopeHistory,
         DomainEnvelopeModel,
+        DomainEnvelopeObject,
+        DomainEnvelopeProjectionIndex,
+        DomainValidationFinding,
     )
     from src.models.sql.database import Base
     from src.models.sql.pdf_document import PDFDocument
@@ -94,6 +98,10 @@ def submission_e2e_context(client: TestClient, test_db):
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
             DomainEnvelopeModel.__table__,
+            DomainEnvelopeObject.__table__,
+            DomainValidationFinding.__table__,
+            DomainEnvelopeHistory.__table__,
+            DomainEnvelopeProjectionIndex.__table__,
             CurationCandidate.__table__,
             CurationEvidenceRecord.__table__,
             CurationDraft.__table__,
@@ -174,6 +182,31 @@ def submission_e2e_context(client: TestClient, test_db):
     if session_ids:
         test_db.query(CurationReviewSession).filter(
             CurationReviewSession.id.in_(session_ids)
+        ).delete(synchronize_session=False)
+
+    envelope_ids = [
+        row[0]
+        for row in (
+            test_db.query(DomainEnvelopeModel.envelope_id)
+            .filter(DomainEnvelopeModel.document_id == document_id)
+            .all()
+        )
+    ]
+    if envelope_ids:
+        test_db.query(DomainEnvelopeProjectionIndex).filter(
+            DomainEnvelopeProjectionIndex.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeHistory).filter(
+            DomainEnvelopeHistory.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainValidationFinding).filter(
+            DomainValidationFinding.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeObject).filter(
+            DomainEnvelopeObject.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeModel).filter(
+            DomainEnvelopeModel.envelope_id.in_(envelope_ids)
         ).delete(synchronize_session=False)
 
     test_db.query(CurationExtractionResultRecord).filter(
@@ -269,7 +302,7 @@ def _reference_prep_output_payload() -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anchors(
+async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_rows(
     submission_e2e_context,
     test_db,
 ):
@@ -300,40 +333,84 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
             "candidate_count": 1,
             "conversation_summary": "Conversation focused on evidence-backed extraction findings.",
             "payload_json": {
-                "items": [
+                "summary": "Prepared one domain-envelope fixture object.",
+                "curatable_objects": [
                     {
-                        "gene_symbol": "alpha-1",
-                        "entity_type": "gene",
-                        "normalized_id": "FB:FBgn0000008",
-                        "source_mentions": ["Alpha mention"],
-                        "evidence": [
+                        "object_type": "gene_mention_evidence",
+                        "object_role": "validated_reference",
+                        "pending_ref_id": "gene-fixture-review-object-1",
+                        "payload": {
+                            "gene_symbol": "alpha-1",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0000008",
+                            "source_mentions": ["Alpha mention"],
+                        },
+                        "field_refs": [
                             {
-                                "entity": "alpha-1",
-                                "verified_quote": "alpha-1 was supported by a verified observation.",
-                                "page": 6,
-                                "section": "Results",
-                                "subsection": "Observation set",
-                                "chunk_id": "chunk-alpha-1",
-                                "figure_reference": "Figure 3B",
-                            }
+                                "object_ref": {
+                                    "pending_ref_id": "gene-fixture-review-object-1",
+                                    "object_type": "gene_mention_evidence",
+                                },
+                                "field_path": "gene_symbol",
+                            },
+                            {
+                                "object_ref": {
+                                    "pending_ref_id": "gene-fixture-review-object-1",
+                                    "object_type": "gene_mention_evidence",
+                                },
+                                "field_path": "entity_type",
+                            },
+                            {
+                                "object_ref": {
+                                    "pending_ref_id": "gene-fixture-review-object-1",
+                                    "object_type": "gene_mention_evidence",
+                                },
+                                "field_path": "normalized_id",
+                            },
+                            {
+                                "object_ref": {
+                                    "pending_ref_id": "gene-fixture-review-object-1",
+                                    "object_type": "gene_mention_evidence",
+                                },
+                                "field_path": "source_mentions[0]",
+                            },
                         ],
+                        "evidence_record_ids": ["alpha-1-evidence-1"],
+                        "metadata": {
+                            "semantic_source": "curatable_objects",
+                            "workspace_display": {
+                                "primary_label_field": "gene_symbol",
+                                "secondary_label_field": "normalized_id",
+                                "summary_fields": [
+                                    "gene_symbol",
+                                    "entity_type",
+                                    "normalized_id",
+                                    "source_mentions[0]",
+                                ],
+                                "projection_key": "gene-fixture-review-object-1",
+                            }
+                        },
                     }
                 ],
-                "evidence_records": [
-                    {
-                        "entity": "alpha-1",
-                        "verified_quote": "alpha-1 was supported by a verified observation.",
-                        "page": 6,
-                        "section": "Results",
-                        "subsection": "Observation set",
-                        "chunk_id": "chunk-alpha-1",
-                        "figure_reference": "Figure 3B",
-                    }
-                ],
-                "run_summary": {"candidate_count": 1},
+                "metadata": {
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "alpha-1-evidence-1",
+                            "entity": "alpha-1",
+                            "verified_quote": "alpha-1 was supported by a verified observation.",
+                            "page": 6,
+                            "section": "Results",
+                            "subsection": "Observation set",
+                            "chunk_id": "chunk-alpha-1",
+                            "figure_reference": "Figure 3B",
+                        }
+                    ],
+                    "provenance": {"semantic_source": "curatable_objects"},
+                },
+                "run_summary": {"candidate_count": 1, "kept_count": 1},
             },
             "created_at": "2026-03-28T12:00:00Z",
-            "metadata": {},
+            "metadata": {"envelope_id": "gene-fixture-review-envelope"},
         }
     )
 
@@ -352,7 +429,9 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
         ),
     )
 
-    assert len(prep_output.candidates) == 1
+    assert prep_output.candidates == []
+    assert prep_output.review_row_count == 1
+    assert len(prep_output.envelope_refs) == 1
 
     bootstrap_response = await bootstrap_document_session(
         submission_e2e_context["document_id"],
@@ -368,24 +447,25 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
     workspace = get_session_workspace(test_db, bootstrap_response.session.session_id)
     candidate = workspace.workspace.candidates[0]
     assert candidate.adapter_key == "gene"
+    assert candidate.projection_ref.envelope_id == "gene-fixture-review-envelope"
+    assert candidate.projection_ref.envelope_revision == (
+        prep_output.envelope_refs[0].envelope_revision
+    )
+    assert candidate.projection_ref.object_id == "gene-fixture-review-object-1"
+    assert candidate.normalized_payload == {}
+    assert candidate.metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate.metadata["projection_key"] == "gene-fixture-review-object-1"
     label_field = next(
         field for field in candidate.draft.fields if field.field_key == "gene_symbol"
     )
     assert label_field.value == "alpha-1"
-    assert candidate.evidence_anchors[0].field_keys == [
+    assert [field.field_key for field in candidate.draft.fields] == [
         "gene_symbol",
         "entity_type",
         "normalized_id",
-        "source_mentions.0",
+        "source_mentions[0]",
     ]
-    assert candidate.evidence_anchors[0].anchor.snippet_text == (
-        "alpha-1 was supported by a verified observation."
-    )
-    assert candidate.evidence_anchors[0].anchor.page_number == 6
-    assert candidate.evidence_anchors[0].anchor.section_title == "Results"
-    assert candidate.evidence_anchors[0].anchor.subsection_title == "Observation set"
-    assert candidate.evidence_anchors[0].anchor.figure_reference == "Figure 3B"
-    assert candidate.evidence_anchors[0].anchor.table_reference is None
+    assert candidate.evidence_anchors == []
 
 
 def test_submission_workflow_e2e_with_retry_and_history(

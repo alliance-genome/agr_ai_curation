@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from tests.fixtures.evidence.harness import (
     ALL_EVIDENCE_FIXTURE_NAMES,
+    build_domain_envelope_extraction_payload,
     build_expected_candidates,
     build_extraction_payload,
     build_extraction_scope,
@@ -87,6 +88,7 @@ def _fixture_extraction_result(
     )
 
     extraction = evidence_fixture["extraction"]
+    payload_json = build_domain_envelope_extraction_payload(evidence_fixture)
 
     return CurationExtractionResultRecord.model_validate(
         {
@@ -99,11 +101,14 @@ def _fixture_extraction_result(
             "trace_id": "trace-evidence-fixture",
             "flow_run_id": None,
             "user_id": user_id,
-            "candidate_count": extraction["run_summary"]["candidate_count"],
+            "candidate_count": payload_json["run_summary"]["candidate_count"],
             "conversation_summary": evidence_fixture["paper"]["conversation_summary"],
-            "payload_json": build_extraction_payload(evidence_fixture),
+            "payload_json": payload_json,
             "created_at": datetime.now(timezone.utc),
-            "metadata": {"fixture_id": evidence_fixture["fixture_id"]},
+            "metadata": {
+                "fixture_id": evidence_fixture["fixture_id"],
+                "envelope_id": f"{evidence_fixture['fixture_id']}-review-envelope",
+            },
         }
     )
 
@@ -121,9 +126,16 @@ def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
         user_id="user-fixture",
         origin_session_id="session-fixture",
     )
+    native_payload = native_extraction_result.payload_json
     assert native_extraction_result.adapter_key == native_adapter_key
-    assert native_extraction_result.payload_json.get("profile_key") == native_scope["profile_key"]
-    assert "domain_key" not in native_extraction_result.payload_json
+    assert "items" not in native_payload
+    assert native_payload["metadata"]["provenance"]["adapter_key"] == native_adapter_key
+    assert native_payload["metadata"]["provenance"]["profile_key"] == native_scope["profile_key"]
+    assert native_payload["metadata"]["provenance"]["domain_key"] == native_scope["domain_key"]
+    assert native_payload["curatable_objects"][0]["metadata"]["semantic_source"] == (
+        "curatable_objects"
+    )
+    assert native_payload["curatable_objects"][0]["evidence_record_ids"]
 
     scoped_fixture = copy.deepcopy(evidence_fixture)
     scoped_fixture["extraction"]["profile_key"] = "pilot"
@@ -136,13 +148,13 @@ def test_fixture_extraction_payload_and_result_preserve_fixture_scope_values(
         user_id="user-fixture",
         origin_session_id="session-fixture",
     )
-    payload = build_extraction_payload(scoped_fixture)
+    payload = build_domain_envelope_extraction_payload(scoped_fixture)
 
-    assert payload["profile_key"] == "pilot"
-    assert payload["scope_confirmation"]["profile_keys"] == ["pilot"]
-    assert payload["scope_confirmation"]["domain_keys"] == ["disease"]
-    assert extraction_result.payload_json["profile_key"] == "pilot"
+    assert payload["metadata"]["provenance"]["profile_key"] == "pilot"
+    assert payload["metadata"]["provenance"]["domain_key"] == "disease"
+    assert extraction_result.payload_json["metadata"]["provenance"]["profile_key"] == "pilot"
     assert "domain_key" not in extraction_result.payload_json
+    assert "items" not in extraction_result.payload_json
 
 
 @pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
@@ -201,7 +213,8 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
         )
     ).one()
     persisted_extraction = _record_to_schema(extraction_record)
-    assert persisted_extraction.payload_json == build_extraction_payload(evidence_fixture)
+    expected_payload = build_domain_envelope_extraction_payload(evidence_fixture)
+    assert persisted_extraction.payload_json == expected_payload
     assert persisted_extraction.origin_session_id == session_id
 
     prep_output = await run_curation_prep(
@@ -216,28 +229,14 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
         ),
     )
 
-    assert len(prep_output.candidates) == 1
-    assert prep_output.run_metadata.warnings == [evidence_fixture["expected_gating"]["warning"]]
-
-    prep_candidate = prep_output.candidates[0]
-    assert prep_candidate.adapter_key == expected_candidate["adapter_key"]
-    assert prep_candidate.payload == expected_candidate["payload"]
-    assert [record.field_paths for record in prep_candidate.evidence_records] == [
-        expected_candidate["field_paths"]
-        for _evidence in expected_candidate["evidence"]
-    ]
-    assert [record.extraction_result_id for record in prep_candidate.evidence_records] == [
-        persisted_extraction.extraction_result_id
-        for _evidence in expected_candidate["evidence"]
-    ]
-    assert [record.anchor.snippet_text for record in prep_candidate.evidence_records] == [
-        evidence["verified_quote"]
-        for evidence in expected_candidate["evidence"]
-    ]
-    assert [record.anchor.chunk_ids for record in prep_candidate.evidence_records] == [
-        [evidence["chunk_id"]]
-        for evidence in expected_candidate["evidence"]
-    ]
+    assert prep_output.candidates == []
+    assert prep_output.review_row_count == 1
+    assert len(prep_output.envelope_refs) == 1
+    envelope_ref = prep_output.envelope_refs[0]
+    assert envelope_ref.source_extraction_result_id == persisted_extraction.extraction_result_id
+    assert envelope_ref.domain_pack_id
+    assert envelope_ref.review_row_count == 1
+    assert prep_output.run_metadata.warnings == []
 
     bootstrap_response = client.post(
         (
@@ -257,22 +256,27 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
     workspace_candidate = workspace_response.json()["workspace"]["candidates"][0]
 
     assert workspace_candidate["adapter_key"] == expected_candidate["adapter_key"]
-    assert [anchor["field_keys"] for anchor in workspace_candidate["evidence_anchors"]] == [
-        expected_candidate["field_paths"]
-        for _evidence in expected_candidate["evidence"]
-    ]
-    assert [anchor["anchor"]["snippet_text"] for anchor in workspace_candidate["evidence_anchors"]] == [
-        evidence["verified_quote"]
-        for evidence in expected_candidate["evidence"]
-    ]
-    assert [anchor["anchor"]["chunk_ids"] for anchor in workspace_candidate["evidence_anchors"]] == [
-        [evidence["chunk_id"]]
-        for evidence in expected_candidate["evidence"]
-    ]
-    assert [anchor["anchor"]["section_title"] for anchor in workspace_candidate["evidence_anchors"]] == [
-        evidence["section"]
-        for evidence in expected_candidate["evidence"]
-    ]
+    assert workspace_candidate["projection_ref"] == {
+        "envelope_id": envelope_ref.envelope_id,
+        "envelope_revision": envelope_ref.envelope_revision,
+        "object_id": expected_payload["curatable_objects"][0]["pending_ref_id"],
+    }
+    assert workspace_candidate["normalized_payload"] == {}
+    assert workspace_candidate["metadata"]["semantic_source"] == "domain_envelope.objects"
+    assert workspace_candidate["metadata"]["object_type"] == (
+        expected_payload["curatable_objects"][0]["object_type"]
+    )
+    assert workspace_candidate["metadata"]["object_role"] == (
+        expected_payload["curatable_objects"][0]["object_role"]
+    )
+    assert workspace_candidate["metadata"]["projection_type"] == "workspace_review_row"
+    assert workspace_candidate["metadata"]["projection_key"] == (
+        expected_payload["curatable_objects"][0]["pending_ref_id"]
+    )
+    assert [field["field_key"] for field in workspace_candidate["draft"]["fields"]] == (
+        expected_payload["curatable_objects"][0]["metadata"]["workspace_display"]["summary_fields"]
+    )
+    assert workspace_candidate["evidence_anchors"] == []
 
 
 @pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
@@ -315,8 +319,9 @@ async def test_fixture_scoped_prep_bootstrap_drops_legacy_profile_scope_from_sha
         ),
     )
 
-    assert len(prep_output.candidates) == 1
-    assert "profile_key" not in prep_output.model_dump(mode="json")["candidates"][0]
+    assert prep_output.candidates == []
+    assert prep_output.review_row_count == 1
+    assert "profile_key" not in prep_output.model_dump(mode="json")
 
     prep_record = test_db.scalars(
         select(ExtractionResultModel).where(
@@ -326,7 +331,9 @@ async def test_fixture_scoped_prep_bootstrap_drops_legacy_profile_scope_from_sha
     ).one()
     persisted_prep = _record_to_schema(prep_record)
 
-    assert "profile_key" not in persisted_prep.payload_json["candidates"][0]
+    assert "profile_key" not in persisted_prep.payload_json
+    assert persisted_prep.payload_json["review_row_count"] == 1
+    assert persisted_prep.payload_json["envelope_refs"][0]["review_row_count"] == 1
 
     bootstrap_response = client.post(
         (
@@ -345,6 +352,7 @@ async def test_fixture_scoped_prep_bootstrap_drops_legacy_profile_scope_from_sha
     workspace_candidate = workspace_response.json()["workspace"]["candidates"][0]
 
     assert "profile_key" not in workspace_candidate
+    assert workspace_candidate["metadata"]["semantic_source"] == "domain_envelope.objects"
 
 
 @pytest.mark.parametrize("evidence_fixture", ALL_EVIDENCE_FIXTURE_NAMES, indirect=True)
@@ -363,9 +371,12 @@ async def test_run_curation_prep_rejects_fixture_payload_when_all_candidates_hav
         origin_session_id="session-evidence-all-zero",
     )
     payload = copy.deepcopy(extraction_result.payload_json)
-    for item in payload["items"]:
-        item["evidence"] = []
-    payload["evidence_records"] = build_extraction_payload(evidence_fixture)["evidence_records"]
+    payload["curatable_objects"] = []
+    payload["metadata"]["evidence_records"] = build_extraction_payload(evidence_fixture)[
+        "evidence_records"
+    ]
+    payload["run_summary"]["candidate_count"] = 0
+    payload["run_summary"]["kept_count"] = 0
     extraction_result = extraction_result.model_copy(update={"payload_json": payload})
 
     with pytest.raises(

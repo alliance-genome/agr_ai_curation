@@ -830,6 +830,52 @@ async def test_dispatch_curation_prep_runs_deterministic_prep_with_confirmed_sco
 
 
 @pytest.mark.asyncio
+async def test_dispatch_curation_prep_reports_envelope_review_row_count(monkeypatch):
+    monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
+    monkeypatch.setattr(supervisor_agent, "get_current_trace_id", lambda: "trace-1")
+    monkeypatch.setattr(
+        supervisor_agent,
+        "document_state",
+        SimpleNamespace(get_document=lambda _user_id: None),
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "latest_assistant_message_for_session",
+        lambda **_kwargs: "Ready to prepare these for curation?",
+    )
+    monkeypatch.setattr(
+        supervisor_agent,
+        "list_extraction_results",
+        lambda *_args, **_kwargs: [_PrepExtractionRecord(adapter_key="gene")],
+    )
+
+    async def _fake_run_curation_prep(*_args, **_kwargs):
+        return SimpleNamespace(
+            candidates=[],
+            envelope_refs=[SimpleNamespace(review_row_count=2)],
+            review_row_count=2,
+            run_metadata=SimpleNamespace(
+                warnings=[],
+                processing_notes=["Prepared persisted envelope review rows."],
+            ),
+        )
+
+    monkeypatch.setattr(supervisor_agent, "run_curation_prep", _fake_run_curation_prep)
+
+    response = await supervisor_agent._dispatch_curation_prep_from_chat_context(
+        user_confirmation="Yes, prepare the confirmed gene findings.",
+        adapter_keys=["gene"],
+    )
+
+    payload = json.loads(response)
+    assert payload["status"] == "prepared"
+    assert payload["candidate_count"] == 2
+    assert payload["message"] == "Prepared 2 candidate annotations for curation review."
+    assert payload["processing_notes"] == ["Prepared persisted envelope review rows."]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_curation_prep_rejects_ambiguous_scope(monkeypatch):
     monkeypatch.setattr(supervisor_agent, "get_current_session_id", lambda: "session-1")
     monkeypatch.setattr(supervisor_agent, "get_current_user_id", lambda: "user-1")
