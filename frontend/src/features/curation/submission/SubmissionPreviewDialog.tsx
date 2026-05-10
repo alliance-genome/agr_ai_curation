@@ -25,9 +25,13 @@ import { fetchSubmissionPreview } from '@/features/curation/services/curationWor
 import type {
   CurationCandidate,
   CurationReviewSession,
+  CurationSubmissionReadinessBlocker,
   CurationSubmissionPreviewResponse,
   SubmissionMode,
+  SubmissionTargetKey,
 } from '@/features/curation/types'
+
+const EMPTY_EXPECTED_ENVELOPE_REVISIONS: Record<string, number> = {}
 
 const MODE_COPY: Record<
   SubmissionMode,
@@ -60,6 +64,8 @@ interface SubmissionPreviewDialogProps {
   candidates: CurationCandidate[]
   onClose: () => void
   onSubmit?: (response: CurationSubmissionPreviewResponse) => Promise<void> | void
+  directSubmitTargetKey?: SubmissionTargetKey | null
+  expectedEnvelopeRevisions?: Record<string, number>
   submitAvailable?: boolean
 }
 
@@ -127,10 +133,162 @@ function downloadPayload(response: CurationSubmissionPreviewResponse) {
   window.URL.revokeObjectURL(url)
 }
 
+function hasExpectedEnvelopeRevisions(expectedEnvelopeRevisions: Record<string, number>): boolean {
+  return Object.keys(expectedEnvelopeRevisions).length > 0
+}
+
+function blockerAllowsCuratorOverride(
+  blocker: CurationSubmissionReadinessBlocker,
+): boolean {
+  return blocker.details.allow_opt_out === true
+    || blocker.details.allow_curator_override === true
+    || blocker.details.allow_override === true
+}
+
+function blockerRequiresOverrideReason(
+  blocker: CurationSubmissionReadinessBlocker,
+): boolean {
+  return blocker.details.opt_out_reason_required === true
+    || blocker.details.reason_required === true
+}
+
+function blockerPolicyLabels(blocker: CurationSubmissionReadinessBlocker): string[] {
+  const labels: string[] = []
+  const code = blocker.code ?? ''
+
+  if (blocker.details.required === true) {
+    labels.push('Required')
+  }
+  if (blocker.details.export_blocking === true) {
+    labels.push('Export-blocking')
+  }
+  if (blocker.status === 'definition_state' || code.includes('definition_state')) {
+    labels.push('Definition state')
+  }
+  if (
+    blocker.status === 'missing_host_context'
+    || code === 'domain_envelope.missing_export_context'
+  ) {
+    labels.push('Missing host context')
+  }
+  if (blocker.status === 'stale_revision' || code === 'domain_envelope.stale_revision') {
+    labels.push('Revision mismatch')
+  }
+  if (code.includes('validation_finding') || typeof blocker.details.finding_id === 'string') {
+    labels.push('Validation finding')
+  }
+
+  return labels
+}
+
+interface ReadinessActionGate {
+  ready: boolean
+  blocking_reasons: string[]
+  blockers?: CurationSubmissionReadinessBlocker[]
+}
+
+function readinessItemBlocksAction(item: ReadinessActionGate): boolean {
+  return !item.ready || item.blocking_reasons.length > 0 || (item.blockers?.length ?? 0) > 0
+}
+
+function BlockerList({
+  blockers,
+}: {
+  blockers: CurationSubmissionReadinessBlocker[]
+}) {
+  if (blockers.length === 0) {
+    return null
+  }
+
+  return (
+    <Stack spacing={1} sx={{ mt: 1 }}>
+      {blockers.map((blocker, index) => {
+        const policyLabels = blockerPolicyLabels(blocker)
+        const overrideAllowed = blockerAllowsCuratorOverride(blocker)
+        const blockerKey = [
+          blocker.envelope_id,
+          blocker.object_id ?? 'session',
+          blocker.field_path ?? 'object',
+          blocker.code ?? index,
+        ].join(':')
+
+        return (
+          <Box
+            key={blockerKey}
+            sx={(theme) => ({
+              border: `1px solid ${theme.palette.divider}`,
+              borderRadius: 1,
+              p: 1.25,
+              bgcolor: 'background.default',
+            })}
+          >
+            <Stack spacing={0.75}>
+              <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                <Chip
+                  label={`Object ${blocker.object_id ?? 'session'}`}
+                  size="small"
+                  variant="outlined"
+                />
+                {blocker.field_path ? (
+                  <Chip
+                    label={`Field ${blocker.field_path}`}
+                    size="small"
+                    variant="outlined"
+                  />
+                ) : null}
+                <Chip
+                  color="warning"
+                  label={blocker.status}
+                  size="small"
+                  variant="outlined"
+                />
+                {policyLabels.map((label) => (
+                  <Chip key={label} label={label} size="small" variant="outlined" />
+                ))}
+              </Stack>
+
+              <Typography variant="body2">
+                {blocker.message}
+              </Typography>
+
+              {blocker.code ? (
+                <Typography variant="caption" color="text.secondary">
+                  {blocker.code}
+                </Typography>
+              ) : null}
+
+              {overrideAllowed ? (
+                <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+                  <Chip
+                    color="info"
+                    label="Curator override allowed"
+                    size="small"
+                    variant="outlined"
+                  />
+                  {blockerRequiresOverrideReason(blocker) ? (
+                    <Chip
+                      color="warning"
+                      label="Reason required"
+                      size="small"
+                      variant="outlined"
+                    />
+                  ) : null}
+                </Stack>
+              ) : null}
+            </Stack>
+          </Box>
+        )
+      })}
+    </Stack>
+  )
+}
+
 export default function SubmissionPreviewDialog({
   open,
   session,
   candidates,
+  directSubmitTargetKey = null,
+  expectedEnvelopeRevisions = EMPTY_EXPECTED_ENVELOPE_REVISIONS,
   onClose,
   onSubmit,
   submitAvailable = false,
@@ -164,11 +322,19 @@ export default function SubmissionPreviewDialog({
     setLoading(true)
     setError(null)
 
-    void fetchSubmissionPreview({
+    const previewRequest = {
       session_id: session.session_id,
       mode,
       include_payload: true,
-    })
+      ...(mode === 'direct_submit' && directSubmitTargetKey
+        ? { target_key: directSubmitTargetKey }
+        : {}),
+      ...(hasExpectedEnvelopeRevisions(expectedEnvelopeRevisions)
+        ? { expected_envelope_revisions: expectedEnvelopeRevisions }
+        : {}),
+    }
+
+    void fetchSubmissionPreview(previewRequest)
       .then((nextResponse) => {
         if (cancelled) {
           return
@@ -193,7 +359,14 @@ export default function SubmissionPreviewDialog({
     return () => {
       cancelled = true
     }
-  }, [mode, open, refreshNonce, session.session_id])
+  }, [
+    directSubmitTargetKey,
+    expectedEnvelopeRevisions,
+    mode,
+    open,
+    refreshNonce,
+    session.session_id,
+  ])
 
   const candidateLabels = useMemo(
     () => new Map(candidates.map((candidate) => [candidate.candidate_id, candidate.display_label])),
@@ -201,6 +374,9 @@ export default function SubmissionPreviewDialog({
   )
   const readiness = response?.submission.readiness ?? []
   const readyCount = readiness.filter((item) => item.ready).length
+  const blockedCount = readiness.filter(readinessItemBlocksAction).length
+  const hasReadinessData = readiness.length > 0
+  const readinessBlocksAction = !hasReadinessData || blockedCount > 0
   const blockingValidationIssues = countBlockingValidationIssues(response)
   const validationSummary = formatValidationSummary(response)
   const exportPayload = response?.submission.payload
@@ -208,13 +384,21 @@ export default function SubmissionPreviewDialog({
     exportPayload
       && (exportPayload.payload_text || exportPayload.filename || exportPayload.content_type),
   )
-  const canDownload = mode === 'export' && !loading && readyCount > 0 && hasExportBundle
+  const effectiveSubmitAvailable = submitAvailable || Boolean(directSubmitTargetKey)
+  const canDownload = Boolean(
+    mode === 'export'
+      && !loading
+      && readyCount > 0
+      && hasExportBundle
+      && !readinessBlocksAction,
+  )
   const canSubmit = Boolean(
     mode === 'direct_submit'
-      && submitAvailable
+      && effectiveSubmitAvailable
       && onSubmit
       && response
-      && readyCount > 0,
+      && readyCount > 0
+      && !readinessBlocksAction
   )
 
   async function handlePrimaryAction() {
@@ -237,6 +421,12 @@ export default function SubmissionPreviewDialog({
     setSubmitting(true)
     try {
       await onSubmit(response)
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : 'Unable to submit this curation session.',
+      )
     } finally {
       setSubmitting(false)
     }
@@ -308,13 +498,26 @@ export default function SubmissionPreviewDialog({
 
           {mode === 'export' && !loading && response && hasExportBundle && !canDownload ? (
             <Alert severity="warning">
-              No export bundle is available until at least one candidate is submission-ready.
+              Resolve export blockers before downloading a bundle.
             </Alert>
           ) : null}
 
-          {mode === 'direct_submit' && !submitAvailable ? (
+          {mode === 'direct_submit' && !effectiveSubmitAvailable ? (
             <Alert severity="warning">
               No submission transport is configured for this adapter yet.
+            </Alert>
+          ) : null}
+
+          {!loading && response && !hasReadinessData ? (
+            <Alert severity="warning">
+              Readiness data is unavailable. Export and submission actions are disabled.
+            </Alert>
+          ) : null}
+
+          {!loading && response && mode === 'direct_submit' && blockedCount > 0 ? (
+            <Alert severity="warning">
+              Resolve readiness blockers before submission. Curator overrides only unblock when
+              metadata allows them and a reason is saved.
             </Alert>
           ) : null}
 
@@ -326,8 +529,8 @@ export default function SubmissionPreviewDialog({
               variant="outlined"
             />
             <Chip
-              color={readiness.length === readyCount ? 'default' : 'warning'}
-              label={`${Math.max(readiness.length - readyCount, 0)} blocked`}
+              color={blockedCount === 0 ? 'default' : 'warning'}
+              label={`${blockedCount} blocked`}
               size="small"
               variant="outlined"
             />
@@ -342,7 +545,7 @@ export default function SubmissionPreviewDialog({
 
           <Paper variant="outlined" sx={{ p: 2 }}>
             <Stack spacing={1.5}>
-              <Typography variant="subtitle1">Candidate readiness</Typography>
+              <Typography variant="subtitle1">Object readiness</Typography>
               {loading && !response ? (
                 <Stack direction="row" spacing={1} alignItems="center">
                   <CircularProgress size={18} />
@@ -352,7 +555,7 @@ export default function SubmissionPreviewDialog({
                 </Stack>
               ) : readiness.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
-                  No candidate readiness data is available yet.
+                  No object readiness data is available yet.
                 </Typography>
               ) : (
                 readiness.map((item) => (
@@ -385,6 +588,7 @@ export default function SubmissionPreviewDialog({
                         {item.blocking_reasons.join(' ')}
                       </Typography>
                     ) : null}
+                    <BlockerList blockers={item.blockers ?? []} />
                     {item.warnings.length > 0 ? (
                       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
                         {item.warnings.join(' ')}

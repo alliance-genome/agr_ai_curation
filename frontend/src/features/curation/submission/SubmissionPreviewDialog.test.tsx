@@ -8,6 +8,7 @@ import theme from '@/theme'
 import type {
   CurationCandidate,
   CurationReviewSession,
+  CurationSubmissionReadinessBlocker,
   CurationSubmissionPreviewResponse,
   SubmissionMode,
 } from '@/features/curation/types'
@@ -113,12 +114,18 @@ function buildResponse({
   invalidCount = 0,
   payloadText = null,
   filename = null,
+  readyCandidateBlockers = [],
+  readyCandidateWarnings = [],
+  pendingCandidateBlockers = [],
 }: {
   mode?: SubmissionMode
   readyCandidateIds?: string[]
   invalidCount?: number
   payloadText?: string | null
   filename?: string | null
+  readyCandidateBlockers?: CurationSubmissionReadinessBlocker[]
+  readyCandidateWarnings?: string[]
+  pendingCandidateBlockers?: CurationSubmissionReadinessBlocker[]
 } = {}): CurationSubmissionPreviewResponse {
   return {
     submission: {
@@ -135,13 +142,17 @@ function buildResponse({
           blocking_reasons: readyCandidateIds.includes('candidate-ready')
             ? []
             : ['Gene symbol is empty or invalid.'],
-          warnings: [],
+          warnings: readyCandidateWarnings,
+          blockers: readyCandidateBlockers,
         },
         {
           candidate_id: 'candidate-pending',
           ready: readyCandidateIds.includes('candidate-pending'),
-          blocking_reasons: ['Candidate is still pending curator review.'],
+          blocking_reasons: readyCandidateIds.includes('candidate-pending')
+            ? []
+            : ['Candidate is still pending curator review.'],
           warnings: [],
+          blockers: pendingCandidateBlockers,
         },
       ],
       payload: {
@@ -164,6 +175,8 @@ function buildResponse({
       completed_at: '2026-03-21T12:00:01Z',
       validation_errors: [],
       warnings: [],
+      submission_state: {},
+      target_result_history: [],
     },
     session_validation: {
       snapshot_id: 'snapshot-1',
@@ -280,6 +293,7 @@ describe('SubmissionPreviewDialog', () => {
       .mockResolvedValueOnce(
         buildResponse({
           mode: 'export',
+          readyCandidateIds: ['candidate-ready', 'candidate-pending'],
           payloadText: '{\"candidate_count\":1}',
           filename: 'submission-export.json',
         }),
@@ -342,7 +356,68 @@ describe('SubmissionPreviewDialog', () => {
     expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
   })
 
-  it('allows direct submit when at least one candidate is ready even if other session validation issues remain', async () => {
+  it('displays envelope blockers by object and field with override policy metadata', async () => {
+    const blocker: CurationSubmissionReadinessBlocker = {
+      envelope_id: 'envelope-1',
+      object_id: 'artifact-1',
+      field_path: 'artifact.title',
+      severity: 'blocker',
+      status: 'open',
+      code: 'domain_envelope.required_field_missing',
+      message: 'Required export field is missing: artifact.title.',
+      provider_refs: {},
+      projection_ref: {
+        envelope_revision: 3,
+      },
+      details: {
+        required: true,
+        export_blocking: true,
+        allow_opt_out: true,
+        opt_out_reason_required: true,
+      },
+    }
+    const revisionBlocker: CurationSubmissionReadinessBlocker = {
+      envelope_id: 'envelope-1',
+      object_id: 'artifact-1',
+      field_path: null,
+      severity: 'blocker',
+      status: 'stale_revision',
+      code: 'domain_envelope.stale_revision',
+      message: 'Domain envelope envelope-1 is at revision 4, not expected revision 3.',
+      provider_refs: {},
+      projection_ref: {},
+      details: {
+        expected_revision: 3,
+        actual_revision: 4,
+      },
+    }
+
+    serviceMocks.fetchSubmissionPreview.mockResolvedValue(
+      buildResponse({
+        readyCandidateIds: ['candidate-pending'],
+        readyCandidateBlockers: [blocker, revisionBlocker],
+        readyCandidateWarnings: [
+          'Curator override accepted for export-blocking field artifact.note.',
+        ],
+      }),
+    )
+
+    renderDialog()
+
+    expect(await screen.findAllByText('Object artifact-1')).toHaveLength(2)
+    expect(screen.getByText('Field artifact.title')).toBeInTheDocument()
+    expect(screen.getByText('Required')).toBeInTheDocument()
+    expect(screen.getByText('Export-blocking')).toBeInTheDocument()
+    expect(screen.getByText('Curator override allowed')).toBeInTheDocument()
+    expect(screen.getByText('Reason required')).toBeInTheDocument()
+    expect(screen.getByText('Revision mismatch')).toBeInTheDocument()
+    expect(screen.getByText('Required export field is missing: artifact.title.')).toBeInTheDocument()
+    expect(screen.getByText(
+      'Curator override accepted for export-blocking field artifact.note.',
+    )).toBeInTheDocument()
+  })
+
+  it('prevents direct submit when any readiness item is blocked', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn()
     const submitResponse = buildResponse({
@@ -356,8 +431,8 @@ describe('SubmissionPreviewDialog', () => {
       .mockResolvedValueOnce(submitResponse)
 
     renderDialog({
+      directSubmitTargetKey: 'review_export_bundle',
       onSubmit,
-      submitAvailable: true,
     })
 
     await waitFor(() => {
@@ -370,7 +445,54 @@ describe('SubmissionPreviewDialog', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
         session_id: 'session-1',
         mode: 'direct_submit',
+        target_key: 'review_export_bundle',
         include_payload: true,
+      })
+    })
+
+    expect(screen.getByText(/Session validation summary: 1 invalid/)).toBeInTheDocument()
+    expect(screen.getByText(/Resolve readiness blockers before submission/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
+
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('allows direct submit when every object is ready for the configured target', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+    const submitResponse = buildResponse({
+      mode: 'direct_submit',
+      readyCandidateIds: ['candidate-ready', 'candidate-pending'],
+      invalidCount: 1,
+    })
+
+    serviceMocks.fetchSubmissionPreview
+      .mockResolvedValueOnce(buildResponse())
+      .mockResolvedValueOnce(submitResponse)
+
+    renderDialog({
+      directSubmitTargetKey: 'review_export_bundle',
+      expectedEnvelopeRevisions: {
+        'envelope-1': 3,
+      },
+      onSubmit,
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledTimes(1)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Submit mode' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
+        session_id: 'session-1',
+        mode: 'direct_submit',
+        target_key: 'review_export_bundle',
+        include_payload: true,
+        expected_envelope_revisions: {
+          'envelope-1': 3,
+        },
       })
     })
 

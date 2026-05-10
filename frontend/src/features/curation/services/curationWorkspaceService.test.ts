@@ -4,8 +4,10 @@ import type { CurationWorkspace, DomainEnvelopeReviewRowsResponse } from '@/feat
 import {
   buildCurationWorkspaceEnvelopeReviewRowsRequests,
   buildDomainEnvelopeReviewRowsPath,
+  executeCurationSubmission,
   fetchCurationWorkspaceEnvelopeReviewRows,
   fetchDomainEnvelopeReviewRows,
+  fetchSubmissionPreview,
 } from './curationWorkspaceService'
 
 function buildWorkspace(): CurationWorkspace {
@@ -142,9 +144,19 @@ function reviewRowsResponse(
   }
 }
 
+function jsonResponse(payload: unknown, init: ResponseInit = {}) {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    ...init,
+  })
+}
+
 describe('curationWorkspaceService envelope review rows', () => {
   afterEach(() => {
-    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
   })
 
   it('builds the persisted domain-envelope review-row endpoint path', () => {
@@ -226,5 +238,146 @@ describe('curationWorkspaceService envelope review rows', () => {
       'env-chemical',
     ])
     expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('curationWorkspaceService submission requests', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts envelope revision checks when fetching submission readiness', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        submission: {
+          submission_id: 'submission-1',
+          session_id: 'session-1',
+          adapter_key: 'gene',
+          mode: 'export',
+          target_key: 'review_export_bundle',
+          status: 'export_ready',
+          readiness: [],
+          payload: null,
+          requested_at: '2026-05-10T12:00:00Z',
+          validation_errors: [],
+          warnings: [],
+          submission_state: {},
+          target_result_history: [],
+        },
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchSubmissionPreview({
+      session_id: 'session-1',
+      mode: 'export',
+      target_key: 'review_export_bundle',
+      include_payload: true,
+      expected_envelope_revisions: {
+        'envelope-1': 7,
+      },
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/curation-workspace/sessions/session-1/submission-preview',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: 'session-1',
+          mode: 'export',
+          target_key: 'review_export_bundle',
+          include_payload: true,
+          expected_envelope_revisions: {
+            'envelope-1': 7,
+          },
+        }),
+      }),
+    )
+  })
+
+  it('posts direct submission requests to the session submit endpoint', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        submission: {
+          submission_id: 'submission-1',
+          session_id: 'session-1',
+          adapter_key: 'gene',
+          mode: 'direct_submit',
+          target_key: 'review_export_bundle',
+          status: 'accepted',
+          readiness: [],
+          payload: null,
+          requested_at: '2026-05-10T12:00:00Z',
+          validation_errors: [],
+          warnings: [],
+          submission_state: {},
+          target_result_history: [],
+        },
+        session: {
+          session_id: 'session-1',
+          status: 'submitted',
+          adapter: {
+            adapter_key: 'gene',
+            metadata: {},
+          },
+          document: {
+            document_id: 'document-1',
+            title: 'Document',
+          },
+          progress: {
+            total_candidates: 1,
+            reviewed_candidates: 1,
+            pending_candidates: 0,
+            accepted_candidates: 1,
+            rejected_candidates: 0,
+            manual_candidates: 0,
+          },
+          prepared_at: '2026-05-10T11:00:00Z',
+          warnings: [],
+          tags: [],
+          session_version: 2,
+          extraction_results: [],
+        },
+        action_log_entry: {
+          action_id: 'action-1',
+          session_id: 'session-1',
+          action_type: 'submission_executed',
+          actor_type: 'user',
+          occurred_at: '2026-05-10T12:00:01Z',
+          changed_field_keys: [],
+          evidence_anchor_ids: [],
+          metadata: {},
+        },
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await executeCurationSubmission({
+      session_id: 'session-1',
+      target_key: 'review_export_bundle',
+      candidate_ids: ['candidate-1'],
+      mode: 'direct_submit',
+      expected_envelope_revisions: {
+        'envelope-1': 7,
+      },
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/curation-workspace/sessions/session-1/submit',
+      expect.objectContaining({
+        credentials: 'include',
+        method: 'POST',
+        body: JSON.stringify({
+          session_id: 'session-1',
+          target_key: 'review_export_bundle',
+          candidate_ids: ['candidate-1'],
+          mode: 'direct_submit',
+          expected_envelope_revisions: {
+            'envelope-1': 7,
+          },
+        }),
+      }),
+    )
   })
 })

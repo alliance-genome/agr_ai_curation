@@ -12,6 +12,8 @@ import type {
   DomainEnvelopeReviewRowsResponse,
   CurationSessionValidationRequest,
   CurationSessionValidationResponse,
+  CurationSubmissionExecuteRequest,
+  CurationSubmissionExecuteResponse,
   CurationSessionUpdateRequest,
   CurationSessionUpdateResponse,
   CurationSubmissionPreviewRequest,
@@ -220,6 +222,20 @@ export async function fetchSubmissionPreview(
 ): Promise<CurationSubmissionPreviewResponse> {
   return fetchCurationWorkspaceJson<CurationSubmissionPreviewResponse>(
     `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/submission-preview`,
+    {
+      method: 'POST',
+      body: JSON.stringify(request),
+      keepalive: options.keepalive,
+    },
+  )
+}
+
+export async function executeCurationSubmission(
+  request: CurationSubmissionExecuteRequest,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<CurationSubmissionExecuteResponse> {
+  return fetchCurationWorkspaceJson<CurationSubmissionExecuteResponse>(
+    `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/submit`,
     {
       method: 'POST',
       body: JSON.stringify(request),

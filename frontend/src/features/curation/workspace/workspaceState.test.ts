@@ -4,6 +4,8 @@ import type { CurationWorkspace } from '../types'
 import {
   appendWorkspaceActionLogEntry,
   applyDraftFieldChangesToWorkspace,
+  buildWorkspaceExpectedEnvelopeRevisions,
+  mergeSubmissionExecutionIntoWorkspace,
 } from './workspaceState'
 
 function buildWorkspace(): CurationWorkspace {
@@ -45,6 +47,11 @@ function buildWorkspace(): CurationWorkspace {
         order: 0,
         adapter_key: 'gene',
         display_label: 'Candidate 1',
+        projection_ref: {
+          envelope_id: 'envelope-1',
+          object_id: 'object-1',
+          envelope_revision: 4,
+        },
         draft: {
           draft_id: 'draft-1',
           candidate_id: 'candidate-1',
@@ -153,5 +160,82 @@ describe('workspaceState', () => {
       action_id: 'action-1',
       action_type: 'candidate_accepted',
     })
+  })
+
+  it('builds expected envelope revision checks from workspace projections', () => {
+    const workspace = buildWorkspace()
+
+    expect(buildWorkspaceExpectedEnvelopeRevisions(workspace.candidates)).toEqual({
+      'envelope-1': 4,
+    })
+  })
+
+  it('merges executed submissions into session state, history, and action log', () => {
+    const workspace = buildWorkspace()
+    const response = {
+      submission: {
+        submission_id: 'submission-1',
+        session_id: 'session-1',
+        adapter_key: 'gene',
+        mode: 'direct_submit' as const,
+        target_key: 'review_export_bundle',
+        status: 'accepted' as const,
+        readiness: [
+          {
+            candidate_id: 'candidate-1',
+            ready: true,
+            blocking_reasons: [],
+            warnings: [],
+            blockers: [],
+          },
+        ],
+        payload: null,
+        requested_at: '2026-03-20T14:00:00Z',
+        completed_at: '2026-03-20T14:00:01Z',
+        external_reference: 'noop:review_export_bundle:1',
+        response_message: 'Accepted.',
+        validation_errors: [],
+        warnings: [],
+        submission_state: {},
+        target_result_history: [],
+      },
+      session: {
+        ...workspace.session,
+        status: 'submitted' as const,
+        latest_submission: {
+          submission_id: 'submission-1',
+          session_id: 'session-1',
+          adapter_key: 'gene',
+          mode: 'direct_submit' as const,
+          target_key: 'review_export_bundle',
+          status: 'accepted' as const,
+          readiness: [],
+          payload: null,
+          requested_at: '2026-03-20T14:00:00Z',
+          validation_errors: [],
+          warnings: [],
+          submission_state: {},
+          target_result_history: [],
+        },
+      },
+      action_log_entry: {
+        action_id: 'action-submit-1',
+        session_id: 'session-1',
+        action_type: 'submission_executed' as const,
+        actor_type: 'user' as const,
+        occurred_at: '2026-03-20T14:00:01Z',
+        changed_field_keys: [],
+        evidence_anchor_ids: [],
+        metadata: {},
+      },
+    }
+
+    const nextWorkspace = mergeSubmissionExecutionIntoWorkspace(workspace, response)
+
+    expect(nextWorkspace.session.status).toBe('submitted')
+    expect(nextWorkspace.submission_history).toHaveLength(1)
+    expect(nextWorkspace.submission_history[0].submission_id).toBe('submission-1')
+    expect(nextWorkspace.action_log).toHaveLength(1)
+    expect(nextWorkspace.action_log[0].action_type).toBe('submission_executed')
   })
 })

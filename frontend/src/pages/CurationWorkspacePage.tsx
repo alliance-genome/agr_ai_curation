@@ -28,6 +28,7 @@ import {
   buildCurationWorkspaceEnvelopeReviewRowsRequests,
   createManualCurationCandidate,
   deleteCurationCandidate,
+  executeCurationSubmission,
   fetchCurationWorkspaceEnvelopeReviewRows,
   fetchCurationWorkspace,
   submitCurationCandidateDecision,
@@ -35,6 +36,7 @@ import {
 } from '@/features/curation/services/curationWorkspaceService'
 import type {
   CurationCandidate,
+  CurationSubmissionPreviewResponse,
   CurationWorkspace,
 } from '@/features/curation/types'
 import {
@@ -50,6 +52,8 @@ import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
 import { buildWorkspaceEnvelopeObjectReviewRows } from '@/features/curation/workspace/envelopeObjectReviewRows'
 import {
+  buildWorkspaceExpectedEnvelopeRevisions,
+  mergeSubmissionExecutionIntoWorkspace,
   updateWorkspaceActiveCandidate,
 } from '@/features/curation/workspace/workspaceState'
 
@@ -149,6 +153,10 @@ function CurationWorkspacePageContent({
       workspace.validation_summary_projections,
     ],
   )
+  const expectedEnvelopeRevisions = useMemo(
+    () => buildWorkspaceExpectedEnvelopeRevisions(candidates),
+    [candidates],
+  )
   const candidateEvidenceByTagId = useMemo(
     () =>
       candidates.reduce<Record<string, CurationCandidate['evidence_anchors']>>((index, candidate) => {
@@ -157,6 +165,29 @@ function CurationWorkspacePageContent({
       }, {}),
     [candidates],
   )
+
+  const handleSubmitPreview = useCallback(async (
+    previewResponse: CurationSubmissionPreviewResponse,
+  ) => {
+    const submissionPayload = previewResponse.submission.payload
+    if (!submissionPayload) {
+      throw new Error(
+        'Direct submission requires a preview payload. Refresh the submission preview and try again.',
+      )
+    }
+
+    const response = await executeCurationSubmission({
+      session_id: workspace.session.session_id,
+      target_key: previewResponse.submission.target_key,
+      candidate_ids: submissionPayload.candidate_ids,
+      mode: 'direct_submit',
+      expected_envelope_revisions: expectedEnvelopeRevisions,
+    })
+
+    setWorkspace((currentWorkspace) =>
+      mergeSubmissionExecutionIntoWorkspace(currentWorkspace, response)
+    )
+  }, [expectedEnvelopeRevisions, setWorkspace, workspace.session.session_id])
 
   useEffect(() => {
     const pdfUrl = workspaceDocumentPdfUrl ?? workspaceDocumentViewerUrl
@@ -488,7 +519,9 @@ function CurationWorkspacePageContent({
 
       <SubmissionPreviewDialog
         candidates={candidates}
+        expectedEnvelopeRevisions={expectedEnvelopeRevisions}
         onClose={() => setSubmissionDialogOpen(false)}
+        onSubmit={handleSubmitPreview}
         open={submissionDialogOpen}
         session={workspace.session}
       />
