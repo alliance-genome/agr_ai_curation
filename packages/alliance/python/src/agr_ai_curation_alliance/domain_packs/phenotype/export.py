@@ -22,6 +22,7 @@ from .._export_utils import (
     candidate_payload,
     canonical_json,
     list_value,
+    malformed_payload_blocker,
     mapping_value,
     missing_field_blockers,
     string_value,
@@ -182,6 +183,14 @@ def build_phenotype_annotation_export_payload(
 def _project_phenotype_candidate(
     candidate: Mapping[str, Any],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    payload_blocker = malformed_payload_blocker(
+        candidate=candidate,
+        code="alliance.phenotype.export.payload_malformed",
+        message="Phenotype annotation export requires a mapping payload.",
+    )
+    if payload_blocker is not None:
+        return None, [payload_blocker]
+
     payload = candidate_payload(candidate)
     blockers = missing_field_blockers(
         candidate=candidate,

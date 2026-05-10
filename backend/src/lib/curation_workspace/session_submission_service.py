@@ -44,7 +44,6 @@ from src.lib.curation_workspace.session_validation_service import (
     validate_session,
 )
 from src.lib.curation_workspace.submission_adapters import (
-    DEFAULT_NOOP_SUBMISSION_TARGET_KEY,
     DIRECT_SUBMISSION_RESULT_STATUSES,
     SubmissionTransportAdapter,
     SubmissionTransportError,
@@ -1522,12 +1521,6 @@ def _default_direct_submission_target_key(
     if len(eligible_target_keys) == 1:
         return eligible_target_keys[0]
 
-    if (
-        not supported_target_keys
-        and DEFAULT_NOOP_SUBMISSION_TARGET_KEY in eligible_target_keys
-    ):
-        return DEFAULT_NOOP_SUBMISSION_TARGET_KEY
-
     if not eligible_target_keys:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1536,7 +1529,10 @@ def _default_direct_submission_target_key(
 
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Submission target is required when multiple direct-submit transports are configured",
+        detail=(
+            "Submission target is required when multiple direct-submit transports "
+            "are configured"
+        ),
     )
 
 

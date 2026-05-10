@@ -48,9 +48,6 @@ def test_build_default_submission_adapter_registry_exposes_reference_adapter():
 
     assert isinstance(adapter, NoOpSubmissionAdapter)
     assert DEFAULT_NOOP_SUBMISSION_TARGET_KEY in registry.target_keys()
-    assert "alliance.disease_annotation.v1" in registry.target_keys()
-    assert "alliance.phenotype_annotation.v1" in registry.target_keys()
-    assert "alliance.chemical_condition.v1" in registry.target_keys()
 
 
 def test_noop_submission_adapter_invokes_transport_with_mock_payload():

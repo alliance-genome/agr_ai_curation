@@ -83,6 +83,27 @@ def candidate_payload(candidate: Mapping[str, Any]) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, Mapping) else {}
 
 
+def malformed_payload_blocker(
+    *,
+    candidate: Mapping[str, Any],
+    code: str,
+    message: str,
+) -> dict[str, Any] | None:
+    """Return a blocker when a candidate payload is missing or not a mapping."""
+
+    payload = candidate.get("payload")
+    if isinstance(payload, Mapping):
+        return None
+    observed_type = "missing" if payload is None else type(payload).__name__
+    return adapter_blocker(
+        candidate=candidate,
+        code=code,
+        field_path="payload",
+        message=message,
+        details={"observed_payload_type": observed_type},
+    )
+
+
 def candidate_object_id(candidate: Mapping[str, Any]) -> str | None:
     """Return the stable object identifier from a domain-envelope candidate bundle."""
 

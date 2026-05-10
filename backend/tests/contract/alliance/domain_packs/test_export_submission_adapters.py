@@ -10,6 +10,12 @@ from typing import Any
 import pytest
 import yaml
 
+from src.lib.curation_workspace.export_adapters import (
+    build_default_export_adapter_registry,
+)
+from src.lib.curation_workspace.submission_adapters import (
+    build_default_submission_adapter_registry,
+)
 from src.schemas.curation_workspace import CurationSubmissionStatus, SubmissionMode
 
 
@@ -64,6 +70,36 @@ def _payload_context(candidate: dict[str, Any]) -> dict[str, Any]:
         "readiness_blockers": [],
         "warnings": [],
     }
+
+
+def test_alliance_default_registries_expose_domain_export_and_submission_adapters():
+    export_registry = build_default_export_adapter_registry()
+    submission_registry = build_default_submission_adapter_registry()
+
+    assert isinstance(
+        export_registry.require("disease"),
+        DiseaseAnnotationExportAdapter,
+    )
+    assert isinstance(
+        export_registry.require("phenotype"),
+        PhenotypeAnnotationExportAdapter,
+    )
+    assert isinstance(
+        export_registry.require("chemical"),
+        ChemicalConditionExportAdapter,
+    )
+    assert isinstance(
+        submission_registry.require(DISEASE_EXPORT_TARGET_ID),
+        DiseaseAnnotationSubmissionBlockerAdapter,
+    )
+    assert isinstance(
+        submission_registry.require(PHENOTYPE_EXPORT_TARGET_ID),
+        PhenotypeAnnotationSubmissionBlockerAdapter,
+    )
+    assert isinstance(
+        submission_registry.require(CHEMICAL_CONDITION_EXPORT_TARGET_ID),
+        ChemicalConditionSubmissionBlockerAdapter,
+    )
 
 
 def test_disease_export_adapter_projects_complete_envelope_to_target_payload():
@@ -174,6 +210,47 @@ def test_disease_export_blocks_incomplete_subject_context_with_field_details():
     assert payload["adapter_blockers"][0]["field_path"] == (
         "disease_annotation_subject.subject_identifier"
     )
+
+
+@pytest.mark.parametrize(
+    ("fixture_key", "builder", "expected_code"),
+    (
+        (
+            "disease",
+            build_disease_annotation_export_payload,
+            "alliance.disease.export.payload_malformed",
+        ),
+        (
+            "phenotype",
+            build_phenotype_annotation_export_payload,
+            "alliance.phenotype.export.payload_malformed",
+        ),
+        (
+            "chemical_condition",
+            build_chemical_condition_export_payload,
+            "alliance.chemical_condition.export.payload_malformed",
+        ),
+    ),
+)
+def test_export_blocks_malformed_candidate_payload_with_object_details(
+    fixture_key,
+    builder,
+    expected_code: str,
+):
+    candidate = deepcopy(_fixtures()[fixture_key]["candidate"])
+    candidate["payload"] = "not-a-mapping"
+
+    if fixture_key == "chemical_condition":
+        payload = builder(domain_envelope_candidates=[candidate], domain_envelopes=[])
+    else:
+        payload = builder(domain_envelope_candidates=[candidate])
+
+    assert payload["payload_status"] == "blocked"
+    assert payload["adapter_blockers"][0]["field_path"] == "payload"
+    assert payload["adapter_blockers"][0]["code"] == expected_code
+    assert payload["adapter_blockers"][0]["details"] == {
+        "observed_payload_type": "str"
+    }
 
 
 @pytest.mark.parametrize(

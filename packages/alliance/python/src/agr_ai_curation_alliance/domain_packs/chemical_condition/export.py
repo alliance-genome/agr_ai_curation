@@ -21,6 +21,7 @@ from .._export_utils import (
     candidate_object_type,
     candidate_payload,
     canonical_json,
+    malformed_payload_blocker,
     mapping_value,
     missing_field_blockers,
     source_reference_id_from_context,
@@ -175,6 +176,14 @@ def _project_chemical_condition_candidate(
     *,
     domain_envelopes: Sequence[Mapping[str, Any]],
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    payload_blocker = malformed_payload_blocker(
+        candidate=candidate,
+        code="alliance.chemical_condition.export.payload_malformed",
+        message="Chemical condition export requires a mapping payload.",
+    )
+    if payload_blocker is not None:
+        return None, [payload_blocker]
+
     payload = candidate_payload(candidate)
     blockers = missing_field_blockers(
         candidate=candidate,

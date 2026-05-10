@@ -258,16 +258,18 @@ def test_build_default_export_adapter_registry_exposes_reference_adapter():
     assert adapter.__class__.__module__ == (
         "src.lib.curation_workspace.export_adapters.json_bundle"
     )
-    assert registry.require("disease").__class__.__name__ == (
-        "DiseaseAnnotationExportAdapter"
-    )
-    assert registry.require("phenotype").__class__.__name__ == (
-        "PhenotypeAnnotationExportAdapter"
-    )
-    assert registry.require("chemical").__class__.__name__ == (
-        "ChemicalConditionExportAdapter"
-    )
     assert adapter.supported_target_keys == (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
+
+
+def test_curation_adapter_registry_rejects_none_submission_transport_entries():
+    registry = adapter_registry_module.CurationAdapterRegistry()
+
+    with pytest.raises(ValueError, match="must not contain None"):
+        registry.register_adapter(
+            adapter_key="demo",
+            candidate_normalizer=object(),
+            submission_transport_adapters=[None],
+        )
 
 
 def test_build_default_export_adapter_registry_keeps_package_export_when_agent_bundle_is_undeclared(

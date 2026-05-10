@@ -143,7 +143,10 @@ def _normalize_submission_transport_adapters(value: Any | None) -> tuple[Any, ..
     if value is None:
         return ()
     if isinstance(value, (list, tuple)):
-        return tuple(item for item in value if item is not None)
+        normalized = tuple(value)
+        if any(item is None for item in normalized):
+            raise ValueError("submission_transport_adapters must not contain None")
+        return normalized
     return (value,)
 
 
