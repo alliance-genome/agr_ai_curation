@@ -28,14 +28,19 @@ from ..lib.flows.evidence_export import (
     build_flow_evidence_export_artifact,
     resolve_authorized_flow_run_extraction_results,
 )
+from ..lib.flows.validation_attachments import (
+    FlowValidationAttachmentError,
+    apply_flow_validation_attachment_defaults,
+)
 from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import (
     CreateFlowRequest,
-    UpdateFlowRequest,
-    FlowResponse,
+    FlowDefinition,
     FlowListResponse,
+    FlowResponse,
     FlowSummaryResponse,
+    UpdateFlowRequest,
 )
 from ..services.user_service import set_global_user_from_cognito
 
@@ -44,6 +49,40 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/flows")
 DEFAULT_FLOW_LIST_PAGE_SIZE = 50
+
+
+def _validated_flow_definition_payload(flow_definition) -> dict[str, Any]:
+    """Return flow definition JSON with metadata-backed validation defaults."""
+
+    return _validated_flow_definition(flow_definition).model_dump()
+
+
+def _validated_flow_definition(flow_definition: FlowDefinition) -> FlowDefinition:
+    """Return a flow definition hydrated with metadata-backed validation defaults."""
+
+    try:
+        return apply_flow_validation_attachment_defaults(flow_definition)
+    except FlowValidationAttachmentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _flow_to_response(flow: CurationFlow) -> FlowResponse:
+    """Convert a stored flow to an API response with validation defaults hydrated."""
+
+    flow_definition = _validated_flow_definition(
+        FlowDefinition.model_validate(flow.flow_definition)
+    )
+    return FlowResponse(
+        id=flow.id,
+        user_id=flow.user_id,
+        name=flow.name,
+        description=flow.description,
+        flow_definition=flow_definition,
+        execution_count=flow.execution_count,
+        last_executed_at=flow.last_executed_at,
+        created_at=flow.created_at,
+        updated_at=flow.updated_at,
+    )
 
 
 def verify_flow_ownership(
@@ -262,7 +301,7 @@ async def get_flow(
 
     logger.info('Retrieved flow %s for user %s', flow_id, flow.user_id)
 
-    return FlowResponse.model_validate(flow)
+    return _flow_to_response(flow)
 
 
 @router.post("", response_model=FlowResponse, status_code=201)
@@ -283,7 +322,7 @@ async def create_flow(
         user_id=db_user.id,
         name=request.name,
         description=request.description,
-        flow_definition=request.flow_definition.model_dump(),
+        flow_definition=_validated_flow_definition_payload(request.flow_definition),
     )
 
     try:
@@ -307,7 +346,7 @@ async def create_flow(
 
     logger.info("Created flow %s '%s' for user %s", flow.id, flow.name, db_user.id)
 
-    return FlowResponse.model_validate(flow)
+    return _flow_to_response(flow)
 
 
 @router.put("/{flow_id}", response_model=FlowResponse)
@@ -356,7 +395,7 @@ async def update_flow(
         node_count = len(request.flow_definition.nodes) if request.flow_definition.nodes else 0
         edge_count = len(request.flow_definition.edges) if request.flow_definition.edges else 0
         logger.debug('[Flow Update] Updating flow_definition: %s nodes, %s edges', node_count, edge_count)
-        flow.flow_definition = request.flow_definition.model_dump()
+        flow.flow_definition = _validated_flow_definition_payload(request.flow_definition)
         # CRITICAL: SQLAlchemy doesn't detect changes to mutable JSONB fields
         # We must explicitly flag it as modified for the UPDATE to be emitted
         flag_modified(flow, "flow_definition")
@@ -388,7 +427,7 @@ async def update_flow(
     else:
         logger.info('[Flow Update] No changes detected for flow %s', flow_id)
 
-    return FlowResponse.model_validate(flow)
+    return _flow_to_response(flow)
 
 
 @router.delete("/{flow_id}", response_model=OperationResult)

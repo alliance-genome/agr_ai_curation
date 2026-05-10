@@ -73,6 +73,7 @@ class CurationConfig:
     """Optional curation-routing metadata declared by the owning package."""
 
     adapter_key: str | None = None
+    domain_pack_id: str | None = None
     launchable: bool = False
 
 
@@ -172,6 +173,7 @@ class AgentDefinition:
         curation_data = data.get("curation", {})
         curation = CurationConfig(
             adapter_key=str(curation_data.get("adapter_key") or "").strip() or None,
+            domain_pack_id=str(curation_data.get("domain_pack_id") or "").strip() or None,
             launchable=bool(curation_data.get("launchable", False)),
         )
 

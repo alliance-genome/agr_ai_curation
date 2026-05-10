@@ -82,6 +82,7 @@ frontend:
 # -----------------------------------------------------------------------------
 curation:
   adapter_key: "chemical"
+  domain_pack_id: "agr.alliance.chemical_condition"
   launchable: true
 
 # -----------------------------------------------------------------------------

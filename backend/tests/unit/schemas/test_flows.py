@@ -32,6 +32,7 @@ def make_agent_node(
     output_filename_template: str | None = None,
     input_source: str = "previous_output",
     custom_input: str | None = None,
+    validation_attachments: list[dict] | None = None,
 ) -> dict:
     """Helper to create a valid agent node dict."""
     data = {
@@ -46,6 +47,8 @@ def make_agent_node(
         data["output_filename_template"] = output_filename_template
     if custom_input is not None:
         data["custom_input"] = custom_input
+    if validation_attachments is not None:
+        data["validation_attachments"] = validation_attachments
 
     return {
         "id": node_id,
@@ -53,6 +56,32 @@ def make_agent_node(
         "position": {"x": 100, "y": 100},
         "data": data,
     }
+
+
+def make_validation_attachment(**overrides) -> dict:
+    """Helper to create a valid validation attachment selection."""
+
+    attachment = {
+        "attachment_id": "fixture:binding:identifier:field:GeneAssertion:gene.identifier",
+        "domain_pack_id": "fixture.validation",
+        "domain_pack_version": "0.1.0",
+        "validator_id": "curie_prefix_format",
+        "validator_binding_id": "identifier",
+        "validation_kind": "curie_prefix_format",
+        "state": "active",
+        "scope": "field",
+        "object_type": "GeneAssertion",
+        "field_path": "gene.identifier",
+        "field_type": "string",
+        "required": True,
+        "export_blocking": True,
+        "default_enabled": True,
+        "allow_opt_out": True,
+        "opt_out_reason_required": True,
+        "enabled": True,
+    }
+    attachment.update(overrides)
+    return attachment
 
 
 class TestFlowDefinitionTaskInputRequirement:
@@ -301,6 +330,142 @@ class TestFlowDefinitionOtherValidations:
 
         flow = FlowDefinition(**flow_data)
         assert flow.nodes[1].data.include_evidence is True
+
+    def test_validation_attachment_enabled_round_trips(self):
+        """Enabled validator choices should persist on agent nodes."""
+        attachment = make_validation_attachment()
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract genes"),
+                make_agent_node(
+                    "n1",
+                    "gene_extractor",
+                    "gene_output",
+                    validation_attachments=[attachment],
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        flow = FlowDefinition(**flow_data)
+
+        assert flow.nodes[1].data.validation_attachments[0].attachment_id == (
+            attachment["attachment_id"]
+        )
+        assert flow.nodes[1].data.validation_attachments[0].enabled is True
+
+    def test_required_validation_opt_out_requires_reason(self):
+        """Required/export-blocking validator opt-outs must persist a reason."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract genes"),
+                make_agent_node(
+                    "n1",
+                    "gene_extractor",
+                    "gene_output",
+                    validation_attachments=[
+                        make_validation_attachment(enabled=False, opt_out_reason="")
+                    ],
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            FlowDefinition(**flow_data)
+
+        assert "opt_out_reason is required" in str(exc_info.value)
+
+    def test_required_validation_opt_out_reason_round_trips(self):
+        """Allowed opt-outs should normalize and persist their curator reason."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract genes"),
+                make_agent_node(
+                    "n1",
+                    "gene_extractor",
+                    "gene_output",
+                    validation_attachments=[
+                        make_validation_attachment(
+                            enabled=False,
+                            opt_out_reason="  Paper has no stable external ID yet.  ",
+                        )
+                    ],
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        flow = FlowDefinition(**flow_data)
+
+        assert flow.nodes[1].data.validation_attachments[0].opt_out_reason == (
+            "Paper has no stable external ID yet."
+        )
+
+    def test_required_validation_cannot_be_disabled_without_policy(self):
+        """Required/export-blocking validators need explicit opt-out policy."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract genes"),
+                make_agent_node(
+                    "n1",
+                    "gene_extractor",
+                    "gene_output",
+                    validation_attachments=[
+                        make_validation_attachment(
+                            enabled=False,
+                            allow_opt_out=False,
+                            opt_out_reason="Curator reason",
+                        )
+                    ],
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            FlowDefinition(**flow_data)
+
+        assert "cannot be disabled" in str(exc_info.value)
+
+    def test_planned_validation_attachment_cannot_be_enabled(self):
+        """Planned validators stay visible metadata rather than active runs."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract genes"),
+                make_agent_node(
+                    "n1",
+                    "gene_extractor",
+                    "gene_output",
+                    validation_attachments=[
+                        make_validation_attachment(
+                            attachment_id="fixture:metadata:planned",
+                            validator_binding_id=None,
+                            state="planned",
+                            enabled=True,
+                            required=False,
+                            export_blocking=False,
+                        )
+                    ],
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            FlowDefinition(**flow_data)
+
+        assert "planned or blocked" in str(exc_info.value)
 
     def test_custom_input_requires_non_empty_template(self):
         """Custom input mode must provide a non-empty template."""

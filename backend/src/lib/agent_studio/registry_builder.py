@@ -930,6 +930,7 @@ def _agent_definition_to_registry_entry(
         },
         "curation": {
             "adapter_key": agent_def.curation.adapter_key,
+            "domain_pack_id": agent_def.curation.domain_pack_id,
             "launchable": agent_def.curation.launchable,
         },
         "documentation": doc if doc else None,

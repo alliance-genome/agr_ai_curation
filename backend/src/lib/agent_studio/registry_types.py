@@ -96,6 +96,7 @@ class CurationMetadata:
     """Optional curation-routing metadata declared by an agent package."""
 
     adapter_key: Optional[str] = None
+    domain_pack_id: Optional[str] = None
     launchable: bool = False
 
 
@@ -181,6 +182,7 @@ class AgentRegistryEntry:
         if self.curation:
             result["curation"] = {
                 "adapter_key": self.curation.adapter_key,
+                "domain_pack_id": self.curation.domain_pack_id,
                 "launchable": self.curation.launchable,
             }
         if self.documentation:
@@ -282,6 +284,7 @@ def entry_from_dict(agent_id: str, data: Dict[str, Any]) -> AgentRegistryEntry:
         curation_data = data["curation"]
         curation = CurationMetadata(
             adapter_key=curation_data.get("adapter_key"),
+            domain_pack_id=curation_data.get("domain_pack_id"),
             launchable=curation_data.get("launchable", False),
         )
 

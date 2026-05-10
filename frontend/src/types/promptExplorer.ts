@@ -231,6 +231,7 @@ export interface FlowContextDefinition {
     custom_input?: string
     output_filename_template?: string
     output_key: string
+    validation_attachments?: Array<Record<string, unknown>>
   }>
   edges: Array<{
     source: string

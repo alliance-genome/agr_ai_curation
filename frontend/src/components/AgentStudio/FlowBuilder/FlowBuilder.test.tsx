@@ -64,13 +64,16 @@ vi.mock('reactflow', async () => {
         return node
       }
 
+      const nodeData = node.data as Record<string, unknown>
+      const taskInstructions = nodeData.task_instructions
+
       return {
         ...node,
         data: {
-          ...node.data,
+          ...nodeData,
           task_instructions:
-            typeof node.data.task_instructions === 'string' && node.data.task_instructions.trim().length > 0
-              ? node.data.task_instructions
+            typeof taskInstructions === 'string' && taskInstructions.trim().length > 0
+              ? taskInstructions
               : 'Start the flow',
         },
       }
@@ -295,6 +298,35 @@ describe('FlowBuilder', () => {
       allele_extractor: {
         category: 'Extraction',
         subcategory: 'PDF extraction',
+        validation_attachments: [
+          {
+            attachment_id: 'agr.alliance.allele:binding:identifier:field:Allele:allele_identifier',
+            domain_pack_id: 'agr.alliance.allele',
+            validator_id: 'allele_identifier_lookup',
+            validator_binding_id: 'identifier',
+            state: 'active',
+            scope: 'field',
+            object_type: 'Allele',
+            field_path: 'allele_identifier',
+            required: true,
+            export_blocking: true,
+            default_enabled: true,
+            allow_opt_out: true,
+            opt_out_reason_required: true,
+          },
+          {
+            attachment_id: 'agr.alliance.allele:metadata:future',
+            domain_pack_id: 'agr.alliance.allele',
+            validator_id: 'future_validator',
+            state: 'planned',
+            scope: 'pack',
+            required: false,
+            export_blocking: false,
+            default_enabled: false,
+            allow_opt_out: false,
+            opt_out_reason_required: false,
+          },
+        ],
       },
     }
     serviceMocks.createFlow.mockResolvedValue(buildFlowResponse({ name: 'Extractor Flow' }))
@@ -341,6 +373,17 @@ describe('FlowBuilder', () => {
                 data: expect.objectContaining({
                   agent_id: 'allele_extractor',
                   input_source: 'previous_output',
+                  validation_attachments: expect.arrayContaining([
+                    expect.objectContaining({
+                      attachment_id: 'agr.alliance.allele:binding:identifier:field:Allele:allele_identifier',
+                      enabled: true,
+                    }),
+                    expect.objectContaining({
+                      attachment_id: 'agr.alliance.allele:metadata:future',
+                      state: 'planned',
+                      enabled: false,
+                    }),
+                  ]),
                 }),
               }),
             ]),

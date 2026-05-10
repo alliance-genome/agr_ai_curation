@@ -10,7 +10,11 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 
-from src.schemas.flows import CreateFlowRequest, UpdateFlowRequest
+from src.schemas.flows import (
+    CreateFlowRequest,
+    FlowValidationAttachmentSelection,
+    UpdateFlowRequest,
+)
 
 flows = importlib.import_module("src.api.flows")
 
@@ -105,6 +109,40 @@ async def test_get_flow_uses_verify_ownership(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_flow_hydrates_metadata_validation_attachments_on_read(monkeypatch):
+    owned = _flow(name="Owned")
+    calls = []
+
+    def _hydrate(flow_definition):
+        calls.append(flow_definition.nodes[1].data.agent_id)
+        hydrated = flow_definition.model_copy(deep=True)
+        hydrated.nodes[1].data.validation_attachments = [
+            FlowValidationAttachmentSelection(
+                attachment_id="fixture.validation:binding:shape:pack",
+                domain_pack_id="fixture.validation",
+                validator_id="shape",
+                validator_binding_id="shape",
+                state="active",
+                scope="pack",
+                required=True,
+                export_blocking=True,
+                default_enabled=True,
+                enabled=True,
+            )
+        ]
+        return hydrated
+
+    monkeypatch.setattr(flows, "verify_flow_ownership", lambda *_args, **_kwargs: owned)
+    monkeypatch.setattr(flows, "apply_flow_validation_attachment_defaults", _hydrate)
+
+    response = await flows.get_flow(flow_id=owned.id, user={"sub": "u1"}, db=object())
+
+    assert calls == ["gene_expression"]
+    attachments = response.flow_definition.nodes[1].data.validation_attachments
+    assert attachments[0].attachment_id == "fixture.validation:binding:shape:pack"
+
+
+@pytest.mark.asyncio
 async def test_create_flow_success(monkeypatch):
     class _DB:
         def __init__(self):
@@ -136,6 +174,52 @@ async def test_create_flow_success(monkeypatch):
     assert db.refreshed is True
     assert response.name == "Created"
     assert response.user_id == 17
+
+
+@pytest.mark.asyncio
+async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch):
+    class _DB:
+        def __init__(self):
+            self.added = None
+
+        def add(self, obj):
+            self.added = obj
+
+        def commit(self):
+            return None
+
+        def refresh(self, _obj):
+            now = datetime.now(timezone.utc)
+            _obj.id = uuid4()
+            _obj.execution_count = 0
+            _obj.created_at = now
+            _obj.updated_at = now
+
+    flow_definition = _flow_definition()
+    flow_definition["nodes"][1]["data"]["agent_id"] = "chemical_extractor"
+    flow_definition["nodes"][1]["data"]["agent_display_name"] = "Chemical Extractor"
+
+    db = _DB()
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
+
+    await flows.create_flow(
+        request=CreateFlowRequest(
+            name="Created",
+            description="new",
+            flow_definition=flow_definition,
+        ),
+        user={"sub": "u1"},
+        db=db,
+    )
+
+    attachments = db.added.flow_definition["nodes"][1]["data"]["validation_attachments"]
+    states = {attachment["state"] for attachment in attachments}
+
+    assert any(
+        attachment["state"] == "active" and attachment["enabled"]
+        for attachment in attachments
+    )
+    assert states.issuperset({"active", "planned", "blocked"})
 
 
 @pytest.mark.asyncio

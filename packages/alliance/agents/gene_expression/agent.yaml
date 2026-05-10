@@ -79,6 +79,7 @@ frontend:
 # -----------------------------------------------------------------------------
 curation:
   adapter_key: "gene_expression"
+  domain_pack_id: "agr.alliance.gene_expression"
   launchable: true
 
 # -----------------------------------------------------------------------------

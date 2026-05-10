@@ -78,6 +78,7 @@ frontend:
 # -----------------------------------------------------------------------------
 curation:
   adapter_key: "phenotype"
+  domain_pack_id: "agr.alliance.phenotype"
   launchable: true
 
 # -----------------------------------------------------------------------------

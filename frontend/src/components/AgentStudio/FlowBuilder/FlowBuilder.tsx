@@ -65,6 +65,8 @@ import type {
   AgentNode,
   AgentNodeData,
   FlowDefinition,
+  FlowResponse,
+  ValidationAttachmentSelection,
 } from './types'
 import {
   getFlow,
@@ -107,6 +109,17 @@ const createInitialTaskInputNode = (): AgentNode => ({
     output_key: 'task_input',
   },
 })
+
+const buildDefaultValidationSelections = (
+  agentId: string,
+  agentMetadata: ReturnType<typeof useAgentMetadata>['agents']
+): ValidationAttachmentSelection[] => (
+  agentMetadata[agentId]?.validation_attachments?.map((attachment) => ({
+    ...attachment,
+    enabled: attachment.default_enabled,
+    opt_out_reason: undefined,
+  })) ?? []
+)
 
 /**
  * Pure function to compute validation errors for all nodes.
@@ -411,12 +424,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       setCurrentFlowId(flow.id)
 
       // Convert flow definition to React Flow format
-      const flowNodes = flow.flow_definition.nodes.map((n) => ({
-        id: n.id,
-        type: n.type === 'task_input' ? 'task_input' : 'agent',
-        position: n.position,
-        data: n.data,
-      }))
+      const flowNodes = flow.flow_definition.nodes.map((n) => (
+        {
+          id: n.id,
+          type: n.type === 'task_input' ? 'task_input' : 'agent',
+          position: n.position,
+          data: n.data,
+        }
+      ))
       const flowEdges = flow.flow_definition.edges.map((e) => ({
         id: e.id,
         source: e.source,
@@ -509,6 +524,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           custom_input: n.data.custom_input,
           output_filename_template: n.data.output_filename_template,
           output_key: n.data.output_key,
+          validation_attachments: n.data.validation_attachments,
         })),
         edges: edges.map((e) => ({
           source: e.source,
@@ -823,6 +839,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         }
 
         const isTaskInput = type === 'task_input' || agentId === 'task_input'
+        const validationAttachments = isTaskInput
+          ? []
+          : buildDefaultValidationSelections(agentId, agentMetadata)
 
         const newNodeId = getNodeId()
 
@@ -867,6 +886,9 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
               ? undefined
               : resolveOutputFormatterIncludeEvidence(agentId, agentMetadata),
             output_key: isTaskInput ? 'task_input' : `${agentId.replace(/-/g, '_')}_output`,
+            validation_attachments: validationAttachments.length > 0
+              ? validationAttachments
+              : undefined,
           },
         }
 

@@ -5,7 +5,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
     required_context: []
-    description: Structured AGR curation database queries and validator reference lookups
+    description: Structured AGR curation database queries and flow validation attachment reference lookups
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
   - tool_id: search_document
     binding_kind: context_factory

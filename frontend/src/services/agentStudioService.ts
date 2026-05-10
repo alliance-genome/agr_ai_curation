@@ -49,12 +49,40 @@ export interface AgentStudioDurableSessionResponse {
 /**
  * Metadata for a single agent
  */
+export interface ValidationAttachmentOption {
+  attachment_id: string
+  domain_pack_id: string
+  domain_pack_version?: string
+  validator_id: string
+  validator_binding_id?: string
+  validation_kind?: string
+  tool_name?: string
+  tool_method?: string
+  state: 'active' | 'planned' | 'blocked'
+  scope: 'pack' | 'object' | 'field'
+  object_type?: string
+  object_role?: string
+  field_path?: string
+  field_type?: string
+  label?: string
+  description?: string
+  definition_state?: string
+  blocked_by?: string
+  reason?: string
+  required: boolean
+  export_blocking: boolean
+  default_enabled: boolean
+  allow_opt_out: boolean
+  opt_out_reason_required: boolean
+}
+
 export interface AgentMetadata {
   name: string
   icon: string
   category: string
   subcategory?: string
   supervisor_tool?: string
+  validation_attachments?: ValidationAttachmentOption[]
 }
 
 /**

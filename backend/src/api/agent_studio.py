@@ -588,7 +588,9 @@ async def get_registry_metadata(
     Frontend should fetch this on load and cache in context.
     """
     from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
+    from src.lib.flows.validation_attachments import validation_attachment_catalog_by_agent
 
+    validation_attachments_by_agent = validation_attachment_catalog_by_agent(AGENT_REGISTRY)
     agents = {}
     for agent_id, entry in AGENT_REGISTRY.items():
         supervisor = entry.get("supervisor", {})
@@ -608,6 +610,7 @@ async def get_registry_metadata(
             category=entry.get("category", "Unknown"),
             subcategory=entry.get("subcategory"),
             supervisor_tool=supervisor_tool,
+            validation_attachments=validation_attachments_by_agent.get(agent_id, []),
         )
 
     # Include current user's custom agents when authenticated.

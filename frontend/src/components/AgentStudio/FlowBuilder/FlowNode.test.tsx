@@ -41,4 +41,59 @@ describe('FlowNode', () => {
 
     expect(screen.queryByText(/^v\d+$/)).not.toBeInTheDocument()
   })
+
+  it('renders validation attachment state counts distinctly', () => {
+    render(
+      <FlowNode
+        data={buildNodeData({
+          validation_attachments: [
+            {
+              attachment_id: 'active',
+              domain_pack_id: 'fixture',
+              validator_id: 'active',
+              state: 'active',
+              scope: 'field',
+              required: true,
+              export_blocking: true,
+              default_enabled: true,
+              allow_opt_out: false,
+              opt_out_reason_required: false,
+              enabled: true,
+            },
+            {
+              attachment_id: 'planned',
+              domain_pack_id: 'fixture',
+              validator_id: 'planned',
+              state: 'planned',
+              scope: 'pack',
+              required: false,
+              export_blocking: false,
+              default_enabled: false,
+              allow_opt_out: false,
+              opt_out_reason_required: false,
+              enabled: false,
+            },
+            {
+              attachment_id: 'blocked',
+              domain_pack_id: 'fixture',
+              validator_id: 'blocked',
+              state: 'blocked',
+              scope: 'pack',
+              required: false,
+              export_blocking: false,
+              default_enabled: false,
+              allow_opt_out: false,
+              opt_out_reason_required: false,
+              enabled: false,
+            },
+          ],
+        })}
+        selected={false}
+      />
+    )
+
+    expect(screen.getByText('1 active validation')).toBeInTheDocument()
+    expect(screen.getByText('1 planned')).toBeInTheDocument()
+    expect(screen.getByText('1 blocked')).toBeInTheDocument()
+  })
 })
