@@ -357,7 +357,7 @@ def _projection_refs_by_object(
 def _loaded_domain_pack_for_envelope(envelope: DomainEnvelope) -> LoadedDomainPack | None:
     try:
         return load_domain_pack_registry().get_pack(envelope.domain_pack_id)
-    except Exception as exc:
+    except Exception:
         logger.warning(
             "Could not load domain-pack registry while preparing envelope '%s' for submission",
             envelope.envelope_id,
