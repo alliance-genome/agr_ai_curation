@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from datetime import datetime, timezone
 from typing import Any, Sequence
 from uuid import UUID
@@ -9,6 +10,18 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
+from src.lib.domain_envelopes.patches import (
+    EnvelopeFieldPatch,
+    EnvelopeFieldPatchOperation,
+    EnvelopeFieldPatchStatus,
+    apply_curator_field_patch,
+)
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopeCheckpointRequest,
+    DomainEnvelopePersistenceError,
+    write_domain_envelope_checkpoint,
+)
+from src.lib.domain_packs.registry import load_domain_pack_registry
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -34,6 +47,8 @@ from src.lib.curation_workspace.session_queries import (
     _session_context_maps,
     get_candidate_detail,
     get_session_detail,
+    load_domain_envelope_row_for_patch,
+    load_projection_candidates_for_patch,
 )
 from src.lib.curation_workspace.session_serializers import (
     _action_log_entry,
@@ -41,6 +56,7 @@ from src.lib.curation_workspace.session_serializers import (
     _draft_payload,
     _session_detail,
     build_action_log_entry,
+    build_envelope_field_patch_response,
 )
 from src.lib.curation_workspace.session_types import (
     PreparedDraftFieldInput,
@@ -62,6 +78,8 @@ from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
     CurationDraftField as CurationDraftFieldSchema,
+    CurationEnvelopeFieldPatchRequest,
+    CurationEnvelopeFieldPatchResponse,
     CurationEvidenceRecord as CurationEvidenceRecordPayload,
     CurationEvidenceSource,
     CurationManualCandidateCreateRequest,
@@ -71,6 +89,11 @@ from src.schemas.curation_workspace import (
     CurationSessionUpdateResponse,
     CurationValidationSnapshot as CurationValidationSnapshotSchema,
 )
+from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope, parse_field_path
+
+
+_MISSING = object()
+
 
 def update_session(
     db: Session,
@@ -579,6 +602,414 @@ def update_candidate_draft(
         validation_snapshot=validation_snapshot,
         action_log_entry=_action_log_entry(action_log_row),
     )
+
+
+def patch_envelope_field(
+    db: Session,
+    session_id: str | UUID,
+    request: CurationEnvelopeFieldPatchRequest,
+    actor_claims: dict[str, Any],
+) -> CurationEnvelopeFieldPatchResponse:
+    """Patch the persisted envelope source of truth and refresh workspace projections."""
+
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
+    if normalized_session_id != request_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path session_id does not match request body session_id",
+        )
+
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation review session {normalized_session_id} not found",
+        )
+    session_row = sessions[0]
+
+    envelope_row = load_domain_envelope_row_for_patch(db, request.envelope_id)
+    if envelope_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain envelope {request.envelope_id} not found",
+        )
+    if envelope_row.session_id is not None and envelope_row.session_id != normalized_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Domain envelope does not belong to the requested session",
+        )
+
+    envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    previous_revision = envelope_row.revision
+    registry = load_domain_pack_registry()
+    domain_pack = registry.get_pack(envelope.domain_pack_id)
+    if domain_pack is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Domain pack {envelope.domain_pack_id} is not available for patch validation",
+        )
+
+    patch_payload = {
+        "envelope_id": request.envelope_id,
+        "expected_revision": request.expected_revision,
+        "object_id": request.object_id,
+        "field_path": request.field_path,
+        "before": request.before,
+        "value": request.value,
+        "operation": EnvelopeFieldPatchOperation(request.operation.value),
+        "reason": request.reason,
+    }
+    if request.patch_id is not None:
+        patch_payload["patch_id"] = request.patch_id
+
+    patch_result = apply_curator_field_patch(
+        envelope,
+        domain_pack,
+        EnvelopeFieldPatch(**patch_payload),
+        current_revision=previous_revision,
+        actor_id=_actor_claims_payload(actor_claims)["actor_id"],
+    )
+
+    if patch_result.status is EnvelopeFieldPatchStatus.STALE_REVISION:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=patch_result.errors[0],
+        )
+
+    if not patch_result.accepted:
+        rejected_checkpoint_revision = _checkpoint_patch_result(
+            db,
+            envelope_row=envelope_row,
+            patched_envelope=patch_result.envelope,
+            expected_revision=previous_revision,
+        )
+        _record_envelope_patch_action(
+            db,
+            session_row=session_row,
+            candidate_id=None,
+            draft_id=None,
+            request=request,
+            patch_result=patch_result,
+            actor_claims=actor_claims,
+            envelope_revision=rejected_checkpoint_revision,
+        )
+        db.commit()
+        raise HTTPException(
+            status_code=_rejected_patch_status_code(patch_result),
+            detail="; ".join(patch_result.errors),
+        )
+
+    checkpoint_revision = _checkpoint_patch_result(
+        db,
+        envelope_row=envelope_row,
+        patched_envelope=patch_result.envelope,
+        expected_revision=previous_revision,
+    )
+
+    updated_object = _envelope_object_by_stable_id(
+        patch_result.envelope,
+        request.object_id,
+    )
+    if updated_object is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Patched envelope object disappeared during projection regeneration",
+        )
+
+    now = datetime.now(timezone.utc)
+    projection_candidates = load_projection_candidates_for_patch(
+        db,
+        session_id=normalized_session_id,
+        envelope_id=request.envelope_id,
+        object_id=request.object_id,
+    )
+    projection_candidate_ids: list[str] = []
+    for candidate in projection_candidates:
+        projection_candidate_ids.append(str(candidate.id))
+        _refresh_candidate_projection_from_envelope(
+            candidate,
+            updated_object,
+            envelope_revision=checkpoint_revision,
+            changed_field_path=request.field_path,
+            updated_at=now,
+        )
+        db.add(candidate)
+        if candidate.draft is not None:
+            db.add(candidate.draft)
+
+    session_row.session_version += 1
+    session_row.updated_at = now
+    session_row.last_worked_at = now
+    action_log_row = _record_envelope_patch_action(
+        db,
+        session_row=session_row,
+        candidate_id=projection_candidates[0].id if projection_candidates else None,
+        draft_id=(
+            projection_candidates[0].draft.id
+            if projection_candidates and projection_candidates[0].draft is not None
+            else None
+        ),
+        request=request,
+        patch_result=patch_result,
+        actor_claims=actor_claims,
+        envelope_revision=checkpoint_revision,
+    )
+    db.add(session_row)
+    db.commit()
+
+    refreshed_candidates = load_projection_candidates_for_patch(
+        db,
+        session_id=normalized_session_id,
+        envelope_id=request.envelope_id,
+        object_id=request.object_id,
+    )
+    refreshed_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    refreshed_session = refreshed_sessions[0] if refreshed_sessions else None
+    document_map, user_map = (
+        _session_context_maps(db, [refreshed_session])
+        if refreshed_session is not None
+        else ({}, {})
+    )
+
+    return build_envelope_field_patch_response(
+        db=db,
+        accepted=True,
+        envelope_id=request.envelope_id,
+        previous_revision=previous_revision,
+        envelope_revision=checkpoint_revision,
+        object_id=request.object_id,
+        object_type=patch_result.object_type,
+        field_path=request.field_path,
+        operation=request.operation,
+        before=patch_result.before,
+        value=patch_result.after,
+        projection_candidate_ids=projection_candidate_ids,
+        history_event_ids=patch_result.history_event_ids,
+        candidate=refreshed_candidates[0] if refreshed_candidates else None,
+        session=refreshed_session,
+        action_log_entry=action_log_row,
+        document_map=document_map,
+        user_map=user_map,
+    )
+
+
+def _checkpoint_patch_result(
+    db: Session,
+    *,
+    envelope_row: Any,
+    patched_envelope: DomainEnvelope,
+    expected_revision: int,
+) -> int:
+    try:
+        checkpoint = write_domain_envelope_checkpoint(
+            db,
+            DomainEnvelopeCheckpointRequest(
+                project_key=envelope_row.project_key,
+                envelope=patched_envelope,
+                expected_revision=expected_revision,
+                document_id=envelope_row.document_id,
+                session_id=envelope_row.session_id,
+                flow_run_id=envelope_row.flow_run_id,
+                object_model_ref_json=dict(envelope_row.object_model_ref_json or {}),
+                model_field_ref_json=dict(envelope_row.model_field_ref_json or {}),
+            ),
+        )
+    except DomainEnvelopePersistenceError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+    return checkpoint.revision
+
+
+def _record_envelope_patch_action(
+    db: Session,
+    *,
+    session_row: ReviewSessionModel,
+    candidate_id: UUID | None,
+    draft_id: UUID | None,
+    request: CurationEnvelopeFieldPatchRequest,
+    patch_result: Any,
+    actor_claims: dict[str, Any],
+    envelope_revision: int,
+) -> SessionActionLogModel:
+    action_log_row = SessionActionLogModel(
+        session_id=session_row.id,
+        candidate_id=candidate_id,
+        draft_id=draft_id,
+        action_type=CurationActionType.ENVELOPE_FIELD_PATCHED,
+        actor_type=CurationActorType.USER,
+        actor=_actor_claims_payload(actor_claims),
+        occurred_at=datetime.now(timezone.utc),
+        changed_field_keys=[request.field_path],
+        message=(
+            "Curator envelope field patch accepted"
+            if patch_result.accepted
+            else "Curator envelope field patch rejected"
+        ),
+        action_metadata={
+            "envelope_id": request.envelope_id,
+            "object_id": request.object_id,
+            "object_type": patch_result.object_type,
+            "field_path": request.field_path,
+            "operation": request.operation.value,
+            "expected_revision": request.expected_revision,
+            "envelope_revision": envelope_revision,
+            "accepted": patch_result.accepted,
+            "before": patch_result.before,
+            "after": patch_result.after,
+            "errors": list(patch_result.errors),
+            "history_event_ids": list(patch_result.history_event_ids),
+            "reason": request.reason,
+        },
+    )
+    db.add(action_log_row)
+    return action_log_row
+
+
+def _rejected_patch_status_code(patch_result: Any) -> int:
+    if any("before does not match" in error for error in patch_result.errors):
+        return status.HTTP_409_CONFLICT
+    return status.HTTP_400_BAD_REQUEST
+
+
+def _envelope_object_by_stable_id(
+    envelope: DomainEnvelope,
+    object_id: str,
+) -> CuratableObjectEnvelope | None:
+    for domain_object in envelope.objects:
+        if object_id in {
+            value
+            for value in (domain_object.object_id, domain_object.pending_ref_id)
+            if value is not None
+        }:
+            return domain_object
+    return None
+
+
+def _refresh_candidate_projection_from_envelope(
+    candidate: CurationCandidate,
+    domain_object: CuratableObjectEnvelope,
+    *,
+    envelope_revision: int,
+    changed_field_path: str,
+    updated_at: datetime,
+) -> None:
+    candidate.envelope_revision = envelope_revision
+    candidate.normalized_payload = copy.deepcopy(domain_object.payload)
+    candidate.updated_at = updated_at
+
+    if candidate.draft is None:
+        return
+
+    draft_fields = [
+        CurationDraftFieldSchema.model_validate(field_payload)
+        for field_payload in (candidate.draft.fields or [])
+    ]
+    changed = False
+    for index, draft_field in enumerate(draft_fields):
+        projected_value = _projected_value_for_draft_field(
+            domain_object.payload,
+            draft_field,
+        )
+        if projected_value is _MISSING:
+            continue
+        next_field = draft_field.model_copy(
+            update={
+                "value": copy.deepcopy(projected_value),
+                "seed_value": copy.deepcopy(projected_value),
+                "dirty": False,
+                "stale_validation": (
+                    draft_field.stale_validation
+                    or _draft_field_matches_path(draft_field, changed_field_path)
+                ),
+            }
+        )
+        if next_field != draft_field:
+            draft_fields[index] = next_field
+            changed = True
+
+    if changed:
+        candidate.draft.fields = [
+            field.model_dump(mode="json")
+            for field in draft_fields
+        ]
+        candidate.draft.version += 1
+        candidate.draft.updated_at = updated_at
+        candidate.draft.last_saved_at = updated_at
+
+
+def _projected_value_for_draft_field(
+    payload: dict[str, Any],
+    draft_field: CurationDraftFieldSchema,
+) -> Any:
+    for field_path in _draft_field_projection_paths(draft_field):
+        value = _payload_value(payload, field_path)
+        if value is not _MISSING:
+            return value
+    return _MISSING
+
+
+def _draft_field_matches_path(
+    draft_field: CurationDraftFieldSchema,
+    field_path: str,
+) -> bool:
+    return field_path in set(_draft_field_projection_paths(draft_field))
+
+
+def _draft_field_projection_paths(
+    draft_field: CurationDraftFieldSchema,
+) -> tuple[str, ...]:
+    paths: list[str] = []
+    source_field_path = draft_field.metadata.get("source_field_path")
+    if isinstance(source_field_path, str) and source_field_path.strip():
+        paths.append(source_field_path.strip())
+    paths.append(draft_field.field_key)
+
+    expanded: list[str] = []
+    for path in paths:
+        if path not in expanded:
+            expanded.append(path)
+        bracket_path = _dot_numeric_path_to_brackets(path)
+        if bracket_path not in expanded:
+            expanded.append(bracket_path)
+    return tuple(expanded)
+
+
+def _dot_numeric_path_to_brackets(path: str) -> str:
+    parts = path.split(".")
+    if not parts:
+        return path
+    converted = parts[0]
+    for part in parts[1:]:
+        if part.isdigit():
+            converted = f"{converted}[{part}]"
+        else:
+            converted = f"{converted}.{part}"
+    return converted
+
+
+def _payload_value(payload: dict[str, Any], field_path: str) -> Any:
+    try:
+        parts = parse_field_path(field_path)
+    except ValueError:
+        return _MISSING
+    current: Any = payload
+    for part in parts:
+        if isinstance(part, str):
+            if not isinstance(current, dict) or part not in current:
+                return _MISSING
+            current = current[part]
+            continue
+        if (
+            not isinstance(current, list)
+            or isinstance(current, (str, bytes, bytearray))
+            or part >= len(current)
+        ):
+            return _MISSING
+        current = current[part]
+    return current
 
 def delete_candidate(
     db: Session,

@@ -17,6 +17,7 @@ from src.lib.curation_workspace.session_mutation_service import (
     create_manual_candidate,
     decide_candidate,
     delete_candidate,
+    patch_envelope_field,
     update_candidate_draft,
     update_session,
 )
@@ -92,6 +93,7 @@ __all__ = [
     "list_flow_runs",
     "list_sessions",
     "normalize_uuid",
+    "patch_envelope_field",
     "PreparedCandidateInput",
     "PreparedDraftFieldInput",
     "PreparedEvidenceRecordInput",

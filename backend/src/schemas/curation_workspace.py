@@ -11,7 +11,16 @@ from datetime import datetime
 from enum import Enum
 from typing import Annotated, Any, Mapping, Optional, Protocol, Sequence, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+
+from src.schemas.domain_envelope import validate_field_path_syntax
 
 
 class EvidenceAnchorKind(str, Enum):
@@ -325,6 +334,7 @@ class CurationActionType(str, Enum):
     CANDIDATE_CREATED = "candidate_created"
     CANDIDATE_DELETED = "candidate_deleted"
     CANDIDATE_UPDATED = "candidate_updated"
+    ENVELOPE_FIELD_PATCHED = "envelope_field_patched"
     CANDIDATE_ACCEPTED = "candidate_accepted"
     CANDIDATE_REJECTED = "candidate_rejected"
     CANDIDATE_RESET = "candidate_reset"
@@ -343,6 +353,12 @@ class CurationActorType(str, Enum):
     USER = "user"
     SYSTEM = "system"
     ADAPTER = "adapter"
+
+
+class CurationEnvelopeFieldPatchOperation(str, Enum):
+    """Supported curator operations against one envelope object field."""
+
+    REPLACE = "replace"
 
 
 class CurationEvidenceSource(str, Enum):
@@ -1630,6 +1646,84 @@ class CurationCandidateDraftUpdateResponse(CurationWorkspaceBaseModel):
     )
 
 
+class CurationEnvelopeFieldPatchRequest(CurationWorkspaceBaseModel):
+    """Request contract for curator field-path patches against an envelope object."""
+
+    session_id: str = Field(description="Owning review session identifier")
+    envelope_id: str = Field(description="Persisted domain envelope identifier")
+    expected_revision: int = Field(
+        ge=1,
+        description="Optimistic-concurrency envelope revision check",
+    )
+    object_id: str = Field(description="Stable envelope object identifier to patch")
+    field_path: str = Field(description="Object-local payload field path to patch")
+    operation: CurationEnvelopeFieldPatchOperation = Field(
+        default=CurationEnvelopeFieldPatchOperation.REPLACE,
+        description="Patch operation to apply",
+    )
+    before: Optional[Any] = Field(
+        default=None,
+        description="Client-observed field value before the edit",
+    )
+    value: Optional[Any] = Field(default=None, description="New field value")
+    reason: Optional[str] = Field(
+        default=None,
+        description="Optional curator reason for the edit",
+    )
+    patch_id: Optional[str] = Field(
+        default=None,
+        description="Optional caller-owned idempotency and audit identifier",
+    )
+
+    @field_validator("field_path")
+    @classmethod
+    def _validate_field_path(cls, value: str) -> str:
+        return validate_field_path_syntax(value)
+
+
+class CurationEnvelopeFieldPatchResponse(CurationWorkspaceBaseModel):
+    """Response contract for an accepted curator envelope field patch."""
+
+    accepted: bool = Field(description="Whether the patch was accepted")
+    envelope_id: str = Field(description="Patched domain envelope identifier")
+    previous_revision: int = Field(description="Envelope revision before the patch")
+    envelope_revision: int = Field(description="Envelope revision after the patch")
+    object_id: str = Field(description="Patched envelope object identifier")
+    object_type: Optional[str] = Field(
+        default=None,
+        description="Domain-pack object type for the patched object",
+    )
+    field_path: str = Field(description="Patched object-local field path")
+    operation: CurationEnvelopeFieldPatchOperation = Field(
+        description="Patch operation that was accepted",
+    )
+    before: Optional[Any] = Field(default=None, description="Field value before patch")
+    value: Optional[Any] = Field(default=None, description="Field value after patch")
+    projection_ref: DomainEnvelopeProjectionRef = Field(
+        description="Current envelope/object projection after the patch",
+    )
+    candidate: Optional[CurationCandidate] = Field(
+        default=None,
+        description="Updated workspace candidate projection when one exists",
+    )
+    session: Optional[CurationReviewSession] = Field(
+        default=None,
+        description="Updated review session when a workspace projection exists",
+    )
+    action_log_entry: Optional[CurationActionLogEntry] = Field(
+        default=None,
+        description="Workspace action-log entry emitted by the accepted patch",
+    )
+    history_event_ids: list[str] = Field(
+        default_factory=list,
+        description="Envelope history events appended by the accepted patch",
+    )
+    projection_candidate_ids: list[str] = Field(
+        default_factory=list,
+        description="Workspace candidates regenerated from the patched object",
+    )
+
+
 class CurationCandidateDecisionRequest(CurationWorkspaceBaseModel):
     """Request contract for candidate accept, reject, or reset actions."""
 
@@ -1996,6 +2090,9 @@ __all__ = [
     "CurationEntityTagEvidence",
     "CurationEntityTagSource",
     "CurationEntityTypeCode",
+    "CurationEnvelopeFieldPatchOperation",
+    "CurationEnvelopeFieldPatchRequest",
+    "CurationEnvelopeFieldPatchResponse",
     "CurationEvidenceQualityCounts",
     "CurationEvidenceRecord",
     "CurationEvidenceRecomputeRequest",

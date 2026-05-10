@@ -44,6 +44,7 @@ from src.lib.curation_workspace.session_service import (
     list_flow_run_sessions,
     list_flow_runs,
     list_sessions,
+    patch_envelope_field,
     retry_submission,
     submission_preview,
     update_candidate_draft,
@@ -63,6 +64,8 @@ from src.schemas.curation_workspace import (
     CurationCandidateDeleteResponse,
     CurationCandidateDraftUpdateRequest,
     CurationCandidateDraftUpdateResponse,
+    CurationEnvelopeFieldPatchRequest,
+    CurationEnvelopeFieldPatchResponse,
     CurationCandidateValidationRequest,
     CurationCandidateValidationResponse,
     CurationDateRange,
@@ -548,6 +551,31 @@ async def patch_review_candidate_draft(
         db,
         session_id,
         candidate_id,
+        request,
+        user,
+    )
+
+
+@router.patch(
+    "/sessions/{session_id}/envelopes/{envelope_id}/field",
+    response_model=CurationEnvelopeFieldPatchResponse,
+)
+async def patch_review_envelope_field(
+    session_id: UUID,
+    envelope_id: str,
+    request: CurationEnvelopeFieldPatchRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationEnvelopeFieldPatchResponse:
+    set_global_user_from_cognito(db, user)
+    if request.envelope_id != envelope_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Path envelope_id does not match request body envelope_id",
+        )
+    return patch_envelope_field(
+        db,
+        session_id,
         request,
         user,
     )
