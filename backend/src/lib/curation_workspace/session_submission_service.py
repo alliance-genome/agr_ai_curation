@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from functools import lru_cache
 from typing import Any, Mapping, Sequence
@@ -1048,24 +1048,15 @@ def _build_domain_envelope_object_context(
         blockers=tuple(blockers),
         warnings=tuple(dedupe(warnings)),
     )
-    blockers.extend(
-        _adapter_domain_envelope_readiness_blockers(
-            candidate=candidate,
-            context=context,
-        )
+    adapter_blockers = _adapter_domain_envelope_readiness_blockers(
+        candidate=candidate,
+        context=context,
     )
-    return _DomainEnvelopeObjectContext(
-        candidate_id=context.candidate_id,
-        envelope_row=context.envelope_row,
-        envelope=context.envelope,
-        domain_object=context.domain_object,
-        object_definition=context.object_definition,
-        field_definitions=context.field_definitions,
-        field_policies=context.field_policies,
-        projection_refs=context.projection_refs,
-        blockers=tuple(blockers),
-        warnings=context.warnings,
-    )
+    if adapter_blockers:
+        blockers.extend(adapter_blockers)
+        return replace(context, blockers=tuple(blockers))
+
+    return context
 
 
 def _build_domain_envelope_submission_context(
@@ -1569,13 +1560,19 @@ def _default_direct_submission_target_key(
     if not supported_target_keys:
         export_adapter = _export_adapter_registry().get(adapter_key)
         if export_adapter is not None:
-            supported_target_keys = tuple(export_adapter.supported_target_keys or ())
+            supported_target_keys = tuple(export_adapter.supported_target_keys)
+
+    if not supported_target_keys:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Submission target is not configured",
+        )
 
     transport_target_keys = _submission_adapter_registry().target_keys()
     eligible_target_keys = tuple(
         target_key
         for target_key in transport_target_keys
-        if not supported_target_keys or target_key in supported_target_keys
+        if target_key in supported_target_keys
     )
 
     if len(eligible_target_keys) == 1:
@@ -2420,7 +2417,11 @@ def _append_domain_envelope_submission_history(
     for context in domain_context.object_contexts.values():
         if context.candidate_id not in submitted_candidate_ids:
             continue
-        if context.envelope is None or context.domain_object is None:
+        if (
+            context.envelope is None
+            or context.envelope_row is None
+            or context.domain_object is None
+        ):
             continue
         envelope_id = context.envelope.envelope_id
         event_indexes_by_envelope.setdefault(
@@ -2465,14 +2466,8 @@ def _append_domain_envelope_submission_history(
         db.add(
             DomainEnvelopeHistory(
                 envelope_id=envelope_id,
-                event_id=event.event_id or (
-                    f"submission:{submission_row.id}:{context.candidate_id}"
-                ),
-                envelope_revision=(
-                    context.envelope_row.revision
-                    if context.envelope_row is not None
-                    else 1
-                ),
+                event_id=event.event_id,
+                envelope_revision=context.envelope_row.revision,
                 event_index=event_index,
                 event_type=event.event_type,
                 occurred_at=event.timestamp,

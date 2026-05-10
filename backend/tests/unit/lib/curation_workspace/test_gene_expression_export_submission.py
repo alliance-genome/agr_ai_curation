@@ -324,11 +324,12 @@ def test_default_registries_expose_gene_expression_export_and_submission_adapter
     finally:
         adapter_registry_module.load_curation_adapter_registry.cache_clear()
 
-    assert isinstance(
-        export_registry.require(GENE_EXPRESSION_ADAPTER_KEY),
-        GeneExpressionExportAdapter,
-    )
-    assert isinstance(
-        submission_registry.require(GENE_EXPRESSION_TARGET_KEY),
-        GeneExpressionSubmissionAdapter,
-    )
+    export_adapter = export_registry.require(GENE_EXPRESSION_ADAPTER_KEY)
+    submission_adapter = submission_registry.require(GENE_EXPRESSION_TARGET_KEY)
+
+    assert export_adapter.__class__.__name__ == "GeneExpressionExportAdapter"
+    assert export_adapter.adapter_key == GENE_EXPRESSION_ADAPTER_KEY
+    assert export_adapter.supported_target_keys == (GENE_EXPRESSION_TARGET_KEY,)
+    assert submission_adapter.__class__.__name__ == "GeneExpressionSubmissionAdapter"
+    assert submission_adapter.transport_key == "alliance_gene_expression_submission"
+    assert submission_adapter.supported_target_keys == (GENE_EXPRESSION_TARGET_KEY,)

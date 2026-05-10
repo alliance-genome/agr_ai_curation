@@ -1868,6 +1868,36 @@ def test_direct_submission_preview_requires_target_when_multiple_transports_are_
     )
 
 
+def test_default_direct_submission_target_requires_supported_adapter_target(monkeypatch):
+    class StubExportRegistry:
+        def get(self, adapter_key):
+            return SimpleNamespace(supported_target_keys=())
+
+    class StubSubmissionRegistry:
+        def target_keys(self):
+            return ("unowned_target",)
+
+    monkeypatch.setattr(
+        submission_module,
+        "_export_adapter_registry",
+        lambda: StubExportRegistry(),
+    )
+    monkeypatch.setattr(
+        submission_module,
+        "_submission_adapter_registry",
+        lambda: StubSubmissionRegistry(),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        submission_module._default_direct_submission_target_key(
+            adapter_key="adapter_without_targets",
+            supported_target_keys=(),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Submission target is not configured"
+
+
 def test_submission_preview_routes_payload_generation_through_submission_adapter(
     db_session,
     monkeypatch,
