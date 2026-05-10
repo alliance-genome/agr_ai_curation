@@ -290,12 +290,6 @@ export interface CurationSubmissionReadinessBlocker {
   details: CurationSubmissionReadinessBlockerDetails
 }
 
-export interface DomainEnvelopeProjectionRef {
-  envelope_id: string
-  object_id: string
-  envelope_revision: number
-}
-
 export interface CurationDraftField {
   field_key: string
   label: string
