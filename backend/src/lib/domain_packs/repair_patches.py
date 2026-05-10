@@ -638,11 +638,10 @@ def record_validator_rerun_request(
     if payload.envelope_id != envelope.envelope_id:
         raise ValueError("validator rerun envelope_id does not match envelope")
 
-    object_ref = payload.object_ref
-    field_ref = (
-        FieldRef(object_ref=object_ref, field_path=payload.field_path)
-        if object_ref is not None and payload.field_path is not None
-        else None
+    object_ref, field_ref = _history_target_refs(
+        envelope,
+        object_ref=payload.object_ref,
+        field_path=payload.field_path,
     )
     event = _repair_event(
         envelope=envelope,
@@ -662,6 +661,7 @@ def record_validator_rerun_request(
             "finding_ids": list(payload.finding_ids),
             "validator_binding_ids": list(payload.validator_binding_ids),
             "expected_revision": payload.expected_revision,
+            **_repair_target_context(payload.object_ref, payload.field_path),
             "chat_summary": "Validator rerun requested after repair.",
         },
     )
@@ -685,11 +685,10 @@ def record_repair_final_classification(
     if payload.envelope_id != envelope.envelope_id:
         raise ValueError("repair classification envelope_id does not match envelope")
 
-    object_ref = payload.object_ref
-    field_ref = (
-        FieldRef(object_ref=object_ref, field_path=payload.field_path)
-        if object_ref is not None and payload.field_path is not None
-        else None
+    object_ref, field_ref = _history_target_refs(
+        envelope,
+        object_ref=payload.object_ref,
+        field_path=payload.field_path,
     )
     event = _repair_event(
         envelope=envelope,
@@ -711,6 +710,7 @@ def record_repair_final_classification(
             "validator_binding_ids": list(payload.validator_binding_ids),
             "expected_revision": payload.expected_revision,
             "reason": payload.reason,
+            **_repair_target_context(payload.object_ref, payload.field_path),
             "chat_summary": (
                 f"Repair classified as {payload.status.value}: {payload.reason}"
             ),
@@ -939,6 +939,39 @@ def _object_for_ref(
 ) -> CuratableObjectEnvelope | None:
     _, domain_object = _object_index_for_ref(envelope, object_ref)
     return domain_object
+
+
+def _history_target_refs(
+    envelope: DomainEnvelope,
+    *,
+    object_ref: ObjectRef | None,
+    field_path: str | None,
+) -> tuple[ObjectRef | None, FieldRef | None]:
+    if object_ref is None:
+        return None, None
+    if field_path is None:
+        return object_ref, None
+
+    domain_object = _object_for_ref(envelope, object_ref)
+    if (
+        domain_object is not None
+        and _payload_value(domain_object.payload, field_path) is not _MISSING
+    ):
+        return None, FieldRef(object_ref=object_ref, field_path=field_path)
+
+    return object_ref, None
+
+
+def _repair_target_context(
+    object_ref: ObjectRef | None,
+    field_path: str | None,
+) -> dict[str, Any]:
+    context: dict[str, Any] = {}
+    if object_ref is not None:
+        context["object_ref"] = object_ref.model_dump(mode="json")
+    if field_path is not None:
+        context["field_path"] = field_path
+    return context
 
 
 def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:

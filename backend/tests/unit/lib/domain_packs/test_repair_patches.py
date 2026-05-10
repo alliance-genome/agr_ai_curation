@@ -508,8 +508,40 @@ def test_final_classifications_are_visible_in_history_and_context(
     )
 
     assert updated.history[-1].event_type is HistoryEventKind.REPAIR_FINAL_CLASSIFIED
+    assert updated.history[-1].field_ref is not None
     assert updated.history[-1].details["status"] == status.value
     assert updated.metadata[REPAIR_CONTEXT_METADATA_KEY]["latest_status"] == status.value
+
+
+def test_missing_field_final_classification_round_trips_and_keeps_target_context():
+    updated = record_repair_final_classification(
+        _envelope(),
+        RepairFinalClassification(
+            repair_action="no_repair_possible",
+            envelope_id="env-1",
+            expected_revision=1,
+            status=RepairFinalStatus.NO_REPAIR_POSSIBLE,
+            reason="Identifier could not be repaired from available evidence.",
+            finding_ids=["validation:identifier"],
+            object_ref=_object_ref(),
+            field_path="gene.identifier",
+        ),
+    )
+
+    event = updated.history[-1]
+    assert event.event_type is HistoryEventKind.REPAIR_FINAL_CLASSIFIED
+    assert event.object_ref == _object_ref()
+    assert event.field_ref is None
+    assert event.details["field_path"] == "gene.identifier"
+
+    latest_classification = updated.metadata[REPAIR_CONTEXT_METADATA_KEY][
+        "classifications"
+    ][-1]
+    assert latest_classification["object_ref"] == _object_ref().model_dump(mode="json")
+    assert latest_classification["field_path"] == "gene.identifier"
+
+    reparsed = DomainEnvelope.model_validate(updated.model_dump(mode="json"))
+    assert reparsed.history[-1].details["field_path"] == "gene.identifier"
 
 
 def test_extractor_final_classification_rejects_action_status_mismatch():
