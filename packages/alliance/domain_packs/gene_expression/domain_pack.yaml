@@ -835,7 +835,10 @@ metadata:
         description: Enforce the LinkML AnatomicalSite rule requiring anatomical_structure or cellular_component once validator runtime wiring lands.
       - validator_id: gene_expression.ontology_term_resolution
         description: Validate embedded MMO, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
-    blocked: []
+    blocked:
+      - validator_id: gene_expression.live_write_transport
+        blocked_by: read_only_curation_db
+        description: Direct live DB writes remain blocked until an approved Alliance write transport replaces the read-only submission handoff adapter.
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

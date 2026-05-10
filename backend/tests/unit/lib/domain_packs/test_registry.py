@@ -25,6 +25,8 @@ PROVIDER_AGNOSTIC_PACKS_DIR = (
     / "provider_agnostic"
 )
 
+pytestmark = pytest.mark.provider_agnostic_domain_pack
+
 
 def _write_domain_pack(root: Path, directory_name: str, metadata_text: str) -> Path:
     pack_dir = root / directory_name

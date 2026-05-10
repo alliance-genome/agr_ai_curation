@@ -117,7 +117,16 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     assert tuple(validators) == GENE_EXPRESSION_VALIDATOR_STATES
     assert validators["active"]
     assert validators["planned"]
-    assert validators["blocked"] == []
+    assert validators["blocked"] == [
+        {
+            "validator_id": "gene_expression.live_write_transport",
+            "blocked_by": "read_only_curation_db",
+            "description": (
+                "Direct live DB writes remain blocked until an approved Alliance "
+                "write transport replaces the read-only submission handoff adapter."
+            ),
+        }
+    ]
     active_validator_ids = {
         validator["validator_id"] for validator in validators["active"]
     }

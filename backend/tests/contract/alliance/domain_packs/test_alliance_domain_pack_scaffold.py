@@ -71,10 +71,17 @@ def _parse_env_assignments(output: str) -> dict[str, str]:
     return parsed
 
 
-def _cache_schema(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+def _cache_schema(
+    tmp_path: Path,
+    *,
+    offline: bool = False,
+) -> tuple[Path, dict[str, str]]:
     script_path = _schema_cache_script_path()
+    args = [str(script_path), "--cache-root", str(tmp_path)]
+    if offline:
+        args.append("--offline")
     result = subprocess.run(
-        [str(script_path), "--cache-root", str(tmp_path)],
+        args,
         check=True,
         text=True,
         capture_output=True,
@@ -228,10 +235,14 @@ def test_alliance_base_scaffold_declares_required_object_roles():
 def test_cache_script_materializes_pinned_schema_checkout(tmp_path: Path):
     first_cache_dir, first_env = _cache_schema(tmp_path)
     second_cache_dir, second_env = _cache_schema(tmp_path)
+    offline_cache_dir, offline_env = _cache_schema(tmp_path, offline=True)
 
     assert first_cache_dir == second_cache_dir
+    assert offline_cache_dir == first_cache_dir
     assert first_env["AGR_CURATION_SCHEMA_CACHE_STATUS"] == "created"
     assert second_env["AGR_CURATION_SCHEMA_CACHE_STATUS"] == "reused"
+    assert offline_env["AGR_CURATION_SCHEMA_CACHE_STATUS"] == "reused"
+    assert offline_env["AGR_CURATION_SCHEMA_CACHE_MODE"] == "offline"
     assert (first_cache_dir / ALLIANCE_LINKML_ROOT_SCHEMA_PATH).is_file()
 
     actual_commit = subprocess.run(
@@ -241,6 +252,25 @@ def test_cache_script_materializes_pinned_schema_checkout(tmp_path: Path):
         capture_output=True,
     ).stdout.strip()
     assert actual_commit == ALLIANCE_LINKML_COMMIT
+
+
+def test_cache_script_offline_mode_fails_without_existing_checkout(tmp_path: Path):
+    script_path = _schema_cache_script_path()
+
+    result = subprocess.run(
+        [str(script_path), "--cache-root", str(tmp_path), "--offline"],
+        check=False,
+        text=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "AGR_CURATION_SCHEMA_REPO_URL": ALLIANCE_LINKML_REPOSITORY,
+            "AGR_CURATION_SCHEMA_COMMIT": ALLIANCE_LINKML_COMMIT,
+        },
+    )
+
+    assert result.returncode == 1
+    assert "offline mode requires an existing checkout" in result.stderr
 
 
 def test_pinned_linkml_class_slot_and_range_refs_exist(tmp_path: Path):

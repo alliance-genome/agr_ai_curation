@@ -1,0 +1,11 @@
+# Paths are relative to backend/.
+# Alliance domain-pack contract suite. Excludes live DB tests by design.
+tests/contract/alliance/domain_packs/test_alliance_domain_pack_scaffold.py
+tests/contract/alliance/domain_packs/test_alliance_gene_domain_pack.py
+tests/contract/alliance/domain_packs/test_gene_expression_domain_pack.py
+tests/contract/alliance/domain_packs/test_allele_domain_pack.py
+tests/contract/alliance/domain_packs/test_disease_domain_pack.py
+tests/contract/alliance/domain_packs/test_chemical_condition_domain_pack.py
+tests/contract/alliance/domain_packs/test_phenotype_domain_pack.py
+tests/contract/alliance/domain_packs/test_validation_metadata.py
+tests/contract/alliance/domain_packs/test_export_submission_adapters.py

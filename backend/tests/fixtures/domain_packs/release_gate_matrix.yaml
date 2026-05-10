@@ -1,0 +1,56 @@
+matrix_api_version: 1.0.0
+display_name: 0.7.0 domain-envelope release gate matrix
+required_surfaces:
+  - provider_agnostic_fixture_pack
+  - alliance_domain_pack_metadata
+  - alliance_linkml_grounding
+  - live_db_projection
+  - one_off_migration
+  - materialization
+  - repair_loop
+  - export_submission
+  - opus_tool
+  - trace_review
+suites:
+  provider_agnostic_unit:
+    runner: backend-unit-tests
+    command: bash tests/unit/run_ci_unit_tests.sh --suite domain-envelope-release
+    path_file: tests/unit/.domain-envelope-release-test-paths
+    markers:
+      - provider_agnostic_domain_pack
+      - domain_envelope_release_gate
+    external_dependencies: []
+    surfaces:
+      - provider_agnostic_fixture_pack
+      - one_off_migration
+      - materialization
+      - repair_loop
+      - export_submission
+      - opus_tool
+      - trace_review
+  alliance_domain_pack_contract:
+    runner: backend-contract-tests
+    command: bash tests/contract/run_ci_contract_core_tests.sh --suite alliance-domain-pack
+    path_file: tests/contract/.alliance-domain-pack-test-paths
+    markers:
+      - alliance_domain_pack
+      - alliance_linkml
+    external_dependencies:
+      - pinned_alliance_linkml_cache
+    surfaces:
+      - alliance_domain_pack_metadata
+      - alliance_linkml_grounding
+      - materialization
+      - repair_loop
+      - export_submission
+  alliance_live_db_contract:
+    runner: backend-contract-tests
+    command: ALLIANCE_LIVE_DB_CONTRACT_TESTS=1 bash tests/contract/run_ci_contract_core_tests.sh --suite alliance-live-db
+    path_file: tests/contract/.alliance-live-db-test-paths
+    markers:
+      - alliance_live_db
+    explicit_opt_in_env: ALLIANCE_LIVE_DB_CONTRACT_TESTS
+    external_dependencies:
+      - read_only_curation_db_tunnel
+    surfaces:
+      - live_db_projection
