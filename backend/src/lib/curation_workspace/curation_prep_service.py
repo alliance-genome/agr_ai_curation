@@ -11,6 +11,13 @@ from sqlalchemy.orm import Session
 from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.extraction_results import persist_extraction_result
+from src.lib.curation_workspace.models import DomainEnvelopeModel
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopeCheckpointRequest,
+    write_domain_envelope_checkpoint,
+)
+from src.lib.domain_packs.materialization import DomainEnvelopeMaterializationError
+from src.models.sql.database import SessionLocal
 from src.lib.curation_workspace.prep_item_conversion import (
     compact_payload,
     normalized_evidence_record_ids,
@@ -20,6 +27,7 @@ from src.lib.curation_workspace.prep_item_conversion import (
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
     CurationPrepCandidate,
+    CurationPrepEnvelopeRef,
     CurationPrepEvidenceRecord,
     CurationPrepRunMetadata,
     CurationPrepScopeConfirmation,
@@ -35,6 +43,14 @@ from src.schemas.curation_workspace import (
     EvidenceLocatorQuality,
     EvidenceSupportsDecision,
 )
+from src.schemas.domain_envelope import (
+    DomainEnvelope,
+    DomainEnvelopeStatus,
+    HistoryActorType,
+    HistoryEvent,
+    HistoryEventKind,
+)
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
 _DETERMINISTIC_PREP_MODEL_NAME = "deterministic_programmatic_mapper_v1"
@@ -90,6 +106,14 @@ class _DeterministicMapperResult:
 
 
 @dataclass(frozen=True)
+class _EnvelopeMaterializationResult:
+    envelope_refs: list[CurationPrepEnvelopeRef]
+    processing_notes: list[str]
+    warnings: list[str]
+    selected_extraction_results: list[CurationExtractionResultRecord]
+
+
+@dataclass(frozen=True)
 class CurationPrepScopeSummary:
     """Evidence-backed prep availability for a requested extraction scope."""
 
@@ -117,22 +141,29 @@ async def run_curation_prep(
 
     primary_extraction_result = _resolve_primary_extraction_result(scoped_results)
     document_id = _resolve_document_id(scoped_results, persistence_context)
-    mapper_result = _map_extraction_results_to_candidates(
+    materialization_result = _materialize_extraction_results_to_envelope_refs(
         scoped_results,
         scope_notes=scope_notes,
+        persist=True,
+        db=db,
     )
-    if not mapper_result.candidates:
+    if not materialization_result.envelope_refs:
         raise ValueError(
             "No evidence-verified candidates were available to prepare for curation review."
         )
 
     prep_output = CurationPrepAgentOutput(
-        candidates=mapper_result.candidates,
+        envelope_refs=materialization_result.envelope_refs,
+        review_row_count=sum(
+            envelope_ref.review_row_count
+            for envelope_ref in materialization_result.envelope_refs
+        ),
+        candidates=[],
         run_metadata=CurationPrepRunMetadata(
             model_name=_DETERMINISTIC_PREP_MODEL_NAME,
             token_usage=CurationPrepTokenUsage(),
-            processing_notes=list(mapper_result.processing_notes),
-            warnings=list(mapper_result.warnings),
+            processing_notes=list(materialization_result.processing_notes),
+            warnings=list(materialization_result.warnings),
         ),
     )
 
@@ -189,15 +220,31 @@ def summarize_curation_prep_scope(
         if not scoped_results:
             continue
 
-        mapper_result = _map_extraction_results_to_candidates(
+        materialization_result = _materialize_extraction_results_to_envelope_refs(
             scoped_results,
             scope_notes=scope_notes,
+            persist=False,
         )
-        candidate_count = len(mapper_result.candidates)
+        candidate_count = sum(
+            envelope_ref.review_row_count
+            for envelope_ref in materialization_result.envelope_refs
+        )
+        if candidate_count == 0:
+            legacy_mapper_result = _map_extraction_results_to_candidates(
+                scoped_results,
+                scope_notes=scope_notes,
+            )
+            candidate_count = len(legacy_mapper_result.candidates)
+            if candidate_count > 0:
+                warnings.extend(legacy_mapper_result.warnings)
+            else:
+                warnings.extend(materialization_result.warnings)
+                warnings.extend(legacy_mapper_result.warnings)
+        else:
+            warnings.extend(materialization_result.warnings)
         if candidate_count > 0:
             preparable_adapter_keys.append(adapter_key)
             total_candidate_count += candidate_count
-        warnings.extend(mapper_result.warnings)
 
     return CurationPrepScopeSummary(
         candidate_count=total_candidate_count,
@@ -247,6 +294,69 @@ def _map_extraction_results_to_candidates(
 
     return _DeterministicMapperResult(
         candidates=candidates,
+        processing_notes=_dedupe_strings(processing_notes),
+        warnings=_dedupe_strings(warnings),
+        selected_extraction_results=list(extraction_results),
+    )
+
+
+def _materialize_extraction_results_to_envelope_refs(
+    extraction_results: Sequence[CurationExtractionResultRecord],
+    *,
+    scope_notes: Sequence[str] = (),
+    persist: bool,
+    db: Session | None = None,
+) -> _EnvelopeMaterializationResult:
+    envelope_refs: list[CurationPrepEnvelopeRef] = []
+    warnings: list[str] = list(scope_notes)
+    skipped_unmappable = 0
+
+    for extraction_result in extraction_results:
+        try:
+            envelope_ref = _ensure_domain_envelope_materialization(
+                extraction_result,
+                persist=persist,
+                db=db,
+            )
+        except (ValueError, DomainEnvelopeMaterializationError) as exc:
+            skipped_unmappable += max(int(extraction_result.candidate_count), 1)
+            warnings.append(
+                "Skipped extraction result "
+                f"{extraction_result.extraction_result_id} because it could not be "
+                f"materialized as a domain envelope review source: {exc}"
+            )
+            continue
+        if envelope_ref.review_row_count <= 0:
+            skipped_unmappable += max(int(extraction_result.candidate_count), 1)
+            warnings.append(
+                "Skipped extraction result "
+                f"{extraction_result.extraction_result_id} because its persisted envelope "
+                "did not materialize any review rows."
+            )
+            continue
+        envelope_refs.append(envelope_ref)
+
+    review_row_count = sum(ref.review_row_count for ref in envelope_refs)
+    processing_notes = [
+        (
+            "Domain-envelope prep selected "
+            f"{len(envelope_refs)} persisted envelope revision"
+            f"{'s' if len(envelope_refs) != 1 else ''} and materialized "
+            f"{review_row_count} review row"
+            f"{'s' if review_row_count != 1 else ''} from "
+            f"{len(extraction_results)} extraction result"
+            f"{'s' if len(extraction_results) != 1 else ''}."
+        )
+    ]
+    if skipped_unmappable:
+        warnings.append(
+            f"Skipped {skipped_unmappable} extraction candidate"
+            f"{'s' if skipped_unmappable != 1 else ''} because persisted domain-envelope "
+            "review rows could not be materialized."
+        )
+
+    return _EnvelopeMaterializationResult(
+        envelope_refs=envelope_refs,
         processing_notes=_dedupe_strings(processing_notes),
         warnings=_dedupe_strings(warnings),
         selected_extraction_results=list(extraction_results),
@@ -338,6 +448,167 @@ def _resolve_candidate_adapter_key(
     extraction_result: CurationExtractionResultRecord,
 ) -> str | None:
     return normalized_optional_string(extraction_result.adapter_key)
+
+
+def _ensure_domain_envelope_materialization(
+    extraction_result: CurationExtractionResultRecord,
+    *,
+    persist: bool,
+    db: Session | None = None,
+) -> CurationPrepEnvelopeRef:
+    envelope = _domain_envelope_from_extraction_result(extraction_result)
+    materializer = _review_row_materializer_for_extraction_result(
+        extraction_result,
+        domain_pack_id=envelope.domain_pack_id,
+    )
+
+    if not persist:
+        review_rows = materializer.materialize(envelope, envelope_revision=1)
+        return CurationPrepEnvelopeRef(
+            envelope_id=envelope.envelope_id,
+            envelope_revision=1,
+            source_extraction_result_id=extraction_result.extraction_result_id,
+            domain_pack_id=envelope.domain_pack_id,
+            review_row_count=len(review_rows),
+        )
+
+    owns_session = db is None
+    session = db or SessionLocal()
+    try:
+        envelope_row = session.get(DomainEnvelopeModel, envelope.envelope_id)
+        if envelope_row is None:
+            checkpoint = write_domain_envelope_checkpoint(
+                session,
+                DomainEnvelopeCheckpointRequest(
+                    project_key=_checkpoint_project_key(extraction_result, envelope),
+                    envelope=envelope,
+                    expected_revision=0,
+                    document_id=extraction_result.document_id,
+                    flow_run_id=extraction_result.flow_run_id,
+                ),
+            )
+            envelope_revision = checkpoint.revision
+            persisted_envelope = envelope
+        else:
+            envelope_revision = envelope_row.revision
+            persisted_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+
+        review_rows = materializer.materialize(
+            persisted_envelope,
+            envelope_revision=envelope_revision,
+        )
+        return CurationPrepEnvelopeRef(
+            envelope_id=persisted_envelope.envelope_id,
+            envelope_revision=envelope_revision,
+            source_extraction_result_id=extraction_result.extraction_result_id,
+            domain_pack_id=persisted_envelope.domain_pack_id,
+            review_row_count=len(review_rows),
+        )
+    finally:
+        if owns_session:
+            session.close()
+
+
+def _domain_envelope_from_extraction_result(
+    extraction_result: CurationExtractionResultRecord,
+) -> DomainEnvelope:
+    payload = extraction_result.payload_json
+    if not isinstance(payload, Mapping):
+        raise ValueError("extraction payload is not a JSON object")
+
+    if {"envelope_id", "domain_pack_id", "objects"}.issubset(payload):
+        return DomainEnvelope.model_validate(payload)
+
+    source = DomainEnvelopeExtractionResult.model_validate(payload)
+    adapter_key = _resolve_candidate_adapter_key(extraction_result)
+    if adapter_key is None:
+        raise ValueError("extraction result does not declare adapter ownership")
+
+    registry = load_curation_adapter_registry()
+    domain_pack = registry.get_domain_pack(adapter_key)
+    if domain_pack is None:
+        raise ValueError(
+            f"adapter_key={adapter_key!r} does not declare a domain pack for envelope prep"
+        )
+
+    envelope_id = _extraction_envelope_id(extraction_result)
+    metadata = {
+        "semantic_source": "domain_envelope.objects",
+        "source_extraction_result_id": extraction_result.extraction_result_id,
+        "source_agent_key": extraction_result.agent_key,
+        "source_adapter_key": adapter_key,
+        "source_kind": extraction_result.source_kind.value,
+        "extraction_summary": source.summary,
+        "extraction_metadata": source.metadata.model_dump(mode="json"),
+        "run_summary": source.run_summary.model_dump(mode="json"),
+    }
+
+    return DomainEnvelope(
+        envelope_id=envelope_id,
+        domain_pack_id=domain_pack.pack_id,
+        domain_pack_version=domain_pack.version,
+        status=DomainEnvelopeStatus.EXTRACTED,
+        schema_ref=source.schema_ref,
+        objects=list(source.curatable_objects),
+        history=[
+            HistoryEvent(
+                event_type=HistoryEventKind.CREATED,
+                actor_type=HistoryActorType.SYSTEM,
+                actor_id=CURATION_PREP_AGENT_ID,
+                message=(
+                    "Created persisted domain envelope from structured extraction result "
+                    f"{extraction_result.extraction_result_id}."
+                ),
+            )
+        ],
+        metadata=metadata,
+    )
+
+
+def _review_row_materializer_for_extraction_result(
+    extraction_result: CurationExtractionResultRecord,
+    *,
+    domain_pack_id: str,
+) -> Any:
+    registry = load_curation_adapter_registry()
+    adapter_key = _resolve_candidate_adapter_key(extraction_result)
+    materializer = (
+        registry.get_review_row_materializer(adapter_key)
+        if adapter_key is not None
+        else None
+    )
+    if materializer is None:
+        materializer = registry.get_review_row_materializer_for_domain_pack(domain_pack_id)
+    if materializer is None:
+        raise DomainEnvelopeMaterializationError(
+            f"No review-row materializer is registered for domain_pack_id={domain_pack_id!r}"
+        )
+    return materializer
+
+
+def _extraction_envelope_id(extraction_result: CurationExtractionResultRecord) -> str:
+    metadata = dict(extraction_result.metadata or {})
+    envelope_id = normalized_optional_string(metadata.get("envelope_id"))
+    if envelope_id is not None:
+        return envelope_id
+    return f"extraction-result:{extraction_result.extraction_result_id}"
+
+
+def _checkpoint_project_key(
+    extraction_result: CurationExtractionResultRecord,
+    envelope: DomainEnvelope,
+) -> str:
+    metadata = dict(extraction_result.metadata or {})
+    project_key = normalized_optional_string(metadata.get("project_key"))
+    if project_key is not None:
+        return project_key
+    domain_prefix = envelope.domain_pack_id.split(".", 1)[0]
+    if domain_prefix:
+        return domain_prefix
+    adapter_key = _resolve_candidate_adapter_key(extraction_result)
+    if adapter_key is not None:
+        return adapter_key
+    raise ValueError("Unable to resolve project_key for domain envelope checkpoint")
 
 
 def _candidate_blueprints(
@@ -666,7 +937,7 @@ def _build_persistence_request(
         trace_id=persistence_context.trace_id or primary_extraction_result.trace_id,
         flow_run_id=persistence_context.flow_run_id or primary_extraction_result.flow_run_id,
         user_id=persistence_context.user_id or primary_extraction_result.user_id,
-        candidate_count=len(prep_output.candidates),
+        candidate_count=prep_output.review_row_count,
         conversation_summary=_resolve_conversation_summary(
             extraction_results,
             persistence_context,
@@ -678,6 +949,10 @@ def _build_persistence_request(
             "scope_adapter_keys": list(scope_confirmation.adapter_keys),
             "source_extraction_result_ids": [
                 record.extraction_result_id for record in extraction_results
+            ],
+            "envelope_refs": [
+                envelope_ref.model_dump(mode="json")
+                for envelope_ref in prep_output.envelope_refs
             ],
         },
     )

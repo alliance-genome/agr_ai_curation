@@ -47,6 +47,9 @@ from src.schemas.curation_workspace import (
     CurationValidationScope,
     CurationValidationSnapshotState,
     CurationValidationSummary,
+    DomainEnvelopeReviewRow,
+    DomainEnvelopeReviewRowsResponse,
+    DomainEnvelopeReviewRowSummaryField,
     FieldValidationStatus,
 )
 
@@ -189,6 +192,34 @@ def _make_prep_output(*, candidate_count: int = 1) -> CurationPrepAgentOutput:
     )
 
 
+def _make_envelope_prep_output() -> CurationPrepAgentOutput:
+    return CurationPrepAgentOutput.model_validate(
+        {
+            "envelope_refs": [
+                {
+                    "envelope_id": "env-review-1",
+                    "envelope_revision": 4,
+                    "source_extraction_result_id": "extract-domain-1",
+                    "domain_pack_id": "fixture.pack",
+                    "review_row_count": 1,
+                }
+            ],
+            "review_row_count": 1,
+            "candidates": [],
+            "run_metadata": {
+                "model_name": "deterministic_programmatic_mapper_v1",
+                "token_usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                },
+                "processing_notes": ["Envelope refs selected."],
+                "warnings": [],
+            },
+        }
+    )
+
+
 def _persist_matching_prep_result(
     db_session,
     *,
@@ -207,21 +238,13 @@ def _persist_matching_prep_result(
         trace_id="trace-1",
         flow_run_id="flow-1",
         user_id="user-1",
-        candidate_count=len(prep_output.candidates),
+        candidate_count=(
+            prep_output.review_row_count
+            if prep_output.envelope_refs
+            else len(prep_output.candidates)
+        ),
         conversation_summary="Prep conversation summary.",
-        payload_json={
-            "candidates": prep_output.model_dump(mode="json")["candidates"],
-            "run_metadata": {
-                "model_name": "placeholder",
-                "token_usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "total_tokens": 0,
-                },
-                "processing_notes": [],
-                "warnings": [],
-            },
-        },
+        payload_json=prep_output.model_dump(mode="json"),
         extraction_metadata={
             "final_run_metadata": prep_output.run_metadata.model_dump(mode="json"),
         },
@@ -577,6 +600,95 @@ def test_execute_post_curation_pipeline_persists_domain_envelope_projection_ref(
     assert candidate_row.envelope_id == "env-1"
     assert candidate_row.object_id == "object-1"
     assert candidate_row.envelope_revision == 5
+
+
+def test_execute_post_curation_pipeline_materializes_envelope_rows_without_normalizer(
+    db_session,
+    monkeypatch,
+):
+    document = _create_document(db_session)
+    prep_output = _make_envelope_prep_output()
+    prep_record = _persist_matching_prep_result(
+        db_session,
+        document_id=str(document.id),
+        prep_output=prep_output,
+    )
+
+    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None):
+        assert db is db_session
+        assert envelope_id == "env-review-1"
+        assert revision == 4
+        return DomainEnvelopeReviewRowsResponse(
+            envelope_id="env-review-1",
+            envelope_revision=4,
+            row_count=1,
+            rows=[
+                DomainEnvelopeReviewRow(
+                    envelope_id="env-review-1",
+                    object_id="object-1",
+                    envelope_revision=4,
+                    domain_pack_id="fixture.pack",
+                    domain_pack_version="0.1.0",
+                    object_type="GeneAssertion",
+                    object_role="curatable_unit",
+                    status="pending",
+                    validation_state="clear",
+                    projection_type="workspace_review_row",
+                    projection_key="object-1",
+                    display_label="ABC-1",
+                    secondary_label="Condition A",
+                    summary_fields=[
+                        DomainEnvelopeReviewRowSummaryField(
+                            field_path="gene.symbol",
+                            label="Gene symbol",
+                            value="ABC-1",
+                            field_type="string",
+                        )
+                    ],
+                )
+            ],
+        )
+
+    class RaisingNormalizer:
+        def normalize(self, *_args, **_kwargs):
+            raise AssertionError("candidate normalizer should not be used for envelope refs")
+
+    monkeypatch.setattr(
+        module,
+        "materialize_persisted_envelope_review_rows",
+        _fake_materialize,
+    )
+
+    result = module.execute_post_curation_pipeline(
+        _make_request(prep_output, document_id=str(document.id)),
+        db=db_session,
+        dependencies=module.PostCurationPipelineDependencies(
+            candidate_normalizers={"disease": RaisingNormalizer()},
+            evidence_resolver=module.PassthroughEvidenceAnchorResolver(),
+            validation_service=module.DeterministicStructuralValidationService(),
+        ),
+    )
+
+    assert result.status is module.PipelineRunStatus.COMPLETED
+    assert result.candidate_count == 1
+    assert result.prep_extraction_result_id == str(prep_record.id)
+
+    candidate_row = db_session.scalars(select(CurationCandidate)).one()
+    assert candidate_row.envelope_id == "env-review-1"
+    assert candidate_row.object_id == "object-1"
+    assert candidate_row.envelope_revision == 4
+    assert candidate_row.normalized_payload == {}
+    assert candidate_row.candidate_metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate_row.candidate_metadata["object_type"] == "GeneAssertion"
+
+    draft_row = db_session.scalars(select(DraftModel)).one()
+    assert draft_row.fields[0]["field_key"] == "gene.symbol"
+    assert draft_row.fields[0]["value"] == "ABC-1"
+    assert draft_row.draft_metadata["projection_ref"] == {
+        "envelope_id": "env-review-1",
+        "object_id": "object-1",
+        "envelope_revision": 4,
+    }
 
 
 def test_execute_post_curation_pipeline_registers_reference_adapter_and_persists_adapter_owned_layout(

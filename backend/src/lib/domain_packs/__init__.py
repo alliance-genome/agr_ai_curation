@@ -7,6 +7,15 @@ from .loader import (
     load_domain_fixture_pack,
     load_domain_pack_metadata,
 )
+from .materialization import (
+    DomainEnvelopeMaterializationError,
+    DomainEnvelopeRevisionUnavailableError,
+    DomainEnvelopeReviewRowMaterializer,
+    DomainPackMetadataReviewRowMaterializer,
+    REVIEW_ROW_PROJECTION_TYPE,
+    materialize_persisted_envelope_review_rows,
+    stable_object_id,
+)
 from .registry import (
     DomainPackDiscoveryFailure,
     DomainPackRegistry,
@@ -57,6 +66,10 @@ __all__ = [
     "DomainFixturePackError",
     "DomainPackContractError",
     "DomainPackDiscoveryFailure",
+    "DomainEnvelopeMaterializationError",
+    "DomainEnvelopeRevisionUnavailableError",
+    "DomainEnvelopeReviewRowMaterializer",
+    "DomainPackMetadataReviewRowMaterializer",
     "DomainPackMetadataError",
     "DomainPackRegistry",
     "DomainPackRegistryValidationError",
@@ -75,6 +88,7 @@ __all__ = [
     "RepairPatchStatus",
     "RepairRequestTarget",
     "RepairRetryBudget",
+    "REVIEW_ROW_PROJECTION_TYPE",
     "ValidationAttachmentOption",
     "ValidationBindingState",
     "ValidationRegistryError",
@@ -88,10 +102,12 @@ __all__ = [
     "load_domain_fixture_pack",
     "load_domain_pack_metadata",
     "load_domain_pack_registry",
+    "materialize_persisted_envelope_review_rows",
     "project_evidence_anchor_projections",
     "project_validation_summary_projections",
     "record_repair_final_classification",
     "record_repair_request",
     "record_validator_rerun_request",
     "run_validation_supervisor",
+    "stable_object_id",
 ]

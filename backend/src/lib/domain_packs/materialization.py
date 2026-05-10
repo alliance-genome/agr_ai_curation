@@ -1,14 +1,28 @@
-"""Provider-neutral workspace projections for domain envelope materialization."""
+"""Provider-neutral workspace projections and review-row materialization."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from hashlib import sha256
 import json
-from typing import Any
+from typing import Any, Protocol
 
+from sqlalchemy.orm import Session
+
+from src.lib.curation_workspace.models import DomainEnvelopeModel
+from src.lib.domain_envelopes.persistence import (
+    OBJECT_VALIDATION_STATE_BLOCKED,
+    OBJECT_VALIDATION_STATE_CLEAR,
+    OBJECT_VALIDATION_STATE_ERROR,
+    OBJECT_VALIDATION_STATE_INFO,
+    OBJECT_VALIDATION_STATE_WARNING,
+)
 from src.schemas.curation_workspace import (
     DomainEnvelopeEvidenceAnchorProjection,
+    DomainEnvelopeReviewRow,
+    DomainEnvelopeReviewRowsResponse,
+    DomainEnvelopeReviewRowSummaryField,
     DomainEnvelopeValidationFindingProjection,
     DomainEnvelopeValidationStatus,
     DomainEnvelopeValidationSummaryProjection,
@@ -24,8 +38,31 @@ from src.schemas.domain_envelope import (
     ValidationFinding,
     ValidationFindingSeverity,
     ValidationFindingStatus,
+    parse_field_path,
+)
+from src.schemas.domain_pack_metadata import (
+    DomainPackFieldDefinition,
+    DomainPackMetadata,
+    DomainPackObjectDefinition,
 )
 
+
+REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
+_MISSING = object()
+
+_VALIDATION_STATE_BY_SEVERITY = {
+    ValidationFindingSeverity.INFO: OBJECT_VALIDATION_STATE_INFO,
+    ValidationFindingSeverity.WARNING: OBJECT_VALIDATION_STATE_WARNING,
+    ValidationFindingSeverity.ERROR: OBJECT_VALIDATION_STATE_ERROR,
+    ValidationFindingSeverity.BLOCKER: OBJECT_VALIDATION_STATE_BLOCKED,
+}
+_VALIDATION_STATE_RANK = {
+    OBJECT_VALIDATION_STATE_CLEAR: 0,
+    OBJECT_VALIDATION_STATE_INFO: 1,
+    OBJECT_VALIDATION_STATE_WARNING: 2,
+    OBJECT_VALIDATION_STATE_ERROR: 3,
+    OBJECT_VALIDATION_STATE_BLOCKED: 4,
+}
 
 VALIDATION_STATUS_RANK: dict[DomainEnvelopeValidationStatus, int] = {
     DomainEnvelopeValidationStatus.RESOLVED: 0,
@@ -44,6 +81,161 @@ SEVERITY_RANK: dict[str, int] = {
 }
 
 
+class DomainEnvelopeMaterializationError(RuntimeError):
+    """Raised when a persisted envelope cannot be materialized for review."""
+
+
+class DomainEnvelopeRevisionUnavailableError(DomainEnvelopeMaterializationError):
+    """Raised when the requested envelope revision is not the persisted revision."""
+
+
+class DomainEnvelopeReviewRowMaterializer(Protocol):
+    """Domain-pack-owned review-row materializer contract."""
+
+    def materialize(
+        self,
+        envelope: DomainEnvelope,
+        *,
+        envelope_revision: int,
+    ) -> list[DomainEnvelopeReviewRow]:
+        """Return review rows regenerated from the supplied envelope revision."""
+
+
+@dataclass(frozen=True)
+class DomainPackMetadataReviewRowMaterializer:
+    """Metadata-driven materializer that keeps provider mappings in domain packs."""
+
+    metadata: DomainPackMetadata
+
+    def materialize(
+        self,
+        envelope: DomainEnvelope,
+        *,
+        envelope_revision: int,
+    ) -> list[DomainEnvelopeReviewRow]:
+        """Project one review row per non-metadata-only envelope object."""
+
+        if envelope.domain_pack_id != self.metadata.pack_id:
+            raise DomainEnvelopeMaterializationError(
+                "Envelope domain_pack_id does not match materializer metadata: "
+                f"{envelope.domain_pack_id!r} != {self.metadata.pack_id!r}"
+            )
+        if envelope_revision < 1:
+            raise DomainEnvelopeMaterializationError(
+                "envelope_revision must be greater than zero"
+            )
+
+        object_definitions = {
+            definition.object_type: definition
+            for definition in self.metadata.object_definitions
+        }
+        validation_state_by_object = _validation_state_by_object(envelope)
+        rows: list[DomainEnvelopeReviewRow] = []
+
+        for object_index, domain_object in enumerate(envelope.objects):
+            object_definition = object_definitions.get(domain_object.object_type)
+            object_id = stable_object_id(domain_object)
+            object_role = _object_role(
+                domain_object,
+                object_definition,
+                object_role_key=_object_role_key(self.metadata),
+            )
+            if object_role == "metadata_only":
+                continue
+
+            display_config = _workspace_display_config(domain_object, object_definition)
+            summary_fields = _summary_fields(
+                domain_object,
+                object_definition=object_definition,
+                display_config=display_config,
+            )
+            display_label = _display_label(
+                domain_object,
+                summary_fields=summary_fields,
+                display_config=display_config,
+            )
+            secondary_label = _secondary_label(
+                domain_object,
+                summary_fields=summary_fields,
+                display_config=display_config,
+            )
+
+            rows.append(
+                DomainEnvelopeReviewRow(
+                    envelope_id=envelope.envelope_id,
+                    object_id=object_id,
+                    envelope_revision=envelope_revision,
+                    domain_pack_id=envelope.domain_pack_id,
+                    domain_pack_version=envelope.domain_pack_version,
+                    object_type=domain_object.object_type,
+                    object_role=object_role,
+                    status=domain_object.status.value,
+                    validation_state=validation_state_by_object[object_id],
+                    projection_type=_projection_type(display_config),
+                    projection_key=_projection_key(display_config, object_id=object_id),
+                    display_label=display_label,
+                    secondary_label=secondary_label,
+                    summary_fields=summary_fields,
+                    schema_provider=(
+                        domain_object.schema_ref.provider
+                        if domain_object.schema_ref is not None
+                        else None
+                    ),
+                    schema_ref=(
+                        domain_object.schema_ref.model_dump(mode="json")
+                        if domain_object.schema_ref is not None
+                        else {}
+                    ),
+                    object_model_ref=_object_model_ref(domain_object, object_definition),
+                    model_field_ref=_model_field_ref(domain_object, object_definition),
+                    metadata={
+                        "semantic_source": "domain_envelope.objects",
+                        "materializer": type(self).__name__,
+                        "object_index": object_index,
+                    },
+                )
+            )
+
+        return rows
+
+
+def materialize_persisted_envelope_review_rows(
+    db: Session,
+    envelope_id: str,
+    *,
+    revision: int | None = None,
+    materializer: DomainEnvelopeReviewRowMaterializer | None = None,
+) -> DomainEnvelopeReviewRowsResponse:
+    """Regenerate review rows from the currently persisted envelope JSON."""
+
+    normalized_envelope_id = _required_string(envelope_id, field_name="envelope_id")
+    envelope_row = db.get(DomainEnvelopeModel, normalized_envelope_id)
+    if envelope_row is None:
+        raise DomainEnvelopeMaterializationError(
+            f"Domain envelope {normalized_envelope_id} was not found"
+        )
+    if revision is not None and envelope_row.revision != revision:
+        raise DomainEnvelopeRevisionUnavailableError(
+            f"Domain envelope {normalized_envelope_id} is at revision "
+            f"{envelope_row.revision}, not requested revision {revision}"
+        )
+
+    envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    resolved_materializer = materializer or _registered_materializer_for(
+        envelope.domain_pack_id
+    )
+    rows = resolved_materializer.materialize(
+        envelope,
+        envelope_revision=envelope_row.revision,
+    )
+    return DomainEnvelopeReviewRowsResponse(
+        envelope_id=envelope.envelope_id,
+        envelope_revision=envelope_row.revision,
+        row_count=len(rows),
+        rows=rows,
+    )
+
+
 def project_evidence_anchor_projections(
     envelope: DomainEnvelope,
     *,
@@ -59,8 +251,8 @@ def project_evidence_anchor_projections(
     projections: list[DomainEnvelopeEvidenceAnchorProjection] = []
 
     for domain_object in envelope.objects:
-        stable_object_id = _stable_object_id(domain_object)
-        if object_id is not None and stable_object_id != object_id:
+        domain_object_id = stable_object_id(domain_object)
+        if object_id is not None and domain_object_id != object_id:
             continue
 
         seen_projection_keys: set[tuple[str, str | None]] = set()
@@ -110,7 +302,7 @@ def project_validation_summary_projections(
 
     object_id_by_ref = _object_id_by_ref(envelope)
     object_type_by_id = {
-        _stable_object_id(domain_object): domain_object.object_type
+        stable_object_id(domain_object): domain_object.object_type
         for domain_object in envelope.objects
     }
     grouped: dict[
@@ -131,7 +323,9 @@ def project_validation_summary_projections(
             object_type=object_type_by_id.get(target_object_id or ""),
             field_path=field_path,
         )
-        grouped.setdefault((target_object_id, field_path), []).append(finding_projection)
+        grouped.setdefault((target_object_id, field_path), []).append(
+            finding_projection
+        )
 
     summaries = [
         _validation_summary_projection(
@@ -152,6 +346,253 @@ def project_validation_summary_projections(
             summary.summary_id,
         ),
     )
+
+
+def stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
+    """Return the stable object identifier used by envelope projections."""
+
+    if domain_object.object_id is not None:
+        return domain_object.object_id
+    if domain_object.pending_ref_id is not None:
+        return domain_object.pending_ref_id
+    raise DomainEnvelopeMaterializationError(
+        "CuratableObjectEnvelope has neither object_id nor pending_ref_id"
+    )
+
+
+def _registered_materializer_for(domain_pack_id: str) -> DomainEnvelopeReviewRowMaterializer:
+    from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
+
+    registry = load_curation_adapter_registry()
+    materializer = registry.get_review_row_materializer_for_domain_pack(domain_pack_id)
+    if materializer is None:
+        raise DomainEnvelopeMaterializationError(
+            f"No review-row materializer is registered for domain_pack_id={domain_pack_id!r}"
+        )
+    return materializer
+
+
+def _workspace_display_config(
+    domain_object: CuratableObjectEnvelope,
+    object_definition: DomainPackObjectDefinition | None,
+) -> Mapping[str, Any]:
+    object_config = domain_object.metadata.get("workspace_display")
+    if isinstance(object_config, Mapping):
+        return object_config
+    if object_definition is None:
+        return {}
+    definition_config = object_definition.metadata.get("workspace_display")
+    return definition_config if isinstance(definition_config, Mapping) else {}
+
+
+def _summary_fields(
+    domain_object: CuratableObjectEnvelope,
+    *,
+    object_definition: DomainPackObjectDefinition | None,
+    display_config: Mapping[str, Any],
+) -> list[DomainEnvelopeReviewRowSummaryField]:
+    field_definitions = {
+        field.field_path: field
+        for field in (object_definition.fields if object_definition is not None else [])
+    }
+    configured_paths = [
+        path
+        for path in display_config.get("summary_fields", [])
+        if isinstance(path, str) and path.strip()
+    ]
+    field_paths = configured_paths or [
+        field.field_path
+        for field in (object_definition.fields if object_definition is not None else [])
+        if _payload_value(domain_object.payload, field.field_path) is not _MISSING
+    ]
+    if not field_paths:
+        field_paths = _leaf_payload_paths(domain_object.payload)
+
+    summary_fields: list[DomainEnvelopeReviewRowSummaryField] = []
+    seen: set[str] = set()
+    for field_path in field_paths:
+        if field_path in seen:
+            continue
+        value = _payload_value(domain_object.payload, field_path)
+        if value is _MISSING:
+            continue
+        seen.add(field_path)
+        field_definition = field_definitions.get(field_path)
+        summary_fields.append(
+            DomainEnvelopeReviewRowSummaryField(
+                field_path=field_path,
+                label=_field_label(field_path, field_definition),
+                value=value,
+                field_type=(
+                    field_definition.field_type.value
+                    if field_definition is not None
+                    else _value_field_type(value)
+                ),
+                metadata=(
+                    dict(field_definition.metadata)
+                    if field_definition is not None
+                    else {}
+                ),
+            )
+        )
+
+    return summary_fields
+
+
+def _display_label(
+    domain_object: CuratableObjectEnvelope,
+    *,
+    summary_fields: Sequence[DomainEnvelopeReviewRowSummaryField],
+    display_config: Mapping[str, Any],
+) -> str:
+    configured_field = display_config.get("primary_label_field")
+    if isinstance(configured_field, str):
+        configured_value = _payload_value(domain_object.payload, configured_field)
+        if configured_value is not _MISSING:
+            normalized = _display_value(configured_value)
+            if normalized is not None:
+                return normalized
+
+    for field in summary_fields:
+        normalized = _display_value(field.value)
+        if normalized is not None:
+            return normalized
+    return stable_object_id(domain_object)
+
+
+def _secondary_label(
+    domain_object: CuratableObjectEnvelope,
+    *,
+    summary_fields: Sequence[DomainEnvelopeReviewRowSummaryField],
+    display_config: Mapping[str, Any],
+) -> str | None:
+    configured_field = display_config.get("secondary_label_field")
+    if isinstance(configured_field, str):
+        configured_value = _payload_value(domain_object.payload, configured_field)
+        if configured_value is not _MISSING:
+            return _display_value(configured_value)
+
+    if len(summary_fields) < 2:
+        return None
+    return _display_value(summary_fields[1].value)
+
+
+def _projection_type(display_config: Mapping[str, Any]) -> str:
+    value = display_config.get("projection_type")
+    return (
+        value.strip()
+        if isinstance(value, str) and value.strip()
+        else REVIEW_ROW_PROJECTION_TYPE
+    )
+
+
+def _projection_key(display_config: Mapping[str, Any], *, object_id: str) -> str:
+    value = display_config.get("projection_key")
+    return value.strip() if isinstance(value, str) and value.strip() else object_id
+
+
+def _object_role(
+    domain_object: CuratableObjectEnvelope,
+    object_definition: DomainPackObjectDefinition | None,
+    *,
+    object_role_key: str,
+) -> str | None:
+    if domain_object.object_role is not None:
+        return domain_object.object_role
+    metadata_role = domain_object.metadata.get(object_role_key)
+    if isinstance(metadata_role, str) and metadata_role.strip():
+        return metadata_role.strip()
+    if object_definition is not None:
+        definition_role = object_definition.metadata.get(object_role_key)
+        if isinstance(definition_role, str) and definition_role.strip():
+            return definition_role.strip()
+    return None
+
+
+def _object_role_key(metadata: DomainPackMetadata) -> str:
+    value = metadata.metadata.get("object_role_key")
+    return value.strip() if isinstance(value, str) and value.strip() else "object_role"
+
+
+def _object_model_ref(
+    domain_object: CuratableObjectEnvelope,
+    object_definition: DomainPackObjectDefinition | None,
+) -> dict[str, Any]:
+    refs = _selected_metadata_refs(
+        domain_object.metadata,
+        keys=("object_model_ref", "object_model_ref_json", "provider_refs"),
+    )
+    if refs or object_definition is None:
+        return refs
+    return _selected_metadata_refs(
+        object_definition.metadata,
+        keys=("object_model_ref", "object_model_ref_json", "provider_refs"),
+    )
+
+
+def _model_field_ref(
+    domain_object: CuratableObjectEnvelope,
+    object_definition: DomainPackObjectDefinition | None,
+) -> dict[str, Any]:
+    refs = _selected_metadata_refs(
+        domain_object.metadata,
+        keys=("model_field_ref", "model_field_ref_json", "field_provider_refs"),
+    )
+    if object_definition is None:
+        return refs
+
+    field_refs: dict[str, Any] = {}
+    for field in object_definition.fields:
+        provider_refs = _selected_metadata_refs(
+            field.metadata,
+            keys=("model_field_ref", "model_field_ref_json", "provider_refs"),
+        )
+        if provider_refs:
+            field_refs[field.field_path] = provider_refs
+    if field_refs:
+        refs["domain_pack_fields"] = field_refs
+    return refs
+
+
+def _selected_metadata_refs(
+    metadata: Mapping[str, Any],
+    *,
+    keys: tuple[str, ...],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key in keys:
+        value = metadata.get(key)
+        if isinstance(value, Mapping):
+            payload[key] = dict(value)
+    return payload
+
+
+def _validation_state_by_object(envelope: DomainEnvelope) -> dict[str, str]:
+    object_id_by_ref = _object_id_by_ref(envelope)
+    state_by_object = {
+        stable_object_id(domain_object): OBJECT_VALIDATION_STATE_CLEAR
+        for domain_object in envelope.objects
+    }
+    for finding in envelope.validation_findings:
+        if finding.status is not ValidationFindingStatus.OPEN:
+            continue
+        object_ref = (
+            finding.field_ref.object_ref
+            if finding.field_ref is not None
+            else finding.object_ref
+        )
+        if object_ref is None:
+            continue
+        object_id = _resolve_object_ref(object_ref, object_id_by_ref)
+        if object_id is None or object_id not in state_by_object:
+            continue
+        candidate_state = _VALIDATION_STATE_BY_SEVERITY[finding.severity]
+        if (
+            _VALIDATION_STATE_RANK[candidate_state]
+            > _VALIDATION_STATE_RANK[state_by_object[object_id]]
+        ):
+            state_by_object[object_id] = candidate_state
+    return state_by_object
 
 
 def _evidence_record_indexes(
@@ -220,8 +661,8 @@ def _evidence_record_targets_object(
     evidence_record: Mapping[str, Any],
     domain_object: CuratableObjectEnvelope,
 ) -> bool:
-    stable_object_id = _stable_object_id(domain_object)
-    if _optional_string(evidence_record.get("object_id")) == stable_object_id:
+    domain_object_id = stable_object_id(domain_object)
+    if _optional_string(evidence_record.get("object_id")) == domain_object_id:
         return True
     if (
         domain_object.pending_ref_id is not None
@@ -233,7 +674,7 @@ def _evidence_record_targets_object(
     raw_object_ref = evidence_record.get("object_ref")
     if not isinstance(raw_object_ref, Mapping):
         return False
-    if _optional_string(raw_object_ref.get("object_id")) == stable_object_id:
+    if _optional_string(raw_object_ref.get("object_id")) == domain_object_id:
         return True
     return (
         domain_object.pending_ref_id is not None
@@ -253,7 +694,7 @@ def _evidence_anchor_projection(
     document_id: str | None,
 ) -> DomainEnvelopeEvidenceAnchorProjection:
     anchor = _evidence_anchor(evidence_record)
-    stable_object_id = _stable_object_id(domain_object)
+    domain_object_id = stable_object_id(domain_object)
     source_document_id = _first_string(
         evidence_record,
         "document_id",
@@ -272,13 +713,13 @@ def _evidence_anchor_projection(
             "evidence",
             envelope.envelope_id,
             envelope_revision,
-            stable_object_id,
+            domain_object_id,
             field_path,
             evidence_record_id,
         ),
         evidence_record_id=evidence_record_id,
         envelope_id=envelope.envelope_id,
-        object_id=stable_object_id,
+        object_id=domain_object_id,
         object_type=domain_object.object_type,
         field_path=field_path,
         envelope_revision=envelope_revision,
@@ -447,7 +888,10 @@ def _validation_status(finding: ValidationFinding) -> DomainEnvelopeValidationSt
             return DomainEnvelopeValidationStatus.BLOCKED
         if binding_state == DomainEnvelopeValidationStatus.PLANNED.value:
             return DomainEnvelopeValidationStatus.PLANNED
-        if _optional_string(validation_metadata.get("definition_state")) == "in_development":
+        if (
+            _optional_string(validation_metadata.get("definition_state"))
+            == "in_development"
+        ):
             return DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT
 
     if _optional_string(details.get("failure_classification")) == "blocked":
@@ -513,13 +957,11 @@ def _chunk_ids(evidence_record: Mapping[str, Any]) -> list[str]:
 def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
     object_id_by_ref: dict[tuple[str, str], str] = {}
     for domain_object in envelope.objects:
-        stable_object_id = _stable_object_id(domain_object)
+        object_id = stable_object_id(domain_object)
         if domain_object.object_id is not None:
-            object_id_by_ref[("object_id", domain_object.object_id)] = stable_object_id
+            object_id_by_ref[("object_id", domain_object.object_id)] = object_id
         if domain_object.pending_ref_id is not None:
-            object_id_by_ref[("pending_ref_id", domain_object.pending_ref_id)] = (
-                stable_object_id
-            )
+            object_id_by_ref[("pending_ref_id", domain_object.pending_ref_id)] = object_id
     return object_id_by_ref
 
 
@@ -530,12 +972,84 @@ def _resolve_object_ref(
     return object_id_by_ref.get(object_ref.ref_key())
 
 
-def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
-    if domain_object.object_id is not None:
-        return domain_object.object_id
-    if domain_object.pending_ref_id is not None:
-        return domain_object.pending_ref_id
-    raise ValueError("CuratableObjectEnvelope must provide object_id or pending_ref_id")
+def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
+    try:
+        parts = parse_field_path(field_path)
+    except ValueError:
+        return _MISSING
+
+    current: Any = payload
+    for part in parts:
+        if isinstance(part, str):
+            if not isinstance(current, Mapping) or part not in current:
+                return _MISSING
+            current = current[part]
+            continue
+        if not isinstance(current, Sequence) or isinstance(
+            current, (str, bytes, bytearray)
+        ):
+            return _MISSING
+        if part >= len(current):
+            return _MISSING
+        current = current[part]
+    return current
+
+
+def _leaf_payload_paths(payload: Any, *, prefix: str = "") -> list[str]:
+    if isinstance(payload, Mapping):
+        paths: list[str] = []
+        for key, value in payload.items():
+            if not isinstance(key, str):
+                continue
+            field_key = f"{prefix}.{key}" if prefix else key
+            paths.extend(_leaf_payload_paths(value, prefix=field_key))
+        return paths
+    if isinstance(payload, list):
+        paths = []
+        for index, value in enumerate(payload):
+            if not prefix:
+                continue
+            paths.extend(_leaf_payload_paths(value, prefix=f"{prefix}[{index}]"))
+        return paths
+    return [prefix] if prefix else []
+
+
+def _field_label(
+    field_path: str,
+    field_definition: DomainPackFieldDefinition | None,
+) -> str:
+    if field_definition is not None and field_definition.display_name:
+        return field_definition.display_name
+    segments = field_path.replace("[", ".").replace("]", "").split(".")
+    normalized = [
+        segment.replace("_", " ").strip().title()
+        for segment in segments
+        if segment
+    ]
+    return " / ".join(normalized) if normalized else field_path
+
+
+def _value_field_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, Mapping):
+        return "object"
+    return "any"
+
+
+def _display_value(value: Any) -> str | None:
+    if value is None or isinstance(value, (dict, list)):
+        return None
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def _highest_status(
@@ -579,6 +1093,19 @@ def _optional_string(value: Any) -> str | None:
     return normalized or None
 
 
+def _required_string(value: Any, *, field_name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise DomainEnvelopeMaterializationError(
+            f"{field_name} must be a non-empty string"
+        )
+    normalized = value.strip()
+    if normalized != value:
+        raise DomainEnvelopeMaterializationError(
+            f"{field_name} must not include leading or trailing whitespace"
+        )
+    return normalized
+
+
 def _unique_strings(values: Any) -> list[str]:
     if isinstance(values, str):
         iterable: Sequence[Any] = [values]
@@ -607,6 +1134,13 @@ def _page_number(value: Any) -> int | None:
 
 
 __all__ = [
+    "DomainEnvelopeMaterializationError",
+    "DomainEnvelopeRevisionUnavailableError",
+    "DomainEnvelopeReviewRowMaterializer",
+    "DomainPackMetadataReviewRowMaterializer",
+    "REVIEW_ROW_PROJECTION_TYPE",
+    "materialize_persisted_envelope_review_rows",
     "project_evidence_anchor_projections",
     "project_validation_summary_projections",
+    "stable_object_id",
 ]

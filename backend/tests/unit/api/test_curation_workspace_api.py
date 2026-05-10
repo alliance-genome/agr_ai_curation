@@ -30,6 +30,7 @@ from src.schemas.curation_workspace import (
     CurationSubmissionExecuteRequest,
     CurationSubmissionRetryRequest,
     CurationSubmissionPreviewRequest,
+    DomainEnvelopeReviewRowsResponse,
     EvidenceAnchor,
     EvidenceAnchorKind,
     EvidenceLocatorQuality,
@@ -110,6 +111,37 @@ async def test_get_chat_prep_preview_maps_value_error_to_sanitized_http_400(monk
     assert exc.value.detail == "Invalid curation prep preview request"
     assert "No candidate annotations" not in str(exc.value.detail)
     assert "No candidate annotations" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_get_domain_envelope_review_rows_delegates_to_materializer(monkeypatch):
+    monkeypatch.setattr(module, "set_global_user_from_cognito", lambda _db, _user: None)
+    expected = DomainEnvelopeReviewRowsResponse(
+        envelope_id="env-1",
+        envelope_revision=2,
+        row_count=0,
+        rows=[],
+    )
+    captured: dict[str, object] = {}
+
+    def _materialize(db, envelope_id, *, revision=None):
+        captured["db"] = db
+        captured["envelope_id"] = envelope_id
+        captured["revision"] = revision
+        return expected
+
+    monkeypatch.setattr(module, "materialize_persisted_envelope_review_rows", _materialize)
+
+    response = await module.get_domain_envelope_review_rows(
+        "env-1",
+        revision=2,
+        user={"sub": "user-1"},
+        db=object(),
+    )
+
+    assert response is expected
+    assert captured["envelope_id"] == "env-1"
+    assert captured["revision"] == 2
 
 
 @pytest.mark.asyncio

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 class StructuredPayloadCandidateNormalizer:
-    """Preserve adapter-owned payload structure without relying on a core fallback path."""
+    """Normalize legacy structured prep candidates outside domain-envelope review flows."""
 
     def normalize(
         self,
@@ -166,4 +166,3 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         ordered.append(value)
     return ordered
-

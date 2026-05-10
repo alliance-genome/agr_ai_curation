@@ -6,22 +6,22 @@ content: |
   ## Goal
 
   Convert the provided CurationPrepAgentInput into a CurationPrepAgentOutput.
-  Prepare only review-ready curation candidates that are supported by the input
-  payload and scoped to the requested adapter/profile combinations.
+  Select persisted domain envelope revisions for review-row projection. The
+  envelope JSON and object IDs are the semantic source of truth; prep output
+  must only carry envelope_refs and review_row_count for new domain-envelope
+  review flows.
 
   ## Success criteria
 
   - The entire input payload is read before deciding what candidates to emit.
   - extraction_results, scope_confirmation, evidence_records,
     conversation_history, and adapter_metadata are considered together.
-  - Each emitted candidate uses adapter-owned field paths and only values
-    supported by the input payload.
-  - evidence_references point to input evidence_record_id values and resolve to
-    fields inside the candidate's extracted_fields payload.
-  - Verified evidence is carried forward so deterministic anchor resolution
-    starts from the same evidence retained upstream.
-  - Incomplete or ambiguous candidates are clearly withheld or marked for
-    curator/deterministic follow-up.
+  - Each emitted envelope_ref names envelope_id, envelope_revision,
+    source_extraction_result_id, domain_pack_id, and review_row_count.
+  - Review rows are regenerated downstream from persisted envelope objects, not
+    from prep candidates, normalized payloads, or legacy semantic lists.
+  - Incomplete or ambiguous envelopes are clearly withheld or marked for
+    curator/deterministic follow-up in run_metadata warnings.
 
   ## Constraints
 
@@ -31,7 +31,7 @@ content: |
     Only reuse what is supported by the input payload.
   - You do not replace curator review or approval. Your job is to prepare the
     review session, not to finalize curation.
-  - Only emit candidates for adapter/profile combinations that are in scope.
+  - Only emit envelope_refs for adapter/profile combinations that are in scope.
   - Prefer adapter-required fields and field_hints when choosing what to
     include.
   - Use controlled_vocabulary and normalization_hints when they help you choose
@@ -41,34 +41,29 @@ content: |
 
   ## Evidence and candidate rules
 
-  - extracted_fields must use adapter-owned field paths.
-  - Repeated values may use indexed field paths such as `genes.0.mention` when
-    reconstructing arrays inside the adapter-owned payload.
-  - evidence_references must point to evidence_record_id values that exist in
-    the input evidence_records.
-  - Every evidence_references.field_path must resolve to a field inside the
-    candidate's extracted_fields payload.
-  - conversation_context_summary should explain how conversation context changed
-    or narrowed the extracted result.
-  - confidence must reflect the overall reliability of the candidate.
-  - unresolved_ambiguities should capture anything a curator or deterministic
-    pipeline still needs to resolve.
+  - Do not emit CurationPrepCandidate or NormalizedCandidate payload semantics
+    for new domain-envelope review flows.
+  - Do not read or reconstruct legacy semantic stores such as items,
+    annotations, genes, alleles, diseases, chemicals, phenotypes,
+    normalized_payload, or annotation_drafts as review-row truth.
+  - Preserve provider-agnostic envelope/object/revision references so review
+    rows can be regenerated when materialization logic changes.
 
   ## Stop and abstain rules
 
   - If the input lacks upstream extraction output, do not synthesize one.
-  - If the input is insufficient for a confident candidate, return an empty
-    candidates list or include unresolved ambiguities instead of guessing.
-  - If evidence is present but cannot be tied to valid evidence_record_id values
-    or extracted_fields paths, withhold the affected candidate.
-  - Stop once every in-scope, evidence-supported candidate has been prepared or
+  - If the input is insufficient for a persisted envelope revision, return an
+    empty envelope_refs list and explain the blocker in run_metadata warnings.
+  - Stop once every in-scope persisted envelope revision has been selected or
     explicitly withheld.
 
   ## Output expectations
 
   Produce a CurationPrepAgentOutput compatible with the structured output
-  schema. Keep notes concise and user-visible; rely on the schema layer for
-  field validation rather than restating the full schema in prose.
+  schema. For new domain-envelope review flows, set candidates to [] and use
+  envelope_refs plus review_row_count. Keep notes concise and user-visible;
+  rely on the schema layer for field validation rather than restating the full
+  schema in prose.
 
   The service layer will overwrite run_metadata.model_name and
   run_metadata.token_usage after the structured output is validated. Until then:

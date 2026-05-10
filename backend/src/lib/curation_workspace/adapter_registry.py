@@ -21,6 +21,8 @@ class RegisteredCurationAdapter:
     adapter_key: str
     candidate_normalizer: Any
     export_adapter: Any | None = None
+    domain_pack: Any | None = None
+    review_row_materializer: Any | None = None
 
 
 class CurationAdapterRegistry:
@@ -30,6 +32,9 @@ class CurationAdapterRegistry:
         self._candidate_normalizers: dict[str, Any] = {}
         self._export_adapters: dict[str, Any] = {}
         self._prep_item_converters: dict[tuple[str, str], Any] = {}
+        self._domain_packs: dict[str, Any] = {}
+        self._review_row_materializers: dict[str, Any] = {}
+        self._review_row_materializers_by_domain_pack: dict[str, Any] = {}
 
     def register_adapter(
         self,
@@ -37,6 +42,8 @@ class CurationAdapterRegistry:
         adapter_key: str,
         candidate_normalizer: Any,
         export_adapter: Any | None = None,
+        domain_pack: Any | None = None,
+        review_row_materializer: Any | None = None,
     ) -> None:
         normalized_key = str(adapter_key).strip()
         if not normalized_key:
@@ -52,6 +59,40 @@ class CurationAdapterRegistry:
             if existing_export_adapter is not None and existing_export_adapter is not export_adapter:
                 raise ValueError(f"Curation export adapter '{normalized_key}' is already registered")
             self._export_adapters[normalized_key] = export_adapter
+
+        if domain_pack is not None:
+            existing_domain_pack = self._domain_packs.get(normalized_key)
+            if existing_domain_pack is not None and existing_domain_pack is not domain_pack:
+                raise ValueError(f"Curation domain pack for '{normalized_key}' is already registered")
+            self._domain_packs[normalized_key] = domain_pack
+
+        if review_row_materializer is not None:
+            existing_materializer = self._review_row_materializers.get(normalized_key)
+            if (
+                existing_materializer is not None
+                and existing_materializer is not review_row_materializer
+            ):
+                raise ValueError(
+                    f"Curation review-row materializer for '{normalized_key}' is already registered"
+                )
+            self._review_row_materializers[normalized_key] = review_row_materializer
+
+            domain_pack_id = _domain_pack_id(domain_pack)
+            if domain_pack_id is not None:
+                existing_domain_materializer = (
+                    self._review_row_materializers_by_domain_pack.get(domain_pack_id)
+                )
+                if (
+                    existing_domain_materializer is not None
+                    and existing_domain_materializer is not review_row_materializer
+                ):
+                    raise ValueError(
+                        "Curation review-row materializer for domain pack "
+                        f"'{domain_pack_id}' is already registered"
+                    )
+                self._review_row_materializers_by_domain_pack[domain_pack_id] = (
+                    review_row_materializer
+                )
 
     def register_prep_item_converter(
         self,
@@ -93,6 +134,15 @@ class CurationAdapterRegistry:
     def candidate_normalizers(self) -> dict[str, Any]:
         return dict(self._candidate_normalizers)
 
+    def get_domain_pack(self, adapter_key: str) -> Any | None:
+        return self._domain_packs.get(str(adapter_key).strip())
+
+    def get_review_row_materializer(self, adapter_key: str) -> Any | None:
+        return self._review_row_materializers.get(str(adapter_key).strip())
+
+    def get_review_row_materializer_for_domain_pack(self, domain_pack_id: str) -> Any | None:
+        return self._review_row_materializers_by_domain_pack.get(str(domain_pack_id).strip())
+
     def get_prep_item_converter(self, *, adapter_key: str, agent_key: str) -> Any | None:
         return self._prep_item_converters.get(
             (str(adapter_key).strip(), str(agent_key).strip())
@@ -106,6 +156,19 @@ class CurationAdapterRegistry:
 
     def adapter_keys(self) -> tuple[str, ...]:
         return tuple(sorted(self._candidate_normalizers))
+
+
+def _domain_pack_id(domain_pack: Any | None) -> str | None:
+    if domain_pack is None:
+        return None
+    pack_id = getattr(domain_pack, "pack_id", None)
+    if isinstance(pack_id, str) and pack_id.strip():
+        return pack_id.strip()
+    metadata = getattr(domain_pack, "metadata", None)
+    metadata_pack_id = getattr(metadata, "pack_id", None)
+    if isinstance(metadata_pack_id, str) and metadata_pack_id.strip():
+        return metadata_pack_id.strip()
+    return None
 
 
 def build_curation_adapter_registry() -> CurationAdapterRegistry:
