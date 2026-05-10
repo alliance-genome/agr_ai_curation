@@ -49,14 +49,6 @@ _LAZY_IMPORTS: dict[str, tuple[str, str]] = {
         "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
     ),
     "AsyncioPipelineTaskScheduler": (".pipeline", "AsyncioPipelineTaskScheduler"),
-    "DeterministicStructuralValidationService": (
-        ".pipeline",
-        "DeterministicStructuralValidationService",
-    ),
-    "PassthroughEvidenceAnchorResolver": (
-        ".pipeline",
-        "PassthroughEvidenceAnchorResolver",
-    ),
     "PipelineExecutionMode": (".pipeline", "PipelineExecutionMode"),
     "PipelineRunStatus": (".pipeline", "PipelineRunStatus"),
     "PostCurationPipelineDependencies": (
@@ -102,8 +94,6 @@ __all__ = [
     "CurationSavedView",
     "CurationSubmissionRecord",
     "CurationValidationSnapshot",
-    "DeterministicStructuralValidationService",
-    "PassthroughEvidenceAnchorResolver",
     "PipelineExecutionMode",
     "PipelineRunStatus",
     "PostCurationPipelineDependencies",

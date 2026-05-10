@@ -39,7 +39,6 @@ from src.schemas.curation_prep import (
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
-    CurationEvidenceSource,
     CurationExtractionSourceKind,
     CurationSessionStatus,
     CurationValidationCounts,
@@ -203,115 +202,6 @@ class PipelineTaskScheduler(Protocol):
 
     def schedule(self, task: Callable[[], None], *, task_name: str) -> str | None:
         """Schedule a synchronous task to run outside the request path."""
-
-
-class PassthroughEvidenceAnchorResolver:
-    """Temporary evidence resolver that preserves prep anchors unchanged."""
-
-    def resolve(
-        self,
-        candidate: CurationPrepCandidate,
-        *,
-        normalized_candidate: NormalizedCandidate,
-        context: EvidenceResolutionContext,
-    ) -> list[PreparedEvidenceRecordInput]:
-        primary_fields: set[str] = set()
-        resolved_records: list[PreparedEvidenceRecordInput] = []
-
-        for evidence_record in candidate.evidence_records:
-            field_keys = list(evidence_record.field_paths)
-            field_group_keys = _field_group_keys(field_keys)
-            resolved_records.append(
-                PreparedEvidenceRecordInput(
-                    source=CurationEvidenceSource.EXTRACTED,
-                    field_keys=field_keys,
-                    field_group_keys=field_group_keys,
-                    is_primary=(
-                        not field_keys
-                        or any(field_key not in primary_fields for field_key in field_keys)
-                    ),
-                    anchor=evidence_record.anchor.model_dump(mode="json"),
-                    warnings=[],
-                )
-            )
-            primary_fields.update(field_keys)
-
-        return resolved_records
-
-
-class DeterministicStructuralValidationService:
-    """Immediate structural validation until adapter validators ship downstream."""
-
-    def validate(
-        self,
-        normalized_candidates: Sequence[NormalizedCandidate],
-        *,
-        context: BatchValidationContext,
-    ) -> BatchValidationOutcome:
-        session_counts = CurationValidationCounts()
-        session_warnings = [
-            "Deterministic structural validation completed; downstream adapter validation is pending."
-        ]
-        candidate_snapshots: list[PreparedValidationSnapshotInput] = []
-
-        for normalized_candidate in normalized_candidates:
-            candidate_counts = CurationValidationCounts()
-            candidate_warnings: list[str] = []
-            field_results: dict[str, FieldValidationResult] = {}
-
-            for draft_field in normalized_candidate.draft_fields:
-                field_status, field_warnings = _field_validation_status(draft_field.value)
-                validation_result = FieldValidationResult(
-                    status=field_status,
-                    resolver="deterministic_post_agent_pipeline",
-                    warnings=field_warnings,
-                )
-                field_results[draft_field.field_key] = validation_result
-                _increment_validation_count(candidate_counts, field_status)
-                _increment_validation_count(session_counts, field_status)
-                candidate_warnings.extend(field_warnings)
-
-            candidate_summary = CurationValidationSummary(
-                state=CurationValidationSnapshotState.COMPLETED,
-                counts=candidate_counts,
-                last_validated_at=context.validated_at,
-                warnings=_dedupe(candidate_warnings),
-            )
-            candidate_snapshots.append(
-                PreparedValidationSnapshotInput(
-                    scope=CurationValidationScope.CANDIDATE,
-                    adapter_key=normalized_candidate.prep_candidate.adapter_key,
-                    state=CurationValidationSnapshotState.COMPLETED,
-                    field_results=field_results,
-                    summary=candidate_summary,
-                    warnings=_dedupe(candidate_warnings),
-                    requested_at=context.validated_at,
-                    completed_at=context.validated_at,
-                )
-            )
-            session_warnings.extend(candidate_warnings)
-
-        session_summary = CurationValidationSummary(
-            state=CurationValidationSnapshotState.COMPLETED,
-            counts=session_counts,
-            last_validated_at=context.validated_at,
-            warnings=_dedupe(session_warnings),
-        )
-        session_snapshot = PreparedValidationSnapshotInput(
-            scope=CurationValidationScope.SESSION,
-            adapter_key=context.adapter_key,
-            state=CurationValidationSnapshotState.COMPLETED,
-            field_results={},
-            summary=session_summary,
-            warnings=_dedupe(session_warnings),
-            requested_at=context.validated_at,
-            completed_at=context.validated_at,
-        )
-
-        return BatchValidationOutcome(
-            candidate_snapshots=candidate_snapshots,
-            session_snapshot=session_snapshot,
-        )
 
 
 class AsyncioPipelineTaskScheduler:
@@ -811,18 +701,6 @@ def _field_group_label(field_path: str | None) -> str | None:
     )
 
 
-def _field_group_keys(field_paths: Sequence[str]) -> list[str]:
-    seen: set[str] = set()
-    group_keys: list[str] = []
-    for field_path in field_paths:
-        group_key = _field_group_key(field_path)
-        if not group_key or group_key in seen:
-            continue
-        seen.add(group_key)
-        group_keys.append(group_key)
-    return group_keys
-
-
 def _field_validation_status(value: Any) -> tuple[FieldValidationStatus, list[str]]:
     return field_validation_status(value)
 
@@ -846,11 +724,9 @@ __all__ = [
     "CandidateNormalizationContext",
     "CurationCandidateNormalizer",
     "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
-    "DeterministicStructuralValidationService",
     "EvidenceAnchorResolver",
     "EvidenceResolutionContext",
     "NormalizedCandidate",
-    "PassthroughEvidenceAnchorResolver",
     "PipelineExecutionMode",
     "PipelineRunStatus",
     "PipelineTaskScheduler",
