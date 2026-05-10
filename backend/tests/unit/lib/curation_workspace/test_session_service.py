@@ -63,6 +63,7 @@ from src.schemas.curation_workspace import (
     CurationSortDirection,
     CurationSubmissionExecuteRequest,
     CurationSubmissionPreviewRequest,
+    CurationSubmissionReadinessBlocker,
     CurationSubmissionRetryRequest,
     CurationSubmissionStatus,
     CurationValidationScope,
@@ -78,6 +79,7 @@ from src.schemas.domain_envelope import (
     DomainEnvelope,
     DomainEnvelopeStatus,
     FieldRef,
+    HistoryEventKind,
     ObjectRef,
     ValidationFinding,
     ValidationFindingSeverity,
@@ -1844,6 +1846,20 @@ def test_direct_submission_preview_requires_target_when_multiple_transports_are_
         def target_keys(self):
             return (DEFAULT_JSON_BUNDLE_TARGET_KEY, "verified_downstream_target")
 
+    class StubExportAdapterRegistry:
+        def get(self, adapter_key):
+            return SimpleNamespace(
+                supported_target_keys=(
+                    DEFAULT_JSON_BUNDLE_TARGET_KEY,
+                    "verified_downstream_target",
+                )
+            )
+
+    monkeypatch.setattr(
+        submission_module,
+        "_export_adapter_registry",
+        lambda: StubExportAdapterRegistry(),
+    )
     monkeypatch.setattr(
         submission_module,
         "_submission_adapter_registry",
@@ -1864,6 +1880,36 @@ def test_direct_submission_preview_requires_target_when_multiple_transports_are_
     assert exc.value.detail == (
         "Submission target is required when multiple direct-submit transports are configured"
     )
+
+
+def test_default_direct_submission_target_requires_supported_adapter_target(monkeypatch):
+    class StubExportRegistry:
+        def get(self, adapter_key):
+            return SimpleNamespace(supported_target_keys=())
+
+    class StubSubmissionRegistry:
+        def target_keys(self):
+            return ("unowned_target",)
+
+    monkeypatch.setattr(
+        submission_module,
+        "_export_adapter_registry",
+        lambda: StubExportRegistry(),
+    )
+    monkeypatch.setattr(
+        submission_module,
+        "_submission_adapter_registry",
+        lambda: StubSubmissionRegistry(),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        submission_module._default_direct_submission_target_key(
+            adapter_key="adapter_without_targets",
+            supported_target_keys=(),
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Submission target is not configured"
 
 
 def test_submission_preview_routes_payload_generation_through_submission_adapter(
@@ -2376,6 +2422,120 @@ def test_execute_submission_rejects_domain_envelope_readiness_blockers(
     assert exc.value.detail["blockers"][0]["code"] == (
         "domain_envelope.required_field_missing"
     )
+
+
+def test_execute_submission_rejects_adapter_domain_envelope_readiness_blockers(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Catalog title",
+                "shape": {"qualifier": "present"},
+            }
+        },
+    )
+
+    class AdapterBlockerExportAdapter:
+        def domain_envelope_readiness_blockers(self, *, candidate):
+            assert candidate["payload"]["artifact"]["title"] == "Catalog title"
+            assert "normalized_payload" not in candidate
+            return (
+                CurationSubmissionReadinessBlocker(
+                    envelope_id=candidate["envelope_id"],
+                    object_id=candidate["object_id"],
+                    field_path="artifact.shape",
+                    severity="blocker",
+                    status="open",
+                    code="museum.catalog.shape_required",
+                    message="Artifact shape cannot be submitted yet.",
+                    projection_ref=candidate["projection_ref"],
+                ),
+            )
+
+    fake_registry = SimpleNamespace(
+        get=lambda adapter_key: (
+            AdapterBlockerExportAdapter()
+            if adapter_key == REFERENCE_ADAPTER_KEY
+            else None
+        )
+    )
+    monkeypatch.setattr(
+        submission_module,
+        "_export_adapter_registry",
+        lambda: fake_registry,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.execute_submission(
+            db_session,
+            seeded["session_id"],
+            CurationSubmissionExecuteRequest(
+                session_id=seeded["session_id"],
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            ),
+            actor_claims={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["message"] == (
+        "Domain-envelope readiness blockers prevent direct submission"
+    )
+    assert exc.value.detail["blockers"][0]["envelope_id"] == seeded["envelope_id"]
+    assert exc.value.detail["blockers"][0]["object_id"] == "artifact-1"
+    assert exc.value.detail["blockers"][0]["field_path"] == "artifact.shape"
+    assert exc.value.detail["blockers"][0]["code"] == "museum.catalog.shape_required"
+
+
+def test_execute_submission_records_domain_envelope_submission_history(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+    )
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+
+    history_rows = db_session.scalars(
+        select(DomainEnvelopeHistory).where(
+            DomainEnvelopeHistory.envelope_id == seeded["envelope_id"]
+        )
+    ).all()
+
+    assert response.submission.status == CurationSubmissionStatus.ACCEPTED
+    assert len(history_rows) == 1
+    history = history_rows[0]
+    assert history.event_type == HistoryEventKind.SUBMITTED
+    assert history.object_id == "artifact-1"
+    assert history.event_json["details"]["submission_id"] == (
+        response.submission.submission_id
+    )
+    assert history.event_json["details"]["status"] == "accepted"
+    assert history.event_json["details"]["target_key"] == DEFAULT_JSON_BUNDLE_TARGET_KEY
 
 
 def test_submission_export_allows_missing_required_field_with_curator_override_policy(

@@ -46,6 +46,9 @@ output:
             anatomical_structure:
               curie: EMAPA:17373
               name: metanephros
+            anatomical_structure_uberon_terms:
+              - curie: UBERON:0001008
+                name: renal system
       evidence_record_ids:
         - evidence-tmem67-metanephros-1
       metadata_refs:

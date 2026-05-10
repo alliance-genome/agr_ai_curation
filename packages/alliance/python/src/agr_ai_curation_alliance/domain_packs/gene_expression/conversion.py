@@ -251,7 +251,7 @@ def _pending_object_from_extraction_object(
         schema_ref=obj.schema_ref,
         model_ref=obj.model_ref,
         status=CuratableObjectStatus.PENDING,
-        definition_state=DefinitionState.IN_DEVELOPMENT,
+        definition_state=DefinitionState.STABLE,
         definition_notes=list(obj.definition_notes or []),
         object_refs=list(obj.object_refs),
         field_refs=list(obj.field_refs),

@@ -54,7 +54,7 @@ class SubmissionAdapterRegistry:
 
 
 def build_default_submission_adapter_registry() -> SubmissionAdapterRegistry:
-    """Build the default submission registry for workspace-backed transports."""
+    """Build the package-driven submission registry for workspace-backed transports."""
 
     from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 
