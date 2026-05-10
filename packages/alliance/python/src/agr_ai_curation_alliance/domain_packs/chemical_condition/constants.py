@@ -33,11 +33,7 @@ CHEMICAL_CONDITION_LINKML_SCHEMA_SOURCE_FILE = (
     "model/schema/phenotypeAndDiseaseAnnotation.yaml"
 )
 CHEMICAL_CONDITION_ONTOLOGY_TERM_SCHEMA_SOURCE_FILE = "model/schema/ontologyTerm.yaml"
-CHEMICAL_CONDITION_CONTROLLED_VOCABULARY_SCHEMA_SOURCE_FILE = (
-    "model/schema/controlledVocabulary.yaml"
-)
 CHEMICAL_CONDITION_REFERENCE_SCHEMA_SOURCE_FILE = "model/schema/reference.yaml"
-CHEMICAL_CONDITION_CORE_SCHEMA_SOURCE_FILE = "model/schema/core.yaml"
 
 
 def get_chemical_condition_domain_pack_metadata_path() -> Path:
@@ -52,9 +48,7 @@ def get_chemical_condition_domain_pack_metadata_path() -> Path:
 
 __all__ = [
     "CHEMICAL_CONDITION_CHEBI_FORMAT_VALIDATOR_ID",
-    "CHEMICAL_CONDITION_CONTROLLED_VOCABULARY_SCHEMA_SOURCE_FILE",
     "CHEMICAL_CONDITION_CONVERTER_ID",
-    "CHEMICAL_CONDITION_CORE_SCHEMA_SOURCE_FILE",
     "CHEMICAL_CONDITION_DOMAIN_PACK_DIR_NAME",
     "CHEMICAL_CONDITION_DOMAIN_PACK_ID",
     "CHEMICAL_CONDITION_DOMAIN_PACK_VERSION",
