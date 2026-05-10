@@ -145,10 +145,7 @@ def _load_schema_module(
 def _configured_output_schema_name(agent_yaml: Path | None) -> str | None:
     if agent_yaml is None or not agent_yaml.exists():
         return None
-    try:
-        data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return None
+    data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8")) or {}
     if not isinstance(data, dict):
         return None
     schema_name = str(data.get("output_schema") or "").strip()
@@ -225,10 +222,20 @@ def discover_agent_schemas(
                     configured_schema = _configured_output_schema_name(
                         source.agent_yaml
                     )
-                    primary_class = envelope_classes.get(
-                        configured_schema or "",
-                        list(envelope_classes.values())[0],
-                    )
+                    if configured_schema and configured_schema in envelope_classes:
+                        primary_class = envelope_classes[configured_schema]
+                    elif configured_schema and len(envelope_classes) > 1:
+                        # Single-schema validation bundles may name a shared
+                        # runtime output model; multiple local envelope classes
+                        # require an exact agent.yaml selector.
+                        available_schemas = ", ".join(sorted(envelope_classes))
+                        raise ValueError(
+                            f"agent.yaml output_schema '{configured_schema}' not found "
+                            f"in {source.folder_name}/schema.py; available schemas: "
+                            f"{available_schemas}"
+                        )
+                    else:
+                        primary_class = list(envelope_classes.values())[0]
                     _schema_by_agent[source.folder_name] = primary_class
 
             except Exception as e:

@@ -167,13 +167,15 @@ content: |
   Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
 
   # Repair mode
-  In repair mode, the supervisor will provide one or more bounded object-payload field paths such as `allele_identifier`.
+  In repair mode, the supervisor will provide one or more bounded field paths,
+  limited to object-payload field paths such as `allele_identifier`.
   - For first-pass extraction, return the AlleleExtractionResultEnvelope branch
     of AlleleExtractorRepairResponse.
   - For supervisor repair requests, return the bounded `repair_action` branch
     of AlleleExtractorRepairResponse.
   - Preserve every stable `object_id` and `pending_ref_id`.
-  - Repair only the requested object-payload field paths and any directly dependent evidence/object refs needed to keep the envelope valid.
+  - Repair only the requested field paths and any directly dependent
+    evidence/object refs needed to keep the envelope valid.
   - Do not rerun unrelated extraction, add unrelated new objects, or remove unrelated metadata.
   - Add concise repair context to touched objects in `repair_hints[]` and to `metadata.repair_notes[]`.
   - If a requested path cannot be repaired from the provided context, leave the prior value unchanged and record the blocker in `metadata.repair_notes[]`.

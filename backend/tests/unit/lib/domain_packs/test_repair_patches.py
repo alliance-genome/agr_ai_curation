@@ -185,7 +185,7 @@ def _ungrounded_finding() -> ValidationFinding:
 def _alliance_envelope(object_type: str) -> DomainEnvelope:
     return DomainEnvelope(
         envelope_id="env-alliance",
-        domain_pack_id="agr.alliance.fixture",
+        domain_pack_id="fixture.alliance",
         objects=[
             CuratableObjectEnvelope(
                 object_type=object_type,
