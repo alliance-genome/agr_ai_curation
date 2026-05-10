@@ -2496,8 +2496,6 @@ def _history_object_ref(
     domain_object: CuratableObjectEnvelope,
     object_id: str,
 ) -> ObjectRef:
-    if domain_object.object_id == object_id:
-        return ObjectRef(object_id=object_id, object_type=domain_object.object_type)
     if domain_object.pending_ref_id == object_id:
         return ObjectRef(pending_ref_id=object_id, object_type=domain_object.object_type)
     return ObjectRef(object_id=object_id, object_type=domain_object.object_type)
