@@ -277,6 +277,7 @@ def test_repo_shipped_packages_are_discoverable_and_compatible():
         ExportKind.GROUP_RULE,
         ExportKind.SCHEMA,
         ExportKind.TOOL_BINDING,
+        ExportKind.TOOL_POLICY_DEFAULTS,
     }
 
 

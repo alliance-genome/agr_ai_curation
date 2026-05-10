@@ -219,6 +219,29 @@ def _candidate_from_result(method: str, result: Dict[str, Any]) -> Dict[str, Any
     )
 
 
+def _projection_from_entity_match(
+    method: str,
+    result: Dict[str, Any],
+    *,
+    taxon_id: str,
+    projection_status: str = "resolved",
+    matched_variant: Optional[str] = None,
+) -> Dict[str, Any]:
+    return _projection_from_result(
+        method,
+        _clean_mapping(
+            {
+                "curie": result.get("entity_curie"),
+                "symbol": result.get("entity"),
+                "taxon": taxon_id,
+                "match_type": result.get("match_type"),
+                "matched_variant": matched_variant,
+            }
+        ),
+        projection_status=projection_status,
+    )
+
+
 def _is_projection_result(result: Dict[str, Any]) -> bool:
     return any(
         result.get(key) is not None
@@ -980,6 +1003,11 @@ def agr_curation_query(
                         entity_names=[gene_symbol],
                         taxon_curie=tid
                     )
+                    target_projection = (
+                        _projection_from_entity_match(method, results[0], taxon_id=tid)
+                        if len(results) == 1
+                        else None
+                    )
                     lookup_attempts.append(
                         _lookup_attempt(
                             method=method,
@@ -1001,11 +1029,20 @@ def agr_curation_query(
                                 f"the curation DB returned {len(results)} candidate(s)."
                             ),
                             candidate_count=len(results),
+                            target_projection=target_projection,
                         )
                     )
                     for result in results:
+                        curie = result.get('entity_curie')
+                        if not curie:
+                            continue
+                        detail_projection = _projection_from_entity_match(
+                            method,
+                            result,
+                            taxon_id=tid,
+                        )
                         try:
-                            gene = db.get_gene(result['entity_curie'])
+                            gene = db.get_gene(curie)
                             if gene:
                                 genes_data.append({
                                     "curie": gene.primaryExternalId,
@@ -1014,8 +1051,50 @@ def agr_curation_query(
                                     "taxon": tid,
                                     "gene_type": gene.geneType.get("name") if gene.geneType and isinstance(gene.geneType, dict) else str(gene.geneType) if gene.geneType else None,
                                 })
+                            else:
+                                lookup_attempts.append(
+                                    _lookup_attempt(
+                                        method=method,
+                                        attempted_query=_attempt_query(
+                                            method,
+                                            gene_symbol=gene_symbol,
+                                            gene_id=curie,
+                                            taxon_id=tid,
+                                            data_provider=TAXON_TO_PROVIDER.get(tid),
+                                            lookup_stage="fetch_gene_details",
+                                        ),
+                                        lookup_status=LOOKUP_STATUS_NOT_FOUND,
+                                        explanation=(
+                                            f"Exact gene symbol {gene_symbol!r} matched {curie!r} "
+                                            f"in taxon {tid}, but no resolved gene details were returned."
+                                        ),
+                                        candidate_count=1,
+                                        target_projection=detail_projection,
+                                    )
+                                )
                         except Exception as e:
-                            logger.warning('Failed to fetch gene %s: %s', result.get('entity_curie'), e)
+                            logger.warning('Failed to fetch gene %s: %s', curie, e)
+                            lookup_attempts.append(
+                                _lookup_attempt(
+                                    method=method,
+                                    attempted_query=_attempt_query(
+                                        method,
+                                        gene_symbol=gene_symbol,
+                                        gene_id=curie,
+                                        taxon_id=tid,
+                                        data_provider=TAXON_TO_PROVIDER.get(tid),
+                                        lookup_stage="fetch_gene_details",
+                                    ),
+                                    lookup_status=LOOKUP_STATUS_TRANSIENT,
+                                    explanation=(
+                                        f"Exact gene symbol {gene_symbol!r} matched {curie!r} "
+                                        f"in taxon {tid}, but fetching resolved gene details failed."
+                                    ),
+                                    candidate_count=1,
+                                    target_projection=detail_projection,
+                                    error=e,
+                                )
+                            )
                 except Exception as e:
                     logger.warning('Failed to search taxon %s: %s', tid, e)
                     lookup_attempts.append(
@@ -1565,6 +1644,16 @@ def agr_curation_query(
                             entity_names=[symbol_variant],
                             taxon_curie=tid
                         )
+                        target_projection = (
+                            _projection_from_entity_match(
+                                method,
+                                results[0],
+                                taxon_id=tid,
+                                matched_variant=symbol_variant,
+                            )
+                            if len(results) == 1
+                            else None
+                        )
                         lookup_attempts.append(
                             _lookup_attempt(
                                 method=method,
@@ -1587,11 +1676,20 @@ def agr_curation_query(
                                     f"the curation DB returned {len(results)} candidate(s)."
                                 ),
                                 candidate_count=len(results),
+                                target_projection=target_projection,
                             )
                         )
                         for result in results:
+                            curie = result.get('entity_curie')
+                            if not curie:
+                                continue
+                            detail_projection = _projection_from_entity_match(
+                                method,
+                                result,
+                                taxon_id=tid,
+                                matched_variant=symbol_variant,
+                            )
                             try:
-                                curie = result['entity_curie']
                                 if curie in seen_curies:
                                     continue  # Skip duplicates
                                 seen_curies.add(curie)
@@ -1607,8 +1705,52 @@ def agr_curation_query(
                                         "matched_variant": symbol_variant,  # Track which variant matched
                                         "fullname_attribution": _extract_fullname_attribution(fullname, tid),
                                     })
+                                else:
+                                    lookup_attempts.append(
+                                        _lookup_attempt(
+                                            method=method,
+                                            attempted_query=_attempt_query(
+                                                method,
+                                                allele_symbol=symbol_variant,
+                                                original_allele_symbol=allele_symbol,
+                                                allele_id=curie,
+                                                taxon_id=tid,
+                                                data_provider=TAXON_TO_PROVIDER.get(tid),
+                                                lookup_stage="fetch_allele_details",
+                                            ),
+                                            lookup_status=LOOKUP_STATUS_NOT_FOUND,
+                                            explanation=(
+                                                f"Exact allele symbol {symbol_variant!r} matched {curie!r} "
+                                                f"in taxon {tid}, but no resolved allele details were returned."
+                                            ),
+                                            candidate_count=1,
+                                            target_projection=detail_projection,
+                                        )
+                                    )
                             except Exception as e:
                                 logger.warning('Failed to fetch allele details: %s', e)
+                                lookup_attempts.append(
+                                    _lookup_attempt(
+                                        method=method,
+                                        attempted_query=_attempt_query(
+                                            method,
+                                            allele_symbol=symbol_variant,
+                                            original_allele_symbol=allele_symbol,
+                                            allele_id=curie,
+                                            taxon_id=tid,
+                                            data_provider=TAXON_TO_PROVIDER.get(tid),
+                                            lookup_stage="fetch_allele_details",
+                                        ),
+                                        lookup_status=LOOKUP_STATUS_TRANSIENT,
+                                        explanation=(
+                                            f"Exact allele symbol {symbol_variant!r} matched {curie!r} "
+                                            f"in taxon {tid}, but fetching resolved allele details failed."
+                                        ),
+                                        candidate_count=1,
+                                        target_projection=detail_projection,
+                                        error=e,
+                                    )
+                                )
                     except Exception as e:
                         logger.warning("Failed to search alleles in taxon %s with variant '%s': %s", tid, symbol_variant, e)
                         lookup_attempts.append(
