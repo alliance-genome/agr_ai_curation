@@ -10,14 +10,6 @@ from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
 
-from src.lib.curation_workspace.models import DomainEnvelopeModel
-from src.lib.domain_envelopes.persistence import (
-    OBJECT_VALIDATION_STATE_BLOCKED,
-    OBJECT_VALIDATION_STATE_CLEAR,
-    OBJECT_VALIDATION_STATE_ERROR,
-    OBJECT_VALIDATION_STATE_INFO,
-    OBJECT_VALIDATION_STATE_WARNING,
-)
 from src.schemas.curation_workspace import (
     DomainEnvelopeEvidenceAnchorProjection,
     DomainEnvelopeReviewRow,
@@ -49,20 +41,6 @@ from src.schemas.domain_pack_metadata import (
 
 REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
 _MISSING = object()
-
-_VALIDATION_STATE_BY_SEVERITY = {
-    ValidationFindingSeverity.INFO: OBJECT_VALIDATION_STATE_INFO,
-    ValidationFindingSeverity.WARNING: OBJECT_VALIDATION_STATE_WARNING,
-    ValidationFindingSeverity.ERROR: OBJECT_VALIDATION_STATE_ERROR,
-    ValidationFindingSeverity.BLOCKER: OBJECT_VALIDATION_STATE_BLOCKED,
-}
-_VALIDATION_STATE_RANK = {
-    OBJECT_VALIDATION_STATE_CLEAR: 0,
-    OBJECT_VALIDATION_STATE_INFO: 1,
-    OBJECT_VALIDATION_STATE_WARNING: 2,
-    OBJECT_VALIDATION_STATE_ERROR: 3,
-    OBJECT_VALIDATION_STATE_BLOCKED: 4,
-}
 
 VALIDATION_STATUS_RANK: dict[DomainEnvelopeValidationStatus, int] = {
     DomainEnvelopeValidationStatus.RESOLVED: 0,
@@ -207,6 +185,8 @@ def materialize_persisted_envelope_review_rows(
     materializer: DomainEnvelopeReviewRowMaterializer | None = None,
 ) -> DomainEnvelopeReviewRowsResponse:
     """Regenerate review rows from the currently persisted envelope JSON."""
+
+    from src.lib.curation_workspace.models import DomainEnvelopeModel
 
     normalized_envelope_id = _required_string(envelope_id, field_name="envelope_id")
     envelope_row = db.get(DomainEnvelopeModel, normalized_envelope_id)
@@ -568,6 +548,27 @@ def _selected_metadata_refs(
 
 
 def _validation_state_by_object(envelope: DomainEnvelope) -> dict[str, str]:
+    from src.lib.domain_envelopes.persistence import (
+        OBJECT_VALIDATION_STATE_BLOCKED,
+        OBJECT_VALIDATION_STATE_CLEAR,
+        OBJECT_VALIDATION_STATE_ERROR,
+        OBJECT_VALIDATION_STATE_INFO,
+        OBJECT_VALIDATION_STATE_WARNING,
+    )
+
+    validation_state_by_severity = {
+        ValidationFindingSeverity.INFO: OBJECT_VALIDATION_STATE_INFO,
+        ValidationFindingSeverity.WARNING: OBJECT_VALIDATION_STATE_WARNING,
+        ValidationFindingSeverity.ERROR: OBJECT_VALIDATION_STATE_ERROR,
+        ValidationFindingSeverity.BLOCKER: OBJECT_VALIDATION_STATE_BLOCKED,
+    }
+    validation_state_rank = {
+        OBJECT_VALIDATION_STATE_CLEAR: 0,
+        OBJECT_VALIDATION_STATE_INFO: 1,
+        OBJECT_VALIDATION_STATE_WARNING: 2,
+        OBJECT_VALIDATION_STATE_ERROR: 3,
+        OBJECT_VALIDATION_STATE_BLOCKED: 4,
+    }
     object_id_by_ref = _object_id_by_ref(envelope)
     state_by_object = {
         stable_object_id(domain_object): OBJECT_VALIDATION_STATE_CLEAR
@@ -586,10 +587,10 @@ def _validation_state_by_object(envelope: DomainEnvelope) -> dict[str, str]:
         object_id = _resolve_object_ref(object_ref, object_id_by_ref)
         if object_id is None or object_id not in state_by_object:
             continue
-        candidate_state = _VALIDATION_STATE_BY_SEVERITY[finding.severity]
+        candidate_state = validation_state_by_severity[finding.severity]
         if (
-            _VALIDATION_STATE_RANK[candidate_state]
-            > _VALIDATION_STATE_RANK[state_by_object[object_id]]
+            validation_state_rank[candidate_state]
+            > validation_state_rank[state_by_object[object_id]]
         ):
             state_by_object[object_id] = candidate_state
     return state_by_object
