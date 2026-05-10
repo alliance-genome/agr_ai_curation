@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from src.schemas.curation_workspace import SubmissionMode
 from src.schemas.domain_envelope import CuratableObjectStatus, DefinitionState
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 
@@ -29,6 +30,7 @@ from agr_ai_curation_alliance.domain_packs import (  # noqa: E402
 from agr_ai_curation_alliance.domain_packs.allele import (  # noqa: E402
     ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
     ALLELE_DOMAIN_PACK_ID,
+    AllelePaperEvidenceExportAdapter,
     VERIFIED_ALLELE_ASSOCIATION_TARGETS,
     build_allele_association_export,
     build_allele_association_submission_plan,
@@ -51,6 +53,48 @@ def _allele_pack():
     pack = registry.get_pack(ALLELE_DOMAIN_PACK_ID)
     assert pack is not None
     return pack
+
+
+def _resolved_allele_association_envelope():
+    fixture = load_evidence_fixture("tool_verified_allele_paper")
+    envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
+
+    resolved_objects = []
+    for obj in envelope.objects:
+        payload = dict(obj.payload)
+        metadata = dict(obj.metadata)
+        definition_state = obj.definition_state
+        if obj.object_type == "Allele":
+            payload["allele_id"] = 4749192
+        elif obj.object_type == "Reference":
+            payload["reference_id"] = 247320
+        elif obj.object_type == "EvidenceQuote":
+            payload["information_content_entity_id"] = 269867
+        elif obj.object_type == "AllelePaperEvidenceAssociation":
+            payload["association_id"] = 210252399
+            metadata.pop("write_behavior", None)
+            metadata.pop("export_behavior", None)
+            definition_state = DefinitionState.STABLE
+        resolved_objects.append(
+            obj.model_copy(
+                update={
+                    "payload": payload,
+                    "metadata": metadata,
+                    "definition_state": definition_state,
+                }
+            )
+        )
+    return envelope.model_copy(
+        update={"objects": resolved_objects, "validation_findings": []}
+    )
+
+
+def _stable_object_id(domain_object) -> str:
+    if domain_object.object_id is not None:
+        return domain_object.object_id
+    if domain_object.pending_ref_id is not None:
+        return domain_object.pending_ref_id
+    raise AssertionError("test object is missing object_id and pending_ref_id")
 
 
 def test_allele_pack_declares_object_roles_and_validator_bindings():
@@ -364,37 +408,7 @@ def test_allele_submission_plan_blocks_unknown_write_target_loudly():
 
 
 def test_allele_submission_plan_emits_only_verified_non_mutating_operations_when_resolved():
-    fixture = load_evidence_fixture("tool_verified_allele_paper")
-    envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
-
-    resolved_objects = []
-    for obj in envelope.objects:
-        payload = dict(obj.payload)
-        metadata = dict(obj.metadata)
-        definition_state = obj.definition_state
-        if obj.object_type == "Allele":
-            payload["allele_id"] = 4749192
-        elif obj.object_type == "Reference":
-            payload["reference_id"] = 247320
-        elif obj.object_type == "EvidenceQuote":
-            payload["information_content_entity_id"] = 269867
-        elif obj.object_type == "AllelePaperEvidenceAssociation":
-            payload["association_id"] = 210252399
-            metadata.pop("write_behavior", None)
-            metadata.pop("export_behavior", None)
-            definition_state = DefinitionState.STABLE
-        resolved_objects.append(
-            obj.model_copy(
-                update={
-                    "payload": payload,
-                    "metadata": metadata,
-                    "definition_state": definition_state,
-                }
-            )
-        )
-    resolved_envelope = envelope.model_copy(
-        update={"objects": resolved_objects, "validation_findings": []}
-    )
+    resolved_envelope = _resolved_allele_association_envelope()
 
     plan = build_allele_association_submission_plan(resolved_envelope)
 
@@ -410,6 +424,62 @@ def test_allele_submission_plan_emits_only_verified_non_mutating_operations_when
         "public.allele": False,
         "public.gene": False,
     }
+
+
+def test_allele_export_adapter_preserves_verified_operations_from_workspace_snapshot():
+    resolved_envelope = _resolved_allele_association_envelope()
+    association = next(
+        obj
+        for obj in resolved_envelope.objects
+        if obj.object_type == "AllelePaperEvidenceAssociation"
+    )
+    selected_object_id = _stable_object_id(association)
+    referenced_keys = {ref.ref_key() for ref in association.object_refs}
+    snapshot_objects = [
+        obj.model_dump(mode="json")
+        for obj in resolved_envelope.objects
+        if _stable_object_id(obj) == selected_object_id
+        or any(ref_key in referenced_keys for ref_key in obj.ref_keys())
+    ]
+    adapter = AllelePaperEvidenceExportAdapter()
+
+    payload = adapter.build_submission_payload(
+        mode=SubmissionMode.EXPORT,
+        target_key=ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+        payload_context={
+            "session_id": "session-1",
+            "candidate_ids": ["candidate-1"],
+            "candidate_count": 1,
+            "domain_envelope_candidates": [{"candidate_id": "candidate-1"}],
+            "domain_envelopes": [
+                {
+                    "envelope_id": resolved_envelope.envelope_id,
+                    "domain_pack_id": resolved_envelope.domain_pack_id,
+                    "domain_pack_version": resolved_envelope.domain_pack_version,
+                    "status": resolved_envelope.status.value,
+                    "schema_ref": (
+                        resolved_envelope.schema_ref.model_dump(mode="json")
+                        if resolved_envelope.schema_ref is not None
+                        else None
+                    ),
+                    "selected_object_ids": [selected_object_id],
+                    "objects": snapshot_objects,
+                    "validation_findings": [],
+                    "metadata": {},
+                }
+            ],
+        },
+    )
+
+    assert payload.payload_json is not None
+    plan = payload.payload_json["plans"][0]["submission_plan"]
+    assert plan["status"] == "ready"
+    assert plan["blockers"] == []
+    assert [operation["target_table"] for operation in plan["operations"]] == [
+        "public.allele_reference",
+        "public.allelegeneassociation_informationcontententity",
+        "public.allelegeneassociation_informationcontententity",
+    ]
 
 
 def test_allele_export_carries_submission_plan_and_never_base_row_mutations():

@@ -2050,6 +2050,102 @@ def test_submission_export_reads_domain_envelope_at_expected_revision(
     assert "POISONED" not in json.dumps(payload)
 
 
+def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
+    envelope = DomainEnvelope(
+        envelope_id="museum-envelope-1",
+        domain_pack_id="museum.catalog",
+        status=DomainEnvelopeStatus.VALIDATED,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="MuseumSource",
+                object_id="source-1",
+                payload={"accession_id": "S-1"},
+            ),
+            CuratableObjectEnvelope(
+                object_type="EvidenceQuote",
+                object_id="quote-1",
+                payload={"quote": "The astrolabe was catalogued."},
+            ),
+            CuratableObjectEnvelope(
+                object_type="MuseumArtifact",
+                object_id="artifact-1",
+                payload={"title": "Bronze astrolabe"},
+                object_refs=[
+                    ObjectRef(object_id="source-1", object_type="MuseumSource"),
+                ],
+                field_refs=[
+                    FieldRef(
+                        object_ref=ObjectRef(
+                            object_id="quote-1",
+                            object_type="EvidenceQuote",
+                        ),
+                        field_path="quote",
+                    )
+                ],
+            ),
+        ],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.INFO,
+                status=ValidationFindingStatus.RESOLVED,
+                code="museum.artifact.checked",
+                message="Artifact was reviewed.",
+                object_ref=ObjectRef(
+                    object_id="artifact-1",
+                    object_type="MuseumArtifact",
+                ),
+            ),
+            ValidationFinding(
+                severity=ValidationFindingSeverity.INFO,
+                status=ValidationFindingStatus.RESOLVED,
+                code="museum.source.checked",
+                message="Source was reviewed.",
+                object_ref=ObjectRef(
+                    object_id="source-1",
+                    object_type="MuseumSource",
+                ),
+            ),
+        ],
+    )
+
+    snapshot = submission_module._domain_envelope_snapshot(
+        envelope_row=SimpleNamespace(
+            revision=2,
+            schema_provider="test",
+            schema_ref_json={"schema_id": "museum.schema"},
+            object_model_ref_json={},
+            model_field_ref_json={},
+        ),
+        envelope=envelope,
+        selected_object_ids=["artifact-1"],
+    )
+
+    assert snapshot["selected_object_ids"] == ["artifact-1"]
+    assert [item["object_id"] for item in snapshot["objects"]] == [
+        "source-1",
+        "quote-1",
+        "artifact-1",
+    ]
+    assert [finding["code"] for finding in snapshot["validation_findings"]] == [
+        "museum.artifact.checked"
+    ]
+    DomainEnvelope.model_validate(
+        {
+            key: snapshot[key]
+            for key in (
+                "envelope_id",
+                "domain_pack_id",
+                "domain_pack_version",
+                "status",
+                "schema_ref",
+                "objects",
+                "validation_findings",
+                "metadata",
+            )
+        }
+    )
+
+
 def test_submission_export_reports_stale_domain_envelope_revision_blocker(
     db_session,
     tmp_path,
