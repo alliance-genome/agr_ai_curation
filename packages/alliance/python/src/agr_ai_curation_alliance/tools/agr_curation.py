@@ -154,6 +154,9 @@ def _projection_from_result(
     *,
     projection_status: str = "resolved",
 ) -> Dict[str, Any]:
+    # Lookup families return different identifier/label shapes:
+    # ontology rows use curie/name, entity rows may use primary_external_id/symbol,
+    # and provider rows use abbreviation/display_name.
     resolved_id = (
         result.get("curie")
         or result.get("primary_external_id")
