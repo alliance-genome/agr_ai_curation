@@ -4,7 +4,10 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { ThemeProvider } from '@mui/material/styles'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { CurationWorkspace } from '@/features/curation/types'
+import type {
+  CurationWorkspace,
+  DomainEnvelopeReviewRowsResponse,
+} from '@/features/curation/types'
 import theme from '@/theme'
 import CurationWorkspacePage from './CurationWorkspacePage'
 
@@ -13,6 +16,7 @@ const serviceMocks = vi.hoisted(() => ({
   createManualCurationCandidate: vi.fn(),
   deleteCurationCandidate: vi.fn(),
   fetchCurationWorkspace: vi.fn(),
+  fetchCurationWorkspaceEnvelopeReviewRows: vi.fn(),
   fetchSubmissionPreview: vi.fn(),
   dispatchPDFDocumentChanged: vi.fn(),
   renderPdfViewer: vi.fn(),
@@ -23,9 +27,28 @@ const serviceMocks = vi.hoisted(() => ({
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
+  buildCurationWorkspaceEnvelopeReviewRowsRequests: (workspace: CurationWorkspace) => {
+    const requestsByKey = new Map<string, { envelope_id: string; envelope_revision: number }>()
+    for (const candidate of workspace.candidates) {
+      const projectionRef = candidate.projection_ref
+      if (!projectionRef) {
+        continue
+      }
+      requestsByKey.set(
+        `${projectionRef.envelope_id}:${projectionRef.envelope_revision}`,
+        {
+          envelope_id: projectionRef.envelope_id,
+          envelope_revision: projectionRef.envelope_revision,
+        },
+      )
+    }
+
+    return Array.from(requestsByKey.values())
+  },
   createManualCurationCandidate: serviceMocks.createManualCurationCandidate,
   deleteCurationCandidate: serviceMocks.deleteCurationCandidate,
   fetchCurationWorkspace: serviceMocks.fetchCurationWorkspace,
+  fetchCurationWorkspaceEnvelopeReviewRows: serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows,
   fetchSubmissionPreview: serviceMocks.fetchSubmissionPreview,
   submitCurationCandidateDecision: serviceMocks.submitCurationCandidateDecision,
   updateCurationSession: serviceMocks.updateCurationSession,
@@ -308,6 +331,154 @@ function buildWorkspace(): CurationWorkspace {
   }
 }
 
+function buildEnvelopeWorkspace(): CurationWorkspace {
+  const baseWorkspace = buildWorkspace()
+  const candidate = {
+    ...baseWorkspace.candidates[1],
+    candidate_id: 'candidate-tmem67',
+    source: 'extracted' as const,
+    status: 'pending' as const,
+    display_label: 'Legacy candidate label',
+    projection_ref: {
+      envelope_id: 'tmem67-envelope',
+      object_id: 'tmem67-gene-object',
+      envelope_revision: 4,
+    },
+    draft: {
+      ...baseWorkspace.candidates[1].draft,
+      draft_id: 'draft-tmem67',
+      candidate_id: 'candidate-tmem67',
+      fields: [
+        {
+          ...baseWorkspace.candidates[1].draft.fields[0],
+          field_key: 'legacy_gene_symbol',
+          label: 'Legacy should not render',
+          value: 'LEGACY',
+          seed_value: 'LEGACY',
+        },
+      ],
+    },
+    evidence_anchors: [],
+  }
+
+  return {
+    ...baseWorkspace,
+    entity_tags: [],
+    candidates: [candidate],
+    evidence_anchor_projections: [
+      {
+        anchor_id: 'projection-anchor-1',
+        evidence_record_id: 'evidence-record-1',
+        envelope_id: 'tmem67-envelope',
+        object_id: 'tmem67-gene-object',
+        object_type: 'GeneAssertion',
+        field_path: 'gene.symbol',
+        envelope_revision: 4,
+        document_id: 'document-1',
+        quote: 'Projected evidence sentence for TMEM67.',
+        page_number: 3,
+        page_label: '3',
+        chunk_id: 'chunk-1',
+        chunk_ids: ['chunk-1'],
+        section_title: 'Results',
+        subsection_title: null,
+        figure_reference: null,
+        table_reference: null,
+        source_id: null,
+        source_title: null,
+        source_url: null,
+        anchor: {
+          anchor_kind: 'snippet',
+          locator_quality: 'exact_quote',
+          supports_decision: 'supports',
+          snippet_text: 'Projected evidence sentence for TMEM67.',
+          chunk_ids: ['chunk-1'],
+        },
+        metadata: {},
+      },
+    ],
+    validation_summary_projections: [
+      {
+        summary_id: 'validation-summary-1',
+        envelope_id: 'tmem67-envelope',
+        object_id: 'tmem67-gene-object',
+        object_type: 'GeneAssertion',
+        field_path: 'gene.symbol',
+        envelope_revision: 4,
+        status: 'unresolved',
+        highest_severity: 'warning',
+        finding_count: 1,
+        open_finding_count: 1,
+        finding_ids: ['finding-1'],
+        codes: ['fixture.warning'],
+        messages: ['Needs curator review'],
+        findings: [],
+      },
+    ],
+    active_candidate_id: 'candidate-tmem67',
+    session: {
+      ...baseWorkspace.session,
+      current_candidate_id: 'candidate-tmem67',
+      progress: {
+        total_candidates: 1,
+        reviewed_candidates: 0,
+        pending_candidates: 1,
+        accepted_candidates: 0,
+        rejected_candidates: 0,
+        manual_candidates: 0,
+      },
+    },
+  }
+}
+
+function buildEnvelopeReviewRows(): DomainEnvelopeReviewRowsResponse {
+  return {
+    envelope_id: 'tmem67-envelope',
+    envelope_revision: 4,
+    row_count: 1,
+    rows: [
+      {
+        envelope_id: 'tmem67-envelope',
+        object_id: 'tmem67-gene-object',
+        envelope_revision: 4,
+        domain_pack_id: 'fixture.alliance.gene',
+        domain_pack_version: '0.7.0',
+        object_type: 'GeneAssertion',
+        object_role: 'curatable_unit',
+        status: 'draft',
+        validation_state: 'unresolved',
+        projection_type: 'workspace_review_row',
+        projection_key: 'tmem67-gene-object',
+        display_label: 'TMEM67',
+        secondary_label: 'Gene assertion',
+        summary_fields: [
+          {
+            field_path: 'gene.symbol',
+            label: 'Symbol',
+            value: 'TMEM67',
+            field_type: 'string',
+            metadata: {},
+          },
+          {
+            field_path: 'evidence.count',
+            label: 'Evidence count',
+            value: 1,
+            field_type: 'integer',
+            metadata: {},
+          },
+        ],
+        schema_provider: 'fixture-schema',
+        schema_ref: {},
+        object_model_ref: {},
+        model_field_ref: {},
+        metadata: {
+          semantic_source: 'domain_envelope.objects',
+        },
+      },
+    ],
+  }
+}
+
 function LocationProbe() {
   const location = useLocation()
   return (
@@ -364,6 +535,7 @@ describe('CurationWorkspacePage', () => {
     serviceMocks.createManualCurationCandidate.mockReset()
     serviceMocks.deleteCurationCandidate.mockReset()
     serviceMocks.fetchCurationWorkspace.mockReset()
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockReset()
     serviceMocks.fetchSubmissionPreview.mockReset()
     serviceMocks.dispatchPDFDocumentChanged.mockReset()
     serviceMocks.renderPdfViewer.mockReset()
@@ -398,6 +570,67 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getAllByText('APOE').length).toBeGreaterThan(0)
     expect(screen.getByText('validated')).toBeInTheDocument()
     expect(screen.getByText('ambiguous')).toBeInTheDocument()
+  })
+
+  it('renders domain-envelope object rows from persisted review-row projections', async () => {
+    const workspace = buildEnvelopeWorkspace()
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
+    serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows.mockResolvedValue([
+      buildEnvelopeReviewRows(),
+    ])
+    serviceMocks.submitCurationCandidateDecision.mockResolvedValue({
+      candidate: {
+        ...workspace.candidates[0],
+        status: 'accepted',
+      },
+      session: {
+        ...workspace.session,
+        current_candidate_id: 'candidate-tmem67',
+      },
+      next_candidate_id: null,
+      action_log_entry: {
+        action_id: 'action-envelope-accept',
+        session_id: workspace.session.session_id,
+        candidate_id: 'candidate-tmem67',
+        action_type: 'candidate_accepted',
+        actor_type: 'user',
+        occurred_at: '2026-05-10T12:15:00Z',
+        changed_field_keys: [],
+        evidence_anchor_ids: [],
+        metadata: {},
+      },
+    })
+
+    renderPage('/curation/session-1')
+
+    expect(await screen.findByText('Envelope objects')).toBeInTheDocument()
+    expect(
+      screen.getByRole('region', { name: /envelope object table panel/i }),
+    ).toBeInTheDocument()
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows).toHaveBeenCalledTimes(1)
+    })
+
+    expect(screen.getAllByText('TMEM67').length).toBeGreaterThan(0)
+    expect(screen.getByText('Object tmem67-gene-object')).toBeInTheDocument()
+    expect(screen.getByText('fixture.alliance.gene@0.7.0')).toBeInTheDocument()
+    expect(screen.getByText('GeneAssertion')).toBeInTheDocument()
+    expect(screen.getByText(/workspace_review_row/)).toBeInTheDocument()
+    expect(screen.getByText('1 open / 1 findings')).toBeInTheDocument()
+    expect(screen.getByText('Projected evidence sentence for TMEM67.')).toBeInTheDocument()
+    expect(screen.queryByText('Legacy should not render')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Accept TMEM67' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        candidate_id: 'candidate-tmem67',
+        action: 'accept',
+        advance_queue: false,
+      })
+    })
   })
 
   it('renders the workspace header with document info', async () => {

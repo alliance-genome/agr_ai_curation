@@ -44,7 +44,7 @@ export default function CurationInventoryPage() {
         <Stack spacing={0.75}>
           <Typography variant="h4">Curation Inventory</Typography>
           <Typography color="text.secondary" variant="body1">
-            Browse prepared sessions, refine the queue, and open a workspace right where curation left off.
+            Browse prepared object review sessions, refine the queue, and open a workspace where curation left off.
           </Typography>
         </Stack>
 

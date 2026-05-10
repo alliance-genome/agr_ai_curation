@@ -49,6 +49,118 @@ export interface EvidenceAnchor {
   chunk_ids: string[]
 }
 
+export interface DomainEnvelopeProjectionRef {
+  envelope_id: string
+  object_id: string
+  envelope_revision: number
+}
+
+export const DOMAIN_ENVELOPE_VALIDATION_STATUSES = [
+  'unresolved',
+  'planned',
+  'blocked',
+  'under_development',
+  'resolved',
+  'waived',
+] as const
+
+export type DomainEnvelopeValidationStatus =
+  (typeof DOMAIN_ENVELOPE_VALIDATION_STATUSES)[number]
+
+export interface DomainEnvelopeEvidenceAnchorProjection {
+  anchor_id: string
+  evidence_record_id: string
+  envelope_id: string
+  object_id: string
+  object_type?: string | null
+  field_path?: string | null
+  envelope_revision: number
+  document_id?: string | null
+  quote?: string | null
+  page_number?: number | null
+  page_label?: string | null
+  chunk_id?: string | null
+  chunk_ids: string[]
+  section_title?: string | null
+  subsection_title?: string | null
+  figure_reference?: string | null
+  table_reference?: string | null
+  source_id?: string | null
+  source_title?: string | null
+  source_url?: string | null
+  anchor: EvidenceAnchor
+  metadata: Record<string, unknown>
+}
+
+export interface DomainEnvelopeValidationFindingProjection {
+  finding_id: string
+  envelope_id: string
+  object_id?: string | null
+  object_type?: string | null
+  field_path?: string | null
+  envelope_revision: number
+  severity: string
+  finding_status: string
+  summary_status: DomainEnvelopeValidationStatus
+  code?: string | null
+  message: string
+  details: Record<string, unknown>
+}
+
+export interface DomainEnvelopeValidationSummaryProjection {
+  summary_id: string
+  envelope_id: string
+  object_id?: string | null
+  object_type?: string | null
+  field_path?: string | null
+  envelope_revision: number
+  status: DomainEnvelopeValidationStatus
+  highest_severity?: string | null
+  finding_count: number
+  open_finding_count: number
+  finding_ids: string[]
+  codes: string[]
+  messages: string[]
+  findings: DomainEnvelopeValidationFindingProjection[]
+}
+
+export interface DomainEnvelopeReviewRowSummaryField {
+  field_path: string
+  label: string
+  value?: unknown | null
+  field_type?: string | null
+  metadata: Record<string, unknown>
+}
+
+export interface DomainEnvelopeReviewRow {
+  envelope_id: string
+  object_id: string
+  envelope_revision: number
+  domain_pack_id: string
+  domain_pack_version?: string | null
+  object_type: string
+  object_role?: string | null
+  status: string
+  validation_state: string
+  projection_type: string
+  projection_key: string
+  display_label?: string | null
+  secondary_label?: string | null
+  summary_fields: DomainEnvelopeReviewRowSummaryField[]
+  schema_provider?: string | null
+  schema_ref: Record<string, unknown>
+  object_model_ref: Record<string, unknown>
+  model_field_ref: Record<string, unknown>
+  metadata: Record<string, unknown>
+}
+
+export interface DomainEnvelopeReviewRowsResponse {
+  envelope_id: string
+  envelope_revision: number
+  row_count: number
+  rows: DomainEnvelopeReviewRow[]
+}
+
 export interface ValidationCandidateMatch {
   label: string
   identifier?: string | null

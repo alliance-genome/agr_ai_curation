@@ -1,4 +1,5 @@
 export {
+  DOMAIN_ENVELOPE_VALIDATION_STATUSES,
   EVIDENCE_ANCHOR_KINDS,
   EVIDENCE_LOCATOR_QUALITIES,
   EVIDENCE_SUPPORTS_DECISIONS,
@@ -7,6 +8,14 @@ export {
 } from './contracts'
 
 export type {
+  DomainEnvelopeEvidenceAnchorProjection,
+  DomainEnvelopeProjectionRef,
+  DomainEnvelopeReviewRow,
+  DomainEnvelopeReviewRowsResponse,
+  DomainEnvelopeReviewRowSummaryField,
+  DomainEnvelopeValidationFindingProjection,
+  DomainEnvelopeValidationStatus,
+  DomainEnvelopeValidationSummaryProjection,
   EvidenceAnchor,
   EvidenceAnchorKind,
   EvidenceLocatorQuality,
@@ -22,6 +31,9 @@ export type {
 } from './contracts'
 
 import type {
+  DomainEnvelopeEvidenceAnchorProjection,
+  DomainEnvelopeProjectionRef,
+  DomainEnvelopeValidationSummaryProjection,
   EvidenceAnchor,
   FieldValidationResult,
   SubmissionMode,
@@ -336,9 +348,12 @@ export interface CurationCandidate {
   secondary_label?: string | null
   conversation_summary?: string | null
   extraction_result_id?: string | null
+  projection_ref?: DomainEnvelopeProjectionRef | null
   draft: CurationDraft
   evidence_anchors: CurationEvidenceRecord[]
+  evidence_anchor_projections?: DomainEnvelopeEvidenceAnchorProjection[]
   validation?: CurationValidationSummary | null
+  validation_summary_projections?: DomainEnvelopeValidationSummaryProjection[]
   evidence_summary?: CurationEvidenceSummary | null
   created_at: string
   updated_at: string
@@ -488,6 +503,8 @@ export interface CurationWorkspace {
   session: CurationReviewSession
   entity_tags: EntityTag[]
   candidates: CurationCandidate[]
+  evidence_anchor_projections?: DomainEnvelopeEvidenceAnchorProjection[]
+  validation_summary_projections?: DomainEnvelopeValidationSummaryProjection[]
   active_candidate_id?: string | null
   queue_context?: CurationQueueContext | null
   action_log: CurationActionLogEntry[]

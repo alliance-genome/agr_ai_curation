@@ -56,7 +56,7 @@ const COLUMN_HEADERS: Array<{
   { field: 'status', label: 'Status' },
   { field: 'document_title', label: 'Paper' },
   { field: 'adapter', label: 'Adapter / Profile' },
-  { field: 'candidate_count', label: 'Candidates' },
+  { field: 'candidate_count', label: 'Objects' },
   { field: 'validation', label: 'Validation' },
   { field: 'evidence', label: 'Evidence' },
   { field: 'prepared_at', label: 'Prepared' },
@@ -125,7 +125,7 @@ function renderCuratorName(session: CurationSessionSummary): string {
   )
 }
 
-function renderCandidateSummary(session: CurationSessionSummary): string {
+function renderObjectReviewSummary(session: CurationSessionSummary): string {
   return `${session.progress.reviewed_candidates} reviewed`
 }
 
@@ -209,7 +209,7 @@ function SessionTableRow({ nested = false, onRowClick, session }: SessionTableRo
         <Stack spacing={0.35}>
           <Typography variant="body2">{session.progress.total_candidates} total</Typography>
           <Typography color="text.secondary" variant="caption">
-            {renderCandidateSummary(session)}
+            {renderObjectReviewSummary(session)}
           </Typography>
         </Stack>
       </TableCell>
@@ -436,11 +436,11 @@ export default function CurationInventoryTable({
                     <Typography variant="h6">
                       {tableIsLoading ? 'Loading inventory...' : 'No curation sessions match these filters.'}
                     </Typography>
-                    <Typography color="text.secondary" variant="body2">
-                      {hasActiveFilters
-                        ? 'Try clearing one or more filters to broaden the queue.'
-                        : 'Prepared sessions will appear here once they are ready for review.'}
-                    </Typography>
+                      <Typography color="text.secondary" variant="body2">
+                        {hasActiveFilters
+                          ? 'Try clearing one or more filters to broaden the queue.'
+                          : 'Prepared object review sessions will appear here once they are ready for review.'}
+                      </Typography>
                     {hasActiveFilters && !tableIsLoading && (
                       <Button onClick={onClearFilters} variant="outlined">
                         Clear filters

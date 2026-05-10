@@ -25,8 +25,10 @@ import {
 import { SubmissionPreviewDialog } from '@/features/curation/submission'
 import {
   autosaveCurationCandidateDraft,
+  buildCurationWorkspaceEnvelopeReviewRowsRequests,
   createManualCurationCandidate,
   deleteCurationCandidate,
+  fetchCurationWorkspaceEnvelopeReviewRows,
   fetchCurationWorkspace,
   submitCurationCandidateDecision,
   validateCurationCandidate,
@@ -42,9 +44,11 @@ import {
   useCurationWorkspaceHydration,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
 import { CurationWorkspaceRuntimeProvider } from '@/features/curation/workspace/CurationWorkspaceRuntimeProvider'
+import EnvelopeObjectReviewTable from '@/features/curation/workspace/EnvelopeObjectReviewTable'
 import WorkspaceHeader from '@/features/curation/workspace/WorkspaceHeader'
 import WorkspaceShell from '@/features/curation/workspace/WorkspaceShell'
 import WorkspaceSessionNavigation from '@/features/curation/workspace/WorkspaceSessionNavigation'
+import { buildWorkspaceEnvelopeObjectReviewRows } from '@/features/curation/workspace/envelopeObjectReviewRows'
 import {
   updateWorkspaceActiveCandidate,
 } from '@/features/curation/workspace/workspaceState'
@@ -104,6 +108,35 @@ function CurationWorkspacePageContent({
   const [submissionDialogOpen, setSubmissionDialogOpen] = useState(false)
   const [tableError, setTableError] = useState<string | null>(null)
   const entityTags = workspace.entity_tags
+  const envelopeReviewRequests = useMemo(
+    () => buildCurationWorkspaceEnvelopeReviewRowsRequests(workspace),
+    [workspace],
+  )
+  const hasEnvelopeObjectRows = envelopeReviewRequests.length > 0
+  const envelopeRowsQuery = useQuery({
+    queryKey: [
+      'curation-workspace-envelope-review-rows',
+      workspace.session.session_id,
+      envelopeReviewRequests,
+    ],
+    queryFn: () => fetchCurationWorkspaceEnvelopeReviewRows(workspace),
+    enabled: hasEnvelopeObjectRows,
+    staleTime: WORKSPACE_STALE_TIME_MS,
+  })
+  const envelopeObjectRows = useMemo(
+    () => buildWorkspaceEnvelopeObjectReviewRows({
+      candidates,
+      evidenceAnchorProjections: workspace.evidence_anchor_projections ?? [],
+      reviewRowResponses: envelopeRowsQuery.data ?? [],
+      validationSummaryProjections: workspace.validation_summary_projections ?? [],
+    }),
+    [
+      candidates,
+      envelopeRowsQuery.data,
+      workspace.evidence_anchor_projections,
+      workspace.validation_summary_projections,
+    ],
+  )
   const candidateEvidenceByTagId = useMemo(
     () =>
       candidates.reduce<Record<string, CurationCandidate['evidence_anchors']>>((index, candidate) => {
@@ -387,6 +420,7 @@ function CurationWorkspacePageContent({
       ) : null}
 
       <WorkspaceShell
+        reviewTableLabel={hasEnvelopeObjectRows ? 'Envelope object table panel' : undefined}
         headerSlot={(
           <WorkspaceHeader
             navigationSlot={(
@@ -410,18 +444,35 @@ function CurationWorkspacePageContent({
           />
         )}
         entityTableSlot={(
-          <EntityTagTable
-            tags={entityTags}
-            candidateEvidenceByTagId={candidateEvidenceByTagId}
-            selectedTagId={activeCandidateId}
-            onSelectTag={handleSelectTag}
-            onAcceptTag={handleAcceptTag}
-            onRejectTag={handleRejectTag}
-            onDeleteTag={handleDeleteTag}
-            onAcceptAllValidated={handleAcceptAllValidated}
-            onSaveTag={handleSaveTag}
-            onCreateManualTag={handleCreateManualTag}
-          />
+          hasEnvelopeObjectRows ? (
+            <EnvelopeObjectReviewTable
+              errorMessage={envelopeRowsQuery.error instanceof Error
+                ? envelopeRowsQuery.error.message
+                : null}
+              isLoading={envelopeRowsQuery.isLoading || envelopeRowsQuery.isFetching}
+              onAcceptRow={handleAcceptTag}
+              onRejectRow={handleRejectTag}
+              onRetry={() => {
+                void envelopeRowsQuery.refetch()
+              }}
+              onSelectRow={handleSelectTag}
+              rows={envelopeObjectRows}
+              selectedCandidateId={activeCandidateId}
+            />
+          ) : (
+            <EntityTagTable
+              tags={entityTags}
+              candidateEvidenceByTagId={candidateEvidenceByTagId}
+              selectedTagId={activeCandidateId}
+              onSelectTag={handleSelectTag}
+              onAcceptTag={handleAcceptTag}
+              onRejectTag={handleRejectTag}
+              onDeleteTag={handleDeleteTag}
+              onAcceptAllValidated={handleAcceptAllValidated}
+              onSaveTag={handleSaveTag}
+              onCreateManualTag={handleCreateManualTag}
+            />
+          )
         )}
       />
 
