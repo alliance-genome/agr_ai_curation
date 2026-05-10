@@ -215,7 +215,10 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
         {validationAttachments.length > 0 && (
           <ValidationSummary>
             {scheduledValidationCount > 0 && (
-              <ValidationPill>{scheduledValidationCount} active validation</ValidationPill>
+              <ValidationPill>
+                {scheduledValidationCount} active validation
+                {scheduledValidationCount === 1 ? '' : 's'}
+              </ValidationPill>
             )}
             {plannedValidationCount > 0 && (
               <ValidationPill>{plannedValidationCount} planned</ValidationPill>

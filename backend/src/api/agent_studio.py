@@ -630,7 +630,6 @@ async def get_registry_metadata(
                     "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
                 ),
                 supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
-                validation_attachments=[],
             )
 
     return RegistryMetadataResponse(agents=agents)
