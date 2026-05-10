@@ -707,14 +707,8 @@ describe('CurationWorkspacePage', () => {
     ).toHaveAttribute('href', '/curation')
   })
 
-  it('passes envelope revisions and configured direct-submit target into submission previews', async () => {
+  it('passes envelope revisions into previews and submits with the preview-resolved target', async () => {
     const workspace = buildWorkspace()
-    workspace.session.adapter.metadata = {
-      submission: {
-        direct_submit_enabled: true,
-        target_key: 'review_export_bundle',
-      },
-    }
     workspace.candidates = workspace.candidates.map((candidate) => ({
       ...candidate,
       status: 'accepted',
@@ -724,10 +718,34 @@ describe('CurationWorkspacePage', () => {
         envelope_revision: 5,
       },
     }))
+    const directSubmitPreview = buildSubmissionPreviewResponse('direct_submit')
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(workspace)
     serviceMocks.fetchSubmissionPreview
       .mockResolvedValueOnce(buildSubmissionPreviewResponse('preview'))
-      .mockResolvedValueOnce(buildSubmissionPreviewResponse('direct_submit'))
+      .mockResolvedValueOnce(directSubmitPreview)
+    serviceMocks.executeCurationSubmission.mockResolvedValue({
+      submission: {
+        ...directSubmitPreview.submission,
+        status: 'accepted',
+        external_reference: 'noop:review_export_bundle:2',
+        completed_at: '2026-03-20T13:01:00Z',
+      },
+      session: {
+        ...workspace.session,
+        status: 'submitted',
+        submitted_at: '2026-03-20T13:01:00Z',
+      },
+      action_log_entry: {
+        action_id: 'action-submit-1',
+        session_id: 'session-1',
+        action_type: 'submission_executed',
+        actor_type: 'user',
+        occurred_at: '2026-03-20T13:01:00Z',
+        changed_field_keys: [],
+        evidence_anchor_ids: [],
+        metadata: {},
+      },
+    })
 
     renderPage('/curation/session-1')
 
@@ -754,8 +772,25 @@ describe('CurationWorkspacePage', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
         session_id: 'session-1',
         mode: 'direct_submit',
-        target_key: 'review_export_bundle',
         include_payload: true,
+        expected_envelope_revisions: {
+          'envelope-1': 5,
+        },
+      })
+    })
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Submit' })).toBeEnabled()
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.executeCurationSubmission).toHaveBeenCalledWith({
+        session_id: 'session-1',
+        target_key: 'review_export_bundle',
+        candidate_ids: ['candidate-accepted', 'candidate-pending'],
+        mode: 'direct_submit',
         expected_envelope_revisions: {
           'envelope-1': 5,
         },

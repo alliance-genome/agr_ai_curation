@@ -322,7 +322,7 @@ describe('SubmissionPreviewDialog', () => {
     expect(global.URL.revokeObjectURL).toHaveBeenCalledWith('blob:submission-preview')
   })
 
-  it('gates submit mode when no candidates are ready and no transport is available', async () => {
+  it('gates submit mode when no candidates are ready', async () => {
     const user = userEvent.setup()
 
     serviceMocks.fetchSubmissionPreview
@@ -351,7 +351,6 @@ describe('SubmissionPreviewDialog', () => {
       })
     })
 
-    expect(screen.getByText('No submission transport is configured for this adapter yet.')).toBeInTheDocument()
     expect(screen.getByText(/Session validation summary: 1 invalid/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
   })
@@ -431,7 +430,6 @@ describe('SubmissionPreviewDialog', () => {
       .mockResolvedValueOnce(submitResponse)
 
     renderDialog({
-      directSubmitTargetKey: 'review_export_bundle',
       onSubmit,
     })
 
@@ -445,7 +443,6 @@ describe('SubmissionPreviewDialog', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
         session_id: 'session-1',
         mode: 'direct_submit',
-        target_key: 'review_export_bundle',
         include_payload: true,
       })
     })
@@ -457,7 +454,7 @@ describe('SubmissionPreviewDialog', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
-  it('allows direct submit when every object is ready for the configured target', async () => {
+  it('allows direct submit when every object is ready for the preview-resolved target', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn()
     const submitResponse = buildResponse({
@@ -471,7 +468,6 @@ describe('SubmissionPreviewDialog', () => {
       .mockResolvedValueOnce(submitResponse)
 
     renderDialog({
-      directSubmitTargetKey: 'review_export_bundle',
       expectedEnvelopeRevisions: {
         'envelope-1': 3,
       },
@@ -488,7 +484,6 @@ describe('SubmissionPreviewDialog', () => {
       expect(serviceMocks.fetchSubmissionPreview).toHaveBeenLastCalledWith({
         session_id: 'session-1',
         mode: 'direct_submit',
-        target_key: 'review_export_bundle',
         include_payload: true,
         expected_envelope_revisions: {
           'envelope-1': 3,

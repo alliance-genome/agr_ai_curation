@@ -28,7 +28,6 @@ import type {
   CurationSubmissionReadinessBlocker,
   CurationSubmissionPreviewResponse,
   SubmissionMode,
-  SubmissionTargetKey,
 } from '@/features/curation/types'
 
 const EMPTY_EXPECTED_ENVELOPE_REVISIONS: Record<string, number> = {}
@@ -64,9 +63,7 @@ interface SubmissionPreviewDialogProps {
   candidates: CurationCandidate[]
   onClose: () => void
   onSubmit?: (response: CurationSubmissionPreviewResponse) => Promise<void> | void
-  directSubmitTargetKey?: SubmissionTargetKey | null
   expectedEnvelopeRevisions?: Record<string, number>
-  submitAvailable?: boolean
 }
 
 function countBlockingValidationIssues(
@@ -287,11 +284,9 @@ export default function SubmissionPreviewDialog({
   open,
   session,
   candidates,
-  directSubmitTargetKey = null,
   expectedEnvelopeRevisions = EMPTY_EXPECTED_ENVELOPE_REVISIONS,
   onClose,
   onSubmit,
-  submitAvailable = false,
 }: SubmissionPreviewDialogProps) {
   const [mode, setMode] = useState<SubmissionMode>('preview')
   const [response, setResponse] = useState<CurationSubmissionPreviewResponse | null>(null)
@@ -326,9 +321,6 @@ export default function SubmissionPreviewDialog({
       session_id: session.session_id,
       mode,
       include_payload: true,
-      ...(mode === 'direct_submit' && directSubmitTargetKey
-        ? { target_key: directSubmitTargetKey }
-        : {}),
       ...(hasExpectedEnvelopeRevisions(expectedEnvelopeRevisions)
         ? { expected_envelope_revisions: expectedEnvelopeRevisions }
         : {}),
@@ -360,7 +352,6 @@ export default function SubmissionPreviewDialog({
       cancelled = true
     }
   }, [
-    directSubmitTargetKey,
     expectedEnvelopeRevisions,
     mode,
     open,
@@ -384,7 +375,8 @@ export default function SubmissionPreviewDialog({
     exportPayload
       && (exportPayload.payload_text || exportPayload.filename || exportPayload.content_type),
   )
-  const effectiveSubmitAvailable = submitAvailable || Boolean(directSubmitTargetKey)
+  const previewResolvedSubmitTarget = response?.submission.target_key ?? null
+  const hasPreviewResolvedSubmitTarget = Boolean(previewResolvedSubmitTarget)
   const canDownload = Boolean(
     mode === 'export'
       && !loading
@@ -394,7 +386,7 @@ export default function SubmissionPreviewDialog({
   )
   const canSubmit = Boolean(
     mode === 'direct_submit'
-      && effectiveSubmitAvailable
+      && hasPreviewResolvedSubmitTarget
       && onSubmit
       && response
       && readyCount > 0
@@ -502,9 +494,9 @@ export default function SubmissionPreviewDialog({
             </Alert>
           ) : null}
 
-          {mode === 'direct_submit' && !effectiveSubmitAvailable ? (
+          {mode === 'direct_submit' && !loading && response && !hasPreviewResolvedSubmitTarget ? (
             <Alert severity="warning">
-              No submission transport is configured for this adapter yet.
+              Submission target readiness is unavailable for this preview.
             </Alert>
           ) : null}
 
