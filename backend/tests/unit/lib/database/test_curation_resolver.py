@@ -211,6 +211,23 @@ def test_get_db_client_success_sets_tmp_path_and_builds_client(monkeypatch):
     assert os.environ.get("TMP_PATH")
 
 
+def test_curation_db_client_proxies_public_delegate_only():
+    class _Delegate:
+        config = "public-config"
+
+        def _create_session(self):
+            return "session"
+
+    client = CurationDbClient(_Delegate())
+
+    assert client.config == "public-config"
+    assert client.create_session() == "session"
+    with pytest.raises(AttributeError, match="_create_session"):
+        getattr(client, "_create_session")
+    with pytest.raises(AttributeError, match="_delegate"):
+        getattr(client, "_delegate")
+
+
 def test_get_db_client_returns_none_on_constructor_error(monkeypatch):
     resolver = CurationConnectionResolver()
     monkeypatch.setattr(
