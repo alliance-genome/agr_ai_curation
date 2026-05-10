@@ -258,6 +258,15 @@ def test_build_default_export_adapter_registry_exposes_reference_adapter():
     assert adapter.__class__.__module__ == (
         "src.lib.curation_workspace.export_adapters.json_bundle"
     )
+    assert registry.require("disease").__class__.__name__ == (
+        "DiseaseAnnotationExportAdapter"
+    )
+    assert registry.require("phenotype").__class__.__name__ == (
+        "PhenotypeAnnotationExportAdapter"
+    )
+    assert registry.require("chemical").__class__.__name__ == (
+        "ChemicalConditionExportAdapter"
+    )
     assert adapter.supported_target_keys == (DEFAULT_JSON_BUNDLE_TARGET_KEY,)
 
 
