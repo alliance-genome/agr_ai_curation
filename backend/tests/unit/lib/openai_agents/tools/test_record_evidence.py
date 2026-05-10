@@ -146,11 +146,15 @@ def test_build_envelope_target_fields_normalizes_target_identity_and_field_path(
         pending_ref_id="pending-1",
         object_type="  expression_assay  ",
         field_path="  gene.symbol  ",
+        validation_finding_id=" validation:symbol ",
+        repair_attempt_id=" repair-patch:1 ",
     ) == {
         "envelope_target": {
             "object_id": "expression:1",
             "object_type": "expression_assay",
             "field_path": "gene.symbol",
+            "validation_finding_id": "validation:symbol",
+            "repair_attempt_id": "repair-patch:1",
         }
     }
 

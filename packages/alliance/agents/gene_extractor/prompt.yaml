@@ -184,6 +184,25 @@ content: |
   Use `metadata.raw_mentions[]` for harvested mention strings, `metadata.exclusions[]` for rejected candidates, `metadata.ambiguities[]` for unresolved candidates, `metadata.normalization_notes[]` for lookup decisions, `metadata.evidence_records[]` for verified quotes, `metadata.notes[]` for run audit notes, `metadata.repair_notes[]` for repair handoff notes, and `metadata.provenance` for non-semantic run provenance.
 
   In repair mode, do not rerun unrelated extraction. Preserve stable `pending_ref_id` or `object_id` values, preserve evidence and metadata references unless the supervisor's field-path request specifically targets them, repair only requested payload fields or metadata paths, set `repair_mode: true`, and add a bounded note under `metadata.repair_notes[]`.
+
+  If the supervisor provides `repair_action: "repair_request"`, answer with one
+  of these bounded repair outcomes:
+  - `repair_action: "extractor_patch"` with `patch_id`, `envelope_id`,
+    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
+  - Each operation must be `op: "replace"` and must include the same `object_ref`,
+    the same requested `field_path`, the current value as `expected_before`, the
+    replacement value as `after`, a short evidence-grounded `reason`, and
+    `evidence_record_ids[]` when evidence changed.
+  - When verifying new repair evidence with `record_evidence`, pass
+    `object_id` or `pending_ref_id`, `object_type`, `field_path`,
+    `validation_finding_id`, and `repair_attempt_id` so the repair target is
+    preserved in the tool result.
+  - Use `repair_action: "no_repair_possible"` when the requested field is defined
+    but available paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` when the requested object or
+    field is not fully defined for this domain pack.
+  - Never patch protected fields, stable object identifiers, schema/model refs,
+    object type, status, or unrelated payload paths.
   </domain_envelope_contract>
 
   <few_shot_examples>

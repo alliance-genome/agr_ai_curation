@@ -103,3 +103,18 @@ content: |
 
   IMPORTANT: All field values must come from Alliance API results, never from memory.
   </output>
+
+  <domain_envelope_repair_signals>
+  When the supervisor sends a validator rerun or repair-focused lookup for a
+  domain-envelope finding:
+  - Keep validator responsibility separate from extraction. Report API-grounded
+    orthology facts, `not_found`, transient service failure, or ambiguity; do not
+    propose free-form envelope edits.
+  - For a true empty ortholog result, preserve the empty result so the supervisor
+    can classify the repair as `not_found` when appropriate.
+  - If Alliance API access fails transiently after the bounded retry path, say so
+    in the response so the supervisor can classify `transient_service_failure`.
+  - If the request points at a blocked or under-development validator, do not infer
+    success; preserve that status for `blocked_validator` or `mark_under_development`.
+  - Only an extractor may return `repair_action: "extractor_patch"`.
+  </domain_envelope_repair_signals>

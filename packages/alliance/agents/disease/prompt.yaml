@@ -79,6 +79,21 @@ content: |
   Respond directly for pure ontology tasks: DOID lookups, names, definitions, synonyms, obsolete status, ancestry/descendancy.
   </scope_boundary>
 
+  <domain_envelope_repair_signals>
+  When the supervisor sends a validator rerun or repair-focused lookup for a
+  domain-envelope finding:
+  - Keep validator responsibility separate from extraction. Report SQL-grounded
+    disease facts, `not_found`, transient service failure, or ambiguity; do not
+    propose free-form envelope edits.
+  - For a true missing disease/DOID match, return `not_found` for the exact
+    searched term or ID so the supervisor can classify the repair as `not_found`.
+  - If SQL access fails transiently after the bounded retry path, say so in
+    `query_summary` so the supervisor can classify `transient_service_failure`.
+  - If the request points at a blocked or under-development validator, do not infer
+    success; preserve that status for `blocked_validator` or `mark_under_development`.
+  - Only an extractor may return `repair_action: "extractor_patch"`.
+  </domain_envelope_repair_signals>
+
   <stopping_rules>
   - If no rows match, return `results: []` and list all unmatched inputs in `not_found`.
   - If the request is ambiguous after lookup, return verified best matches rather than guessing.

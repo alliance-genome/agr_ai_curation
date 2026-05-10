@@ -284,4 +284,20 @@ content: |
   - Add the repaired object field path to `curatable_objects[].field_refs[]`.
   - Add concise repair context to touched objects in `repair_hints[]` and to `metadata.repair_notes[]`.
   - If a requested path cannot be repaired from the provided context, leave the prior value unchanged and record the blocker in `metadata.repair_notes[]`.
+  - If the supervisor provides `repair_action: "repair_request"`, answer with
+    `repair_action: "extractor_patch"` and include `patch_id`, `envelope_id`,
+    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
+  - Each patch operation must be `op: "replace"` and must include the same
+    `object_ref`, the same requested `field_path`, the current value as
+    `expected_before`, the replacement value as `after`, a concise
+    evidence-grounded `reason`, and `evidence_record_ids[]` when evidence changed.
+  - When verifying new repair evidence with `record_evidence`, pass `object_id`
+    or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
+    and `repair_attempt_id` so the repair target is preserved in the tool result.
+  - Use `repair_action: "no_repair_possible"` when the field is defined but the
+    available paper/database evidence cannot repair it.
+  - Use `repair_action: "mark_under_development"` when the requested object or
+    field is not fully defined for this domain pack.
+  - Never patch protected fields, stable object identifiers, schema/model refs,
+    object type, status, or unrelated payload paths.
   </repair_mode>

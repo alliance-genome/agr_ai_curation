@@ -161,6 +161,21 @@ content: |
   - If an optional field is not returned by the API, omit it entirely (do not include null values).
   </output_format>
 
+  <domain_envelope_repair_signals>
+  When the supervisor sends a validator rerun or repair-focused lookup for a
+  domain-envelope finding:
+  - Keep validator responsibility separate from extraction. Report API-grounded
+    chemical facts, `not_found`, transient service failure, or ambiguity; do not
+    propose free-form envelope edits.
+  - For a true missing ChEBI match, return `not_found` for the exact searched
+    term or ID so the supervisor can classify the repair as `not_found`.
+  - If API access fails transiently after the bounded retry path, say so in
+    `query_summary` so the supervisor can classify `transient_service_failure`.
+  - If the request points at a blocked or under-development validator, do not infer
+    success; preserve that status for `blocked_validator` or `mark_under_development`.
+  - Only an extractor may return `repair_action: "extractor_patch"`.
+  </domain_envelope_repair_signals>
+
   <stop_rules>
   - If no entries match a term, add the term to `not_found` and continue with remaining items.
   - If a tool call fails after one retry, stop further nested enrichment for that term and report the failure transparently.
