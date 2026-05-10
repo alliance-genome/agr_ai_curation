@@ -17,9 +17,6 @@ from src.lib.domain_envelopes.persistence import (
 )
 from src.lib.domain_packs.materialization import DomainEnvelopeMaterializationError
 from src.models.sql.database import SessionLocal
-from src.lib.curation_workspace.prep_item_conversion import (
-    normalized_optional_string,
-)
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
     CurationPrepEnvelopeRef,
@@ -571,6 +568,13 @@ def _resolve_single_value(values: Iterable[str | None]) -> str | None:
     if len(distinct_values) == 1:
         return distinct_values[0]
     return None
+
+
+def normalized_optional_string(value: Any) -> str | None:
+    if value is None or not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _unique_non_empty(values: Iterable[str | None]) -> list[str]:

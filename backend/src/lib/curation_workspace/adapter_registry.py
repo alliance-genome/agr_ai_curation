@@ -31,7 +31,6 @@ class CurationAdapterRegistry:
     def __init__(self) -> None:
         self._candidate_normalizers: dict[str, Any] = {}
         self._export_adapters: dict[str, Any] = {}
-        self._prep_item_converters: dict[tuple[str, str], Any] = {}
         self._domain_packs: dict[str, Any] = {}
         self._review_row_materializers: dict[str, Any] = {}
         self._review_row_materializers_by_domain_pack: dict[str, Any] = {}
@@ -94,31 +93,6 @@ class CurationAdapterRegistry:
                     review_row_materializer
                 )
 
-    def register_prep_item_converter(
-        self,
-        *,
-        adapter_key: str,
-        agent_key: str,
-        converter: Any,
-    ) -> None:
-        """Register a package-owned extraction-to-prep item converter."""
-
-        normalized_adapter_key = str(adapter_key).strip()
-        normalized_agent_key = str(agent_key).strip()
-        if not normalized_adapter_key:
-            raise ValueError("adapter_key must not be blank")
-        if not normalized_agent_key:
-            raise ValueError("agent_key must not be blank")
-
-        registry_key = (normalized_adapter_key, normalized_agent_key)
-        existing_converter = self._prep_item_converters.get(registry_key)
-        if existing_converter is not None and existing_converter is not converter:
-            raise ValueError(
-                "Curation prep item converter for "
-                f"'{normalized_adapter_key}'/'{normalized_agent_key}' is already registered"
-            )
-        self._prep_item_converters[registry_key] = converter
-
     def get_candidate_normalizer(self, adapter_key: str) -> Any | None:
         return self._candidate_normalizers.get(str(adapter_key).strip())
 
@@ -142,11 +116,6 @@ class CurationAdapterRegistry:
 
     def get_review_row_materializer_for_domain_pack(self, domain_pack_id: str) -> Any | None:
         return self._review_row_materializers_by_domain_pack.get(str(domain_pack_id).strip())
-
-    def get_prep_item_converter(self, *, adapter_key: str, agent_key: str) -> Any | None:
-        return self._prep_item_converters.get(
-            (str(adapter_key).strip(), str(agent_key).strip())
-        )
 
     def export_adapters(self) -> tuple[Any, ...]:
         return tuple(
