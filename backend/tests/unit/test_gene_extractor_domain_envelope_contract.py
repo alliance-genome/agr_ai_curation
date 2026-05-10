@@ -57,6 +57,10 @@ def _gene_extractor_schema():
     return schema_cls
 
 
+def _validate_gene_extractor_payload(payload: dict[str, object]):
+    return _gene_extractor_schema().model_validate(payload).root
+
+
 def _valid_gene_extractor_payload() -> dict[str, object]:
     return {
         "summary": "Retained one verified daf-16 gene mention.",
@@ -159,8 +163,7 @@ def _valid_gene_extractor_payload() -> dict[str, object]:
 
 
 def test_gene_extractor_schema_accepts_gene_mention_evidence_domain_envelope():
-    schema_cls = _gene_extractor_schema()
-    envelope = schema_cls.model_validate(_valid_gene_extractor_payload())
+    envelope = _validate_gene_extractor_payload(_valid_gene_extractor_payload())
 
     obj = envelope.curatable_objects[0]
     assert obj.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
@@ -229,7 +232,7 @@ def test_gene_extractor_schema_requires_repair_handoff_context_in_repair_mode():
     payload["metadata"]["repair_notes"] = [
         "Repaired payload.primary_external_id only; evidence and metadata refs preserved."
     ]
-    envelope = _gene_extractor_schema().model_validate(payload)
+    envelope = _validate_gene_extractor_payload(payload)
 
     assert envelope.repair_mode is True
     assert envelope.metadata.repair_notes[0].startswith("Repaired payload.primary_external_id")

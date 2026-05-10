@@ -310,9 +310,11 @@ content: |
   - `payload.phenotype_annotation_object`: the paper-supported phenotype statement or term label.
   - `payload.phenotype_annotation_subject`: subject/context payload with `resolution_state`
     set to `resolved`, `pending_entity_resolution`, or `blocked_missing_subject`.
-    Include `subject_identifier`, `subject_label`, `subject_type`, and LinkML-required
-    `taxon` when supported. If a resolved subject lacks taxon support, keep the subject
-    pending or blocked and preserve the missing context in `resolution_note` or
+    Include `subject_identifier`, `subject_label`, `subject_type`, and the
+    LinkML-required `taxon` field
+    (`payload.phenotype_annotation_subject.taxon`) when supported. If a resolved
+    subject lacks taxon support, keep the subject pending or blocked and
+    preserve the missing context in `resolution_note` or
     `metadata.ambiguities[]`.
   - `payload.phenotype_terms[0].curie` and optional `label` when a phenotype ontology term is
     grounded. If the term cannot be grounded, do not emit a curatable assertion; preserve the

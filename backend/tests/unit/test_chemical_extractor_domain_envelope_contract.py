@@ -61,6 +61,10 @@ def _chemical_extractor_schema():
     return schema_cls
 
 
+def _validate_chemical_extractor_payload(payload: dict[str, object]):
+    return _chemical_extractor_schema().model_validate(payload).root
+
+
 def _schema_ref(schema_id: str, name: str, source_file: str) -> dict[str, object]:
     commit = "1b11d0888f19eba4ca72022200bb7d96b30d4a52"
     return {
@@ -266,7 +270,7 @@ def _valid_chemical_extractor_payload() -> dict[str, object]:
 
 
 def test_chemical_extractor_schema_accepts_chemical_condition_objects():
-    envelope = _chemical_extractor_schema().model_validate(
+    envelope = _validate_chemical_extractor_payload(
         _valid_chemical_extractor_payload()
     )
 
@@ -352,7 +356,7 @@ def test_chemical_extractor_schema_requires_repair_context_in_repair_mode():
     payload["metadata"]["repair_notes"] = [
         "Supervisor requested repair of curatable_objects[3].payload.condition_chemical.curie."
     ]
-    envelope = _chemical_extractor_schema().model_validate(payload)
+    envelope = _validate_chemical_extractor_payload(payload)
 
     assert envelope.repair_mode is True
     assert envelope.curatable_objects[-1].pending_ref_id == "chemical-condition-1"

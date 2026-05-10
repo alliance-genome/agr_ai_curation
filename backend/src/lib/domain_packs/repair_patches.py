@@ -519,9 +519,11 @@ def apply_repair_patch(
             )
             continue
         if not repairable:
+            blocked_reason = repair_policy.get("blocked_reason")
+            reason_suffix = f": {blocked_reason}" if blocked_reason else ""
             errors.append(
                 f"operations[{index}].field_path '{operation.field_path}' is not "
-                "declared editable or repairable"
+                f"declared editable or repairable{reason_suffix}"
             )
             continue
 
@@ -958,32 +960,62 @@ def _field_repairability(
     field_definition: DomainPackFieldDefinition,
 ) -> tuple[bool, dict[str, Any]]:
     metadata = field_definition.metadata
+    source_of_truth = _repair_source_of_truth(metadata)
+    provider_refs = metadata.get("provider_refs")
+    provider_ref_grounded = (
+        source_of_truth is None
+        or (
+            isinstance(provider_refs, Mapping)
+            and isinstance(provider_refs.get(source_of_truth), Mapping)
+        )
+    )
     protected = _metadata_bool(metadata, "protected") or _nested_metadata_bool(
         metadata,
         "repair",
         "protected",
     )
-    repairable = (
+    declared_repairable = (
         _metadata_bool(metadata, "repairable")
         or _metadata_bool(metadata, "editable")
         or _nested_metadata_bool(metadata, "repair", "repairable")
         or _nested_metadata_bool(metadata, "repair", "editable")
         or _nested_metadata_bool(metadata, "edit", "editable")
     )
+    editable = (
+        _metadata_bool(metadata, "editable")
+        or _nested_metadata_bool(metadata, "repair", "editable")
+        or _nested_metadata_bool(metadata, "edit", "editable")
+    )
+    repairable = declared_repairable and not protected and provider_ref_grounded
     details = {
         "field_path": field_definition.field_path,
         "definition_state": field_definition.definition_state.value,
         "repairable": repairable,
-        "editable": (
-            _metadata_bool(metadata, "editable")
-            or _nested_metadata_bool(metadata, "repair", "editable")
-            or _nested_metadata_bool(metadata, "edit", "editable")
-        ),
+        "declared_repairable": declared_repairable,
+        "editable": editable,
         "protected": protected,
     }
+    if source_of_truth is not None:
+        details["source_of_truth"] = source_of_truth
+        details["provider_ref_grounded"] = provider_ref_grounded
+    if not provider_ref_grounded:
+        details["blocked_reason"] = (
+            f"metadata.provider_refs.{source_of_truth} is required when "
+            f"repair.source_of_truth is '{source_of_truth}'"
+        )
     if field_definition.definition_notes:
         details["definition_notes"] = list(field_definition.definition_notes)
-    return (repairable and not protected), details
+    return repairable, details
+
+
+def _repair_source_of_truth(metadata: Mapping[str, Any]) -> str | None:
+    nested = metadata.get("repair")
+    if isinstance(nested, Mapping) and isinstance(nested.get("source_of_truth"), str):
+        return nested["source_of_truth"]
+    source_of_truth = metadata.get("source_of_truth")
+    if isinstance(source_of_truth, str):
+        return source_of_truth
+    return None
 
 
 def _metadata_bool(metadata: Mapping[str, Any], key: str) -> bool:

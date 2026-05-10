@@ -69,6 +69,10 @@ def _disease_extractor_schema():
     return schema_cls
 
 
+def _validate_disease_extractor_payload(payload: dict[str, object]):
+    return _disease_extractor_schema().model_validate(payload).root
+
+
 def _valid_disease_extractor_payload() -> dict[str, object]:
     return yaml.safe_load(FIXTURE_PATH.read_text(encoding="utf-8"))["output"]
 
@@ -89,7 +93,7 @@ def _valid_pending_disease_envelope():
 
 
 def test_disease_extractor_schema_accepts_pending_disease_annotation_output():
-    envelope = _disease_extractor_schema().model_validate(
+    envelope = _validate_disease_extractor_payload(
         _valid_disease_extractor_payload()
     )
 
@@ -228,7 +232,7 @@ def test_disease_extractor_schema_requires_bounded_repair_field_refs():
             "field_path": "disease_annotation_object.curie",
         }
     ]
-    repaired = _disease_extractor_schema().model_validate(payload)
+    repaired = _validate_disease_extractor_payload(payload)
 
     assert repaired.repair_mode is True
     assert repaired.curatable_objects[0].field_refs[0].field_path.endswith("curie")
@@ -280,7 +284,7 @@ def test_disease_extractor_schema_allows_untouched_objects_in_repair_mode():
         }
     ]
 
-    repaired = _disease_extractor_schema().model_validate(payload)
+    repaired = _validate_disease_extractor_payload(payload)
 
     assert repaired.repair_mode is True
     assert len(repaired.curatable_objects) == 2

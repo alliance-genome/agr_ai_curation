@@ -243,10 +243,15 @@ object_definitions:
       - field_path: phenotype_terms[0].label
         field_type: string
         display_name: First phenotype term label
+        description: >-
+          Display-only ontology label retained for curator review; Alliance
+          LinkML PhenotypeTerm has no label slot.
         metadata:
           repair:
-            repairable: true
-            source_of_truth: alliance_linkml
+            protected: true
+            reason: >-
+              Display-only label is not a LinkML repair target; repair grounded
+              phenotype term fields such as phenotype_terms[0].curie.
       - field_path: single_reference
         field_type: object_ref
         display_name: Evidence reference

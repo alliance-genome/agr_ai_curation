@@ -62,6 +62,10 @@ def _phenotype_extractor_schema():
     return schema_cls
 
 
+def _validate_phenotype_extractor_payload(payload: dict[str, object]):
+    return _phenotype_extractor_schema().model_validate(payload).root
+
+
 def _schema_ref(schema_id: str, name: str, source_file: str) -> dict[str, str]:
     return {
         "schema_id": schema_id,
@@ -289,7 +293,7 @@ def _add_valid_repair_context(payload: dict[str, object]) -> None:
 
 
 def test_phenotype_extractor_schema_accepts_domain_pack_objects_and_metadata():
-    envelope = _phenotype_extractor_schema().model_validate(_valid_phenotype_payload())
+    envelope = _validate_phenotype_extractor_payload(_valid_phenotype_payload())
 
     annotation = envelope.curatable_objects[-1]
     assert annotation.object_type == PHENOTYPE_OBJECT_TYPE
@@ -359,7 +363,7 @@ def test_phenotype_extractor_schema_requires_bounded_repair_field_refs():
 
     _add_valid_repair_context(payload)
 
-    envelope = _phenotype_extractor_schema().model_validate(payload)
+    envelope = _validate_phenotype_extractor_payload(payload)
 
     assert envelope.repair_mode is True
     assert envelope.curatable_objects[-1].field_refs[0].field_path == (

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,12 @@ object_definitions:
           protected: true
       - field_path: stable_note
         field_type: string
+      - field_path: ungrounded_name
+        field_type: string
+        metadata:
+          repair:
+            repairable: true
+            source_of_truth: fixture_source
       - field_path: draft_value
         field_type: string
         definition_state: in_development
@@ -113,6 +120,13 @@ def _field_metadata(
     return field_definition.metadata
 
 
+def _repair_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    repair_metadata = metadata.get("repair")
+    if isinstance(repair_metadata, Mapping):
+        return repair_metadata
+    return metadata
+
+
 def _object_ref() -> ObjectRef:
     return ObjectRef(pending_ref_id="gene-assertion-1", object_type="GeneAssertion")
 
@@ -129,6 +143,7 @@ def _envelope(*, metadata: dict | None = None) -> DomainEnvelope:
                     "gene": {"symbol": "abc-1"},
                     "protected_note": "do not touch",
                     "stable_note": "fixed",
+                    "ungrounded_name": "Display value",
                     "draft_value": "draft",
                 },
             )
@@ -154,6 +169,16 @@ def _identifier_finding() -> ValidationFinding:
         code="fixture.identifier_missing",
         message="Gene identifier is missing.",
         field_ref=FieldRef(object_ref=_object_ref(), field_path="gene.identifier"),
+    )
+
+
+def _ungrounded_finding() -> ValidationFinding:
+    return ValidationFinding(
+        finding_id="validation:ungrounded-name",
+        severity=ValidationFindingSeverity.ERROR,
+        code="fixture.ungrounded_name_mismatch",
+        message="Display value lacks source-of-truth grounding.",
+        field_ref=FieldRef(object_ref=_object_ref(), field_path="ungrounded_name"),
     )
 
 
@@ -286,6 +311,94 @@ def test_alliance_repairable_fields_are_declared_in_domain_pack_metadata(
     )["repair"]
     assert repair_metadata["repairable"] is True
     assert repair_metadata["source_of_truth"] == "alliance_linkml"
+
+
+def test_source_of_truth_repair_targets_require_provider_ref_grounding(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+
+    request = build_repair_request(
+        _envelope(),
+        pack,
+        findings=[_ungrounded_finding()],
+        expected_revision=1,
+    )
+    result = apply_repair_patch(
+        _envelope(),
+        pack,
+        _patch(
+            "ungrounded_name",
+            before="Display value",
+            after="Updated display value",
+        ),
+        current_revision=1,
+    )
+
+    field_policy = request.targets[0].metadata["field_policy"]
+    assert request.targets[0].repairable is False
+    assert field_policy["repairable"] is False
+    assert field_policy["declared_repairable"] is True
+    assert field_policy["source_of_truth"] == "fixture_source"
+    assert field_policy["provider_ref_grounded"] is False
+    assert "metadata.provider_refs.fixture_source" in field_policy["blocked_reason"]
+    assert result.status is RepairPatchStatus.REJECTED
+    assert any(
+        "metadata.provider_refs.fixture_source" in error
+        for error in result.errors
+    )
+
+
+def test_alliance_repairable_source_of_truth_fields_have_provider_refs():
+    failures: list[str] = []
+    for metadata_path in sorted(
+        (REPO_ROOT / "packages/alliance/domain_packs").glob("*/domain_pack.yaml")
+    ):
+        pack = _loaded_alliance_pack(str(metadata_path.relative_to(REPO_ROOT)))
+        for object_definition in pack.metadata.object_definitions:
+            for field_definition in object_definition.fields:
+                metadata = field_definition.metadata
+                repair_metadata = _repair_metadata(metadata)
+                source_of_truth = repair_metadata.get("source_of_truth")
+                if not isinstance(source_of_truth, str):
+                    continue
+                if not (
+                    repair_metadata.get("repairable") is True
+                    or repair_metadata.get("editable") is True
+                ):
+                    continue
+                provider_refs = metadata.get("provider_refs")
+                if not (
+                    isinstance(provider_refs, Mapping)
+                    and isinstance(provider_refs.get(source_of_truth), Mapping)
+                ):
+                    failures.append(
+                        f"{metadata_path.relative_to(REPO_ROOT)} "
+                        f"{object_definition.object_type}.{field_definition.field_path} "
+                        f"missing metadata.provider_refs.{source_of_truth}"
+                    )
+
+    assert failures == []
+
+
+def test_phenotype_term_label_is_not_a_linkml_repair_target():
+    object_type = "PhenotypeAnnotation"
+    field_path = "phenotype_terms[0].label"
+    pack = _loaded_alliance_pack(
+        "packages/alliance/domain_packs/phenotype/domain_pack.yaml"
+    )
+
+    request = build_repair_request(
+        _alliance_envelope(object_type),
+        pack,
+        findings=[_alliance_finding(object_type, field_path)],
+        expected_revision=1,
+    )
+
+    field_policy = request.targets[0].metadata["field_policy"]
+    assert request.targets[0].repairable is False
+    assert field_policy["protected"] is True
+    assert field_policy["declared_repairable"] is False
 
 
 @pytest.mark.parametrize(
