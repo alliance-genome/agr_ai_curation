@@ -1846,6 +1846,20 @@ def test_direct_submission_preview_requires_target_when_multiple_transports_are_
         def target_keys(self):
             return (DEFAULT_JSON_BUNDLE_TARGET_KEY, "verified_downstream_target")
 
+    class StubExportAdapterRegistry:
+        def get(self, adapter_key):
+            return SimpleNamespace(
+                supported_target_keys=(
+                    DEFAULT_JSON_BUNDLE_TARGET_KEY,
+                    "verified_downstream_target",
+                )
+            )
+
+    monkeypatch.setattr(
+        submission_module,
+        "_export_adapter_registry",
+        lambda: StubExportAdapterRegistry(),
+    )
     monkeypatch.setattr(
         submission_module,
         "_submission_adapter_registry",
