@@ -6,7 +6,6 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from src.lib.database import curation_resolver as resolver_module
 from src.lib.database.curation_resolver import (
     CurationDbClient,
     CurationConnectionResolver,
