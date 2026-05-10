@@ -7,18 +7,12 @@ import logging
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
-from src.lib.curation_workspace.evidence_resolver import DeterministicEvidenceAnchorResolver
-from src.lib.curation_workspace.evidence_quality import (
-    evidence_anchor_payload_with_quality,
-    summarize_evidence_records,
-)
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
@@ -45,36 +39,22 @@ from src.schemas.curation_prep import (
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
     CurationCandidateStatus,
-    CurationEvidenceSource,
     CurationExtractionSourceKind,
     CurationSessionStatus,
     CurationValidationCounts,
     CurationValidationScope,
     CurationValidationSnapshotState,
     CurationValidationSummary,
+    DomainEnvelopeReviewRow,
     FieldValidationResult,
     FieldValidationStatus,
 )
+from src.lib.domain_packs.materialization import materialize_persisted_envelope_review_rows
 
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_ASYNC_CANDIDATE_THRESHOLD = 25
-PREP_EVIDENCE_RECORDS_METADATA_KEY = "prep_evidence_records"
-NORMALIZER_METADATA_KEY = "normalizer"
-EVIDENCE_SUMMARY_METADATA_KEY = "evidence_summary"
-
-
-def _default_candidate_normalizers() -> Mapping[str, CurationCandidateNormalizer]:
-    """Build the package-driven adapter registry for candidate normalization."""
-
-    return load_curation_adapter_registry().candidate_normalizers()
-
-
-def _default_evidence_resolver() -> "EvidenceAnchorResolver":
-    """Resolve prep evidence against PDFX chunks during initial workspace bootstrap."""
-
-    return DeterministicEvidenceAnchorResolver(resolve_against_document=True)
 
 
 class PipelineExecutionMode(str, Enum):
@@ -224,115 +204,6 @@ class PipelineTaskScheduler(Protocol):
         """Schedule a synchronous task to run outside the request path."""
 
 
-class PassthroughEvidenceAnchorResolver:
-    """Temporary evidence resolver that preserves prep anchors unchanged."""
-
-    def resolve(
-        self,
-        candidate: CurationPrepCandidate,
-        *,
-        normalized_candidate: NormalizedCandidate,
-        context: EvidenceResolutionContext,
-    ) -> list[PreparedEvidenceRecordInput]:
-        primary_fields: set[str] = set()
-        resolved_records: list[PreparedEvidenceRecordInput] = []
-
-        for evidence_record in candidate.evidence_records:
-            field_keys = list(evidence_record.field_paths)
-            field_group_keys = _field_group_keys(field_keys)
-            resolved_records.append(
-                PreparedEvidenceRecordInput(
-                    source=CurationEvidenceSource.EXTRACTED,
-                    field_keys=field_keys,
-                    field_group_keys=field_group_keys,
-                    is_primary=(
-                        not field_keys
-                        or any(field_key not in primary_fields for field_key in field_keys)
-                    ),
-                    anchor=evidence_record.anchor.model_dump(mode="json"),
-                    warnings=[],
-                )
-            )
-            primary_fields.update(field_keys)
-
-        return resolved_records
-
-
-class DeterministicStructuralValidationService:
-    """Immediate structural validation until adapter validators ship downstream."""
-
-    def validate(
-        self,
-        normalized_candidates: Sequence[NormalizedCandidate],
-        *,
-        context: BatchValidationContext,
-    ) -> BatchValidationOutcome:
-        session_counts = CurationValidationCounts()
-        session_warnings = [
-            "Deterministic structural validation completed; downstream adapter validation is pending."
-        ]
-        candidate_snapshots: list[PreparedValidationSnapshotInput] = []
-
-        for normalized_candidate in normalized_candidates:
-            candidate_counts = CurationValidationCounts()
-            candidate_warnings: list[str] = []
-            field_results: dict[str, FieldValidationResult] = {}
-
-            for draft_field in normalized_candidate.draft_fields:
-                field_status, field_warnings = _field_validation_status(draft_field.value)
-                validation_result = FieldValidationResult(
-                    status=field_status,
-                    resolver="deterministic_post_agent_pipeline",
-                    warnings=field_warnings,
-                )
-                field_results[draft_field.field_key] = validation_result
-                _increment_validation_count(candidate_counts, field_status)
-                _increment_validation_count(session_counts, field_status)
-                candidate_warnings.extend(field_warnings)
-
-            candidate_summary = CurationValidationSummary(
-                state=CurationValidationSnapshotState.COMPLETED,
-                counts=candidate_counts,
-                last_validated_at=context.validated_at,
-                warnings=_dedupe(candidate_warnings),
-            )
-            candidate_snapshots.append(
-                PreparedValidationSnapshotInput(
-                    scope=CurationValidationScope.CANDIDATE,
-                    adapter_key=normalized_candidate.prep_candidate.adapter_key,
-                    state=CurationValidationSnapshotState.COMPLETED,
-                    field_results=field_results,
-                    summary=candidate_summary,
-                    warnings=_dedupe(candidate_warnings),
-                    requested_at=context.validated_at,
-                    completed_at=context.validated_at,
-                )
-            )
-            session_warnings.extend(candidate_warnings)
-
-        session_summary = CurationValidationSummary(
-            state=CurationValidationSnapshotState.COMPLETED,
-            counts=session_counts,
-            last_validated_at=context.validated_at,
-            warnings=_dedupe(session_warnings),
-        )
-        session_snapshot = PreparedValidationSnapshotInput(
-            scope=CurationValidationScope.SESSION,
-            adapter_key=context.adapter_key,
-            state=CurationValidationSnapshotState.COMPLETED,
-            field_results={},
-            summary=session_summary,
-            warnings=_dedupe(session_warnings),
-            requested_at=context.validated_at,
-            completed_at=context.validated_at,
-        )
-
-        return BatchValidationOutcome(
-            candidate_snapshots=candidate_snapshots,
-            session_snapshot=session_snapshot,
-        )
-
-
 class AsyncioPipelineTaskScheduler:
     """Default scheduler backed by `asyncio.create_task`."""
 
@@ -357,17 +228,8 @@ class AsyncioPipelineTaskScheduler:
 
 @dataclass(frozen=True)
 class PostCurationPipelineDependencies:
-    """Replaceable collaborators for normalization, evidence, validation, and async dispatch."""
+    """Replaceable collaborators for post-prep pipeline dispatch."""
 
-    candidate_normalizers: Mapping[str, CurationCandidateNormalizer] = field(
-        default_factory=_default_candidate_normalizers
-    )
-    evidence_resolver: EvidenceAnchorResolver = field(
-        default_factory=_default_evidence_resolver
-    )
-    validation_service: BatchValidationService = field(
-        default_factory=DeterministicStructuralValidationService
-    )
     task_scheduler: PipelineTaskScheduler = field(
         default_factory=AsyncioPipelineTaskScheduler
     )
@@ -387,21 +249,19 @@ async def run_post_curation_pipeline(
         return execute_post_curation_pipeline(
             request,
             db=db,
-            dependencies=dependencies,
         )
 
     task_name = _task_name_for_request(request)
     scheduled_task_name = dependencies.task_scheduler.schedule(
         lambda: execute_post_curation_pipeline(
             request,
-            dependencies=dependencies,
         ),
         task_name=task_name,
     )
     return PostCurationPipelineResult(
         status=PipelineRunStatus.SCHEDULED,
         execution_mode=PipelineExecutionMode.ASYNC,
-        candidate_count=len(request.prep_output.candidates),
+        candidate_count=_prep_review_row_count(request.prep_output),
         prep_extraction_result_id=request.prep_extraction_result_id,
         task_name=scheduled_task_name,
     )
@@ -411,11 +271,9 @@ def execute_post_curation_pipeline(
     request: PostCurationPipelineRequest,
     *,
     db: Session | None = None,
-    dependencies: PostCurationPipelineDependencies | None = None,
 ) -> PostCurationPipelineResult:
     """Execute the deterministic post-agent pipeline synchronously."""
 
-    dependencies = dependencies or PostCurationPipelineDependencies()
     owns_session = db is None
     session = db or SessionLocal()
 
@@ -423,14 +281,13 @@ def execute_post_curation_pipeline(
         persistence_result, prep_extraction_result_id = _execute_pipeline_steps(
             session,
             request,
-            dependencies,
         )
         if owns_session:
             session.commit()
         return PostCurationPipelineResult(
             status=PipelineRunStatus.COMPLETED,
             execution_mode=PipelineExecutionMode.SYNC,
-            candidate_count=len(request.prep_output.candidates),
+            candidate_count=_prep_review_row_count(request.prep_output),
             session_id=persistence_result.session_id,
             created=persistence_result.created,
             prep_extraction_result_id=prep_extraction_result_id,
@@ -447,84 +304,18 @@ def execute_post_curation_pipeline(
 def _execute_pipeline_steps(
     db: Session,
     request: PostCurationPipelineRequest,
-    dependencies: PostCurationPipelineDependencies,
 ) -> tuple[PreparedSessionUpsertResult, str]:
     prep_extraction_result = _resolve_prep_extraction_result(db, request)
     adapter_key = _resolve_pipeline_adapter_key(request)
 
-    normalized_candidates: list[NormalizedCandidate] = []
-    evidence_records_by_candidate: list[list[PreparedEvidenceRecordInput]] = []
-
-    for candidate_index, candidate in enumerate(request.prep_output.candidates):
-        _validate_candidate_scope(
-            candidate,
-            adapter_key=adapter_key,
-        )
-        normalizer = dependencies.candidate_normalizers.get(candidate.adapter_key)
-        if normalizer is None:
-            raise LookupError(
-                "No package-owned curation adapter normalizer is registered for "
-                f"adapter_key={candidate.adapter_key!r}."
-            )
-        normalized_candidate = normalizer.normalize(
-            candidate.payload,
-            prep_candidate=candidate,
-            context=CandidateNormalizationContext(
-                document_id=request.document_id,
-                adapter_key=adapter_key,
-                prep_extraction_result_id=str(prep_extraction_result.id),
-                candidate_index=candidate_index,
-                flow_run_id=request.flow_run_id,
-            ),
-        )
-        normalized_candidates.append(normalized_candidate)
-        resolved_records = dependencies.evidence_resolver.resolve(
-            candidate,
-            normalized_candidate=normalized_candidate,
-            context=EvidenceResolutionContext(
-                document_id=request.document_id,
-                adapter_key=adapter_key,
-                prep_extraction_result_id=str(prep_extraction_result.id),
-                candidate_index=candidate_index,
-                current_user_id=request.user_id,
-            ),
-        )
-        evidence_records_by_candidate.append(
-            [
-                replace(
-                    record,
-                    anchor=evidence_anchor_payload_with_quality(record.anchor),
-                )
-                for record in resolved_records
-            ]
-        )
-
     validated_at = request.prepared_at or datetime.now(timezone.utc)
-    validation_outcome = dependencies.validation_service.validate(
-        normalized_candidates,
-        context=BatchValidationContext(
-            document_id=request.document_id,
-            adapter_key=adapter_key,
-            validated_at=validated_at,
-        ),
+    prepared_candidates, validation_outcome = _prepared_candidates_from_envelope_refs(
+        db,
+        request,
+        adapter_key=adapter_key,
+        prep_extraction_result_id=str(prep_extraction_result.id),
+        validated_at=validated_at,
     )
-
-    if len(validation_outcome.candidate_snapshots) != len(normalized_candidates):
-        raise ValueError(
-            "Validation service must return one candidate snapshot per normalized candidate"
-        )
-
-    prepared_candidates = [
-        _prepared_candidate_input(
-            normalized_candidate=normalized_candidate,
-            evidence_records=evidence_records_by_candidate[index],
-            validation_snapshot=validation_outcome.candidate_snapshots[index],
-            prep_extraction_result_id=str(prep_extraction_result.id),
-            prep_output=request.prep_output,
-            candidate_index=index,
-        )
-        for index, normalized_candidate in enumerate(normalized_candidates)
-    ]
 
     session_warnings = _dedupe(
         [
@@ -555,48 +346,224 @@ def _execute_pipeline_steps(
     return persistence_result, str(prep_extraction_result.id)
 
 
-def _prepared_candidate_input(
+def _prepared_candidates_from_envelope_refs(
+    db: Session,
+    request: PostCurationPipelineRequest,
     *,
-    normalized_candidate: NormalizedCandidate,
-    evidence_records: Sequence[PreparedEvidenceRecordInput],
-    validation_snapshot: PreparedValidationSnapshotInput,
+    adapter_key: str,
+    prep_extraction_result_id: str,
+    validated_at: datetime,
+) -> tuple[list[PreparedCandidateInput], BatchValidationOutcome]:
+    review_rows = _materialized_review_rows(db, request)
+    prepared_candidates = [
+        _prepared_candidate_input_from_review_row(
+            review_row,
+            adapter_key=adapter_key,
+            prep_extraction_result_id=prep_extraction_result_id,
+            prep_output=request.prep_output,
+            candidate_index=index,
+        )
+        for index, review_row in enumerate(review_rows)
+    ]
+    validation_outcome = _validate_prepared_review_rows(
+        prepared_candidates,
+        adapter_key=adapter_key,
+        validated_at=validated_at,
+    )
+    if len(validation_outcome.candidate_snapshots) != len(prepared_candidates):
+        raise ValueError(
+            "Validation service must return one candidate snapshot per review row"
+        )
+    return (
+        [
+            replace(
+                candidate,
+                validation_snapshot=validation_outcome.candidate_snapshots[index],
+            )
+            for index, candidate in enumerate(prepared_candidates)
+        ],
+        validation_outcome,
+    )
+
+
+def _materialized_review_rows(
+    db: Session,
+    request: PostCurationPipelineRequest,
+) -> list[DomainEnvelopeReviewRow]:
+    if not request.prep_output.envelope_refs:
+        raise ValueError(
+            "Domain-envelope post-curation pipeline requires prep_output.envelope_refs"
+        )
+
+    rows: list[DomainEnvelopeReviewRow] = []
+    for envelope_ref in request.prep_output.envelope_refs:
+        response = materialize_persisted_envelope_review_rows(
+            db,
+            envelope_ref.envelope_id,
+            revision=envelope_ref.envelope_revision,
+        )
+        rows.extend(response.rows)
+
+    if not rows:
+        raise ValueError("Domain-envelope post-curation pipeline materialized no review rows")
+    return rows
+
+
+def _prepared_candidate_input_from_review_row(
+    review_row: DomainEnvelopeReviewRow,
+    *,
+    adapter_key: str,
     prep_extraction_result_id: str,
     prep_output: CurationPrepAgentOutput,
     candidate_index: int,
 ) -> PreparedCandidateInput:
-    prep_candidate = normalized_candidate.prep_candidate
-    metadata = dict(normalized_candidate.metadata)
-    evidence_summary = summarize_evidence_records(evidence_records)
-    metadata[PREP_EVIDENCE_RECORDS_METADATA_KEY] = [
-        evidence_record.model_dump(mode="json")
-        for evidence_record in prep_candidate.evidence_records
-    ]
-    metadata["prep_candidate_index"] = candidate_index
-    if evidence_summary is not None:
-        metadata[EVIDENCE_SUMMARY_METADATA_KEY] = evidence_summary.model_dump(mode="json")
+    draft_fields = _draft_fields_from_review_row(review_row)
+    metadata = {
+        "semantic_source": "domain_envelope.objects",
+        "projection_type": review_row.projection_type,
+        "projection_key": review_row.projection_key,
+        "domain_pack_id": review_row.domain_pack_id,
+        "domain_pack_version": review_row.domain_pack_version,
+        "object_type": review_row.object_type,
+        "object_role": review_row.object_role,
+        "object_status": review_row.status,
+        "validation_state": review_row.validation_state,
+        "summary_fields": [
+            field.model_dump(mode="json")
+            for field in review_row.summary_fields
+        ],
+        "prep_envelope_refs": [
+            envelope_ref.model_dump(mode="json")
+            for envelope_ref in prep_output.envelope_refs
+        ],
+        "prep_candidate_index": candidate_index,
+    }
 
     return PreparedCandidateInput(
         source=CurationCandidateSource.EXTRACTED,
         status=CurationCandidateStatus.PENDING,
         order=candidate_index,
-        adapter_key=prep_candidate.adapter_key,
-        display_label=normalized_candidate.display_label,
-        secondary_label=normalized_candidate.secondary_label,
-        conversation_summary=prep_candidate.conversation_context_summary,
+        adapter_key=adapter_key,
+        display_label=review_row.display_label,
+        secondary_label=review_row.secondary_label,
+        conversation_summary=(
+            f"Materialized {review_row.object_type} review row from domain envelope "
+            f"{review_row.envelope_id} revision {review_row.envelope_revision}."
+        ),
         extraction_result_id=prep_extraction_result_id,
-        envelope_id=prep_candidate.envelope_id,
-        object_id=prep_candidate.object_id,
-        envelope_revision=prep_candidate.envelope_revision,
-        normalized_payload=normalized_candidate.normalized_payload,
+        envelope_id=review_row.envelope_id,
+        object_id=review_row.object_id,
+        envelope_revision=review_row.envelope_revision,
+        normalized_payload={},
         metadata=metadata,
-        draft_fields=normalized_candidate.draft_fields,
-        draft_title=normalized_candidate.display_label,
-        draft_summary=prep_candidate.conversation_context_summary,
+        draft_fields=draft_fields,
+        draft_title=review_row.display_label,
+        draft_summary=review_row.secondary_label,
         draft_metadata={
+            "semantic_source": "domain_envelope.objects",
             "prep_run_metadata": prep_output.run_metadata.model_dump(mode="json"),
+            "projection_ref": {
+                "envelope_id": review_row.envelope_id,
+                "object_id": review_row.object_id,
+                "envelope_revision": review_row.envelope_revision,
+            },
         },
-        evidence_records=list(evidence_records),
-        validation_snapshot=validation_snapshot,
+        evidence_records=[],
+        validation_snapshot=None,
+    )
+
+
+def _draft_fields_from_review_row(
+    review_row: DomainEnvelopeReviewRow,
+) -> list[PreparedDraftFieldInput]:
+    return [
+        PreparedDraftFieldInput(
+            field_key=field.field_path,
+            label=field.label,
+            value=field.value,
+            seed_value=field.value,
+            field_type=field.field_type,
+            group_key=_field_group_key(field.field_path),
+            group_label=_field_group_label(_field_group_key(field.field_path)),
+            order=index,
+            metadata={
+                "semantic_source": "domain_envelope.objects",
+                "source_field_path": field.field_path,
+                "projection_type": review_row.projection_type,
+                "projection_key": review_row.projection_key,
+                "field_metadata": dict(field.metadata),
+            },
+        )
+        for index, field in enumerate(review_row.summary_fields)
+    ]
+
+
+def _validate_prepared_review_rows(
+    candidates: Sequence[PreparedCandidateInput],
+    *,
+    adapter_key: str,
+    validated_at: datetime,
+) -> BatchValidationOutcome:
+    session_counts = CurationValidationCounts()
+    candidate_snapshots: list[PreparedValidationSnapshotInput] = []
+    session_warnings = [
+        "Domain-envelope review-row projection validation completed from persisted envelope fields."
+    ]
+
+    for candidate in candidates:
+        candidate_counts = CurationValidationCounts()
+        field_results: dict[str, FieldValidationResult] = {}
+        candidate_warnings: list[str] = []
+
+        for draft_field in candidate.draft_fields:
+            field_status, field_warnings = _field_validation_status(draft_field.value)
+            field_results[draft_field.field_key] = FieldValidationResult(
+                status=field_status,
+                resolver="domain_envelope_review_row_materializer",
+                warnings=field_warnings,
+            )
+            _increment_validation_count(candidate_counts, field_status)
+            _increment_validation_count(session_counts, field_status)
+            candidate_warnings.extend(field_warnings)
+
+        candidate_summary = CurationValidationSummary(
+            state=CurationValidationSnapshotState.COMPLETED,
+            counts=candidate_counts,
+            last_validated_at=validated_at,
+            warnings=_dedupe(candidate_warnings),
+        )
+        candidate_snapshots.append(
+            PreparedValidationSnapshotInput(
+                scope=CurationValidationScope.CANDIDATE,
+                adapter_key=candidate.adapter_key,
+                state=CurationValidationSnapshotState.COMPLETED,
+                field_results=field_results,
+                summary=candidate_summary,
+                warnings=_dedupe(candidate_warnings),
+                requested_at=validated_at,
+                completed_at=validated_at,
+            )
+        )
+        session_warnings.extend(candidate_warnings)
+
+    session_summary = CurationValidationSummary(
+        state=CurationValidationSnapshotState.COMPLETED,
+        counts=session_counts,
+        last_validated_at=validated_at,
+        warnings=_dedupe(session_warnings),
+    )
+    return BatchValidationOutcome(
+        candidate_snapshots=candidate_snapshots,
+        session_snapshot=PreparedValidationSnapshotInput(
+            scope=CurationValidationScope.SESSION,
+            adapter_key=adapter_key,
+            state=CurationValidationSnapshotState.COMPLETED,
+            field_results={},
+            summary=session_summary,
+            warnings=_dedupe(session_warnings),
+            requested_at=validated_at,
+            completed_at=validated_at,
+        ),
     )
 
 
@@ -621,7 +588,7 @@ def _resolve_prep_extraction_result(
         .where(ExtractionResultModel.document_id == UUID(str(request.document_id)))
         .where(ExtractionResultModel.agent_key == CURATION_PREP_AGENT_ID)
         .where(ExtractionResultModel.source_kind == request.source_kind)
-        .where(ExtractionResultModel.candidate_count == len(request.prep_output.candidates))
+        .where(ExtractionResultModel.candidate_count == _prep_review_row_count(request.prep_output))
         .order_by(ExtractionResultModel.created_at.desc())
     )
 
@@ -638,13 +605,15 @@ def _resolve_prep_extraction_result(
     if request.user_id is not None:
         statement = statement.where(ExtractionResultModel.user_id == request.user_id)
 
-    candidates_payload = request.prep_output.model_dump(mode="json")["candidates"]
+    expected_payload = request.prep_output.model_dump(mode="json")
     run_metadata_payload = request.prep_output.run_metadata.model_dump(mode="json")
 
     for record in db.scalars(statement).all():
         payload = record.payload_json if isinstance(record.payload_json, dict) else {}
         metadata = dict(record.extraction_metadata or {})
-        if payload.get("candidates") != candidates_payload:
+        if payload.get("envelope_refs") != expected_payload.get("envelope_refs"):
+            continue
+        if payload.get("review_row_count") != expected_payload.get("review_row_count"):
             continue
         if metadata.get("final_run_metadata") != run_metadata_payload:
             continue
@@ -665,8 +634,11 @@ def _validate_prep_extraction_result(
     if str(record.document_id) != str(request.document_id):
         raise ValueError("prep_extraction_result_id document_id does not match pipeline request")
     payload = record.payload_json if isinstance(record.payload_json, dict) else {}
-    if payload.get("candidates") != request.prep_output.model_dump(mode="json")["candidates"]:
+    expected_payload = request.prep_output.model_dump(mode="json")
+    if payload.get("envelope_refs") != expected_payload.get("envelope_refs"):
         raise ValueError("prep_extraction_result_id payload does not match the supplied prep output")
+    if payload.get("review_row_count") != expected_payload.get("review_row_count"):
+        raise ValueError("prep_extraction_result_id row count does not match the supplied prep output")
     metadata = dict(record.extraction_metadata or {})
     if metadata.get("final_run_metadata") != request.prep_output.run_metadata.model_dump(mode="json"):
         raise ValueError(
@@ -678,21 +650,7 @@ def _resolve_pipeline_adapter_key(request: PostCurationPipelineRequest) -> str:
     if request.adapter_key is not None:
         return request.adapter_key
 
-    adapter_keys = sorted({candidate.adapter_key for candidate in request.prep_output.candidates})
-    if len(adapter_keys) == 1:
-        return adapter_keys[0]
-    if not adapter_keys:
-        raise ValueError("adapter_key is required when prep_output contains no candidates")
-    raise ValueError("Deterministic pipeline requires prep candidates for exactly one adapter")
-
-
-def _validate_candidate_scope(
-    candidate: CurationPrepCandidate,
-    *,
-    adapter_key: str,
-) -> None:
-    if candidate.adapter_key != adapter_key:
-        raise ValueError("Deterministic pipeline requires prep candidates for exactly one adapter")
+    raise ValueError("adapter_key is required for domain-envelope review-row materialization")
 
 
 def _select_execution_mode(
@@ -705,9 +663,17 @@ def _select_execution_mode(
         return PipelineExecutionMode.SYNC
     if request.execution_mode == PipelineExecutionMode.ASYNC:
         return PipelineExecutionMode.ASYNC
-    if len(request.prep_output.candidates) > request.async_candidate_threshold:
+    if _prep_review_row_count(request.prep_output) > request.async_candidate_threshold:
         return PipelineExecutionMode.ASYNC
     return PipelineExecutionMode.SYNC
+
+
+def _prep_review_row_count(prep_output: CurationPrepAgentOutput) -> int:
+    if not prep_output.envelope_refs:
+        raise ValueError(
+            "Domain-envelope post-curation pipeline requires prep_output.envelope_refs"
+        )
+    return prep_output.review_row_count
 
 
 def _task_name_for_request(request: PostCurationPipelineRequest) -> str:
@@ -725,16 +691,16 @@ def _field_group_key(field_path: str | None) -> str | None:
     return field_path.rsplit(".", 1)[0]
 
 
-def _field_group_keys(field_paths: Sequence[str]) -> list[str]:
-    seen: set[str] = set()
-    group_keys: list[str] = []
-    for field_path in field_paths:
-        group_key = _field_group_key(field_path)
-        if not group_key or group_key in seen:
-            continue
-        seen.add(group_key)
-        group_keys.append(group_key)
-    return group_keys
+def _field_group_label(field_path: str | None) -> str | None:
+    if field_path is None:
+        return None
+    return " / ".join(
+        segment.replace("_", " ").strip().title()
+        for segment in field_path.split(".")
+        if segment
+    )
+
+
 def _field_validation_status(value: Any) -> tuple[FieldValidationStatus, list[str]]:
     return field_validation_status(value)
 
@@ -758,12 +724,9 @@ __all__ = [
     "CandidateNormalizationContext",
     "CurationCandidateNormalizer",
     "DEFAULT_ASYNC_CANDIDATE_THRESHOLD",
-    "DeterministicEvidenceAnchorResolver",
-    "DeterministicStructuralValidationService",
     "EvidenceAnchorResolver",
     "EvidenceResolutionContext",
     "NormalizedCandidate",
-    "PassthroughEvidenceAnchorResolver",
     "PipelineExecutionMode",
     "PipelineRunStatus",
     "PipelineTaskScheduler",

@@ -913,6 +913,91 @@ class DomainEnvelopeValidationSummaryProjection(CurationWorkspaceBaseModel):
     findings: list[DomainEnvelopeValidationFindingProjection] = Field(default_factory=list)
 
 
+class DomainEnvelopeReviewRowSummaryField(CurationWorkspaceBaseModel):
+    """One provider-neutral summary field projected from a domain envelope object."""
+
+    field_path: str = Field(description="Object-payload field path represented by this value")
+    label: str = Field(description="Curator-facing field label from the domain-pack materializer")
+    value: Any | None = Field(default=None, description="JSON-compatible projected field value")
+    field_type: str | None = Field(
+        default=None,
+        description="Provider-neutral field type declared by the domain pack when available",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Domain-pack-owned metadata for this projected field",
+    )
+
+
+class DomainEnvelopeReviewRow(CurationWorkspaceBaseModel):
+    """Provider-neutral review row regenerated from a persisted domain envelope."""
+
+    envelope_id: str = Field(description="Domain envelope identifier")
+    object_id: str = Field(description="Stable domain envelope object identifier")
+    envelope_revision: int = Field(
+        ge=1,
+        description="Envelope revision represented by this row",
+    )
+    domain_pack_id: str = Field(description="Domain pack that owns this object")
+    domain_pack_version: str | None = Field(
+        default=None,
+        description="Domain pack version used to interpret this object",
+    )
+    object_type: str = Field(description="Domain-pack object type")
+    object_role: str | None = Field(
+        default=None,
+        description="Domain-pack object role, such as curatable_unit or validated_reference",
+    )
+    status: str = Field(description="Provider-neutral object lifecycle status")
+    validation_state: str = Field(description="Aggregated validation state for this object")
+    projection_type: str = Field(description="Materializer-owned projection type")
+    projection_key: str = Field(description="Materializer-owned projection key")
+    display_label: str | None = Field(
+        default=None,
+        description="Primary row label emitted by the domain-pack materializer",
+    )
+    secondary_label: str | None = Field(
+        default=None,
+        description="Secondary row label emitted by the domain-pack materializer",
+    )
+    summary_fields: list[DomainEnvelopeReviewRowSummaryField] = Field(
+        default_factory=list,
+        description="Provider-neutral row summary fields emitted by the materializer",
+    )
+    schema_provider: str | None = Field(
+        default=None,
+        description="Schema provider for this object when declared",
+    )
+    schema_ref: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Provider-neutral schema reference for this object",
+    )
+    object_model_ref: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Domain-pack object/model reference metadata",
+    )
+    model_field_ref: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Domain-pack field reference metadata keyed by field path",
+    )
+    metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Non-semantic projection metadata for UI/state consumers",
+    )
+
+
+class DomainEnvelopeReviewRowsResponse(CurationWorkspaceBaseModel):
+    """Response containing review rows regenerated from one persisted envelope revision."""
+
+    envelope_id: str = Field(description="Domain envelope identifier")
+    envelope_revision: int = Field(ge=1, description="Envelope revision materialized")
+    row_count: int = Field(ge=0, description="Number of regenerated review rows")
+    rows: list[DomainEnvelopeReviewRow] = Field(
+        default_factory=list,
+        description="Review rows regenerated from the persisted envelope",
+    )
+
+
 class CurationCandidate(CurationWorkspaceBaseModel):
     """Curator-reviewable candidate with draft, evidence, and validation state."""
 
@@ -2299,6 +2384,9 @@ __all__ = [
     "CurationWorkspaceResponse",
     "DomainEnvelopeEvidenceAnchorProjection",
     "DomainEnvelopeProjectionRef",
+    "DomainEnvelopeReviewRow",
+    "DomainEnvelopeReviewRowSummaryField",
+    "DomainEnvelopeReviewRowsResponse",
     "DomainEnvelopeValidationFindingProjection",
     "DomainEnvelopeValidationStatus",
     "DomainEnvelopeValidationSummaryProjection",

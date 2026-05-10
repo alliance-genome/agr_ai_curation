@@ -31,6 +31,11 @@ from src.lib.curation_workspace.saved_view_service import (
     list_saved_views as list_saved_view_records,
 )
 from src.lib.http_errors import raise_sanitized_http_exception
+from src.lib.domain_packs.materialization import (
+    DomainEnvelopeMaterializationError,
+    DomainEnvelopeRevisionUnavailableError,
+    materialize_persisted_envelope_review_rows,
+)
 from src.lib.curation_workspace.session_service import (
     create_manual_candidate,
     delete_candidate,
@@ -114,6 +119,7 @@ from src.schemas.curation_workspace import (
     CurationSessionUpdateResponse,
     CurationSortDirection,
     CurationWorkspaceResponse,
+    DomainEnvelopeReviewRowsResponse,
 )
 from src.services.user_service import set_global_user_from_cognito
 
@@ -364,6 +370,43 @@ async def get_review_session(
     if include_workspace:
         return get_session_workspace(db, session_id)
     return get_session_detail(db, session_id)
+
+
+@router.get(
+    "/domain-envelopes/{envelope_id}/review-rows",
+    response_model=DomainEnvelopeReviewRowsResponse,
+)
+async def get_domain_envelope_review_rows(
+    envelope_id: str,
+    revision: int | None = Query(default=None, ge=1),
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> DomainEnvelopeReviewRowsResponse:
+    set_global_user_from_cognito(db, user)
+    try:
+        return materialize_persisted_envelope_review_rows(
+            db,
+            envelope_id,
+            revision=revision,
+        )
+    except DomainEnvelopeRevisionUnavailableError as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=409,
+            detail="Requested domain envelope revision is not available",
+            log_message="Domain envelope review-row revision request rejected",
+            exc=exc,
+            level=logging.WARNING,
+        )
+    except DomainEnvelopeMaterializationError as exc:
+        raise_sanitized_http_exception(
+            logger,
+            status_code=404,
+            detail="Domain envelope review rows were not found",
+            log_message="Domain envelope review-row materialization failed",
+            exc=exc,
+            level=logging.WARNING,
+        )
 
 
 @router.patch("/sessions/{session_id}", response_model=CurationSessionUpdateResponse)

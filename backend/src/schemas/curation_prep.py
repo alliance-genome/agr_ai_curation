@@ -291,6 +291,25 @@ class CurationPrepCandidate(CurationPrepBaseModel):
         return self
 
 
+class CurationPrepEnvelopeRef(CurationPrepBaseModel):
+    """Persisted envelope revision selected for review-row materialization."""
+
+    envelope_id: NonEmptyString = Field(description="Persisted domain envelope identifier")
+    envelope_revision: int = Field(
+        ge=1,
+        description="Persisted envelope revision represented by generated review rows",
+    )
+    source_extraction_result_id: NonEmptyString = Field(
+        description="Extraction result that produced or selected this envelope",
+    )
+    domain_pack_id: NonEmptyString = Field(description="Domain pack that owns the envelope")
+    review_row_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of review rows materialized from this envelope revision",
+    )
+
+
 class CurationPrepTokenUsage(CurationPrepBaseModel):
     """Run-level token accounting for prep output."""
 
@@ -329,13 +348,37 @@ class CurationPrepRunMetadata(CurationPrepBaseModel):
 class CurationPrepAgentOutput(CurationPrepBaseModel):
     """Structured output emitted by curation prep."""
 
+    envelope_refs: list[CurationPrepEnvelopeRef] = Field(
+        default_factory=list,
+        description=(
+            "Persisted domain envelope revisions selected as the semantic source for "
+            "review-row projection"
+        ),
+    )
+    review_row_count: int = Field(
+        default=0,
+        ge=0,
+        description="Total review rows projected from envelope_refs",
+    )
     candidates: list[CurationPrepCandidate] = Field(
         default_factory=list,
-        description="Candidates prepared for deterministic normalization and review-session creation",
+        description=(
+            "Legacy candidate payloads retained for old structured-output shape only; "
+            "new domain-envelope review flows use envelope_refs as semantic truth"
+        ),
     )
     run_metadata: CurationPrepRunMetadata = Field(
         description="Run-level metadata associated with candidate generation",
     )
+
+    @model_validator(mode="after")
+    def validate_review_row_count(self) -> "CurationPrepAgentOutput":
+        """Keep persisted envelope refs and reported review row totals aligned."""
+
+        projected_count = sum(ref.review_row_count for ref in self.envelope_refs)
+        if self.envelope_refs and self.review_row_count != projected_count:
+            raise ValueError("review_row_count must equal envelope_refs.review_row_count total")
+        return self
 
 
 class CurationPrepChatPreviewResponse(CurationPrepBaseModel):
@@ -410,7 +453,7 @@ class CurationPrepChatRunResponse(CurationPrepBaseModel):
     candidate_count: int = Field(
         default=0,
         ge=0,
-        description="Number of candidates produced by prep",
+        description="Number of review rows produced by prep materialization",
     )
     warnings: list[str] = Field(
         default_factory=list,
@@ -434,6 +477,7 @@ __all__ = [
     "CurationPrepAgentOutput",
     "CurationPrepBaseModel",
     "CurationPrepCandidate",
+    "CurationPrepEnvelopeRef",
     "CurationPrepChatPreviewResponse",
     "CurationPrepChatRunRequest",
     "CurationPrepChatRunResponse",

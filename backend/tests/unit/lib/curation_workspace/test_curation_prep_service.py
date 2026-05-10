@@ -6,7 +6,7 @@ import pytest
 
 import src.lib.curation_workspace.adapter_registry as adapter_registry_module
 from src.lib.curation_workspace import curation_prep_service as module
-from src.schemas.curation_prep import CurationPrepScopeConfirmation
+from src.schemas.curation_prep import CurationPrepEnvelopeRef, CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import (
     CurationExtractionResultRecord,
     CurationExtractionSourceKind,
@@ -23,7 +23,7 @@ def _reset_adapter_registry():
 def _make_scope_confirmation() -> CurationPrepScopeConfirmation:
     return CurationPrepScopeConfirmation(
         confirmed=True,
-        adapter_keys=["reference_adapter"],
+        adapter_keys=["gene"],
         notes=["User confirmed the current chat extraction scope."],
     )
 
@@ -103,6 +103,58 @@ def _make_extraction_result(
             },
             "created_at": "2026-03-20T21:55:00Z",
             "metadata": {},
+        }
+    )
+
+
+def _make_domain_envelope_extraction_result(
+    *,
+    document_id: str = "document-1",
+    adapter_key: str = "gene",
+    candidate_count: int = 1,
+) -> CurationExtractionResultRecord:
+    return CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": "extract-domain-1",
+            "document_id": document_id,
+            "adapter_key": adapter_key,
+            "agent_key": "gene_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": "chat-session-1",
+            "trace_id": "trace-upstream",
+            "flow_run_id": None,
+            "user_id": "user-upstream",
+            "candidate_count": candidate_count,
+            "conversation_summary": "Conversation focused on domain envelopes.",
+            "payload_json": {
+                "summary": "One gene mention was extracted.",
+                "curatable_objects": [
+                    {
+                        "object_type": "gene_mention_evidence",
+                        "object_role": "validated_reference",
+                        "object_id": "gene-row-1",
+                        "payload": {
+                            "mention": "abc-1",
+                            "gene_symbol": "ABC-1",
+                            "primary_external_id": "EXAMPLE:1",
+                            "taxon": "NCBITaxon:10116",
+                            "confidence": "high",
+                            "evidence_record_id": "evidence-1",
+                            "verified_quote": "abc-1 was observed in the paper.",
+                            "page": 5,
+                            "section": "Results",
+                            "chunk_id": "chunk-1",
+                        },
+                        "evidence_record_ids": ["evidence-1"],
+                    }
+                ],
+                "metadata": {
+                    "evidence_records": [_make_evidence_record()],
+                },
+                "run_summary": {"candidate_count": candidate_count},
+            },
+            "created_at": "2026-03-20T21:55:00Z",
+            "metadata": {"project_key": "agr"},
         }
     )
 
@@ -195,60 +247,61 @@ def _make_allele_domain_payload(
 
 
 @pytest.mark.asyncio
-async def test_run_curation_prep_maps_generic_items_and_persists_output(monkeypatch):
-    extraction_result = _make_extraction_result()
+async def test_run_curation_prep_selects_envelope_refs_and_persists_output(monkeypatch):
+    extraction_result = _make_domain_envelope_extraction_result()
     captured: dict[str, object] = {}
+
+    def _fake_ensure_domain_envelope_materialization(record, *, persist, db=None):
+        assert record is extraction_result
+        assert persist is True
+        assert db == object_db
+        return CurationPrepEnvelopeRef(
+            envelope_id="env-gene-1",
+            envelope_revision=2,
+            source_extraction_result_id="extract-domain-1",
+            domain_pack_id="gene",
+            review_row_count=1,
+        )
 
     def _fake_persist_extraction_result(request, *, db=None):
         captured["request"] = request
         captured["db"] = db
         return None
 
+    object_db = object()
+    monkeypatch.setattr(
+        module,
+        "_ensure_domain_envelope_materialization",
+        _fake_ensure_domain_envelope_materialization,
+    )
     monkeypatch.setattr(module, "persist_extraction_result", _fake_persist_extraction_result)
 
     prep_output = await module.run_curation_prep(
         [extraction_result],
         scope_confirmation=_make_scope_confirmation(),
-        db=object(),
+        db=object_db,
     )
 
-    assert len(prep_output.candidates) == 1
-    candidate = prep_output.candidates[0]
-    assert candidate.adapter_key == "reference_adapter"
-    assert candidate.payload == {
-        "label": "Candidate Alpha",
-        "entity_type": "observation",
-        "normalized_id": "OBS:0001",
-        "source_mentions": ["Alpha mention"],
-    }
-    assert candidate.evidence_records[0].field_paths == [
-        "label",
-        "entity_type",
-        "normalized_id",
-        "source_mentions.0",
-    ]
-    assert candidate.evidence_records[0].evidence_record_id == "evidence-1"
-    assert candidate.evidence_records[0].anchor.snippet_text == (
-        "Candidate Alpha was supported by a verified observation."
-    )
-    assert candidate.evidence_records[0].anchor.page_number == 5
-    assert candidate.evidence_records[0].anchor.section_title == "Results"
-    assert candidate.evidence_records[0].anchor.subsection_title == "Observation set"
-    assert candidate.evidence_records[0].anchor.figure_reference is None
-    assert candidate.evidence_records[0].anchor.table_reference == "Table 2"
-    assert candidate.evidence_records[0].anchor.chunk_ids == ["chunk-1"]
+    assert prep_output.candidates == []
+    assert prep_output.review_row_count == 1
+    assert prep_output.envelope_refs[0].envelope_id == "env-gene-1"
+    assert prep_output.envelope_refs[0].envelope_revision == 2
+    assert prep_output.envelope_refs[0].source_extraction_result_id == "extract-domain-1"
     assert prep_output.run_metadata.model_name == "deterministic_programmatic_mapper_v1"
 
     persisted_request = captured["request"]
     assert persisted_request.document_id == "document-1"
     assert persisted_request.agent_key == "curation_prep"
     assert persisted_request.source_kind is CurationExtractionSourceKind.CHAT
-    assert persisted_request.adapter_key == "reference_adapter"
+    assert persisted_request.adapter_key == "gene"
     assert persisted_request.origin_session_id == "chat-session-1"
     assert persisted_request.trace_id == "trace-upstream"
     assert persisted_request.user_id == "user-upstream"
     assert persisted_request.candidate_count == 1
-    assert persisted_request.metadata["scope_adapter_keys"] == ["reference_adapter"]
+    assert persisted_request.payload_json["candidates"] == []
+    assert persisted_request.payload_json["envelope_refs"][0]["envelope_id"] == "env-gene-1"
+    assert persisted_request.metadata["scope_adapter_keys"] == ["gene"]
+    assert persisted_request.metadata["envelope_refs"][0]["envelope_id"] == "env-gene-1"
     assert (
         persisted_request.metadata["final_run_metadata"]["model_name"]
         == "deterministic_programmatic_mapper_v1"
@@ -256,183 +309,72 @@ async def test_run_curation_prep_maps_generic_items_and_persists_output(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_run_curation_prep_gates_candidates_without_item_level_evidence(monkeypatch):
-    extraction_result = _make_extraction_result(
-        items=[
-            _make_item(
-                label="Candidate Alpha",
-                normalized_id="OBS:0001",
-                source_mentions=["Alpha mention"],
-                evidence_record_ids=["evidence-1"],
-            ),
-            _make_item(
-                label="Candidate Beta",
-                normalized_id="OBS:0002",
-                source_mentions=["Beta mention"],
-                evidence_record_ids=[],
-            ),
-        ],
-        evidence_records=[
-            _make_evidence_record(
-                evidence_record_id="evidence-1",
-            )
-        ],
-    )
+async def test_run_curation_prep_rejects_legacy_items_as_semantic_source(monkeypatch):
+    extraction_result = _make_extraction_result(adapter_key="gene")
 
-    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+    persist_called = False
 
-    prep_output = await module.run_curation_prep(
+    def _fake_persist(*_args, **_kwargs):
+        nonlocal persist_called
+        persist_called = True
+
+    monkeypatch.setattr(module, "persist_extraction_result", _fake_persist)
+
+    with pytest.raises(
+        ValueError,
+        match="No evidence-verified candidates were available",
+    ):
+        await module.run_curation_prep(
+            [extraction_result],
+            scope_confirmation=_make_scope_confirmation(),
+        )
+
+    assert persist_called is False
+
+
+def test_summarize_curation_prep_scope_counts_materialized_envelope_rows(monkeypatch):
+    extraction_result = _make_domain_envelope_extraction_result()
+
+    def _fake_ensure(record, *, persist, db=None):
+        assert record is extraction_result
+        assert persist is False
+        assert db is None
+        return CurationPrepEnvelopeRef(
+            envelope_id="env-gene-1",
+            envelope_revision=1,
+            source_extraction_result_id="extract-domain-1",
+            domain_pack_id="gene",
+            review_row_count=3,
+        )
+
+    monkeypatch.setattr(module, "_ensure_domain_envelope_materialization", _fake_ensure)
+
+    summary = module.summarize_curation_prep_scope(
         [extraction_result],
-        scope_confirmation=_make_scope_confirmation(),
+        adapter_keys=["gene"],
     )
 
-    assert [candidate.payload["label"] for candidate in prep_output.candidates] == [
-        "Candidate Alpha"
-    ]
-    assert prep_output.run_metadata.warnings == ["Skipped 1 candidate without verified evidence."]
+    assert summary.candidate_count == 3
+    assert summary.adapter_keys == ["gene"]
+    assert summary.warnings == []
 
 
-@pytest.mark.asyncio
-async def test_run_curation_prep_does_not_fall_back_to_top_level_evidence_records(monkeypatch):
-    extraction_result = _make_extraction_result(
-        items=[
-            _make_item(
-                evidence_record_ids=[],
-            )
-        ],
-        evidence_records=[
-            _make_evidence_record()
-        ],
-    )
+def test_summarize_curation_prep_scope_rejects_legacy_items_as_semantic_source():
+    extraction_result = _make_extraction_result(adapter_key="gene")
 
-    persist_called = False
-
-    def _fake_persist(*_args, **_kwargs):
-        nonlocal persist_called
-        persist_called = True
-
-    monkeypatch.setattr(module, "persist_extraction_result", _fake_persist)
-
-    with pytest.raises(
-        ValueError,
-        match="No evidence-verified candidates were available",
-    ):
-        await module.run_curation_prep(
-            [extraction_result],
-            scope_confirmation=_make_scope_confirmation(),
-        )
-
-    assert persist_called is False
-
-
-@pytest.mark.asyncio
-async def test_run_curation_prep_items_do_not_use_metadata_evidence_records(monkeypatch):
-    extraction_result = _make_extraction_result(
-        items=[
-            _make_item(
-                evidence_record_ids=["evidence-1"],
-                evidence=[],
-            )
-        ],
-        evidence_records=[],
-    )
-    extraction_result.payload_json["evidence_records"] = []
-    extraction_result.payload_json["metadata"] = {
-        "evidence_records": [_make_evidence_record()]
-    }
-
-    persist_called = False
-
-    def _fake_persist(*_args, **_kwargs):
-        nonlocal persist_called
-        persist_called = True
-
-    monkeypatch.setattr(module, "persist_extraction_result", _fake_persist)
-
-    with pytest.raises(
-        ValueError,
-        match="No evidence-verified candidates were available",
-    ):
-        await module.run_curation_prep(
-            [extraction_result],
-            scope_confirmation=_make_scope_confirmation(),
-        )
-
-    assert persist_called is False
-
-
-@pytest.mark.asyncio
-async def test_run_curation_prep_rejects_when_all_candidates_fail_evidence_gate(monkeypatch):
-    extraction_result = _make_extraction_result(
-        items=[
-            _make_item(
-                evidence_record_ids=[],
-                evidence=[
-                    {
-                        "entity": "Candidate Alpha",
-                        "page": 5,
-                        "section": "Results",
-                        "chunk_id": "chunk-1",
-                    }
-                ],
-            )
-        ]
-    )
-
-    persist_called = False
-
-    def _fake_persist(*_args, **_kwargs):
-        nonlocal persist_called
-        persist_called = True
-
-    monkeypatch.setattr(module, "persist_extraction_result", _fake_persist)
-
-    with pytest.raises(
-        ValueError,
-        match="No evidence-verified candidates were available",
-    ):
-        await module.run_curation_prep(
-            [extraction_result],
-            scope_confirmation=_make_scope_confirmation(),
-        )
-
-    assert persist_called is False
-
-
-@pytest.mark.asyncio
-async def test_run_curation_prep_supports_legacy_inline_item_evidence(monkeypatch):
-    extraction_result = _make_extraction_result(
-        items=[
-            _make_item(
-                evidence_record_ids=[],
-                evidence=[
-                    {
-                        "entity": "Candidate Alpha",
-                        "verified_quote": "Candidate Alpha was supported by a verified observation.",
-                        "page": 5,
-                        "section": "Results",
-                        "subsection": "Observation set",
-                        "chunk_id": "chunk-1",
-                    }
-                ],
-            )
-        ],
-        evidence_records=[],
-    )
-
-    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
-
-    prep_output = await module.run_curation_prep(
+    summary = module.summarize_curation_prep_scope(
         [extraction_result],
-        scope_confirmation=_make_scope_confirmation(),
+        adapter_keys=["gene"],
     )
 
-    assert len(prep_output.candidates) == 1
+    assert summary.candidate_count == 0
+    assert summary.adapter_keys == []
+    assert any("curatable_objects" in warning for warning in summary.warnings)
 
 
 @pytest.mark.asyncio
 async def test_run_curation_prep_rejects_mismatched_document_id_override(monkeypatch):
-    extraction_result = _make_extraction_result()
+    extraction_result = _make_domain_envelope_extraction_result()
 
     monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
 
@@ -460,112 +402,10 @@ def test_curation_prep_persistence_context_keeps_optional_fields():
     assert context.flow_run_id == "flow-1"
 
 
-def test_candidate_blueprints_skip_empty_compacted_payload_without_error():
-    extraction_result = _make_extraction_result(
-        items=[
-            _make_item(
-                label=None,
-                entity_type=None,
-                normalized_id=None,
-                source_mentions=[],
-                evidence=[],
-            )
-        ],
-        conversation_summary=None,
-    )
-
-    blueprints = module._candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-        candidate_adapter_key="observation",
-    )
-
-    assert blueprints == []
-
-
-def test_candidate_conversation_summary_falls_back_to_generic_item_context():
-    extraction_result = _make_extraction_result(conversation_summary=None)
-
-    blueprints = module._candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-        candidate_adapter_key="observation",
-    )
-
-    assert len(blueprints) == 1
-    assert (
-        blueprints[0].conversation_context_summary
-        == "Prepared deterministic observation candidate for Candidate Alpha."
-    )
-
-
-def test_candidate_blueprints_preserve_domain_envelope_projection_ref():
-    extraction_result = _make_extraction_result(
-        items=[
-            {
-                **_make_item(label="Projected Candidate"),
-                "domain_envelope_projection_ref": {
-                    "envelope_id": "env-1",
-                    "object_id": "object-1",
-                    "envelope_revision": 4,
-                },
-            }
-        ]
-    )
-
-    blueprints = module._candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-        candidate_adapter_key="observation",
-    )
-
-    assert len(blueprints) == 1
-    assert blueprints[0].envelope_id == "env-1"
-    assert blueprints[0].object_id == "object-1"
-    assert blueprints[0].envelope_revision == 4
-    assert "domain_envelope_projection_ref" not in blueprints[0].payload
-
-
-def test_candidate_blueprints_do_not_accept_projection_ref_alias():
-    extraction_result = _make_extraction_result(
-        items=[
-            {
-                **_make_item(label="Projected Candidate"),
-                "projection_ref": {
-                    "envelope_id": "env-1",
-                    "object_id": "object-1",
-                    "envelope_revision": 4,
-                },
-            }
-        ]
-    )
-
-    blueprints = module._candidate_blueprints(  # noqa: SLF001
-        extraction_result,
-        extraction_result.payload_json,
-        candidate_adapter_key="observation",
-    )
-
-    assert len(blueprints) == 1
-    assert blueprints[0].envelope_id is None
-    assert blueprints[0].object_id is None
-    assert blueprints[0].envelope_revision is None
-
-
 @pytest.mark.asyncio
-async def test_run_curation_prep_maps_allele_candidates_from_domain_envelope_objects(monkeypatch):
-    first = _make_allele_domain_payload(
-        label="crb11A22",
-        normalized_id="ALLELE:0000001",
-        evidence_record_ids=["evidence-1"],
-        index=1,
-    )
-    second = _make_allele_domain_payload(
-        label="crb8F105",
-        normalized_id="ALLELE:0000002",
-        evidence_record_ids=["evidence-2"],
-        index=2,
-    )
+async def test_run_curation_prep_allele_scope_uses_envelope_refs_not_prep_candidates(
+    monkeypatch,
+):
     extraction_result = CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": "extract-allele-1",
@@ -580,33 +420,15 @@ async def test_run_curation_prep_maps_allele_candidates_from_domain_envelope_obj
             "candidate_count": 2,
             "conversation_summary": None,
             "payload_json": {
-                "alleles": [
-                    {
-                        "mention": "legacy-only-allele",
-                        "associated_gene": "Legacy",
-                        "evidence_record_ids": ["legacy-evidence"],
-                    }
-                ],
+                "summary": "Allele envelope ready.",
                 "curatable_objects": [
-                    *first["supporting_objects"],
-                    first["association"],
-                    *second["supporting_objects"],
-                    second["association"],
+                    _make_allele_domain_payload(
+                        label="crb11A22",
+                        normalized_id="ALLELE:0000001",
+                        index=1,
+                    )["association"],
                 ],
-                "metadata": {
-                    "evidence_records": [
-                        _make_evidence_record(
-                            evidence_record_id="evidence-1",
-                            entity="crb11A22",
-                            verified_quote="crb11A22 has fused rhabdomeres.",
-                        ),
-                        _make_evidence_record(
-                            evidence_record_id="evidence-2",
-                            entity="crb8F105",
-                            verified_quote="crb8F105 truncates the protein.",
-                        ),
-                    ]
-                },
+                "metadata": {"evidence_records": [_make_evidence_record()]},
                 "run_summary": {"candidate_count": 2},
             },
             "created_at": "2026-03-20T21:55:00Z",
@@ -614,7 +436,24 @@ async def test_run_curation_prep_maps_allele_candidates_from_domain_envelope_obj
         }
     )
 
-    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
+    def _fake_ensure(record, *, persist, db=None):
+        assert record is extraction_result
+        assert persist is True
+        return CurationPrepEnvelopeRef(
+            envelope_id="env-allele-1",
+            envelope_revision=1,
+            source_extraction_result_id="extract-allele-1",
+            domain_pack_id="fixture.alliance.allele",
+            review_row_count=2,
+        )
+
+    captured: dict[str, object] = {}
+
+    def _fake_persist(request, *, db=None):
+        captured["request"] = request
+
+    monkeypatch.setattr(module, "_ensure_domain_envelope_materialization", _fake_ensure)
+    monkeypatch.setattr(module, "persist_extraction_result", _fake_persist)
 
     prep_output = await module.run_curation_prep(
         [extraction_result],
@@ -625,166 +464,7 @@ async def test_run_curation_prep_maps_allele_candidates_from_domain_envelope_obj
         ),
     )
 
-    assert [candidate.payload["label"] for candidate in prep_output.candidates] == [
-        "crb11A22",
-        "crb8F105",
-    ]
-    assert prep_output.candidates[0].payload["entity_type"] == "allele"
-    assert prep_output.candidates[0].payload["source_mentions"] == ["crb11A22"]
-    assert prep_output.candidates[0].payload["normalized_id"] == "ALLELE:0000001"
-    assert prep_output.candidates[0].payload["associated_gene"] == "Crumbs"
-    assert prep_output.candidates[0].evidence_records[0].anchor.snippet_text == (
-        "crb11A22 has fused rhabdomeres."
-    )
-    assert all(
-        candidate.payload["label"] != "legacy-only-allele"
-        for candidate in prep_output.candidates
-    )
-
-
-@pytest.mark.asyncio
-async def test_run_curation_prep_allele_domain_objects_still_require_evidence_ids(
-    monkeypatch,
-):
-    first = _make_allele_domain_payload(
-        label="crb11A22",
-        normalized_id="ALLELE:0000001",
-        evidence_record_ids=["evidence-1"],
-        index=1,
-    )
-    second = _make_allele_domain_payload(
-        label="crb8F105",
-        normalized_id="ALLELE:0000002",
-        evidence_record_ids=[],
-        index=2,
-    )
-    second["association"]["payload"]["evidence_record_ids"] = ["evidence-2"]
-    extraction_result = CurationExtractionResultRecord.model_validate(
-        {
-            "extraction_result_id": "extract-allele-2",
-            "document_id": "document-1",
-            "adapter_key": "allele",
-            "agent_key": "allele_extractor",
-            "source_kind": CurationExtractionSourceKind.CHAT,
-            "origin_session_id": "chat-session-1",
-            "trace_id": "trace-upstream",
-            "flow_run_id": None,
-            "user_id": "user-upstream",
-            "candidate_count": 2,
-            "conversation_summary": None,
-            "payload_json": {
-                "curatable_objects": [
-                    *first["supporting_objects"],
-                    first["association"],
-                    *second["supporting_objects"],
-                    second["association"],
-                ],
-                "metadata": {
-                    "evidence_records": [
-                        _make_evidence_record(
-                            evidence_record_id="evidence-1",
-                            entity="crb11A22",
-                            verified_quote="crb11A22 has fused rhabdomeres.",
-                        ),
-                        _make_evidence_record(
-                            evidence_record_id="evidence-2",
-                            entity="crb8F105",
-                            verified_quote="crb8F105 truncates the protein.",
-                        ),
-                    ]
-                },
-                "run_summary": {"candidate_count": 2},
-            },
-            "created_at": "2026-03-20T21:55:00Z",
-            "metadata": {},
-        }
-    )
-
-    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
-
-    prep_output = await module.run_curation_prep(
-        [extraction_result],
-        scope_confirmation=CurationPrepScopeConfirmation(
-            confirmed=True,
-            adapter_keys=["allele"],
-            notes=["User confirmed allele prep scope."],
-        ),
-    )
-
-    assert [candidate.payload["label"] for candidate in prep_output.candidates] == ["crb11A22"]
-    assert prep_output.run_metadata.warnings == ["Skipped 1 candidate without verified evidence."]
-
-
-@pytest.mark.asyncio
-async def test_run_curation_prep_allele_domain_objects_derive_label_from_reference(
-    monkeypatch,
-):
-    first = _make_allele_domain_payload(
-        label="crb11A22",
-        normalized_id="ALLELE:0000001",
-        evidence_record_ids=["evidence-1"],
-        index=1,
-    )
-    second = _make_allele_domain_payload(
-        label="crb8F105",
-        normalized_id="ALLELE:0000002",
-        evidence_record_ids=["evidence-2"],
-        index=2,
-    )
-    second["association"]["payload"].pop("allele_label")
-    extraction_result = CurationExtractionResultRecord.model_validate(
-        {
-            "extraction_result_id": "extract-allele-3",
-            "document_id": "document-1",
-            "adapter_key": "allele",
-            "agent_key": "allele_extractor",
-            "source_kind": CurationExtractionSourceKind.CHAT,
-            "origin_session_id": "chat-session-1",
-            "trace_id": "trace-upstream",
-            "flow_run_id": None,
-            "user_id": "user-upstream",
-            "candidate_count": 2,
-            "conversation_summary": None,
-            "payload_json": {
-                "curatable_objects": [
-                    *first["supporting_objects"],
-                    first["association"],
-                    *second["supporting_objects"],
-                    second["association"],
-                ],
-                "metadata": {
-                    "evidence_records": [
-                        _make_evidence_record(
-                            evidence_record_id="evidence-1",
-                            entity="crb11A22",
-                            verified_quote="crb11A22 has fused rhabdomeres.",
-                        ),
-                        _make_evidence_record(
-                            evidence_record_id="evidence-2",
-                            entity="crb8F105",
-                            verified_quote="crb8F105 truncates the protein.",
-                        ),
-                    ]
-                },
-                "run_summary": {"candidate_count": 2},
-            },
-            "created_at": "2026-03-20T21:55:00Z",
-            "metadata": {},
-        }
-    )
-
-    monkeypatch.setattr(module, "persist_extraction_result", lambda *_args, **_kwargs: None)
-
-    prep_output = await module.run_curation_prep(
-        [extraction_result],
-        scope_confirmation=CurationPrepScopeConfirmation(
-            confirmed=True,
-            adapter_keys=["allele"],
-            notes=["User confirmed allele prep scope."],
-        ),
-    )
-
-    assert [candidate.payload["label"] for candidate in prep_output.candidates] == [
-        "crb11A22",
-        "crb8F105",
-    ]
+    assert prep_output.candidates == []
+    assert prep_output.review_row_count == 2
+    assert prep_output.envelope_refs[0].domain_pack_id == "fixture.alliance.allele"
+    assert captured["request"].candidate_count == 2

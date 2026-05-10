@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from unittest.mock import patch
@@ -80,7 +81,11 @@ def submission_e2e_context(client: TestClient, test_db):
         CurationReviewSession,
         CurationSubmissionRecord,
         CurationValidationSnapshot,
+        DomainEnvelopeHistory,
         DomainEnvelopeModel,
+        DomainEnvelopeObject,
+        DomainEnvelopeProjectionIndex,
+        DomainValidationFinding,
     )
     from src.models.sql.database import Base
     from src.models.sql.pdf_document import PDFDocument
@@ -94,6 +99,10 @@ def submission_e2e_context(client: TestClient, test_db):
             CurationReviewSession.__table__,
             CurationExtractionResultRecord.__table__,
             DomainEnvelopeModel.__table__,
+            DomainEnvelopeObject.__table__,
+            DomainValidationFinding.__table__,
+            DomainEnvelopeHistory.__table__,
+            DomainEnvelopeProjectionIndex.__table__,
             CurationCandidate.__table__,
             CurationEvidenceRecord.__table__,
             CurationDraft.__table__,
@@ -176,6 +185,31 @@ def submission_e2e_context(client: TestClient, test_db):
             CurationReviewSession.id.in_(session_ids)
         ).delete(synchronize_session=False)
 
+    envelope_ids = [
+        row[0]
+        for row in (
+            test_db.query(DomainEnvelopeModel.envelope_id)
+            .filter(DomainEnvelopeModel.document_id == document_id)
+            .all()
+        )
+    ]
+    if envelope_ids:
+        test_db.query(DomainEnvelopeProjectionIndex).filter(
+            DomainEnvelopeProjectionIndex.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeHistory).filter(
+            DomainEnvelopeHistory.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainValidationFinding).filter(
+            DomainValidationFinding.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeObject).filter(
+            DomainEnvelopeObject.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+        test_db.query(DomainEnvelopeModel).filter(
+            DomainEnvelopeModel.envelope_id.in_(envelope_ids)
+        ).delete(synchronize_session=False)
+
     test_db.query(CurationExtractionResultRecord).filter(
         CurationExtractionResultRecord.document_id == document_id
     ).delete(synchronize_session=False)
@@ -184,92 +218,111 @@ def submission_e2e_context(client: TestClient, test_db):
     test_db.commit()
 
 
-def _reference_prep_output_payload() -> dict[str, object]:
+def _gene_envelope_extraction_payload(
+    submission_e2e_context,
+    *,
+    extraction_result_id: str,
+    origin_session_id: str,
+    trace_id: str,
+    flow_run_id: str | None,
+    envelope_id: str,
+) -> dict[str, object]:
     return {
-        "candidates": [
-            {
-                "adapter_key": "reference_adapter",
-                "payload": {
-                    "citation": {
-                        "title": "Adapter-owned reference scaffold in practice",
-                        "authors": ["Ada Lovelace", "Grace Hopper"],
-                        "journal": "Journal of Adapter Boundaries",
-                        "publication_year": "2025",
+        "extraction_result_id": extraction_result_id,
+        "document_id": submission_e2e_context["document_id"],
+        "adapter_key": "gene",
+        "agent_key": "gene_extractor",
+        "source_kind": "chat",
+        "origin_session_id": origin_session_id,
+        "trace_id": trace_id,
+        "flow_run_id": flow_run_id,
+        "user_id": submission_e2e_context["current_user_auth_sub"],
+        "candidate_count": 1,
+        "conversation_summary": "Conversation focused on evidence-backed extraction findings.",
+        "payload_json": {
+            "summary": "Prepared one domain-envelope fixture object.",
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
+                    "pending_ref_id": f"{envelope_id}-object-1",
+                    "payload": {
+                        "gene_symbol": "alpha-1",
+                        "entity_type": "gene",
+                        "normalized_id": "FB:FBgn0000008",
+                        "source_mentions": ["Alpha mention"],
                     },
-                    "identifiers": {
-                        "doi": "10.1000/reference-1",
+                    "field_refs": [
+                        {
+                            "object_ref": {
+                                "pending_ref_id": f"{envelope_id}-object-1",
+                                "object_type": "gene_mention_evidence",
+                            },
+                            "field_path": "gene_symbol",
+                        },
+                        {
+                            "object_ref": {
+                                "pending_ref_id": f"{envelope_id}-object-1",
+                                "object_type": "gene_mention_evidence",
+                            },
+                            "field_path": "entity_type",
+                        },
+                        {
+                            "object_ref": {
+                                "pending_ref_id": f"{envelope_id}-object-1",
+                                "object_type": "gene_mention_evidence",
+                            },
+                            "field_path": "normalized_id",
+                        },
+                        {
+                            "object_ref": {
+                                "pending_ref_id": f"{envelope_id}-object-1",
+                                "object_type": "gene_mention_evidence",
+                            },
+                            "field_path": "source_mentions[0]",
+                        },
+                    ],
+                    "evidence_record_ids": ["alpha-1-evidence-1"],
+                    "metadata": {
+                        "semantic_source": "curatable_objects",
+                        "workspace_display": {
+                            "primary_label_field": "gene_symbol",
+                            "secondary_label_field": "normalized_id",
+                            "summary_fields": [
+                                "gene_symbol",
+                                "entity_type",
+                                "normalized_id",
+                                "source_mentions[0]",
+                            ],
+                            "projection_key": f"{envelope_id}-object-1",
+                        },
                     },
-                },
+                }
+            ],
+            "metadata": {
                 "evidence_records": [
                     {
-                        "evidence_record_id": "reference-evidence-title",
-                        "source": "extracted",
-                        "extraction_result_id": "prep-extract-reference",
-                        "field_paths": ["citation.title"],
-                        "anchor": {
-                            "anchor_kind": "snippet",
-                            "locator_quality": "exact_quote",
-                            "supports_decision": "supports",
-                            "snippet_text": "Adapter-owned reference scaffold in practice",
-                            "sentence_text": "Adapter-owned reference scaffold in practice",
-                            "normalized_text": None,
-                            "viewer_search_text": "Adapter-owned reference scaffold in practice",
-                            "page_number": 2,
-                            "page_label": None,
-                            "section_title": "Results",
-                            "subsection_title": None,
-                            "figure_reference": None,
-                            "table_reference": None,
-                            "chunk_ids": ["chunk-reference-title"],
-                        },
-                        "notes": ["The title is quoted directly from the manuscript."],
-                    },
-                    {
-                        "evidence_record_id": "reference-evidence-doi",
-                        "source": "extracted",
-                        "extraction_result_id": "prep-extract-reference",
-                        "field_paths": ["identifiers.doi"],
-                        "anchor": {
-                            "anchor_kind": "snippet",
-                            "locator_quality": "exact_quote",
-                            "supports_decision": "supports",
-                            "snippet_text": "10.1000/reference-1",
-                            "sentence_text": "10.1000/reference-1",
-                            "normalized_text": None,
-                            "viewer_search_text": "10.1000/reference-1",
-                            "page_number": 4,
-                            "page_label": None,
-                            "section_title": "References",
-                            "subsection_title": None,
-                            "figure_reference": None,
-                            "table_reference": None,
-                            "chunk_ids": ["chunk-reference-doi"],
-                        },
-                        "notes": ["The DOI is present in the reference block."],
-                    },
+                        "evidence_record_id": "alpha-1-evidence-1",
+                        "entity": "alpha-1",
+                        "verified_quote": "alpha-1 was supported by a verified observation.",
+                        "page": 6,
+                        "section": "Results",
+                        "subsection": "Observation set",
+                        "chunk_id": "chunk-alpha-1",
+                        "figure_reference": "Figure 3B",
+                    }
                 ],
-                "conversation_context_summary": (
-                    "Conversation narrowed the workspace to a single supporting reference."
-                ),
-            }
-        ],
-        "run_metadata": {
-            "model_name": "gpt-5.4-mini",
-            "token_usage": {
-                "input_tokens": 90,
-                "output_tokens": 35,
-                "total_tokens": 125,
+                "provenance": {"semantic_source": "curatable_objects"},
             },
-            "processing_notes": [
-                "Reference candidate normalized by the adapter scaffold.",
-            ],
-            "warnings": [],
+            "run_summary": {"candidate_count": 1, "kept_count": 1},
         },
+        "created_at": "2026-03-28T12:00:00Z",
+        "metadata": {"envelope_id": envelope_id},
     }
 
 
 @pytest.mark.asyncio
-async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anchors(
+async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_rows(
     submission_e2e_context,
     test_db,
 ):
@@ -300,40 +353,84 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
             "candidate_count": 1,
             "conversation_summary": "Conversation focused on evidence-backed extraction findings.",
             "payload_json": {
-                "items": [
+                "summary": "Prepared one domain-envelope fixture object.",
+                "curatable_objects": [
                     {
-                        "gene_symbol": "alpha-1",
-                        "entity_type": "gene",
-                        "normalized_id": "FB:FBgn0000008",
-                        "source_mentions": ["Alpha mention"],
-                        "evidence": [
+                        "object_type": "gene_mention_evidence",
+                        "object_role": "validated_reference",
+                        "pending_ref_id": "gene-fixture-review-object-1",
+                        "payload": {
+                            "gene_symbol": "alpha-1",
+                            "entity_type": "gene",
+                            "normalized_id": "FB:FBgn0000008",
+                            "source_mentions": ["Alpha mention"],
+                        },
+                        "field_refs": [
                             {
-                                "entity": "alpha-1",
-                                "verified_quote": "alpha-1 was supported by a verified observation.",
-                                "page": 6,
-                                "section": "Results",
-                                "subsection": "Observation set",
-                                "chunk_id": "chunk-alpha-1",
-                                "figure_reference": "Figure 3B",
-                            }
+                                "object_ref": {
+                                    "pending_ref_id": "gene-fixture-review-object-1",
+                                    "object_type": "gene_mention_evidence",
+                                },
+                                "field_path": "gene_symbol",
+                            },
+                            {
+                                "object_ref": {
+                                    "pending_ref_id": "gene-fixture-review-object-1",
+                                    "object_type": "gene_mention_evidence",
+                                },
+                                "field_path": "entity_type",
+                            },
+                            {
+                                "object_ref": {
+                                    "pending_ref_id": "gene-fixture-review-object-1",
+                                    "object_type": "gene_mention_evidence",
+                                },
+                                "field_path": "normalized_id",
+                            },
+                            {
+                                "object_ref": {
+                                    "pending_ref_id": "gene-fixture-review-object-1",
+                                    "object_type": "gene_mention_evidence",
+                                },
+                                "field_path": "source_mentions[0]",
+                            },
                         ],
+                        "evidence_record_ids": ["alpha-1-evidence-1"],
+                        "metadata": {
+                            "semantic_source": "curatable_objects",
+                            "workspace_display": {
+                                "primary_label_field": "gene_symbol",
+                                "secondary_label_field": "normalized_id",
+                                "summary_fields": [
+                                    "gene_symbol",
+                                    "entity_type",
+                                    "normalized_id",
+                                    "source_mentions[0]",
+                                ],
+                                "projection_key": "gene-fixture-review-object-1",
+                            }
+                        },
                     }
                 ],
-                "evidence_records": [
-                    {
-                        "entity": "alpha-1",
-                        "verified_quote": "alpha-1 was supported by a verified observation.",
-                        "page": 6,
-                        "section": "Results",
-                        "subsection": "Observation set",
-                        "chunk_id": "chunk-alpha-1",
-                        "figure_reference": "Figure 3B",
-                    }
-                ],
-                "run_summary": {"candidate_count": 1},
+                "metadata": {
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "alpha-1-evidence-1",
+                            "entity": "alpha-1",
+                            "verified_quote": "alpha-1 was supported by a verified observation.",
+                            "page": 6,
+                            "section": "Results",
+                            "subsection": "Observation set",
+                            "chunk_id": "chunk-alpha-1",
+                            "figure_reference": "Figure 3B",
+                        }
+                    ],
+                    "provenance": {"semantic_source": "curatable_objects"},
+                },
+                "run_summary": {"candidate_count": 1, "kept_count": 1},
             },
             "created_at": "2026-03-28T12:00:00Z",
-            "metadata": {},
+            "metadata": {"envelope_id": "gene-fixture-review-envelope"},
         }
     )
 
@@ -352,7 +449,9 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
         ),
     )
 
-    assert len(prep_output.candidates) == 1
+    assert prep_output.candidates == []
+    assert prep_output.review_row_count == 1
+    assert len(prep_output.envelope_refs) == 1
 
     bootstrap_response = await bootstrap_document_session(
         submission_e2e_context["document_id"],
@@ -368,24 +467,25 @@ async def test_deterministic_prep_bootstrap_preserves_tool_verified_evidence_anc
     workspace = get_session_workspace(test_db, bootstrap_response.session.session_id)
     candidate = workspace.workspace.candidates[0]
     assert candidate.adapter_key == "gene"
+    assert candidate.projection_ref.envelope_id == "gene-fixture-review-envelope"
+    assert candidate.projection_ref.envelope_revision == (
+        prep_output.envelope_refs[0].envelope_revision
+    )
+    assert candidate.projection_ref.object_id == "gene-fixture-review-object-1"
+    assert candidate.normalized_payload == {}
+    assert candidate.metadata["semantic_source"] == "domain_envelope.objects"
+    assert candidate.metadata["projection_key"] == "gene-fixture-review-object-1"
     label_field = next(
         field for field in candidate.draft.fields if field.field_key == "gene_symbol"
     )
     assert label_field.value == "alpha-1"
-    assert candidate.evidence_anchors[0].field_keys == [
+    assert [field.field_key for field in candidate.draft.fields] == [
         "gene_symbol",
         "entity_type",
         "normalized_id",
-        "source_mentions.0",
+        "source_mentions[0]",
     ]
-    assert candidate.evidence_anchors[0].anchor.snippet_text == (
-        "alpha-1 was supported by a verified observation."
-    )
-    assert candidate.evidence_anchors[0].anchor.page_number == 6
-    assert candidate.evidence_anchors[0].anchor.section_title == "Results"
-    assert candidate.evidence_anchors[0].anchor.subsection_title == "Observation set"
-    assert candidate.evidence_anchors[0].anchor.figure_reference == "Figure 3B"
-    assert candidate.evidence_anchors[0].anchor.table_reference is None
+    assert candidate.evidence_anchors == []
 
 
 def test_submission_workflow_e2e_with_retry_and_history(
@@ -395,51 +495,50 @@ def test_submission_workflow_e2e_with_retry_and_history(
     monkeypatch,
 ):
     from src.lib.curation_workspace import session_service
-    from src.lib.curation_workspace.extraction_results import persist_extraction_result
+    from src.lib.curation_workspace.curation_prep_service import (
+        CurationPrepPersistenceContext,
+        run_curation_prep,
+    )
     from src.lib.curation_workspace.models import CurationReviewSession, CurationSubmissionRecord
     from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
-    from src.schemas.curation_prep import CurationPrepAgentOutput
+    from src.schemas.curation_prep import CurationPrepScopeConfirmation
     from src.schemas.curation_workspace import (
         CurationActionType,
-        CurationExtractionPersistenceRequest,
+        CurationExtractionResultRecord,
         CurationExtractionSourceKind,
         CurationSessionStatus,
         CurationSubmissionStatus,
     )
 
-    prep_output = CurationPrepAgentOutput.model_validate(_reference_prep_output_payload())
-    prep_output_payload = prep_output.model_dump(mode="json")
-    persist_extraction_result(
-        CurationExtractionPersistenceRequest(
-            document_id=submission_e2e_context["document_id"],
-            adapter_key="reference_adapter",
-            agent_key="curation_prep",
-            source_kind=CurationExtractionSourceKind.CHAT,
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        _gene_envelope_extraction_payload(
+            submission_e2e_context,
+            extraction_result_id="extract-submission-e2e-1",
             origin_session_id="chat-session-submission-e2e",
             trace_id="trace-submission-e2e",
             flow_run_id="flow-submission-e2e",
-            user_id=submission_e2e_context["current_user_auth_sub"],
-            candidate_count=len(prep_output.candidates),
-            conversation_summary="Prepare one reference candidate for submission e2e coverage.",
-            payload_json={
-                "candidates": prep_output_payload["candidates"],
-                "run_metadata": {
-                    "model_name": "placeholder",
-                    "token_usage": {
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                    },
-                    "processing_notes": [],
-                    "warnings": [],
-                },
-            },
-            metadata={
-                "final_run_metadata": prep_output_payload["run_metadata"],
-            },
-        ),
-        db=test_db,
+            envelope_id="gene-submission-e2e-envelope",
+        )
     )
+    prep_output = asyncio.run(
+        run_curation_prep(
+            [extraction_result],
+            scope_confirmation=CurationPrepScopeConfirmation(
+                confirmed=True,
+                adapter_keys=["gene"],
+                notes=["Confirmed from chat session submission e2e."],
+            ),
+            db=test_db,
+            persistence_context=CurationPrepPersistenceContext(
+                origin_session_id="chat-session-submission-e2e",
+                trace_id="trace-submission-e2e",
+                flow_run_id="flow-submission-e2e",
+                user_id=submission_e2e_context["current_user_auth_sub"],
+                source_kind=CurationExtractionSourceKind.CHAT,
+            ),
+        )
+    )
+    assert prep_output.review_row_count == 1
 
     bootstrap_response = client.post(
         (
@@ -452,7 +551,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
     bootstrap_payload = bootstrap_response.json()
     assert bootstrap_payload["created"] is True
     session_id = bootstrap_payload["session"]["session_id"]
-    assert bootstrap_payload["session"]["adapter"]["adapter_key"] == "reference_adapter"
+    assert bootstrap_payload["session"]["adapter"]["adapter_key"] == "gene"
     assert bootstrap_payload["session"]["progress"]["total_candidates"] == 1
 
     workspace_response = client.get(
@@ -471,7 +570,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
     string_field = next(
         field
         for field in draft["fields"]
-        if isinstance(field["value"], str) and field["value"]
+        if field["field_key"] == "source_mentions[0]"
     )
     edited_value = f"{string_field['value']} (reviewed)"
 

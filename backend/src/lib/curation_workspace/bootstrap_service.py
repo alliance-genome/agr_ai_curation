@@ -445,13 +445,11 @@ def _replayable_prep_output(extraction_result: ExtractionResultModel) -> Curatio
 
     metadata = dict(extraction_result.extraction_metadata or {})
     run_metadata = metadata.get("final_run_metadata", payload.get("run_metadata"))
+    replay_payload = dict(payload)
+    if run_metadata is not None:
+        replay_payload["run_metadata"] = run_metadata
     try:
-        return CurationPrepAgentOutput.model_validate(
-            {
-                "candidates": payload.get("candidates", []),
-                "run_metadata": run_metadata,
-            }
-        )
+        return CurationPrepAgentOutput.model_validate(replay_payload)
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

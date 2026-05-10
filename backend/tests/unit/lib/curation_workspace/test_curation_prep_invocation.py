@@ -25,48 +25,52 @@ def _default_conversation_message_count(monkeypatch: pytest.MonkeyPatch) -> None
 def _make_extraction_result(
     *,
     candidate_count: int = 2,
-    adapter_key: str | None = "reference_adapter",
-    agent_key: str = "observation_extractor",
+    adapter_key: str | None = "gene",
+    agent_key: str = "gene_extractor",
     payload_json: dict | None = None,
     metadata: dict | None = None,
 ) -> CurationExtractionResultRecord:
-    default_payload = {
-        "items": [
-            {
-                "label": f"Candidate {index + 1}",
-                "entity_type": "observation",
-                "normalized_id": f"OBS:{index + 1:04d}",
-                "source_mentions": [f"Mention {index + 1}"],
-                "evidence": [
-                    {
-                        "entity": f"Candidate {index + 1}",
-                        "verified_quote": (
-                            f"Candidate {index + 1} was supported by a verified observation."
-                        ),
-                        "section": "Results",
-                        "subsection": "Observation set",
-                        "page": 4 + index,
-                        "chunk_id": f"chunk-alpha-{index + 1}",
-                    }
-                ],
-            }
-            for index in range(max(candidate_count, 0))
-        ],
-        "evidence_records": [
-            {
-                "entity": f"Candidate {index + 1}",
-                "verified_quote": (
-                    f"Candidate {index + 1} was supported by a verified observation."
-                ),
-                "section": "Results",
-                "subsection": "Observation set",
-                "page": 4 + index,
-                "chunk_id": f"chunk-alpha-{index + 1}",
-            }
-            for index in range(max(candidate_count, 0))
-        ],
-        "run_summary": {"candidate_count": candidate_count},
-    }
+    default_payload = (
+        _make_domain_envelope_extraction_payload(candidate_count)
+        if adapter_key is not None
+        else {
+            "items": [
+                {
+                    "label": f"Candidate {index + 1}",
+                    "entity_type": "observation",
+                    "normalized_id": f"OBS:{index + 1:04d}",
+                    "source_mentions": [f"Mention {index + 1}"],
+                    "evidence": [
+                        {
+                            "entity": f"Candidate {index + 1}",
+                            "verified_quote": (
+                                f"Candidate {index + 1} was supported by a verified observation."
+                            ),
+                            "section": "Results",
+                            "subsection": "Observation set",
+                            "page": 4 + index,
+                            "chunk_id": f"chunk-alpha-{index + 1}",
+                        }
+                    ],
+                }
+                for index in range(max(candidate_count, 0))
+            ],
+            "evidence_records": [
+                {
+                    "entity": f"Candidate {index + 1}",
+                    "verified_quote": (
+                        f"Candidate {index + 1} was supported by a verified observation."
+                    ),
+                    "section": "Results",
+                    "subsection": "Observation set",
+                    "page": 4 + index,
+                    "chunk_id": f"chunk-alpha-{index + 1}",
+                }
+                for index in range(max(candidate_count, 0))
+            ],
+            "run_summary": {"candidate_count": candidate_count},
+        }
+    )
     return CurationExtractionResultRecord.model_validate(
         {
             "extraction_result_id": "extract-1",
@@ -85,6 +89,40 @@ def _make_extraction_result(
             "metadata": metadata or {},
         }
     )
+
+
+def _make_domain_envelope_extraction_payload(candidate_count: int = 2) -> dict:
+    return {
+        "summary": "Domain-envelope extraction fixture.",
+        "curatable_objects": [
+            {
+                "object_type": "gene_mention_evidence",
+                "object_role": "validated_reference",
+                "pending_ref_id": f"gene-mention-evidence-{index + 1}",
+                "model_ref": "GeneMentionEvidencePayload",
+                "definition_state": "in_development",
+                "payload": {
+                    "mention": f"Candidate {index + 1}",
+                    "gene_symbol": f"GENE{index + 1}",
+                    "primary_external_id": f"EXAMPLE:{index + 1}",
+                    "taxon": "NCBITaxon:10116",
+                    "confidence": "high",
+                    "evidence_record_id": f"evidence-{index + 1}",
+                    "verified_quote": (
+                        f"Candidate {index + 1} was supported by a verified observation."
+                    ),
+                    "page": 4 + index,
+                    "section": "Results",
+                    "subsection": "Observation set",
+                    "chunk_id": f"chunk-alpha-{index + 1}",
+                },
+                "evidence_record_ids": [f"evidence-{index + 1}"],
+            }
+            for index in range(max(candidate_count, 0))
+        ],
+        "metadata": {"evidence_records": []},
+        "run_summary": {"candidate_count": candidate_count},
+    }
 
 
 def _make_allele_domain_extraction_payload(candidate_count: int = 3) -> dict:
@@ -177,51 +215,17 @@ def _make_allele_domain_extraction_payload(candidate_count: int = 3) -> dict:
 def _make_prep_output(candidate_count: int = 1) -> CurationPrepAgentOutput:
     return CurationPrepAgentOutput.model_validate(
         {
-            "candidates": [
+            "envelope_refs": [
                 {
-                    "adapter_key": "observation",
-                    "payload": {
-                        "label": f"Candidate {index + 1}",
-                        "entity_type": "observation",
-                        "normalized_id": f"OBS:000{index + 1}",
-                        "source_mentions": [f"Mention {index + 1}"],
-                    },
-                    "evidence_records": [
-                        {
-                            "evidence_record_id": f"extract-{index + 1}:candidate:1:evidence:1",
-                            "source": "extracted",
-                            "extraction_result_id": f"extract-{index + 1}",
-                            "field_paths": [
-                                "label",
-                                "entity_type",
-                                "normalized_id",
-                                "source_mentions.0",
-                            ],
-                            "anchor": {
-                                "anchor_kind": "snippet",
-                                "locator_quality": "exact_quote",
-                                "supports_decision": "supports",
-                                "snippet_text": "Verified quote.",
-                                "sentence_text": "Verified quote.",
-                                "normalized_text": None,
-                                "viewer_search_text": "Verified quote.",
-                                "page_number": 4,
-                                "page_label": None,
-                                "section_title": "Results",
-                                "subsection_title": "Observation set",
-                                "figure_reference": None,
-                                "table_reference": None,
-                                "chunk_ids": ["chunk-1"],
-                            },
-                            "notes": [],
-                        }
-                    ],
-                    "conversation_context_summary": (
-                        "Conversation focused on evidence-backed extraction findings."
-                    ),
+                    "envelope_id": "env-fixture-1",
+                    "envelope_revision": 1,
+                    "source_extraction_result_id": "extract-1",
+                    "domain_pack_id": "gene",
+                    "review_row_count": candidate_count,
                 }
-                for index in range(candidate_count)
             ],
+            "review_row_count": candidate_count,
+            "candidates": [],
             "run_metadata": {
                 "model_name": "deterministic_programmatic_mapper_v1",
                 "token_usage": {
@@ -259,11 +263,11 @@ def test_build_chat_curation_prep_preview_summarizes_scope(monkeypatch):
     assert preview.preparable_candidate_count == 2
     assert preview.extraction_result_count == 1
     assert preview.conversation_message_count == 6
-    assert preview.adapter_keys == ["reference_adapter"]
-    assert preview.discussed_adapter_keys == ["reference_adapter"]
+    assert preview.adapter_keys == ["gene"]
+    assert preview.discussed_adapter_keys == ["gene"]
     assert preview.blocking_reasons == []
     assert "You discussed 2 candidate annotations" in preview.summary_text
-    assert "reference adapter" in preview.summary_text
+    assert "gene adapter" in preview.summary_text
 
 
 def test_build_chat_curation_prep_preview_blocks_when_no_candidates(monkeypatch):
@@ -408,6 +412,65 @@ def test_build_chat_curation_prep_preview_blocks_when_no_evidence_verified_candi
     assert preview.summary_text == preview.blocking_reasons[0]
 
 
+def test_build_chat_curation_prep_preview_blocks_legacy_items_as_semantic_source(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        module,
+        "list_extraction_results",
+        lambda **_kwargs: [
+            _make_extraction_result(
+                candidate_count=1,
+                adapter_key="gene",
+                payload_json={
+                    "items": [
+                        {
+                            "label": "Candidate Alpha",
+                            "entity_type": "observation",
+                            "normalized_id": "OBS:0001",
+                            "source_mentions": ["Alpha mention"],
+                            "evidence": [
+                                {
+                                    "entity": "Candidate Alpha",
+                                    "verified_quote": (
+                                        "Candidate Alpha was supported by a verified observation."
+                                    ),
+                                    "section": "Results",
+                                    "page": 4,
+                                    "chunk_id": "chunk-alpha-1",
+                                }
+                            ],
+                        }
+                    ],
+                    "run_summary": {"candidate_count": 1},
+                },
+            )
+        ],
+    )
+
+    preview = module.build_chat_curation_prep_preview(
+        session_id="session-1",
+        user_id="user-1",
+        db=object(),
+    )
+
+    assert preview.ready is False
+    assert preview.candidate_count == 1
+    assert preview.preparable_candidate_count == 0
+    assert preview.adapter_keys == []
+    assert preview.discussed_adapter_keys == ["gene"]
+    assert preview.blocking_reasons == [
+        "No evidence-verified candidates were available to prepare for curation review."
+    ]
+    with pytest.raises(ValueError, match="No evidence-verified candidates"):
+        module.validate_chat_curation_prep_request(
+            session_id="session-1",
+            user_id="user-1",
+            db=object(),
+            requested_adapter_keys=["gene"],
+        )
+
+
 def test_build_chat_curation_prep_preview_filters_to_preparable_adapters(monkeypatch):
     monkeypatch.setattr(
         module,
@@ -485,13 +548,14 @@ def test_build_chat_curation_prep_preview_counts_allele_domain_objects_as_prepar
 
     assert preview.ready is True
     assert preview.candidate_count == 5
-    assert preview.preparable_candidate_count == 5
+    assert preview.preparable_candidate_count == 11
     assert preview.adapter_keys == ["gene", "allele"]
     assert preview.discussed_adapter_keys == ["gene", "allele"]
     assert (
         preview.summary_text
         == "You discussed 5 candidate annotations across gene and allele adapters. "
-        "Prepare all for curation review?"
+        "11 evidence-verified candidate annotations across gene and allele adapters "
+        "are ready to prepare for curation review."
     )
 
 
@@ -579,13 +643,13 @@ async def test_run_chat_curation_prep_passes_scope_confirmation_and_returns_summ
         db=object(),
     )
 
-    assert result.summary_text == "Prepared 2 candidate annotations for curation review in reference adapter."
+    assert result.summary_text == "Prepared 2 candidate annotations for curation review in gene adapter."
     assert result.document_id == "document-1"
     assert result.candidate_count == 2
-    assert result.adapter_keys == ["reference_adapter"]
+    assert result.adapter_keys == ["gene"]
     assert result.prepared_sessions == []
     assert len(captured["extraction_results"]) == 1
-    assert captured["scope_confirmation"].adapter_keys == ["reference_adapter"]
+    assert captured["scope_confirmation"].adapter_keys == ["gene"]
     assert captured["persistence_context"].origin_session_id == "session-1"
     assert captured["persistence_context"].user_id == "user-1"
 

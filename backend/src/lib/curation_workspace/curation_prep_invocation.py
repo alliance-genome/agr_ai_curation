@@ -107,7 +107,7 @@ async def run_chat_curation_prep(
                 source_kind=CurationExtractionSourceKind.CHAT,
             ),
         )
-        total_candidate_count += len(prep_output.candidates)
+        total_candidate_count += prep_output.review_row_count
         warnings.extend(
             _format_adapter_messages(
                 messages=prep_output.run_metadata.warnings,

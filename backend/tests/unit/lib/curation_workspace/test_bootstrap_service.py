@@ -395,39 +395,16 @@ def test_replayable_prep_output_uses_persisted_final_run_metadata(db_session):
         created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
     )
     extraction_result.payload_json = {
-        "candidates": [
+        "envelope_refs": [
             {
-                "adapter_key": "reference_adapter",
-                "payload": {"title": "APOE"},
-                "evidence_records": [
-                    {
-                        "evidence_record_id": "extract-1:candidate:1:evidence:1",
-                        "source": "extracted",
-                        "extraction_result_id": "extract-1",
-                        "field_paths": ["title"],
-                        "anchor": {
-                            "anchor_kind": "snippet",
-                            "locator_quality": "exact_quote",
-                            "supports_decision": "supports",
-                            "snippet_text": "APOE finding.",
-                            "sentence_text": "APOE finding.",
-                            "normalized_text": None,
-                            "viewer_search_text": "APOE finding.",
-                            "viewer_highlightable": False,
-                            "page_number": 2,
-                            "page_label": None,
-                            "section_title": "Results",
-                            "subsection_title": None,
-                            "figure_reference": None,
-                            "table_reference": None,
-                            "chunk_ids": ["chunk-1"],
-                        },
-                        "notes": [],
-                    }
-                ],
-                "conversation_context_summary": "Prepared from persisted prep output.",
+                "envelope_id": "env-review-1",
+                "envelope_revision": 2,
+                "source_extraction_result_id": "extract-1",
+                "domain_pack_id": "fixture.pack",
+                "review_row_count": 1,
             }
         ],
+        "review_row_count": 1,
         "run_metadata": {
             "model_name": "stale-model-name",
             "token_usage": {
@@ -456,11 +433,64 @@ def test_replayable_prep_output_uses_persisted_final_run_metadata(db_session):
 
     prep_output = module._replayable_prep_output(extraction_result)
 
-    assert len(prep_output.candidates) == 1
+    assert prep_output.candidates == []
+    assert prep_output.envelope_refs[0].envelope_id == "env-review-1"
     assert prep_output.run_metadata.model_name == "deterministic_programmatic_mapper_v1"
     assert prep_output.run_metadata.processing_notes == [
         "Persisted prep metadata should win during replay."
     ]
+
+
+def test_replayable_prep_output_preserves_persisted_envelope_refs(db_session):
+    document = _create_document(db_session)
+    extraction_result = _create_extraction_result(
+        db_session,
+        document_id=document.id,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-1",
+        created_at=datetime(2026, 3, 21, 15, 30, tzinfo=timezone.utc),
+        adapter_key="gene",
+    )
+    extraction_result.payload_json = {
+        "envelope_refs": [
+            {
+                "envelope_id": "env-gene-1",
+                "envelope_revision": 4,
+                "source_extraction_result_id": "extract-domain-1",
+                "domain_pack_id": "fixture.alliance.gene",
+                "review_row_count": 2,
+            }
+        ],
+        "review_row_count": 2,
+        "candidates": [],
+        "run_metadata": {
+            "model_name": "deterministic_programmatic_mapper_v1",
+            "token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+            "processing_notes": ["Envelope refs selected."],
+            "warnings": [],
+        },
+    }
+    extraction_result.extraction_metadata = {
+        "final_run_metadata": extraction_result.payload_json["run_metadata"],
+    }
+    db_session.add(extraction_result)
+    db_session.commit()
+
+    prep_output = module._replayable_prep_output(extraction_result)
+
+    assert prep_output.candidates == []
+    assert prep_output.review_row_count == 2
+    assert len(prep_output.envelope_refs) == 1
+    envelope_ref = prep_output.envelope_refs[0]
+    assert envelope_ref.envelope_id == "env-gene-1"
+    assert envelope_ref.envelope_revision == 4
+    assert envelope_ref.source_extraction_result_id == "extract-domain-1"
+    assert envelope_ref.domain_pack_id == "fixture.alliance.gene"
+    assert envelope_ref.review_row_count == 2
 
 
 @pytest.mark.asyncio
@@ -536,6 +566,106 @@ async def test_bootstrap_document_session_commits_persisted_session(monkeypatch)
     assert response.session == session_payload
     assert pipeline_request["db"] is fake_db
     assert detail_request == {"db": fake_db, "session_id": "session-123"}
+    assert fake_db.commit_calls == 1
+    assert fake_db.rollback_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_document_session_replays_envelope_refs_into_pipeline(monkeypatch):
+    class FakeDb:
+        def __init__(self):
+            self.commit_calls = 0
+            self.rollback_calls = 0
+            self._in_transaction = True
+
+        def commit(self):
+            self.commit_calls += 1
+            self._in_transaction = False
+
+        def rollback(self):
+            self.rollback_calls += 1
+            self._in_transaction = False
+
+        def in_transaction(self):
+            return self._in_transaction
+
+    payload_json = {
+        "envelope_refs": [
+            {
+                "envelope_id": "env-gene-1",
+                "envelope_revision": 4,
+                "source_extraction_result_id": "extract-domain-1",
+                "domain_pack_id": "fixture.alliance.gene",
+                "review_row_count": 2,
+            }
+        ],
+        "review_row_count": 2,
+        "candidates": [],
+        "run_metadata": {
+            "model_name": "deterministic_programmatic_mapper_v1",
+            "token_usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+            "processing_notes": ["Envelope refs selected."],
+            "warnings": [],
+        },
+    }
+    fake_db = FakeDb()
+    extraction_result = SimpleNamespace(
+        id=uuid4(),
+        adapter_key="gene",
+        source_kind=CurationExtractionSourceKind.CHAT,
+        flow_run_id="flow-1",
+        origin_session_id="chat-session-1",
+        trace_id="trace-1",
+        payload_json=payload_json,
+        extraction_metadata={"final_run_metadata": payload_json["run_metadata"]},
+    )
+    pipeline_request: dict[str, object] = {}
+
+    monkeypatch.setattr(module, "_require_document", lambda db, document_id: object())
+    monkeypatch.setattr(
+        module,
+        "_select_bootstrap_extraction_result",
+        lambda db, *, document_id, request: extraction_result,
+    )
+    monkeypatch.setattr(module, "find_reusable_prepared_session", lambda *args, **kwargs: None)
+
+    async def _run_post_curation_pipeline(request, *, db):
+        pipeline_request["request"] = request
+        pipeline_request["db"] = db
+        return SimpleNamespace(session_id="session-env", created=True)
+
+    monkeypatch.setattr(module, "run_post_curation_pipeline", _run_post_curation_pipeline)
+    monkeypatch.setattr(module, "get_session_detail", lambda db, session_id: {"session_id": session_id})
+    monkeypatch.setattr(
+        module,
+        "CurationDocumentBootstrapResponse",
+        lambda *, created, session: SimpleNamespace(created=created, session=session),
+    )
+
+    response = await module.bootstrap_document_session(
+        "document-1",
+        CurationDocumentBootstrapRequest(
+            origin_session_id="chat-session-1",
+            adapter_key="gene",
+        ),
+        current_user_id="user-1",
+        db=fake_db,
+    )
+
+    assert response.created is True
+    assert response.session == {"session_id": "session-env"}
+    assert pipeline_request["db"] is fake_db
+    request = pipeline_request["request"]
+    assert request.prep_output.candidates == []
+    assert request.prep_output.review_row_count == 2
+    assert request.prep_output.envelope_refs[0].envelope_id == "env-gene-1"
+    assert request.prep_output.envelope_refs[0].envelope_revision == 4
+    assert request.prep_output.envelope_refs[0].review_row_count == 2
+    assert request.prep_extraction_result_id == str(extraction_result.id)
     assert fake_db.commit_calls == 1
     assert fake_db.rollback_calls == 0
 
