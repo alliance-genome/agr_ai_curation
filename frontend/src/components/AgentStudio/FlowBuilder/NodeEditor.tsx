@@ -22,6 +22,7 @@ import {
   Divider,
   Tooltip,
   Alert,
+  Chip,
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
 import CloseIcon from '@mui/icons-material/Close'
@@ -30,7 +31,7 @@ import DeleteIcon from '@mui/icons-material/Delete'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import DescriptionIcon from '@mui/icons-material/Description'
 
-import type { NodeEditorProps, InputSource } from './types'
+import type { NodeEditorProps, InputSource, ValidationAttachmentSelection } from './types'
 import {
   isOutputFormatterAgentFromMetadata,
   resolveOutputFormatterIncludeEvidence,
@@ -130,6 +131,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const [includeEvidence, setIncludeEvidence] = useState(false)
   const [outputFilenameTemplate, setOutputFilenameTemplate] = useState('')
   const [outputKey, setOutputKey] = useState('')
+  const [validationAttachments, setValidationAttachments] = useState<ValidationAttachmentSelection[]>([])
 
   // Check if this is a PDF agent (input source is hardcoded to PDF document)
   const isPdfAgent = node?.data.agent_id === 'pdf_extraction'
@@ -141,6 +143,16 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
     new Set([...availableVariables, ...BUILT_IN_TEMPLATE_VARIABLES])
   )
   const customInputError = inputSource === 'custom' && !customInput.trim()
+  const missingOptOutReason = validationAttachments.some(
+    (attachment) => (
+      attachment.state === 'active'
+      && !attachment.enabled
+      && (attachment.required || attachment.export_blocking)
+      && attachment.allow_opt_out
+      && attachment.opt_out_reason_required
+      && !attachment.opt_out_reason?.trim()
+    )
+  )
 
   // Initialize form when node changes
   useEffect(() => {
@@ -163,6 +175,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
       )
       setOutputFilenameTemplate(node.data.output_filename_template || '')
       setOutputKey(node.data.output_key || `${node.data.agent_id}_output`)
+      setValidationAttachments(node.data.validation_attachments || [])
     }
   }, [node, isPdfAgent, hasIncomingEdge, agentMetadata])
 
@@ -170,6 +183,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const handleSave = () => {
     if (!node) return
     if (customInputError) return
+    if (missingOptOutReason) return
 
     const nextIncludeEvidence = agentMetadataEntry
       ? resolveOutputFormatterIncludeEvidence(
@@ -188,6 +202,9 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         ? outputFilenameTemplate.trim() || undefined
         : undefined,
       output_key: outputKey,
+      validation_attachments: validationAttachments.length > 0
+        ? validationAttachments
+        : undefined,
     })
 
     // Mark as manually configured when user saves (user has taken control)
@@ -203,6 +220,22 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
 
   const handleInsertOutputFilenameVariable = (variable: string) => {
     setOutputFilenameTemplate((prev) => prev + `{{${variable}}}`)
+  }
+
+  const handleValidationToggle = (attachmentId: string, enabled: boolean) => {
+    setValidationAttachments((current) => current.map((attachment) => (
+      attachment.attachment_id === attachmentId
+        ? { ...attachment, enabled }
+        : attachment
+    )))
+  }
+
+  const handleValidationReasonChange = (attachmentId: string, optOutReason: string) => {
+    setValidationAttachments((current) => current.map((attachment) => (
+      attachment.attachment_id === attachmentId
+        ? { ...attachment, opt_out_reason: optOutReason }
+        : attachment
+    )))
   }
 
   // Get icon from registry via hook
@@ -304,6 +337,137 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         </Box>
 
         <Divider />
+
+        {validationAttachments.length > 0 && (
+          <>
+            <Box>
+              <FieldLabel>
+                <Typography variant="caption" fontWeight={600}>
+                  Validation Attachments
+                </Typography>
+                <Tooltip title="Domain-pack metadata controls which validators are active, optional, planned, or blocked for this extraction step.">
+                  <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
+                </Tooltip>
+              </FieldLabel>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                {validationAttachments.map((attachment) => {
+                  const isRequiredPolicy = attachment.required || attachment.export_blocking
+                  const hasBinding = Boolean(attachment.validator_binding_id)
+                  const canToggle = attachment.state === 'active'
+                    && hasBinding
+                    && (!isRequiredPolicy || attachment.allow_opt_out)
+                  const showReason = attachment.state === 'active'
+                    && !attachment.enabled
+                    && isRequiredPolicy
+                    && attachment.allow_opt_out
+                  const reasonError = showReason
+                    && attachment.opt_out_reason_required
+                    && !attachment.opt_out_reason?.trim()
+                  const stateColor: 'success' | 'warning' | 'error' = attachment.state === 'active'
+                    ? 'success'
+                    : attachment.state === 'planned'
+                      ? 'warning'
+                      : 'error'
+                  return (
+                    <Box
+                      key={attachment.attachment_id}
+                      sx={{
+                        border: (theme) => `1px solid ${theme.palette.divider}`,
+                        borderRadius: 1,
+                        p: 1,
+                        backgroundColor: (theme) => alpha(theme.palette.background.default, 0.35),
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.75 }}>
+                        <Checkbox
+                          size="small"
+                          checked={attachment.enabled}
+                          disabled={!canToggle}
+                          onChange={(event) => handleValidationToggle(
+                            attachment.attachment_id,
+                            event.target.checked
+                          )}
+                          sx={{ p: 0.25 }}
+                        />
+                        <Box sx={{ flex: 1, minWidth: 0 }}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                            <Typography variant="body2" sx={{ fontSize: '0.75rem', fontWeight: 600 }}>
+                              {attachment.label || attachment.validator_id}
+                            </Typography>
+                            <Chip
+                              size="small"
+                              color={stateColor}
+                              label={attachment.state}
+                              sx={{ height: 18, fontSize: '0.6rem' }}
+                            />
+                            {attachment.export_blocking && (
+                              <Chip
+                                size="small"
+                                color="error"
+                                variant="outlined"
+                                label="blocks export"
+                                sx={{ height: 18, fontSize: '0.6rem' }}
+                              />
+                            )}
+                            {attachment.required && (
+                              <Chip
+                                size="small"
+                                color="primary"
+                                variant="outlined"
+                                label="required"
+                                sx={{ height: 18, fontSize: '0.6rem' }}
+                              />
+                            )}
+                          </Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                            {[attachment.object_type, attachment.field_path].filter(Boolean).join(' / ') || attachment.scope}
+                          </Typography>
+                          {attachment.state === 'blocked' && attachment.blocked_by && (
+                            <Typography variant="caption" color="error.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                              Blocked by {attachment.blocked_by}
+                            </Typography>
+                          )}
+                          {attachment.state === 'planned' && (
+                            <Typography variant="caption" color="warning.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                              Planned metadata only
+                            </Typography>
+                          )}
+                          {isRequiredPolicy && !attachment.allow_opt_out && attachment.state === 'active' && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                              Required by policy
+                            </Typography>
+                          )}
+                          {!hasBinding && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                              Metadata only
+                            </Typography>
+                          )}
+                        </Box>
+                      </Box>
+                      {showReason && (
+                        <TextField
+                          fullWidth
+                          size="small"
+                          value={attachment.opt_out_reason || ''}
+                          onChange={(event) => handleValidationReasonChange(
+                            attachment.attachment_id,
+                            event.target.value
+                          )}
+                          placeholder="Reason for disabling this validator"
+                          error={reasonError}
+                          helperText={reasonError ? 'A reason is required for this opt-out.' : undefined}
+                          sx={{ mt: 1 }}
+                        />
+                      )}
+                    </Box>
+                  )
+                })}
+              </Box>
+            </Box>
+
+            <Divider />
+          </>
+        )}
 
         {/* Input Source */}
         {isPdfAgent ? (
@@ -514,7 +678,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           size="small"
           startIcon={<SaveIcon />}
           onClick={handleSave}
-          disabled={customInputError}
+          disabled={customInputError || missingOptOutReason}
         >
           Apply
         </Button>

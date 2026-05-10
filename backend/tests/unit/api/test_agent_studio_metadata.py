@@ -42,6 +42,32 @@ class TestGetRegistryMetadata:
         assert metadata.subcategory == "Entity"
         assert metadata.supervisor_tool == "query_test_specialist"
 
+    def test_agent_metadata_supports_validation_attachments(self):
+        """AgentMetadata should carry flow-builder validation attachment options."""
+        from src.api.agent_studio import AgentMetadata
+
+        metadata = AgentMetadata(
+            name="Test Agent",
+            icon="🧪",
+            category="Extraction",
+            validation_attachments=[
+                {
+                    "attachment_id": "fixture",
+                    "domain_pack_id": "fixture.validation",
+                    "validator_id": "fixture.validator",
+                    "state": "active",
+                    "scope": "field",
+                    "required": True,
+                    "export_blocking": True,
+                    "default_enabled": True,
+                    "allow_opt_out": False,
+                    "opt_out_reason_required": False,
+                }
+            ],
+        )
+
+        assert metadata.validation_attachments[0]["attachment_id"] == "fixture"
+
     def test_registry_metadata_response_has_agents(self):
         """RegistryMetadataResponse should have agents dict."""
         from src.api.agent_studio import AgentMetadata, RegistryMetadataResponse
@@ -94,6 +120,20 @@ class TestGetRegistryMetadata:
         gene = result.agents.get("gene")
         assert gene is not None
         assert gene.supervisor_tool == "ask_gene_specialist"
+
+    def test_get_registry_metadata_includes_extraction_validation_attachments(self):
+        """Extraction agents should include domain-pack validation attachment options."""
+        import asyncio
+        from src.api.agent_studio import get_registry_metadata
+
+        result = asyncio.run(get_registry_metadata())
+        chemical_extractor = result.agents.get("chemical_extractor")
+
+        assert chemical_extractor is not None
+        assert chemical_extractor.validation_attachments
+        assert {
+            option["state"] for option in chemical_extractor.validation_attachments
+        }.issuperset({"active", "planned", "blocked"})
 
     def test_get_registry_metadata_includes_custom_agents_for_user(self, monkeypatch):
         """Metadata endpoint should append current user's active custom agents."""

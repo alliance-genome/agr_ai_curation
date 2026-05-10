@@ -88,6 +88,9 @@ class ValidatorBinding:
     blocked_by: str | None = None
     reason: str | None = None
     blocking: bool = False
+    required: bool = True
+    allow_opt_out: bool = False
+    opt_out_reason_required: bool = False
     required_only: bool = False
     applies_to_domain_pack_id: str | None = None
     object_types: tuple[str, ...] = ()
@@ -114,6 +117,9 @@ class ValidatorBinding:
             "metadata_source": "validator_bindings",
             "source_scope": self.source_scope,
             "blocking": self.blocking,
+            "required": self.required,
+            "allow_opt_out": self.allow_opt_out,
+            "opt_out_reason_required": self.opt_out_reason_required,
         }
         optional_values = {
             "validator": self.validator,
@@ -142,6 +148,67 @@ class ValidatorBinding:
         if self.expected_result_fields:
             details["expected_result_fields"] = dict(self.expected_result_fields)
         return details
+
+
+@dataclass(frozen=True)
+class ValidationAttachmentOption:
+    """One flow-builder attachment option derived from domain-pack metadata."""
+
+    attachment_id: str
+    domain_pack_id: str
+    domain_pack_version: str | None
+    validator_id: str
+    state: ValidationBindingState
+    scope: str
+    validator_binding_id: str | None = None
+    validation_kind: str | None = None
+    tool_name: str | None = None
+    tool_method: str | None = None
+    object_type: str | None = None
+    object_role: str | None = None
+    field_path: str | None = None
+    field_type: DomainPackFieldType | None = None
+    label: str = ""
+    description: str = ""
+    definition_state: DefinitionState = DefinitionState.STABLE
+    blocked_by: str | None = None
+    reason: str | None = None
+    required: bool = False
+    export_blocking: bool = False
+    default_enabled: bool = False
+    allow_opt_out: bool = False
+    opt_out_reason_required: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return JSON-serializable option metadata for APIs and flow payloads."""
+
+        payload: dict[str, Any] = {
+            "attachment_id": self.attachment_id,
+            "domain_pack_id": self.domain_pack_id,
+            "domain_pack_version": self.domain_pack_version,
+            "validator_id": self.validator_id,
+            "validator_binding_id": self.validator_binding_id,
+            "validation_kind": self.validation_kind,
+            "tool_name": self.tool_name,
+            "tool_method": self.tool_method,
+            "state": self.state.value,
+            "scope": self.scope,
+            "object_type": self.object_type,
+            "object_role": self.object_role,
+            "field_path": self.field_path,
+            "field_type": self.field_type.value if self.field_type is not None else None,
+            "label": self.label,
+            "description": self.description,
+            "definition_state": self.definition_state.value,
+            "blocked_by": self.blocked_by,
+            "reason": self.reason,
+            "required": self.required,
+            "export_blocking": self.export_blocking,
+            "default_enabled": self.default_enabled,
+            "allow_opt_out": self.allow_opt_out,
+            "opt_out_reason_required": self.opt_out_reason_required,
+        }
+        return {key: value for key, value in payload.items() if value is not None}
 
 
 @dataclass(frozen=True)
@@ -413,6 +480,76 @@ class DomainPackValidationRegistry:
 
         return tuple(matches)
 
+    def validation_attachment_options(self) -> tuple[ValidationAttachmentOption, ...]:
+        """Return deterministic flow-builder validation attachment options."""
+
+        options: list[ValidationAttachmentOption] = [
+            _metadata_attachment_option(
+                domain_pack=self.domain_pack,
+                entry=entry,
+            )
+            for entry in self.validator_metadata
+        ]
+
+        policies_by_binding_id: dict[str, list[FieldValidationPolicy]] = {}
+        for policy in self.field_policies:
+            for binding_id in policy.validator_binding_ids:
+                policies_by_binding_id.setdefault(binding_id, []).append(policy)
+
+        object_definitions = self.object_definitions_by_type
+        for binding in self.bindings:
+            if (
+                binding.applies_to_domain_pack_id is not None
+                and binding.applies_to_domain_pack_id != self.domain_pack.pack_id
+            ):
+                continue
+
+            matched_policies = tuple(policies_by_binding_id.get(binding.binding_id, ()))
+            if _binding_has_field_constraints(binding):
+                for policy in matched_policies:
+                    options.append(
+                        _binding_attachment_option(
+                            domain_pack=self.domain_pack,
+                            binding=binding,
+                            scope="field",
+                            object_type=policy.object_type,
+                            object_role=policy.object_role,
+                            field_path=policy.field_path,
+                            field_type=policy.field_type,
+                            export_blocking=policy.export_blocking or binding.blocking,
+                        )
+                    )
+                continue
+
+            matched_objects = _binding_target_object_definitions(
+                binding,
+                object_definitions,
+            )
+            if matched_objects:
+                for object_definition in matched_objects:
+                    options.append(
+                        _binding_attachment_option(
+                            domain_pack=self.domain_pack,
+                            binding=binding,
+                            scope="object",
+                            object_type=object_definition.object_type,
+                            object_role=_metadata_object_role(object_definition.metadata),
+                            export_blocking=binding.blocking,
+                        )
+                    )
+                continue
+
+            options.append(
+                _binding_attachment_option(
+                    domain_pack=self.domain_pack,
+                    binding=binding,
+                    scope="pack",
+                    export_blocking=binding.blocking,
+                )
+            )
+
+        return tuple(sorted(options, key=lambda option: option.attachment_id))
+
 
 def _collect_validator_metadata(
     owner_metadata: Mapping[str, Any],
@@ -479,6 +616,16 @@ def _collect_validator_bindings(
         if source_field_type is not None and not field_types:
             field_types = (source_field_type,)
 
+        blocking = _optional_bool(raw_item.get("blocking"))
+        required = _optional_bool_with_default(
+            raw_item.get("required"),
+            state is ValidationBindingState.ACTIVE,
+        )
+        allow_opt_out = _optional_bool_with_default(
+            raw_item.get("allow_opt_out"),
+            state is ValidationBindingState.ACTIVE and not required and not blocking,
+        )
+
         bindings.append(
             ValidatorBinding(
                 binding_id=_required_string(raw_item, "binding_id", "validator_bindings"),
@@ -493,7 +640,15 @@ def _collect_validator_bindings(
                 definition_state=_definition_state(raw_item),
                 blocked_by=_optional_string(raw_item.get("blocked_by")),
                 reason=_optional_string(raw_item.get("reason")),
-                blocking=_optional_bool(raw_item.get("blocking")),
+                blocking=blocking,
+                required=required,
+                allow_opt_out=allow_opt_out,
+                opt_out_reason_required=_optional_bool_with_default(
+                    raw_item.get("opt_out_reason_required"),
+                    state is ValidationBindingState.ACTIVE
+                    and allow_opt_out
+                    and (required or blocking),
+                ),
                 required_only=_optional_bool(raw_item.get("required_only")),
                 applies_to_domain_pack_id=_optional_string(
                     applies_to.get("domain_pack_id", raw_item.get("domain_pack_id"))
@@ -649,6 +804,10 @@ def _optional_string(value: Any) -> str | None:
 
 def _optional_bool(value: Any) -> bool:
     return bool(value) if value is not None else False
+
+
+def _optional_bool_with_default(value: Any, default: bool) -> bool:
+    return bool(value) if value is not None else default
 
 
 def _definition_state(raw_item: Mapping[str, Any]) -> DefinitionState:
@@ -877,6 +1036,139 @@ def _binding_targets_policy_field(
     return _binding_has_field_constraints(binding)
 
 
+def _metadata_attachment_option(
+    *,
+    domain_pack: LoadedDomainPack,
+    entry: ValidatorMetadataEntry,
+) -> ValidationAttachmentOption:
+    return ValidationAttachmentOption(
+        attachment_id=_validation_attachment_id(
+            domain_pack.pack_id,
+            "metadata",
+            entry.validator_id,
+            "pack",
+        ),
+        domain_pack_id=domain_pack.pack_id,
+        domain_pack_version=domain_pack.version,
+        validator_id=entry.validator_id,
+        state=entry.state,
+        scope="pack",
+        tool_name=entry.tool_name,
+        label=_validation_attachment_label(entry.validator_id, None),
+        description=entry.description,
+        definition_state=entry.definition_state,
+        blocked_by=entry.blocked_by,
+        reason=entry.reason,
+        default_enabled=False,
+    )
+
+
+def _binding_attachment_option(
+    *,
+    domain_pack: LoadedDomainPack,
+    binding: ValidatorBinding,
+    scope: str,
+    object_type: str | None = None,
+    object_role: str | None = None,
+    field_path: str | None = None,
+    field_type: DomainPackFieldType | None = None,
+    export_blocking: bool = False,
+) -> ValidationAttachmentOption:
+    active = binding.state is ValidationBindingState.ACTIVE
+    required = active and binding.required
+    blocks_export = active and bool(export_blocking)
+    allow_opt_out = active and binding.allow_opt_out
+    opt_out_reason_required = active and allow_opt_out and (
+        binding.opt_out_reason_required or required or blocks_export
+    )
+
+    validator_id = (
+        binding.validator
+        or binding.validation_kind
+        or binding.tool_name
+        or binding.binding_id
+    )
+    return ValidationAttachmentOption(
+        attachment_id=_validation_attachment_id(
+            domain_pack.pack_id,
+            "binding",
+            binding.binding_id,
+            scope,
+            object_type=object_type,
+            field_path=field_path,
+        ),
+        domain_pack_id=domain_pack.pack_id,
+        domain_pack_version=domain_pack.version,
+        validator_id=validator_id,
+        validator_binding_id=binding.binding_id,
+        validation_kind=binding.validation_kind,
+        tool_name=binding.tool_name,
+        tool_method=binding.tool_method,
+        state=binding.state,
+        scope=scope,
+        object_type=object_type,
+        object_role=object_role,
+        field_path=field_path,
+        field_type=field_type,
+        label=_validation_attachment_label(validator_id, field_path or object_type),
+        description=binding.reason or "",
+        definition_state=binding.definition_state,
+        blocked_by=binding.blocked_by,
+        reason=binding.reason,
+        required=required,
+        export_blocking=blocks_export,
+        default_enabled=active and required,
+        allow_opt_out=allow_opt_out,
+        opt_out_reason_required=opt_out_reason_required,
+    )
+
+
+def _validation_attachment_id(
+    domain_pack_id: str,
+    source: str,
+    source_id: str,
+    scope: str,
+    *,
+    object_type: str | None = None,
+    field_path: str | None = None,
+) -> str:
+    target_parts = [
+        domain_pack_id,
+        source,
+        source_id,
+        scope,
+        object_type or "*",
+        field_path or "*",
+    ]
+    return ":".join(target_parts)
+
+
+def _validation_attachment_label(
+    validator_id: str,
+    target: str | None,
+) -> str:
+    label = validator_id.replace("_", " ").replace(".", " ")
+    if target:
+        return f"{label} ({target})"
+    return label
+
+
+def _binding_target_object_definitions(
+    binding: ValidatorBinding,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+) -> tuple[DomainPackObjectDefinition, ...]:
+    matches: list[DomainPackObjectDefinition] = []
+    for object_definition in object_definitions.values():
+        if binding.object_types and object_definition.object_type not in binding.object_types:
+            continue
+        if binding.object_roles:
+            object_role = _metadata_object_role(object_definition.metadata)
+            if object_role not in binding.object_roles:
+                continue
+        matches.append(object_definition)
+    return tuple(matches)
+
+
 def _matching_objects(
     *,
     binding: ValidatorBinding,
@@ -978,6 +1270,7 @@ __all__ = [
     "FieldValidationPolicy",
     "ValidationBindingState",
     "ValidationRegistryError",
+    "ValidationAttachmentOption",
     "ValidatorBinding",
     "ValidatorBindingMatch",
     "ValidatorMetadataEntry",

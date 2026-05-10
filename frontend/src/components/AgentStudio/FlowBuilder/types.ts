@@ -4,6 +4,7 @@
  */
 
 import type { Node, Edge } from 'reactflow'
+import type { ValidationAttachmentOption } from '@/services/agentStudioService'
 
 // ============================================================================
 // Agent Catalog Types (from /api/agent-studio/catalog)
@@ -33,6 +34,11 @@ export interface AgentCategory {
 export type InputSource = 'user_query' | 'previous_output' | 'custom'
 export type NodeType = 'agent' | 'decision' | 'output' | 'task_input'
 
+export interface ValidationAttachmentSelection extends ValidationAttachmentOption {
+  enabled: boolean
+  opt_out_reason?: string
+}
+
 export interface FlowNodePosition {
   x: number
   y: number
@@ -54,6 +60,7 @@ export interface FlowNodeData {
   /** For output/formatter steps only. Controls the human-readable output descriptor. */
   output_filename_template?: string
   output_key: string
+  validation_attachments?: ValidationAttachmentSelection[]
 }
 
 export interface FlowNodeDefinition {
@@ -167,6 +174,7 @@ export interface FlowState {
     custom_input?: string
     output_filename_template?: string
     output_key: string
+    validation_attachments?: ValidationAttachmentSelection[]
   }>
   edges: Array<{
     source: string

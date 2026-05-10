@@ -47,6 +47,7 @@ from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
 from src.lib.file_outputs import sanitize_output_descriptor
+from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.models.sql.curation_flow import CurationFlow
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
@@ -1041,6 +1042,12 @@ def get_all_agent_tools(
             output_key = str(node_data.get("output_key") or "").strip()
             if output_key:
                 execution_state["template_variables"][output_key] = result_text
+            validation_schedule = validation_schedule_from_node_data(node_data)
+            validation_schedule_metadata = (
+                {"validation_schedule": validation_schedule}
+                if any(validation_schedule.values())
+                else {}
+            )
             candidate, step_evidence_metadata = (
                 build_extraction_envelope_candidate_with_evidence(
                     result,
@@ -1054,6 +1061,7 @@ def get_all_agent_tools(
                         "step": step_number,
                         "agent_name": agent_name,
                         **({"document_name": document_name} if document_name else {}),
+                        **validation_schedule_metadata,
                     },
                 )
             )
@@ -1070,6 +1078,7 @@ def get_all_agent_tools(
                     "output": result_text,
                     "output_preview": _truncate_tool_output(result_text),
                     "candidate": candidate,
+                    **validation_schedule_metadata,
                     **step_evidence,
                 }
             )
@@ -1333,6 +1342,27 @@ def build_supervisor_instructions(
             step_desc += " [includes evidence in output]"
         elif include_evidence is False:
             step_desc += " [excludes evidence from output]"
+        validation_schedule = validation_schedule_from_node_data(data)
+        scheduled_count = len(validation_schedule["scheduled_validators"])
+        opt_out_count = len(validation_schedule["opt_outs"])
+        planned_count = sum(
+            1
+            for item in validation_schedule["inactive_metadata"]
+            if item.get("state") == "planned"
+        )
+        blocked_count = sum(
+            1
+            for item in validation_schedule["inactive_metadata"]
+            if item.get("state") == "blocked"
+        )
+        if scheduled_count:
+            step_desc += f" [schedule {scheduled_count} validation validator(s)]"
+        if opt_out_count:
+            step_desc += f" [validation opt-outs recorded: {opt_out_count}]"
+        if planned_count:
+            step_desc += f" [planned validators visible: {planned_count}]"
+        if blocked_count:
+            step_desc += f" [blocked validators visible: {blocked_count}]"
         step_descriptions.append(step_desc)
 
     # Build document guidance if a document is loaded
@@ -1357,6 +1387,8 @@ Guidelines:
 - Call each available step exactly once, in order
 - If a step is unavailable, skip it and continue to the next available step
 - Pass relevant context from previous steps to subsequent steps
+- Treat validation schedules attached to extraction steps as runtime metadata;
+  do not ask extractor prompts to call validators directly
 - The final step typically produces output (file or response)
 
 COMPLETION: Once the final step produces output (e.g., CSV file saved, response generated),

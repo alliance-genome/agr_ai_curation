@@ -17,6 +17,7 @@ from .registry import (
 from .validation_registry import (
     DomainPackValidationRegistry,
     FieldValidationPolicy,
+    ValidationAttachmentOption,
     ValidationBindingState,
     ValidationRegistryError,
     ValidatorBinding,
@@ -39,6 +40,7 @@ __all__ = [
     "DomainPackValidationRegistry",
     "FieldValidationPolicy",
     "LoadedDomainPack",
+    "ValidationAttachmentOption",
     "ValidationBindingState",
     "ValidationRegistryError",
     "ValidationSupervisorResult",

@@ -109,6 +109,22 @@ const StepPreview = styled(Typography)(({ theme }) => ({
   WebkitBoxOrient: 'vertical',
 }))
 
+const ValidationSummary = styled(Box)(({ theme }) => ({
+  display: 'flex',
+  flexWrap: 'wrap',
+  gap: theme.spacing(0.25),
+  marginTop: theme.spacing(0.5),
+}))
+
+const ValidationPill = styled(Box)(({ theme }) => ({
+  fontSize: '0.6rem',
+  lineHeight: 1.2,
+  color: theme.palette.text.secondary,
+  backgroundColor: alpha(theme.palette.info.main, 0.08),
+  borderRadius: theme.shape.borderRadius,
+  padding: theme.spacing(0.125, 0.5),
+}))
+
 const HandleStyled = styled(Handle)(({ theme }) => ({
   width: 8,
   height: 8,
@@ -150,6 +166,16 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
     : 'Click to configure'
 
   const tooltipTitle = previewText || (isTaskInput ? 'No task instructions' : 'No custom instructions')
+  const validationAttachments = data.validation_attachments || []
+  const scheduledValidationCount = validationAttachments.filter(
+    (attachment) => attachment.state === 'active' && attachment.enabled
+  ).length
+  const plannedValidationCount = validationAttachments.filter(
+    (attachment) => attachment.state === 'planned'
+  ).length
+  const blockedValidationCount = validationAttachments.filter(
+    (attachment) => attachment.state === 'blocked'
+  ).length
 
   return (
     <>
@@ -185,6 +211,20 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
             {previewText ? previewText : <em>{emptyMessage}</em>}
           </StepPreview>
         </Tooltip>
+
+        {validationAttachments.length > 0 && (
+          <ValidationSummary>
+            {scheduledValidationCount > 0 && (
+              <ValidationPill>{scheduledValidationCount} active validation</ValidationPill>
+            )}
+            {plannedValidationCount > 0 && (
+              <ValidationPill>{plannedValidationCount} planned</ValidationPill>
+            )}
+            {blockedValidationCount > 0 && (
+              <ValidationPill>{blockedValidationCount} blocked</ValidationPill>
+            )}
+          </ValidationSummary>
+        )}
       </NodeContainer>
 
       {/* Output handle (bottom) */}

@@ -540,12 +540,17 @@ def _create_flow_handler():
         }
 
         # Validate via Pydantic schema (same validation as API endpoint)
+        from src.lib.flows.validation_attachments import (
+            apply_flow_validation_attachment_defaults,
+        )
         from src.schemas.flows import FlowDefinition
         from pydantic import ValidationError
 
         try:
             validated_flow_def = FlowDefinition(**flow_definition)
-            flow_definition = validated_flow_def.model_dump()
+            flow_definition = apply_flow_validation_attachment_defaults(
+                validated_flow_def,
+            ).model_dump()
         except ValidationError as e:
             # Extract user-friendly error message
             errors = e.errors()
@@ -554,6 +559,8 @@ def _create_flow_handler():
             else:
                 error_msg = "Flow validation failed"
             return {"success": False, "error": error_msg}
+        except ValueError as e:
+            return {"success": False, "error": str(e)}
 
         # Save to database
         try:
@@ -936,6 +943,7 @@ def _get_current_flow_handler():
             custom_input = node_data.get("custom_input")
             output_filename_template = node_data.get("output_filename_template")
             output_key = node_data.get("output_key", f"step_{i}_output")
+            validation_attachments = node_data.get("validation_attachments") or []
 
             # Check if this is a task_input node
             is_task_input = node_type == "task_input" or agent_id == "task_input"
@@ -967,6 +975,8 @@ def _get_current_flow_handler():
                 step_info["custom_input"] = custom_input
             if output_filename_template:
                 step_info["output_filename_template"] = output_filename_template
+            if validation_attachments:
+                step_info["validation_attachments"] = validation_attachments
 
             steps.append(step_info)
 
@@ -996,6 +1006,36 @@ def _get_current_flow_handler():
                     markdown_lines.append(
                         "- **Output Filename Template:** "
                         f"{_truncate_preview(output_filename_template, 100)}"
+                    )
+                if validation_attachments:
+                    active_enabled = [
+                        attachment
+                        for attachment in validation_attachments
+                        if attachment.get("state") == "active" and attachment.get("enabled")
+                    ]
+                    opted_out = [
+                        attachment
+                        for attachment in validation_attachments
+                        if attachment.get("state") == "active"
+                        and not attachment.get("enabled")
+                        and (attachment.get("required") or attachment.get("export_blocking"))
+                    ]
+                    planned = [
+                        attachment
+                        for attachment in validation_attachments
+                        if attachment.get("state") == "planned"
+                    ]
+                    blocked = [
+                        attachment
+                        for attachment in validation_attachments
+                        if attachment.get("state") == "blocked"
+                    ]
+                    markdown_lines.append(
+                        "- **Validation Attachments:** "
+                        f"{len(active_enabled)} active scheduled"
+                        + (f", {len(opted_out)} opted out with policy reason" if opted_out else "")
+                        + (f", {len(planned)} planned" if planned else "")
+                        + (f", {len(blocked)} blocked" if blocked else "")
                     )
             markdown_lines.append(f"- **Output Key:** `{output_key}`")
             markdown_lines.append("")

@@ -69,6 +69,7 @@ def _agent_node(
     custom_input=None,
     output_key=None,
     output_filename_template=None,
+    validation_attachments=None,
 ):
     """Build a minimal agent node dict."""
     data = {
@@ -87,6 +88,8 @@ def _agent_node(
         data["custom_input"] = custom_input
     if output_filename_template is not None:
         data["output_filename_template"] = output_filename_template
+    if validation_attachments is not None:
+        data["validation_attachments"] = validation_attachments
     return {
         "id": node_id,
         "type": "agent",
@@ -107,6 +110,32 @@ def _task_input_node(task_instructions="Do the thing", output_key="task_out"):
             "output_key": output_key,
             "task_instructions": task_instructions,
         },
+    }
+
+
+def _validation_attachment(
+    attachment_id: str,
+    *,
+    state: str = "active",
+    enabled: bool = True,
+    required: bool = True,
+    export_blocking: bool = False,
+    validator_binding_id: str | None = "binding-1",
+    opt_out_reason: str | None = None,
+) -> dict:
+    return {
+        "attachment_id": attachment_id,
+        "domain_pack_id": "fixture.validation",
+        "validator_id": attachment_id,
+        "validator_binding_id": validator_binding_id,
+        "state": state,
+        "scope": "field",
+        "object_type": "GeneAssertion",
+        "field_path": "gene.identifier",
+        "required": required,
+        "export_blocking": export_blocking,
+        "enabled": enabled,
+        **({"opt_out_reason": opt_out_reason} if opt_out_reason else {}),
     }
 
 
@@ -972,6 +1001,61 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_validation_attachment_schedule_is_recorded_on_completed_step(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Extraction node validation choices should feed runtime scheduling metadata."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                return "extracted"
+
+            return _tool
+
+        mock_streaming.side_effect = _make_streaming_tool
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node(
+                "n1",
+                "gene",
+                validation_attachments=[
+                    _validation_attachment("active-lookup"),
+                    _validation_attachment(
+                        "manual-opt-out",
+                        enabled=False,
+                        export_blocking=True,
+                        opt_out_reason="Curator disabled for manual review.",
+                    ),
+                    _validation_attachment(
+                        "planned-lookup",
+                        state="planned",
+                        enabled=False,
+                        required=False,
+                        validator_binding_id=None,
+                    ),
+                ],
+            ),
+        ])
+
+        tools, _, _, execution_state = get_all_agent_tools(flow, include_unavailable=True)
+        tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+        asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+
+        schedule = execution_state["completed_steps"][0]["validation_schedule"]
+        assert [item["attachment_id"] for item in schedule["scheduled_validators"]] == [
+            "active-lookup"
+        ]
+        assert [item["attachment_id"] for item in schedule["opt_outs"]] == [
+            "manual-opt-out"
+        ]
+        assert [item["attachment_id"] for item in schedule["inactive_metadata"]] == [
+            "planned-lookup"
+        ]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     def test_output_filename_template_sets_step_scoped_formatter_override(
         self, mock_get_agent, mock_streaming
     ):
@@ -1264,6 +1348,47 @@ class TestBuildSupervisorCustomInstructions:
         ])
         result = build_supervisor_instructions(flow)
         assert "[excludes evidence from output]" in result
+
+    def test_validation_attachments_are_annotated_as_schedule_metadata(self):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node(
+                "n1",
+                "gene_extractor",
+                step_goal="Extract genes",
+                validation_attachments=[
+                    _validation_attachment("active-lookup"),
+                    _validation_attachment(
+                        "manual-opt-out",
+                        enabled=False,
+                        export_blocking=True,
+                        opt_out_reason="Manual lookup required.",
+                    ),
+                    _validation_attachment(
+                        "planned-lookup",
+                        state="planned",
+                        enabled=False,
+                        required=False,
+                        validator_binding_id=None,
+                    ),
+                    _validation_attachment(
+                        "blocked-export",
+                        state="blocked",
+                        enabled=False,
+                        required=False,
+                        validator_binding_id=None,
+                    ),
+                ],
+            ),
+        ])
+
+        result = build_supervisor_instructions(flow)
+
+        assert "[schedule 1 validation validator(s)]" in result
+        assert "[validation opt-outs recorded: 1]" in result
+        assert "[planned validators visible: 1]" in result
+        assert "[blocked validators visible: 1]" in result
+        assert "do not ask extractor prompts to call validators directly" in result
 
 
 class TestBuildSupervisorDuplicateAgentRefs:

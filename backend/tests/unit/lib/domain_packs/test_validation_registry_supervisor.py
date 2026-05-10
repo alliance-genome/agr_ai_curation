@@ -102,6 +102,17 @@ metadata:
           field_types:
             - string
         blocking: true
+        allow_opt_out: true
+        opt_out_reason_required: true
+      - binding_id: fixture.optional_confidence_check
+        validation_kind: enum_value_check
+        required: false
+        applies_to:
+          domain_pack_id: fixture.validation
+          object_types:
+            - GeneAssertion
+          field_paths:
+            - confidence
     planned:
       - binding_id: fixture.planned_symbol_lookup
         validation_kind: db_backed_reference_lookup
@@ -190,7 +201,7 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
     )
     assert {
         match.binding.binding_id for match in metadata_only_matches
-    } == {"fixture.callable_validator"}
+    } == {"fixture.callable_validator", "fixture.optional_confidence_check"}
 
 
 def test_registry_exposes_planned_and_blocked_validator_metadata(tmp_path: Path):
@@ -206,6 +217,44 @@ def test_registry_exposes_planned_and_blocked_validator_metadata(tmp_path: Path)
     assert metadata_by_state[ValidationBindingState.BLOCKED] == "fixture.export_projection"
     assert binding_states["fixture.planned_symbol_lookup"] is ValidationBindingState.PLANNED
     assert binding_states["fixture.blocked_export_validator"] is ValidationBindingState.BLOCKED
+
+
+def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    options = registry.validation_attachment_options()
+    by_id = {option.attachment_id: option for option in options}
+
+    identifier_option = by_id[
+        "fixture.validation:binding:fixture.identifier_prefix:field:GeneAssertion:gene.identifier"
+    ]
+    assert identifier_option.state is ValidationBindingState.ACTIVE
+    assert identifier_option.field_path == "gene.identifier"
+    assert identifier_option.required is True
+    assert identifier_option.export_blocking is True
+    assert identifier_option.default_enabled is True
+    assert identifier_option.allow_opt_out is True
+    assert identifier_option.opt_out_reason_required is True
+
+    optional_option = by_id[
+        "fixture.validation:binding:fixture.optional_confidence_check:field:GeneAssertion:confidence"
+    ]
+    assert optional_option.required is False
+    assert optional_option.default_enabled is False
+    assert optional_option.allow_opt_out is True
+
+    planned_option = by_id[
+        "fixture.validation:binding:fixture.planned_symbol_lookup:field:GeneAssertion:gene.symbol"
+    ]
+    assert planned_option.state is ValidationBindingState.PLANNED
+    assert planned_option.default_enabled is False
+
+    blocked_option = by_id[
+        "fixture.validation:binding:fixture.blocked_export_validator:object:GeneAssertion:*"
+    ]
+    assert blocked_option.state is ValidationBindingState.BLOCKED
+    assert blocked_option.blocked_by == "ALL-999"
 
 
 def test_registry_rejects_conflicting_status_and_state_metadata(tmp_path: Path):
@@ -399,6 +448,6 @@ def test_supervisor_does_not_fake_success_for_unsupported_active_binding(tmp_pat
         for finding in result.envelope.validation_findings
         if finding.code == "domain_pack.validator_dispatch_unavailable"
     ]
-    assert len(dispatch_findings) == 1
+    assert len(dispatch_findings) == 2
     assert dispatch_findings[0].severity is ValidationFindingSeverity.WARNING
     assert dispatch_findings[0].object_ref.pending_ref_id == "gene-assertion-1"

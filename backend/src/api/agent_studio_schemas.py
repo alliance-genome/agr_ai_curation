@@ -101,6 +101,7 @@ class AgentMetadata(BaseModel):
     category: str
     subcategory: Optional[str] = None
     supervisor_tool: Optional[str] = None
+    validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class RegistryMetadataResponse(BaseModel):

@@ -139,6 +139,52 @@ async def test_create_flow_success(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch):
+    class _DB:
+        def __init__(self):
+            self.added = None
+
+        def add(self, obj):
+            self.added = obj
+
+        def commit(self):
+            return None
+
+        def refresh(self, _obj):
+            now = datetime.now(timezone.utc)
+            _obj.id = uuid4()
+            _obj.execution_count = 0
+            _obj.created_at = now
+            _obj.updated_at = now
+
+    flow_definition = _flow_definition()
+    flow_definition["nodes"][1]["data"]["agent_id"] = "chemical_extractor"
+    flow_definition["nodes"][1]["data"]["agent_display_name"] = "Chemical Extractor"
+
+    db = _DB()
+    monkeypatch.setattr(flows, "set_global_user_from_cognito", lambda *_args, **_kwargs: SimpleNamespace(id=17))
+
+    await flows.create_flow(
+        request=CreateFlowRequest(
+            name="Created",
+            description="new",
+            flow_definition=flow_definition,
+        ),
+        user={"sub": "u1"},
+        db=db,
+    )
+
+    attachments = db.added.flow_definition["nodes"][1]["data"]["validation_attachments"]
+    states = {attachment["state"] for attachment in attachments}
+
+    assert any(
+        attachment["state"] == "active" and attachment["enabled"]
+        for attachment in attachments
+    )
+    assert states.issuperset({"active", "planned", "blocked"})
+
+
+@pytest.mark.asyncio
 async def test_create_flow_maps_unique_integrity_error_to_409(monkeypatch):
     class _DB:
         def add(self, _obj):

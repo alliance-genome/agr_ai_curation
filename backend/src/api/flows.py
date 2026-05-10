@@ -28,6 +28,10 @@ from ..lib.flows.evidence_export import (
     build_flow_evidence_export_artifact,
     resolve_authorized_flow_run_extraction_results,
 )
+from ..lib.flows.validation_attachments import (
+    FlowValidationAttachmentError,
+    apply_flow_validation_attachment_defaults,
+)
 from ..models.api_schemas import OperationResult
 from ..models.sql import get_db, CurationFlow
 from ..schemas.flows import (
@@ -44,6 +48,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/flows")
 DEFAULT_FLOW_LIST_PAGE_SIZE = 50
+
+
+def _validated_flow_definition_payload(flow_definition) -> dict[str, Any]:
+    """Return flow definition JSON with metadata-backed validation defaults."""
+
+    try:
+        return apply_flow_validation_attachment_defaults(flow_definition).model_dump()
+    except FlowValidationAttachmentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def verify_flow_ownership(
@@ -283,7 +296,7 @@ async def create_flow(
         user_id=db_user.id,
         name=request.name,
         description=request.description,
-        flow_definition=request.flow_definition.model_dump(),
+        flow_definition=_validated_flow_definition_payload(request.flow_definition),
     )
 
     try:
@@ -356,7 +369,7 @@ async def update_flow(
         node_count = len(request.flow_definition.nodes) if request.flow_definition.nodes else 0
         edge_count = len(request.flow_definition.edges) if request.flow_definition.edges else 0
         logger.debug('[Flow Update] Updating flow_definition: %s nodes, %s edges', node_count, edge_count)
-        flow.flow_definition = request.flow_definition.model_dump()
+        flow.flow_definition = _validated_flow_definition_payload(request.flow_definition)
         # CRITICAL: SQLAlchemy doesn't detect changes to mutable JSONB fields
         # We must explicitly flag it as modified for the UPDATE to be emitted
         flag_modified(flow, "flow_definition")

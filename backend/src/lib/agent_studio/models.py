@@ -164,6 +164,7 @@ class FlowNodeContext(BaseModel):
     custom_input: Optional[str] = None
     output_filename_template: Optional[str] = None
     output_key: str
+    validation_attachments: List[Dict[str, object]] = Field(default_factory=list)
 
 
 class FlowEdgeContext(BaseModel):

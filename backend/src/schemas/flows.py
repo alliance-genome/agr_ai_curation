@@ -20,6 +20,72 @@ class FlowNodePosition(BaseModel):
     y: float = Field(..., description="Y coordinate")
 
 
+class FlowValidationAttachmentSelection(BaseModel):
+    """Persisted validation attachment choice for one extraction node."""
+
+    attachment_id: str = Field(..., min_length=1, max_length=500)
+    domain_pack_id: str = Field(..., min_length=1, max_length=255)
+    domain_pack_version: Optional[str] = Field(None, max_length=100)
+    validator_id: str = Field(..., min_length=1, max_length=255)
+    validator_binding_id: Optional[str] = Field(None, max_length=255)
+    validation_kind: Optional[str] = Field(None, max_length=255)
+    tool_name: Optional[str] = Field(None, max_length=255)
+    tool_method: Optional[str] = Field(None, max_length=255)
+    state: Literal["active", "planned", "blocked"]
+    scope: Literal["pack", "object", "field"]
+    object_type: Optional[str] = Field(None, max_length=255)
+    object_role: Optional[str] = Field(None, max_length=255)
+    field_path: Optional[str] = Field(None, max_length=255)
+    field_type: Optional[str] = Field(None, max_length=100)
+    label: Optional[str] = Field(None, max_length=500)
+    description: Optional[str] = Field(None, max_length=2000)
+    definition_state: Optional[str] = Field(None, max_length=100)
+    blocked_by: Optional[str] = Field(None, max_length=255)
+    reason: Optional[str] = Field(None, max_length=1000)
+    required: bool = False
+    export_blocking: bool = False
+    default_enabled: bool = False
+    allow_opt_out: bool = False
+    opt_out_reason_required: bool = False
+    enabled: bool = False
+    opt_out_reason: Optional[str] = Field(None, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_attachment_policy(self) -> "FlowValidationAttachmentSelection":
+        """Enforce required/export-blocking opt-out policy at persistence time."""
+
+        normalized_reason = (
+            self.opt_out_reason.strip()
+            if isinstance(self.opt_out_reason, str)
+            else None
+        )
+        if normalized_reason == "":
+            normalized_reason = None
+
+        if self.state in {"planned", "blocked"} and self.enabled:
+            raise ValueError(
+                "planned or blocked validation attachments cannot be enabled"
+            )
+
+        if (
+            self.state == "active"
+            and not self.enabled
+            and (self.required or self.export_blocking)
+        ):
+            if not self.allow_opt_out:
+                raise ValueError(
+                    "required or export-blocking validators cannot be disabled"
+                )
+            if self.opt_out_reason_required and not normalized_reason:
+                raise ValueError(
+                    "opt_out_reason is required when disabling a required "
+                    "or export-blocking validator"
+                )
+
+        self.opt_out_reason = normalized_reason
+        return self
+
+
 class FlowNodeData(BaseModel):
     """Configuration data for a flow node."""
 
@@ -99,6 +165,13 @@ class FlowNodeData(BaseModel):
         max_length=50,
         pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$",
         description="Variable name for downstream templates"
+    )
+    validation_attachments: List[FlowValidationAttachmentSelection] = Field(
+        default_factory=list,
+        description=(
+            "Validation attachment selections inherited from domain-pack metadata "
+            "for extraction nodes."
+        ),
     )
 
     @model_validator(mode="after")
