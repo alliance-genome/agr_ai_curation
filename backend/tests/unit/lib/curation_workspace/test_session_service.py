@@ -63,6 +63,7 @@ from src.schemas.curation_workspace import (
     CurationSortDirection,
     CurationSubmissionExecuteRequest,
     CurationSubmissionPreviewRequest,
+    CurationSubmissionReadinessBlocker,
     CurationSubmissionRetryRequest,
     CurationSubmissionStatus,
     CurationValidationScope,
@@ -2377,6 +2378,75 @@ def test_execute_submission_rejects_domain_envelope_readiness_blockers(
     assert exc.value.detail["blockers"][0]["code"] == (
         "domain_envelope.required_field_missing"
     )
+
+
+def test_execute_submission_rejects_adapter_domain_envelope_readiness_blockers(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Catalog title",
+                "shape": {"qualifier": "present"},
+            }
+        },
+    )
+
+    class AdapterBlockerExportAdapter:
+        def domain_envelope_readiness_blockers(self, *, candidate):
+            assert candidate["payload"]["artifact"]["title"] == "Catalog title"
+            assert "normalized_payload" not in candidate
+            return (
+                CurationSubmissionReadinessBlocker(
+                    envelope_id=candidate["envelope_id"],
+                    object_id=candidate["object_id"],
+                    field_path="artifact.shape",
+                    severity="blocker",
+                    status="open",
+                    code="museum.catalog.shape_required",
+                    message="Artifact shape cannot be submitted yet.",
+                    projection_ref=candidate["projection_ref"],
+                ),
+            )
+
+    fake_registry = SimpleNamespace(
+        get=lambda adapter_key: (
+            AdapterBlockerExportAdapter()
+            if adapter_key == REFERENCE_ADAPTER_KEY
+            else None
+        )
+    )
+    monkeypatch.setattr(
+        submission_module,
+        "_export_adapter_registry",
+        lambda: fake_registry,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.execute_submission(
+            db_session,
+            seeded["session_id"],
+            CurationSubmissionExecuteRequest(
+                session_id=seeded["session_id"],
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            ),
+            actor_claims={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["message"] == (
+        "Domain-envelope readiness blockers prevent direct submission"
+    )
+    assert exc.value.detail["blockers"][0]["envelope_id"] == seeded["envelope_id"]
+    assert exc.value.detail["blockers"][0]["object_id"] == "artifact-1"
+    assert exc.value.detail["blockers"][0]["field_path"] == "artifact.shape"
+    assert exc.value.detail["blockers"][0]["code"] == "museum.catalog.shape_required"
 
 
 def test_execute_submission_records_domain_envelope_submission_history(

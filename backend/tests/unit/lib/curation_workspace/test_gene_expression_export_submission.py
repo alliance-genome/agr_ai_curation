@@ -195,6 +195,11 @@ def test_gene_expression_export_maps_tmem67_fixture_to_target_db_shape():
     assert target_rows["anatomicalsite"]["lookups"]["anatomicalstructure_id"][
         "match"
     ] == {"curie": "EMAPA:17373"}
+    assert target_rows["anatomicalsite"]["columns"] == {
+        "anatomicalstructureuberontermother": False,
+        "anatomicalsubstructureuberontermother": False,
+        "cellularcomponentother": False,
+    }
     assert target_rows["anatomicalsite"]["relationships"][
         "anatomicalsite_anatomicalstructureuberonterms"
     ] == [{"curie": "UBERON:0001008", "name": "renal system"}]
@@ -217,6 +222,11 @@ def test_gene_expression_export_maps_lta_cellular_component_projection():
     assert target_rows["anatomicalsite"]["lookups"]["cellularcomponentterm_id"][
         "match"
     ] == {"curie": "GO:0005615"}
+    assert target_rows["anatomicalsite"]["columns"] == {
+        "anatomicalstructureuberontermother": False,
+        "anatomicalsubstructureuberontermother": False,
+        "cellularcomponentother": False,
+    }
     assert "anatomicalstructure_id" not in target_rows["anatomicalsite"]["lookups"]
     assert annotation["term_projections"]["cellular_component"] == {
         "curie": "GO:0005615",
@@ -245,6 +255,34 @@ def test_gene_expression_export_blockers_are_object_and_field_addressable():
             "alliance.gene_expression.required_field_missing",
         ),
     }
+
+
+def test_gene_expression_adapter_readiness_blocks_missing_anatomical_site_terms():
+    candidate = copy.deepcopy(_candidate_from_fixture())
+    candidate["payload"]["expression_pattern"]["where_expressed"] = {
+        "cellular_component_qualifiers": [
+            {"curie": "RO:0002170", "name": "present in"}
+        ],
+    }
+
+    blockers = GeneExpressionExportAdapter().domain_envelope_readiness_blockers(
+        candidate=candidate,
+    )
+
+    assert {
+        (blocker.object_id, blocker.field_path, blocker.code)
+        for blocker in blockers
+    } == {
+        (
+            "gene-expression-annotation-206552169",
+            "expression_pattern.where_expressed",
+            "alliance.gene_expression.anatomical_site_required",
+        )
+    }
+    assert blockers[0].envelope_id == "gene-expression-tmem67-mgi-206552169"
+    assert blockers[0].severity == "blocker"
+    assert blockers[0].status == "open"
+    assert blockers[0].projection_ref == candidate["projection_ref"]
 
 
 def test_gene_expression_submission_adapter_records_target_state():

@@ -8,6 +8,7 @@ from typing import Any, Mapping, Sequence
 
 from src.schemas.curation_workspace import (
     CurationExportPayloadContext,
+    CurationSubmissionReadinessBlocker,
     SubmissionMode,
     SubmissionPayloadContract,
     SubmissionTargetKey,
@@ -77,6 +78,15 @@ class DeterministicExportAdapter(ABC):
                 [*export_context.warnings, *bundle.warnings]
             ),
         )
+
+    def domain_envelope_readiness_blockers(
+        self,
+        *,
+        candidate: Mapping[str, Any],
+    ) -> tuple[CurationSubmissionReadinessBlocker, ...]:
+        """Return adapter-owned blockers for one domain-envelope candidate."""
+
+        return ()
 
     def _validate_submission_request(
         self,

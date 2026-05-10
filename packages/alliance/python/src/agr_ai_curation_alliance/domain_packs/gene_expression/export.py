@@ -47,6 +47,11 @@ GENE_EXPRESSION_CURATION_DB_TABLES = (
     "anatomicalsite_anatomicalstructureuberonterms",
     "anatomicalsite_cellularcomponentqualifiers",
 )
+ANATOMICAL_SITE_REQUIRED_COLUMNS = {
+    "anatomicalstructureuberontermother": False,
+    "anatomicalsubstructureuberontermother": False,
+    "cellularcomponentother": False,
+}
 
 
 @dataclass(frozen=True)
@@ -117,6 +122,18 @@ class GeneExpressionExportAdapter(DeterministicExportAdapter):
                 f"{self.adapter_key}-{export_context.session_id}-"
                 "gene-expression-curation-db.json"
             ),
+        )
+
+    def domain_envelope_readiness_blockers(
+        self,
+        *,
+        candidate: Mapping[str, Any],
+    ) -> tuple[CurationSubmissionReadinessBlocker, ...]:
+        """Surface gene-expression export blockers through submission readiness."""
+
+        return tuple(
+            _readiness_blocker_from_export_blocker(blocker, candidate)
+            for blocker in gene_expression_export_blockers(candidate)
         )
 
 
@@ -286,7 +303,7 @@ def _gene_expression_annotation_payload(candidate: Mapping[str, Any]) -> dict[st
     }
     anatomical_target = {
         "table": "anatomicalsite",
-        "columns": {},
+        "columns": dict(ANATOMICAL_SITE_REQUIRED_COLUMNS),
         "lookups": _drop_empty(
             {
                 "anatomicalstructure_id": _term_lookup(
@@ -465,6 +482,33 @@ def _term_lookup(value: Any) -> dict[str, Any] | None:
         return None
     match = {"curie": term["curie"]} if term.get("curie") else {"name": term["name"]}
     return {"table": "ontologyterm", "match": match, "projection": term}
+
+
+def _readiness_blocker_from_export_blocker(
+    blocker: GeneExpressionExportBlocker,
+    candidate: Mapping[str, Any],
+) -> CurationSubmissionReadinessBlocker:
+    envelope_id = blocker.envelope_id
+    if envelope_id is None:
+        raise ValueError("Gene-expression export readiness blocker is missing envelope_id")
+
+    return CurationSubmissionReadinessBlocker(
+        envelope_id=envelope_id,
+        object_id=blocker.object_id,
+        field_path=blocker.field_path,
+        severity="blocker",
+        status="open",
+        code=blocker.code,
+        message=blocker.message,
+        provider_refs=dict(_mapping(candidate.get("provider_refs"))),
+        projection_ref=dict(_mapping(candidate.get("projection_ref"))),
+        details=_drop_empty(
+            {
+                "candidate_id": blocker.candidate_id,
+                "adapter_key": candidate.get("adapter_key"),
+            }
+        ),
+    )
 
 
 def _term_payload(value: Any) -> dict[str, Any] | None:

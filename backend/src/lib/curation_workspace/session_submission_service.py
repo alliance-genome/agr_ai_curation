@@ -1036,7 +1036,7 @@ def _build_domain_envelope_object_context(
         )
     )
 
-    return _DomainEnvelopeObjectContext(
+    context = _DomainEnvelopeObjectContext(
         candidate_id=str(candidate.id),
         envelope_row=envelope_row,
         envelope=envelope,
@@ -1047,6 +1047,24 @@ def _build_domain_envelope_object_context(
         projection_refs=projection_refs,
         blockers=tuple(blockers),
         warnings=tuple(dedupe(warnings)),
+    )
+    blockers.extend(
+        _adapter_domain_envelope_readiness_blockers(
+            candidate=candidate,
+            context=context,
+        )
+    )
+    return _DomainEnvelopeObjectContext(
+        candidate_id=context.candidate_id,
+        envelope_row=context.envelope_row,
+        envelope=context.envelope,
+        domain_object=context.domain_object,
+        object_definition=context.object_definition,
+        field_definitions=context.field_definitions,
+        field_policies=context.field_policies,
+        projection_refs=context.projection_refs,
+        blockers=tuple(blockers),
+        warnings=context.warnings,
     )
 
 
@@ -1336,7 +1354,21 @@ def _domain_envelope_candidate_bundle(
     ):
         return None
 
+    return _domain_envelope_candidate_payload(candidate, context)
+
+
+def _domain_envelope_candidate_payload(
+    candidate: CurationCandidate,
+    context: _DomainEnvelopeObjectContext,
+) -> dict[str, Any]:
     domain_object = context.domain_object
+    if (
+        context.envelope_row is None
+        or context.envelope is None
+        or domain_object is None
+    ):
+        raise ValueError("Domain-envelope candidate context is incomplete")
+
     object_id = _stable_object_id(domain_object)
     object_definition = context.object_definition
     return {
@@ -1382,6 +1414,22 @@ def _domain_envelope_candidate_bundle(
             "candidate_metadata": dict(candidate.candidate_metadata or {}),
         },
     }
+
+
+def _adapter_domain_envelope_readiness_blockers(
+    *,
+    candidate: CurationCandidate,
+    context: _DomainEnvelopeObjectContext,
+) -> tuple[CurationSubmissionReadinessBlocker, ...]:
+    export_adapter = _export_adapter_registry().get(candidate.adapter_key)
+    if export_adapter is None:
+        return ()
+
+    return tuple(
+        export_adapter.domain_envelope_readiness_blockers(
+            candidate=_domain_envelope_candidate_payload(candidate, context),
+        )
+    )
 
 
 def _non_envelope_ready_candidates(
