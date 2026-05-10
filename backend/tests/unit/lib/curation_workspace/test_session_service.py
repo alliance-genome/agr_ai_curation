@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 import logging
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -31,8 +32,14 @@ from src.lib.curation_workspace.models import (
     CurationReviewSession as ReviewSessionModel,
     CurationSubmissionRecord as SubmissionModel,
     CurationValidationSnapshot as ValidationSnapshotModel,
+    DomainEnvelopeHistory,
     DomainEnvelopeModel,
+    DomainEnvelopeObject,
+    DomainEnvelopeProjectionIndex,
+    DomainValidationFinding,
 )
+from src.lib.domain_packs.loader import load_domain_pack_metadata
+from src.lib.domain_packs.registry import LoadedDomainPack
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (
@@ -64,6 +71,17 @@ from src.schemas.curation_workspace import (
     SubmissionMode,
     SubmissionPayloadContract,
 )
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    DefinitionState,
+    DomainEnvelope,
+    DomainEnvelopeStatus,
+    FieldRef,
+    ObjectRef,
+    ValidationFinding,
+    ValidationFindingSeverity,
+    ValidationFindingStatus,
+)
 
 
 @compiles(PostgresUUID, "sqlite")
@@ -81,6 +99,10 @@ TEST_TABLES = [
     ReviewSessionModel.__table__,
     ExtractionResultModel.__table__,
     DomainEnvelopeModel.__table__,
+    DomainEnvelopeObject.__table__,
+    DomainValidationFinding.__table__,
+    DomainEnvelopeHistory.__table__,
+    DomainEnvelopeProjectionIndex.__table__,
     CurationCandidate.__table__,
     EvidenceRecordModel.__table__,
     DraftModel.__table__,
@@ -529,6 +551,214 @@ def _create_decision_session(
         "first_draft_id": str(first_draft.id),
         "manual_evidence_id": str(manual_evidence.id) if manual_evidence is not None else None,
         "existing_action_log_id": str(existing_action_log.id) if existing_action_log is not None else None,
+    }
+
+
+def _museum_pack_text(*, allow_title_override: bool = False) -> str:
+    title_metadata = (
+        """
+          allow_curator_override: true
+          opt_out_reason_required: true"""
+        if allow_title_override
+        else " {}"
+    )
+    return f"""pack_id: museum.catalog
+display_name: Museum Catalog
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+object_definitions:
+  - object_type: MuseumArtifact
+    display_name: Museum artifact
+    fields:
+      - field_path: artifact.accession_id
+        field_type: string
+        display_name: Accession ID
+        required: true
+      - field_path: artifact.title
+        field_type: string
+        display_name: Title
+        required: true
+        metadata:{title_metadata}
+      - field_path: condition.status
+        field_type: string
+"""
+
+
+def _loaded_museum_pack(tmp_path, *, allow_title_override: bool = False) -> LoadedDomainPack:
+    pack_dir = tmp_path / "museum.catalog"
+    pack_dir.mkdir()
+    metadata_path = pack_dir / "domain_pack.yaml"
+    metadata_path.write_text(
+        _museum_pack_text(allow_title_override=allow_title_override),
+        encoding="utf-8",
+    )
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_dir,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+
+def _create_domain_envelope_submission_session(
+    db_session,
+    *,
+    tmp_path,
+    monkeypatch,
+    payload: dict,
+    validation_findings: list[ValidationFinding] | None = None,
+    object_metadata: dict | None = None,
+    object_definition_state: DefinitionState = DefinitionState.STABLE,
+    allow_title_override: bool = False,
+) -> dict[str, str]:
+    loaded_pack = _loaded_museum_pack(
+        tmp_path,
+        allow_title_override=allow_title_override,
+    )
+    monkeypatch.setattr(
+        submission_module,
+        "_loaded_domain_pack_for_envelope",
+        lambda _envelope: loaded_pack,
+    )
+
+    document = _create_document(db_session)
+    now = _now()
+    session_row = ReviewSessionModel(
+        id=uuid4(),
+        status=CurationSessionStatus.NEW,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        profile_key="primary",
+        document_id=document.id,
+        session_version=1,
+        total_candidates=1,
+        reviewed_candidates=1,
+        pending_candidates=0,
+        accepted_candidates=1,
+        rejected_candidates=0,
+        manual_candidates=0,
+        warnings=[],
+        prepared_at=now,
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(session_row)
+    db_session.flush()
+
+    envelope = DomainEnvelope(
+        envelope_id="museum-envelope-1",
+        domain_pack_id="museum.catalog",
+        status=DomainEnvelopeStatus.VALIDATED,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="MuseumArtifact",
+                object_id="artifact-1",
+                payload=payload,
+                metadata=object_metadata or {},
+                definition_state=object_definition_state,
+            )
+        ],
+        validation_findings=validation_findings or [],
+    )
+    envelope_revision = 1
+    db_session.add(
+        DomainEnvelopeModel(
+            envelope_id=envelope.envelope_id,
+            revision=envelope_revision,
+            project_key="museum",
+            domain_pack_key=envelope.domain_pack_id,
+            domain_pack_version=envelope.domain_pack_version,
+            status=envelope.status,
+            document_id=document.id,
+            session_id=session_row.id,
+            schema_ref_json={},
+            object_model_ref_json={},
+            model_field_ref_json={},
+            envelope_json=envelope.model_dump(mode="json"),
+            created_at=now,
+            updated_at=now,
+            checkpointed_at=now,
+        )
+    )
+    db_session.add(
+        DomainEnvelopeProjectionIndex(
+            id=uuid4(),
+            envelope_id=envelope.envelope_id,
+            object_id="artifact-1",
+            envelope_revision=envelope_revision,
+            object_type="MuseumArtifact",
+            projection_type="object_payload",
+            projection_key="artifact-1",
+            projection_status="validated",
+            schema_ref_json={},
+            object_model_ref_json={},
+            model_field_ref_json={},
+            projection_json=envelope.objects[0].model_dump(mode="json"),
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    db_session.flush()
+
+    candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=session_row.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.ACCEPTED,
+        order=0,
+        adapter_key=REFERENCE_ADAPTER_KEY,
+        profile_key="primary",
+        display_label="Artifact one",
+        envelope_id=envelope.envelope_id,
+        object_id="artifact-1",
+        envelope_revision=envelope_revision,
+        candidate_metadata={"semantic_source": "domain_envelope.objects"},
+        normalized_payload={"artifact": {"title": "POISONED LEGACY NORMALIZED PAYLOAD"}},
+        created_at=now,
+        updated_at=now,
+    )
+    db_session.add(candidate)
+    db_session.flush()
+    db_session.add(
+        DraftModel(
+            id=uuid4(),
+            candidate_id=candidate.id,
+            adapter_key=REFERENCE_ADAPTER_KEY,
+            version=1,
+            title="Poisoned legacy draft",
+            fields=[
+                {
+                    "field_key": "artifact.title",
+                    "label": "Title",
+                    "value": "POISONED LEGACY DRAFT",
+                    "seed_value": "POISONED LEGACY DRAFT",
+                    "order": 0,
+                    "required": True,
+                    "read_only": False,
+                    "dirty": False,
+                    "stale_validation": False,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                }
+            ],
+            notes=None,
+            created_at=now,
+            updated_at=now,
+            draft_metadata={},
+        )
+    )
+    session_row.current_candidate_id = candidate.id
+    db_session.add(session_row)
+    db_session.commit()
+
+    return {
+        "session_id": str(session_row.id),
+        "candidate_id": str(candidate.id),
+        "envelope_id": envelope.envelope_id,
+        "envelope_revision": str(envelope_revision),
     }
 
 
@@ -1697,6 +1927,388 @@ def test_submission_preview_builds_export_payload_when_ready_candidates_are_filt
     ]
 
 
+def test_submission_export_reads_domain_envelope_at_expected_revision(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            },
+            "condition": {"status": "stable"},
+        },
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            expected_envelope_revisions={
+                seeded["envelope_id"]: int(seeded["envelope_revision"]),
+            },
+        ),
+    )
+
+    assert response.submission.payload is not None
+    payload = response.submission.payload.payload_json
+    assert payload is not None
+    assert response.submission.readiness[0].ready is True
+    assert response.submission.readiness[0].blockers == []
+    assert payload["candidate_count"] == 1
+    assert payload["candidates"] == []
+    envelope_candidate = payload["domain_envelope_candidates"][0]
+    assert envelope_candidate["candidate_id"] == seeded["candidate_id"]
+    assert envelope_candidate["semantic_source"] == "domain_envelope.objects"
+    assert envelope_candidate["payload"]["artifact"]["title"] == "Bronze astrolabe"
+    assert "POISONED" not in json.dumps(payload)
+
+
+def test_submission_export_reports_stale_domain_envelope_revision_blocker(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            },
+            "condition": {"status": "stable"},
+        },
+    )
+    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
+    assert envelope_row is not None
+    envelope_row.revision = 2
+    db_session.add(envelope_row)
+    db_session.commit()
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is False
+    assert readiness.blockers[0].envelope_id == seeded["envelope_id"]
+    assert readiness.blockers[0].object_id == "artifact-1"
+    assert readiness.blockers[0].field_path is None
+    assert readiness.blockers[0].severity == "blocker"
+    assert readiness.blockers[0].status == "stale_revision"
+    assert readiness.blockers[0].code == "domain_envelope.stale_revision"
+    assert response.submission.payload is not None
+    assert response.submission.payload.payload_json is not None
+    assert response.submission.payload.payload_json["candidate_count"] == 0
+
+
+def test_submission_export_blocks_missing_required_domain_field_without_allowed_override(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1"}},
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    blocker = response.submission.readiness[0].blockers[0]
+    assert blocker.envelope_id == seeded["envelope_id"]
+    assert blocker.object_id == "artifact-1"
+    assert blocker.field_path == "artifact.title"
+    assert blocker.severity == "blocker"
+    assert blocker.status == "open"
+    assert blocker.code == "domain_envelope.required_field_missing"
+
+
+def test_submission_export_blocks_missing_required_host_context(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1", "title": "Bronze astrolabe"}},
+        object_metadata={
+            "export_behavior": {
+                "required_export_context_fields": ["condition.status"],
+            }
+        },
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    blocker = response.submission.readiness[0].blockers[0]
+    assert blocker.envelope_id == seeded["envelope_id"]
+    assert blocker.object_id == "artifact-1"
+    assert blocker.field_path == "condition.status"
+    assert blocker.severity == "blocker"
+    assert blocker.status == "missing_host_context"
+    assert blocker.code == "domain_envelope.missing_export_context"
+
+
+def test_submission_export_blocks_unstable_definition_state(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        object_definition_state=DefinitionState.DRAFT,
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    blocker = response.submission.readiness[0].blockers[0]
+    assert blocker.envelope_id == seeded["envelope_id"]
+    assert blocker.object_id == "artifact-1"
+    assert blocker.field_path is None
+    assert blocker.severity == "blocker"
+    assert blocker.status == "definition_state"
+    assert blocker.code == "domain_envelope.definition_state_blocked"
+    assert blocker.details["definition_state"] == "draft"
+
+
+def test_execute_submission_rejects_domain_envelope_readiness_blockers(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1"}},
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.execute_submission(
+            db_session,
+            seeded["session_id"],
+            CurationSubmissionExecuteRequest(
+                session_id=seeded["session_id"],
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            ),
+            actor_claims={"sub": "user-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["message"] == (
+        "Domain-envelope readiness blockers prevent direct submission"
+    )
+    assert exc.value.detail["blockers"][0]["field_path"] == "artifact.title"
+    assert exc.value.detail["blockers"][0]["code"] == (
+        "domain_envelope.required_field_missing"
+    )
+
+
+def test_submission_export_allows_missing_required_field_with_curator_override_policy(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1"}},
+        allow_title_override=True,
+        object_metadata={
+            "curator_overrides": [
+                {
+                    "field_path": "artifact.title",
+                    "reason": "Artifact title is intentionally absent in the source.",
+                }
+            ]
+        },
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is True
+    assert readiness.blockers == []
+    assert readiness.warnings == [
+        "Curator override accepted for export-blocking field artifact.title."
+    ]
+
+
+def test_submission_export_blocks_open_export_blocking_validation_findings(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            },
+        },
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Title requires external catalog verification.",
+                code="museum.catalog.title_unverified",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "provider_refs": {
+                        "catalog_schema": {"class": "Artifact", "field": "title"}
+                    }
+                },
+            )
+        ],
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    blocker = response.submission.readiness[0].blockers[0]
+    assert blocker.envelope_id == seeded["envelope_id"]
+    assert blocker.object_id == "artifact-1"
+    assert blocker.field_path == "artifact.title"
+    assert blocker.severity == "blocker"
+    assert blocker.status == "open"
+    assert blocker.code == "museum.catalog.title_unverified"
+    assert blocker.provider_refs == {
+        "catalog_schema": {"class": "Artifact", "field": "title"}
+    }
+
+
+def test_submission_export_allows_waived_finding_with_field_override_policy(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        allow_title_override=True,
+        object_metadata={
+            "curator_overrides": [
+                {
+                    "field_path": "artifact.title",
+                    "reason": "Curator verified the source exception.",
+                }
+            ]
+        },
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                status=ValidationFindingStatus.WAIVED,
+                message="Title requires external catalog verification.",
+                code="museum.catalog.title_unverified",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+            )
+        ],
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is True
+    assert readiness.blockers == []
+
+
 def test_submission_preview_rejects_unknown_candidate_ids(db_session):
     seeded = _create_decision_session(
         db_session,
@@ -1949,6 +2561,83 @@ def test_execute_submission_preserves_payload_warnings_across_reload(db_session,
     assert session_detail.latest_submission.payload is not None
     assert session_detail.latest_submission.payload.warnings == [payload_warning]
     assert session_detail.latest_submission.warnings == [payload_warning, transport_warning]
+
+
+def test_execute_submission_records_target_submission_state_and_history(
+    db_session,
+    monkeypatch,
+):
+    seeded = _create_decision_session(
+        db_session,
+        first_candidate_status=CurationCandidateStatus.ACCEPTED,
+    )
+    session_row = db_session.get(ReviewSessionModel, UUID(seeded["session_id"]))
+    assert session_row is not None
+    session_row.adapter_key = REFERENCE_ADAPTER_KEY
+    db_session.add(session_row)
+    db_session.commit()
+
+    class StatefulSubmissionAdapter:
+        transport_key = "stateful_submission"
+
+        def submit(self, *, payload):
+            assert payload.mode == SubmissionMode.DIRECT_SUBMIT
+            return {
+                "status": CurationSubmissionStatus.ACCEPTED,
+                "external_reference": "target:submission-1",
+                "response_message": "Accepted by target.",
+                "submission_state": {
+                    "target_status": "accepted",
+                    "target_reference": "target:submission-1",
+                },
+                "target_result_history": [
+                    {
+                        "status": "accepted",
+                        "external_reference": "target:submission-1",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(
+        submission_module,
+        "_resolve_submission_transport_adapter",
+        lambda _target_key: StatefulSubmissionAdapter(),
+    )
+
+    response = module.execute_submission(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionExecuteRequest(
+            session_id=seeded["session_id"],
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+        actor_claims={"sub": "user-1"},
+    )
+
+    assert response.submission.status == CurationSubmissionStatus.ACCEPTED
+    assert response.submission.submission_state == {
+        "target_status": "accepted",
+        "target_reference": "target:submission-1",
+    }
+    assert response.submission.target_result_history == [
+        {
+            "status": "accepted",
+            "external_reference": "target:submission-1",
+        }
+    ]
+    assert response.action_log_entry.metadata["submission_state"] == {
+        "target_status": "accepted",
+        "target_reference": "target:submission-1",
+    }
+    assert response.action_log_entry.metadata["target_result_history_count"] == 1
+
+    persisted_submission = db_session.scalars(
+        select(SubmissionModel).where(SubmissionModel.session_id == UUID(seeded["session_id"]))
+    ).one()
+    assert persisted_submission.submission_state == response.submission.submission_state
+    assert persisted_submission.target_result_history == (
+        response.submission.target_result_history
+    )
 
 
 def test_execute_submission_persists_validation_errors_without_marking_session_submitted(

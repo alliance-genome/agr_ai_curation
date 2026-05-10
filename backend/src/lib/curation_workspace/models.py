@@ -1057,6 +1057,18 @@ class CurationSubmissionRecord(Base):
         default=list,
         server_default=JSONB_EMPTY_ARRAY,
     )
+    submission_state: Mapped[dict[str, Any]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=dict,
+        server_default=JSONB_EMPTY_OBJECT,
+    )
+    target_result_history: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=JSONB_EMPTY_ARRAY,
+    )
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 

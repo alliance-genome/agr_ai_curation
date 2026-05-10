@@ -36,6 +36,8 @@ class SubmissionTransportResult:
     validation_errors: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     completed_at: datetime | None = None
+    submission_state: Mapping[str, Any] | None = None
+    target_result_history: tuple[Mapping[str, Any], ...] = ()
 
 
 class SubmissionTransportError(Exception):
@@ -50,6 +52,8 @@ class SubmissionTransportError(Exception):
         validation_errors: Sequence[str] = (),
         warnings: Sequence[str] = (),
         completed_at: datetime | None = None,
+        submission_state: Mapping[str, Any] | None = None,
+        target_result_history: Sequence[Mapping[str, Any]] = (),
     ) -> None:
         super().__init__(message)
         self.message = message
@@ -58,6 +62,8 @@ class SubmissionTransportError(Exception):
         self.validation_errors = tuple(validation_errors)
         self.warnings = tuple(warnings)
         self.completed_at = completed_at
+        self.submission_state = submission_state
+        self.target_result_history = tuple(target_result_history)
 
     def to_result(self) -> SubmissionTransportResult:
         """Return this exception as a normalized submission result payload."""
@@ -69,6 +75,8 @@ class SubmissionTransportError(Exception):
             validation_errors=self.validation_errors,
             warnings=self.warnings,
             completed_at=self.completed_at,
+            submission_state=self.submission_state,
+            target_result_history=self.target_result_history,
         )
 
 
@@ -123,6 +131,8 @@ def coerce_submission_transport_result(
             validation_errors=result.validation_errors,
             warnings=result.warnings,
             completed_at=result.completed_at,
+            submission_state=result.submission_state,
+            target_result_history=result.target_result_history,
         )
 
     if not isinstance(result, Mapping):
@@ -135,6 +145,8 @@ def coerce_submission_transport_result(
         validation_errors=result.get("validation_errors") or (),
         warnings=result.get("warnings") or (),
         completed_at=result.get("completed_at"),
+        submission_state=result.get("submission_state"),
+        target_result_history=result.get("target_result_history") or (),
     )
 
 
@@ -146,6 +158,8 @@ def normalize_submission_transport_result(
     validation_errors: Sequence[str] = (),
     warnings: Sequence[str] = (),
     completed_at: datetime | None = None,
+    submission_state: Mapping[str, Any] | None = None,
+    target_result_history: Sequence[Mapping[str, Any]] = (),
 ) -> SubmissionTransportResult:
     """Normalize one adapter response into the shared transport result contract."""
 
@@ -156,6 +170,10 @@ def normalize_submission_transport_result(
         validation_errors=tuple(_dedupe_preserve_order(validation_errors)),
         warnings=tuple(_dedupe_preserve_order(warnings)),
         completed_at=completed_at or datetime.now(timezone.utc),
+        submission_state=_normalize_mapping(submission_state),
+        target_result_history=tuple(
+            _normalize_mapping(item) for item in target_result_history
+        ),
     )
 
 
@@ -170,3 +188,9 @@ def _normalize_optional_string(value: str | None) -> str | None:
 
 def _normalize_string(value: object) -> str:
     return str(value or "").strip()
+
+
+def _normalize_mapping(value: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {}
+    return dict(value)
