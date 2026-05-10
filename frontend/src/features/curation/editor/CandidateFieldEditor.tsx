@@ -25,7 +25,6 @@ import type {
   DomainEnvelopeEvidenceAnchorProjection,
   DomainEnvelopeValidationStatus,
   DomainEnvelopeValidationSummaryProjection,
-  FieldValidationResult,
 } from '@/features/curation/types'
 import {
   useCurationWorkspaceAutosave,
@@ -108,8 +107,13 @@ function humanizeKey(value?: string | null): string {
     .replace(/\b\w/g, (match) => match.toUpperCase())
 }
 
-function humanizeGroupLabel(groupKey?: string | null): string {
-  return humanizeKey(groupKey) || 'Details'
+function groupLabel(field: CurationDraftField): string {
+  const label = field.group_label?.trim()
+  if (label) {
+    return label
+  }
+
+  return humanizeKey(field.group_key) || 'Ungrouped fields'
 }
 
 function buildSections(fields: CurationDraftField[]): FieldSection[] {
@@ -122,7 +126,7 @@ function buildSections(fields: CurationDraftField[]): FieldSection[] {
     if (!existingSection) {
       sections.set(key, {
         key,
-        label: field.group_label?.trim() || humanizeGroupLabel(field.group_key),
+        label: groupLabel(field),
         order: field.order,
         fields: [field],
       })
@@ -223,44 +227,6 @@ function uniqueMessages(summaries: DomainEnvelopeValidationSummaryProjection[]):
   return messages
 }
 
-function legacyStatusPresentation(
-  validationResult?: FieldValidationResult | null,
-): StatusPresentation | null {
-  if (!validationResult) {
-    return null
-  }
-
-  if (validationResult.status === 'validated') {
-    return {
-      label: 'Validated',
-      color: 'success',
-      severity: 'success',
-    }
-  }
-
-  if (validationResult.status === 'ambiguous' || validationResult.status === 'conflict') {
-    return {
-      label: humanizeKey(validationResult.status),
-      color: 'warning',
-      severity: 'warning',
-    }
-  }
-
-  if (validationResult.status === 'skipped' || validationResult.status === 'overridden') {
-    return {
-      label: humanizeKey(validationResult.status),
-      color: 'default',
-      severity: 'info',
-    }
-  }
-
-  return {
-    label: humanizeKey(validationResult.status),
-    color: 'error',
-    severity: 'error',
-  }
-}
-
 function FieldValidationSlot({
   field,
   summaries,
@@ -269,12 +235,8 @@ function FieldValidationSlot({
   summaries: DomainEnvelopeValidationSummaryProjection[]
 }) {
   const status = strongestStatus(summaries)
-  const presentation = status
-    ? STATUS_PRESENTATION[status]
-    : legacyStatusPresentation(field.validation_result)
-  const messages = summaries.length > 0
-    ? uniqueMessages(summaries)
-    : field.validation_result?.warnings ?? []
+  const presentation = status ? STATUS_PRESENTATION[status] : null
+  const messages = uniqueMessages(summaries)
 
   if (!presentation && !field.stale_validation) {
     return null
@@ -329,7 +291,7 @@ function evidenceQuote(projection: DomainEnvelopeEvidenceAnchorProjection): stri
     ?? projection.anchor.sentence_text
     ?? projection.anchor.snippet_text
     ?? projection.anchor.normalized_text
-    ?? 'No evidence snippet available.'
+    ?? '[missing evidence text]'
 }
 
 function FieldEvidenceSlot({
@@ -346,6 +308,7 @@ function FieldEvidenceSlot({
   return (
     <>
       {projections.map((projection, index) => {
+        const quote = evidenceQuote(projection)
         const pageNumber = projection.page_number ?? projection.anchor.page_number ?? null
         const sectionTitle = projection.section_title ?? projection.anchor.section_title ?? null
         const subsectionTitle =
@@ -361,10 +324,10 @@ function FieldEvidenceSlot({
             arrow
             key={projection.anchor_id}
             placement="top"
-            title={evidenceQuote(projection)}
+            title={quote}
           >
             <ButtonBase
-              aria-label={`Highlight field evidence ${index + 1}: ${evidenceQuote(projection)}`}
+              aria-label={`Highlight field evidence ${index + 1}: ${quote}`}
               data-testid={`field-evidence-projection-${projection.anchor_id}`}
               onClick={() =>
                 dispatchEvidenceNavigationCommand(
@@ -428,7 +391,7 @@ function formatUnknown(value: unknown): string {
   try {
     return JSON.stringify(value)
   } catch {
-    return 'value'
+    return '[unserializable value]'
   }
 }
 
@@ -616,31 +579,28 @@ export default function CandidateFieldEditor() {
           </Typography>
           <Stack divider={<Divider flexItem />} spacing={0.25}>
             {section.fields.map((field) => {
-              const fieldState =
-                activeCandidate.draft.fields.find((item) => item.field_key === field.field_key) ??
-                field
-              const history = fieldPatchHistory(workspace.action_log, activeCandidate, fieldState)
+              const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
 
               return (
                 <Stack key={field.field_key} spacing={0.6} sx={{ py: 1 }}>
                   <FieldRow
                     evidenceSlot={(
                       <FieldEvidenceSlot
-                        projections={evidenceProjectionsForField(activeCandidate, fieldState)}
+                        projections={evidenceProjectionsForField(activeCandidate, field)}
                       />
                     )}
-                    field={fieldState}
+                    field={field}
                     onChange={(value) => {
                       autosave.queueFieldChange({
-                        field_key: fieldState.field_key,
+                        field_key: field.field_key,
                         value,
                       })
                     }}
-                    revertSlot={fieldState.dirty ? (
+                    revertSlot={field.dirty ? (
                       <Button
                         onClick={() =>
                           autosave.queueFieldChange({
-                            field_key: fieldState.field_key,
+                            field_key: field.field_key,
                             revert_to_seed: true,
                           })}
                         size="small"
@@ -652,15 +612,15 @@ export default function CandidateFieldEditor() {
                     ) : null}
                     validationSlot={(
                       <FieldValidationSlot
-                        field={fieldState}
-                        summaries={validationSummariesForField(activeCandidate, fieldState)}
+                        field={field}
+                        summaries={validationSummariesForField(activeCandidate, field)}
                       />
                     )}
-                    value={fieldState.value}
+                    value={field.value}
                   />
                   <FieldSupportDetails
                     candidate={activeCandidate}
-                    field={fieldState}
+                    field={field}
                     history={history}
                   />
                 </Stack>

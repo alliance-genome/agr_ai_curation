@@ -10,6 +10,10 @@ export interface WorkspaceShellProps {
   fieldEditorSlot?: ReactNode
 }
 
+interface DesktopPanelsProps {
+  hasFieldEditor: boolean
+}
+
 const ShellRoot = styled(Box)(() => ({
   flex: 1,
   minHeight: 0,
@@ -51,12 +55,16 @@ const SlotFrame = styled(Box)(() => ({
   },
 }))
 
-const DesktopPanels = styled(Box)(({ theme }) => ({
+const DesktopPanels = styled(Box, {
+  shouldForwardProp: (prop) => prop !== 'hasFieldEditor',
+})<DesktopPanelsProps>(({ theme, hasFieldEditor }) => ({
   flex: 1,
   minHeight: 0,
   height: '100%',
   display: 'grid',
-  gridTemplateColumns: 'minmax(360px, 0.95fr) minmax(420px, 1.05fr)',
+  gridTemplateColumns: hasFieldEditor
+    ? 'minmax(360px, 0.95fr) minmax(420px, 1.05fr)'
+    : 'minmax(0, 1fr)',
   gap: theme.spacing(1.5),
   overflow: 'hidden',
   paddingTop: theme.spacing(1.5),
@@ -116,7 +124,7 @@ export default function WorkspaceShell({
           ) : null}
         </MobilePanels>
       ) : (
-        <DesktopPanels>
+        <DesktopPanels hasFieldEditor={Boolean(fieldEditorSlot)}>
           <PanelSection>
             <WorkspacePane
               label={reviewTableLabel}

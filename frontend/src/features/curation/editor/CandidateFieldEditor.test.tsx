@@ -392,4 +392,60 @@ describe('CandidateFieldEditor', () => {
       'Last repair: old -> abc',
     )
   })
+
+  it('does not use legacy field validation results when envelope summaries are absent', () => {
+    const workspace = buildWorkspace()
+    const candidate = workspace.candidates[0]!
+    candidate.validation_summary_projections = []
+    candidate.draft.fields[0]!.validation_result = {
+      status: 'conflict',
+      candidate_matches: [],
+      warnings: ['Legacy validation warning.'],
+    }
+
+    renderEditor(workspace)
+
+    expect(screen.queryByText('Conflict')).not.toBeInTheDocument()
+    expect(screen.queryByText('Legacy validation warning.')).not.toBeInTheDocument()
+  })
+
+  it('marks missing evidence text explicitly', () => {
+    const workspace = buildWorkspace()
+    const projection = workspace.candidates[0]!.evidence_anchor_projections![0]!
+    projection.quote = null
+    projection.anchor.sentence_text = null
+    projection.anchor.snippet_text = null
+    projection.anchor.normalized_text = null
+
+    renderEditor(workspace)
+
+    expect(
+      screen.getByRole('button', {
+        name: 'Highlight field evidence 1: [missing evidence text]',
+      }),
+    ).toBeInTheDocument()
+  })
+
+  it('marks unserializable repair values explicitly', () => {
+    const workspace = buildWorkspace()
+    const circular: Record<string, unknown> = {}
+    circular.self = circular
+    workspace.action_log[0]!.metadata.before = circular
+
+    renderEditor(workspace)
+
+    expect(screen.getByTestId('field-support-details-field_symbol')).toHaveTextContent(
+      'Last repair: [unserializable value] -> abc',
+    )
+  })
+
+  it('does not hide missing field groups behind a generic details label', () => {
+    const workspace = buildWorkspace()
+    workspace.candidates[0]!.draft.fields[0]!.group_key = null
+    workspace.candidates[0]!.draft.fields[0]!.group_label = null
+
+    renderEditor(workspace)
+
+    expect(screen.getByText('UNGROUPED FIELDS')).toBeInTheDocument()
+  })
 })

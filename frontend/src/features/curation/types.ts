@@ -724,7 +724,7 @@ export interface CurationEnvelopeFieldPatchRequest {
   expected_revision: number
   object_id: string
   field_path: string
-  operation?: CurationEnvelopeFieldPatchOperation
+  operation: CurationEnvelopeFieldPatchOperation
   before?: unknown | null
   value?: unknown | null
   reason?: string | null

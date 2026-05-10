@@ -171,10 +171,7 @@ export async function patchCurationEnvelopeField(
     }/field`,
     {
       method: 'PATCH',
-      body: JSON.stringify({
-        ...request,
-        operation: request.operation ?? 'replace',
-      }),
+      body: JSON.stringify(request),
       keepalive: options.keepalive,
     },
   )
