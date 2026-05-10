@@ -98,6 +98,7 @@ object_definitions:
       validator_bindings:
         - binding_id: alliance_gene_reference_lookup
           validation_kind: db_backed_reference_lookup
+          provider: alliance_curation_db
           tool_name: agr_curation_query
           tool_method: get_gene_by_id
           input_fields:

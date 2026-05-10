@@ -22,6 +22,25 @@ from urllib.parse import quote
 logger = logging.getLogger(__name__)
 
 
+class CurationDbClient:
+    """Public adapter around a published curation DB client."""
+
+    def __init__(self, delegate: Any):
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._delegate, name)
+
+    def create_session(self) -> Any:
+        """Return a SQLAlchemy session from the wrapped client."""
+        return self._delegate._create_session()
+
+    def close(self) -> None:
+        close = getattr(self._delegate, "close", None)
+        if callable(close):
+            close()
+
+
 class CurationConnectionResolver:
     """Resolves curation database connection details from config/connections.yaml.
 
@@ -202,7 +221,7 @@ class CurationConnectionResolver:
                 config.host = parsed.hostname
                 config.port = str(parsed.port) if parsed.port else "5432"
 
-                self._db_client = DatabaseMethods(config)
+                self._db_client = CurationDbClient(DatabaseMethods(config))
                 logger.info("Created curation DB client instance")
                 return self._db_client
 

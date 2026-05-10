@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import pytest
 import yaml
 
 from . import find_repo_root
@@ -71,6 +70,11 @@ def test_alliance_package_manifest_exports_shipped_specialist_catalog():
 
     expected_exports = {
         (ExportKind.TOOL_BINDING, "default", "tools/bindings.yaml"),
+        (
+            ExportKind.TOOL_POLICY_DEFAULTS,
+            "default_tool_policies",
+            "config/tool_policy_defaults.yaml",
+        ),
         (
             ExportKind.CURATION_ADAPTER,
             "default",

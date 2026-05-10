@@ -107,6 +107,70 @@ def test_result_factories():
     assert warning.message == "bad symbol"
 
 
+def test_lookup_response_serializes_attempts_candidates_and_projections():
+    result = agr_curation._lookup_response(
+        method="get_gene_by_id",
+        data={
+            "curie": "WB:WBGene00000298",
+            "symbol": "cat-4",
+            "name": "GTP cyclohydrolase I",
+            "taxon": "NCBITaxon:6239",
+        },
+        attempted_query={
+            "method": "get_gene_by_id",
+            "gene_id": "WB:WBGene00000298",
+        },
+        exact_lookup=True,
+    )
+
+    assert result.lookup_status == "success"
+    assert result.failure_classification is None
+    assert result.lookup_attempts[0]["lookup_status"] == "success"
+    assert result.lookup_attempts[0]["attempted_query"]["gene_id"] == "WB:WBGene00000298"
+    assert result.candidate_matches[0]["candidate_id"] == "WB:WBGene00000298"
+    projection = result.result_projections[0]
+    assert projection["provider"] == "alliance_curation_db"
+    assert projection["projection_type"] == "gene_reference"
+    assert projection["resolved_label"] == "cat-4"
+    assert projection["provider_data"]["taxon"] == "NCBITaxon:6239"
+    assert "resolved" in result.explanation
+
+
+def test_lookup_response_classifies_not_found_ambiguous_and_transient():
+    missing = agr_curation._lookup_response(
+        method="get_allele_by_id",
+        data=None,
+        count=0,
+        attempted_query={"method": "get_allele_by_id", "allele_id": "WB:missing"},
+        exact_lookup=True,
+    )
+    assert missing.lookup_status == "not_found"
+    assert missing.failure_classification == "not_found"
+
+    ambiguous = agr_curation._lookup_response(
+        method="get_gene_by_exact_symbol",
+        data=[
+            {"curie": "WB:WBGene00000001", "symbol": "abc"},
+            {"curie": "FB:FBgn0000001", "symbol": "abc"},
+        ],
+        count=2,
+        attempted_query={"method": "get_gene_by_exact_symbol", "gene_symbol": "abc"},
+        exact_lookup=True,
+    )
+    assert ambiguous.lookup_status == "ambiguous"
+    assert ambiguous.failure_classification == "ambiguous"
+
+    transient = agr_curation._err(
+        "database timed out",
+        method="search_genes",
+        attempted_query={"method": "search_genes", "gene_symbol": "abc"},
+        failure_classification="transient",
+        error=TimeoutError("timeout"),
+    )
+    assert transient.lookup_status == "transient"
+    assert transient.lookup_attempts[0]["error"]["type"] == "TimeoutError"
+
+
 def test_unwrap_function_tool_callable_raises_for_missing_callable():
     fake_tool = SimpleNamespace(on_invoke_tool=lambda: None)
     with pytest.raises(RuntimeError, match="Unable to locate callable"):
@@ -191,6 +255,57 @@ def test_query_branch_unknown_and_exception(monkeypatch):
     failed = query_fn(method="search_genes")
     assert failed.status == "error"
     assert "Query error: db init failed" in (failed.message or "")
+
+
+def test_transient_lookup_exception_preserves_attempted_query(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def get_gene(_gene_id):
+            raise TimeoutError("gene lookup timed out")
+
+        @staticmethod
+        def search_go_terms(**_kwargs):
+            raise TimeoutError("GO lookup timed out")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+
+    gene_result = query_fn(
+        method="get_gene_by_id",
+        gene_id="WB:WBGene00000001",
+    )
+    assert gene_result.status == "error"
+    assert gene_result.lookup_status == "transient"
+    assert gene_result.lookup_attempts[0]["attempted_query"] == {
+        "method": "get_gene_by_id",
+        "gene_id": "WB:WBGene00000001",
+    }
+
+    go_result = query_fn(
+        method="search_go_terms",
+        term="kinase activity",
+        go_aspect="molecular_function",
+        exact_match=True,
+        include_synonyms=False,
+        limit=7,
+    )
+    assert go_result.status == "error"
+    assert go_result.lookup_status == "transient"
+    assert go_result.lookup_attempts[0]["attempted_query"] == {
+        "method": "search_go_terms",
+        "term": "kinase activity",
+        "go_aspect": "molecular_function",
+        "exact_match": True,
+        "include_synonyms": False,
+        "limit": 7,
+    }
 
 
 def test_query_simple_methods(monkeypatch):
@@ -314,3 +429,67 @@ def test_query_ontology_search_methods(monkeypatch):
     go = query_fn(method="search_go_terms", term="molecular")
     assert go.status == "ok"
     assert go.count == 1
+
+
+def test_query_ontology_term_by_curie_uses_structured_lookup(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeRows:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class FakeSession:
+        def execute(self, _query, params):
+            if params == {"curie": "DOID:0050434", "ontologytermtype": "DOTerm"}:
+                return FakeRows(
+                    [("DOID:0050434", "Andersen-Tawil syndrome", "DOTerm")]
+                )
+            return FakeRows([])
+
+        @staticmethod
+        def close():
+            return None
+
+    class FakeDb:
+        @staticmethod
+        def create_session():
+            return FakeSession()
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = query_fn(
+        method="get_ontology_term_by_curie",
+        term="DOID:0050434",
+        ontology_term_type="DOTerm",
+    )
+    assert result.status == "ok"
+    assert result.lookup_status == "success"
+    assert result.data == [
+        {
+            "curie": "DOID:0050434",
+            "curie_validated": True,
+            "name": "Andersen-Tawil syndrome",
+            "ontology_type": "DOTerm",
+        }
+    ]
+    assert result.result_projections[0]["projection_type"] == "ontology_term_reference"
+    assert result.lookup_attempts[0]["resolved_id"] == "DOID:0050434"
+
+    missing = query_fn(
+        method="get_ontology_term_by_curie",
+        term="DOID:0050434",
+        ontology_term_type="CHEBITerm",
+    )
+    assert missing.status == "ok"
+    assert missing.lookup_status == "not_found"
+    assert missing.failure_classification == "not_found"

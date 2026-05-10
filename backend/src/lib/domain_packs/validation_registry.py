@@ -99,6 +99,7 @@ class ValidatorBinding:
     field_types: tuple[DomainPackFieldType, ...] = ()
     input_fields: dict[str, Any] = field(default_factory=dict)
     expected_result_fields: dict[str, Any] = field(default_factory=dict)
+    provider_projection: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -147,6 +148,8 @@ class ValidatorBinding:
             details["input_fields"] = dict(self.input_fields)
         if self.expected_result_fields:
             details["expected_result_fields"] = dict(self.expected_result_fields)
+        if self.provider_projection:
+            details["provider_projection"] = dict(self.provider_projection)
         return details
 
 
@@ -666,10 +669,59 @@ def _collect_validator_bindings(
                         "expected_result_fields",
                     )
                 ),
+                provider_projection=_provider_projection(raw_item),
                 raw=dict(raw_item),
             )
         )
     return bindings
+
+
+def _provider_projection(raw_item: Mapping[str, Any]) -> dict[str, Any]:
+    validation_kind = _optional_string(raw_item.get("validation_kind"))
+    provider = _projection_provider(raw_item)
+    provider_fields = _provider_projection_fields(raw_item)
+    target: dict[str, Any] = {}
+    input_fields = _optional_mapping(raw_item.get("input_fields"), "input_fields")
+    expected_result_fields = _optional_mapping(
+        raw_item.get("expected_result_fields"),
+        "expected_result_fields",
+    )
+    if input_fields:
+        target["input_fields"] = dict(input_fields)
+    if expected_result_fields:
+        target["expected_result_fields"] = dict(expected_result_fields)
+
+    projection: dict[str, Any] = {}
+    if provider:
+        projection["provider"] = provider
+    if validation_kind:
+        projection["projection_type"] = validation_kind
+    if target:
+        projection["target"] = target
+    if provider_fields:
+        projection["provider_fields"] = provider_fields
+    return projection
+
+
+def _projection_provider(raw_item: Mapping[str, Any]) -> str | None:
+    return _optional_string(raw_item.get("provider"))
+
+
+def _provider_projection_fields(raw_item: Mapping[str, Any]) -> dict[str, Any]:
+    provider_fields: dict[str, Any] = {}
+    for key in (
+        "table",
+        "tables",
+        "expected_db_target",
+        "expected_db_targets",
+        "target_terms",
+        "tool_name",
+        "tool_method",
+    ):
+        value = raw_item.get(key)
+        if value is not None:
+            provider_fields[key] = value
+    return provider_fields
 
 
 def _iter_stateful_metadata_items(

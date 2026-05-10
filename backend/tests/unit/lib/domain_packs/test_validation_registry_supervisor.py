@@ -332,6 +332,9 @@ def test_supervisor_appends_required_planned_blocked_findings_and_history(
     assert planned_binding.details["validation_metadata"]["validator_binding_id"] == (
         "fixture.planned_symbol_lookup"
     )
+    planned_attempt = planned_binding.details["lookup_attempts"][0]
+    assert planned_attempt["provider"] is None
+    assert "provider" not in planned_binding.details["provider_projections"][0]
 
     blocked_metadata = [
         finding

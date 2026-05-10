@@ -40,6 +40,8 @@ from .validation_registry import (
 
 
 _CURIE_PATTERN_TEMPLATE = r"^{prefix}:.+"
+LOOKUP_STATUS_BLOCKED = "blocked"
+LOOKUP_STATUS_UNDER_DEVELOPMENT = "under_development"
 
 
 @dataclass(frozen=True)
@@ -281,21 +283,33 @@ def _planned_or_blocked_binding_findings(
     for match in matches:
         binding = match.binding
         details = _match_details(match, provider_model_ref=provider_model_ref)
+        lookup_status = (
+            LOOKUP_STATUS_UNDER_DEVELOPMENT
+            if binding.state is ValidationBindingState.PLANNED
+            else LOOKUP_STATUS_BLOCKED
+        )
         severity = (
             ValidationFindingSeverity.INFO
             if binding.state is ValidationBindingState.PLANNED
             else ValidationFindingSeverity.BLOCKER
         )
+        message = _state_message(
+            state=binding.state,
+            identifier=binding.binding_id,
+            reason=binding.reason,
+            blocked_by=binding.blocked_by,
+        )
+        _attach_lookup_attempt_details(
+            details,
+            match=match,
+            lookup_status=lookup_status,
+            explanation=message,
+        )
         findings.append(
             ValidationFinding(
                 severity=severity,
                 code=f"domain_pack.validator_binding_{binding.state.value}",
-                message=_state_message(
-                    state=binding.state,
-                    identifier=binding.binding_id,
-                    reason=binding.reason,
-                    blocked_by=binding.blocked_by,
-                ),
+                message=message,
                 object_ref=_match_object_ref(match),
                 field_ref=_match_field_ref(match),
                 details=details,
@@ -443,6 +457,25 @@ def _dispatch_unavailable_finding(
     reason: str,
 ) -> ValidationFinding:
     binding = match.binding
+    details = {
+        **_match_details(match, provider_model_ref=provider_model_ref),
+        "dispatch_unavailable_reason": reason,
+    }
+    lookup_status = (
+        LOOKUP_STATUS_BLOCKED
+        if binding.blocking
+        else LOOKUP_STATUS_UNDER_DEVELOPMENT
+    )
+    message = (
+        f"Active validator binding '{binding.binding_id}' could not be dispatched: "
+        f"{reason}."
+    )
+    _attach_lookup_attempt_details(
+        details,
+        match=match,
+        lookup_status=lookup_status,
+        explanation=message,
+    )
     return ValidationFinding(
         severity=(
             ValidationFindingSeverity.BLOCKER
@@ -450,16 +483,10 @@ def _dispatch_unavailable_finding(
             else ValidationFindingSeverity.WARNING
         ),
         code="domain_pack.validator_dispatch_unavailable",
-        message=(
-            f"Active validator binding '{binding.binding_id}' could not be dispatched: "
-            f"{reason}."
-        ),
+        message=message,
         object_ref=_match_object_ref(match),
         field_ref=_match_field_ref(match),
-        details={
-            **_match_details(match, provider_model_ref=provider_model_ref),
-            "dispatch_unavailable_reason": reason,
-        },
+        details=details,
     )
 
 
@@ -534,6 +561,90 @@ def _match_details(
             provider_model_ref,
         )
     }
+
+
+def _attach_lookup_attempt_details(
+    details: dict[str, Any],
+    *,
+    match: ValidatorBindingMatch,
+    lookup_status: str,
+    explanation: str,
+) -> None:
+    attempt = _lookup_attempt_for_match(
+        match=match,
+        lookup_status=lookup_status,
+        explanation=explanation,
+    )
+    details["lookup_attempts"] = [attempt]
+    details["lookup_explanation"] = explanation
+    details["failure_classification"] = lookup_status
+    provider_projection = match.binding.provider_projection
+    if provider_projection:
+        details["provider_projections"] = [dict(provider_projection)]
+
+
+def _lookup_attempt_for_match(
+    *,
+    match: ValidatorBindingMatch,
+    lookup_status: str,
+    explanation: str,
+) -> dict[str, Any]:
+    binding = match.binding
+    attempted_query = {
+        "validator_binding_id": binding.binding_id,
+        "validation_kind": binding.validation_kind,
+    }
+    input_fields = _attempt_input_fields(match)
+    if input_fields:
+        attempted_query["input_fields"] = input_fields
+    provider_projection = dict(binding.provider_projection)
+    return {
+        "source": {
+            "validator_binding_id": binding.binding_id,
+            "tool_name": binding.tool_name,
+            "tool_method": binding.tool_method,
+            "validator": binding.validator,
+        },
+        "provider": provider_projection.get("provider"),
+        "target_projection": provider_projection or None,
+        "attempted_query": {
+            key: value for key, value in attempted_query.items() if value is not None
+        },
+        "lookup_status": lookup_status,
+        "candidate_count": 0,
+        "resolved_id": None,
+        "resolved_label": None,
+        "explanation": explanation,
+    }
+
+
+def _attempt_input_fields(match: ValidatorBindingMatch) -> dict[str, Any]:
+    if not match.binding.input_fields:
+        return {}
+    fields: dict[str, Any] = {}
+    for input_name, raw_field_path in match.binding.input_fields.items():
+        field_path = str(raw_field_path)
+        value = None
+        if match.object_envelope is not None:
+            value = _payload_value(
+                match.object_envelope.payload,
+                _relative_field_path(
+                    field_path,
+                    object_type=match.object_envelope.object_type,
+                ),
+            )
+        fields[str(input_name)] = {
+            "field_path": field_path,
+            "value": value,
+        }
+    return fields
+
+
+def _relative_field_path(field_path: str, *, object_type: str) -> str:
+    prefix = f"{object_type}."
+    if field_path.startswith(prefix):
+        return field_path[len(prefix):]
+    return field_path
 
 
 def _with_provider_model_ref(
@@ -677,6 +788,24 @@ def _history_event_for_finding(
             finding.field_ref.object_ref if finding.field_ref is not None else None
         )
 
+    details = {
+        "finding_id": finding.finding_id,
+        "finding_code": finding.code,
+        "finding_severity": finding.severity.value,
+        "finding_status": finding.status.value,
+        "target": target,
+    }
+    if finding.details:
+        details["validation_details"] = finding.details
+        for key in (
+            "lookup_attempts",
+            "lookup_explanation",
+            "failure_classification",
+            "provider_projections",
+        ):
+            if key in finding.details:
+                details[key] = finding.details[key]
+
     return HistoryEvent(
         event_type=HistoryEventKind.VALIDATION_FINDING_ADDED,
         event_id=f"validation-event:{digest}",
@@ -685,13 +814,7 @@ def _history_event_for_finding(
         message=f"Validation finding added: {finding.code or finding.severity.value}",
         object_ref=event_object_ref,
         field_ref=event_field_ref,
-        details={
-            "finding_id": finding.finding_id,
-            "finding_code": finding.code,
-            "finding_severity": finding.severity.value,
-            "finding_status": finding.status.value,
-            "target": target,
-        },
+        details=details,
     )
 
 

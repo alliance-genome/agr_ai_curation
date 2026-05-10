@@ -6,8 +6,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from src.lib.database import curation_resolver as resolver_module
 from src.lib.database.curation_resolver import (
+    CurationDbClient,
     CurationConnectionResolver,
     get_curation_resolver,
     reset_curation_resolver,
@@ -192,6 +192,9 @@ def test_get_db_client_success_sets_tmp_path_and_builds_client(monkeypatch):
         def __init__(self, config):
             self.config = config
 
+        def _create_session(self):
+            return "session"
+
     fake_module.DatabaseConfig = _DatabaseConfig
     fake_module.DatabaseMethods = _DatabaseMethods
     monkeypatch.setitem(sys.modules, "agr_curation_api.db_methods", fake_module)
@@ -203,6 +206,8 @@ def test_get_db_client_success_sets_tmp_path_and_builds_client(monkeypatch):
     assert client.config.database == "dbname"
     assert client.config.host == "host"
     assert client.config.port == "5432"
+    assert isinstance(client, CurationDbClient)
+    assert client.create_session() == "session"
     assert os.environ.get("TMP_PATH")
 
 

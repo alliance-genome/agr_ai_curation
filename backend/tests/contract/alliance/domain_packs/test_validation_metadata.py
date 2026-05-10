@@ -9,6 +9,7 @@ from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
 )
+from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 
 
@@ -212,3 +213,86 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "ChemicalCondition",
         "condition_class.curie",
     ).validator_binding_ids
+
+
+def test_db_backed_validator_bindings_emit_lookup_attempts_and_provider_projections():
+    alliance_registry = load_alliance_domain_pack_registry()
+    disease_pack = alliance_registry.get_pack("agr.alliance.disease")
+    registry = DomainPackValidationRegistry.from_domain_pack(disease_pack)
+
+    binding = {
+        item.binding_id: item
+        for item in registry.bindings
+    }["disease_ontology_term_lookup"]
+    assert binding.provider_projection == {
+        "provider": "alliance_curation_db",
+        "projection_type": "curation_db_reference_lookup",
+        "target": {
+            "input_fields": {
+                "curie": "disease_annotation_object.curie",
+                "name": "disease_annotation_object.name",
+            },
+            "expected_result_fields": {
+                "curie": "disease_annotation_object.curie",
+                "name": "disease_annotation_object.name",
+                "ontologytermtype": "DOTerm",
+            },
+        },
+        "provider_fields": {
+            "table": "public.ontologyterm",
+        },
+    }
+
+    envelope = DomainEnvelope(
+        envelope_id="disease-env",
+        domain_pack_id="agr.alliance.disease",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="DiseaseAnnotation",
+                pending_ref_id="disease-annotation-1",
+                payload={
+                    "mention": "Andersen-Tawil syndrome",
+                    "disease_annotation_object": {
+                        "curie": "DOID:0050434",
+                        "name": "Andersen-Tawil syndrome",
+                    },
+                    "role": "primary",
+                    "confidence": "high",
+                    "evidence_record_ids": ["evidence-1"],
+                    "evidence_records": [
+                        {
+                            "evidence_record_id": "evidence-1",
+                            "verified_quote": "Andersen-Tawil syndrome",
+                            "page": 1,
+                            "section": "Results",
+                            "chunk_id": "chunk-1",
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+
+    result = run_validation_supervisor(envelope, disease_pack, registry=registry)
+    ontology_finding = next(
+        finding
+        for finding in result.envelope.validation_findings
+        if finding.details.get("lookup_attempts")
+        and finding.details["lookup_attempts"][0]["attempted_query"][
+            "validator_binding_id"
+        ] == "disease_ontology_term_lookup"
+    )
+    attempt = ontology_finding.details["lookup_attempts"][0]
+    assert attempt["lookup_status"] == "under_development"
+    assert attempt["provider"] == "alliance_curation_db"
+    assert attempt["attempted_query"]["input_fields"]["curie"]["value"] == "DOID:0050434"
+    assert ontology_finding.details["failure_classification"] == "under_development"
+    assert ontology_finding.details["provider_projections"][0]["provider"] == "alliance_curation_db"
+
+    history_event = next(
+        event
+        for event in result.envelope.history
+        if event.details.get("finding_id") == ontology_finding.finding_id
+    )
+    assert history_event.details["lookup_attempts"] == ontology_finding.details["lookup_attempts"]
+    assert history_event.details["provider_projections"] == ontology_finding.details["provider_projections"]

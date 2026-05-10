@@ -71,6 +71,148 @@ def test_get_gene_by_exact_symbol_branches(monkeypatch):
     assert "invalid_curie_prefixes:1" in (prefixed.warnings or [])
 
 
+def test_get_gene_by_exact_symbol_detail_fetch_failure_is_transient(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def map_entity_names_to_curies(entity_type, entity_names, taxon_curie):
+            if entity_type == "gene" and taxon_curie == "NCBITaxon:6239":
+                return [{"entity_curie": "WB:WBGene00000001", "entity": entity_names[0]}]
+            return []
+
+        @staticmethod
+        def get_gene(_curie):
+            raise TimeoutError("detail timeout")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+
+    result = query_fn(
+        method="get_gene_by_exact_symbol",
+        gene_symbol="unc-54",
+        data_provider="WB",
+    )
+
+    assert result.status == "ok"
+    assert result.lookup_status == "transient"
+    assert result.failure_classification == "transient"
+    assert result.lookup_attempts[0]["lookup_status"] == "success"
+    assert result.lookup_attempts[0]["resolved_id"] == "WB:WBGene00000001"
+    assert result.lookup_attempts[0]["resolved_label"] == "unc-54"
+    detail_attempt = result.lookup_attempts[1]
+    assert detail_attempt["lookup_status"] == "transient"
+    assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_gene_details"
+    assert detail_attempt["attempted_query"]["gene_id"] == "WB:WBGene00000001"
+    assert detail_attempt["target_projection"]["resolved_id"] == "WB:WBGene00000001"
+    assert detail_attempt["error"]["type"] == "TimeoutError"
+
+
+def test_search_genes_detail_fetch_failure_is_transient(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type == "gene" and taxon_curie == "NCBITaxon:6239":
+                return [
+                    {
+                        "entity_curie": "WB:WBGene00000001",
+                        "entity": search_pattern,
+                        "match_type": "exact",
+                    }
+                ]
+            return []
+
+        @staticmethod
+        def get_gene(_curie):
+            raise TimeoutError("detail timeout")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _valid_validation())
+
+    result = query_fn(
+        method="search_genes",
+        gene_symbol="unc-54",
+        data_provider="WB",
+    )
+
+    assert result.status == "ok"
+    assert result.count == 0
+    assert result.lookup_status == "transient"
+    assert result.failure_classification == "transient"
+    assert result.lookup_attempts[0]["lookup_status"] == "success"
+    detail_attempt = result.lookup_attempts[1]
+    assert detail_attempt["lookup_status"] == "transient"
+    assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_gene_details"
+    assert detail_attempt["attempted_query"]["gene_id"] == "WB:WBGene00000001"
+    assert detail_attempt["target_projection"]["resolved_id"] == "WB:WBGene00000001"
+    assert detail_attempt["target_projection"]["resolved_label"] == "unc-54"
+    assert detail_attempt["error"]["type"] == "TimeoutError"
+
+
+def test_search_genes_bulk_detail_fetch_failure_is_transient(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type == "gene" and taxon_curie == "NCBITaxon:6239":
+                return [
+                    {
+                        "entity_curie": "WB:WBGene00000001",
+                        "entity": search_pattern,
+                        "match_type": "exact",
+                    }
+                ]
+            return []
+
+        @staticmethod
+        def get_gene(_curie):
+            raise TimeoutError("detail timeout")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _valid_validation())
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["unc-54"],
+        data_provider="WB",
+    )
+
+    item = result.data["items"][0]
+    assert item["count"] == 0
+    assert item["lookup_status"] == "transient"
+    assert item["failure_classification"] == "transient"
+    detail_attempt = item["lookup_attempts"][1]
+    assert detail_attempt["lookup_status"] == "transient"
+    assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_gene_details"
+    assert detail_attempt["attempted_query"]["gene_id"] == "WB:WBGene00000001"
+    assert detail_attempt["error"]["type"] == "TimeoutError"
+
+
 def test_search_genes_validation_force_and_success_paths(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
 
@@ -223,3 +365,145 @@ def test_allele_exact_and_search_paths(monkeypatch):
     assert search.count == 1
     assert search.data[0]["symbol"] == "Arx<sup>tm1Gldn</sup>"
     assert "invalid_curie_prefixes:1" in (search.warnings or [])
+
+
+def test_get_allele_by_exact_symbol_detail_fetch_failure_is_transient(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def map_entity_names_to_curies(entity_type, entity_names, taxon_curie):
+            if entity_type == "allele" and taxon_curie == "NCBITaxon:6239":
+                return [{"entity_curie": "WB:WBVar00000001", "entity": entity_names[0]}]
+            return []
+
+        @staticmethod
+        def get_allele(_curie):
+            raise TimeoutError("detail timeout")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+
+    result = query_fn(
+        method="get_allele_by_exact_symbol",
+        allele_symbol="e1370",
+        data_provider="WB",
+    )
+
+    assert result.status == "ok"
+    assert result.lookup_status == "transient"
+    assert result.failure_classification == "transient"
+    assert result.lookup_attempts[0]["lookup_status"] == "success"
+    assert result.lookup_attempts[0]["resolved_id"] == "WB:WBVar00000001"
+    assert result.lookup_attempts[0]["resolved_label"] == "e1370"
+    detail_attempt = result.lookup_attempts[1]
+    assert detail_attempt["lookup_status"] == "transient"
+    assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_allele_details"
+    assert detail_attempt["attempted_query"]["allele_id"] == "WB:WBVar00000001"
+    assert detail_attempt["target_projection"]["resolved_id"] == "WB:WBVar00000001"
+    assert detail_attempt["error"]["type"] == "TimeoutError"
+
+
+def test_search_alleles_detail_fetch_failure_is_transient(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type == "allele" and taxon_curie == "NCBITaxon:6239":
+                return [
+                    {
+                        "entity_curie": "WB:WBVar00000001",
+                        "entity": search_pattern,
+                        "match_type": "exact",
+                    }
+                ]
+            return []
+
+        @staticmethod
+        def get_allele(_curie):
+            raise TimeoutError("detail timeout")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _valid_validation())
+
+    result = query_fn(
+        method="search_alleles",
+        allele_symbol="e1370",
+        data_provider="WB",
+    )
+
+    assert result.status == "ok"
+    assert result.count == 0
+    assert result.lookup_status == "transient"
+    assert result.failure_classification == "transient"
+    assert result.lookup_attempts[0]["lookup_status"] == "success"
+    detail_attempt = result.lookup_attempts[1]
+    assert detail_attempt["lookup_status"] == "transient"
+    assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_allele_details"
+    assert detail_attempt["attempted_query"]["allele_id"] == "WB:WBVar00000001"
+    assert detail_attempt["target_projection"]["resolved_id"] == "WB:WBVar00000001"
+    assert detail_attempt["target_projection"]["resolved_label"] == "e1370"
+    assert detail_attempt["error"]["type"] == "TimeoutError"
+
+
+def test_search_alleles_bulk_detail_fetch_failure_is_transient(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if entity_type == "allele" and taxon_curie == "NCBITaxon:6239":
+                return [
+                    {
+                        "entity_curie": "WB:WBVar00000001",
+                        "entity": search_pattern,
+                        "match_type": "exact",
+                    }
+                ]
+            return []
+
+        @staticmethod
+        def get_allele(_curie):
+            raise TimeoutError("detail timeout")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _valid_validation())
+
+    result = query_fn(
+        method="search_alleles_bulk",
+        allele_symbols=["e1370"],
+        data_provider="WB",
+    )
+
+    item = result.data["items"][0]
+    assert item["count"] == 0
+    assert item["lookup_status"] == "transient"
+    assert item["failure_classification"] == "transient"
+    detail_attempt = item["lookup_attempts"][1]
+    assert detail_attempt["lookup_status"] == "transient"
+    assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_allele_details"
+    assert detail_attempt["attempted_query"]["allele_id"] == "WB:WBVar00000001"
+    assert detail_attempt["error"]["type"] == "TimeoutError"

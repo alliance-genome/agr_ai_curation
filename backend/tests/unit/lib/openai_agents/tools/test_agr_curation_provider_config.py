@@ -357,7 +357,7 @@ def test_search_genes_bulk_uses_batched_detail_lookup(monkeypatch):
                 "taxon": "NCBITaxon:7227",
                 "gene_type": "protein_coding_gene",
             },
-        }
+        }, {}
 
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
@@ -420,7 +420,7 @@ def test_search_genes_uses_batched_detail_lookup(monkeypatch):
                 "taxon": "NCBITaxon:7227",
                 "gene_type": "protein_coding_gene",
             },
-        }
+        }, {}
 
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
@@ -480,7 +480,7 @@ def test_search_alleles_bulk_uses_batched_detail_lookup(monkeypatch):
                 "name": "let-23",
                 "taxon": "NCBITaxon:7227",
             },
-        }
+        }, {}
 
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
@@ -541,7 +541,7 @@ def test_search_alleles_uses_batched_detail_lookup(monkeypatch):
                 "name": "Act88F 6",
                 "taxon": "NCBITaxon:7227",
             },
-        }
+        }, {}
 
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})

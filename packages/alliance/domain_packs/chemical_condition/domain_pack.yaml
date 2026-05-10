@@ -604,6 +604,7 @@ metadata:
     planned:
       - binding_id: chemical_condition.chebi_api_lookup
         validation_kind: external_ontology_lookup
+        provider: ontology_provider
         tool_name: chebi_api_call
         expected_result_fields:
           chebi_id: condition_chemical.curie
@@ -611,6 +612,7 @@ metadata:
         definition_state: in_development
       - binding_id: chemical_condition.condition_ontology_lookup
         validation_kind: ontology_lookup
+        provider: ontology_provider
         target_terms:
           - condition_class.curie
           - condition_id.curie
