@@ -120,7 +120,13 @@ class TraceSummaryAnalyzer:
             ),
         }
 
-        domain_envelope = DomainEnvelopeTraceAnalyzer.analyze(raw_trace, observations)
+        trace_scores = trace.get("scores")
+        raw_scores = trace_scores if isinstance(trace_scores, list) else None
+        domain_envelope = DomainEnvelopeTraceAnalyzer.analyze(
+            raw_trace,
+            observations,
+            scores=raw_scores,
+        )
 
         # Error detection
         errors = []

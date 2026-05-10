@@ -30,13 +30,18 @@ export function hasDomainEnvelopeSignals(summary?: DomainEnvelopeTraceSummary): 
 }
 
 export function domainEnvelopeCountChips(summary: DomainEnvelopeTraceSummary): Array<{ label: string; color: 'primary' | 'secondary' | 'warning' | 'error' | 'success' | 'info' | 'default' }> {
-  const counts = summary.summary || {};
+  const counts = summary.summary ?? {};
+  const envelopeCount = counts.envelope_count ?? 0;
+  const objectCount = counts.object_count ?? 0;
+  const findingCount = counts.finding_count ?? 0;
+  const repairAttemptCount = counts.repair_attempt_count ?? 0;
+  const blockerCount = counts.blocker_count ?? 0;
   return [
-    { label: `${counts.envelope_count || 0} envelopes`, color: 'primary' },
-    { label: `${counts.object_count || 0} objects`, color: 'secondary' },
-    { label: `${counts.finding_count || 0} findings`, color: (counts.finding_count || 0) > 0 ? 'warning' : 'default' },
-    { label: `${counts.repair_attempt_count || 0} repairs`, color: (counts.repair_attempt_count || 0) > 0 ? 'info' : 'default' },
-    { label: `${counts.blocker_count || 0} blockers`, color: (counts.blocker_count || 0) > 0 ? 'error' : 'default' },
+    { label: `${envelopeCount} envelopes`, color: 'primary' },
+    { label: `${objectCount} objects`, color: 'secondary' },
+    { label: `${findingCount} findings`, color: findingCount > 0 ? 'warning' : 'default' },
+    { label: `${repairAttemptCount} repairs`, color: repairAttemptCount > 0 ? 'info' : 'default' },
+    { label: `${blockerCount} blockers`, color: blockerCount > 0 ? 'error' : 'default' },
   ];
 }
 
@@ -49,7 +54,7 @@ function LimitedChips({
   color?: 'primary' | 'secondary' | 'warning' | 'error' | 'success' | 'info' | 'default';
   max?: number;
 }) {
-  const items = (values || []).filter(Boolean);
+  const items = (values ?? []).filter(Boolean);
   if (items.length === 0) return null;
 
   return (
@@ -72,7 +77,7 @@ function LimitedChips({
 }
 
 function CountMapChips({ values }: { values?: Record<string, number> }) {
-  const entries = Object.entries(values || {}).filter(([, count]) => count > 0);
+  const entries = Object.entries(values ?? {}).filter(([, count]) => count > 0);
   if (entries.length === 0) return null;
   return (
     <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
@@ -84,7 +89,7 @@ function CountMapChips({ values }: { values?: Record<string, number> }) {
 }
 
 function RepairRows({ summary, dense }: { summary: DomainEnvelopeTraceSummary; dense?: boolean }) {
-  const repairs = summary.repair_attempts || [];
+  const repairs = summary.repair_attempts ?? [];
   if (repairs.length === 0) return null;
 
   return (
@@ -113,11 +118,11 @@ function RepairRows({ summary, dense }: { summary: DomainEnvelopeTraceSummary; d
                 <TableCell sx={{ fontFamily: 'monospace' }}>{repair.envelope_id || 'N/A'}</TableCell>
                 {!dense && (
                   <TableCell sx={{ fontFamily: 'monospace' }}>
-                    {(repair.finding_ids || []).join(', ') || 'N/A'}
+                    {(repair.finding_ids ?? []).join(', ') || 'N/A'}
                   </TableCell>
                 )}
                 <TableCell sx={{ fontFamily: 'monospace' }}>
-                  {(repair.field_paths || []).join(', ') || 'N/A'}
+                  {(repair.field_paths ?? []).join(', ') || 'N/A'}
                 </TableCell>
                 {!dense && (
                   <TableCell>
@@ -134,7 +139,7 @@ function RepairRows({ summary, dense }: { summary: DomainEnvelopeTraceSummary; d
 }
 
 function BlockerRows({ summary, dense }: { summary: DomainEnvelopeTraceSummary; dense?: boolean }) {
-  const blockers = summary.blockers || [];
+  const blockers = summary.blockers ?? [];
   if (blockers.length === 0) return null;
 
   return (
@@ -174,7 +179,7 @@ function BlockerRows({ summary, dense }: { summary: DomainEnvelopeTraceSummary; 
 }
 
 function DefinitionStateRows({ summary }: { summary: DomainEnvelopeTraceSummary }) {
-  const flags = summary.definition_state_flags || [];
+  const flags = summary.definition_state_flags ?? [];
   if (flags.length === 0) return null;
 
   return (
@@ -223,7 +228,7 @@ export function DomainEnvelopeSignalPanel({
         </Grid>
         <Grid item xs={12} md={6}>
           <Typography variant="caption" color="text.secondary">Object IDs</Typography>
-          <LimitedChips values={[...(summary.object_ids || []), ...(summary.pending_ref_ids || [])]} color="secondary" max={dense ? 3 : 8} />
+          <LimitedChips values={[...(summary.object_ids ?? []), ...(summary.pending_ref_ids ?? [])]} color="secondary" max={dense ? 3 : 8} />
         </Grid>
         <Grid item xs={12} md={6}>
           <Typography variant="caption" color="text.secondary">Finding IDs</Typography>

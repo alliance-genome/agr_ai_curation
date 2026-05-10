@@ -445,6 +445,33 @@ class TraceReviewAnalyzerTests(unittest.TestCase):
         self.assertEqual(domain["curator_edits"][0]["field_path"], "gene.symbol")
         self.assertEqual(summary["tool_summary"]["domain_envelope_tool_call_count"], 1)
 
+    def test_trace_summary_includes_score_domain_envelope_signals(self):
+        summary = TraceSummaryAnalyzer.analyze(
+            {
+                "raw_trace": self._make_trace({}),
+                "scores": [
+                    {
+                        "id": "score-submission-state",
+                        "metadata": {
+                            "envelope_id": "env-score-1",
+                            "object_id": "object-score-1",
+                            "submission_state": {
+                                "target": "production",
+                                "status": "blocked",
+                            },
+                        },
+                    }
+                ],
+            },
+            [],
+        )
+
+        domain = summary["domain_envelope"]
+        self.assertTrue(domain["found"])
+        self.assertEqual(domain["envelope_ids"], ["env-score-1"])
+        self.assertEqual(domain["object_ids"], ["object-score-1"])
+        self.assertGreaterEqual(domain["summary"]["submission_state_count"], 1)
+
     def test_domain_envelope_analyzer_reports_top_level_curatable_objects(self):
         domain = DomainEnvelopeTraceAnalyzer.analyze_payload({
             "curatable_objects": [

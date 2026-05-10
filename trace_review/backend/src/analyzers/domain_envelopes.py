@@ -1,7 +1,7 @@
 """Domain-envelope signal extraction for TraceReview.
 
 This analyzer is intentionally provider-agnostic. It does not validate or
-interpret Alliance schema payloads; it only pulls trace-visible envelope
+interpret provider-specific schema payloads; it only pulls trace-visible envelope
 identifiers, object/finding references, field paths, repair-loop metadata, and
 readiness blockers into compact diagnostic summaries.
 """
@@ -63,6 +63,7 @@ def _coerce_json_like(value: Any) -> Any:
     except json.JSONDecodeError:
         pass
 
+    # Some trace payloads stringify Python literals before they reach Langfuse.
     try:
         parsed = ast.literal_eval(text)
     except (SyntaxError, ValueError):

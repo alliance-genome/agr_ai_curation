@@ -40,6 +40,7 @@ from ..models.responses import (
 )
 from ..utils.trace_output import is_trace_output_cacheable
 from .auth import get_auth_dependency
+from .domain_envelope_responses import domain_envelope_response_views
 
 
 router = APIRouter()
@@ -107,7 +108,7 @@ async def _ensure_trace_analyzed(
         token_analysis = TokenAnalysisAnalyzer.analyze(trace_data, observations)
         agent_context = AgentContextAnalyzer.analyze(trace_data, observations)
         trace_summary = TraceSummaryAnalyzer.analyze(trace_data, observations)
-        domain_envelope = trace_summary.get("domain_envelope", {})
+        domain_envelope, compact_domain_envelope = domain_envelope_response_views(trace_summary)
         document_hierarchy = DocumentHierarchyAnalyzer.analyze(trace_data, observations)
         agent_configs = AgentConfigAnalyzer.extract_agent_configs(observations)
 
@@ -126,14 +127,7 @@ async def _ensure_trace_analyzed(
             "score_count": trace_data["metadata"]["score_count"],
             "timestamp": trace_data["metadata"]["timestamp"],
             "system_domain": system_domain,
-            "domain_envelope": trace_data["metadata"].get("domain_envelope") or {
-                "found": domain_envelope.get("found", False),
-                "summary": domain_envelope.get("summary", {}),
-                "envelope_ids": domain_envelope.get("envelope_ids", []),
-                "object_ids": domain_envelope.get("object_ids", []),
-                "finding_ids": domain_envelope.get("finding_ids", []),
-                "field_paths": domain_envelope.get("field_paths", []),
-            },
+            "domain_envelope": compact_domain_envelope,
         }
 
         # Group context
@@ -227,8 +221,7 @@ async def get_trace_summary(
         "has_errors": trace_summary.get("has_errors", False),
         "context_overflow_detected": trace_summary.get("context_overflow_detected", False),
         "timestamp": summary.get("timestamp"),
-        "domain_envelope": summary.get("domain_envelope")
-        or trace_summary.get("domain_envelope", {}),
+        "domain_envelope": summary["domain_envelope"],
     }
 
     token_info = create_token_info_dict(response_data)

@@ -7,6 +7,12 @@ from src.models.requests import AnalyzeTraceRequest
 from src.services.cache_manager import CacheManager
 
 
+EMPTY_TRACE_SUMMARY = {
+    "has_errors": False,
+    "domain_envelope": {"found": False, "summary": {}},
+}
+
+
 class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
     def _make_request(self) -> SimpleNamespace:
         cache_manager = CacheManager(ttl_hours=1)
@@ -46,7 +52,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})
-    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value={"has_errors": False})
+    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value=EMPTY_TRACE_SUMMARY)
     @patch("src.api.traces.AgentContextAnalyzer.analyze", return_value={})
     @patch("src.api.traces.TokenAnalysisAnalyzer.analyze", return_value={})
     @patch("src.api.traces.PDFCitationsAnalyzer.analyze", return_value={})
@@ -92,7 +98,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})
-    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value={"has_errors": False})
+    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value=EMPTY_TRACE_SUMMARY)
     @patch("src.api.traces.AgentContextAnalyzer.analyze", return_value={})
     @patch("src.api.traces.TokenAnalysisAnalyzer.analyze", return_value={})
     @patch("src.api.traces.PDFCitationsAnalyzer.analyze", return_value={})
@@ -127,7 +133,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})
-    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value={"has_errors": False})
+    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value=EMPTY_TRACE_SUMMARY)
     @patch("src.api.traces.AgentContextAnalyzer.analyze", return_value={})
     @patch("src.api.traces.TokenAnalysisAnalyzer.analyze", return_value={})
     @patch("src.api.traces.PDFCitationsAnalyzer.analyze", return_value={})
@@ -162,7 +168,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.api.traces.AgentConfigAnalyzer.extract_agent_configs", return_value={})
     @patch("src.api.traces.DocumentHierarchyAnalyzer.analyze", return_value={})
-    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value={"has_errors": False})
+    @patch("src.api.traces.TraceSummaryAnalyzer.analyze", return_value=EMPTY_TRACE_SUMMARY)
     @patch("src.api.traces.AgentContextAnalyzer.analyze", return_value={})
     @patch("src.api.traces.TokenAnalysisAnalyzer.analyze", return_value={})
     @patch("src.api.traces.PDFCitationsAnalyzer.analyze", return_value={})
@@ -278,7 +284,7 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
             ],
             "meta": {"page": 1, "limit": 100, "totalItems": 1, "totalPages": 1},
         }
-        extractor.extract_complete_trace.return_value = self._make_trace_data(
+        trace_data = self._make_trace_data(
             {
                 "domain_envelopes": [
                     {
@@ -314,6 +320,11 @@ class TraceReviewApiTests(unittest.IsolatedAsyncioTestCase):
             trace_id="trace-domain",
             name="curation_prep",
         )
+        trace_data["metadata"]["domain_envelope"] = {
+            "found": True,
+            "envelope_ids": ["stale-metadata-envelope"],
+        }
+        extractor.extract_complete_trace.return_value = trace_data
 
         response = await traces.export_session("session-domain", request, source="local")
         item = response["traces"][0]
