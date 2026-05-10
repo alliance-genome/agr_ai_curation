@@ -7,6 +7,11 @@ export interface WorkspaceShellProps {
   headerSlot?: ReactNode
   entityTableSlot: ReactNode
   reviewTableLabel?: string
+  fieldEditorSlot?: ReactNode
+}
+
+interface DesktopPanelsProps {
+  hasFieldEditor: boolean
 }
 
 const ShellRoot = styled(Box)(() => ({
@@ -50,12 +55,17 @@ const SlotFrame = styled(Box)(() => ({
   },
 }))
 
-const DesktopPanels = styled(Box)(({ theme }) => ({
+const DesktopPanels = styled(Box, {
+  shouldForwardProp: (prop) => prop !== 'hasFieldEditor',
+})<DesktopPanelsProps>(({ theme, hasFieldEditor }) => ({
   flex: 1,
   minHeight: 0,
   height: '100%',
-  display: 'flex',
-  flexDirection: 'column',
+  display: 'grid',
+  gridTemplateColumns: hasFieldEditor
+    ? 'minmax(360px, 0.95fr) minmax(420px, 1.05fr)'
+    : 'minmax(0, 1fr)',
+  gap: theme.spacing(1.5),
   overflow: 'hidden',
   paddingTop: theme.spacing(1.5),
   '& > [data-panel-group]': {
@@ -91,6 +101,7 @@ export default function WorkspaceShell({
   headerSlot,
   entityTableSlot,
   reviewTableLabel = 'Entity table panel',
+  fieldEditorSlot,
 }: WorkspaceShellProps) {
   const theme = useTheme()
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'))
@@ -106,9 +117,14 @@ export default function WorkspaceShell({
           <WorkspacePane label={reviewTableLabel} testId="workspace-shell-entity-table-panel">
             {entityTableSlot}
           </WorkspacePane>
+          {fieldEditorSlot ? (
+            <WorkspacePane label="Field editor panel" testId="workspace-shell-field-editor-panel">
+              {fieldEditorSlot}
+            </WorkspacePane>
+          ) : null}
         </MobilePanels>
       ) : (
-        <DesktopPanels>
+        <DesktopPanels hasFieldEditor={Boolean(fieldEditorSlot)}>
           <PanelSection>
             <WorkspacePane
               label={reviewTableLabel}
@@ -117,6 +133,16 @@ export default function WorkspaceShell({
               {entityTableSlot}
             </WorkspacePane>
           </PanelSection>
+          {fieldEditorSlot ? (
+            <PanelSection>
+              <WorkspacePane
+                label="Field editor panel"
+                testId="workspace-shell-field-editor-panel"
+              >
+                {fieldEditorSlot}
+              </WorkspacePane>
+            </PanelSection>
+          ) : null}
         </DesktopPanels>
       )}
     </ShellRoot>

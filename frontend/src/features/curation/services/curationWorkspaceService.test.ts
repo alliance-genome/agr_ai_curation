@@ -8,6 +8,7 @@ import {
   fetchCurationWorkspaceEnvelopeReviewRows,
   fetchDomainEnvelopeReviewRows,
   fetchSubmissionPreview,
+  patchCurationEnvelopeField,
 } from './curationWorkspaceService'
 
 function buildWorkspace(): CurationWorkspace {
@@ -238,6 +239,65 @@ describe('curationWorkspaceService envelope review rows', () => {
       'env-chemical',
     ])
     expect(vi.mocked(global.fetch)).toHaveBeenCalledTimes(2)
+  })
+
+  it('sends explicit envelope field patch operations unchanged', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({
+          accepted: true,
+          envelope_id: 'env gene',
+          previous_revision: 2,
+          envelope_revision: 3,
+          object_id: 'gene-1',
+          object_type: 'gene',
+          field_path: 'gene.symbol',
+          operation: 'replace',
+          before: 'abc',
+          value: 'def',
+          projection_ref: {
+            envelope_id: 'env gene',
+            object_id: 'gene-1',
+            envelope_revision: 3,
+          },
+          candidate: null,
+          session: null,
+          action_log_entry: null,
+          history_event_ids: ['history-1'],
+          projection_candidate_ids: ['candidate-gene'],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      ),
+    )
+
+    await patchCurationEnvelopeField({
+      session_id: 'session-1',
+      envelope_id: 'env gene',
+      expected_revision: 2,
+      object_id: 'gene-1',
+      field_path: 'gene.symbol',
+      operation: 'replace',
+      before: 'abc',
+      value: 'def',
+      patch_id: 'patch-1',
+    })
+
+    const [url, init] = vi.mocked(global.fetch).mock.calls[0]
+    expect(String(url)).toBe('/api/curation-workspace/sessions/session-1/envelopes/env%20gene/field')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      session_id: 'session-1',
+      envelope_id: 'env gene',
+      expected_revision: 2,
+      object_id: 'gene-1',
+      field_path: 'gene.symbol',
+      operation: 'replace',
+      before: 'abc',
+      value: 'def',
+      patch_id: 'patch-1',
+    })
   })
 })
 

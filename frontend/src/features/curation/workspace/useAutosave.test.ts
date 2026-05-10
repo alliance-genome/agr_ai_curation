@@ -14,11 +14,13 @@ import { useAutosave } from './useAutosave'
 
 const serviceMocks = vi.hoisted(() => ({
   autosaveCurationCandidateDraft: vi.fn(),
+  patchCurationEnvelopeField: vi.fn(),
   updateCurationSession: vi.fn(),
 }))
 
 vi.mock('@/features/curation/services/curationWorkspaceService', () => ({
   autosaveCurationCandidateDraft: serviceMocks.autosaveCurationCandidateDraft,
+  patchCurationEnvelopeField: serviceMocks.patchCurationEnvelopeField,
   updateCurationSession: serviceMocks.updateCurationSession,
 }))
 
@@ -140,6 +142,126 @@ function buildSavedWorkspaceResponse({
   }
 }
 
+function buildEnvelopeWorkspace({
+  includeSecondaryField = false,
+}: {
+  includeSecondaryField?: boolean
+} = {}): CurationWorkspace {
+  const workspace = buildWorkspace()
+  const baseField = workspace.candidates[0].draft.fields[0]
+  const envelopeCandidate = {
+    ...workspace.candidates[0],
+    projection_ref: {
+      envelope_id: 'envelope-1',
+      object_id: 'object-1',
+      envelope_revision: 7,
+    },
+    draft: {
+      ...workspace.candidates[0].draft,
+      fields: [
+        {
+          ...baseField,
+          metadata: {
+            source_field_path: 'gene.symbol',
+          },
+        },
+        ...(includeSecondaryField
+          ? [
+              {
+                ...baseField,
+                field_key: 'gene_name',
+                label: 'Gene name',
+                value: 'breast cancer 1',
+                seed_value: 'breast cancer 1',
+                order: 1,
+                metadata: {
+                  source_field_path: 'gene.name',
+                },
+              },
+            ]
+          : []),
+      ],
+    },
+  }
+
+  return {
+    ...workspace,
+    candidates: [envelopeCandidate],
+  }
+}
+
+function buildEnvelopePatchResponse({
+  workspace,
+  value,
+  before,
+  previousRevision,
+  envelopeRevision,
+  fieldKey = 'gene_symbol',
+  fieldPath = 'gene.symbol',
+}: {
+  workspace: CurationWorkspace
+  value: string
+  before: string
+  previousRevision: number
+  envelopeRevision: number
+  fieldKey?: string
+  fieldPath?: string
+}) {
+  const candidate = workspace.candidates[0]
+  const projectionRef = candidate.projection_ref ?? {
+    envelope_id: 'envelope-1',
+    object_id: 'object-1',
+    envelope_revision: previousRevision,
+  }
+  const patchedCandidate = {
+    ...candidate,
+    projection_ref: {
+      ...projectionRef,
+      envelope_revision: envelopeRevision,
+    },
+    draft: {
+      ...candidate.draft,
+      version: envelopeRevision,
+      fields: candidate.draft.fields.map((field) => {
+        const sourceFieldPath = field.metadata.source_field_path
+        const resolvedFieldPath =
+          typeof sourceFieldPath === 'string' && sourceFieldPath.trim().length > 0
+            ? sourceFieldPath.trim()
+            : field.field_key
+
+        return field.field_key === fieldKey || resolvedFieldPath === fieldPath
+          ? {
+              ...field,
+              value,
+              seed_value: value,
+              dirty: false,
+              stale_validation: true,
+            }
+          : field
+      }),
+    },
+  }
+
+  return {
+    accepted: true,
+    envelope_id: projectionRef.envelope_id,
+    previous_revision: previousRevision,
+    envelope_revision: envelopeRevision,
+    object_id: projectionRef.object_id,
+    object_type: 'gene',
+    field_path: fieldPath,
+    operation: 'replace',
+    before,
+    value,
+    projection_ref: patchedCandidate.projection_ref,
+    candidate: patchedCandidate,
+    session: workspace.session,
+    action_log_entry: null,
+    history_event_ids: [`history-${envelopeRevision}`],
+    projection_candidate_ids: [candidate.candidate_id],
+  }
+}
+
 function createDeferred<T>() {
   let resolvePromise!: (value: T) => void
   let rejectPromise!: (reason?: unknown) => void
@@ -220,6 +342,7 @@ function createWrapper(initialWorkspace: CurationWorkspace) {
 describe('useAutosave', () => {
   beforeEach(() => {
     serviceMocks.autosaveCurationCandidateDraft.mockReset()
+    serviceMocks.patchCurationEnvelopeField.mockReset()
     serviceMocks.updateCurationSession.mockReset()
   })
 
@@ -290,6 +413,288 @@ describe('useAutosave', () => {
     expect(result.current.context.activeCandidate?.draft.version).toBe(2)
     expect(result.current.autosave.isDirty).toBe(false)
     expect(result.current.autosave.warning).toBeNull()
+  })
+
+  it('patches envelope-backed fields by object id, field path, revision, and before value', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValue(
+      buildEnvelopePatchResponse({
+        workspace: envelopeWorkspace,
+        value: 'BRCA2',
+        before: 'BRCA1',
+        previousRevision: 7,
+        envelopeRevision: 8,
+      }),
+    )
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(envelopeWorkspace),
+      },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    expect(result.current.context.activeCandidate?.draft.fields[0].value).toBe('BRCA2')
+
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, AUTOSAVE_SETTLE_MS))
+    })
+
+    expect(serviceMocks.autosaveCurationCandidateDraft).not.toHaveBeenCalled()
+    expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledWith({
+      session_id: 'session-1',
+      envelope_id: 'envelope-1',
+      expected_revision: 7,
+      object_id: 'object-1',
+      field_path: 'gene.symbol',
+      operation: 'replace',
+      before: 'BRCA1',
+      value: 'BRCA2',
+    }, {
+      keepalive: undefined,
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.projection_ref?.envelope_revision).toBe(8)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA2',
+        dirty: false,
+        stale_validation: true,
+      })
+    })
+  })
+
+  it('keeps unsent envelope batch fields visible and dirty after an earlier field saves', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace({ includeSecondaryField: true })
+    const firstEnvelopePatch = createDeferred<ReturnType<typeof buildEnvelopePatchResponse>>()
+    const secondEnvelopePatch = createDeferred<ReturnType<typeof buildEnvelopePatchResponse>>()
+
+    serviceMocks.patchCurationEnvelopeField
+      .mockImplementationOnce(() => firstEnvelopePatch.promise)
+      .mockImplementationOnce(() => secondEnvelopePatch.promise)
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(envelopeWorkspace),
+      },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChanges([
+        {
+          field_key: 'gene_symbol',
+          value: 'BRCA2',
+        },
+        {
+          field_key: 'gene_name',
+          value: 'BRCA1 related',
+        },
+      ])
+    })
+
+    expect(result.current.context.activeCandidate?.draft.fields[0].value).toBe('BRCA2')
+    expect(result.current.context.activeCandidate?.draft.fields[1].value).toBe('BRCA1 related')
+
+    await waitFor(() => {
+      expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField.mock.calls[0]?.[0]).toMatchObject({
+      expected_revision: 7,
+      object_id: 'object-1',
+      field_path: 'gene.symbol',
+      before: 'BRCA1',
+      value: 'BRCA2',
+    })
+
+    const firstPatchResponse = buildEnvelopePatchResponse({
+      workspace: envelopeWorkspace,
+      value: 'BRCA2',
+      before: 'BRCA1',
+      previousRevision: 7,
+      envelopeRevision: 8,
+    })
+
+    await act(async () => {
+      firstEnvelopePatch.resolve(firstPatchResponse)
+      await firstEnvelopePatch.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.projection_ref?.envelope_revision).toBe(8)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA2',
+        dirty: false,
+      })
+      expect(result.current.context.activeCandidate?.draft.fields[1]).toMatchObject({
+        value: 'BRCA1 related',
+        dirty: true,
+      })
+      expect(result.current.autosave.isDirty).toBe(true)
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField.mock.calls[1]?.[0]).toMatchObject({
+      expected_revision: 8,
+      object_id: 'object-1',
+      field_path: 'gene.name',
+      before: 'breast cancer 1',
+      value: 'BRCA1 related',
+    })
+
+    await act(async () => {
+      secondEnvelopePatch.reject(new Error('validation conflict'))
+      await secondEnvelopePatch.promise.catch(() => undefined)
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.draft.fields[1]).toMatchObject({
+        value: 'BRCA1 related',
+        dirty: true,
+      })
+      expect(result.current.autosave.warning).toBe(
+        'Autosave could not patch the envelope field. Your edits remain local and can be retried.',
+      )
+    })
+
+    serviceMocks.patchCurationEnvelopeField.mockResolvedValueOnce(
+      buildEnvelopePatchResponse({
+        workspace: {
+          ...envelopeWorkspace,
+          candidates: [firstPatchResponse.candidate],
+        },
+        fieldKey: 'gene_name',
+        fieldPath: 'gene.name',
+        value: 'BRCA1 related',
+        before: 'breast cancer 1',
+        previousRevision: 8,
+        envelopeRevision: 9,
+      }),
+    )
+
+    await act(async () => {
+      await result.current.autosave.flush()
+    })
+  })
+
+  it('keeps newer queued envelope edits dirty after an in-flight patch completes', async () => {
+    const envelopeWorkspace = buildEnvelopeWorkspace()
+    const firstEnvelopePatch = createDeferred<ReturnType<typeof buildEnvelopePatchResponse>>()
+    const secondEnvelopePatch = createDeferred<ReturnType<typeof buildEnvelopePatchResponse>>()
+
+    serviceMocks.patchCurationEnvelopeField
+      .mockImplementationOnce(() => firstEnvelopePatch.promise)
+      .mockImplementationOnce(() => secondEnvelopePatch.promise)
+
+    const { result } = renderHook(
+      () => ({
+        autosave: useAutosave({ debounceMs: 10 }),
+        context: useCurationWorkspaceContext(),
+      }),
+      {
+        wrapper: createWrapper(envelopeWorkspace),
+      },
+    )
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA2',
+      })
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(1)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField.mock.calls[0]?.[0]).toMatchObject({
+      expected_revision: 7,
+      object_id: 'object-1',
+      field_path: 'gene.symbol',
+      before: 'BRCA1',
+      value: 'BRCA2',
+    })
+
+    act(() => {
+      result.current.autosave.queueFieldChange({
+        field_key: 'gene_symbol',
+        value: 'BRCA3',
+      })
+    })
+
+    expect(result.current.context.activeCandidate?.draft.fields[0].value).toBe('BRCA3')
+    expect(result.current.autosave.isDirty).toBe(true)
+
+    const firstPatchResponse = buildEnvelopePatchResponse({
+      workspace: envelopeWorkspace,
+      value: 'BRCA2',
+      before: 'BRCA1',
+      previousRevision: 7,
+      envelopeRevision: 8,
+    })
+
+    await act(async () => {
+      firstEnvelopePatch.resolve(firstPatchResponse)
+      await firstEnvelopePatch.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.projection_ref?.envelope_revision).toBe(8)
+      expect(result.current.context.activeCandidate?.draft.fields[0].value).toBe('BRCA3')
+      expect(result.current.autosave.isDirty).toBe(true)
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.patchCurationEnvelopeField).toHaveBeenCalledTimes(2)
+    })
+    expect(serviceMocks.patchCurationEnvelopeField.mock.calls[1]?.[0]).toMatchObject({
+      expected_revision: 8,
+      object_id: 'object-1',
+      field_path: 'gene.symbol',
+      before: 'BRCA2',
+      value: 'BRCA3',
+    })
+
+    await act(async () => {
+      secondEnvelopePatch.resolve(
+        buildEnvelopePatchResponse({
+          workspace: {
+            ...envelopeWorkspace,
+            candidates: [firstPatchResponse.candidate],
+          },
+          value: 'BRCA3',
+          before: 'BRCA2',
+          previousRevision: 8,
+          envelopeRevision: 9,
+        }),
+      )
+      await secondEnvelopePatch.promise
+    })
+
+    await waitFor(() => {
+      expect(result.current.context.activeCandidate?.projection_ref?.envelope_revision).toBe(9)
+      expect(result.current.context.activeCandidate?.draft.fields[0]).toMatchObject({
+        value: 'BRCA3',
+        dirty: false,
+        stale_validation: true,
+      })
+      expect(result.current.autosave.isDirty).toBe(false)
+    })
   })
 
   it('keeps newer queued edits dirty and advances expected_version after an in-flight save completes', async () => {

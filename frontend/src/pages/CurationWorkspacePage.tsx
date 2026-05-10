@@ -31,11 +31,14 @@ import {
   executeCurationSubmission,
   fetchCurationWorkspaceEnvelopeReviewRows,
   fetchCurationWorkspace,
+  patchCurationEnvelopeField,
   submitCurationCandidateDecision,
   validateCurationCandidate,
 } from '@/features/curation/services/curationWorkspaceService'
+import { CandidateFieldEditor } from '@/features/curation/editor'
 import type {
   CurationCandidate,
+  CurationDraftFieldChange,
   CurationSubmissionPreviewResponse,
   CurationWorkspace,
 } from '@/features/curation/types'
@@ -55,6 +58,7 @@ import {
   buildWorkspaceExpectedEnvelopeRevisions,
   mergeSubmissionExecutionIntoWorkspace,
   updateWorkspaceActiveCandidate,
+  resolveEnvelopeFieldPath,
 } from '@/features/curation/workspace/workspaceState'
 
 const WORKSPACE_STALE_TIME_MS = 60_000
@@ -94,6 +98,64 @@ function selectEntityTemplateCandidate(
   }
 
   return candidates[0] ?? null
+}
+
+function fieldValueForChange(
+  candidate: CurationCandidate,
+  fieldChange: CurationDraftFieldChange,
+): unknown {
+  const field = candidate.draft.fields.find(
+    (draftField) => draftField.field_key === fieldChange.field_key,
+  )
+
+  if (!field) {
+    throw new Error(
+      `Candidate ${candidate.candidate_id} is missing field ${fieldChange.field_key}.`,
+    )
+  }
+
+  return fieldChange.revert_to_seed
+    ? field.seed_value ?? null
+    : fieldChange.value ?? null
+}
+
+async function patchEnvelopeFieldChanges(args: {
+  sessionId: string
+  candidate: CurationCandidate
+  fieldChanges: CurationDraftFieldChange[]
+}): Promise<void> {
+  const projectionRef = args.candidate.projection_ref
+  if (!projectionRef) {
+    throw new Error(
+      `Candidate ${args.candidate.candidate_id} is not backed by a domain envelope.`,
+    )
+  }
+
+  let expectedRevision = projectionRef.envelope_revision
+
+  for (const fieldChange of args.fieldChanges) {
+    const field = args.candidate.draft.fields.find(
+      (draftField) => draftField.field_key === fieldChange.field_key,
+    )
+
+    if (!field) {
+      throw new Error(
+        `Candidate ${args.candidate.candidate_id} is missing field ${fieldChange.field_key}.`,
+      )
+    }
+
+    const response = await patchCurationEnvelopeField({
+      session_id: args.sessionId,
+      envelope_id: projectionRef.envelope_id,
+      expected_revision: expectedRevision,
+      object_id: projectionRef.object_id,
+      field_path: resolveEnvelopeFieldPath(field),
+      operation: 'replace',
+      before: field.value ?? null,
+      value: fieldValueForChange(args.candidate, fieldChange),
+    })
+    expectedRevision = response.envelope_revision
+  }
 }
 
 function CurationWorkspacePageContent({
@@ -375,6 +437,16 @@ function CurationWorkspacePageContent({
         return
       }
 
+      if (candidate.projection_ref) {
+        await patchEnvelopeFieldChanges({
+          sessionId: workspace.session.session_id,
+          candidate,
+          fieldChanges,
+        })
+        await refreshWorkspace(tagId)
+        return
+      }
+
       await autosaveCurationCandidateDraft({
         session_id: workspace.session.session_id,
         candidate_id: candidate.candidate_id,
@@ -515,6 +587,7 @@ function CurationWorkspacePageContent({
             />
           )
         )}
+        fieldEditorSlot={<CandidateFieldEditor />}
       />
 
       <SubmissionPreviewDialog
