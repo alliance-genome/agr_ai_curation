@@ -267,3 +267,72 @@ def test_live_db_representative_disease_chemical_and_phenotype_projection_rows(l
     assert condition_relation["condition_count"] >= 1
     assert phenotype_projection["curie"] == "MP:0003733"
     assert phenotype_projection["ontologytermtype"] == "MPTerm"
+
+
+def test_live_db_representative_gene_expression_projection_rows(live_db_engine):
+    with live_db_engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                """
+                SELECT gea.id AS annotation_id,
+                       gea.uniqueid,
+                       org.abbreviation AS data_provider,
+                       be.primaryexternalid AS gene_primary_external_id,
+                       symbol.displaytext AS gene_symbol,
+                       relation.name AS relation_name,
+                       gea.evidenceitem_id AS reference_id,
+                       exp.uniqueid AS experiment_unique_id,
+                       assay.curie AS assay_curie,
+                       gea.whenexpressedstagename,
+                       gea.whereexpressedstatement,
+                       anatomy.curie AS anatomical_structure_curie,
+                       cell.curie AS cellular_component_curie
+                FROM public.geneexpressionannotation gea
+                LEFT JOIN public.organization org ON org.id = gea.dataprovider_id
+                LEFT JOIN public.biologicalentity be
+                  ON be.id = gea.expressionannotationsubject_id
+                LEFT JOIN public.slotannotation symbol
+                  ON symbol.singlegene_id = be.id
+                 AND symbol.slotannotationtype = 'GeneSymbolSlotAnnotation'
+                 AND symbol.obsolete = false
+                LEFT JOIN public.vocabularyterm relation ON relation.id = gea.relation_id
+                LEFT JOIN public.geneexpressionexperiment exp
+                  ON exp.id = gea.expressionexperiment_id
+                LEFT JOIN public.ontologyterm assay ON assay.id = gea.expressionassayused_id
+                LEFT JOIN public.expressionpattern pattern
+                  ON pattern.id = gea.expressionpattern_id
+                LEFT JOIN public.anatomicalsite site
+                  ON site.id = pattern.whereexpressed_id
+                LEFT JOIN public.ontologyterm anatomy
+                  ON anatomy.id = site.anatomicalstructure_id
+                LEFT JOIN public.ontologyterm cell
+                  ON cell.id = site.cellularcomponentterm_id
+                WHERE gea.id IN (206552169, 205864243)
+                ORDER BY gea.id
+                """
+            )
+        ).mappings().all()
+        uberon_rows = conn.execute(
+            text(
+                """
+                SELECT gea.id AS annotation_id, ot.curie, ot.name
+                FROM public.geneexpressionannotation gea
+                JOIN public.expressionpattern pattern
+                  ON pattern.id = gea.expressionpattern_id
+                JOIN public.anatomicalsite_anatomicalstructureuberonterms rel
+                  ON rel.anatomicalsite_id = pattern.whereexpressed_id
+                JOIN public.ontologyterm ot
+                  ON ot.id = rel.anatomicalstructureuberonterms_id
+                WHERE gea.id = 206552169
+                """
+            )
+        ).mappings().all()
+
+    rows_by_id = {row["annotation_id"]: row for row in rows}
+    assert set(rows_by_id) == {206552169, 205864243}
+    assert rows_by_id[206552169]["gene_symbol"] == "Tmem67"
+    assert rows_by_id[206552169]["anatomical_structure_curie"] == "EMAPA:17373"
+    assert rows_by_id[205864243]["gene_symbol"] == "Lta"
+    assert rows_by_id[205864243]["cellular_component_curie"] == "GO:0005615"
+    assert rows_by_id[205864243]["reference_id"] == 419039
+    assert {row["curie"] for row in uberon_rows} == {"UBERON:0001008"}

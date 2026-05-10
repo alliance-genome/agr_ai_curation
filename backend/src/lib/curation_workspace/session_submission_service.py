@@ -10,7 +10,7 @@ from typing import Any, Mapping, Sequence
 from uuid import UUID, uuid4
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.lib.http_errors import raise_sanitized_http_exception
@@ -20,6 +20,7 @@ from src.lib.curation_workspace.models import (
     CurationCandidate,
     CurationReviewSession as ReviewSessionModel,
     CurationSubmissionRecord as SubmissionModel,
+    DomainEnvelopeHistory,
     DomainEnvelopeModel,
     DomainEnvelopeProjectionIndex,
 )
@@ -88,6 +89,10 @@ from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DefinitionState,
     DomainEnvelope,
+    HistoryActorType,
+    HistoryEvent,
+    HistoryEventKind,
+    ObjectRef,
     ValidationFinding,
     ValidationFindingSeverity,
     ValidationFindingStatus,
@@ -1496,6 +1501,7 @@ def _resolve_submission_preview_target_key(
 
     if mode == SubmissionMode.DIRECT_SUBMIT:
         return submission_adapter, _default_direct_submission_target_key(
+            adapter_key=adapter_key,
             supported_target_keys=supported_target_keys,
         )
 
@@ -1509,8 +1515,14 @@ def _resolve_submission_preview_target_key(
 
 def _default_direct_submission_target_key(
     *,
+    adapter_key: str,
     supported_target_keys: Sequence[str],
 ) -> str:
+    if not supported_target_keys:
+        export_adapter = _export_adapter_registry().get(adapter_key)
+        if export_adapter is not None:
+            supported_target_keys = tuple(export_adapter.supported_target_keys or ())
+
     transport_target_keys = _submission_adapter_registry().target_keys()
     eligible_target_keys = tuple(
         target_key
@@ -1854,6 +1866,7 @@ def _execute_direct_submission_attempt(
     target_key: str,
     payload: SubmissionPayloadContract,
     readiness: Sequence[CurationCandidateSubmissionReadiness],
+    domain_context: _DomainEnvelopeSubmissionContext | None = None,
     actor_claims: dict[str, Any],
     action_type: CurationActionType,
     action_metadata: Mapping[str, Any] | None = None,
@@ -1957,6 +1970,14 @@ def _execute_direct_submission_attempt(
     db.add(submission_row)
     db.add(action_log_row)
     db.flush()
+    _append_domain_envelope_submission_history(
+        db=db,
+        domain_context=domain_context,
+        submission_row=submission_row,
+        payload=payload,
+        result=result,
+        completed_at=completed_at,
+    )
 
     response_submission = _submission_record(submission_row).model_copy(
         update={
@@ -2177,6 +2198,7 @@ def execute_submission(
         target_key=request.target_key,
         payload=payload,
         readiness=readiness,
+        domain_context=domain_context,
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_EXECUTED,
     )
@@ -2302,6 +2324,7 @@ def retry_submission(
         target_key=original_submission.target_key,
         payload=payload,
         readiness=readiness,
+        domain_context=domain_context,
         actor_claims=actor_claims,
         action_type=CurationActionType.SUBMISSION_RETRIED,
         action_metadata={
@@ -2330,6 +2353,111 @@ def get_submission(
     return CurationSubmissionHistoryResponse(
         submission=_submission_record(submission_row),
     )
+
+
+def _append_domain_envelope_submission_history(
+    *,
+    db: Session,
+    domain_context: _DomainEnvelopeSubmissionContext | None,
+    submission_row: SubmissionModel,
+    payload: SubmissionPayloadContract,
+    result: SubmissionTransportResult,
+    completed_at: datetime,
+) -> None:
+    if domain_context is None or not payload.candidate_ids:
+        return
+
+    submitted_candidate_ids = set(payload.candidate_ids)
+    event_indexes_by_envelope: dict[str, int] = {}
+    for context in domain_context.object_contexts.values():
+        if context.candidate_id not in submitted_candidate_ids:
+            continue
+        if context.envelope is None or context.domain_object is None:
+            continue
+        envelope_id = context.envelope.envelope_id
+        event_indexes_by_envelope.setdefault(
+            envelope_id,
+            _next_domain_envelope_history_index(db, envelope_id),
+        )
+        event_index = event_indexes_by_envelope[envelope_id]
+        event_indexes_by_envelope[envelope_id] = event_index + 1
+
+        object_id = _stable_object_id(context.domain_object)
+        event = HistoryEvent(
+            event_id=(
+                f"submission:{submission_row.id}:{context.candidate_id}:{object_id}"
+            ),
+            event_type=HistoryEventKind.SUBMITTED,
+            timestamp=completed_at,
+            actor_type=HistoryActorType.TOOL,
+            actor_id=payload.adapter_key,
+            message=(
+                f"Recorded submission result for target '{payload.target_key}' "
+                f"with status '{result.status.value}'."
+            ),
+            object_ref=_history_object_ref(context.domain_object, object_id),
+            details={
+                "submission_id": str(submission_row.id),
+                "candidate_id": context.candidate_id,
+                "target_key": payload.target_key,
+                "mode": payload.mode.value,
+                "status": result.status.value,
+                "external_reference": result.external_reference,
+                "response_message": result.response_message,
+                "validation_errors": list(result.validation_errors),
+                "warnings": list(result.warnings),
+                "submission_state": dict(result.submission_state or {}),
+                "target_result_history": [
+                    dict(item)
+                    for item in result.target_result_history
+                ],
+                "payload_candidate_ids": list(payload.candidate_ids),
+            },
+        )
+        db.add(
+            DomainEnvelopeHistory(
+                envelope_id=envelope_id,
+                event_id=event.event_id or (
+                    f"submission:{submission_row.id}:{context.candidate_id}"
+                ),
+                envelope_revision=(
+                    context.envelope_row.revision
+                    if context.envelope_row is not None
+                    else 1
+                ),
+                event_index=event_index,
+                event_type=event.event_type,
+                occurred_at=event.timestamp,
+                actor_type=event.actor_type,
+                actor_id=event.actor_id,
+                object_id=object_id,
+                field_path=None,
+                model_field_ref_json={},
+                event_json=event.model_dump(mode="json"),
+                created_at=completed_at,
+            )
+        )
+    db.flush()
+
+
+def _next_domain_envelope_history_index(db: Session, envelope_id: str) -> int:
+    current_max = db.scalar(
+        select(func.max(DomainEnvelopeHistory.event_index)).where(
+            DomainEnvelopeHistory.envelope_id == envelope_id
+        )
+    )
+    return int(current_max if current_max is not None else -1) + 1
+
+
+def _history_object_ref(
+    domain_object: CuratableObjectEnvelope,
+    object_id: str,
+) -> ObjectRef:
+    if domain_object.object_id == object_id:
+        return ObjectRef(object_id=object_id, object_type=domain_object.object_type)
+    if domain_object.pending_ref_id == object_id:
+        return ObjectRef(pending_ref_id=object_id, object_type=domain_object.object_type)
+    return ObjectRef(object_id=object_id, object_type=domain_object.object_type)
 
 
 __all__ = [

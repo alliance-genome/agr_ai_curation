@@ -23,7 +23,7 @@ fixtures:
           pending_ref_id: gene-expression-annotation-206552169
           model_ref: GeneExpressionAnnotationPayload
           status: pending
-          definition_state: in_development
+          definition_state: stable
           definition_notes:
             - The envelope carries exactly one GeneExpressionAnnotation object per annotation.
             - Evidence and raw extraction details are preserved as envelope metadata.
@@ -59,6 +59,9 @@ fixtures:
                 anatomical_structure:
                   curie: EMAPA:17373
                   name: metanephros
+                anatomical_structure_uberon_terms:
+                  - curie: UBERON:0001008
+                    name: renal system
           evidence_record_ids:
             - evidence-tmem67-metanephros-1
           metadata_refs:

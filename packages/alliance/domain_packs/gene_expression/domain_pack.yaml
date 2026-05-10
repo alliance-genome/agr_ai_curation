@@ -3,7 +3,7 @@ display_name: Alliance Gene Expression Domain Pack
 version: 0.1.0
 metadata_api_version: 1.0.0
 description: Concrete 0.7.0 domain-envelope contract for one GeneExpressionAnnotation curatable object per gene-expression annotation.
-status: in_development
+status: active
 schema_refs:
   - schema_id: alliance.linkml
     provider: alliance_linkml
@@ -199,7 +199,7 @@ object_definitions:
             commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
             source_file: model/schema/expression.yaml
             class: GeneExpressionAnnotation
-    definition_state: in_development
+    definition_state: stable
     definition_notes:
       - The envelope carries exactly one GeneExpressionAnnotation object per annotation; gene, reference, experiment, assay, and expression context values are embedded in that object's payload.
       - LinkML postconditions that require one of anatomical_structure or cellular_component are declared for validator execution rather than represented as helper semantic lists.
@@ -810,7 +810,7 @@ fixture_packs:
     description: Production-like pending GeneExpressionAnnotation envelope preserving tmem67 extraction evidence metadata.
     object_types:
       - GeneExpressionAnnotation
-    definition_state: in_development
+    definition_state: stable
     definition_notes:
       - Fixture values mirror grounded tmem67 curation DB shape while preserving extractor-side metadata.
 metadata:
@@ -828,15 +828,14 @@ metadata:
         description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
       - validator_id: gene_expression.extractor_output_migration
         description: Validate runtime extractor output through the GeneExpressionAnnotation domain-envelope schema and pending-envelope conversion.
+      - validator_id: gene_expression.export_submission_projection
+        description: Validate GeneExpressionAnnotation export/submission target projection payloads.
     planned:
       - validator_id: gene_expression.linkml_anatomical_site_postcondition
         description: Enforce the LinkML AnatomicalSite rule requiring anatomical_structure or cellular_component once validator runtime wiring lands.
       - validator_id: gene_expression.ontology_term_resolution
         description: Validate embedded MMO, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
-    blocked:
-      - validator_id: gene_expression.export_submission_projection
-        blocked_by: ALL-424
-        description: Export/submission adapter validation waits for the 0.7.0 gene-expression submission adapter.
+    blocked: []
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
+from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.lib.curation_workspace.submission_adapters.base import SubmissionTransportAdapter
 from src.lib.curation_workspace.submission_adapters.noop import (
     DEFAULT_NOOP_SUBMISSION_TARGET_KEY,
@@ -54,7 +55,7 @@ class SubmissionAdapterRegistry:
 
 
 def build_default_submission_adapter_registry() -> SubmissionAdapterRegistry:
-    """Build the default submission registry for workspace-backed transports."""
+    """Build the package-driven submission registry for workspace-backed transports."""
 
     from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 

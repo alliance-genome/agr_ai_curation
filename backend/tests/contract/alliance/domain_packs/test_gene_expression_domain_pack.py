@@ -12,6 +12,7 @@ import yaml
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.schemas.domain_envelope import CuratableObjectStatus, field_path_exists
+from src.schemas.domain_envelope import DefinitionState
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 
 
@@ -110,10 +111,13 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     assert curatable_unit.metadata[OBJECT_ROLE_METADATA_KEY] == "curatable_unit"
     assert curatable_unit.model_ref == GENE_EXPRESSION_MODEL_ID
     assert curatable_unit.schema_ref.name == GENE_EXPRESSION_OBJECT_TYPE
+    assert curatable_unit.definition_state is DefinitionState.STABLE
 
     validators = metadata.metadata["validators"]
     assert tuple(validators) == GENE_EXPRESSION_VALIDATOR_STATES
-    assert all(validators[state] for state in GENE_EXPRESSION_VALIDATOR_STATES)
+    assert validators["active"]
+    assert validators["planned"]
+    assert validators["blocked"] == []
     active_validator_ids = {
         validator["validator_id"] for validator in validators["active"]
     }
@@ -121,7 +125,9 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
         validator["validator_id"] for validator in validators["blocked"]
     }
     assert "gene_expression.extractor_output_migration" in active_validator_ids
+    assert "gene_expression.export_submission_projection" in active_validator_ids
     assert "gene_expression.extractor_output_migration" not in blocked_validator_ids
+    assert "gene_expression.export_submission_projection" not in blocked_validator_ids
     assert all(
         validator.get("blocked_by") != "ALL-407"
         for validator in validators["blocked"]
@@ -250,6 +256,9 @@ def test_tmem67_fixture_carries_anatomical_site_for_linkml_postcondition():
         "anatomical_structure" in where_expressed
         or "cellular_component" in where_expressed
     )
+    assert where_expressed["anatomical_structure_uberon_terms"] == [
+        {"curie": "UBERON:0001008", "name": "renal system"}
+    ]
 
 
 def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():

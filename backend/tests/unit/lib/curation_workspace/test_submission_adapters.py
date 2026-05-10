@@ -13,6 +13,7 @@ from src.lib.curation_workspace.submission_adapters import (
     coerce_submission_transport_result,
     normalize_submission_transport_result,
 )
+from src.lib.curation_workspace.adapter_registry import load_curation_adapter_registry
 from src.schemas.curation_workspace import (
     CurationSubmissionStatus,
     SubmissionMode,
@@ -42,7 +43,11 @@ def test_submission_adapter_registry_registers_and_looks_up_adapters():
 
 
 def test_build_default_submission_adapter_registry_exposes_reference_adapter():
-    registry = build_default_submission_adapter_registry()
+    load_curation_adapter_registry.cache_clear()
+    try:
+        registry = build_default_submission_adapter_registry()
+    finally:
+        load_curation_adapter_registry.cache_clear()
 
     adapter = registry.require(DEFAULT_NOOP_SUBMISSION_TARGET_KEY)
 
