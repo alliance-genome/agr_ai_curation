@@ -393,12 +393,7 @@ def _export_behavior_for(
     return behavior
 
 
-def _field_allows_curator_override(
-    field_definition: DomainPackFieldDefinition | None,
-) -> bool:
-    if field_definition is None:
-        return False
-    metadata = field_definition.metadata
+def _metadata_allows_curator_override(metadata: Mapping[str, Any]) -> bool:
     if metadata.get("allow_curator_override") is True:
         return True
     if metadata.get("allow_override") is True:
@@ -411,17 +406,13 @@ def _field_allows_curator_override(
             raw_policy.get("allowed") is True
             or raw_policy.get("allow") is True
             or raw_policy.get("allow_curator_override") is True
+            or raw_policy.get("allow_opt_out") is True
         ):
             return True
     return False
 
 
-def _field_override_requires_reason(
-    field_definition: DomainPackFieldDefinition | None,
-) -> bool:
-    if field_definition is None:
-        return False
-    metadata = field_definition.metadata
+def _metadata_override_requires_reason(metadata: Mapping[str, Any]) -> bool:
     if metadata.get("opt_out_reason_required") is True:
         return True
     for key in ("curator_override", "override", "validation"):
@@ -432,6 +423,34 @@ def _field_override_requires_reason(
         ):
             return True
     return False
+
+
+def _field_allows_curator_override(
+    field_definition: DomainPackFieldDefinition | None,
+    field_policy: FieldValidationPolicy | None = None,
+) -> bool:
+    if (
+        field_definition is not None
+        and _metadata_allows_curator_override(field_definition.metadata)
+    ):
+        return True
+    return field_policy is not None and field_policy.allow_opt_out
+
+
+def _field_override_requires_reason(
+    field_definition: DomainPackFieldDefinition | None,
+    field_policy: FieldValidationPolicy | None = None,
+) -> bool:
+    if (
+        field_definition is not None
+        and _metadata_override_requires_reason(field_definition.metadata)
+    ):
+        return True
+    return (
+        field_policy is not None
+        and field_policy.allow_opt_out
+        and field_policy.opt_out_reason_required
+    )
 
 
 def _curator_override_for_field(
@@ -463,12 +482,16 @@ def _curator_override_satisfies_policy(
     *,
     domain_object: CuratableObjectEnvelope,
     field_definition: DomainPackFieldDefinition | None,
+    field_policy: FieldValidationPolicy | None = None,
     field_path: str,
 ) -> bool:
     override = _curator_override_for_field(domain_object, field_path)
-    if override is None or not _field_allows_curator_override(field_definition):
+    if override is None or not _field_allows_curator_override(
+        field_definition,
+        field_policy,
+    ):
         return False
-    if not _field_override_requires_reason(field_definition):
+    if not _field_override_requires_reason(field_definition, field_policy):
         return True
     reason = override.get("reason") or override.get("opt_out_reason")
     return isinstance(reason, str) and bool(reason.strip())
@@ -700,6 +723,7 @@ def _field_policy_blockers(
         if _curator_override_satisfies_policy(
             domain_object=domain_object,
             field_definition=field_definition,
+            field_policy=policy,
             field_path=field_path,
         ):
             warnings.append(
@@ -743,6 +767,7 @@ def _validation_finding_blockers(
     domain_object: CuratableObjectEnvelope,
     object_id_by_ref: Mapping[tuple[str, str], str],
     field_definitions: Mapping[str, DomainPackFieldDefinition],
+    field_policies: Mapping[str, FieldValidationPolicy],
     projection_ref: Mapping[str, Any],
 ) -> list[CurationSubmissionReadinessBlocker]:
     blockers: list[CurationSubmissionReadinessBlocker] = []
@@ -759,6 +784,11 @@ def _validation_finding_blockers(
             domain_object=domain_object,
             field_definition=(
                 field_definitions.get(field_path)
+                if field_path is not None
+                else None
+            ),
+            field_policy=(
+                field_policies.get(field_path)
                 if field_path is not None
                 else None
             ),
@@ -796,21 +826,34 @@ def _finding_waiver_allowed(
     finding: ValidationFinding,
     domain_object: CuratableObjectEnvelope,
     field_definition: DomainPackFieldDefinition | None,
+    field_policy: FieldValidationPolicy | None,
     field_path: str | None,
 ) -> bool:
     details = finding.details or {}
-    if details.get("allow_curator_override") is True or details.get("allow_opt_out") is True:
-        return True
-    raw_policy = details.get("curator_override") or details.get("override")
-    if isinstance(raw_policy, Mapping):
-        return raw_policy.get("allowed") is True or raw_policy.get("allow") is True
+    for metadata in _finding_policy_metadata_sources(details):
+        if _metadata_allows_curator_override(metadata):
+            return True
     if field_path is not None and _curator_override_satisfies_policy(
         domain_object=domain_object,
         field_definition=field_definition,
+        field_policy=field_policy,
         field_path=field_path,
     ):
         return True
     return False
+
+
+def _finding_policy_metadata_sources(
+    details: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    metadata_sources: list[Mapping[str, Any]] = [details]
+    raw_validation_metadata = details.get("validation_metadata")
+    if isinstance(raw_validation_metadata, Mapping):
+        metadata_sources.append(raw_validation_metadata)
+        raw_field_policy = raw_validation_metadata.get("field_policy")
+        if isinstance(raw_field_policy, Mapping):
+            metadata_sources.append(raw_field_policy)
+    return tuple(metadata_sources)
 
 
 def _domain_object_for_id(
@@ -956,6 +999,7 @@ def _build_domain_envelope_object_context(
             domain_object=domain_object,
             object_id_by_ref=_object_id_by_ref(envelope),
             field_definitions=field_definitions,
+            field_policies=field_policies,
             projection_ref=projection_ref,
         )
     )

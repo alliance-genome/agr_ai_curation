@@ -555,13 +555,38 @@ def _create_decision_session(
     }
 
 
-def _museum_pack_text(*, allow_title_override: bool = False) -> str:
+def _museum_pack_text(
+    *,
+    allow_title_override: bool = False,
+    title_binding_allows_opt_out: bool = False,
+) -> str:
     title_metadata = (
         """
           allow_curator_override: true
           opt_out_reason_required: true"""
         if allow_title_override
         else " {}"
+    )
+    validator_metadata = (
+        """
+metadata:
+  validator_bindings:
+    active:
+      - binding_id: museum.title_catalog_check
+        validation_kind: external_catalog_check
+        applies_to:
+          domain_pack_id: museum.catalog
+          object_types:
+            - MuseumArtifact
+          field_paths:
+            - artifact.title
+          field_types:
+            - string
+        blocking: true
+        allow_opt_out: true
+        opt_out_reason_required: true"""
+        if title_binding_allows_opt_out
+        else ""
     )
     return f"""pack_id: museum.catalog
 display_name: Museum Catalog
@@ -583,15 +608,24 @@ object_definitions:
         metadata:{title_metadata}
       - field_path: condition.status
         field_type: string
+{validator_metadata}
 """
 
 
-def _loaded_museum_pack(tmp_path, *, allow_title_override: bool = False) -> LoadedDomainPack:
+def _loaded_museum_pack(
+    tmp_path,
+    *,
+    allow_title_override: bool = False,
+    title_binding_allows_opt_out: bool = False,
+) -> LoadedDomainPack:
     pack_dir = tmp_path / "museum.catalog"
     pack_dir.mkdir()
     metadata_path = pack_dir / "domain_pack.yaml"
     metadata_path.write_text(
-        _museum_pack_text(allow_title_override=allow_title_override),
+        _museum_pack_text(
+            allow_title_override=allow_title_override,
+            title_binding_allows_opt_out=title_binding_allows_opt_out,
+        ),
         encoding="utf-8",
     )
     metadata = load_domain_pack_metadata(metadata_path)
@@ -615,10 +649,12 @@ def _create_domain_envelope_submission_session(
     object_metadata: dict | None = None,
     object_definition_state: DefinitionState = DefinitionState.STABLE,
     allow_title_override: bool = False,
+    title_binding_allows_opt_out: bool = False,
 ) -> dict[str, str]:
     loaded_pack = _loaded_museum_pack(
         tmp_path,
         allow_title_override=allow_title_override,
+        title_binding_allows_opt_out=title_binding_allows_opt_out,
     )
     monkeypatch.setattr(
         submission_module,
@@ -2214,6 +2250,84 @@ def test_submission_export_allows_missing_required_field_with_curator_override_p
     ]
 
 
+def test_submission_export_allows_binding_policy_curator_override(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1"}},
+        title_binding_allows_opt_out=True,
+        object_metadata={
+            "curator_overrides": [
+                {
+                    "field_path": "artifact.title",
+                    "reason": "External catalog title is intentionally unavailable.",
+                }
+            ]
+        },
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is True
+    assert readiness.blockers == []
+    assert readiness.warnings == [
+        "Curator override accepted for export-blocking field artifact.title."
+    ]
+
+
+def test_submission_export_blocks_binding_policy_override_without_required_reason(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"accession_id": "A-1"}},
+        title_binding_allows_opt_out=True,
+        object_metadata={
+            "curator_overrides": [
+                {
+                    "field_path": "artifact.title",
+                }
+            ]
+        },
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    blocker = response.submission.readiness[0].blockers[0]
+    assert blocker.code == "domain_envelope.curator_override_not_allowed"
+    assert blocker.details["allow_opt_out"] is True
+    assert blocker.details["opt_out_reason_required"] is True
+    assert blocker.details["blocking_validator_binding_ids"] == [
+        "museum.title_catalog_check"
+    ]
+
+
 def test_submission_export_blocks_open_export_blocking_validation_findings(
     db_session,
     tmp_path,
@@ -2309,6 +2423,61 @@ def test_submission_export_allows_waived_finding_with_field_override_policy(
                     ),
                     field_path="artifact.title",
                 ),
+            )
+        ],
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is True
+    assert readiness.blockers == []
+
+
+def test_submission_export_allows_waived_finding_with_binding_validation_metadata(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                status=ValidationFindingStatus.WAIVED,
+                message="Title requires external catalog verification.",
+                code="museum.catalog.title_unverified",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "allow_opt_out": True,
+                        "opt_out_reason_required": True,
+                    }
+                },
             )
         ],
     )

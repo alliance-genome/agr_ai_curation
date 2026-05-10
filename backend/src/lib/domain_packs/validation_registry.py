@@ -230,6 +230,8 @@ class FieldValidationPolicy:
     provider_refs: dict[str, Any] = field(default_factory=dict)
     validator_binding_ids: tuple[str, ...] = ()
     blocking_validator_binding_ids: tuple[str, ...] = ()
+    allow_opt_out: bool = False
+    opt_out_reason_required: bool = False
 
     def identity_details(self) -> dict[str, Any]:
         """Return stable structured details suitable for findings."""
@@ -243,6 +245,8 @@ class FieldValidationPolicy:
             "required": self.required,
             "export_blocking": self.export_blocking,
             "definition_state": self.definition_state.value,
+            "allow_opt_out": self.allow_opt_out,
+            "opt_out_reason_required": self.opt_out_reason_required,
         }
         if self.object_role:
             details["object_role"] = self.object_role
@@ -1044,6 +1048,13 @@ def _build_field_policies(
                 for binding in matching_bindings
                 if binding.blocking and binding.state is ValidationBindingState.ACTIVE
             )
+            opt_out_bindings = tuple(
+                binding
+                for binding in matching_bindings
+                if binding.state is ValidationBindingState.ACTIVE
+                and binding.allow_opt_out
+                and (binding.blocking or binding.required)
+            )
             policies.append(
                 FieldValidationPolicy(
                     domain_pack_id=domain_pack.pack_id,
@@ -1066,6 +1077,10 @@ def _build_field_policies(
                         binding.binding_id for binding in matching_bindings
                     ),
                     blocking_validator_binding_ids=blocking_binding_ids,
+                    allow_opt_out=bool(opt_out_bindings),
+                    opt_out_reason_required=any(
+                        binding.opt_out_reason_required for binding in opt_out_bindings
+                    ),
                 )
             )
     return tuple(sorted(policies, key=lambda item: (item.object_type, item.field_path)))
