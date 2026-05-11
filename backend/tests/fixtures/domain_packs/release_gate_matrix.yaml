@@ -11,6 +11,7 @@ required_surfaces:
   - export_submission
   - opus_tool
   - trace_review
+  - end_to_end_integration
 suites:
   provider_agnostic_unit:
     runner: backend-unit-tests
@@ -54,3 +55,17 @@ suites:
       - read_only_curation_db_tunnel
     surfaces:
       - live_db_projection
+  end_to_end_integration:
+    runner: backend-integration-tests/backend-persistence-tests
+    command: bash scripts/testing/domain_envelope_e2e_gate.sh
+    path_file: tests/integration/.domain-envelope-e2e-test-paths
+    markers:
+      - integration
+      - domain_envelope_release_gate
+    external_dependencies: []
+    surfaces:
+      - end_to_end_integration
+      - materialization
+      - repair_loop
+      - export_submission
+      - one_off_migration

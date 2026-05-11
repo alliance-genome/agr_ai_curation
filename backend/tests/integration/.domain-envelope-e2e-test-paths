@@ -1,0 +1,5 @@
+# Paths are relative to backend/.
+# End-to-end 0.7.0 domain-envelope integration and retained-legacy migration gate.
+tests/integration/test_curation_submission_e2e.py
+tests/integration/test_curation_workspace_sessions_api.py
+tests/integration/persistence/test_legacy_curation_workspace_migration.py

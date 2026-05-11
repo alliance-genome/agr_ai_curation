@@ -112,6 +112,10 @@ case $TEST_TYPE in
     test_stack_compose run --rm backend-contract-tests \
       bash tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-live-db-test-paths --suite-label alliance-live-db --require-truthy-env ALLIANCE_LIVE_DB_CONTRACT_TESTS
     ;;
+  domain-envelope-e2e)
+    echo -e "${YELLOW}Running domain-envelope end-to-end integration gate...${NC}"
+    "${SCRIPT_DIR}/domain_envelope_e2e_gate.sh"
+    ;;
   domain-envelope-release)
     echo -e "${YELLOW}Running full 0.7.0 domain-envelope release gate...${NC}"
     test_stack_compose run --rm backend-unit-tests \
@@ -119,6 +123,7 @@ case $TEST_TYPE in
     "${SCRIPT_DIR}/prepare-test-stack.sh"
     test_stack_compose run --rm backend-contract-tests \
       bash -lc "alembic upgrade head && bash tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-domain-pack-test-paths --suite-label alliance-domain-pack"
+    "${SCRIPT_DIR}/domain_envelope_e2e_gate.sh"
     load_live_db_tunnel_env_if_present
     export ALLIANCE_LIVE_DB_CONTRACT_TESTS=1
     test_stack_compose run --rm backend-contract-tests \
@@ -131,7 +136,7 @@ case $TEST_TYPE in
     ;;
   *)
     echo -e "${RED}Unknown test type: $TEST_TYPE${NC}"
-    echo "Usage: $0 [build|prepare|unit|integration|contract|domain-envelope-unit|alliance-domain-contract|alliance-live-db-contract|domain-envelope-release|all]"
+    echo "Usage: $0 [build|prepare|unit|integration|contract|domain-envelope-unit|alliance-domain-contract|alliance-live-db-contract|domain-envelope-e2e|domain-envelope-release|all]"
     echo ""
     echo "  build       - Build the test Docker image"
     echo "  prepare     - Start isolated test infra (Postgres + Weaviate) and run migrations"
@@ -141,6 +146,7 @@ case $TEST_TYPE in
     echo "  domain-envelope-unit       - Run offline provider-agnostic domain-envelope release unit tests"
     echo "  alliance-domain-contract   - Run Alliance domain-pack + LinkML contract tests"
     echo "  alliance-live-db-contract  - Run explicit live DB projection contract tests"
+    echo "  domain-envelope-e2e        - Run persisted domain-envelope integration and migration gate"
     echo "  domain-envelope-release    - Run provider-agnostic, Alliance LinkML, and explicit live DB gates"
     echo "  all         - Run all tests (default)"
     exit 1

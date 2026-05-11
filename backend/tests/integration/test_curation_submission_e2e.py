@@ -5,14 +5,37 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from collections.abc import Mapping
+from pathlib import Path
 from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import pytest
+import yaml
 from fastapi import Security
 from fastapi.testclient import TestClient
 
 from conftest import MOCK_USERS
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
+if str(ALLIANCE_PYTHON_SRC) not in sys.path:
+    sys.path.insert(0, str(ALLIANCE_PYTHON_SRC))
+
+FORBIDDEN_LEGACY_SEMANTIC_KEYS = {
+    "items",
+    "annotations",
+    "genes",
+    "alleles",
+    "diseases",
+    "chemicals",
+    "phenotypes",
+    "CurationPrepCandidate",
+    "NormalizedCandidate",
+    "normalized_payload",
+    "annotation_drafts",
+}
 
 
 def _hash(char: str) -> str:
@@ -34,6 +57,352 @@ def _patch_submission_transport_adapter(monkeypatch, adapter_factory):
     )
 
 
+def _fixture_yaml(*parts: str) -> dict:
+    fixture_path = REPO_ROOT / "backend" / "tests" / "fixtures" / "domain_packs"
+    for part in parts:
+        fixture_path /= part
+    return yaml.safe_load(fixture_path.read_text(encoding="utf-8"))
+
+
+def _iter_mapping_keys(value):
+    if isinstance(value, Mapping):
+        yield from value.keys()
+        for child in value.values():
+            yield from _iter_mapping_keys(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_mapping_keys(child)
+
+
+def _retag_envelope(envelope, *, envelope_id: str):
+    metadata = dict(envelope.metadata or {})
+    metadata["semantic_source"] = "domain_envelope.objects"
+    return envelope.model_copy(
+        update={"envelope_id": envelope_id, "metadata": metadata}
+    )
+
+
+def _alliance_gate_case(case_key: str):
+    if case_key == "gene":
+        from agr_ai_curation_alliance.domain_packs.gene import (
+            GENE_MENTION_EVIDENCE_OBJECT_TYPE,
+            GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
+            tool_verified_gene_output_to_pending_envelope,
+        )
+
+        envelope = tool_verified_gene_output_to_pending_envelope(
+            _fixture_yaml("gene", "tool_verified_gene_output.yaml")
+        )
+        return {
+            "adapter_key": "gene",
+            "envelope": _retag_envelope(
+                envelope,
+                envelope_id="gene-alliance-e2e-envelope",
+            ),
+            "target_key": GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
+            "target_object_type": GENE_MENTION_EVIDENCE_OBJECT_TYPE,
+            "expected_ready": True,
+        }
+
+    elif case_key == "gene_expression":
+        from agr_ai_curation_alliance.domain_packs.gene_expression import (
+            GENE_EXPRESSION_OBJECT_TYPE,
+            GENE_EXPRESSION_TARGET_KEY,
+        )
+
+        return {
+            "adapter_key": "gene_expression",
+            "envelope": _retag_envelope(
+                _tmem67_gene_expression_envelope(
+                    envelope_id="gene-expression-alliance-e2e-envelope"
+                ),
+                envelope_id="gene-expression-alliance-e2e-envelope",
+            ),
+            "target_key": GENE_EXPRESSION_TARGET_KEY,
+            "target_object_type": GENE_EXPRESSION_OBJECT_TYPE,
+            "expected_ready": True,
+        }
+
+    elif case_key == "allele":
+        from agr_ai_curation_alliance.domain_packs.allele import (
+            ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+            build_pending_allele_envelope_from_tool_verified_fixture,
+        )
+        from tests.fixtures.evidence.harness import load_evidence_fixture
+
+        envelope = build_pending_allele_envelope_from_tool_verified_fixture(
+            load_evidence_fixture("tool_verified_allele_paper"),
+            envelope_id="allele-alliance-e2e-envelope",
+        )
+        return {
+            "adapter_key": "allele",
+            "envelope": _retag_envelope(
+                envelope,
+                envelope_id="allele-alliance-e2e-envelope",
+            ),
+            "target_key": ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
+            "target_object_type": "AllelePaperEvidenceAssociation",
+            "expected_ready": False,
+            "expected_blocker_codes": {
+                "domain_envelope.definition_state_blocked",
+                "domain_envelope.export_behavior_blocked",
+                "alliance.allele.write_blocked",
+            },
+        }
+
+    elif case_key == "disease":
+        from agr_ai_curation_alliance.domain_packs.disease import (
+            DISEASE_EXPORT_TARGET_ID,
+            DISEASE_OBJECT_TYPE,
+            tool_verified_disease_output_to_pending_envelope,
+        )
+
+        envelope = tool_verified_disease_output_to_pending_envelope(
+            _fixture_yaml("disease", "tool_verified_disease_output.yaml")
+        )
+        return {
+            "adapter_key": "disease",
+            "envelope": _retag_envelope(
+                envelope,
+                envelope_id="disease-alliance-e2e-envelope",
+            ),
+            "target_key": DISEASE_EXPORT_TARGET_ID,
+            "target_object_type": DISEASE_OBJECT_TYPE,
+            "expected_ready": False,
+            "expected_blocker_codes": {
+                "domain_envelope.definition_state_blocked",
+                "domain_envelope.export_behavior_blocked",
+            },
+        }
+
+    elif case_key == "chemical_condition":
+        from agr_ai_curation_alliance.domain_packs.chemical_condition import (
+            CHEMICAL_CONDITION_EXPORT_TARGET_ID,
+            CHEMICAL_CONDITION_OBJECT_TYPE,
+            build_pending_chemical_condition_envelope_from_tool_verified_output,
+        )
+
+        envelope = build_pending_chemical_condition_envelope_from_tool_verified_output(
+            _fixture_yaml("chemical_condition", "tool_verified_chemical_output.yaml")
+        )
+        return {
+            "adapter_key": "chemical",
+            "envelope": _retag_envelope(
+                envelope,
+                envelope_id="chemical-condition-alliance-e2e-envelope",
+            ),
+            "target_key": CHEMICAL_CONDITION_EXPORT_TARGET_ID,
+            "target_object_type": CHEMICAL_CONDITION_OBJECT_TYPE,
+            "expected_ready": False,
+            "expected_blocker_codes": {
+                "domain_envelope.missing_export_context",
+                "alliance.chemical_condition.export_context_missing",
+            },
+        }
+
+    elif case_key == "phenotype":
+        from agr_ai_curation_alliance.domain_packs.phenotype import (
+            PHENOTYPE_EXPORT_TARGET_ID,
+            PHENOTYPE_OBJECT_TYPE,
+            build_pending_phenotype_envelope_from_tool_verified_fixture,
+        )
+        from tests.fixtures.evidence.harness import load_evidence_fixture
+
+        envelope = build_pending_phenotype_envelope_from_tool_verified_fixture(
+            load_evidence_fixture("tool_verified_phenotype_paper"),
+            envelope_id="phenotype-alliance-e2e-envelope",
+        )
+        return {
+            "adapter_key": "phenotype",
+            "envelope": _retag_envelope(
+                envelope,
+                envelope_id="phenotype-alliance-e2e-envelope",
+            ),
+            "target_key": PHENOTYPE_EXPORT_TARGET_ID,
+            "target_object_type": PHENOTYPE_OBJECT_TYPE,
+            "expected_ready": False,
+            "expected_blocker_codes": {
+                "domain_envelope.pack_export_policy_blocked",
+                "domain_envelope.definition_state_blocked",
+                "domain_envelope.export_behavior_blocked",
+            },
+        }
+
+    raise AssertionError(f"Unhandled domain-envelope gate case: {case_key}")
+
+
+def _tmem67_gene_expression_envelope(*, envelope_id: str):
+    from agr_ai_curation_alliance.domain_packs.gene_expression import (
+        gene_expression_extraction_output_to_pending_envelope,
+    )
+
+    raw_fixture = _fixture_yaml(
+        "gene_expression",
+        "tmem67_gene_expression_output.yaml",
+    )
+    context = raw_fixture["envelope_context"]
+    return gene_expression_extraction_output_to_pending_envelope(
+        raw_fixture["output"],
+        envelope_id=envelope_id,
+        document_id=context["document_id"],
+        produced_by=context["produced_by"],
+        produced_at=context["produced_at"],
+    )
+
+
+def _tmem67_missing_where_statement_envelope(*, envelope_id: str):
+    from agr_ai_curation_alliance.domain_packs.gene_expression import (
+        GENE_EXPRESSION_OBJECT_TYPE,
+    )
+
+    envelope = _tmem67_gene_expression_envelope(envelope_id=envelope_id)
+    objects = []
+    for domain_object in envelope.objects:
+        if domain_object.object_type != GENE_EXPRESSION_OBJECT_TYPE:
+            objects.append(domain_object)
+            continue
+        payload = dict(domain_object.payload)
+        payload.pop("where_expressed_statement", None)
+        objects.append(domain_object.model_copy(update={"payload": payload}))
+    return envelope.model_copy(update={"objects": objects, "validation_findings": []})
+
+
+def _domain_envelope_extraction_record(
+    submission_e2e_context,
+    *,
+    envelope,
+    adapter_key: str,
+    case_key: str,
+):
+    from src.schemas.curation_workspace import (
+        CurationExtractionResultRecord,
+        CurationExtractionSourceKind,
+    )
+
+    return CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": f"extract-{case_key}",
+            "document_id": submission_e2e_context["document_id"],
+            "adapter_key": adapter_key,
+            "agent_key": f"{adapter_key}_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": f"chat-session-{case_key}",
+            "trace_id": f"trace-{case_key}",
+            "flow_run_id": f"flow-{case_key}",
+            "user_id": submission_e2e_context["current_user_auth_sub"],
+            "candidate_count": len(envelope.objects),
+            "conversation_summary": (
+                f"Prepared {adapter_key} domain-envelope gate fixture."
+            ),
+            "payload_json": envelope.model_dump(mode="json"),
+            "created_at": "2026-05-10T12:00:00Z",
+            "metadata": {
+                "envelope_id": envelope.envelope_id,
+                "project_key": "agr",
+            },
+        }
+    )
+
+
+def _run_prep_and_bootstrap_domain_envelope(
+    client: TestClient,
+    submission_e2e_context,
+    test_db,
+    *,
+    envelope,
+    adapter_key: str,
+    case_key: str,
+):
+    from src.lib.curation_workspace.curation_prep_service import (
+        CurationPrepPersistenceContext,
+        run_curation_prep,
+    )
+    from src.schemas.curation_prep import CurationPrepScopeConfirmation
+    from src.schemas.curation_workspace import CurationExtractionSourceKind
+
+    extraction_result = _domain_envelope_extraction_record(
+        submission_e2e_context,
+        envelope=envelope,
+        adapter_key=adapter_key,
+        case_key=case_key,
+    )
+    prep_output = asyncio.run(
+        run_curation_prep(
+            [extraction_result],
+            scope_confirmation=CurationPrepScopeConfirmation(
+                confirmed=True,
+                adapter_keys=[adapter_key],
+                notes=[f"Confirmed {case_key} domain-envelope gate fixture."],
+            ),
+            db=test_db,
+            persistence_context=CurationPrepPersistenceContext(
+                origin_session_id=f"chat-session-{case_key}",
+                trace_id=f"trace-{case_key}",
+                flow_run_id=f"flow-{case_key}",
+                user_id=submission_e2e_context["current_user_auth_sub"],
+                source_kind=CurationExtractionSourceKind.CHAT,
+            ),
+        )
+    )
+    assert prep_output.candidates == []
+    assert prep_output.review_row_count > 0
+    assert prep_output.envelope_refs[0].envelope_id == envelope.envelope_id
+
+    bootstrap_response = client.post(
+        (
+            "/api/curation-workspace/documents/"
+            f"{submission_e2e_context['document_id']}/bootstrap"
+        ),
+        json={
+            "adapter_key": adapter_key,
+            "origin_session_id": f"chat-session-{case_key}",
+        },
+    )
+    assert bootstrap_response.status_code == 200, bootstrap_response.text
+    bootstrap_payload = bootstrap_response.json()
+    session_id = bootstrap_payload["session"]["session_id"]
+    workspace_response = client.get(
+        f"/api/curation-workspace/sessions/{session_id}",
+        params={"include_workspace": "true"},
+    )
+    assert workspace_response.status_code == 200, workspace_response.text
+    return prep_output, bootstrap_payload, workspace_response.json()["workspace"]
+
+
+def _assert_workspace_candidates_use_persisted_envelopes(workspace_payload):
+    assert workspace_payload["candidates"]
+    for candidate in workspace_payload["candidates"]:
+        assert candidate["projection_ref"] is not None
+        assert candidate["normalized_payload"] == {}
+        assert candidate["metadata"]["semantic_source"] == "domain_envelope.objects"
+        assert candidate["metadata"]["object_type"]
+        assert candidate["metadata"]["object_role"]
+
+
+def _candidate_for_object_type(workspace_payload, object_type: str) -> dict:
+    matches = [
+        candidate
+        for candidate in workspace_payload["candidates"]
+        if candidate["metadata"].get("object_type") == object_type
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _accept_candidate(client: TestClient, *, session_id: str, candidate_id: str) -> dict:
+    response = client.post(
+        f"/api/curation-workspace/candidates/{candidate_id}/decision",
+        json={
+            "session_id": session_id,
+            "candidate_id": candidate_id,
+            "action": "accept",
+            "advance_queue": False,
+        },
+    )
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
 @pytest.fixture
 def client(test_db, get_auth_mock, monkeypatch):
     """Create isolated app client with auth and database overrides."""
@@ -46,7 +415,12 @@ def client(test_db, get_auth_mock, monkeypatch):
     modules_to_clear = [
         name
         for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
+        if (
+            name == "main"
+            or name.startswith("src.")
+            or name == "agr_ai_curation_alliance"
+            or name.startswith("agr_ai_curation_alliance.")
+        )
     ]
     for module_name in modules_to_clear:
         del sys.modules[module_name]
@@ -495,82 +869,42 @@ def test_submission_workflow_e2e_with_retry_and_history(
     monkeypatch,
 ):
     from src.lib.curation_workspace import session_service
-    from src.lib.curation_workspace.curation_prep_service import (
-        CurationPrepPersistenceContext,
-        run_curation_prep,
-    )
     from src.lib.curation_workspace.models import CurationReviewSession, CurationSubmissionRecord
     from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
-    from src.schemas.curation_prep import CurationPrepScopeConfirmation
     from src.schemas.curation_workspace import (
         CurationActionType,
-        CurationExtractionResultRecord,
-        CurationExtractionSourceKind,
         CurationSessionStatus,
         CurationSubmissionStatus,
     )
 
-    extraction_result = CurationExtractionResultRecord.model_validate(
-        _gene_envelope_extraction_payload(
+    gate_case = _alliance_gate_case("gene")
+    _prep_output, bootstrap_payload, workspace_payload = (
+        _run_prep_and_bootstrap_domain_envelope(
+            client,
             submission_e2e_context,
-            extraction_result_id="extract-submission-e2e-1",
-            origin_session_id="chat-session-submission-e2e",
-            trace_id="trace-submission-e2e",
-            flow_run_id="flow-submission-e2e",
-            envelope_id="gene-submission-e2e-envelope",
+            test_db,
+            envelope=gate_case["envelope"],
+            adapter_key=gate_case["adapter_key"],
+            case_key="submission-e2e",
         )
     )
-    prep_output = asyncio.run(
-        run_curation_prep(
-            [extraction_result],
-            scope_confirmation=CurationPrepScopeConfirmation(
-                confirmed=True,
-                adapter_keys=["gene"],
-                notes=["Confirmed from chat session submission e2e."],
-            ),
-            db=test_db,
-            persistence_context=CurationPrepPersistenceContext(
-                origin_session_id="chat-session-submission-e2e",
-                trace_id="trace-submission-e2e",
-                flow_run_id="flow-submission-e2e",
-                user_id=submission_e2e_context["current_user_auth_sub"],
-                source_kind=CurationExtractionSourceKind.CHAT,
-            ),
-        )
-    )
-    assert prep_output.review_row_count == 1
-
-    bootstrap_response = client.post(
-        (
-            "/api/curation-workspace/documents/"
-            f"{submission_e2e_context['document_id']}/bootstrap"
-        ),
-        json={},
-    )
-    assert bootstrap_response.status_code == 200, bootstrap_response.text
-    bootstrap_payload = bootstrap_response.json()
-    assert bootstrap_payload["created"] is True
     session_id = bootstrap_payload["session"]["session_id"]
     assert bootstrap_payload["session"]["adapter"]["adapter_key"] == "gene"
     assert bootstrap_payload["session"]["progress"]["total_candidates"] == 1
-
-    workspace_response = client.get(
-        f"/api/curation-workspace/sessions/{session_id}",
-        params={"include_workspace": "true"},
-    )
-    assert workspace_response.status_code == 200, workspace_response.text
-    workspace_payload = workspace_response.json()["workspace"]
     assert workspace_payload["session"]["session_id"] == session_id
     assert workspace_payload["submission_history"] == []
     assert len(workspace_payload["candidates"]) == 1
 
-    candidate = workspace_payload["candidates"][0]
+    candidate = _candidate_for_object_type(
+        workspace_payload,
+        gate_case["target_object_type"],
+    )
     candidate_id = candidate["candidate_id"]
     draft = candidate["draft"]
     string_field = next(
         field
         for field in draft["fields"]
-        if field["field_key"] == "source_mentions[0]"
+        if isinstance(field.get("value"), str) and not field.get("read_only", False)
     )
     edited_value = f"{string_field['value']} (reviewed)"
 
@@ -629,7 +963,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
         json={
             "session_id": session_id,
             "mode": "export",
-            "target_key": "review_export_bundle",
+            "target_key": gate_case["target_key"],
             "include_payload": True,
         },
     )
@@ -642,7 +976,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
     _patch_submission_transport_adapter(
         monkeypatch,
         lambda _target_key: NoOpSubmissionAdapter(
-            target_key="review_export_bundle",
+            target_key=gate_case["target_key"],
             response_status=CurationSubmissionStatus.FAILED,
         ),
     )
@@ -650,7 +984,7 @@ def test_submission_workflow_e2e_with_retry_and_history(
         f"/api/curation-workspace/sessions/{session_id}/submit",
         json={
             "session_id": session_id,
-            "target_key": "review_export_bundle",
+            "target_key": gate_case["target_key"],
         },
     )
     assert failed_submit_response.status_code == 200, failed_submit_response.text
@@ -672,7 +1006,9 @@ def test_submission_workflow_e2e_with_retry_and_history(
 
     _patch_submission_transport_adapter(
         monkeypatch,
-        lambda _target_key: NoOpSubmissionAdapter(target_key="review_export_bundle"),
+        lambda _target_key: NoOpSubmissionAdapter(
+            target_key=gate_case["target_key"]
+        ),
     )
     retry_response = client.post(
         (
@@ -702,7 +1038,9 @@ def test_submission_workflow_e2e_with_retry_and_history(
     history_payload = history_response.json()
     assert history_payload["submission"]["submission_id"] == retried_submission_id
     assert history_payload["submission"]["status"] == "accepted"
-    assert history_payload["submission"]["external_reference"] == "noop:review_export_bundle:1"
+    assert history_payload["submission"]["external_reference"] == (
+        f"noop:{gate_case['target_key']}:1"
+    )
 
     final_workspace_response = client.get(
         f"/api/curation-workspace/sessions/{session_id}",
@@ -730,3 +1068,315 @@ def test_submission_workflow_e2e_with_retry_and_history(
     ]
     assert CurationActionType.SUBMISSION_EXECUTED.value in action_types
     assert CurationActionType.SUBMISSION_RETRIED.value in action_types
+
+
+@pytest.mark.parametrize(
+    "case_key",
+    (
+        "gene",
+        "gene_expression",
+        "allele",
+        "disease",
+        "chemical_condition",
+        "phenotype",
+    ),
+)
+def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes(
+    client: TestClient,
+    submission_e2e_context,
+    test_db,
+    case_key: str,
+):
+    from src.lib.curation_workspace.models import (
+        DomainEnvelopeModel,
+        DomainEnvelopeObject,
+    )
+
+    gate_case = _alliance_gate_case(case_key)
+    envelope = gate_case["envelope"]
+    _prep_output, bootstrap_payload, workspace_payload = (
+        _run_prep_and_bootstrap_domain_envelope(
+            client,
+            submission_e2e_context,
+            test_db,
+            envelope=envelope,
+            adapter_key=gate_case["adapter_key"],
+            case_key=case_key,
+        )
+    )
+
+    session_id = bootstrap_payload["session"]["session_id"]
+    _assert_workspace_candidates_use_persisted_envelopes(workspace_payload)
+
+    envelope_row = test_db.get(DomainEnvelopeModel, envelope.envelope_id)
+    assert envelope_row is not None
+    assert envelope_row.revision == 1
+    assert envelope_row.envelope_json["metadata"]["semantic_source"] == (
+        "domain_envelope.objects"
+    )
+    assert FORBIDDEN_LEGACY_SEMANTIC_KEYS.isdisjoint(
+        set(_iter_mapping_keys(envelope_row.envelope_json))
+    )
+    assert (
+        test_db.query(DomainEnvelopeObject)
+        .filter(DomainEnvelopeObject.envelope_id == envelope.envelope_id)
+        .count()
+        == len(envelope.objects)
+    )
+
+    target_candidate = _candidate_for_object_type(
+        workspace_payload,
+        gate_case["target_object_type"],
+    )
+    candidate_id = target_candidate["candidate_id"]
+    _accept_candidate(client, session_id=session_id, candidate_id=candidate_id)
+
+    preview_response = client.post(
+        f"/api/curation-workspace/sessions/{session_id}/submission-preview",
+        json={
+            "session_id": session_id,
+            "candidate_ids": [candidate_id],
+            "mode": "export",
+            "target_key": gate_case["target_key"],
+            "include_payload": True,
+            "expected_envelope_revisions": {envelope.envelope_id: 1},
+        },
+    )
+    assert preview_response.status_code == 200, preview_response.text
+    preview_payload = preview_response.json()
+    readiness = preview_payload["submission"]["readiness"]
+    assert len(readiness) == 1
+    assert readiness[0]["candidate_id"] == candidate_id
+    assert readiness[0]["ready"] is gate_case["expected_ready"]
+
+    blocker_codes = {
+        blocker["code"]
+        for readiness_item in readiness
+        for blocker in readiness_item["blockers"]
+    }
+    if gate_case["expected_ready"]:
+        assert blocker_codes == set()
+        assert preview_payload["submission"]["payload"]["candidate_ids"] == [candidate_id]
+        assert preview_payload["submission"]["payload"]["payload_json"]["candidate_count"] == 1
+    else:
+        assert blocker_codes & gate_case["expected_blocker_codes"]
+        assert preview_payload["submission"]["payload"]["payload_json"][
+            "readiness_blockers"
+        ]
+
+
+def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_history(
+    client: TestClient,
+    submission_e2e_context,
+    test_db,
+):
+    from agr_ai_curation_alliance.domain_packs.gene_expression import (
+        GENE_EXPRESSION_MODEL_ID,
+        GENE_EXPRESSION_OBJECT_TYPE,
+        GENE_EXPRESSION_TARGET_KEY,
+    )
+    from src.lib.curation_workspace.models import (
+        CurationCandidate,
+        CurationReviewSession,
+        DomainEnvelopeHistory,
+        DomainEnvelopeModel,
+    )
+    from src.schemas.curation_workspace import CurationSessionStatus
+
+    envelope_id = "gene-expression-tmem67-repair-e2e-envelope"
+    envelope = _tmem67_missing_where_statement_envelope(envelope_id=envelope_id)
+    _prep_output, bootstrap_payload, workspace_payload = (
+        _run_prep_and_bootstrap_domain_envelope(
+            client,
+            submission_e2e_context,
+            test_db,
+            envelope=envelope,
+            adapter_key="gene_expression",
+            case_key="tmem67-repair",
+        )
+    )
+    session_id = bootstrap_payload["session"]["session_id"]
+    _assert_workspace_candidates_use_persisted_envelopes(workspace_payload)
+
+    target_candidate = _candidate_for_object_type(
+        workspace_payload,
+        GENE_EXPRESSION_OBJECT_TYPE,
+    )
+    candidate_id = target_candidate["candidate_id"]
+    object_id = target_candidate["projection_ref"]["object_id"]
+    _accept_candidate(client, session_id=session_id, candidate_id=candidate_id)
+
+    blocked_preview_response = client.post(
+        f"/api/curation-workspace/sessions/{session_id}/submission-preview",
+        json={
+            "session_id": session_id,
+            "candidate_ids": [candidate_id],
+            "mode": "direct_submit",
+            "target_key": GENE_EXPRESSION_TARGET_KEY,
+            "include_payload": True,
+            "expected_envelope_revisions": {envelope_id: 1},
+        },
+    )
+    assert blocked_preview_response.status_code == 200, blocked_preview_response.text
+    blocked_readiness = blocked_preview_response.json()["submission"]["readiness"][0]
+    assert blocked_readiness["ready"] is False
+    assert {
+        (blocker["code"], blocker["field_path"])
+        for blocker in blocked_readiness["blockers"]
+    } >= {("domain_envelope.required_field_missing", "where_expressed_statement")}
+
+    repaired_statement = "Tmem67 expression was detected in the metanephros."
+    patch_response = client.patch(
+        f"/api/curation-workspace/sessions/{session_id}/envelopes/{envelope_id}/field",
+        json={
+            "session_id": session_id,
+            "envelope_id": envelope_id,
+            "expected_revision": 1,
+            "object_id": object_id,
+            "field_path": "where_expressed_statement",
+            "operation": "replace",
+            "before": None,
+            "value": repaired_statement,
+            "reason": "Curator resolved the required expression statement.",
+        },
+    )
+    assert patch_response.status_code == 200, patch_response.text
+    patch_payload = patch_response.json()
+    assert patch_payload["accepted"] is True
+    assert patch_payload["previous_revision"] == 1
+    assert patch_payload["envelope_revision"] == 2
+    assert patch_payload["candidate"]["projection_ref"]["envelope_revision"] == 2
+    assert patch_payload["candidate"]["normalized_payload"] == {}
+    assert patch_payload["history_event_ids"]
+
+    submit_response = client.post(
+        f"/api/curation-workspace/sessions/{session_id}/submit",
+        json={
+            "session_id": session_id,
+            "candidate_ids": [candidate_id],
+            "mode": "direct_submit",
+            "target_key": GENE_EXPRESSION_TARGET_KEY,
+            "expected_envelope_revisions": {envelope_id: 2},
+        },
+    )
+    assert submit_response.status_code == 200, submit_response.text
+    submit_payload = submit_response.json()
+    submission = submit_payload["submission"]
+    assert submission["status"] == "manual_review_required"
+    assert submission["payload"]["candidate_ids"] == [candidate_id]
+    annotation = submission["payload"]["payload_json"]["gene_expression_annotations"][0]
+    assert annotation["envelope"]["domain_pack_id"] == envelope.domain_pack_id
+    assert annotation["envelope"]["domain_pack_version"] == envelope.domain_pack_version
+    assert annotation["envelope"]["envelope_id"] == envelope_id
+    assert annotation["envelope"]["envelope_revision"] == 2
+    assert annotation["envelope"]["model_ref"] == GENE_EXPRESSION_MODEL_ID
+    assert annotation["envelope"]["object_id"] == object_id
+    assert annotation["envelope"]["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
+    assert annotation["source_payload"]["where_expressed_statement"] == repaired_statement
+    assert submission["submission_state"]["write_mode"] == "read_only_handoff"
+    assert submission["submission_state"]["envelope_revisions"] == [
+        {"envelope_id": envelope_id, "envelope_revision": 2}
+    ]
+
+    envelope_row = test_db.get(DomainEnvelopeModel, envelope_id)
+    assert envelope_row is not None
+    assert envelope_row.revision == 2
+    persisted_object = next(
+        item
+        for item in envelope_row.envelope_json["objects"]
+        if item["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
+    )
+    assert persisted_object["payload"]["where_expressed_statement"] == repaired_statement
+
+    candidate_row = test_db.get(CurationCandidate, UUID(candidate_id))
+    assert candidate_row is not None
+    assert candidate_row.envelope_revision == 2
+    assert candidate_row.normalized_payload == {}
+
+    history_event_types = [
+        row.event_type.value
+        for row in (
+            test_db.query(DomainEnvelopeHistory)
+            .filter(DomainEnvelopeHistory.envelope_id == envelope_id)
+            .order_by(DomainEnvelopeHistory.event_index.asc())
+            .all()
+        )
+    ]
+    assert "field_updated" in history_event_types
+    assert "curator_field_patch_accepted" in history_event_types
+    assert "submitted" in history_event_types
+
+    session_row = test_db.get(CurationReviewSession, UUID(session_id))
+    assert session_row is not None
+    assert session_row.status == CurationSessionStatus.SUBMITTED
+
+
+@pytest.mark.parametrize(
+    "adapter_key",
+    ("gene", "gene_expression", "allele", "disease", "chemical", "phenotype"),
+)
+def test_domain_envelope_prep_rejects_legacy_semantic_payloads_for_current_packs(
+    submission_e2e_context,
+    test_db,
+    adapter_key: str,
+):
+    from src.lib.curation_workspace.curation_prep_service import (
+        CurationPrepPersistenceContext,
+        run_curation_prep,
+    )
+    from src.lib.curation_workspace.models import DomainEnvelopeModel
+    from src.schemas.curation_prep import CurationPrepScopeConfirmation
+    from src.schemas.curation_workspace import (
+        CurationExtractionResultRecord,
+        CurationExtractionSourceKind,
+    )
+
+    extraction_result = CurationExtractionResultRecord.model_validate(
+        {
+            "extraction_result_id": f"legacy-{adapter_key}-payload",
+            "document_id": submission_e2e_context["document_id"],
+            "adapter_key": adapter_key,
+            "agent_key": f"{adapter_key}_extractor",
+            "source_kind": CurationExtractionSourceKind.CHAT,
+            "origin_session_id": f"legacy-chat-{adapter_key}",
+            "trace_id": f"legacy-trace-{adapter_key}",
+            "user_id": submission_e2e_context["current_user_auth_sub"],
+            "candidate_count": 1,
+            "conversation_summary": "Legacy semantic-list extraction payload.",
+            "payload_json": {
+                "summary": "Legacy output must not be materialized.",
+                "items": [{"label": "legacy semantic item"}],
+                "run_summary": {"candidate_count": 1, "kept_count": 1},
+            },
+            "created_at": "2026-05-10T13:00:00Z",
+            "metadata": {"project_key": "agr"},
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="No evidence-verified candidates were available",
+    ):
+        asyncio.run(
+            run_curation_prep(
+                [extraction_result],
+                scope_confirmation=CurationPrepScopeConfirmation(
+                    confirmed=True,
+                    adapter_keys=[adapter_key],
+                    notes=["Legacy semantic payload should be rejected."],
+                ),
+                db=test_db,
+                persistence_context=CurationPrepPersistenceContext(
+                    origin_session_id=f"legacy-chat-{adapter_key}",
+                    user_id=submission_e2e_context["current_user_auth_sub"],
+                    source_kind=CurationExtractionSourceKind.CHAT,
+                ),
+            )
+        )
+
+    assert (
+        test_db.query(DomainEnvelopeModel)
+        .filter(DomainEnvelopeModel.document_id == UUID(submission_e2e_context["document_id"]))
+        .count()
+        == 0
+    )

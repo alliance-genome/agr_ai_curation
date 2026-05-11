@@ -33,6 +33,18 @@ def _patch_submission_transport_adapter(monkeypatch, adapter_factory):
     )
 
 
+def _patch_export_adapter(monkeypatch, adapter):
+    from src.lib.curation_workspace import session_submission_service
+    from src.lib.curation_workspace.export_adapters import ExportAdapterRegistry
+
+    registry = ExportAdapterRegistry(adapters=(adapter,))
+    monkeypatch.setattr(
+        session_submission_service,
+        "_export_adapter_registry",
+        lambda: registry,
+    )
+
+
 def _seed_submission_record(
     test_db,
     *,
@@ -98,7 +110,12 @@ def client(test_db, get_auth_mock, monkeypatch):
     modules_to_clear = [
         name
         for name in list(sys.modules.keys())
-        if name == "main" or name.startswith("src.")
+        if (
+            name == "main"
+            or name.startswith("src.")
+            or name == "agr_ai_curation_alliance"
+            or name.startswith("agr_ai_curation_alliance.")
+        )
     ]
     for module_name in modules_to_clear:
         del sys.modules[module_name]
@@ -1377,6 +1394,7 @@ def test_post_submission_retry_creates_new_submission_record(
     monkeypatch,
 ):
     from src.lib.curation_workspace import session_service
+    from src.lib.curation_workspace.export_adapters import JsonBundleExportAdapter
     from src.lib.curation_workspace.models import CurationSubmissionRecord
     from src.lib.curation_workspace.submission_adapters import NoOpSubmissionAdapter
     from src.schemas.curation_workspace import (
@@ -1395,6 +1413,10 @@ def test_post_submission_retry_creates_new_submission_record(
     _patch_submission_transport_adapter(
         monkeypatch,
         lambda _target_key: NoOpSubmissionAdapter(target_key="review_export_bundle"),
+    )
+    _patch_export_adapter(
+        monkeypatch,
+        JsonBundleExportAdapter(adapter_key="gene"),
     )
 
     response = client.post(
