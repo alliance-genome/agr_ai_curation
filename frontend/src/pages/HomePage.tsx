@@ -140,6 +140,7 @@ function HomePage() {
   const sessionInitPromiseRef = useRef<Promise<string> | null>(null)
   const latestCreatedSessionRef = useRef<DurableChatSessionResponse | null>(null)
   const handledRouteDocumentLoadRef = useRef<string | null>(null)
+  const documentLoadingTimeoutIdRef = useRef<number | null>(null)
   const [isBootstrappingSession, setIsBootstrappingSession] = useState(true)
   const [missingSessionId, setMissingSessionId] = useState<string | null>(null)
   const [sessionBootstrapError, setSessionBootstrapError] = useState<string | null>(null)
@@ -163,6 +164,15 @@ function HomePage() {
 
   // Single shared SSE stream for both Chat and AuditPanel
   const { events, isLoading, sendMessage, stopStream, executeFlow } = useChatStream()
+
+  const clearDocumentLoadingTimeout = useCallback(() => {
+    if (documentLoadingTimeoutIdRef.current === null) {
+      return
+    }
+
+    window.clearTimeout(documentLoadingTimeoutIdRef.current)
+    documentLoadingTimeoutIdRef.current = null
+  }, [])
 
   const persistSessionId = useCallback((nextSessionId: string | null) => {
     sessionIdRef.current = nextSessionId
@@ -575,6 +585,7 @@ function HomePage() {
 
     const handleLoadComplete = () => {
       debug.log('[HomePage] Document load complete')
+      clearDocumentLoadingTimeout()
       setLoadingDocument(false)
       setLoadingError(null)
     }
@@ -583,6 +594,7 @@ function HomePage() {
       const detail = (event as CustomEvent<{ message?: string }>).detail
       const message = detail?.message ?? 'Document loaded for chat, but the PDF viewer could not be restored.'
       debug.log('[HomePage] Document load error', message)
+      clearDocumentLoadingTimeout()
       setLoadingDocument(true)
       setLoadingError(message)
     }
@@ -596,29 +608,37 @@ function HomePage() {
       window.removeEventListener(DOCUMENT_LOAD_COMPLETE_EVENT, handleLoadComplete)
       window.removeEventListener(DOCUMENT_LOAD_ERROR_EVENT, handleLoadError)
     }
-  }, [])
+  }, [clearDocumentLoadingTimeout])
 
   // Timeout safety net: if loading takes too long, show an error
   useEffect(() => {
-    if (!loadingDocument || loadingError) return
+    if (!loadingDocument || loadingError) {
+      clearDocumentLoadingTimeout()
+      return
+    }
 
     const timeoutId = window.setTimeout(() => {
       const message = 'Document loading timed out before the chat handoff completed. The PDF may still be processing, unavailable, or too large.'
       debug.log('[HomePage] Document loading timeout - showing error')
       failDocumentLoad({ message })
     }, 30000) // 30 second timeout
+    documentLoadingTimeoutIdRef.current = timeoutId
 
     return () => {
+      if (documentLoadingTimeoutIdRef.current === timeoutId) {
+        documentLoadingTimeoutIdRef.current = null
+      }
       window.clearTimeout(timeoutId)
     }
-  }, [loadingDocument, loadingError])
+  }, [clearDocumentLoadingTimeout, loadingDocument, loadingError])
 
   // Dismiss loading overlay and clear error state
   const handleDismissLoading = useCallback(() => {
+    clearDocumentLoadingTimeout()
     setLoadingDocument(false)
     setLoadingError(null)
     sessionStorage.removeItem(DOCUMENT_LOADING_STORAGE_KEY)
-  }, [])
+  }, [clearDocumentLoadingTimeout])
 
   const handleStartNewChat = useCallback(async () => {
     setIsBootstrappingSession(true)
