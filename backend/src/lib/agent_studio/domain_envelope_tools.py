@@ -79,7 +79,18 @@ def list_domain_envelopes(
 
         query = select(DomainEnvelopeModel).order_by(DomainEnvelopeModel.updated_at.desc())
         if session_id:
-            query = query.where(DomainEnvelopeModel.session_id == _uuid(session_id, "session_id"))
+            normalized_session_id = _uuid(session_id, "session_id")
+            session_candidate_envelopes = (
+                select(CurationCandidate.envelope_id)
+                .where(CurationCandidate.session_id == normalized_session_id)
+                .where(CurationCandidate.envelope_id.is_not(None))
+            )
+            query = query.where(
+                or_(
+                    DomainEnvelopeModel.session_id == normalized_session_id,
+                    DomainEnvelopeModel.envelope_id.in_(session_candidate_envelopes),
+                )
+            )
         if document_id:
             query = query.where(DomainEnvelopeModel.document_id == _uuid(document_id, "document_id"))
         if flow_run_id:
@@ -569,13 +580,39 @@ def _envelope_visible_to_user(
     row: DomainEnvelopeModel,
     user_auth_sub: str,
 ) -> bool:
-    if row.session_id is None:
-        return True
-    return _session_visible_to_user(
-        db,
-        session_id=row.session_id,
-        user_auth_sub=user_auth_sub,
+    if row.session_id is not None:
+        return _session_visible_to_user(
+            db,
+            session_id=row.session_id,
+            user_auth_sub=user_auth_sub,
+        )
+
+    return any(
+        _session_visible_to_user(
+            db,
+            session_id=session_id,
+            user_auth_sub=user_auth_sub,
+        )
+        for session_id in _candidate_session_ids_for_envelope(db, row.envelope_id)
     )
+
+
+def _candidate_session_ids_for_envelope(
+    db: Session,
+    envelope_id: str | None,
+) -> list[UUID]:
+    normalized_envelope_id = _optional_text(envelope_id)
+    if normalized_envelope_id is None:
+        return []
+    return [
+        session_id
+        for session_id in db.scalars(
+            select(CurationCandidate.session_id)
+            .where(CurationCandidate.envelope_id == normalized_envelope_id)
+            .distinct()
+        ).all()
+        if session_id is not None
+    ]
 
 
 def _bounded_limit(value: int | None, *, default: int = _DEFAULT_LIMIT) -> int:
