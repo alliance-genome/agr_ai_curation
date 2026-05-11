@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from src.lib.http_errors import raise_sanitized_http_exception
 from src.lib.curation_workspace.export_adapters import build_default_export_adapter_registry
+from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -54,7 +55,7 @@ from src.lib.curation_workspace.submission_adapters import (
     normalize_submission_transport_result,
 )
 from src.lib.curation_workspace.validation_runtime import dedupe
-from src.lib.domain_packs.registry import LoadedDomainPack, load_domain_pack_registry
+from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     FieldValidationPolicy,
@@ -385,7 +386,7 @@ def _projection_refs_by_object(
 
 
 def _loaded_domain_pack_for_envelope(envelope: DomainEnvelope) -> LoadedDomainPack | None:
-    return load_domain_pack_registry().get_pack(envelope.domain_pack_id)
+    return resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
 
 
 def _field_definitions_for(
@@ -1417,10 +1418,21 @@ def _adapter_domain_envelope_readiness_blockers(
         return ()
 
     return tuple(
-        export_adapter.domain_envelope_readiness_blockers(
+        _coerce_readiness_blocker(blocker)
+        for blocker in export_adapter.domain_envelope_readiness_blockers(
             candidate=_domain_envelope_candidate_payload(candidate, context),
         )
     )
+
+
+def _coerce_readiness_blocker(blocker: Any) -> CurationSubmissionReadinessBlocker:
+    if isinstance(blocker, CurationSubmissionReadinessBlocker):
+        return blocker
+    if hasattr(blocker, "model_dump"):
+        return CurationSubmissionReadinessBlocker.model_validate(
+            blocker.model_dump(mode="json")
+        )
+    return CurationSubmissionReadinessBlocker.model_validate(blocker)
 
 
 def _non_envelope_ready_candidates(

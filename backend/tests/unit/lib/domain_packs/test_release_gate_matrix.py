@@ -68,6 +68,7 @@ def test_domain_envelope_release_gate_matrix_covers_required_surfaces():
         "provider_agnostic_unit",
         "alliance_domain_pack_contract",
         "alliance_live_db_contract",
+        "end_to_end_integration",
     ),
 )
 def test_release_gate_matrix_path_files_resolve_to_existing_tests(suite_key: str):

@@ -183,6 +183,9 @@ run_check "alliance-domain-contract-path-validation" \
 run_check "alliance-live-db-contract-path-validation" \
   "bash backend/tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-live-db-test-paths --suite-label alliance-live-db --require-truthy-env ALLIANCE_LIVE_DB_CONTRACT_TESTS --validate-only"
 
+run_check "domain-envelope-e2e-path-validation" \
+  "bash scripts/testing/domain_envelope_e2e_gate.sh --validate-only"
+
 mapfile -t CHANGED_BACKEND_PY_FILES < <(
   git diff --name-only --diff-filter=ACMR "${DIFF_RANGE}" -- backend/src backend/tests | awk '/\.py$/'
 )

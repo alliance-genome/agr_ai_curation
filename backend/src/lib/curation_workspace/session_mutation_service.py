@@ -21,7 +21,7 @@ from src.lib.domain_envelopes.persistence import (
     DomainEnvelopePersistenceError,
     write_domain_envelope_checkpoint,
 )
-from src.lib.domain_packs.registry import load_domain_pack_registry
+from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -642,8 +642,7 @@ def patch_envelope_field(
 
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
     previous_revision = envelope_row.revision
-    registry = load_domain_pack_registry()
-    domain_pack = registry.get_pack(envelope.domain_pack_id)
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
     if domain_pack is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

@@ -67,13 +67,6 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import DomainEnvelope
 
-ENTITY_TAG_FIELD_KEYS: tuple[str, ...] = (
-    *ENTITY_FIELD_KEYS,
-    *ENTITY_TYPE_FIELD_KEYS,
-    *SPECIES_FIELD_KEYS,
-    *TOPIC_FIELD_KEYS,
-)
-
 def _viewer_url(file_path: str | None) -> str | None:
     if not file_path:
         return None
@@ -736,9 +729,9 @@ def _find_entity_field(
 
 
 def _candidate_has_entity_tag_fields(candidate: CurationCandidatePayload) -> bool:
-    return any(
-        _matches_entity_field(draft_field, ENTITY_TAG_FIELD_KEYS)
-        for draft_field in candidate.draft.fields
+    return (
+        _find_entity_field(candidate.draft.fields, ENTITY_FIELD_KEYS) is not None
+        and _find_entity_field(candidate.draft.fields, ENTITY_TYPE_FIELD_KEYS) is not None
     )
 
 
