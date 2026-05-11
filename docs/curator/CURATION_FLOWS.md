@@ -129,10 +129,11 @@ what will happen when the flow runs:
 - **planned** - declared by metadata, but not run yet.
 - **blocked** - declared by metadata, but blocked by another dependency.
 
-Required and export-blocking active validators are enabled by default. If policy
-allows an opt-out, the checkbox can be changed. If a reason is required, save the
-reason in the same panel before saving the flow. Validators that are required by
-policy and do not allow opt-out stay locked on.
+Required and export-blocking active validators are enabled by default. Active
+validators can normally be unchecked when you plan to add a custom validation
+step for the same field or object. If a reason is required, save the reason in
+the same panel before saving the flow. Validators that the domain pack marks as
+not allowing opt-out stay locked on.
 
 To add a custom validation step, add a validation agent after the extraction
 node. Use its steering prompt to point at the envelope object, field path, or

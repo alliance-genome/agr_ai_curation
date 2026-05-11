@@ -630,7 +630,7 @@ def _collect_validator_bindings(
         )
         allow_opt_out = _optional_bool_with_default(
             raw_item.get("allow_opt_out"),
-            state is ValidationBindingState.ACTIVE and not required and not blocking,
+            state is ValidationBindingState.ACTIVE,
         )
 
         bindings.append(

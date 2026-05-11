@@ -243,9 +243,12 @@ Agent Studio exposes domain-envelope metadata through
 Flow Builder validation attachments are derived from domain-pack metadata.
 Defaults are applied to extraction nodes by
 `apply_flow_validation_attachment_defaults()`. Active default validators run
-automatically. Planned and blocked validators remain visible metadata. Required
-or export-blocking validators cannot be silently disabled; opt-out controls only
-work where metadata policy permits them and may require a reason.
+automatically. Planned and blocked validators remain visible metadata. Active
+validators are curator-opt-out by default so a flow can replace automatic
+validation with a custom validation step; domain packs may explicitly forbid an
+opt-out with `allow_opt_out: false`. Required or export-blocking validators
+cannot be silently disabled and require a saved reason unless the domain-pack
+metadata explicitly forbids opt-out.
 
 Custom validation agents are regular flow steps. Their steering prompts are
 stored as normal node configuration and should target envelope objects, field

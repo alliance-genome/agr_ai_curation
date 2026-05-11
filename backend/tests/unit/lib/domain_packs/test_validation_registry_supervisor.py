@@ -259,6 +259,14 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     assert identifier_option.allow_opt_out is True
     assert identifier_option.opt_out_reason_required is True
 
+    callable_option = by_id[
+        "fixture.validation:binding:fixture.callable_validator:object:GeneAssertion:*"
+    ]
+    assert callable_option.required is True
+    assert callable_option.default_enabled is True
+    assert callable_option.allow_opt_out is True
+    assert callable_option.opt_out_reason_required is True
+
     optional_option = by_id[
         "fixture.validation:binding:fixture.optional_confidence_check:field:GeneAssertion:confidence"
     ]
