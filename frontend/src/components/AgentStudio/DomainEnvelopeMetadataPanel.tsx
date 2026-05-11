@@ -32,8 +32,8 @@ interface DomainEnvelopeMetadataPanelProps {
   validationModeNote?: string
 }
 
-function humanizeState(value?: string | null): string {
-  return (value ?? '').replace(/_/g, ' ')
+function humanizeState(value: string): string {
+  return value.replace(/_/g, ' ')
 }
 
 function chipColorForState(

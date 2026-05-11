@@ -251,7 +251,11 @@ class TestGetRegistryMetadata:
             name="Custom Gene Extractor",
             icon=None,
         )
-        monkeypatch.setattr(api_module, "list_custom_agents_visible_to_user", lambda _db, _uid: [fake_custom])
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_visible_to_user",
+            lambda _db, _uid: [fake_custom],
+        )
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",

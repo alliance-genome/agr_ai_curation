@@ -290,6 +290,5 @@ def _dedupe_strings(values: list[str]) -> list[str]:
 
 
 __all__ = [
-    "SEMANTIC_SOURCE_NOTE",
     "domain_envelope_metadata_catalog_by_agent",
 ]
