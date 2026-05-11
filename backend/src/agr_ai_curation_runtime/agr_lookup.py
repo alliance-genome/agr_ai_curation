@@ -24,6 +24,24 @@ logger = logging.getLogger(__name__)
 AGR_CURATION_DB_PROVIDER = "alliance_curation_db"
 AGR_CURATION_TOOL_NAME = "agr_curation_query"
 DETAIL_RETRY_STRATEGY_PER_CURIE = "per_curie"
+_DETAIL_LOOKUP_STAGES = frozenset(
+    {
+        "batch_setup_gene_details",
+        "batch_fetch_gene_details",
+        "fetch_gene_details",
+        "batch_setup_allele_details",
+        "batch_fetch_allele_details",
+        "fetch_allele_details",
+    }
+)
+_BULK_ITEM_STATUS_BY_LOOKUP_STATUS = {
+    LOOKUP_STATUS_SUCCESS: "resolved",
+    LOOKUP_STATUS_NOT_FOUND: "no_matches",
+    LOOKUP_STATUS_AMBIGUOUS: LOOKUP_STATUS_AMBIGUOUS,
+    LOOKUP_STATUS_TRANSIENT: "transient_failure",
+    LOOKUP_STATUS_BLOCKED: "blocked",
+    LOOKUP_STATUS_UNDER_DEVELOPMENT: LOOKUP_STATUS_UNDER_DEVELOPMENT,
+}
 
 
 def clean_mapping(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -386,8 +404,8 @@ def _attempts_include_detail_lookup(
         attempted_query = attempt.get("attempted_query")
         if not isinstance(attempted_query, Mapping):
             continue
-        lookup_stage = str(attempted_query.get("lookup_stage") or "")
-        if "details" in lookup_stage:
+        lookup_stage = attempted_query.get("lookup_stage")
+        if lookup_stage in _DETAIL_LOOKUP_STAGES:
             return True
     return False
 
@@ -399,17 +417,14 @@ def bulk_item_status_from_lookup_status(
     attempts: list[dict[str, Any]] | None = None,
 ) -> str:
     """Map lookup metadata to explicit per-input bulk resolution status."""
-    if count > 0 or lookup_status == LOOKUP_STATUS_SUCCESS:
+    if count > 0:
         return "resolved"
     if _attempts_include_detail_lookup(attempts):
         return "detail_failure"
-    if lookup_status == LOOKUP_STATUS_TRANSIENT:
-        return "transient_failure"
-    if lookup_status == LOOKUP_STATUS_BLOCKED:
-        return "blocked"
-    if lookup_status == LOOKUP_STATUS_NOT_FOUND:
-        return "no_matches"
-    return lookup_status
+    try:
+        return _BULK_ITEM_STATUS_BY_LOOKUP_STATUS[lookup_status]
+    except KeyError as exc:
+        raise ValueError(f"Unexpected bulk lookup status: {lookup_status!r}") from exc
 
 
 def bulk_resolution_summary(items: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -419,12 +434,10 @@ def bulk_resolution_summary(items: list[Mapping[str, Any]]) -> dict[str, Any]:
     resolved_input_count = 0
 
     for item in items:
-        status = str(item.get("status") or "unknown")
+        status = str(item["status"])
         status_counts[status] = status_counts.get(status, 0) + 1
-        item_count = item.get("count") or 0
-        if not isinstance(item_count, int):
-            item_count = 0
-        resolved_count += max(item_count, 0)
+        item_count = item["count"]
+        resolved_count += item_count
         if status == "resolved":
             resolved_input_count += 1
 
