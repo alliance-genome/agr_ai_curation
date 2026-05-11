@@ -529,7 +529,7 @@ ensure_trace_review_ports() {
     fi
   fi
 
-  if [[ "${mode}" == "repair" ]]; then
+  if [[ "${mode}" == "repair" && ( -z "${TRACE_REVIEW_FRONTEND_HOST_PORT}" || -z "${TRACE_REVIEW_BACKEND_HOST_PORT}" ) ]]; then
     restore_trace_review_ports_from_running_services
   fi
 
