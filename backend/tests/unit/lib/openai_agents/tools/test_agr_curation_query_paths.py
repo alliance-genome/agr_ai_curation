@@ -283,14 +283,61 @@ def test_search_genes_bulk_detail_fetch_failure_is_transient(monkeypatch):
     )
 
     item = result.data["items"][0]
+    assert result.data["resolution_status"] == "detail_failure"
+    assert item["status"] == "detail_failure"
     assert item["count"] == 0
     assert item["lookup_status"] == "transient"
-    assert item["failure_classification"] == "transient"
+    assert item["failure_classification"] == "detail_failure"
     detail_attempt = item["lookup_attempts"][1]
     assert detail_attempt["lookup_status"] == "transient"
     assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_gene_details"
     assert detail_attempt["attempted_query"]["gene_id"] == "WB:WBGene00000001"
     assert detail_attempt["error"]["type"] == "TimeoutError"
+
+
+def test_search_genes_bulk_search_failure_is_transient_failure(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = entity_type, search_pattern, taxon_curie, include_synonyms, limit
+            raise TimeoutError("search timeout")
+
+        @staticmethod
+        def get_gene(_curie):
+            raise AssertionError("search failure should not fetch details")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
+    monkeypatch.setattr(
+        agr_curation,
+        "validate_search_symbol",
+        lambda *_args, **_kwargs: _valid_validation(),
+    )
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["unc-54"],
+        data_provider="WB",
+    )
+
+    item = result.data["items"][0]
+    assert result.count == 0
+    assert result.lookup_status == "transient"
+    assert result.data["resolution_status"] == "transient_failure"
+    assert result.data["status_counts"] == {"transient_failure": 1}
+    assert item["status"] == "transient_failure"
+    assert item["count"] == 0
+    assert item["lookup_status"] == "transient"
+    assert item["failure_classification"] == "transient"
+    assert item["lookup_attempts"][0]["error"]["type"] == "TimeoutError"
 
 
 def test_search_genes_validation_force_and_success_paths(monkeypatch):
@@ -664,9 +711,11 @@ def test_search_alleles_bulk_detail_fetch_failure_is_transient(monkeypatch):
     )
 
     item = result.data["items"][0]
+    assert result.data["resolution_status"] == "detail_failure"
+    assert item["status"] == "detail_failure"
     assert item["count"] == 0
     assert item["lookup_status"] == "transient"
-    assert item["failure_classification"] == "transient"
+    assert item["failure_classification"] == "detail_failure"
     detail_attempt = item["lookup_attempts"][1]
     assert detail_attempt["lookup_status"] == "transient"
     assert detail_attempt["attempted_query"]["lookup_stage"] == "fetch_allele_details"

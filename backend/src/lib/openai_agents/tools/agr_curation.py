@@ -24,6 +24,8 @@ from agr_ai_curation_runtime.agr_lookup import (
     LOOKUP_STATUS_TRANSIENT,
     LOOKUP_STATUS_UNDER_DEVELOPMENT,
     attempt_query as _attempt_query,
+    bulk_item_status_from_lookup_status as _bulk_item_status_from_lookup_status,
+    bulk_resolution_summary as _bulk_resolution_summary,
     candidate_from_result as _candidate_from_result,
     create_db_session as _create_db_session,
     entity_detail_lookup_attempts as _entity_detail_lookup_attempts,
@@ -1050,7 +1052,6 @@ def agr_curation_query(
                 gene_detail_failures_by_taxon[tid] = detail_failures
 
             bulk_items: List[Dict[str, Any]] = []
-            total_matches = 0
 
             for symbol in normalized_symbols:
                 if symbol in validation_messages:
@@ -1113,10 +1114,14 @@ def agr_curation_query(
                 if invalid_curie_count > 0:
                     item_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
-                total_matches += len(validated_data)
                 item_lookup_status = _lookup_status_from_count(
                     len(validated_data),
                     exact_lookup=False,
+                    attempts=lookup_attempts_by_symbol.get(symbol),
+                )
+                item_status = _bulk_item_status_from_lookup_status(
+                    item_lookup_status,
+                    count=len(validated_data),
                     attempts=lookup_attempts_by_symbol.get(symbol),
                 )
                 item_explanation = _lookup_explanation(
@@ -1127,14 +1132,18 @@ def agr_curation_query(
                 )
                 item_payload: Dict[str, Any] = {
                     "input": symbol,
-                    "status": "ok",
+                    "status": item_status,
                     "results": validated_data,
                     "count": len(validated_data),
                     "lookup_status": item_lookup_status,
                     "failure_classification": (
                         None
-                        if item_lookup_status == LOOKUP_STATUS_SUCCESS
-                        else item_lookup_status
+                        if item_status == "resolved"
+                        else (
+                            "detail_failure"
+                            if item_status == "detail_failure"
+                            else item_lookup_status
+                        )
                     ),
                     "explanation": item_explanation,
                     "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
@@ -1149,15 +1158,15 @@ def agr_curation_query(
                     item_payload["warnings"] = item_warnings
                 bulk_items.append(item_payload)
 
+            summary = _bulk_resolution_summary(bulk_items)
             return _lookup_response(
                 method=method,
                 data={
                     "items": bulk_items,
-                    "requested_count": len(normalized_symbols),
-                    "total_matches": total_matches,
+                    **summary,
                     "method": "search_genes_bulk",
                 },
-                count=len(bulk_items),
+                count=summary["resolved_count"],
                 warnings=warnings,
                 attempted_query=_attempt_query(
                     method,
@@ -1761,7 +1770,6 @@ def agr_curation_query(
                 allele_detail_failures_by_taxon[tid] = detail_failures
 
             bulk_items: List[Dict[str, Any]] = []
-            total_matches = 0
 
             for symbol in normalized_symbols:
                 if symbol in validation_messages:
@@ -1831,10 +1839,14 @@ def agr_curation_query(
                 if invalid_curie_count > 0:
                     item_warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
 
-                total_matches += len(validated_data)
                 item_lookup_status = _lookup_status_from_count(
                     len(validated_data),
                     exact_lookup=False,
+                    attempts=lookup_attempts_by_symbol.get(symbol),
+                )
+                item_status = _bulk_item_status_from_lookup_status(
+                    item_lookup_status,
+                    count=len(validated_data),
                     attempts=lookup_attempts_by_symbol.get(symbol),
                 )
                 item_explanation = _lookup_explanation(
@@ -1845,14 +1857,18 @@ def agr_curation_query(
                 )
                 item_payload: Dict[str, Any] = {
                     "input": symbol,
-                    "status": "ok",
+                    "status": item_status,
                     "results": validated_data,
                     "count": len(validated_data),
                     "lookup_status": item_lookup_status,
                     "failure_classification": (
                         None
-                        if item_lookup_status == LOOKUP_STATUS_SUCCESS
-                        else item_lookup_status
+                        if item_status == "resolved"
+                        else (
+                            "detail_failure"
+                            if item_status == "detail_failure"
+                            else item_lookup_status
+                        )
                     ),
                     "explanation": item_explanation,
                     "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
@@ -1867,15 +1883,15 @@ def agr_curation_query(
                     item_payload["warnings"] = item_warnings
                 bulk_items.append(item_payload)
 
+            summary = _bulk_resolution_summary(bulk_items)
             return _lookup_response(
                 method=method,
                 data={
                     "items": bulk_items,
-                    "requested_count": len(normalized_symbols),
-                    "total_matches": total_matches,
+                    **summary,
                     "method": "search_alleles_bulk",
                 },
-                count=len(bulk_items),
+                count=summary["resolved_count"],
                 warnings=warnings,
                 attempted_query=_attempt_query(
                     method,

@@ -3,6 +3,7 @@
 import importlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -250,13 +251,126 @@ def test_query_search_genes_bulk_returns_per_symbol_results(monkeypatch):
     )
 
     assert result.status == "ok"
+    assert result.count == 2
     assert result.data["method"] == "search_genes_bulk"
     assert result.data["requested_count"] == 2
+    assert result.data["resolved_count"] == 2
+    assert result.data["total_matches"] == 2
+    assert result.data["resolved_input_count"] == 2
+    assert result.data["unresolved_input_count"] == 0
+    assert result.data["resolution_status"] == "resolved"
     assert len(result.data["items"]) == 2
-    assert result.data["items"][0]["status"] == "ok"
+    assert result.data["items"][0]["status"] == "resolved"
     assert result.data["items"][0]["count"] == 1
-    assert result.data["items"][1]["status"] == "ok"
+    assert result.data["items"][1]["status"] == "resolved"
     assert result.data["items"][1]["count"] == 1
+
+
+def test_query_search_genes_bulk_all_not_found_is_no_matches(monkeypatch):
+    """All-not-found gene bulk lookup should not look like entity resolution success."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = entity_type, search_pattern, taxon_curie, include_synonyms, limit
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["missing-a", "missing-b"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert result.count == 0
+    assert result.lookup_status == "not_found"
+    assert result.failure_classification == "not_found"
+    assert result.data["requested_count"] == 2
+    assert result.data["resolved_count"] == 0
+    assert result.data["total_matches"] == 0
+    assert result.data["resolution_status"] == "no_matches"
+    assert result.data["status_counts"] == {"no_matches": 2}
+    assert [item["status"] for item in result.data["items"]] == [
+        "no_matches",
+        "no_matches",
+    ]
+    assert [item["count"] for item in result.data["items"]] == [0, 0]
+
+
+def test_query_search_genes_bulk_mixed_results_are_partial(monkeypatch):
+    """Mixed resolved and not-found gene inputs should be explicit partial resolution."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+
+    class _Display:
+        def __init__(self, text):
+            self.displayText = text
+
+    class _Gene:
+        def __init__(self, curie, symbol, name):
+            self.primaryExternalId = curie
+            self.geneSymbol = _Display(symbol)
+            self.geneFullName = _Display(name)
+            self.geneType = None
+
+    gene = _Gene("FB:FBgn0000117", "crb", "crumbs")
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            if (
+                entity_type == "gene"
+                and taxon_curie == "NCBITaxon:7227"
+                and search_pattern == "crb"
+            ):
+                return [{"entity_curie": "FB:FBgn0000117", "entity": "crb", "match_type": "exact"}]
+            return []
+
+        @staticmethod
+        def get_gene(curie):
+            if curie == "FB:FBgn0000117":
+                return gene
+            return None
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["crb", "missing"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert result.count == 1
+    assert result.data["requested_count"] == 2
+    assert result.data["resolved_count"] == 1
+    assert result.data["resolved_input_count"] == 1
+    assert result.data["unresolved_input_count"] == 1
+    assert result.data["resolution_status"] == "partial"
+    assert result.data["status_counts"] == {"resolved": 1, "no_matches": 1}
+    assert result.data["items"][0]["status"] == "resolved"
+    assert result.data["items"][0]["results"][0]["symbol"] == "crb"
+    assert result.data["items"][1]["status"] == "no_matches"
+    assert result.data["items"][1]["count"] == 0
 
 
 def test_query_search_alleles_bulk_includes_validation_warning_items(monkeypatch):
@@ -308,10 +422,107 @@ def test_query_search_alleles_bulk_includes_validation_warning_items(monkeypatch
     )
 
     assert result.status == "ok"
+    assert result.count == 1
     assert result.data["method"] == "search_alleles_bulk"
+    assert result.data["requested_count"] == 2
+    assert result.data["resolved_count"] == 1
+    assert result.data["resolution_status"] == "partial"
+    assert result.data["status_counts"] == {
+        "resolved": 1,
+        "validation_warning": 1,
+    }
     assert len(result.data["items"]) == 2
-    assert result.data["items"][0]["status"] == "ok"
+    assert result.data["items"][0]["status"] == "resolved"
     assert result.data["items"][1]["status"] == "validation_warning"
+
+
+def test_query_search_alleles_bulk_all_not_found_is_no_matches(monkeypatch):
+    """All-not-found allele bulk lookup should expose zero resolved matches."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = entity_type, search_pattern, taxon_curie, include_synonyms, limit
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+
+    result = query_fn(
+        method="search_alleles_bulk",
+        allele_symbols=["missing-a", "missing-b"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert result.count == 0
+    assert result.lookup_status == "not_found"
+    assert result.failure_classification == "not_found"
+    assert result.data["requested_count"] == 2
+    assert result.data["resolved_count"] == 0
+    assert result.data["total_matches"] == 0
+    assert result.data["resolution_status"] == "no_matches"
+    assert result.data["status_counts"] == {"no_matches": 2}
+    assert [item["status"] for item in result.data["items"]] == [
+        "no_matches",
+        "no_matches",
+    ]
+
+
+def test_query_search_genes_bulk_all_validation_warnings_are_blocked(monkeypatch):
+    """All locally rejected bulk inputs should aggregate as blocked, not no-match."""
+    query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(*_args, **_kwargs):
+            raise AssertionError("validation-blocked bulk inputs must not query the DB")
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(
+        agr_curation,
+        "validate_search_symbol",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            is_valid=False,
+            warning_message="invalid symbol",
+        ),
+    )
+
+    result = query_fn(
+        method="search_genes_bulk",
+        gene_symbols=["bad one", "bad two"],
+        data_provider="FB",
+        limit=10,
+    )
+
+    assert result.status == "ok"
+    assert result.count == 0
+    assert result.lookup_status == "blocked"
+    assert result.failure_classification == "blocked"
+    assert result.data["requested_count"] == 2
+    assert result.data["resolved_count"] == 0
+    assert result.data["resolution_status"] == "blocked"
+    assert result.data["status_counts"] == {"validation_warning": 2}
+    assert [item["status"] for item in result.data["items"]] == [
+        "validation_warning",
+        "validation_warning",
+    ]
+    assert all(item["lookup_status"] == "blocked" for item in result.data["items"])
 
 
 def test_search_genes_bulk_uses_batched_detail_lookup(monkeypatch):
