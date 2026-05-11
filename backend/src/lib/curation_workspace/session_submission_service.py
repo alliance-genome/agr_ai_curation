@@ -1429,6 +1429,8 @@ def _coerce_readiness_blocker(blocker: Any) -> CurationSubmissionReadinessBlocke
     if isinstance(blocker, CurationSubmissionReadinessBlocker):
         return blocker
     if hasattr(blocker, "model_dump"):
+        # Adapter packages can load an equivalent Pydantic model class from a
+        # different module identity; normalize it at this boundary.
         return CurationSubmissionReadinessBlocker.model_validate(
             blocker.model_dump(mode="json")
         )

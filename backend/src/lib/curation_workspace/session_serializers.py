@@ -729,10 +729,7 @@ def _find_entity_field(
 
 
 def _candidate_has_entity_tag_fields(candidate: CurationCandidatePayload) -> bool:
-    return (
-        _find_entity_field(candidate.draft.fields, ENTITY_FIELD_KEYS) is not None
-        and _find_entity_field(candidate.draft.fields, ENTITY_TYPE_FIELD_KEYS) is not None
-    )
+    return isinstance(candidate.draft.metadata.get("entity_tag"), Mapping)
 
 
 def _read_required_entity_string(

@@ -104,7 +104,7 @@ def _alliance_gate_case(case_key: str):
             "expected_ready": True,
         }
 
-    if case_key == "gene_expression":
+    elif case_key == "gene_expression":
         from agr_ai_curation_alliance.domain_packs.gene_expression import (
             GENE_EXPRESSION_OBJECT_TYPE,
             GENE_EXPRESSION_TARGET_KEY,
@@ -123,7 +123,7 @@ def _alliance_gate_case(case_key: str):
             "expected_ready": True,
         }
 
-    if case_key == "allele":
+    elif case_key == "allele":
         from agr_ai_curation_alliance.domain_packs.allele import (
             ALLELE_ASSOCIATION_SUBMISSION_TARGET_KEY,
             build_pending_allele_envelope_from_tool_verified_fixture,
@@ -150,7 +150,7 @@ def _alliance_gate_case(case_key: str):
             },
         }
 
-    if case_key == "disease":
+    elif case_key == "disease":
         from agr_ai_curation_alliance.domain_packs.disease import (
             DISEASE_EXPORT_TARGET_ID,
             DISEASE_OBJECT_TYPE,
@@ -175,7 +175,7 @@ def _alliance_gate_case(case_key: str):
             },
         }
 
-    if case_key == "chemical_condition":
+    elif case_key == "chemical_condition":
         from agr_ai_curation_alliance.domain_packs.chemical_condition import (
             CHEMICAL_CONDITION_EXPORT_TARGET_ID,
             CHEMICAL_CONDITION_OBJECT_TYPE,
@@ -200,7 +200,7 @@ def _alliance_gate_case(case_key: str):
             },
         }
 
-    if case_key == "phenotype":
+    elif case_key == "phenotype":
         from agr_ai_curation_alliance.domain_packs.phenotype import (
             PHENOTYPE_EXPORT_TARGET_ID,
             PHENOTYPE_OBJECT_TYPE,

@@ -802,12 +802,13 @@ def _create_domain_envelope_submission_session(
 
 
 def test_loaded_domain_pack_for_envelope_propagates_registry_errors(monkeypatch):
-    def raise_registry_error():
+    def raise_registry_error(domain_pack_id: str):
+        assert domain_pack_id == "museum.catalog"
         raise RuntimeError("registry exploded")
 
     monkeypatch.setattr(
         submission_module,
-        "load_domain_pack_registry",
+        "resolve_curation_domain_pack_by_id",
         raise_registry_error,
     )
     envelope = DomainEnvelope(
@@ -1163,7 +1164,12 @@ def test_get_session_workspace_rejects_entity_tag_candidates_missing_entity_type
             notes="Gene note",
             created_at=now,
             updated_at=now,
-            draft_metadata={},
+            draft_metadata={
+                "entity_tag": {
+                    "entity_field_key": "gene_symbol",
+                    "entity_type_field_key": "entity_type",
+                },
+            },
         )
     )
     session_row.current_candidate_id = candidate.id
