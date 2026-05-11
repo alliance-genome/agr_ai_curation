@@ -128,7 +128,7 @@ function DomainEnvelopeViewer({
                   validationAttachments={validationAttachments}
                   compact={false}
                   layout="flow-editor"
-                  validationModeNote="Active default validators run automatically for this extraction step. Add a Data Validation agent after the extractor for custom checks; its steering prompt is saved as normal flow node configuration."
+                  validationModeNote="Active validators run automatically when checked. Uncheck a default validator when you want to replace it with a custom Data Validation agent after the extractor; that agent's steering prompt is saved as normal flow node configuration."
                 />
               </ViewerContent>
             </ViewerPanel>

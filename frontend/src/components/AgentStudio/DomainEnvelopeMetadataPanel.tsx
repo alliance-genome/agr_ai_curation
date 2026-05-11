@@ -41,6 +41,18 @@ interface SectionAccordionProps {
   children: ReactNode
 }
 
+interface SourceTruthFieldNote {
+  objectLabel: string
+  fieldLabel: string
+  provider: string
+}
+
+interface SourceTruthNotes {
+  objectNotes: string[]
+  fieldNotes: SourceTruthFieldNote[]
+  otherNotes: string[]
+}
+
 const monoTextSx = {
   fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
   overflowWrap: 'anywhere',
@@ -104,6 +116,39 @@ function formatProviderRef(providerKey: string, value: unknown): string {
   return details.length > 0 ? `${providerKey}: ${details.join(' / ')}` : providerKey
 }
 
+function stripTrailingPeriod(value: string): string {
+  return value.trim().replace(/\.$/, '')
+}
+
+function splitSourceTruthNotes(notes: string[]): SourceTruthNotes {
+  return notes.reduce<SourceTruthNotes>(
+    (groups, note) => {
+      const trimmed = note.trim()
+      const fieldMatch = trimmed.match(/^(.+?)\s+\/\s+(.+?):\s+source of truth is\s+(.+?)\.?$/i)
+      if (fieldMatch) {
+        groups.fieldNotes.push({
+          objectLabel: fieldMatch[1].trim(),
+          fieldLabel: fieldMatch[2].trim(),
+          provider: stripTrailingPeriod(fieldMatch[3]),
+        })
+        return groups
+      }
+
+      const objectMatch = trimmed.match(/^([^:]+):\s+(.+)$/)
+      if (objectMatch) {
+        groups.objectNotes.push(stripTrailingPeriod(objectMatch[2]))
+        return groups
+      }
+
+      if (trimmed) {
+        groups.otherNotes.push(stripTrailingPeriod(trimmed))
+      }
+      return groups
+    },
+    { objectNotes: [], fieldNotes: [], otherNotes: [] }
+  )
+}
+
 function validationStateCounts(attachments: ValidationAttachmentView[]) {
   return attachments.reduce(
     (counts, attachment) => {
@@ -122,6 +167,112 @@ function validationStateCounts(attachments: ValidationAttachmentView[]) {
       return counts
     },
     { active: 0, planned: 0, blocked: 0, enabled: 0, optedOut: 0 }
+  )
+}
+
+function GuidanceCard({
+  label,
+  children,
+  tone = 'default',
+}: {
+  label: string
+  children: ReactNode
+  tone?: 'default' | 'info' | 'success'
+}) {
+  const toneColor = tone === 'success' ? 'success.main' : tone === 'info' ? 'info.main' : 'text.secondary'
+  return (
+    <Box
+      sx={{
+        p: 1,
+        borderRadius: 1,
+        border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.72)}`,
+        backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.5),
+      }}
+    >
+      <Typography
+        variant="caption"
+        sx={{
+          display: 'block',
+          mb: 0.35,
+          color: toneColor,
+          fontSize: '0.6rem',
+          fontWeight: 750,
+          textTransform: 'uppercase',
+          letterSpacing: 0.4,
+        }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        component="div"
+        variant="body2"
+        color="text.secondary"
+        sx={{ fontSize: '0.75rem', lineHeight: 1.45, textWrap: 'pretty' }}
+      >
+        {children}
+      </Typography>
+    </Box>
+  )
+}
+
+function FieldSourceMap({ notes }: { notes: SourceTruthFieldNote[] }) {
+  if (notes.length === 0) return null
+
+  return (
+    <Box
+      sx={{
+        border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.68)}`,
+        borderRadius: 1,
+        overflow: 'hidden',
+      }}
+    >
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) minmax(120px, 0.4fr)' },
+          gap: 1,
+          px: 1,
+          py: 0.65,
+          backgroundColor: (theme) => alpha(theme.palette.background.default, 0.42),
+          borderBottom: (theme) => `1px solid ${alpha(theme.palette.divider, 0.68)}`,
+        }}
+      >
+        <FieldMetaLabel>Field path</FieldMetaLabel>
+        <FieldMetaLabel>Source</FieldMetaLabel>
+      </Box>
+      <Box sx={{ maxHeight: 300, overflow: 'auto' }}>
+        {notes.map((note) => (
+          <Box
+            key={`${note.objectLabel}/${note.fieldLabel}/${note.provider}`}
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) minmax(120px, 0.4fr)' },
+              gap: 1,
+              px: 1,
+              py: 0.7,
+              borderBottom: (theme) => `1px solid ${alpha(theme.palette.divider, 0.52)}`,
+              '&:last-of-type': { borderBottom: 0 },
+            }}
+          >
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="body2" sx={{ fontSize: '0.73rem', fontWeight: 650, lineHeight: 1.3 }}>
+                {note.fieldLabel}
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ ...monoTextSx, display: 'block', mt: 0.15, fontSize: '0.64rem' }}
+              >
+                {note.objectLabel}
+              </Typography>
+            </Box>
+            <Box sx={{ minWidth: 0, alignSelf: 'center' }}>
+              <Chip size="small" variant="outlined" label={note.provider} sx={compactChipSx} />
+            </Box>
+          </Box>
+        ))}
+      </Box>
+    </Box>
   )
 }
 
@@ -543,7 +694,13 @@ function DomainEnvelopeMetadataPanel({
     (count, object) => count + object.fields.length,
     0
   )
-  const noteCount = Math.max(metadata.source_of_truth_notes.length - 1, 0)
+  const sourceTruthNotes = splitSourceTruthNotes(metadata.source_of_truth_notes.slice(1))
+  const guidanceNoteCount = (
+    sourceTruthNotes.objectNotes.length
+    + sourceTruthNotes.otherNotes.length
+    + (validationModeNote ? 1 : 0)
+    + 1
+  )
 
   return (
     <Box
@@ -674,30 +831,55 @@ function DomainEnvelopeMetadataPanel({
           <>
             <SectionAccordion
               title="Guidance"
-              summary={`${noteCount} source-of-truth note${noteCount === 1 ? '' : 's'} plus automatic validation behavior.`}
+              summary={`${guidanceNoteCount} workflow note${guidanceNoteCount === 1 ? '' : 's'}; field source map is separated below.`}
+              defaultExpanded
             >
               <Stack spacing={1}>
-                <Alert severity="info" sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
+                <GuidanceCard label="Source of truth" tone="info">
                   {metadata.semantic_source_note}
-                </Alert>
+                </GuidanceCard>
 
                 {validationModeNote && (
-                  <Alert severity="success" sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
+                  <GuidanceCard label="Automatic validation" tone="success">
                     {validationModeNote}
-                  </Alert>
+                  </GuidanceCard>
                 )}
 
-                {metadata.source_of_truth_notes.length > 1 && (
-                  <Stack spacing={0.5}>
-                    {metadata.source_of_truth_notes.slice(1).map((note) => (
-                      <Typography key={note} variant="caption" color="text.secondary">
+                {sourceTruthNotes.objectNotes.length > 0 && (
+                  <GuidanceCard label="Object shape">
+                    <Stack component="ul" spacing={0.5} sx={{ m: 0, pl: 2 }}>
+                      {sourceTruthNotes.objectNotes.map((note) => (
+                        <Typography key={note} component="li" variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem', lineHeight: 1.45 }}>
+                          {note}
+                        </Typography>
+                      ))}
+                    </Stack>
+                  </GuidanceCard>
+                )}
+
+                {sourceTruthNotes.otherNotes.length > 0 && (
+                  <GuidanceCard label="Notes">
+                    <Stack spacing={0.5}>
+                      {sourceTruthNotes.otherNotes.map((note) => (
+                        <Typography key={note} variant="body2" color="text.secondary" sx={{ fontSize: '0.75rem', lineHeight: 1.45 }}>
                         {note}
                       </Typography>
                     ))}
                   </Stack>
+                  </GuidanceCard>
                 )}
               </Stack>
             </SectionAccordion>
+
+            {sourceTruthNotes.fieldNotes.length > 0 && (
+              <SectionAccordion
+                title="Field source map"
+                summary={`${sourceTruthNotes.fieldNotes.length} LinkML/database source mapping${sourceTruthNotes.fieldNotes.length === 1 ? '' : 's'}; open only when you need field-level detail.`}
+                defaultExpanded={false}
+              >
+                <FieldSourceMap notes={sourceTruthNotes.fieldNotes} />
+              </SectionAccordion>
+            )}
 
             <SectionAccordion
               title="Schema References"
