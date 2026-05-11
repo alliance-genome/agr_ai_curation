@@ -290,10 +290,76 @@ EOF
   rm -rf "${temp_root}"
 }
 
+test_already_in_progress_state_race_is_success() {
+  local temp_root repo context helper_dir output workpad_log state_log state_helper
+  temp_root="$(mktemp -d)"
+  repo="${temp_root}/ALL-123"
+  context="${temp_root}/context.json"
+  helper_dir="${temp_root}/helpers"
+  output="${temp_root}/output.txt"
+  workpad_log="${temp_root}/workpad.md"
+  state_log="${temp_root}/state.txt"
+  state_helper="${helper_dir}/state-already-in-progress.sh"
+
+  make_repo "${repo}"
+  write_context_json "${context}" "Todo"
+  write_stub_helpers "${helper_dir}" "${workpad_log}" "${state_log}"
+
+  cat > "${state_helper}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+target_state=""
+from_state=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --state)
+      target_state="$2"
+      shift 2
+      ;;
+    --from-state)
+      from_state="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+{
+  echo "target=${target_state}"
+  echo "from=${from_state}"
+} > "${SYMPHONY_TEST_STATE_LOG:?}"
+echo "LINEAR_STATE_STATUS=error"
+echo "LINEAR_STATE_FROM=In Progress"
+echo "LINEAR_STATE_TO=In Progress"
+echo "LINEAR_STATE_ERROR=Current state does not match --from-state."
+exit 3
+EOF
+  chmod +x "${state_helper}"
+
+  bash "${SCRIPT_PATH}" \
+    --issue-identifier ALL-123 \
+    --context-json-file "${context}" \
+    --workspace-dir "${repo}" \
+    --workpad-helper "${helper_dir}/workpad.sh" \
+    --state-helper "${state_helper}" \
+    > "${output}"
+
+  assert_contains "TODO_LANE_STATUS=handed_off" "${output}"
+  assert_contains "TODO_LANE_TO_STATE=In Progress" "${output}"
+  assert_contains "TODO_LANE_STATE_STATUS=already_in_progress" "${output}"
+  assert_contains "Branch helper status: \`created\`" "${workpad_log}"
+  assert_contains "target=In Progress" "${state_log}"
+  assert_contains "from=Todo" "${state_log}"
+
+  rm -rf "${temp_root}"
+}
+
 test_clean_todo_creates_branch_and_moves_to_in_progress
 test_dirty_todo_blocks_without_switching
 test_dirty_todo_blocks_when_already_on_issue_branch
 test_unexpected_branch_blocks_without_switching
 test_non_todo_state_is_noop
+test_already_in_progress_state_race_is_success
 
 echo "symphony_todo_lane tests passed"
