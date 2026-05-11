@@ -28,6 +28,12 @@ def _domain_pack_validation_registries() -> dict[str, DomainPackValidationRegist
     }
 
 
+def domain_pack_validation_registries() -> dict[str, DomainPackValidationRegistry]:
+    """Return cached validation registries keyed by domain-pack ID."""
+
+    return dict(_domain_pack_validation_registries())
+
+
 def validation_attachment_catalog_by_agent(
     agent_registry: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
@@ -247,6 +253,7 @@ def _schedule_entry(attachment: Mapping[str, Any]) -> dict[str, Any]:
 __all__ = [
     "FlowValidationAttachmentError",
     "apply_flow_validation_attachment_defaults",
+    "domain_pack_validation_registries",
     "validation_attachment_catalog_by_agent",
     "validation_attachment_options_for_agent",
     "validation_schedule_from_node_data",

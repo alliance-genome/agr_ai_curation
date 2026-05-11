@@ -20,13 +20,14 @@ const serviceMocks = vi.hoisted(() => ({
 }))
 
 const metadataMocks = vi.hoisted(() => ({
+  agents: {} as Record<string, unknown>,
   refresh: vi.fn(),
 }))
 
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/contexts/AgentMetadataContext', () => ({
   useAgentMetadata: () => ({
-    agents: {},
+    agents: metadataMocks.agents,
     refresh: metadataMocks.refresh,
     isLoading: false,
     error: null,
@@ -55,6 +56,129 @@ function buildCatalog(): PromptCatalog {
     total_agents: 1,
     available_groups: [],
     last_updated: '2026-02-23T00:00:00Z',
+  }
+}
+
+function buildDomainEnvelopeMetadata() {
+  return {
+    domain_pack_id: 'gene',
+    domain_pack_version: '0.1.0',
+    display_name: 'Gene Validated Reference Domain Pack',
+    description: 'Envelope metadata for gene mentions.',
+    status: 'in_development',
+    metadata_api_version: '1.0.0',
+    schema_refs: [
+      {
+        schema_id: 'alliance.linkml',
+        provider: 'alliance_linkml',
+        name: 'Alliance curation LinkML schema',
+        version: 'abc123',
+      },
+    ],
+    provider_refs: {
+      alliance_linkml: {
+        schema_ref: 'alliance.linkml',
+        source_file: 'model/schema/gene.yaml',
+      },
+    },
+    semantic_source_note: 'Domain envelope objects are the semantic source of truth; review rows are projections.',
+    source_of_truth_notes: [
+      'Domain envelope objects are the semantic source of truth; review rows are projections.',
+      'Gene mention evidence / Gene symbol: source of truth is alliance_linkml.',
+    ],
+    validation_attachments: [
+      {
+        attachment_id: 'gene:lookup',
+        domain_pack_id: 'gene',
+        domain_pack_version: '0.1.0',
+        validator_id: 'gene_lookup',
+        validator_binding_id: 'gene_lookup',
+        validation_kind: 'db_backed_reference_lookup',
+        state: 'active',
+        scope: 'field',
+        object_type: 'gene_mention_evidence',
+        field_path: 'gene_symbol',
+        label: 'Gene lookup',
+        required: true,
+        export_blocking: true,
+        default_enabled: true,
+        allow_opt_out: true,
+        opt_out_reason_required: true,
+      },
+    ],
+    model_definitions: [],
+    object_definitions: [
+      {
+        object_type: 'gene_mention_evidence',
+        display_name: 'Gene mention evidence',
+        description: 'A verified paper gene mention.',
+        object_role: 'validated_reference',
+        model_ref: 'GeneMentionEvidencePayload',
+        schema_ref: {
+          schema_id: 'alliance.linkml.Gene',
+          provider: 'alliance_linkml',
+          name: 'Gene',
+          version: 'abc123',
+        },
+        definition_state: 'stable',
+        definition_notes: [],
+        provider_refs: {
+          alliance_linkml: {
+            class: 'Gene',
+            source_file: 'model/schema/gene.yaml',
+          },
+        },
+        validation_attachments: [],
+        fields: [
+          {
+            field_path: 'gene_symbol',
+            display_name: 'Gene symbol',
+            description: 'Current accepted symbol for the resolved gene.',
+            field_type: 'string',
+            required: true,
+            definition_state: 'stable',
+            definition_notes: [],
+            provider_refs: {
+              alliance_linkml: {
+                slot: 'gene_symbol',
+                range: 'GeneSymbolSlotAnnotation',
+              },
+            },
+            source_of_truth: 'alliance_linkml',
+            validation_policy: null,
+            validation_attachments: [
+              {
+                attachment_id: 'gene:lookup',
+                domain_pack_id: 'gene',
+                domain_pack_version: '0.1.0',
+                validator_id: 'gene_lookup',
+                validator_binding_id: 'gene_lookup',
+                validation_kind: 'db_backed_reference_lookup',
+                state: 'active',
+                scope: 'field',
+                object_type: 'gene_mention_evidence',
+                field_path: 'gene_symbol',
+                label: 'Gene lookup',
+                required: true,
+                export_blocking: true,
+                default_enabled: true,
+                allow_opt_out: true,
+                opt_out_reason_required: true,
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    validation_summary: {
+      total: 1,
+      by_state: { active: 1, planned: 0, blocked: 0 },
+      by_scope: { pack: 0, object: 0, field: 1 },
+      default_enabled: 1,
+      required: 1,
+      export_blocking: 1,
+      opt_out_allowed: 1,
+    },
   }
 }
 
@@ -334,6 +458,7 @@ describe('PromptWorkshop', () => {
   ]
 
   beforeEach(() => {
+    metadataMocks.agents = {}
     metadataMocks.refresh.mockReset()
     serviceMocks.createCustomAgent.mockReset()
     serviceMocks.deleteCustomAgent.mockReset()
@@ -395,6 +520,27 @@ describe('PromptWorkshop', () => {
     expect(payload.model_id).toBe('gpt-4o')
     expect(payload).not.toHaveProperty('parent_agent_id')
   }, 15000) // Increased because full workshop bootstrap can exceed the default timeout under CI load.
+
+  it('shows domain-envelope and automatic validation metadata for the selected template', async () => {
+    metadataMocks.agents = {
+      gene: {
+        name: 'Gene Specialist',
+        icon: 'G',
+        category: 'Extraction',
+        domain_envelope: buildDomainEnvelopeMetadata(),
+      },
+    }
+
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+
+    expect(await screen.findByText('Envelope & Validation')).toBeInTheDocument()
+    expect(screen.getByText('Gene Validated Reference Domain Pack')).toBeInTheDocument()
+    expect(screen.getByText(/semantic source of truth/i)).toBeInTheDocument()
+    expect(screen.getByText('Gene mention evidence')).toBeInTheDocument()
+    expect(screen.getByText('gene_symbol')).toBeInTheDocument()
+    expect(screen.getByText('1 default validator')).toBeInTheDocument()
+    expect(screen.getByText('1 export-blocking')).toBeInTheDocument()
+  }, 15000)
 
   it('disables non-attachable tools in tool library modal', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)

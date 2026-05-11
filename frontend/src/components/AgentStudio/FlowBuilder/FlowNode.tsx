@@ -170,12 +170,23 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
   const scheduledValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'active' && attachment.enabled
   ).length
+  const requiredValidationCount = validationAttachments.filter(
+    (attachment) => attachment.state === 'active' && attachment.enabled && attachment.required
+  ).length
+  const exportBlockingValidationCount = validationAttachments.filter(
+    (attachment) => attachment.state === 'active' && attachment.enabled && attachment.export_blocking
+  ).length
   const plannedValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'planned'
   ).length
   const blockedValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'blocked'
   ).length
+  const envelopeObjectCount = new Set(
+    validationAttachments
+      .map((attachment) => attachment.object_type)
+      .filter((objectType): objectType is string => Boolean(objectType))
+  ).size
 
   return (
     <>
@@ -214,11 +225,23 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
 
         {validationAttachments.length > 0 && (
           <ValidationSummary>
+            {envelopeObjectCount > 0 && (
+              <ValidationPill>
+                {envelopeObjectCount} envelope object
+                {envelopeObjectCount === 1 ? '' : 's'}
+              </ValidationPill>
+            )}
             {scheduledValidationCount > 0 && (
               <ValidationPill>
                 {scheduledValidationCount} active validation
                 {scheduledValidationCount === 1 ? '' : 's'}
               </ValidationPill>
+            )}
+            {requiredValidationCount > 0 && (
+              <ValidationPill>{requiredValidationCount} required</ValidationPill>
+            )}
+            {exportBlockingValidationCount > 0 && (
+              <ValidationPill>{exportBlockingValidationCount} export-blocking</ValidationPill>
             )}
             {plannedValidationCount > 0 && (
               <ValidationPill>{plannedValidationCount} planned</ValidationPill>

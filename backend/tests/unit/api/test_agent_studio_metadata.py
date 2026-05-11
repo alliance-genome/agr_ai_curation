@@ -68,6 +68,34 @@ class TestGetRegistryMetadata:
 
         assert metadata.validation_attachments[0]["attachment_id"] == "fixture"
 
+    def test_agent_metadata_supports_domain_envelope_metadata(self):
+        """AgentMetadata should carry domain-envelope authoring metadata."""
+        from src.api.agent_studio import AgentMetadata
+
+        metadata = AgentMetadata(
+            name="Test Extractor",
+            icon="E",
+            category="Extraction",
+            domain_envelope={
+                "domain_pack_id": "fixture.validation",
+                "domain_pack_version": "0.1.0",
+                "display_name": "Fixture Pack",
+                "semantic_source_note": (
+                    "Domain envelope objects are the semantic source of truth."
+                ),
+                "object_definitions": [
+                    {
+                        "object_type": "fixture_object",
+                        "display_name": "Fixture object",
+                        "fields": [{"field_path": "identifier"}],
+                    }
+                ],
+            },
+        )
+
+        assert metadata.domain_envelope is not None
+        assert metadata.domain_envelope["domain_pack_id"] == "fixture.validation"
+
     def test_registry_metadata_response_has_agents(self):
         """RegistryMetadataResponse should have agents dict."""
         from src.api.agent_studio import AgentMetadata, RegistryMetadataResponse
@@ -134,6 +162,40 @@ class TestGetRegistryMetadata:
         assert {
             option["state"] for option in chemical_extractor.validation_attachments
         }.issuperset({"active", "planned", "blocked"})
+
+    def test_get_registry_metadata_includes_domain_envelope_authoring_metadata(self):
+        """Extraction agents should expose domain-pack envelope metadata."""
+        import asyncio
+        from src.api.agent_studio import get_registry_metadata
+
+        result = asyncio.run(get_registry_metadata())
+        gene_extractor = result.agents.get("gene_extractor")
+
+        assert gene_extractor is not None
+        assert gene_extractor.domain_envelope is not None
+
+        envelope = gene_extractor.domain_envelope
+        assert envelope["domain_pack_id"] == "gene"
+        assert envelope["schema_refs"]
+        assert "semantic source of truth" in envelope["semantic_source_note"]
+        assert envelope["validation_summary"]["default_enabled"] >= 1
+
+        object_definitions = envelope["object_definitions"]
+        assert object_definitions
+        gene_object = object_definitions[0]
+        assert gene_object["object_type"] == "gene_mention_evidence"
+        assert gene_object["schema_ref"]["provider"] == "alliance_linkml"
+        field_paths = {
+            field["field_path"]
+            for field in gene_object["fields"]
+        }
+        assert {"primary_external_id", "gene_symbol"}.issubset(field_paths)
+        fields_by_path = {
+            field["field_path"]: field
+            for field in gene_object["fields"]
+        }
+        assert fields_by_path["gene_symbol"]["provider_refs"]
+        assert fields_by_path["gene_symbol"]["source_of_truth"] == "alliance_linkml"
 
     def test_get_registry_metadata_includes_custom_agents_for_user(self, monkeypatch):
         """Metadata endpoint should append current user's active custom agents."""

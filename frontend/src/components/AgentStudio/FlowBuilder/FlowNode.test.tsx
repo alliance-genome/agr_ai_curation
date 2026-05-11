@@ -53,6 +53,8 @@ describe('FlowNode', () => {
               validator_id: 'active',
               state: 'active',
               scope: 'field',
+              object_type: 'gene_mention_evidence',
+              field_path: 'gene_symbol',
               required: true,
               export_blocking: true,
               default_enabled: true,
@@ -93,6 +95,9 @@ describe('FlowNode', () => {
     )
 
     expect(screen.getByText('1 active validation')).toBeInTheDocument()
+    expect(screen.getByText('1 envelope object')).toBeInTheDocument()
+    expect(screen.getByText('1 required')).toBeInTheDocument()
+    expect(screen.getByText('1 export-blocking')).toBeInTheDocument()
     expect(screen.getByText('1 planned')).toBeInTheDocument()
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })
