@@ -89,7 +89,7 @@ function DomainEnvelopeViewer({
     <Slide direction="left" in={open} mountOnEnter unmountOnExit>
       <ViewerShell>
         <PanelGroup direction="horizontal">
-          <Panel minSize={12} defaultSize={34} order={1}>
+          <Panel minSize={8} defaultSize={28} order={1}>
             <Box
               onClick={onClose}
               sx={{
@@ -100,7 +100,7 @@ function DomainEnvelopeViewer({
             />
           </Panel>
           <ResizeHandle />
-          <Panel minSize={46} defaultSize={66} maxSize={88} order={2}>
+          <Panel minSize={50} defaultSize={72} maxSize={92} order={2}>
             <ViewerPanel elevation={8}>
               <ViewerHeader>
                 <SchemaIcon sx={{ fontSize: 20, color: 'primary.main' }} />

@@ -47,7 +47,7 @@ const EditorContainer = styled(Paper)(({ theme }) => ({
   right: 0,
   bottom: 0,
   width: '100%',
-  maxWidth: 360,
+  maxWidth: 420,
   backgroundColor: theme.palette.background.paper,
   borderLeft: `1px solid ${theme.palette.divider}`,
   display: 'flex',
@@ -168,6 +168,12 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
       && attachment.opt_out_reason_required
       && !attachment.opt_out_reason?.trim()
     )
+  )
+  const actionableValidationAttachments = validationAttachments.filter(
+    (attachment) => attachment.state === 'active' && Boolean(attachment.validator_binding_id)
+  )
+  const metadataValidationAttachments = validationAttachments.filter(
+    (attachment) => !(attachment.state === 'active' && Boolean(attachment.validator_binding_id))
   )
 
   // Initialize form when node changes
@@ -425,12 +431,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 <Typography variant="caption" fontWeight={600}>
                   Validation Attachments
                 </Typography>
-                <Tooltip title="Domain-pack metadata controls which validators are active, optional, planned, or blocked for this extraction step.">
+                <Tooltip title="Checked active validators run automatically. Planned, blocked, and metadata-only validators are shown below as read-only domain-pack context.">
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
                 </Tooltip>
               </FieldLabel>
-              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                {validationAttachments.map((attachment) => {
+              {actionableValidationAttachments.length > 0 && (
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {actionableValidationAttachments.map((attachment) => {
                   const hasBinding = Boolean(attachment.validator_binding_id)
                   const canToggle = attachment.state === 'active'
                     && hasBinding
@@ -469,7 +476,18 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                         />
                         <Box sx={{ flex: 1, minWidth: 0 }}>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
-                            <Typography variant="body2" sx={{ fontSize: '0.75rem', fontWeight: 600 }}>
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                flex: '1 1 180px',
+                                minWidth: 0,
+                                fontSize: '0.75rem',
+                                fontWeight: 650,
+                                lineHeight: 1.25,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                            >
                               {attachment.label || attachment.validator_id}
                             </Typography>
                             <Chip
@@ -488,7 +506,17 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                               />
                             )}
                           </Box>
-                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{
+                              display: 'block',
+                              fontSize: '0.65rem',
+                              lineHeight: 1.3,
+                              overflowWrap: 'anywhere',
+                              wordBreak: 'break-word',
+                            }}
+                          >
                             {[attachment.object_type, attachment.field_path].filter(Boolean).join(' / ') || attachment.scope}
                           </Typography>
                           {attachment.state === 'blocked' && attachment.blocked_by && (
@@ -531,7 +559,83 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                     </Box>
                   )
                 })}
-              </Box>
+                </Box>
+              )}
+
+              {metadataValidationAttachments.length > 0 && (
+                <Box sx={{ mt: actionableValidationAttachments.length > 0 ? 1.25 : 0 }}>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}
+                  >
+                    Planned, blocked, and metadata-only validators are not scheduled by this checkbox list.
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                    {metadataValidationAttachments.map((attachment) => {
+                      const stateColor: 'success' | 'warning' | 'error' = attachment.state === 'active'
+                        ? 'success'
+                        : attachment.state === 'planned'
+                          ? 'warning'
+                          : 'error'
+                      return (
+                        <Box
+                          key={attachment.attachment_id}
+                          sx={{
+                            border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.72)}`,
+                            borderRadius: 1,
+                            p: 0.85,
+                            backgroundColor: (theme) => alpha(theme.palette.background.default, 0.22),
+                          }}
+                        >
+                          <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.75 }}>
+                            <Chip
+                              size="small"
+                              color={stateColor}
+                              variant="outlined"
+                              label={attachment.state === 'active' ? 'metadata' : attachment.state}
+                              sx={{ height: 18, fontSize: '0.6rem', mt: 0.1, flexShrink: 0 }}
+                            />
+                            <Box sx={{ flex: 1, minWidth: 0 }}>
+                              <Typography
+                                variant="body2"
+                                sx={{
+                                  fontSize: '0.72rem',
+                                  fontWeight: 650,
+                                  lineHeight: 1.3,
+                                  overflowWrap: 'anywhere',
+                                  wordBreak: 'break-word',
+                                }}
+                              >
+                                {attachment.label || attachment.validator_id}
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{
+                                  display: 'block',
+                                  mt: 0.2,
+                                  fontSize: '0.63rem',
+                                  lineHeight: 1.3,
+                                  overflowWrap: 'anywhere',
+                                  wordBreak: 'break-word',
+                                }}
+                              >
+                                {[attachment.object_type, attachment.field_path].filter(Boolean).join(' / ') || attachment.scope}
+                              </Typography>
+                              {attachment.state === 'blocked' && attachment.blocked_by && (
+                                <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.63rem' }}>
+                                  Blocked by {attachment.blocked_by}
+                                </Typography>
+                              )}
+                            </Box>
+                          </Box>
+                        </Box>
+                      )
+                    })}
+                  </Box>
+                </Box>
+              )}
             </Box>
 
             <Divider />

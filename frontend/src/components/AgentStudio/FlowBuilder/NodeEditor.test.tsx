@@ -143,6 +143,53 @@ describe('NodeEditor', () => {
     expect(screen.getByText('A reason is required for this opt-out.')).toBeInTheDocument()
   })
 
+  it('separates read-only validation metadata from actionable validator checkboxes', () => {
+    const actionable = buildValidationAttachmentSelection({
+      attachment_id: 'disease:pending-envelope',
+      label: 'Pending disease envelope validator',
+      validator_binding_id: 'disease_pending_envelope_validator',
+      enabled: true,
+      default_enabled: true,
+      allow_opt_out: true,
+    })
+    const planned = buildValidationAttachmentSelection({
+      attachment_id: 'disease:condition-relation',
+      label: 'curation db reference lookup (condition_relations[0].condition_relation_type.name)',
+      validator_binding_id: 'disease_condition_relation_lookup',
+      field_path: 'condition_relations[0].condition_relation_type.name',
+      state: 'planned',
+      enabled: false,
+      default_enabled: false,
+      allow_opt_out: false,
+    })
+    const metadataOnly = buildValidationAttachmentSelection({
+      attachment_id: 'disease:required-payload-fields',
+      label: 'disease required payload fields',
+      validator_binding_id: undefined,
+      state: 'active',
+      enabled: false,
+      default_enabled: false,
+      allow_opt_out: false,
+    })
+
+    render(
+      <NodeEditor
+        node={buildNode({
+          validation_attachments: [actionable, planned, metadataOnly],
+        })}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        availableVariables={[]}
+      />
+    )
+
+    expect(screen.getAllByRole('checkbox')).toHaveLength(1)
+    expect(screen.getByText('Pending disease envelope validator')).toBeInTheDocument()
+    expect(screen.getAllByText(/condition_relations\[0\]\.condition_relation_type\.name/i).length).toBeGreaterThan(0)
+    expect(screen.getByText('disease required payload fields')).toBeInTheDocument()
+    expect(screen.getByText(/not scheduled by this checkbox list/i)).toBeInTheDocument()
+  })
+
   it('labels validation agent instructions as a steering prompt', () => {
     metadataMocks.agents = {
       gene_validator: {
