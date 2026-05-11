@@ -406,28 +406,33 @@ def test_runtime_output_type_wraps_domain_repair_responses_non_strict():
     assert isinstance(wrapped, AgentOutputSchema)
     assert wrapped.output_type is GeneExtractorRepairResponse
     assert wrapped.is_strict_json_schema() is False
+    assert wrapped.__name__ == "GeneExtractorRepairResponse"
+    assert wrapped.json_schema().get("type") == "object"
+    assert set(wrapped.json_schema().get("properties", {})) == {"response"}
     parsed = wrapped.validate_json(
         """
         {
-          "repair_action": "extractor_patch",
-          "patch_id": "repair-patch:test",
-          "envelope_id": "env-1",
-          "expected_revision": 1,
-          "operations": [
-            {
-              "op": "replace",
-              "object_ref": {
-                "pending_ref_id": "object-1",
-                "object_type": "gene_mention_evidence"
-              },
-              "field_path": "primary_external_id",
-              "expected_before": "WB:OLD",
-              "after": "WB:NEW",
-              "reason": "Validator supplied the grounded identifier."
-            }
-          ],
-          "source_finding_ids": ["validation:1"],
-          "rationale": "Bounded repair against the requested field path."
+          "response": {
+            "repair_action": "extractor_patch",
+            "patch_id": "repair-patch:test",
+            "envelope_id": "env-1",
+            "expected_revision": 1,
+            "operations": [
+              {
+                "op": "replace",
+                "object_ref": {
+                  "pending_ref_id": "object-1",
+                  "object_type": "gene_mention_evidence"
+                },
+                "field_path": "primary_external_id",
+                "expected_before": "WB:OLD",
+                "after": "WB:NEW",
+                "reason": "Validator supplied the grounded identifier."
+              }
+            ],
+            "source_finding_ids": ["validation:1"],
+            "rationale": "Bounded repair against the requested field path."
+          }
         }
         """
     )

@@ -1887,6 +1887,51 @@ def get_prompt_catalog() -> PromptCatalogService:
 _REASONING_LEVEL_PATTERN = re.compile(r"^(minimal|low|medium|high)$")
 
 
+class _DomainEnvelopeRepairOutputSchema(AgentOutputSchema):
+    """Object-shaped Agents SDK schema for RootModel repair responses.
+
+    The Responses API requires structured outputs to be top-level JSON objects.
+    Our extractor repair responses are Pydantic RootModel unions so normal
+    Python validation can accept either a first-pass envelope, a repair patch, or
+    a final classification directly. This adapter gives the SDK its required
+    object wrapper while preserving the original RootModel as the value returned
+    to application code.
+    """
+
+    def __init__(self, output_type: type[Any]):
+        root_field = getattr(output_type, "model_fields", {}).get("root")
+        root_annotation = getattr(root_field, "annotation", None)
+        if root_annotation is None:
+            raise ValueError(
+                f"Domain-envelope repair output schema '{output_type.__name__}' "
+                "must be a Pydantic RootModel with a root annotation"
+            )
+
+        super().__init__(root_annotation, strict_json_schema=False)
+        self.output_type = output_type
+        self.__name__ = output_type.__name__
+        self.__domain_envelope_extractor_repair_response__ = True
+
+    def name(self) -> str:
+        return self.output_type.__name__
+
+    def model_json_schema(self) -> dict[str, Any]:
+        return self.json_schema()
+
+    def model_validate(self, payload: Any) -> Any:
+        if isinstance(payload, dict) and set(payload.keys()) == {"response"}:
+            payload = payload["response"]
+        return self.output_type.model_validate(payload)
+
+    def validate_json(self, json_str: str) -> Any:
+        try:
+            validated = super().validate_json(json_str)
+        except Exception:
+            parsed = json.loads(json_str)
+            return self.model_validate(parsed)
+        return self.output_type.model_validate(validated)
+
+
 def _coerce_db_user_id(raw_user_id: Any) -> Optional[int]:
     """Best-effort conversion for runtime user IDs passed via kwargs."""
     if isinstance(raw_user_id, int):
@@ -2107,7 +2152,7 @@ def _runtime_output_type_for_schema(output_schema: Optional[Any]) -> Optional[An
     if getattr(output_schema, "__domain_envelope_extractor_repair_response__", False):
         # These responses intentionally carry provider-owned envelope payloads
         # and repair metadata; Pydantic and the patch engine remain authoritative.
-        return AgentOutputSchema(output_schema, strict_json_schema=False)
+        return _DomainEnvelopeRepairOutputSchema(output_schema)
     return output_schema
 
 

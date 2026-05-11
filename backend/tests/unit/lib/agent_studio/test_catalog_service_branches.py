@@ -528,6 +528,9 @@ def test_create_db_agent_wraps_domain_repair_schema_for_runtime(monkeypatch):
     assert isinstance(built.output_type, AgentOutputSchema)
     assert built.output_type.output_type is GeneExtractorRepairResponse
     assert built.output_type.is_strict_json_schema() is False
+    assert built.output_type.__name__ == "GeneExtractorRepairResponse"
+    assert built.output_type.json_schema().get("type") == "object"
+    assert set(built.output_type.json_schema().get("properties", {})) == {"response"}
 
 
 def test_create_db_agent_applies_model_overrides(monkeypatch):
