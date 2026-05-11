@@ -26,9 +26,11 @@ Start here for new developers:
 1. **[CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md)** -- Repository architecture and package-aware runtime loading
 2. **[ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md)** -- How to add an agent bundle, with separate notes for runtime packages vs source checkouts
 3. **[ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md)** -- How to add a tool, with separate notes for package-owned exports vs runtime internals
-4. **[DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md)** -- Forward-only development rules for fallbacks, compatibility, and migrations
-5. **[AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md)** -- Comprehensive agent/runtime architecture reference
-6. **[UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md)** -- Upload runtime contract (status/cancellation/rollback/idempotency; implementation in ALL-23)
+4. **[DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md)** -- 0.7.0 domain-envelope/domain-pack source-of-truth, validation, repair, review, export, and submission contracts
+5. **[TEST_STRATEGY.md](TEST_STRATEGY.md)** -- Docker-first validation strategy and domain-envelope release gates
+6. **[DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md)** -- Forward-only development rules for fallbacks, compatibility, and migrations
+7. **[AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md)** -- Comprehensive agent/runtime architecture reference
+8. **[UPLOAD_RUNTIME_CONTRACT.md](guides/UPLOAD_RUNTIME_CONTRACT.md)** -- Upload runtime contract (status/cancellation/rollback/idempotency; implementation in ALL-23)
 
 ### Developer Guides
 
@@ -36,6 +38,8 @@ Start here for new developers:
 |-------|-------------|
 | [DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md) | Forward-only development policy: remove fallbacks, avoid compatibility shims, prefer explicit migrations |
 | [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide for repo contributors -- package loading, database runtime, loaders, deployment |
+| [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) | Domain-envelope architecture: source of truth, field paths, validation supervisor, lookup attempts, repair, materialization, export/submission, and Agent Studio metadata |
+| [TEST_STRATEGY.md](TEST_STRATEGY.md) | Docker-first test commands plus domain-envelope contract, LinkML, live DB, fixture, and release-gate expectations |
 | [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) | Add agent bundles for runtime packages or source-checkout shipped-package maintenance |
 | [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add package-owned tools or maintain Alliance Defaults tool catalogs/runtime tool plumbing |
 | [AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md) | Comprehensive reference: unified agents table, dynamic supervisor, tool bindings, prompt management |
@@ -121,6 +125,22 @@ export. `backend/tests/unit/lib/packages/test_project_agnostic_runtime_guardrail
 scans backend and frontend test files for Alliance-specific literals; new
 generic/core test files should stay off that allowlist.
 
+### Work with Domain Envelopes
+
+For new domain-pack curation runs, `DomainEnvelope` is the semantic source of
+truth. Workspace candidates, draft fields, frontend review rows, export payloads,
+and submission payloads are projections over persisted envelope objects at an
+expected revision. Do not add new behavior that treats prep candidates,
+normalized payloads, or materialized review rows as a parallel semantic store.
+
+Use domain-pack metadata for curatable object definitions, field paths, schema
+refs, validator bindings, required/export-blocking policy, opt-out policy,
+workspace display, and export/submission behavior. Shared runtime code must stay
+provider-agnostic; Alliance LinkML, curation DB projections, and package-specific
+adapters belong in `packages/alliance/`.
+
+See [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) for the full contract.
+
 ### Configure Groups
 
 ```bash
@@ -148,7 +168,8 @@ The system uses a **config-driven, database-backed architecture** where:
 2. **Database is runtime authority** -- The unified `agents` table stores all agent records (system + custom)
 3. **Dynamic discovery** -- The supervisor queries the database for enabled agents and builds streaming tools at runtime
 4. **Declarative tool bindings** -- Package `tools/bindings.yaml` exports are normalized into `TOOL_BINDINGS` with explicit context requirements
-5. **No hardcoded agent files** -- All 16 original Python agent files have been replaced by generic construction from database rows
+5. **Domain packs define curation semantics** -- Extraction agents produce persisted domain envelopes; validation, review rows, export, and submission are driven by package metadata and envelope revisions
+6. **No hardcoded agent files** -- All 16 original Python agent files have been replaced by generic construction from database rows
 
 ```text
 ~/.agr_ai_curation/runtime/packages/org-custom/

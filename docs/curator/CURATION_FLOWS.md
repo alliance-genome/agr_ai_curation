@@ -20,6 +20,12 @@ Curation Flows are visual workflows that let you chain multiple AI agents togeth
 - In flows, you can customize instructions for each agent individually
 - Example: Tell the PDF agent to focus on methods sections, then tell the validation agent to only accept certain ontology types
 
+**Domain Envelopes and Automatic Validation**
+- Domain-pack extraction agents save their results as domain envelopes
+- Flow Builder shows which curatable objects and field paths the extractor produces
+- Active default validators attach automatically from domain-pack metadata
+- Required/export-blocking validators can only be disabled where policy allows it
+
 **Repeatable Results**
 - Same workflow = consistent extraction across documents
 - Great for processing batches of similar papers
@@ -106,6 +112,31 @@ Click on any agent node to open the **Properties Panel** on the right. This pane
 **Custom Instructions**
 
 Add specific instructions for this step. These are prepended to the agent's system prompt with highest priority — they override the agent's default behavior for this flow step. Example: "Focus only on gene expression data from the methods section."
+
+**Domain Envelope Metadata**
+
+For domain-pack extraction agents, the Properties Panel shows the domain
+envelope object types, field paths, required fields, schema/provider references,
+source-of-truth notes, and validation policy. This tells you what the extractor
+is expected to save for review and export.
+
+**Validation Attachments**
+
+Automatic validators are listed on the extraction node. Their state explains
+what will happen when the flow runs:
+
+- **active** - can run now when enabled.
+- **planned** - declared by metadata, but not run yet.
+- **blocked** - declared by metadata, but blocked by another dependency.
+
+Required and export-blocking active validators are enabled by default. If policy
+allows an opt-out, the checkbox can be changed. If a reason is required, save the
+reason in the same panel before saving the flow. Validators that are required by
+policy and do not allow opt-out stay locked on.
+
+To add a custom validation step, add a validation agent after the extraction
+node. Use its steering prompt to point at the envelope object, field path, or
+question you want it to check.
 
 **Input Source**
 
@@ -212,6 +243,7 @@ Understanding how flows run helps you build effective workflows:
 3. Each step's output is stored under its **output variable name** and available to later steps via `{{variable}}` references
 4. When a step produces a final output (e.g., a file formatter generates a CSV, or Chat Output displays results), the flow **terminates**
 5. Custom instructions for each step are applied with highest priority, overriding the agent's default behavior for that step (see [How Prompts Layer Together](#how-prompts-layer-together) above)
+6. Domain-pack extraction steps save envelope objects and schedule automatic validation according to the node's validation attachments
 
 **Important:** Because the flow terminates when it reaches an output agent, place your output agent at the end of the chain. Only one output agent will produce results per flow run.
 
@@ -273,6 +305,18 @@ When a flow generates a file:
 2. Click the download button to save the file
 3. Files are available until the session ends
 
+### Review, Export, and Submission Readiness
+
+Domain-pack extraction can also create review sessions with envelope object
+rows. The review table is a projection over the saved envelope. When you preview
+export or direct submission, the system checks the expected envelope revision,
+required fields, active validation findings, definition state, and adapter-owned
+readiness policy.
+
+If blockers appear, resolve the listed object/field issue before final export or
+submission. Curator overrides only work when the domain-pack policy allows them
+and any required reason has been saved.
+
 ## Example Workflows
 
 ### Example 1: Gene Expression Extraction to CSV
@@ -307,6 +351,11 @@ Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → 
 
 **Instructions for Initial Instructions node:**
 "Extract gene expression data and validate all gene identifiers before export."
+
+For domain-pack extractors, check the Gene Expression Extractor node before
+running. Its automatic validation attachments may already include required
+validators, so add a separate validation agent only when you need extra custom
+checks or a curator-specific steering prompt.
 
 ## Managing Flows
 
@@ -359,7 +408,8 @@ Use names like "C. elegans Expression to WBbt CSV" rather than "Flow 1".
 ### Wrong Data Extracted
 
 - **Refine your instructions:** Add more specific custom instructions to agents
-- **Add validation agents:** Include Ontology Mapping Agent for term verification
+- **Review automatic validation:** Check the extractor node's validation attachments and any validation findings in the review workspace
+- **Add validation agents:** Include Ontology Mapping Agent or another validation agent when you need custom checks beyond the domain-pack defaults
 
 ## Common Questions
 

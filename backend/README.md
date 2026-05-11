@@ -5,6 +5,7 @@
 Unified FastAPI backend serving both AI Chat and Weaviate Control Panel APIs. This service provides:
 - AI-powered chat functionality using OpenAI Agents SDK with config-driven agents
 - Agent Workshop for browsing, customizing, and managing agents
+- Domain-envelope curation runtime: domain-pack metadata, persisted envelope checkpoints, validation findings/history, review-row materialization, and export/submission readiness
 - Multi-provider LLM support (OpenAI, Gemini, Groq) via pluggable provider architecture
 - Vector database management via Weaviate
 - PDF document processing and chunking
@@ -23,6 +24,7 @@ backend/
 │   │   ├── chunks.py               # Document chunking
 │   │   ├── batch.py                # Batch processing endpoints
 │   │   ├── flows.py                # Curation flow endpoints
+│   │   ├── curation_workspace.py   # Curation review, envelope rows, field patches, export/submission
 │   │   ├── processing.py           # PDF processing
 │   │   ├── schema.py               # Schema management
 │   │   ├── settings.py             # Settings endpoints
@@ -48,6 +50,9 @@ backend/
 │   │   │       └── supervisor_agent.py # Supervisor (routes to config-driven agents)
 │   │   ├── batch/                  # Batch processing engine
 │   │   ├── flows/                  # Curation flow executor
+│   │   ├── domain_packs/           # Domain-pack registry, validation, repair, materialization
+│   │   ├── domain_envelopes/       # Envelope checkpoints, indexes, and field patches
+│   │   ├── curation_workspace/     # Review sessions, projections, validation, export/submission
 │   │   ├── weaviate_client/        # Weaviate integration
 │   │   └── pipeline/               # Processing pipeline
 │   └── models/                     # Data models
@@ -92,6 +97,7 @@ config/
 
 ### Agent Studio (`/api/agent-studio`)
 - `GET /api/agent-studio/catalog` - Get all agent prompts organized by category
+- `GET /api/agent-studio/registry/metadata` - Get agent metadata, including domain-envelope and validation attachment metadata for domain-pack agents
 - `POST /api/agent-studio/chat` - Stream a conversation with Opus
 - `GET /api/agent-studio/trace/{trace_id}/context` - Get enriched trace context
 - `POST /api/agent-studio/suggestion` - Submit a prompt suggestion
@@ -99,6 +105,12 @@ config/
 - `POST /api/agent-studio/custom-agents` - Create a custom agent
 - `PUT /api/agent-studio/custom-agents/{id}` - Update a custom agent
 - `DELETE /api/agent-studio/custom-agents/{id}` - Delete a custom agent
+
+### Curation Workspace (`/api/curation-workspace`)
+- Review sessions materialize domain-envelope objects into curator-visible rows
+- Field edits are bounded patches against envelope object field paths
+- Validation summaries and evidence anchors are projected from persisted envelope data
+- Export and submission previews enforce expected envelope revisions, validation findings, required/export-blocking field policy, and adapter readiness blockers
 
 ### Weaviate Control Panel (`/weaviate`)
 - `GET /weaviate/documents` - List all documents
@@ -197,20 +209,24 @@ The API will be available at `http://localhost:8000`
 
 ## Testing
 
-Run the test suite:
+Run backend tests through the Docker test compose file from the repository root:
 ```bash
 # Unit tests
-pytest tests/unit/
-
-# Integration tests (requires Weaviate)
-pytest tests/integration/
+docker compose -f docker-compose.test.yml run --rm backend-unit-tests
 
 # Contract tests
-pytest tests/contract/
+docker compose -f docker-compose.test.yml run --rm backend-contract-tests
 
-# All tests with coverage
-pytest --cov=src tests/
+# All backend tests
+docker compose -f docker-compose.test.yml run --rm backend-tests
+
+# Specific file
+docker compose -f docker-compose.test.yml run --rm backend-unit-tests \
+  bash -lc "python -m pytest tests/unit/path/to/test.py -v --tb=short"
 ```
+
+Domain-envelope release gates and live curation DB opt-in tests are documented in
+[docs/developer/TEST_STRATEGY.md](../docs/developer/TEST_STRATEGY.md).
 
 ## API Documentation
 
@@ -254,6 +270,24 @@ from YAML have `visibility = 'system'`.
 
 See [CONFIG_DRIVEN_ARCHITECTURE.md](../docs/developer/guides/CONFIG_DRIVEN_ARCHITECTURE.md) for
 the full guide on adding agents, configuring providers, and managing tool policies.
+
+## Domain Envelopes
+
+New domain-pack curation runs use persisted `DomainEnvelope` records as the
+semantic source of truth. Extraction agents produce envelope objects with object
+IDs or pending refs, relative field paths, validation findings, history, schema
+refs, evidence metadata, and domain-pack metadata. The workspace still stores
+candidate rows for review mechanics, but for domain-pack runs those rows are
+materialized projections with `semantic_source: domain_envelope.objects`.
+
+Automatic validation comes from domain-pack metadata. Active validators run or
+produce explicit dispatch findings, planned/blocked validators remain visible,
+and DB-backed lookup tools preserve `lookup_attempts` as an audit trail. Repair,
+field edits, export, and submission all operate against envelope object field
+paths and expected revisions.
+
+See [DOMAIN_ENVELOPES.md](../docs/developer/guides/DOMAIN_ENVELOPES.md) for the
+full developer contract.
 
 ## Dependencies
 

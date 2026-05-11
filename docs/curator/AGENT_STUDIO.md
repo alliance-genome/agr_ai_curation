@@ -16,6 +16,12 @@ On both tabs, the left panel is your chat with Claude Opus. You can ask Opus abo
 
 When your question is about how the application itself works, Opus can inspect the live repository in read-only mode to verify whether a feature, restriction, or code path exists before answering.
 
+Opus is best used as an explanation and drafting assistant. It can help you
+interpret prompts, domain-envelope metadata, validation choices, trace context,
+and flow structure. It does not replace the curation workspace readiness checks:
+final export and submission still depend on the saved envelope, validation
+findings, and domain-pack policy.
+
 ### Agents Tab
 
 Browse the instructions given to each AI agent and chat with Opus about them.
@@ -37,6 +43,22 @@ For each agent, you can view:
 - **Group-Specific Rules** - How the prompt is customized for each curator group (WormBase, FlyBase, MGI, ZFIN, RGD, SGD, Xenbase)
 - **Combined View** - See the base prompt with group rules injected
 - **Tools** - The tools available to each agent (listed in the agent card)
+- **Domain Envelope Metadata** - For extraction agents, the curatable objects,
+  field paths, schema/provider references, source-of-truth notes, and automatic
+  validation policy supplied by the domain pack
+
+**Domain Envelope Metadata**
+
+Extraction agents that use domain packs show what kind of envelope they produce.
+This includes object types, fields, required fields, definition state, provider
+refs, active validators, planned validators, blocked validators, and
+export-blocking policy. The important idea is simple: the domain envelope object
+is the saved curation record. Review tables and export payloads are generated
+from that saved object.
+
+Planned and blocked validators may appear in the panel even though they do not
+run. They are visible so you can see what the domain pack knows about future or
+currently unavailable validation.
 
 **Clickable Tool Names**
 
@@ -66,6 +88,8 @@ Create workflows by dragging agents onto a canvas and connecting them:
 - 15 available agents from extraction to file output
 - Save, load, and reuse flows
 - Generate downloadable CSV, TSV, or JSON files
+- Inspect which domain-envelope objects an extraction node will produce
+- Inspect automatic validators attached from domain-pack metadata
 
 **Verify with Claude (Important!)**
 
@@ -76,6 +100,21 @@ Before running a flow, click the **"Verify with Claude"** button. Claude will:
 - Confirm your flow is ready to run
 
 This is especially valuable when building new flows or troubleshooting ones that aren't working as expected.
+
+**Automatic Validation Attachments**
+
+When an extraction agent declares domain-pack validation metadata, Flow Builder
+attaches the default active validators to the extraction node. Required and
+export-blocking validators are enabled by default. Some validators can be
+unchecked only when the metadata allows an opt-out; if a reason is required, the
+flow cannot be saved until you enter one. Planned or blocked validators are shown
+as metadata so you know why they will not run.
+
+To add a custom validation step, place a data-validation agent after the
+extractor and use its steering prompt to name the envelope object, field path, or
+curation concern you want checked. Custom validation agents are saved as regular
+flow nodes; automatic validation remains controlled by the extraction agent's
+domain-pack metadata.
 
 **Ask Opus about flows:**
 - "Does this flow make sense for extracting expression data?"
@@ -89,6 +128,11 @@ Create and test custom versions of agent prompts without affecting the live syst
 **What is a Custom Agent?**
 
 A custom agent is your personal copy of a system agent's prompt. You can edit the instructions, add per-group overrides, and use it in flows — all without changing anything for other users. Custom agents you create also appear in the Flow Builder agent palette under "My Custom Agents".
+
+If you clone a domain-pack extraction agent, Agent Workshop keeps the inherited
+domain-envelope metadata visible. Editing the prompt does not edit the domain
+pack schema, field paths, validators, export policy, or submission policy.
+Those remain controlled by the installed package metadata.
 
 **Getting Started**
 
@@ -177,6 +221,8 @@ Click the **"Discuss with Claude"** button in the Workshop toolbar to send your 
 - "Critique this draft and suggest concrete edits"
 - "Help me restructure this prompt for clarity"
 - "What would happen if I changed this instruction?"
+- "Does this prompt still produce the required domain-envelope fields?"
+- "Which automatic validators will run for this agent?"
 
 ## Discussing a Chat Response
 
@@ -190,8 +236,29 @@ This opens Agent Studio with your conversation loaded, so Opus knows exactly wha
 - "Why did the AI suggest this ontology term instead of that one?"
 - "The AI missed the gene mentioned in paragraph 3 - what went wrong?"
 - "Can you help me understand why I got this response?"
+- "Which envelope object and field path did this validation finding target?"
+- "Was this lookup attempt a final failure or just part of the audit trail?"
 
 This is the best way to get help understanding unexpected AI behavior or to formulate improvement suggestions.
+
+## Understanding Validation Findings
+
+Validation findings are attached to envelope objects or fields. A finding may be
+informational, a warning, an error, or a blocker. Findings also have a status,
+such as open, resolved, or waived. Export and submission previews block on open
+error/blocker findings unless metadata allows a curator override or waiver.
+
+Database-backed lookup tools may include `lookup_attempts`. Treat those attempts
+as an audit trail. They show what was tried, which provider was used, how many
+matches were found, and whether an individual attempt was successful,
+ambiguous, not found, transient, blocked, or under development. A transient
+attempt can still appear in the audit trail even when a later retry produced a
+successful top-level lookup result.
+
+Repair attempts are driven by validation findings and field paths. A repair may
+update a bounded field, request a validator rerun, mark a target as under
+development, or conclude that no repair is possible. The envelope history keeps
+that trail.
 
 ## Submitting Feedback and Suggestions
 

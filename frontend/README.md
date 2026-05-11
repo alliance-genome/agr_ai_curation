@@ -7,6 +7,7 @@ React-based frontend application built with Vite, Material-UI, and TypeScript. P
 - **Agent Studio** - Browse agents, inspect prompts, chat with Claude, and submit suggestions
 - **Agent Workshop** - Clone agents, customize prompts, select models/tools, and test against live documents
 - **Visual Flow Builder** - Drag-and-drop workflow creation by chaining agents
+- Domain-envelope curation review with projected object rows, field-path editing, validation findings, evidence anchors, and export/submission blockers
 - Document management and processing
 - Real-time streaming responses with audit transparency
 
@@ -40,6 +41,8 @@ frontend/
 │   │   └── AgentStudioPage.tsx  # Two-panel Agent Studio layout
 │   ├── services/
 │   │   └── agentStudioService.ts  # Agent Studio API client (catalog, custom agents, tools, flows, chat)
+│   ├── features/
+│   │   └── curation/              # Curation workspace, envelope object review, field editor, submission preview
 │   ├── types/
 │   │   └── promptExplorer.ts  # TypeScript types mirroring backend models
 │   ├── utils/                 # Utility functions
@@ -146,6 +149,7 @@ The primary API client for Agent Studio features is `agentStudioService.ts`. It 
 | Endpoint Group | Key Functions | Description |
 |---------------|---------------|-------------|
 | Catalog | `fetchPromptCatalog`, `refreshPromptCatalog` | Agent catalog with categories and prompts |
+| Registry metadata | `fetchRegistryMetadata` | Agent metadata for UI display, including domain-envelope object definitions and validation attachments |
 | Custom Agents | `createCustomAgent`, `updateCustomAgent`, `cloneAgentToWorkshop` | Agent Workshop CRUD |
 | Agent Versions | `listCustomAgentVersions`, `revertCustomAgentVersion` | Version history and rollback |
 | Agent Sharing | `setCustomAgentVisibility` | Private / project visibility toggle |
@@ -199,7 +203,7 @@ The Agent Studio page (`AgentStudioPage.tsx`) uses a two-panel layout with resiz
 
 1. **Agents tab** (`AgentBrowser.tsx`) - Searchable agent catalog organized by subcategory (System, Input, PDF Extraction, Data Validation, Output, Custom). Each agent can be inspected in `AgentDetailsPanel.tsx` which provides Overview, Guidance, and Prompts tabs. Agents can be discussed with Claude or cloned to the Agent Workshop.
 
-2. **Flows tab** (`FlowBuilder/`) - Drag-and-drop visual workflow builder. Curators drag agents from the `AgentPalette` onto a canvas, connect them with edges, and configure each node with custom instructions. Flows can be verified by Claude for structural correctness.
+2. **Flows tab** (`FlowBuilder/`) - Drag-and-drop visual workflow builder. Curators drag agents from the `AgentPalette` onto a canvas, connect them with edges, and configure each node with custom instructions. Domain-pack extraction nodes show envelope metadata and validation attachments derived from backend registry metadata. Flows can be verified by Claude for structural correctness.
 
 3. **Agent Workshop tab** (`PromptWorkshop/PromptWorkshop.tsx`) - Full-featured custom agent editor. Curators can:
    - Clone any system agent as a starting point or create from scratch
@@ -210,6 +214,32 @@ The Agent Studio page (`AgentStudioPage.tsx`) uses a two-panel layout with resiz
    - Share custom agents with the project or keep them private
    - View version history and revert to previous versions
    - Submit tool idea requests when a needed tool does not exist
+
+Domain-envelope metadata is rendered through
+`AgentStudio/DomainEnvelopeMetadataPanel.tsx` in Agent Details, Flow Builder
+nodes, Node Editor, and Prompt Workshop. It is a read-only projection of backend
+domain-pack metadata; editing prompts or custom agents does not edit schema
+refs, field paths, validators, or export/submission policy.
+
+### Curation Workspace Components
+
+The curation workspace frontend consumes domain-envelope projections from the
+backend:
+
+- `workspace/EnvelopeObjectReviewTable.tsx` renders materialized envelope object
+  rows with projected summary fields, validation status, and evidence counts.
+- `editor/CandidateFieldEditor.tsx` displays field-level validation summaries
+  and evidence anchors for the selected object projection.
+- `submission/SubmissionPreviewDialog.tsx` shows readiness blockers for export
+  and direct submission, including required/export-blocking fields, definition
+  state blockers, validation findings, stale revisions, and curator override
+  policy.
+- `services/curationWorkspaceService.ts` carries expected envelope revisions on
+  preview/export/submission requests so stale data blocks instead of submitting
+  silently.
+
+For new domain-pack runs, these components should treat workspace candidates as
+projections over `domain_envelope.objects`, not as the semantic payload.
 
 ### Shared Components
 
