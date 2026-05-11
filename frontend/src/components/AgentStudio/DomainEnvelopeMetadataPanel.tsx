@@ -33,7 +33,7 @@ interface DomainEnvelopeMetadataPanelProps {
 }
 
 function humanizeState(value?: string | null): string {
-  return (value || '').replace(/_/g, ' ')
+  return (value ?? '').replace(/_/g, ' ')
 }
 
 function chipColorForState(
