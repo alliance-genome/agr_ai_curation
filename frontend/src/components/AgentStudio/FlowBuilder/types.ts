@@ -219,6 +219,8 @@ export interface NodeEditorProps {
   availableVariables: string[]
   /** Callback to view the agent's prompts */
   onViewPrompts?: (agentId: string, agentName: string) => void
+  /** Callback to open the domain envelope inspector */
+  onViewDomainEnvelope?: (nodeId: string) => void
   /** Whether this node has an incoming edge (for enabling "Previous Step Output") */
   hasIncomingEdge?: boolean
   /** Callback to mark node as manually configured when user saves in NodeEditor */

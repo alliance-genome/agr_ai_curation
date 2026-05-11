@@ -30,8 +30,8 @@ import SaveIcon from '@mui/icons-material/Save'
 import DeleteIcon from '@mui/icons-material/Delete'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import DescriptionIcon from '@mui/icons-material/Description'
+import SchemaIcon from '@mui/icons-material/Schema'
 
-import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
 import type { NodeEditorProps, InputSource, ValidationAttachmentSelection } from './types'
 import {
   isValidationAgentFromMetadata,
@@ -46,8 +46,8 @@ const EditorContainer = styled(Paper)(({ theme }) => ({
   top: 0,
   right: 0,
   bottom: 0,
-  width: 'clamp(720px, 58vw, 1120px)',
-  maxWidth: 'calc(100vw - 96px)',
+  width: '100%',
+  maxWidth: 360,
   backgroundColor: theme.palette.background.paper,
   borderLeft: `1px solid ${theme.palette.divider}`,
   display: 'flex',
@@ -128,7 +128,7 @@ const BUILT_IN_TEMPLATE_VARIABLES = [
   'timestamp',
 ] as const
 
-function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
+function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
   // Form state
@@ -306,13 +306,52 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         )}
 
         {domainEnvelopeMetadata && (
-          <DomainEnvelopeMetadataPanel
-            metadata={domainEnvelopeMetadata}
-            validationAttachments={validationAttachments}
-            compact
-            layout="flow-editor"
-            validationModeNote="Active default validators run automatically for this extraction step. Add a Data Validation agent after the extractor for custom checks; its steering prompt is saved as normal flow node configuration."
-          />
+          <Box
+            sx={{
+              border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.75)}`,
+              borderRadius: 1,
+              p: 1.25,
+              backgroundColor: (theme) => alpha(theme.palette.background.default, 0.28),
+            }}
+          >
+            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1 }}>
+              <SchemaIcon sx={{ fontSize: 18, color: 'primary.main', mt: 0.2 }} />
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="caption" sx={{ display: 'block', fontWeight: 700 }}>
+                  Domain Envelope
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25, lineHeight: 1.35 }}>
+                  {domainEnvelopeMetadata.display_name}
+                </Typography>
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.75 }}>
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`${domainEnvelopeMetadata.object_definitions.length} object type${domainEnvelopeMetadata.object_definitions.length === 1 ? '' : 's'}`}
+                    sx={{ height: 20, fontSize: '0.65rem' }}
+                  />
+                  <Chip
+                    size="small"
+                    variant="outlined"
+                    label={`${domainEnvelopeMetadata.validation_summary.default_enabled} default validator${domainEnvelopeMetadata.validation_summary.default_enabled === 1 ? '' : 's'}`}
+                    sx={{ height: 20, fontSize: '0.65rem' }}
+                  />
+                </Box>
+              </Box>
+            </Box>
+            {onViewDomainEnvelope && (
+              <Button
+                size="small"
+                variant="outlined"
+                fullWidth
+                onClick={() => onViewDomainEnvelope(node.id)}
+                sx={{ mt: 1, justifyContent: 'flex-start' }}
+                startIcon={<SchemaIcon fontSize="small" />}
+              >
+                View envelope details
+              </Button>
+            )}
+          </Box>
         )}
 
         {isValidationAgentNode && (

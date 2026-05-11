@@ -9,6 +9,7 @@ export { default as FlowNode } from './FlowNode'
 export { default as AgentPalette } from './AgentPalette'
 export { default as NodeEditor } from './NodeEditor'
 export { default as PromptViewer } from './PromptViewer'
+export { default as DomainEnvelopeViewer } from './DomainEnvelopeViewer'
 
 // Re-export types
 export type {

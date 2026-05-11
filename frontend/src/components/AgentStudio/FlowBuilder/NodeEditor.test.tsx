@@ -50,7 +50,7 @@ describe('NodeEditor', () => {
     metadataMocks.agents = {}
   })
 
-  it('renders envelope metadata and automatic validation guidance for extraction nodes', () => {
+  it('renders envelope summary and opens the dedicated envelope inspector', () => {
     metadataMocks.agents = {
       gene_extractor: {
         name: 'Gene Extractor',
@@ -59,6 +59,7 @@ describe('NodeEditor', () => {
         domain_envelope: buildDomainEnvelopeMetadata(),
       },
     }
+    const onViewDomainEnvelope = vi.fn()
 
     render(
       <NodeEditor
@@ -66,15 +67,17 @@ describe('NodeEditor', () => {
         onSave={vi.fn()}
         onClose={vi.fn()}
         availableVariables={[]}
+        onViewDomainEnvelope={onViewDomainEnvelope}
       />
     )
 
-    expect(screen.getByTestId('domain-envelope-metadata-panel')).toBeInTheDocument()
     expect(screen.getByText('Gene Validated Reference Domain Pack')).toBeInTheDocument()
-    expect(screen.getByText(/semantic source of truth/i)).toBeInTheDocument()
-    expect(screen.getByText('Gene mention evidence')).toBeInTheDocument()
-    expect(screen.getByText('gene_symbol')).toBeInTheDocument()
-    expect(screen.getByText(/Active default validators run automatically/i)).toBeInTheDocument()
+    expect(screen.getByText('1 object type')).toBeInTheDocument()
+    expect(screen.getByText('1 default validator')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /view envelope details/i }))
+
+    expect(onViewDomainEnvelope).toHaveBeenCalledWith('node_1')
   })
 
   it('persists allowed validation opt-outs with a curator reason', () => {

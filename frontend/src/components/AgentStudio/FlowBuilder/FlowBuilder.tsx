@@ -59,6 +59,7 @@ import AgentPalette from './AgentPalette'
 import NodeEditor from './NodeEditor'
 import TaskInputEditor from './TaskInputEditor'
 import PromptViewer from './PromptViewer'
+import DomainEnvelopeViewer from './DomainEnvelopeViewer'
 import type {
   FlowBuilderProps,
   FlowState,
@@ -369,6 +370,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Prompt viewer state
   const [promptViewerOpen, setPromptViewerOpen] = useState(false)
   const [promptViewerAgent, setPromptViewerAgent] = useState<{ id: string; name: string } | null>(null)
+  const [domainEnvelopeViewerNodeId, setDomainEnvelopeViewerNodeId] = useState<string | null>(null)
+  const [domainEnvelopeViewerOpen, setDomainEnvelopeViewerOpen] = useState(false)
 
   // Menu bar state
   const [fileMenuAnchor, setFileMenuAnchor] = useState<HTMLElement | null>(null)
@@ -960,6 +963,15 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     return edges.some((e) => e.target === selectedNode.id)
   }, [edges, selectedNode])
 
+  const domainEnvelopeViewerNode = useMemo(() => {
+    if (!domainEnvelopeViewerNodeId) return null
+    return nodes.find((node) => node.id === domainEnvelopeViewerNodeId) ?? null
+  }, [nodes, domainEnvelopeViewerNodeId])
+
+  const domainEnvelopeViewerMetadata = domainEnvelopeViewerNode
+    ? agentMetadata[domainEnvelopeViewerNode.data.agent_id]?.domain_envelope
+    : undefined
+
   // Handle marking a node as manually configured when user saves in NodeEditor
   // This prevents auto-switching on future connections
   const handleMarkManuallyConfigured = useCallback((nodeId: string) => {
@@ -975,6 +987,17 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Handle closing prompt viewer
   const handleClosePromptViewer = useCallback(() => {
     setPromptViewerOpen(false)
+  }, [])
+
+  // Handle opening domain envelope viewer
+  const handleViewDomainEnvelope = useCallback((nodeId: string) => {
+    setDomainEnvelopeViewerNodeId(nodeId)
+    setDomainEnvelopeViewerOpen(true)
+  }, [])
+
+  // Handle closing domain envelope viewer
+  const handleCloseDomainEnvelopeViewer = useCallback(() => {
+    setDomainEnvelopeViewerOpen(false)
   }, [])
 
   // File menu handlers
@@ -1429,10 +1452,22 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
                   onDelete={handleDeleteNode}
                   availableVariables={availableVariables}
                   onViewPrompts={handleViewPrompts}
+                  onViewDomainEnvelope={handleViewDomainEnvelope}
                   hasIncomingEdge={hasIncomingEdge}
                   onMarkManuallyConfigured={handleMarkManuallyConfigured}
                 />
               ) : null}
+
+              {/* Domain Envelope Slide-over */}
+              {domainEnvelopeViewerNode && domainEnvelopeViewerMetadata && (
+                <DomainEnvelopeViewer
+                  agentName={domainEnvelopeViewerNode.data.agent_display_name}
+                  metadata={domainEnvelopeViewerMetadata}
+                  validationAttachments={domainEnvelopeViewerNode.data.validation_attachments || []}
+                  open={domainEnvelopeViewerOpen}
+                  onClose={handleCloseDomainEnvelopeViewer}
+                />
+              )}
 
               {/* Prompt Viewer Slide-over */}
               {promptViewerAgent && (
