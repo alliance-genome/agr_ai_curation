@@ -69,6 +69,7 @@ from src.lib.agent_studio import (
 from src.lib.agent_studio import catalog_service
 from src.lib.agent_studio.catalog_service import get_prompt_catalog
 import src.lib.agent_studio.chat_session as agent_studio_chat_session
+import src.lib.agent_studio.domain_envelope_tools as agent_studio_domain_envelope_tools
 import src.lib.agent_studio.prompt_builder as prompt_builder
 from src.lib.agent_studio.flow_tools import (
     set_workflow_user_context,
@@ -1033,7 +1034,13 @@ GET_TOOL_CALL_DETAIL_TOOL = opus_tools.GET_TOOL_CALL_DETAIL_TOOL
 GET_TRACE_CONVERSATION_TOOL = opus_tools.GET_TRACE_CONVERSATION_TOOL
 GET_TRACE_VIEW_TOOL = opus_tools.GET_TRACE_VIEW_TOOL
 GET_SERVICE_LOGS_TOOL = opus_tools.GET_SERVICE_LOGS_TOOL
+LIST_DOMAIN_ENVELOPES_TOOL = opus_tools.LIST_DOMAIN_ENVELOPES_TOOL
+GET_DOMAIN_ENVELOPE_STATE_TOOL = opus_tools.GET_DOMAIN_ENVELOPE_STATE_TOOL
+GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = opus_tools.GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL
+GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL = opus_tools.GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL
+GET_EXPORT_SUBMISSION_READINESS_TOOL = opus_tools.GET_EXPORT_SUBMISSION_READINESS_TOOL
 _COMMON_TOOLS = opus_tools.COMMON_TOOLS
+_DOMAIN_ENVELOPE_TOOLS = opus_tools.DOMAIN_ENVELOPE_TOOLS
 _WORKSHOP_TOOLS = opus_tools.WORKSHOP_TOOLS
 _TRACE_TOOLS = opus_tools.TRACE_TOOLS
 _FLOW_TOOLS = opus_tools.FLOW_TOOLS
@@ -1147,10 +1154,29 @@ def _prompt_hash(prompt: str) -> str:
 _AUDIT_SAFE_VALUE_KEYS = {
     "agent_id",
     "apply_mode",
+    "blocker_id",
     "call_id",
+    "candidate_id",
     "chat_kind",
+    "code",
     "custom_agent_id",
+    "document_id",
+    "domain_pack_id",
+    "envelope_id",
+    "envelope_revision",
+    "event_id",
+    "field_path",
+    "finding_id",
+    "flow_id",
+    "flow_run_id",
+    "node_id",
+    "object_id",
+    "pending_ref_id",
+    "projection_key",
+    "projection_status",
+    "projection_type",
     "runtime_agent_id",
+    "severity",
     "session_id",
     "source",
     "status",
@@ -1161,8 +1187,44 @@ _AUDIT_SAFE_VALUE_KEYS = {
     "target_prompt",
     "tool_name",
     "trace_id",
+    "validator_binding_id",
+    "validator_id",
     "view_name",
 }
+
+_DOMAIN_REFERENCE_KEYS = {
+    "blocker_id",
+    "candidate_id",
+    "code",
+    "document_id",
+    "domain_pack_id",
+    "envelope_id",
+    "envelope_revision",
+    "event_id",
+    "field_path",
+    "finding_id",
+    "flow_id",
+    "flow_run_id",
+    "node_id",
+    "object_id",
+    "pending_ref_id",
+    "projection_key",
+    "projection_status",
+    "projection_type",
+    "session_id",
+    "status",
+    "validator_binding_id",
+    "validator_id",
+}
+_DOMAIN_REFERENCE_TOOL_NAMES = {
+    "get_current_flow",
+    "get_domain_envelope_review_rows",
+    "get_domain_envelope_state",
+    "get_domain_pack_validation_plan",
+    "get_export_submission_readiness",
+    "list_domain_envelopes",
+}
+_DOMAIN_REFERENCE_MAX_VALUES = 50
 
 
 def _audit_text_summary(value: str) -> Dict[str, Any]:
@@ -1220,6 +1282,110 @@ def _summarize_audit_value(value: Any, *, key: str | None = None, depth: int = 0
     return {
         "type": type(value).__name__,
         "repr_sha256": _prompt_hash(str(value)),
+    }
+
+
+def _collect_domain_reference_values(
+    value: Any,
+    references: Dict[str, set[str]],
+    *,
+    key: str | None = None,
+    depth: int = 0,
+) -> None:
+    """Collect stable domain-envelope reference values from bounded tool output."""
+
+    if depth > 6:
+        return
+
+    normalized_key = key.lower() if isinstance(key, str) else None
+    if normalized_key in _DOMAIN_REFERENCE_KEYS:
+        if isinstance(value, (str, int)) and not isinstance(value, bool):
+            normalized_value = str(value).strip()
+            if normalized_value and len(normalized_value) <= 255:
+                references.setdefault(normalized_key, set()).add(normalized_value)
+        return
+
+    if isinstance(value, dict):
+        for item_key, item_value in value.items():
+            _collect_domain_reference_values(
+                item_value,
+                references,
+                key=str(item_key),
+                depth=depth + 1,
+            )
+        return
+
+    if isinstance(value, list):
+        for item in value[:100]:
+            _collect_domain_reference_values(
+                item,
+                references,
+                depth=depth + 1,
+            )
+
+
+def _domain_references_from_tool_result(
+    tool_name: str,
+    tool_result: Any,
+) -> Dict[str, Any] | None:
+    """Return durable reference metadata worth carrying into follow-up turns."""
+
+    if tool_name not in _DOMAIN_REFERENCE_TOOL_NAMES:
+        return None
+
+    references: Dict[str, set[str]] = {}
+    _collect_domain_reference_values(tool_result, references)
+    if not references:
+        return None
+
+    return {
+        "tool_name": tool_name,
+        "references": {
+            key: sorted(values)[:_DOMAIN_REFERENCE_MAX_VALUES]
+            for key, values in sorted(references.items())
+            if values
+        },
+    }
+
+
+def _merge_domain_reference_events(
+    events: List[Dict[str, Any]],
+) -> Dict[str, Any] | None:
+    """Merge per-tool reference events into compact durable chat context."""
+
+    if not events:
+        return None
+
+    tool_names: List[str] = []
+    merged: Dict[str, set[str]] = {}
+    for event in events:
+        tool_name = _normalize_optional_text(event.get("tool_name"))
+        if tool_name and tool_name not in tool_names:
+            tool_names.append(tool_name)
+        raw_references = event.get("references")
+        if not isinstance(raw_references, dict):
+            continue
+        for key, values in raw_references.items():
+            if key not in _DOMAIN_REFERENCE_KEYS or not isinstance(values, list):
+                continue
+            target = merged.setdefault(key, set())
+            for value in values:
+                if len(target) >= _DOMAIN_REFERENCE_MAX_VALUES:
+                    break
+                normalized_value = _normalize_optional_text(value)
+                if normalized_value and len(normalized_value) <= 255:
+                    target.add(normalized_value)
+
+    if not merged:
+        return None
+
+    return {
+        "tool_names": tool_names,
+        "references": {
+            key: sorted(values)[:_DOMAIN_REFERENCE_MAX_VALUES]
+            for key, values in sorted(merged.items())
+            if values
+        },
     }
 
 
@@ -1885,6 +2051,64 @@ async def _handle_tool_call(
         )
         return result
 
+    elif tool_name == "list_domain_envelopes":
+        return agent_studio_domain_envelope_tools.list_domain_envelopes(
+            session_factory=SessionLocal,
+            user_auth_sub=user_auth_sub,
+            session_id=tool_input.get("session_id"),
+            document_id=tool_input.get("document_id"),
+            flow_run_id=tool_input.get("flow_run_id"),
+            domain_pack_id=tool_input.get("domain_pack_id"),
+            limit=tool_input.get("limit"),
+        )
+
+    elif tool_name == "get_domain_envelope_state":
+        return agent_studio_domain_envelope_tools.get_domain_envelope_state(
+            session_factory=SessionLocal,
+            user_auth_sub=user_auth_sub,
+            envelope_id=tool_input.get("envelope_id"),
+            object_id=tool_input.get("object_id"),
+            field_path=tool_input.get("field_path"),
+            include_object_payload=tool_input.get("include_object_payload", False),
+            history_limit=tool_input.get("history_limit"),
+        )
+
+    elif tool_name == "get_domain_pack_validation_plan":
+        return agent_studio_domain_envelope_tools.get_domain_pack_validation_plan(
+            agent_id=tool_input.get("agent_id"),
+            domain_pack_id=tool_input.get("domain_pack_id"),
+        )
+
+    elif tool_name == "get_domain_envelope_review_rows":
+        return agent_studio_domain_envelope_tools.get_domain_envelope_review_rows(
+            session_factory=SessionLocal,
+            user_auth_sub=user_auth_sub,
+            envelope_id=tool_input.get("envelope_id"),
+            revision=tool_input.get("revision"),
+            object_id=tool_input.get("object_id"),
+        )
+
+    elif tool_name == "get_export_submission_readiness":
+        try:
+            candidate_ids = _optional_tool_string_list(
+                tool_input.get("candidate_ids"),
+                "candidate_ids",
+            )
+            expected_revisions = _optional_tool_int_mapping(
+                tool_input.get("expected_envelope_revisions"),
+                "expected_envelope_revisions",
+            )
+        except ValueError as exc:
+            return {"success": False, "error": str(exc)}
+        return agent_studio_domain_envelope_tools.get_export_submission_readiness(
+            session_factory=SessionLocal,
+            user_auth_sub=user_auth_sub,
+            session_id=tool_input.get("session_id"),
+            candidate_ids=candidate_ids,
+            expected_envelope_revisions=expected_revisions,
+            mode=tool_input.get("mode"),
+        )
+
     elif tool_name == "refresh_workshop_prompt":
         return _build_refresh_workshop_prompt_result(
             tool_input=tool_input,
@@ -2147,6 +2371,35 @@ def _resolve_chat_history_limit(tool_input: dict[str, Any]) -> int:
     return agent_studio_chat_session.resolve_chat_history_limit(tool_input)
 
 
+def _optional_tool_string_list(value: Any, field_name: str) -> List[str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be an array of strings")
+    normalized_values: List[str] = []
+    for item in value:
+        normalized_item = _normalize_optional_text(item)
+        if normalized_item is not None:
+            normalized_values.append(normalized_item)
+    return normalized_values
+
+
+def _optional_tool_int_mapping(value: Any, field_name: str) -> Dict[str, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be an object")
+    normalized_values: Dict[str, int] = {}
+    for raw_key, raw_value in value.items():
+        key = _normalize_optional_text(raw_key)
+        if key is None:
+            continue
+        if isinstance(raw_value, bool) or not isinstance(raw_value, int):
+            raise ValueError(f"{field_name}.{key} must be an integer")
+        normalized_values[key] = raw_value
+    return normalized_values
+
+
 def _with_chat_history_repository(
     callback: Callable[[ChatHistoryRepository], Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -2235,13 +2488,18 @@ def _build_agent_studio_assistant_payload(
     requested_context_session_id: str | None,
     session_id: str,
     trace_capture: Dict[str, Any] | None = None,
+    domain_references: Dict[str, Any] | None = None,
 ) -> Dict[str, Any] | None:
-    return agent_studio_chat_session.build_agent_studio_assistant_payload(
+    payload = agent_studio_chat_session.build_agent_studio_assistant_payload(
         tool_calls=tool_calls,
         requested_context_session_id=requested_context_session_id,
         session_id=session_id,
         trace_capture=trace_capture,
     )
+    if domain_references:
+        payload = payload or {}
+        payload["domain_references"] = domain_references
+    return payload or None
 
 
 def _persist_completed_agent_studio_turn(
@@ -2458,6 +2716,7 @@ async def chat_with_opus(
             collected_content: List[Any] = []
             assistant_text_parts: List[str] = []
             completed_tool_calls: List[Dict[str, Any]] = []
+            domain_reference_events: List[Dict[str, Any]] = []
 
             # Note: User context was set before entering generate_stream().
             # We'll clean it up in the finally block at the end of this generator.
@@ -2543,6 +2802,12 @@ async def chat_with_opus(
                                 user_db_id=db_user_id,
                             )
                             safe_tool_result = _json_safe(tool_result)
+                            domain_reference_event = _domain_references_from_tool_result(
+                                block.name,
+                                safe_tool_result,
+                            )
+                            if domain_reference_event:
+                                domain_reference_events.append(domain_reference_event)
 
                             # Send tool result event to frontend
                             yield _opus_sse_event(
@@ -2597,6 +2862,7 @@ async def chat_with_opus(
                 requested_context_session_id=prepared_turn.requested_context_session_id,
                 session_id=prepared_turn.session_id,
                 trace_capture=_trace_capture_snapshot(trace_id),
+                domain_references=_merge_domain_reference_events(domain_reference_events),
             )
             assistant_turn = _persist_completed_agent_studio_turn(
                 session_id=prepared_turn.session_id,

@@ -24,6 +24,7 @@ from uuid import uuid4
 
 from .catalog_service import AGENT_REGISTRY
 from .diagnostic_tools import get_diagnostic_tools_registry
+from .domain_envelope_tools import current_flow_domain_envelope_analysis
 
 logger = logging.getLogger(__name__)
 
@@ -872,12 +873,17 @@ def _get_current_flow_handler():
         entry_node_id = flow_context.get("entry_node_id")
 
         if not nodes:
+            domain_envelope_analysis = current_flow_domain_envelope_analysis(
+                flow_context=flow_context,
+                agent_registry=AGENT_REGISTRY,
+            )
             return {
                 "success": True,
                 "flow_name": flow_name,
                 "step_count": 0,
                 "message": "Flow is empty - no steps have been added yet",
                 "steps": [],
+                "domain_envelope_analysis": domain_envelope_analysis,
                 "execution_order_markdown": f"# {flow_name}\n\nThis flow has no steps yet."
             }
 
@@ -1099,6 +1105,34 @@ def _get_current_flow_handler():
                 "message": f"Node '{node_data.get('agent_display_name', node_data.get('agent_id', 'unknown'))}' is disconnected and won't execute"
             })
 
+        domain_envelope_analysis = current_flow_domain_envelope_analysis(
+            flow_context=flow_context,
+            agent_registry=AGENT_REGISTRY,
+        )
+        if domain_envelope_analysis["envelope_node_count"]:
+            markdown_lines.append("---")
+            markdown_lines.append("**Domain Envelope Metadata:**")
+            for envelope_node in domain_envelope_analysis["nodes"]:
+                scheduled_count = len(
+                    envelope_node.get("validation_schedule", {}).get("scheduled_validators", [])
+                )
+                opt_out_count = len(
+                    envelope_node.get("validation_schedule", {}).get("opt_outs", [])
+                )
+                inactive_count = len(
+                    envelope_node.get("validation_schedule", {}).get("inactive_metadata", [])
+                )
+                markdown_lines.append(
+                    "- "
+                    f"{envelope_node.get('agent_display_name') or envelope_node.get('agent_id')} "
+                    f"produces `{envelope_node.get('domain_pack_id')}` envelope objects "
+                    f"({scheduled_count} scheduled validators"
+                    + (f", {opt_out_count} policy opt-outs" if opt_out_count else "")
+                    + (f", {inactive_count} planned/blocked metadata" if inactive_count else "")
+                    + ")"
+                )
+            markdown_lines.append("")
+
         # Count critical issues for easy detection
         critical_count = sum(1 for w in validation_warnings if w.get("type") == "CRITICAL")
 
@@ -1110,6 +1144,7 @@ def _get_current_flow_handler():
             "validation_warnings": validation_warnings,
             "has_critical_issues": critical_count > 0,
             "critical_issue_count": critical_count,
+            "domain_envelope_analysis": domain_envelope_analysis,
             "steps": steps,
             "edges": [{"source": e.get("source"), "target": e.get("target")} for e in edges],
             "execution_order_markdown": "\n".join(markdown_lines),

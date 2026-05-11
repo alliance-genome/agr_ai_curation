@@ -641,8 +641,9 @@ This tool returns:
 - Accurate step numbering based on actual execution sequence
 - Disconnected nodes flagged as warnings
 - Clean markdown representation
+- `domain_envelope_analysis` for envelope-producing nodes, domain packs, object definitions, and validation schedules
 
-**NEVER** reference flow structure without calling this tool first.
+**NEVER** reference flow structure, automatic validation choices, or domain-envelope-producing nodes without calling this tool first. If the returned domain-pack or validator metadata is not enough for the curator's question, call `get_domain_pack_validation_plan`.
 </critical_instruction>
 
 <responsibilities>
@@ -664,8 +665,12 @@ This tool returns:
    - Flag any duplication (phrases, instructions, or concepts already in base)
 5. **Missing Agents** - Any important processing steps absent?
 6. **Redundant Steps** - Any agents called unnecessarily?
+7. **Domain Envelope Production** - Which extraction nodes produce domain-envelope objects, which object types/field paths they create, and which schema/provider refs define them?
+8. **Automatic Validation Semantics** - Which validators are active and default-enabled, which custom validators are scheduled, which required/export-blocking validators are present, and which validators are planned or blocked metadata only?
+9. **Curator Validation Choices** - Which active validations were opted out, whether the policy permits that opt-out, whether a reason is required, and how those choices affect review/export readiness?
 
 **CRITICAL for item 4:** You MUST actually call `get_prompt` for each agent with custom instructions to perform the comparison. Do NOT skip this step or guess based on agent name alone.
+**CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
 </validation_checklist>
 
 <flow_design_guidance>
@@ -674,23 +679,26 @@ This tool returns:
 **Every flow follows this pattern:**
 1. **Initial Instructions** (REQUIRED FIRST STEP) - Define the curation task
 2. **Extraction/Verification agents** - Process the document
-3. **Output agent** (if exporting data) - Format results as CSV, TSV, or JSON
+3. **Automatic validation** - Domain-pack metadata and curator selections schedule validators on extracted envelope objects
+4. **Output agent** (if exporting data) - Format materialized projections as CSV, TSV, JSON, or chat
 
 **Initial Instructions should specify:**
 - What to extract (e.g., "Extract all alleles mentioned in this paper")
 - What data categories to capture (e.g., "For each allele, capture: parent gene symbol, allele identifier, phenotype description")
-- Any validation requirements (e.g., "Verify allele IDs against the Alliance database")
+- Any validation steering or curator choices (e.g., "Run default Alliance validation and explain any opt-outs")
 
 **When exporting to file (CSV/TSV/JSON):**
 - The Initial Instructions should define WHAT data to collect
-- The formatter agent (csv_formatter, tsv_formatter, json_formatter) should define HOW to format it
+- Domain envelopes define the semantic objects; review rows and files are projections from those objects
+- The formatter agent (chat_output, csv_formatter, tsv_formatter, json_formatter) should define HOW to present projected data
 - Formatter custom instructions should specify column headers matching the data defined in Initial Instructions
 
 **Example flow for allele extraction:**
 1. **Initial Instructions**: "Extract alleles from this paper. For each allele, capture: parent gene symbol, allele identifier, and phenotype. Verify identifiers against the database."
 2. **PDF Extraction**: Extract relevant sections
-3. **Allele Verification**: Validate allele data against Alliance database
-4. **CSV Formatter**: "Export with columns: parent_gene, allele_id, phenotype"
+3. **Allele Extraction**: Produce domain-envelope allele objects with field paths and schema/provider refs
+4. **Automatic Validation**: Scheduled validators write findings, repair attempts, and lookup attempts back into the envelope
+5. **CSV Formatter**: "Export with columns: parent_gene, allele_id, phenotype"
 </flow_design_guidance>
 
 <output_format>

@@ -371,6 +371,89 @@ def test_get_current_flow_handler_only_adds_preview_ellipsis_when_truncated():
     )
 
 
+def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch):
+    handler = flow_tools._get_current_flow_handler()
+    monkeypatch.setattr(
+        flow_tools,
+        "current_flow_domain_envelope_analysis",
+        lambda **_kwargs: {
+            "semantic_source": "domain_envelope.objects",
+            "envelope_node_count": 1,
+            "nodes": [
+                {
+                    "node_id": "extract_1",
+                    "agent_id": "allele_extractor",
+                    "agent_display_name": "Allele Extraction",
+                    "domain_pack_id": "alliance_allele",
+                    "domain_pack_version": "0.7.0",
+                    "object_definitions": [
+                        {
+                            "object_type": "allele",
+                            "display_name": "Allele",
+                            "field_paths": ["gene.symbol", "allele.symbol"],
+                        }
+                    ],
+                    "validation_schedule": {
+                        "scheduled_validators": [
+                            {"validator_binding_id": "allele-symbol-binding"}
+                        ],
+                        "opt_outs": [
+                            {"validator_binding_id": "optional-note-binding"}
+                        ],
+                        "inactive_metadata": [
+                            {"validator_binding_id": "planned-ontology-binding"}
+                        ],
+                    },
+                }
+            ],
+        },
+    )
+    flow_tools.set_current_flow_context(
+        {
+            "flow_name": "Allele Envelope Flow",
+            "entry_node_id": "task_input_0",
+            "nodes": [
+                {
+                    "id": "task_input_0",
+                    "type": "task_input",
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "Extract alleles.",
+                        "output_key": "task_input",
+                    },
+                },
+                {
+                    "id": "extract_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "allele_extractor",
+                        "agent_display_name": "Allele Extraction",
+                        "output_key": "alleles",
+                    },
+                },
+            ],
+            "edges": [{"source": "task_input_0", "target": "extract_1"}],
+        }
+    )
+
+    result = handler()
+
+    assert result["success"] is True
+    assert result["domain_envelope_analysis"]["semantic_source"] == "domain_envelope.objects"
+    assert result["domain_envelope_analysis"]["envelope_node_count"] == 1
+    assert (
+        result["domain_envelope_analysis"]["nodes"][0]["validation_schedule"][
+            "scheduled_validators"
+        ][0]["validator_binding_id"]
+        == "allele-symbol-binding"
+    )
+    assert "Domain Envelope Metadata" in result["execution_order_markdown"]
+    assert "1 scheduled validators, 1 policy opt-outs, 1 planned/blocked metadata" in result[
+        "execution_order_markdown"
+    ]
+
+
 def test_create_flow_handler_validation_and_auth_errors(monkeypatch):
     create = flow_tools._create_flow_handler()
     monkeypatch.setattr(flow_tools, "get_current_user_id", lambda: None)

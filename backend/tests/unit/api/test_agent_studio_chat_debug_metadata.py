@@ -131,6 +131,11 @@ def test_audit_summary_preserves_only_allowlisted_short_debug_values():
             "target_prompt": "group",
             "custom_agent_id": custom_agent_uuid,
             "runtime_agent_id": f"ca_{custom_agent_uuid}",
+            "envelope_id": "env-123",
+            "object_id": "obj-456",
+            "field_path": "gene.symbol",
+            "finding_id": "finding-789",
+            "validator_binding_id": "binding-abc",
             "source": "saved_custom_agent",
             "query": "Raw prompt text should not be stored",
             "updated_prompt": "Raw prompt text should not be stored",
@@ -143,6 +148,11 @@ def test_audit_summary_preserves_only_allowlisted_short_debug_values():
     assert fields["target_prompt"]["value"] == "group"
     assert fields["custom_agent_id"]["value"] == custom_agent_uuid
     assert fields["runtime_agent_id"]["value"] == f"ca_{custom_agent_uuid}"
+    assert fields["envelope_id"]["value"] == "env-123"
+    assert fields["object_id"]["value"] == "obj-456"
+    assert fields["field_path"]["value"] == "gene.symbol"
+    assert fields["finding_id"]["value"] == "finding-789"
+    assert fields["validator_binding_id"]["value"] == "binding-abc"
     assert fields["source"]["value"] == "saved_custom_agent"
     assert "value" not in fields["query"]
     assert fields["query"]["length"] == len("Raw prompt text should not be stored")
