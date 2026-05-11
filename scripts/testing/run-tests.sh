@@ -103,14 +103,14 @@ case $TEST_TYPE in
     echo -e "${YELLOW}Running Alliance domain-pack contract suite...${NC}"
     "${SCRIPT_DIR}/prepare-test-stack.sh"
     test_stack_compose run --rm backend-contract-tests \
-      bash -lc "alembic upgrade head && bash tests/contract/run_ci_contract_core_tests.sh --suite alliance-domain-pack"
+      bash -lc "alembic upgrade head && bash tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-domain-pack-test-paths --suite-label alliance-domain-pack"
     ;;
   alliance-live-db-contract)
     echo -e "${YELLOW}Running explicit Alliance live DB contract suite...${NC}"
     load_live_db_tunnel_env_if_present
     export ALLIANCE_LIVE_DB_CONTRACT_TESTS=1
     test_stack_compose run --rm backend-contract-tests \
-      bash tests/contract/run_ci_contract_core_tests.sh --suite alliance-live-db
+      bash tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-live-db-test-paths --suite-label alliance-live-db --require-truthy-env ALLIANCE_LIVE_DB_CONTRACT_TESTS
     ;;
   domain-envelope-release)
     echo -e "${YELLOW}Running full 0.7.0 domain-envelope release gate...${NC}"
@@ -118,11 +118,11 @@ case $TEST_TYPE in
       bash /app/backend/tests/unit/run_ci_unit_tests.sh --suite domain-envelope-release
     "${SCRIPT_DIR}/prepare-test-stack.sh"
     test_stack_compose run --rm backend-contract-tests \
-      bash -lc "alembic upgrade head && bash tests/contract/run_ci_contract_core_tests.sh --suite alliance-domain-pack"
+      bash -lc "alembic upgrade head && bash tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-domain-pack-test-paths --suite-label alliance-domain-pack"
     load_live_db_tunnel_env_if_present
     export ALLIANCE_LIVE_DB_CONTRACT_TESTS=1
     test_stack_compose run --rm backend-contract-tests \
-      bash tests/contract/run_ci_contract_core_tests.sh --suite alliance-live-db
+      bash tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-live-db-test-paths --suite-label alliance-live-db --require-truthy-env ALLIANCE_LIVE_DB_CONTRACT_TESTS
     ;;
   all)
     echo -e "${YELLOW}Running all tests...${NC}"

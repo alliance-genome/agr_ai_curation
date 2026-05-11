@@ -30,7 +30,7 @@ suites:
       - trace_review
   alliance_domain_pack_contract:
     runner: backend-contract-tests
-    command: bash tests/contract/run_ci_contract_core_tests.sh --suite alliance-domain-pack
+    command: bash tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-domain-pack-test-paths --suite-label alliance-domain-pack
     path_file: tests/contract/.alliance-domain-pack-test-paths
     markers:
       - alliance_domain_pack
@@ -45,7 +45,7 @@ suites:
       - export_submission
   alliance_live_db_contract:
     runner: backend-contract-tests
-    command: ALLIANCE_LIVE_DB_CONTRACT_TESTS=1 bash tests/contract/run_ci_contract_core_tests.sh --suite alliance-live-db
+    command: ALLIANCE_LIVE_DB_CONTRACT_TESTS=1 bash tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-live-db-test-paths --suite-label alliance-live-db --require-truthy-env ALLIANCE_LIVE_DB_CONTRACT_TESTS
     path_file: tests/contract/.alliance-live-db-test-paths
     markers:
       - alliance_live_db

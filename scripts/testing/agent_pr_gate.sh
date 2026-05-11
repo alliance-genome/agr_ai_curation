@@ -178,10 +178,10 @@ run_check "domain-envelope-unit-path-validation" \
   "bash backend/tests/unit/run_ci_unit_tests.sh --suite domain-envelope-release --validate-only"
 
 run_check "alliance-domain-contract-path-validation" \
-  "bash backend/tests/contract/run_ci_contract_core_tests.sh --suite alliance-domain-pack --validate-only"
+  "bash backend/tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-domain-pack-test-paths --suite-label alliance-domain-pack --validate-only"
 
 run_check "alliance-live-db-contract-path-validation" \
-  "bash backend/tests/contract/run_ci_contract_core_tests.sh --suite alliance-live-db --validate-only"
+  "bash backend/tests/contract/run_ci_contract_core_tests.sh --path-file tests/contract/.alliance-live-db-test-paths --suite-label alliance-live-db --require-truthy-env ALLIANCE_LIVE_DB_CONTRACT_TESTS --validate-only"
 
 mapfile -t CHANGED_BACKEND_PY_FILES < <(
   git diff --name-only --diff-filter=ACMR "${DIFF_RANGE}" -- backend/src backend/tests | awk '/\.py$/'
