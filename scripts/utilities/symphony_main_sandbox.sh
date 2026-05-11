@@ -698,6 +698,7 @@ run_review_prep() {
     --workspace-dir "${SANDBOX_DIR}"
     --issue-key "MAIN-SANDBOX-1"
     --compose-project "${COMPOSE_PROJECT}"
+    --start-test-containers true
   )
 
   if [[ "${mode}" == "repair" ]]; then

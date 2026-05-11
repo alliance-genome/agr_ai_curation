@@ -9,7 +9,7 @@ SCRIPT_PATH="${REPO_ROOT}/scripts/utilities/symphony_main_sandbox.sh"
 assert_output_contains() {
   local pattern="$1"
   local output="$2"
-  if ! printf '%s\n' "${output}" | rg -n --fixed-strings "${pattern}" >/dev/null 2>&1; then
+  if ! printf '%s\n' "${output}" | rg -n --fixed-strings -- "${pattern}" >/dev/null 2>&1; then
     echo "Expected to find '${pattern}' in output:" >&2
     printf '%s\n' "${output}" >&2
     exit 1
@@ -182,6 +182,10 @@ test_trace_review_compose_accepts_dev_and_langfuse_env() {
   assert_output_contains 'LANGFUSE_LOCAL_SECRET_KEY: sk-local' "${output}"
 }
 
+test_main_sandbox_opts_into_test_container_startup() {
+  assert_output_contains "--start-test-containers true" "$(sed -n '/local prep_cmd=(/,/)/p' "${SCRIPT_PATH}")"
+}
+
 test_prepare_dry_run_uses_stable_ports
 test_repair_dry_run_reuses_persisted_ports
 test_prepare_dry_run_reuses_persisted_ports
@@ -190,5 +194,6 @@ test_prepare_dry_run_rejects_overlapping_trace_review_ports
 test_prepare_dry_run_auto_shifts_trace_review_ports_after_main_override
 test_repair_fails_when_git_safety_tools_are_unavailable
 test_trace_review_compose_accepts_dev_and_langfuse_env
+test_main_sandbox_opts_into_test_container_startup
 
 echo "symphony_main_sandbox tests passed"
