@@ -407,6 +407,169 @@ GET_SERVICE_LOGS_TOOL = {
     },
 }
 
+LIST_DOMAIN_ENVELOPES_TOOL = {
+    "name": "list_domain_envelopes",
+    "description": (
+        "List visible persisted domain envelopes for a session, document, flow run, "
+        "or domain pack. Use this before discussing live envelope state when the "
+        "curator has not already supplied an envelope_id."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "Optional curation review session UUID.",
+            },
+            "document_id": {
+                "type": "string",
+                "description": "Optional document UUID.",
+            },
+            "flow_run_id": {
+                "type": "string",
+                "description": "Optional flow run identifier.",
+            },
+            "domain_pack_id": {
+                "type": "string",
+                "description": "Optional domain pack ID to filter results.",
+            },
+            "limit": {
+                "type": "integer",
+                "description": "Maximum envelopes to return (default: 10, max: 50).",
+                "default": 10,
+                "minimum": 1,
+                "maximum": 50,
+            },
+        },
+        "required": [],
+    },
+}
+
+GET_DOMAIN_ENVELOPE_STATE_TOOL = {
+    "name": "get_domain_envelope_state",
+    "description": (
+        "Inspect the current persisted domain envelope state by envelope_id. Returns "
+        "curatable objects, object IDs, field paths, validation findings, repair "
+        "attempts, lookup attempts, history, projections, and schema/provider refs. "
+        "Use this instead of relying on prompt memory for live envelope facts."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "envelope_id": {
+                "type": "string",
+                "description": "Persisted domain envelope ID.",
+            },
+            "object_id": {
+                "type": "string",
+                "description": "Optional object_id or pending_ref_id filter.",
+            },
+            "field_path": {
+                "type": "string",
+                "description": "Optional field path filter for validation findings.",
+            },
+            "include_object_payload": {
+                "type": "boolean",
+                "description": "Include bounded object payload JSON when true.",
+                "default": False,
+            },
+            "history_limit": {
+                "type": "integer",
+                "description": "Maximum history events to return (default: 10, max: 50).",
+                "default": 10,
+                "minimum": 1,
+                "maximum": 50,
+            },
+        },
+        "required": ["envelope_id"],
+    },
+}
+
+GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
+    "name": "get_domain_pack_validation_plan",
+    "description": (
+        "Inspect a domain pack's object definitions, field paths, schema/provider "
+        "references, validator bindings, automatic validation defaults, opt-out "
+        "rules, and planned or blocked validators. Use this for flow validation "
+        "semantics and curator-controlled validation choices."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "agent_id": {
+                "type": "string",
+                "description": "Optional agent ID whose domain pack should be inspected.",
+            },
+            "domain_pack_id": {
+                "type": "string",
+                "description": "Optional domain pack ID to inspect directly.",
+            },
+        },
+        "required": [],
+    },
+}
+
+GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL = {
+    "name": "get_domain_envelope_review_rows",
+    "description": (
+        "Materialize review rows from a persisted domain envelope revision. Use this "
+        "to explain curator review rows as projections from envelope objects, not as "
+        "a separate semantic source of truth."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "envelope_id": {
+                "type": "string",
+                "description": "Persisted domain envelope ID.",
+            },
+            "revision": {
+                "type": "integer",
+                "description": "Optional envelope revision. Defaults to the latest revision.",
+            },
+            "object_id": {
+                "type": "string",
+                "description": "Optional object_id filter.",
+            },
+        },
+        "required": ["envelope_id"],
+    },
+}
+
+GET_EXPORT_SUBMISSION_READINESS_TOOL = {
+    "name": "get_export_submission_readiness",
+    "description": (
+        "Inspect read-only projection/export/submission readiness for a review "
+        "session. Returns blockers tied to envelope IDs, object IDs, field paths, "
+        "and readiness codes without executing export or submission."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "session_id": {
+                "type": "string",
+                "description": "Curation review session UUID.",
+            },
+            "candidate_ids": {
+                "type": "array",
+                "description": "Optional candidate UUIDs to inspect.",
+                "items": {"type": "string"},
+            },
+            "expected_envelope_revisions": {
+                "type": "object",
+                "description": "Optional map of envelope_id to expected revision.",
+                "additionalProperties": {"type": "integer"},
+            },
+            "mode": {
+                "type": "string",
+                "description": "Optional label for the readiness check, such as export or submission.",
+                "default": "readiness",
+            },
+        },
+        "required": ["session_id"],
+    },
+}
+
 
 COMMON_TOOLS = {
     "get_chat_conversation",
@@ -414,6 +577,13 @@ COMMON_TOOLS = {
     "search_chat_history",
     "submit_prompt_suggestion",
     "report_tool_failure",
+}
+DOMAIN_ENVELOPE_TOOLS = {
+    "list_domain_envelopes",
+    "get_domain_envelope_state",
+    "get_domain_pack_validation_plan",
+    "get_domain_envelope_review_rows",
+    "get_export_submission_readiness",
 }
 WORKSHOP_TOOLS = {
     "refresh_workshop_prompt",
@@ -473,6 +643,9 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
 
     if tool_name in COMMON_TOOLS:
         return True
+
+    if tool_name in DOMAIN_ENVELOPE_TOOLS:
+        return active_tab in {"agents", "flows", "agent_workshop"}
 
     if tool_name in WORKSHOP_TOOLS:
         return active_tab == "agent_workshop" and bool(context and context.agent_workshop)
@@ -535,6 +708,11 @@ def get_all_opus_tools(
         GET_TRACE_CONVERSATION_TOOL,
         GET_TRACE_VIEW_TOOL,
         GET_SERVICE_LOGS_TOOL,
+        LIST_DOMAIN_ENVELOPES_TOOL,
+        GET_DOMAIN_ENVELOPE_STATE_TOOL,
+        GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL,
+        GET_DOMAIN_ENVELOPE_REVIEW_ROWS_TOOL,
+        GET_EXPORT_SUBMISSION_READINESS_TOOL,
     ]
 
     tools = [
