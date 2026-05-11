@@ -13,6 +13,7 @@ import os
 import re
 import asyncio
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone  # noqa: F401 - Agent Studio module API surface.
 from pathlib import Path as FilePath
 from typing import Any, Callable, Dict, List, NoReturn, Optional
@@ -626,6 +627,7 @@ async def get_registry_metadata(
         for custom in custom_agents:
             category = custom.category or "Custom"
             custom_id = make_custom_agent_id(custom.id)
+            template_source = _custom_agent_template_source(custom)
 
             agents[custom_id] = AgentMetadata(
                 name=custom.name,
@@ -635,9 +637,24 @@ async def get_registry_metadata(
                     "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
                 ),
                 supervisor_tool=f"ask_{custom_id.replace('-', '_')}_specialist",
+                validation_attachments=deepcopy(
+                    validation_attachments_by_agent.get(template_source, [])
+                ),
+                domain_envelope=deepcopy(
+                    domain_envelope_metadata_by_agent.get(template_source)
+                ),
             )
 
     return RegistryMetadataResponse(agents=agents)
+
+
+def _custom_agent_template_source(custom: Any) -> Optional[str]:
+    raw_template_source = getattr(custom, "template_source", None)
+    if not isinstance(raw_template_source, str):
+        return None
+
+    template_source = raw_template_source.strip()
+    return template_source or None
 
 
 # ============================================================================

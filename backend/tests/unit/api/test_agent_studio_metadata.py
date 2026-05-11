@@ -210,7 +210,11 @@ class TestGetRegistryMetadata:
             name="Doug's Gene Agent",
             icon="🔧",
         )
-        monkeypatch.setattr(api_module, "list_custom_agents_visible_to_user", lambda _db, _uid: [fake_custom])
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_visible_to_user",
+            lambda _db, _uid: [fake_custom],
+        )
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
@@ -233,6 +237,49 @@ class TestGetRegistryMetadata:
         assert custom_id in result.agents
         assert result.agents[custom_id].name == "Doug's Gene Agent"
         assert result.agents[custom_id].subcategory == "My Custom Agents"
+
+    def test_get_registry_metadata_inherits_template_envelope_for_custom_agent(self, monkeypatch):
+        """Custom extraction agents should inherit template envelope authoring metadata."""
+        import asyncio
+        from src.api import agent_studio as api_module
+
+        fake_custom = SimpleNamespace(
+            id="22222222-3333-4444-5555-666666666666",
+            user_id=123,
+            template_source="gene_extractor",
+            category="Extraction",
+            name="Custom Gene Extractor",
+            icon=None,
+        )
+        monkeypatch.setattr(api_module, "list_custom_agents_visible_to_user", lambda _db, _uid: [fake_custom])
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "make_custom_agent_id",
+            lambda custom_id: f"ca_{custom_id}",
+        )
+
+        result = asyncio.run(
+            api_module.get_registry_metadata(
+                user={"sub": "test-sub", "email": "test@example.org"},
+                db=SimpleNamespace(),
+            )
+        )
+
+        custom_id = "ca_22222222-3333-4444-5555-666666666666"
+        template = result.agents["gene_extractor"]
+        custom = result.agents[custom_id]
+
+        assert custom.validation_attachments
+        assert custom.validation_attachments == template.validation_attachments
+        assert custom.domain_envelope is not None
+        assert custom.domain_envelope == template.domain_envelope
+        assert custom.domain_envelope["domain_pack_id"] == "gene"
+        assert custom.domain_envelope["validation_summary"]["default_enabled"] >= 1
 
     def test_merge_custom_agents_into_catalog(self, monkeypatch):
         """Catalog augmentation should add custom agents under a custom subcategory."""
