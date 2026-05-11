@@ -1024,7 +1024,6 @@ def _get_current_flow_handler():
                         for attachment in validation_attachments
                         if attachment.get("state") == "active"
                         and not attachment.get("enabled")
-                        and (attachment.get("required") or attachment.get("export_blocking"))
                     ]
                     planned = [
                         attachment
@@ -1039,7 +1038,7 @@ def _get_current_flow_handler():
                     markdown_lines.append(
                         "- **Validation Attachments:** "
                         f"{len(active_enabled)} active scheduled"
-                        + (f", {len(opted_out)} opted out with policy reason" if opted_out else "")
+                        + (f", {len(opted_out)} opted out" if opted_out else "")
                         + (f", {len(planned)} planned" if planned else "")
                         + (f", {len(blocked)} blocked" if blocked else "")
                     )

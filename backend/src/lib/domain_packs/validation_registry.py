@@ -88,7 +88,7 @@ class ValidatorBinding:
     blocked_by: str | None = None
     reason: str | None = None
     blocking: bool = False
-    required: bool = True
+    required: bool = False
     allow_opt_out: bool = False
     opt_out_reason_required: bool = False
     required_only: bool = False
@@ -626,7 +626,7 @@ def _collect_validator_bindings(
         blocking = _optional_bool(raw_item.get("blocking"))
         required = _optional_bool_with_default(
             raw_item.get("required"),
-            state is ValidationBindingState.ACTIVE,
+            False,
         )
         allow_opt_out = _optional_bool_with_default(
             raw_item.get("allow_opt_out"),
@@ -652,9 +652,7 @@ def _collect_validator_bindings(
                 allow_opt_out=allow_opt_out,
                 opt_out_reason_required=_optional_bool_with_default(
                     raw_item.get("opt_out_reason_required"),
-                    state is ValidationBindingState.ACTIVE
-                    and allow_opt_out
-                    and (required or blocking),
+                    False,
                 ),
                 required_only=_optional_bool(raw_item.get("required_only")),
                 applies_to_domain_pack_id=_optional_string(
@@ -1145,9 +1143,7 @@ def _binding_attachment_option(
     required = active and binding.required
     blocks_export = active and bool(export_blocking)
     allow_opt_out = active and binding.allow_opt_out
-    opt_out_reason_required = active and allow_opt_out and (
-        binding.opt_out_reason_required or required or blocks_export
-    )
+    opt_out_reason_required = active and allow_opt_out and binding.opt_out_reason_required
 
     validator_id = (
         binding.validator
@@ -1184,7 +1180,7 @@ def _binding_attachment_option(
         reason=binding.reason,
         required=required,
         export_blocking=blocks_export,
-        default_enabled=active and required,
+        default_enabled=active,
         allow_opt_out=allow_opt_out,
         opt_out_reason_required=opt_out_reason_required,
     )

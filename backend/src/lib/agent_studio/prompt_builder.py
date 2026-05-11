@@ -666,7 +666,7 @@ This tool returns:
 5. **Missing Agents** - Any important processing steps absent?
 6. **Redundant Steps** - Any agents called unnecessarily?
 7. **Domain Envelope Production** - Which extraction nodes produce domain-envelope objects, which object types/field paths they create, and which schema/provider refs define them?
-8. **Automatic Validation Semantics** - Which validators are active and default-enabled, which custom validators are scheduled, which required/export-blocking validators are present, and which validators are planned or blocked metadata only?
+8. **Automatic Validation Semantics** - Which validators are active and default-enabled, which custom validators are scheduled, which validators are export-blocking or explicitly locked, and which validators are planned or blocked metadata only?
 9. **Curator Validation Choices** - Which active validations were opted out, whether the policy permits that opt-out, whether a reason is required, and how those choices affect review/export readiness?
 
 **CRITICAL for item 4:** You MUST actually call `get_prompt` for each agent with custom instructions to perform the comparison. Do NOT skip this step or guess based on agent name alone.

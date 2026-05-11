@@ -27,7 +27,8 @@ payloads are projections over envelope objects at a known revision.
 Validation is metadata-driven. Active validators can run automatically, planned
 and blocked validators are surfaced as findings/metadata, and required or
 export-blocking fields become readiness blockers unless policy allows a curator
-override with any required reason.
+override. Opt-out reasons are optional unless a specific binding sets
+`opt_out_reason_required: true`.
 
 When adding or changing Alliance packs, update the matching contract tests under
 `backend/tests/contract/alliance/domain_packs/` and fixture examples under

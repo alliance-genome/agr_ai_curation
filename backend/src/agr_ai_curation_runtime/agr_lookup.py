@@ -403,7 +403,7 @@ def lookup_explanation(
         )
     if lookup_status == LOOKUP_STATUS_BLOCKED:
         return (
-            f"{method} was not executed for {target!r} because a required validator "
+            f"{method} was not executed for {target!r} because a configured validator "
             "or runtime prerequisite is blocked."
         )
     if lookup_status == LOOKUP_STATUS_UNDER_DEVELOPMENT:

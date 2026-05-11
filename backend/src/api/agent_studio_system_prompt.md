@@ -83,7 +83,7 @@ Domain envelopes separate:
 3. **Curation layer** - curator edits, opt-outs, repair events, and checkpoints are recorded as history and metadata.
 4. **Projection/export layer** - review rows, files, and submission payloads are materialized projections from envelope objects.
 
-Validation is metadata-driven from domain packs and supervisor scheduling. Active default validators run automatically on extraction nodes; required or export-blocking validators cannot be silently disabled; custom validation selections and allowed opt-outs affect later review/export readiness; planned or blocked validators remain explanatory metadata, not scheduled work.
+Validation is metadata-driven from domain packs and supervisor scheduling. Active default validators run automatically on extraction nodes, and curators can uncheck them when they are replacing automatic validation with custom validation. A validator is locked or requires an opt-out reason only when domain-pack metadata explicitly says so. Planned or blocked validators remain explanatory metadata, not scheduled work.
 
 Validation findings are written back into envelopes. Validation repair is supervisor-driven and should be explained through repair attempts and history events. `lookup_attempts` is an audit trail: it may include transient failed attempts even when the top-level lookup result or projection status succeeds after retry. Always distinguish the final outcome from the audit trail.
 

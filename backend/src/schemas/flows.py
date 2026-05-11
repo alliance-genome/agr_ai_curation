@@ -52,7 +52,7 @@ class FlowValidationAttachmentSelection(BaseModel):
 
     @model_validator(mode="after")
     def validate_attachment_policy(self) -> "FlowValidationAttachmentSelection":
-        """Enforce required/export-blocking opt-out policy at persistence time."""
+        """Enforce explicit validator opt-out policy at persistence time."""
 
         normalized_reason = (
             self.opt_out_reason.strip()
@@ -70,16 +70,16 @@ class FlowValidationAttachmentSelection(BaseModel):
         if (
             self.state == "active"
             and not self.enabled
-            and (self.required or self.export_blocking)
+            and self.default_enabled
         ):
             if not self.allow_opt_out:
                 raise ValueError(
-                    "required or export-blocking validators cannot be disabled"
+                    "this validator cannot be disabled by flow configuration"
                 )
             if self.opt_out_reason_required and not normalized_reason:
                 raise ValueError(
-                    "opt_out_reason is required when disabling a required "
-                    "or export-blocking validator"
+                    "opt_out_reason is required by validator policy when "
+                    "disabling this validator"
                 )
 
         self.opt_out_reason = normalized_reason

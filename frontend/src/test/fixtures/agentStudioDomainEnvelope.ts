@@ -19,11 +19,11 @@ export function buildValidationAttachmentOption(
     object_type: 'gene_mention_evidence',
     field_path: 'gene_symbol',
     label: 'Gene lookup',
-    required: true,
+    required: false,
     export_blocking: true,
     default_enabled: true,
     allow_opt_out: true,
-    opt_out_reason_required: true,
+    opt_out_reason_required: false,
     ...overrides,
   }
 }
@@ -120,7 +120,7 @@ export function buildDomainEnvelopeMetadata(
       by_state: { active: 1, planned: 0, blocked: 0 },
       by_scope: { pack: 0, object: 0, field: 1 },
       default_enabled: 1,
-      required: 1,
+      required: 0,
       export_blocking: 1,
       opt_out_allowed: 1,
     },

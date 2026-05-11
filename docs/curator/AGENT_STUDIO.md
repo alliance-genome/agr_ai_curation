@@ -104,13 +104,14 @@ This is especially valuable when building new flows or troubleshooting ones that
 **Automatic Validation Attachments**
 
 When an extraction agent declares domain-pack validation metadata, Flow Builder
-attaches the default active validators to the extraction node. Required and
-export-blocking validators are enabled by default. Active validators can normally
-be unchecked when you are replacing automatic validation with a custom validation
-step for the same field or object; if a reason is required, the flow cannot be
-saved until you enter one. Validators explicitly marked by the domain pack as
-not allowing opt-out stay locked on. Planned or blocked validators are shown as
-metadata so you know why they will not run.
+attaches the default active validators to the extraction node. Active validators
+are enabled by default and can normally be unchecked when you are replacing
+automatic validation with a custom validation step for the same field or object.
+Most opt-outs do not require a reason; if a
+specific validator does, the flow cannot be saved until you enter one.
+Validators explicitly marked by the domain pack as not allowing opt-out stay
+locked on. Planned or blocked validators are shown as metadata so you know why
+they will not run.
 
 To add a custom validation step, place a data-validation agent after the
 extractor and use its steering prompt to name the envelope object, field path, or

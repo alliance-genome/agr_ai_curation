@@ -100,7 +100,7 @@ Tools for understanding, building, and improving AI behavior:
 - Build visual workflows with drag-and-drop
 - Chain 15 agents together (PDF extraction, validation, output)
 - See domain-envelope object and validation metadata for extraction agents
-- Keep automatic validators enabled by default, or opt out only where policy allows a saved reason
+- Keep automatic validators enabled by default, or uncheck them when replacing automatic validation with custom validation
 - Output to chat, CSV, TSV, or JSON files
 - Use "Verify with Claude" to check your flow before running
 - Save and reuse flows across documents
@@ -130,7 +130,7 @@ check the current envelope revision before sending data anywhere. If an object i
 missing required fields, has unresolved validation findings, uses draft
 definitions, or needs missing context, the preview shows a readiness blocker.
 Curator overrides only unblock export when the domain-pack policy allows the
-override and any required reason has been saved.
+override. A reason is saved only when that specific policy requires one.
 
 ## Available Agents
 

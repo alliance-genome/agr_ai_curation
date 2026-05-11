@@ -80,7 +80,7 @@ describe('NodeEditor', () => {
     expect(onViewDomainEnvelope).toHaveBeenCalledWith('node_1')
   })
 
-  it('persists allowed validation opt-outs with a curator reason', () => {
+  it('persists allowed validation opt-outs without requiring a curator reason', () => {
     metadataMocks.agents = {
       gene_extractor: {
         name: 'Gene Extractor',
@@ -101,23 +101,46 @@ describe('NodeEditor', () => {
     )
 
     fireEvent.click(screen.getByRole('checkbox'))
-    fireEvent.change(screen.getByPlaceholderText('Reason for disabling this validator'), {
-      target: { value: 'Manual curator lookup is required for this paper.' },
-    })
+    expect(screen.queryByPlaceholderText('Reason for disabling this validator')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
 
-    expect(onSave).toHaveBeenCalledWith(
-      'node_1',
-      expect.objectContaining({
-        validation_attachments: [
-          expect.objectContaining({
-            attachment_id: 'gene:lookup',
-            enabled: false,
-            opt_out_reason: 'Manual curator lookup is required for this paper.',
-          }),
-        ],
-      })
+    expect(onSave).toHaveBeenCalledWith('node_1', expect.any(Object))
+    const savedAttachment = onSave.mock.calls[0][1].validation_attachments[0]
+    expect(savedAttachment).toEqual(expect.objectContaining({
+      attachment_id: 'gene:lookup',
+      enabled: false,
+    }))
+    expect(savedAttachment).not.toHaveProperty('opt_out_reason')
+  })
+
+  it('requires a reason only when the attachment policy explicitly asks for one', () => {
+    metadataMocks.agents = {
+      gene_extractor: {
+        name: 'Gene Extractor',
+        icon: 'G',
+        category: 'Extraction',
+        domain_envelope: buildDomainEnvelopeMetadata(),
+      },
+    }
+    const onSave = vi.fn()
+
+    render(
+      <NodeEditor
+        node={buildNode({
+          validation_attachments: [
+            buildValidationAttachmentSelection({ opt_out_reason_required: true }),
+          ],
+        })}
+        onSave={onSave}
+        onClose={vi.fn()}
+        availableVariables={[]}
+      />
     )
+
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+    expect(onSave).not.toHaveBeenCalled()
+    expect(screen.getByText('A reason is required for this opt-out.')).toBeInTheDocument()
   })
 
   it('labels validation agent instructions as a steering prompt', () => {

@@ -254,7 +254,7 @@ runtime/packages/org-custom/domain_packs/my_domain/
 ```
 
 Use `domain_pack.yaml` for object definitions, field paths, schema/provider
-refs, validator bindings, required/export-blocking policy, repair hints,
+refs, validator bindings, field/export readiness policy, repair hints,
 workspace display metadata, and export/submission behavior. Extraction agents
 link to the pack through `agent.yaml` curation metadata.
 

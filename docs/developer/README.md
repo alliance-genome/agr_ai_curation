@@ -134,7 +134,7 @@ expected revision. Do not add new behavior that treats prep candidates,
 normalized payloads, or materialized review rows as a parallel semantic store.
 
 Use domain-pack metadata for curatable object definitions, field paths, schema
-refs, validator bindings, required/export-blocking policy, opt-out policy,
+refs, validator bindings, field/export readiness policy, validator opt-out policy,
 workspace display, and export/submission behavior. Shared runtime code must stay
 provider-agnostic; Alliance LinkML, curation DB projections, and package-specific
 adapters belong in `packages/alliance/`.

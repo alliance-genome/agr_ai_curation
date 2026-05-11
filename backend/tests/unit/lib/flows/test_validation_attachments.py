@@ -64,7 +64,7 @@ def test_catalog_exposes_multiple_validation_options_for_extraction_agent():
     assert any(option["default_enabled"] for option in options if option["state"] == "active")
 
 
-def test_apply_defaults_selects_required_active_and_keeps_planned_blocked_visible():
+def test_apply_defaults_selects_active_and_keeps_planned_blocked_visible():
     flow = _flow_definition()
 
     hydrated = apply_flow_validation_attachment_defaults(flow)
@@ -94,14 +94,14 @@ def test_apply_defaults_preserves_allowed_opt_out_reason():
         _flow_definition("fixture_extractor"),
         agent_registry=agent_registry,
     )
-    required_attachment = next(
+    opt_out_attachment = next(
         attachment
         for attachment in initial.nodes[1].data.validation_attachments
-        if attachment.state == "active" and attachment.required and attachment.allow_opt_out
+        if attachment.state == "active" and attachment.allow_opt_out
     )
 
-    required_attachment.enabled = False
-    required_attachment.opt_out_reason = "Curator confirmed this paper needs manual lookup."
+    opt_out_attachment.enabled = False
+    opt_out_attachment.opt_out_reason = "Curator confirmed this paper needs manual lookup."
 
     hydrated = apply_flow_validation_attachment_defaults(
         _flow_definition(
@@ -113,7 +113,7 @@ def test_apply_defaults_preserves_allowed_opt_out_reason():
     updated_attachment = next(
         attachment
         for attachment in hydrated.nodes[1].data.validation_attachments
-        if attachment.attachment_id == required_attachment.attachment_id
+        if attachment.attachment_id == opt_out_attachment.attachment_id
     )
 
     assert updated_attachment.enabled is False

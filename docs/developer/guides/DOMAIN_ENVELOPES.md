@@ -213,8 +213,8 @@ expected revision. Readiness blockers can come from:
 
 Readiness blockers carry `envelope_id`, `object_id`, `field_path`, severity,
 status, code, message, provider refs, projection refs, and details. Curator
-overrides only unblock when metadata or field policy allows the override and any
-required reason is present.
+overrides only unblock when metadata or field policy allows the override. A
+reason is required only when that specific policy explicitly asks for one.
 
 Export and direct submission payloads include:
 
@@ -244,11 +244,11 @@ Flow Builder validation attachments are derived from domain-pack metadata.
 Defaults are applied to extraction nodes by
 `apply_flow_validation_attachment_defaults()`. Active default validators run
 automatically. Planned and blocked validators remain visible metadata. Active
-validators are curator-opt-out by default so a flow can replace automatic
-validation with a custom validation step; domain packs may explicitly forbid an
-opt-out with `allow_opt_out: false`. Required or export-blocking validators
-cannot be silently disabled and require a saved reason unless the domain-pack
-metadata explicitly forbids opt-out.
+validators are enabled by default and curator-opt-out by default so a flow can
+replace automatic validation with a custom validation step. Domain packs may
+explicitly forbid an opt-out with `allow_opt_out: false`.
+`opt_out_reason_required: true` is reserved for the uncommon cases where a pack
+deliberately wants a saved reason.
 
 Custom validation agents are regular flow steps. Their steering prompts are
 stored as normal node configuration and should target envelope objects, field

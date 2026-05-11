@@ -129,11 +129,11 @@ what will happen when the flow runs:
 - **planned** - declared by metadata, but not run yet.
 - **blocked** - declared by metadata, but blocked by another dependency.
 
-Required and export-blocking active validators are enabled by default. Active
-validators can normally be unchecked when you plan to add a custom validation
-step for the same field or object. If a reason is required, save the reason in
-the same panel before saving the flow. Validators that the domain pack marks as
-not allowing opt-out stay locked on.
+Active validators are enabled by default. They can normally be unchecked when you
+plan to add a custom validation step for the same field or object. Most opt-outs
+do not require a reason. If a specific validator does require one, save the
+reason in the same panel before saving the flow. Validators that the domain pack
+marks as not allowing opt-out stay locked on.
 
 To add a custom validation step, add a validation agent after the extraction
 node. Use its steering prompt to point at the envelope object, field path, or
@@ -316,7 +316,7 @@ readiness policy.
 
 If blockers appear, resolve the listed object/field issue before final export or
 submission. Curator overrides only work when the domain-pack policy allows them
-and any required reason has been saved.
+and a reason has been saved only when that specific policy requires one.
 
 ## Example Workflows
 

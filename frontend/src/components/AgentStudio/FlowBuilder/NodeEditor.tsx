@@ -164,7 +164,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
     (attachment) => (
       attachment.state === 'active'
       && !attachment.enabled
-      && (attachment.required || attachment.export_blocking)
       && attachment.allow_opt_out
       && attachment.opt_out_reason_required
       && !attachment.opt_out_reason?.trim()
@@ -432,17 +431,15 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
               </FieldLabel>
               <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                 {validationAttachments.map((attachment) => {
-                  const isRequiredPolicy = attachment.required || attachment.export_blocking
                   const hasBinding = Boolean(attachment.validator_binding_id)
                   const canToggle = attachment.state === 'active'
                     && hasBinding
-                    && (!isRequiredPolicy || attachment.allow_opt_out)
+                    && attachment.allow_opt_out
                   const showReason = attachment.state === 'active'
                     && !attachment.enabled
-                    && isRequiredPolicy
                     && attachment.allow_opt_out
-                  const reasonError = showReason
                     && attachment.opt_out_reason_required
+                  const reasonError = showReason
                     && !attachment.opt_out_reason?.trim()
                   const stateColor: 'success' | 'warning' | 'error' = attachment.state === 'active'
                     ? 'success'
@@ -490,15 +487,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                                 sx={{ height: 18, fontSize: '0.6rem' }}
                               />
                             )}
-                            {attachment.required && (
-                              <Chip
-                                size="small"
-                                color="primary"
-                                variant="outlined"
-                                label="required"
-                                sx={{ height: 18, fontSize: '0.6rem' }}
-                              />
-                            )}
                           </Box>
                           <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
                             {[attachment.object_type, attachment.field_path].filter(Boolean).join(' / ') || attachment.scope}
@@ -513,9 +501,9 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                               Planned metadata only
                             </Typography>
                           )}
-                          {isRequiredPolicy && !attachment.allow_opt_out && attachment.state === 'active' && (
+                          {attachment.state === 'active' && !attachment.allow_opt_out && (
                             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
-                              Required by policy
+                              Locked by policy
                             </Typography>
                           )}
                           {!hasBinding && (

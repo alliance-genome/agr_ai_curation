@@ -133,7 +133,8 @@ Domain-envelope tests should cover the implemented contract, not design notes:
 - `DomainPackMetadata` validation for object definitions, field definitions,
   schema refs, fixture packs, and metadata references.
 - `DomainPackValidationRegistry` normalization of active/planned/blocked
-  validators, required/export-blocking policies, and opt-out policy.
+  validators, default-enabled attachment policy, export-blocking policy, and
+  explicit opt-out locks or reason requirements.
 - `run_validation_supervisor()` behavior for required fields, planned/blocked
   findings, active bindings, dispatch-unavailable findings, and stable finding
   IDs.

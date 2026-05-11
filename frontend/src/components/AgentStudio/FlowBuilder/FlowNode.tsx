@@ -172,9 +172,6 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
   const scheduledValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'active' && attachment.enabled
   ).length
-  const requiredValidationCount = validationAttachments.filter(
-    (attachment) => attachment.state === 'active' && attachment.enabled && attachment.required
-  ).length
   const exportBlockingValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'active' && attachment.enabled && attachment.export_blocking
   ).length
@@ -234,9 +231,6 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
                 {scheduledValidationCount} active validation
                 {scheduledValidationCount === 1 ? '' : 's'}
               </ValidationPill>
-            )}
-            {requiredValidationCount > 0 && (
-              <ValidationPill>{requiredValidationCount} required</ValidationPill>
             )}
             {exportBlockingValidationCount > 0 && (
               <ValidationPill>{exportBlockingValidationCount} export-blocking</ValidationPill>

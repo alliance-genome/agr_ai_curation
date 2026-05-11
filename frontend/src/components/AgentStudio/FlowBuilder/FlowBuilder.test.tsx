@@ -312,7 +312,7 @@ describe('FlowBuilder', () => {
             export_blocking: true,
             default_enabled: true,
             allow_opt_out: true,
-            opt_out_reason_required: true,
+            opt_out_reason_required: false,
           },
           {
             attachment_id: 'agr.alliance.allele:metadata:future',

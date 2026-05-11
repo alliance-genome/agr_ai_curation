@@ -253,7 +253,7 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     ]
     assert identifier_option.state is ValidationBindingState.ACTIVE
     assert identifier_option.field_path == "gene.identifier"
-    assert identifier_option.required is True
+    assert identifier_option.required is False
     assert identifier_option.export_blocking is True
     assert identifier_option.default_enabled is True
     assert identifier_option.allow_opt_out is True
@@ -262,16 +262,16 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     callable_option = by_id[
         "fixture.validation:binding:fixture.callable_validator:object:GeneAssertion:*"
     ]
-    assert callable_option.required is True
+    assert callable_option.required is False
     assert callable_option.default_enabled is True
     assert callable_option.allow_opt_out is True
-    assert callable_option.opt_out_reason_required is True
+    assert callable_option.opt_out_reason_required is False
 
     optional_option = by_id[
         "fixture.validation:binding:fixture.optional_confidence_check:field:GeneAssertion:confidence"
     ]
     assert optional_option.required is False
-    assert optional_option.default_enabled is False
+    assert optional_option.default_enabled is True
     assert optional_option.allow_opt_out is True
 
     planned_option = by_id[

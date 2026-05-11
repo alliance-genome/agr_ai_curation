@@ -627,7 +627,6 @@ metadata:
             - curie
         blocking: true
         allow_opt_out: true
-        opt_out_reason_required: true
     planned:
       - binding_id: chemical_condition.chebi_api_lookup
         validation_kind: external_ontology_lookup
