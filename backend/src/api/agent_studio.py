@@ -2106,7 +2106,7 @@ async def _handle_tool_call(
             session_id=tool_input.get("session_id"),
             candidate_ids=candidate_ids,
             expected_envelope_revisions=expected_revisions,
-            mode=tool_input.get("mode"),
+            mode=tool_input.get("mode", "readiness"),
         )
 
     elif tool_name == "refresh_workshop_prompt":

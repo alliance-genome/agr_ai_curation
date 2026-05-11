@@ -685,7 +685,7 @@ This tool returns:
 **Initial Instructions should specify:**
 - What to extract (e.g., "Extract all alleles mentioned in this paper")
 - What data categories to capture (e.g., "For each allele, capture: parent gene symbol, allele identifier, phenotype description")
-- Any validation steering or curator choices (e.g., "Run default Alliance validation and explain any opt-outs")
+- Any validation steering or curator choices (e.g., "Run default validation and explain any opt-outs")
 
 **When exporting to file (CSV/TSV/JSON):**
 - The Initial Instructions should define WHAT data to collect

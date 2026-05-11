@@ -417,7 +417,7 @@ def get_export_submission_readiness(
     session_id: str,
     candidate_ids: Sequence[str] | None = None,
     expected_envelope_revisions: Mapping[str, int] | None = None,
-    mode: str | None = None,
+    mode: str = "readiness",
 ) -> dict[str, Any]:
     """Inspect current export/submission readiness without executing submission."""
 
@@ -465,7 +465,7 @@ def get_export_submission_readiness(
         return {
             "success": True,
             "session_id": normalized_session_id,
-            "mode": _optional_text(mode) or "readiness",
+            "mode": _required_text(mode, "mode"),
             "candidate_count": len(readiness),
             "ready_count": sum(1 for item in readiness if item.get("ready") is True),
             "blocker_count": len(blockers),
@@ -836,10 +836,7 @@ def _lookup_attempt_summary(
             attempts=attempts,
         )
 
-    statuses = Counter(
-        str(attempt.get("lookup_status") or attempt.get("status") or "unknown")
-        for attempt in attempts
-    )
+    statuses = Counter(_lookup_attempt_status(attempt) for attempt in attempts)
     return {
         "attempt_count": len(attempts),
         "by_status": dict(sorted(statuses.items())),
@@ -899,7 +896,22 @@ def _lookup_attempt_payload(attempt: Mapping[str, Any], path: str) -> dict[str, 
         if key in attempt and attempt[key] not in (None, "")
     }
     payload["path"] = path
-    return _bounded_json(payload)
+    bounded = _bounded_json(payload)
+    if isinstance(bounded, dict) and bounded.get("_truncated"):
+        bounded["path"] = path
+        for status_key in ("lookup_status", "status"):
+            if status_key in payload:
+                bounded[status_key] = payload[status_key]
+    return bounded
+
+
+def _lookup_attempt_status(attempt: Mapping[str, Any]) -> str:
+    for status_key in ("lookup_status", "status"):
+        status = _optional_text(attempt.get(status_key))
+        if status is not None:
+            return status
+    path = _optional_text(attempt.get("path")) or "<unknown lookup_attempt path>"
+    raise ValueError(f"Lookup attempt at {path} is missing lookup_status/status.")
 
 
 def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:
@@ -989,7 +1001,15 @@ def _group_by_string_key(
 ) -> dict[str, list[Mapping[str, Any]]]:
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for item in items:
-        value = str(item.get(key) or "unknown")
+        value = _optional_text(item.get(key))
+        if value is None:
+            item_id = (
+                _optional_text(item.get("attachment_id"))
+                or _optional_text(item.get("validator_binding_id"))
+                or _optional_text(item.get("validator_id"))
+                or "<unidentified item>"
+            )
+            raise ValueError(f"Item {item_id} is missing required grouping key: {key}")
         grouped.setdefault(value, []).append(item)
     return grouped
 

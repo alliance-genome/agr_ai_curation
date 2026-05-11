@@ -402,7 +402,7 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
                 object_type="gene",
                 object_id="obj-1",
                 payload={
-                    "primary_external_id": "WB:WBGene00000001",
+                    "primary_external_id": "GENE:00000001",
                     "lookup_status": "success",
                     "lookup_attempts": [
                         {
@@ -413,7 +413,7 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
                         {
                             "lookup_status": "success",
                             "attempted_query": {"symbol": "unc-54"},
-                            "resolved_id": "WB:WBGene00000001",
+                            "resolved_id": "GENE:00000001",
                             "resolved_label": "unc-54",
                         },
                     ],
@@ -431,7 +431,7 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
                 {
                     "lookup_status": "success",
                     "target_projection": "gene:unc-54",
-                    "resolved_id": "WB:WBGene00000001",
+                    "resolved_id": "GENE:00000001",
                 }
             ],
         },
@@ -449,6 +449,49 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
     assert "final outcome" in summary["interpretation"]
 
 
+def test_lookup_attempt_summary_rejects_attempts_without_status():
+    envelope = DomainEnvelope(
+        envelope_id="env-lookup-missing-status",
+        domain_pack_id="alliance_gene",
+        status=DomainEnvelopeStatus.VALIDATED,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="gene",
+                object_id="obj-1",
+                payload={
+                    "lookup_attempts": [
+                        {"attempted_query": {"symbol": "unc-54"}},
+                    ],
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "Lookup attempt at "
+            r"envelope.objects\[0\].payload.lookup_attempts\[0\] "
+            "is missing lookup_status/status"
+        ),
+    ):
+        domain_tools._lookup_attempt_summary(
+            envelope=envelope,
+            projection_rows=[],
+        )
+
+
+def test_group_by_string_key_rejects_missing_grouping_key():
+    with pytest.raises(
+        ValueError,
+        match="Item active-binding is missing required grouping key: state",
+    ):
+        domain_tools._group_by_string_key(
+            [{"attachment_id": "active-binding", "validator_id": "validator-1"}],
+            "state",
+        )
+
+
 def test_repair_attempt_summary_exposes_attempts_classifications_and_history_events():
     envelope = DomainEnvelope(
         envelope_id="env-repair",
@@ -457,7 +500,7 @@ def test_repair_attempt_summary_exposes_attempts_classifications_and_history_eve
             CuratableObjectEnvelope(
                 object_type="gene",
                 object_id="obj-1",
-                payload={"primary_external_id": "WB:WBGene00000001"},
+                payload={"primary_external_id": "GENE:00000001"},
             )
         ],
         metadata={

@@ -431,7 +431,7 @@ LIST_DOMAIN_ENVELOPES_TOOL = {
             },
             "domain_pack_id": {
                 "type": "string",
-                "description": "Optional domain pack ID, such as an Alliance domain pack key.",
+                "description": "Optional domain pack ID to filter results.",
             },
             "limit": {
                 "type": "integer",
@@ -563,6 +563,7 @@ GET_EXPORT_SUBMISSION_READINESS_TOOL = {
             "mode": {
                 "type": "string",
                 "description": "Optional label for the readiness check, such as export or submission.",
+                "default": "readiness",
             },
         },
         "required": ["session_id"],
