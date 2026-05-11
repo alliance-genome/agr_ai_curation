@@ -197,7 +197,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
   const [copied, setCopied] = useState(false)
   const [prevSessionId, setPrevSessionId] = useState<string | null>(sessionId)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const processedEventIndicesRef = useRef<Set<number>>(new Set())
+  const processedEventCountRef = useRef(0)
   const copiedResetTimeoutRef = useRef<number | null>(null)
 
   /**
@@ -247,8 +247,8 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
         setEvents([])
       }
       setPrevSessionId(sessionId)
-      // Reset processed events tracker for new session
-      processedEventIndicesRef.current = new Set()
+      // Reset processed events tracker for new session.
+      processedEventCountRef.current = 0
       setCopied(false)
     }
   }, [sessionId, prevSessionId, storageUserId])
@@ -287,8 +287,12 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
 
   // T027: Process SSE events and add audit events to state
   useEffect(() => {
-    // Process only new events
-    const newEvents = sseEvents.slice(processedEventIndicesRef.current.size)
+    // Process only new events. If the shared stream was reset for a fresh
+    // run, the processed counter may point past the new array length.
+    if (processedEventCountRef.current > sseEvents.length) {
+      processedEventCountRef.current = 0
+    }
+    const newEvents = sseEvents.slice(processedEventCountRef.current)
 
     newEvents.forEach((sseEvent: SSEEvent) => {
       // Filter for audit event types only
@@ -323,7 +327,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
     })
 
     // Mark all events as processed
-    processedEventIndicesRef.current = new Set(Array.from({ length: sseEvents.length }, (_, i) => i))
+    processedEventCountRef.current = sseEvents.length
   }, [sseEvents, sessionId, isAuditEvent])
 
   // Auto-scroll to bottom when new events arrive
@@ -374,7 +378,7 @@ const AuditPanel: React.FC<AuditPanelProps> = ({
     // Mark all current SSE events as processed to prevent them from being re-added
     // This preserves the "most recent index processed" marker so the effect sees
     // no new items after a clear and leaves the panel empty until fresh events arrive
-    processedEventIndicesRef.current = new Set(Array.from({ length: sseEvents.length }, (_, i) => i))
+    processedEventCountRef.current = sseEvents.length
 
     // Call optional callback if provided
     if (onClear) {

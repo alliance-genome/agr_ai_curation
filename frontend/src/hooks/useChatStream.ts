@@ -143,9 +143,9 @@ export function useChatStream(): UseChatStreamReturn {
     setIsLoading(true)
     setError(null)
 
-    // Emit immediate "initializing" event so user sees feedback right away
-    setEvents(prev => [
-      ...prev,
+    // Start each run with a fresh stream so consumers do not have to reconcile
+    // stale events from prior turns before processing the new audit trail.
+    setEvents([
       {
         type: 'AGENT_GENERATING',
         session_id: sessionId,
@@ -264,9 +264,9 @@ export function useChatStream(): UseChatStreamReturn {
     setIsLoading(true)
     setError(null)
 
-    // Emit initializing event
-    setEvents(prev => [
-      ...prev,
+    // Start each flow execution with a fresh stream for the same reason as
+    // normal chat sends: right-panel consumers should only process this run.
+    setEvents([
       {
         type: 'AGENT_GENERATING',
         session_id: sessionId,

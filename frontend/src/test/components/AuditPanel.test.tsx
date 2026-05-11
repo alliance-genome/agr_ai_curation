@@ -215,6 +215,91 @@ describe('AuditPanel - Event Display (T018)', () => {
       ).toBeInTheDocument()
     })
   })
+
+  it('continues processing audit events after the shared SSE stream is reset', async () => {
+    const firstRunEvents = [
+      {
+        type: 'AGENT_GENERATING' as const,
+        timestamp: '2026-05-11T18:00:00.000Z',
+        session_id: 'session123',
+        details: {
+          agentRole: 'System',
+          agentDisplayName: 'System',
+          message: 'Initializing AI agents',
+        },
+      },
+      {
+        type: 'SUPERVISOR_START' as const,
+        timestamp: '2026-05-11T18:00:01.000Z',
+        session_id: 'session123',
+        details: { message: 'Processing first run' },
+      },
+      {
+        type: 'CREW_START' as const,
+        timestamp: '2026-05-11T18:00:02.000Z',
+        session_id: 'session123',
+        details: {
+          crewName: 'Query Supervisor',
+          crewDisplayName: 'Query Supervisor',
+          agents: ['Query Supervisor'],
+        },
+      },
+    ]
+
+    const { rerender } = render(
+      <AuditPanel sessionId="session123" sseEvents={firstRunEvents} />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('[SUPERVISOR] Processing first run')).toBeInTheDocument()
+    })
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[
+          {
+            type: 'AGENT_GENERATING',
+            timestamp: '2026-05-11T18:01:00.000Z',
+            session_id: 'session123',
+            details: {
+              agentRole: 'System',
+              agentDisplayName: 'System',
+              message: 'Initializing AI agents',
+            },
+          },
+        ]}
+      />
+    )
+
+    rerender(
+      <AuditPanel
+        sessionId="session123"
+        sseEvents={[
+          {
+            type: 'AGENT_GENERATING',
+            timestamp: '2026-05-11T18:01:00.000Z',
+            session_id: 'session123',
+            details: {
+              agentRole: 'System',
+              agentDisplayName: 'System',
+              message: 'Initializing AI agents',
+            },
+          },
+          {
+            type: 'SUPERVISOR_START',
+            timestamp: '2026-05-11T18:01:01.000Z',
+            session_id: 'session123',
+            details: { message: 'Processing second run' },
+          },
+        ]}
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText('[SUPERVISOR] Processing second run')).toBeInTheDocument()
+    })
+  })
 })
 
 // ===================================================================
