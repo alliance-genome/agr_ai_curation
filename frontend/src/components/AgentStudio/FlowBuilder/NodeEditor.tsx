@@ -31,8 +31,10 @@ import DeleteIcon from '@mui/icons-material/Delete'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import DescriptionIcon from '@mui/icons-material/Description'
 
+import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
 import type { NodeEditorProps, InputSource, ValidationAttachmentSelection } from './types'
 import {
+  isValidationAgentFromMetadata,
   isOutputFormatterAgentFromMetadata,
   resolveOutputFormatterIncludeEvidence,
 } from './agentMetadataUtils'
@@ -136,6 +138,10 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   // Check if this is a PDF agent (input source is hardcoded to PDF document)
   const isPdfAgent = node?.data.agent_id === 'pdf_extraction'
   const agentMetadataEntry = node ? agentMetadata[node.data.agent_id] : undefined
+  const domainEnvelopeMetadata = agentMetadataEntry?.domain_envelope
+  const isValidationAgentNode = node
+    ? isValidationAgentFromMetadata(node.data.agent_id, agentMetadata)
+    : false
   const supportsOutputFormatting = node
     ? isOutputFormatterAgentFromMetadata(node.data.agent_id, agentMetadata)
     : false
@@ -143,6 +149,12 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
     new Set([...availableVariables, ...BUILT_IN_TEMPLATE_VARIABLES])
   )
   const customInputError = inputSource === 'custom' && !customInput.trim()
+  const customInstructionsLabel = isValidationAgentNode
+    ? 'Validation Steering Prompt (Optional)'
+    : 'Custom Instructions (Optional)'
+  const customInstructionsTooltip = isValidationAgentNode
+    ? 'Use this prompt to focus a validation agent on a specific envelope object, field path, or curator concern. It is saved with this flow step.'
+    : 'These instructions take the highest priority and override the agent\'s base prompt and group rules for this flow step. Use them to add constraints or focus the agent\'s behavior.'
   const missingOptOutReason = validationAttachments.some(
     (attachment) => (
       attachment.state === 'active'
@@ -288,6 +300,30 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           </Alert>
         )}
 
+        {domainEnvelopeMetadata && (
+          <DomainEnvelopeMetadataPanel
+            metadata={domainEnvelopeMetadata}
+            validationAttachments={validationAttachments}
+            compact
+            validationModeNote="Active default validators run automatically for this extraction step. Add a Data Validation agent after the extractor for custom checks; its steering prompt is saved as normal flow node configuration."
+          />
+        )}
+
+        {isValidationAgentNode && (
+          <Alert
+            severity="info"
+            sx={{
+              py: 0.5,
+              px: 1.5,
+              fontSize: '0.75rem',
+              '& .MuiAlert-message': { padding: 0 },
+              '& .MuiAlert-icon': { mr: 1, py: 0 },
+            }}
+          >
+            Custom validation agents persist as regular flow steps. Use the steering prompt to target the envelope object, field path, or validation question.
+          </Alert>
+        )}
+
         {/* View Prompts Link */}
         {onViewPrompts && (
           <Box
@@ -319,9 +355,9 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         <Box>
           <FieldLabel>
             <Typography variant="caption" fontWeight={600}>
-              Custom Instructions (Optional)
+              {customInstructionsLabel}
             </Typography>
-            <Tooltip title="These instructions take the highest priority and override the agent's base prompt and group rules for this flow step. Use them to add constraints or focus the agent's behavior.">
+            <Tooltip title={customInstructionsTooltip}>
               <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
             </Tooltip>
           </FieldLabel>

@@ -72,6 +72,7 @@ import {
   updateCustomAgent,
 } from '@/services/agentStudioService'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
+import DomainEnvelopeMetadataPanel from '../DomainEnvelopeMetadataPanel'
 
 const FALLBACK_ICON_OPTIONS = ['🔧', '🧬', '📄', '🔍', '🧪', '📊', '🧠', '⚙️', '✨', '📝', '📚', '🧩']
 
@@ -490,6 +491,24 @@ function PromptWorkshop({
     if (!selectedModelOption || !selectedModelReasoning) return ''
     return selectedModelOption.reasoning_descriptions[selectedModelReasoning] || ''
   }, [selectedModelOption, selectedModelReasoning])
+
+  const domainEnvelopeAgentId = useMemo(() => {
+    if (selectedCustomAgent?.template_source) return selectedCustomAgent.template_source
+    if (gettingStartedMode === 'clone' && selectedCloneSource?.template_source) {
+      return selectedCloneSource.template_source
+    }
+    if (gettingStartedMode === 'template') return parentAgentId
+    return ''
+  }, [
+    gettingStartedMode,
+    parentAgentId,
+    selectedCloneSource?.template_source,
+    selectedCustomAgent?.template_source,
+  ])
+
+  const domainEnvelopeMetadata = domainEnvelopeAgentId
+    ? agentMetadata[domainEnvelopeAgentId]?.domain_envelope
+    : undefined
 
   const toolCategories = useMemo(() => {
     const categories = Array.from(new Set(toolLibrary.map((tool) => tool.category).filter(Boolean)))
@@ -1503,6 +1522,18 @@ function PromptWorkshop({
               />
 
               <Divider sx={{ opacity: 0.5 }} />
+
+              {domainEnvelopeMetadata && (
+                <>
+                  <DomainEnvelopeMetadataPanel
+                    metadata={domainEnvelopeMetadata}
+                    compact
+                    title="Envelope & Validation"
+                    validationModeNote="This template produces domain-envelope objects. Automatic validation defaults come from the domain pack; custom validation can be added in Flow Builder with validation agents and steering prompts."
+                  />
+                  <Divider sx={{ opacity: 0.5 }} />
+                </>
+              )}
 
               {/* Model / Visibility / Output Schema */}
               <Stack direction="row" alignItems="center" spacing={0.5}>

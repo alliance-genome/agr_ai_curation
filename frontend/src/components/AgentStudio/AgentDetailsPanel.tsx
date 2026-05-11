@@ -45,7 +45,9 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 
 import { fetchCombinedPrompt } from '@/services/agentStudioService'
 import type { PromptInfo } from '@/types/promptExplorer'
+import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import ToolDetailsDialog from './ToolDetailsDialog'
+import DomainEnvelopeMetadataPanel from './DomainEnvelopeMetadataPanel'
 
 // Styled components
 const PanelContainer = styled(Box)(() => ({
@@ -146,7 +148,7 @@ const EmptyState = styled(Box)(({ theme }) => ({
   textAlign: 'center',
 }))
 
-type TabValue = 'overview' | 'guidance' | 'prompts'
+type TabValue = 'overview' | 'guidance' | 'envelope' | 'prompts'
 
 interface AgentDetailsPanelProps {
   agent: PromptInfo | null
@@ -167,10 +169,14 @@ function AgentDetailsPanel({
   onDiscussWithClaude,
   onCloneToWorkshop,
 }: AgentDetailsPanelProps) {
+  const { agents: agentMetadata } = useAgentMetadata()
   const [activeTab, setActiveTab] = useState<TabValue>('overview')
   const [combinedPrompt, setCombinedPrompt] = useState<string | null>(null)
   const [loadingCombined, setLoadingCombined] = useState(false)
   const [selectedTool, setSelectedTool] = useState<string | null>(null)
+  const domainEnvelopeMetadata = agent
+    ? agentMetadata[agent.agent_id]?.domain_envelope
+    : undefined
 
   // Load combined prompt when needed
   useEffect(() => {
@@ -185,6 +191,12 @@ function AgentDetailsPanel({
         .finally(() => setLoadingCombined(false))
     }
   }, [viewMode, agent, selectedGroupId])
+
+  useEffect(() => {
+    if (activeTab === 'envelope' && !domainEnvelopeMetadata) {
+      setActiveTab('overview')
+    }
+  }, [activeTab, domainEnvelopeMetadata])
 
   // Handle tab change
   const handleTabChange = (_: React.SyntheticEvent, newValue: TabValue) => {
@@ -321,6 +333,9 @@ function AgentDetailsPanel({
         <StyledTabs value={activeTab} onChange={handleTabChange}>
           <StyledTab label="Overview" value="overview" />
           <StyledTab label="Guidance" value="guidance" />
+          {domainEnvelopeMetadata && (
+            <StyledTab label="Envelope" value="envelope" />
+          )}
           <StyledTab label="Prompts" value="prompts" />
         </StyledTabs>
       </Box>
@@ -507,6 +522,14 @@ function AgentDetailsPanel({
               </Box>
             )}
           </Box>
+        )}
+
+        {activeTab === 'envelope' && domainEnvelopeMetadata && (
+          <DomainEnvelopeMetadataPanel
+            metadata={domainEnvelopeMetadata}
+            title="Envelope & Validation"
+            validationModeNote="Automatic validation is projected from domain-pack metadata. Flow Builder persists allowed opt-outs, custom validation agents, and validation-agent steering prompts in the flow definition."
+          />
         )}
 
         {/* Prompts Tab */}

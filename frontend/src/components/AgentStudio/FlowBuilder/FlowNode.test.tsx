@@ -1,8 +1,17 @@
 import { render, screen } from '@/test/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import FlowNode from './FlowNode'
 import type { AgentNodeData } from './types'
+import type { AgentMetadata } from '@/services/agentStudioService'
+import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
+
+const agentMetadataMocks = vi.hoisted(() => ({
+  agents: {} as Record<string, AgentMetadata>,
+  isLoading: false,
+  error: null,
+  refresh: vi.fn(),
+}))
 
 vi.mock('reactflow', () => ({
   Handle: ({ type }: { type: string }) => <div data-testid={`handle-${type}`} />,
@@ -14,6 +23,10 @@ vi.mock('reactflow', () => ({
 
 vi.mock('@/hooks/useAgentIcon', () => ({
   useAgentIcon: () => 'AI',
+}))
+
+vi.mock('@/contexts/AgentMetadataContext', () => ({
+  useAgentMetadata: () => agentMetadataMocks,
 }))
 
 function buildNodeData(overrides: Partial<AgentNodeData> = {}): AgentNodeData {
@@ -29,6 +42,10 @@ function buildNodeData(overrides: Partial<AgentNodeData> = {}): AgentNodeData {
 }
 
 describe('FlowNode', () => {
+  beforeEach(() => {
+    agentMetadataMocks.agents = {}
+  })
+
   it('renders the prompt version label when prompt_version is present', () => {
     render(<FlowNode data={buildNodeData({ prompt_version: 3 })} selected={false} />)
 
@@ -43,6 +60,15 @@ describe('FlowNode', () => {
   })
 
   it('renders validation attachment state counts distinctly', () => {
+    agentMetadataMocks.agents = {
+      gene_summary: {
+        name: 'Gene Summary',
+        icon: 'AI',
+        category: 'Extraction',
+        domain_envelope: buildDomainEnvelopeMetadata(),
+      },
+    }
+
     render(
       <FlowNode
         data={buildNodeData({
@@ -53,6 +79,7 @@ describe('FlowNode', () => {
               validator_id: 'active',
               state: 'active',
               scope: 'field',
+              field_path: 'gene_symbol',
               required: true,
               export_blocking: true,
               default_enabled: true,
@@ -93,6 +120,9 @@ describe('FlowNode', () => {
     )
 
     expect(screen.getByText('1 active validation')).toBeInTheDocument()
+    expect(screen.getByText('1 envelope object')).toBeInTheDocument()
+    expect(screen.getByText('1 required')).toBeInTheDocument()
+    expect(screen.getByText('1 export-blocking')).toBeInTheDocument()
     expect(screen.getByText('1 planned')).toBeInTheDocument()
     expect(screen.getByText('1 blocked')).toBeInTheDocument()
   })

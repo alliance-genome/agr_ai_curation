@@ -102,6 +102,7 @@ class AgentMetadata(BaseModel):
     subcategory: Optional[str] = None
     supervisor_tool: Optional[str] = None
     validation_attachments: List[Dict[str, Any]] = Field(default_factory=list)
+    domain_envelope: Optional[Dict[str, Any]] = None
 
 
 class RegistryMetadataResponse(BaseModel):

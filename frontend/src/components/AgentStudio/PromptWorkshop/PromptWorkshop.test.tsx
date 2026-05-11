@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { describe, beforeEach, expect, it, vi } from 'vitest'
 
 import PromptWorkshop from './PromptWorkshop'
+import { buildDomainEnvelopeMetadata } from '@/test/fixtures/agentStudioDomainEnvelope'
 import type { PromptCatalog, CustomAgent, ModelOption, ToolLibraryItem, AgentTemplate } from '@/types/promptExplorer'
 
 const serviceMocks = vi.hoisted(() => ({
@@ -20,13 +21,14 @@ const serviceMocks = vi.hoisted(() => ({
 }))
 
 const metadataMocks = vi.hoisted(() => ({
+  agents: {} as Record<string, unknown>,
   refresh: vi.fn(),
 }))
 
 vi.mock('@/services/agentStudioService', () => serviceMocks)
 vi.mock('@/contexts/AgentMetadataContext', () => ({
   useAgentMetadata: () => ({
-    agents: {},
+    agents: metadataMocks.agents,
     refresh: metadataMocks.refresh,
     isLoading: false,
     error: null,
@@ -334,6 +336,7 @@ describe('PromptWorkshop', () => {
   ]
 
   beforeEach(() => {
+    metadataMocks.agents = {}
     metadataMocks.refresh.mockReset()
     serviceMocks.createCustomAgent.mockReset()
     serviceMocks.deleteCustomAgent.mockReset()
@@ -395,6 +398,27 @@ describe('PromptWorkshop', () => {
     expect(payload.model_id).toBe('gpt-4o')
     expect(payload).not.toHaveProperty('parent_agent_id')
   }, 15000) // Increased because full workshop bootstrap can exceed the default timeout under CI load.
+
+  it('shows domain-envelope and automatic validation metadata for the selected template', async () => {
+    metadataMocks.agents = {
+      gene: {
+        name: 'Gene Specialist',
+        icon: 'G',
+        category: 'Extraction',
+        domain_envelope: buildDomainEnvelopeMetadata(),
+      },
+    }
+
+    render(<PromptWorkshop catalog={buildCatalog()} />)
+
+    expect(await screen.findByText('Envelope & Validation')).toBeInTheDocument()
+    expect(screen.getByText('Gene Validated Reference Domain Pack')).toBeInTheDocument()
+    expect(screen.getByText(/semantic source of truth/i)).toBeInTheDocument()
+    expect(screen.getByText('Gene mention evidence')).toBeInTheDocument()
+    expect(screen.getByText('gene_symbol')).toBeInTheDocument()
+    expect(screen.getByText('1 default validator')).toBeInTheDocument()
+    expect(screen.getByText('1 export-blocking')).toBeInTheDocument()
+  }, 15000)
 
   it('disables non-attachable tools in tool library modal', async () => {
     render(<PromptWorkshop catalog={buildCatalog()} />)

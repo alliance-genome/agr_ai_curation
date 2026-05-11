@@ -13,6 +13,7 @@ import { styled, alpha } from '@mui/material/styles'
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline'
 
 import type { AgentNodeData } from './types'
+import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import { useAgentIcon } from '@/hooks/useAgentIcon'
 
 const NodeContainer = styled(Paper, {
@@ -153,6 +154,7 @@ interface FlowNodeComponentProps {
 function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
   // Get icon from registry via hook
   const icon = useAgentIcon(data.agent_id)
+  const { agents: agentMetadata } = useAgentMetadata()
   const hasError = data.hasError
   const isTaskInput = data.agent_id === 'task_input'
 
@@ -170,12 +172,19 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
   const scheduledValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'active' && attachment.enabled
   ).length
+  const requiredValidationCount = validationAttachments.filter(
+    (attachment) => attachment.state === 'active' && attachment.enabled && attachment.required
+  ).length
+  const exportBlockingValidationCount = validationAttachments.filter(
+    (attachment) => attachment.state === 'active' && attachment.enabled && attachment.export_blocking
+  ).length
   const plannedValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'planned'
   ).length
   const blockedValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'blocked'
   ).length
+  const envelopeObjectCount = agentMetadata[data.agent_id]?.domain_envelope?.object_definitions.length ?? 0
 
   return (
     <>
@@ -212,13 +221,25 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
           </StepPreview>
         </Tooltip>
 
-        {validationAttachments.length > 0 && (
+        {(envelopeObjectCount > 0 || validationAttachments.length > 0) && (
           <ValidationSummary>
+            {envelopeObjectCount > 0 && (
+              <ValidationPill>
+                {envelopeObjectCount} envelope object
+                {envelopeObjectCount === 1 ? '' : 's'}
+              </ValidationPill>
+            )}
             {scheduledValidationCount > 0 && (
               <ValidationPill>
                 {scheduledValidationCount} active validation
                 {scheduledValidationCount === 1 ? '' : 's'}
               </ValidationPill>
+            )}
+            {requiredValidationCount > 0 && (
+              <ValidationPill>{requiredValidationCount} required</ValidationPill>
+            )}
+            {exportBlockingValidationCount > 0 && (
+              <ValidationPill>{exportBlockingValidationCount} export-blocking</ValidationPill>
             )}
             {plannedValidationCount > 0 && (
               <ValidationPill>{plannedValidationCount} planned</ValidationPill>

@@ -76,6 +76,86 @@ export interface ValidationAttachmentOption {
   opt_out_reason_required: boolean
 }
 
+export interface DomainEnvelopeSchemaRef {
+  schema_id: string
+  provider?: string
+  name?: string
+  version?: string
+  uri?: string
+  checksum?: string
+  definition_state?: string
+  definition_notes?: string[]
+  metadata?: Record<string, unknown>
+}
+
+export interface DomainEnvelopeModelMetadata {
+  model_id: string
+  display_name: string
+  description?: string
+  schema_ref?: DomainEnvelopeSchemaRef | null
+  definition_state: string
+  definition_notes: string[]
+  provider_refs: Record<string, unknown>
+}
+
+export interface DomainEnvelopeFieldMetadata {
+  field_path: string
+  display_name?: string | null
+  description?: string
+  field_type: string
+  required: boolean
+  enum_ref?: string | null
+  model_ref?: string | null
+  object_type_ref?: string | null
+  definition_state: string
+  definition_notes: string[]
+  provider_refs: Record<string, unknown>
+  source_of_truth?: string | null
+  validation_policy?: Record<string, unknown> | null
+  validation_attachments: ValidationAttachmentOption[]
+}
+
+export interface DomainEnvelopeObjectMetadata {
+  object_type: string
+  display_name: string
+  description?: string
+  object_role?: string | null
+  model_ref?: string | null
+  schema_ref?: DomainEnvelopeSchemaRef | null
+  definition_state: string
+  definition_notes: string[]
+  provider_refs: Record<string, unknown>
+  validation_attachments: ValidationAttachmentOption[]
+  fields: DomainEnvelopeFieldMetadata[]
+}
+
+export interface DomainEnvelopeValidationSummary {
+  total: number
+  by_state: Record<'active' | 'planned' | 'blocked', number>
+  by_scope: Record<'pack' | 'object' | 'field', number>
+  default_enabled: number
+  required: number
+  export_blocking: number
+  opt_out_allowed: number
+}
+
+export interface DomainEnvelopeMetadata {
+  domain_pack_id: string
+  domain_pack_version: string
+  display_name: string
+  description?: string
+  status: string
+  metadata_api_version: string
+  schema_refs: DomainEnvelopeSchemaRef[]
+  provider_refs: Record<string, unknown>
+  semantic_source_note: string
+  source_of_truth_notes: string[]
+  validation_attachments: ValidationAttachmentOption[]
+  model_definitions: DomainEnvelopeModelMetadata[]
+  object_definitions: DomainEnvelopeObjectMetadata[]
+  validation_summary: DomainEnvelopeValidationSummary
+}
+
 export interface AgentMetadata {
   name: string
   icon: string
@@ -83,6 +163,7 @@ export interface AgentMetadata {
   subcategory?: string
   supervisor_tool?: string
   validation_attachments?: ValidationAttachmentOption[]
+  domain_envelope?: DomainEnvelopeMetadata | null
 }
 
 /**
