@@ -310,6 +310,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.test
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./backend:/app/backend
       - ./config:/app/config:ro
@@ -327,6 +329,13 @@ services:
       - EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS=8
       - REDIS_URL=redis://:${TEST_REDIS_PASSWORD:-CHANGE_ME_TEST_REDIS_PASSWORD}@redis-test:6379/0
       - UNSTRUCTURED_API_URL=http://test-unstructured
+      - ALLIANCE_LIVE_DB_CONTRACT_TESTS=${ALLIANCE_LIVE_DB_CONTRACT_TESTS:-0}
+      - CURATION_DB_URL=${CURATION_DB_URL:-}
+      - PERSISTENT_STORE_DB_HOST=${PERSISTENT_STORE_DB_HOST:-}
+      - PERSISTENT_STORE_DB_PORT=${PERSISTENT_STORE_DB_PORT:-}
+      - PERSISTENT_STORE_DB_NAME=${PERSISTENT_STORE_DB_NAME:-}
+      - PERSISTENT_STORE_DB_USERNAME=${PERSISTENT_STORE_DB_USERNAME:-}
+      - PERSISTENT_STORE_DB_PASSWORD=${PERSISTENT_STORE_DB_PASSWORD:-}
       - EMBEDDING_MODEL=text-embedding-3-small
       - EMBEDDING_TOKEN_PREFLIGHT_ENABLED=true
       - EMBEDDING_MODEL_TOKEN_LIMIT=8191

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from src.lib.domain_packs.materialization import (
     REVIEW_ROW_PROJECTION_TYPE,
     DomainPackMetadataReviewRowMaterializer,
@@ -22,6 +24,9 @@ from src.schemas.domain_pack_metadata import (
     DomainPackMetadata,
     DomainPackObjectDefinition,
 )
+
+
+pytestmark = pytest.mark.provider_agnostic_domain_pack
 
 
 def _metadata() -> DomainPackMetadata:
