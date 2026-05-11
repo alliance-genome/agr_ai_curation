@@ -10,6 +10,10 @@ Public customization path:
 - Edit runtime config under `~/.agr_ai_curation/runtime/config/`.
 - Add custom agents and tools through a package under
   `~/.agr_ai_curation/runtime/packages/<your-package>/`.
+- Add domain packs through a package under
+  `~/.agr_ai_curation/runtime/packages/<your-package>/domain_packs/` when the
+  customization changes curatable object semantics, validation policy, or
+  export/submission behavior.
 - Do not rely on repo-local `config/agents/` or `backend/src/...` edits as the
   customization path for an installed deployment.
 
@@ -23,6 +27,9 @@ Repository-development note:
 - `config/agents/` is now the repo-local core/override layer; Alliance
   specialist bundles live under `packages/alliance/agents/` and are discovered
   from runtime packages first.
+- Domain-pack metadata lives with packages. In this source checkout, Alliance
+  packs live under `packages/alliance/domain_packs/`; core provider-neutral
+  tests also use fixtures under `backend/tests/fixtures/domain_packs/`.
 - `config/models.yaml`, `config/providers.yaml`, and
   `config/tool_policy_defaults.yaml` remain aligned with `packages/core/config/`.
 
@@ -45,6 +52,11 @@ config/
     │   └── basic_agent/        # Example agent structure
     └── [your_agent]/           # Source-development agent bundles
 ```
+
+Package directories may also contain `domain_packs/`. Domain packs are not
+deployment overrides in `config/`; they are package-owned contracts that define
+envelope object types, field paths, validators, source/provider refs,
+review-row display metadata, and export/submission policy.
 
 ## Quick Start
 
@@ -264,6 +276,9 @@ At system startup:
 4. The runtime override files in `runtime/config/` are merged on top.
 5. Agent bundles are discovered from `runtime/packages/*/agents`.
 6. Group rules are associated with agents based on `group_id` matching.
+7. Domain packs are discovered from `runtime/packages/*/domain_packs` and used
+   to interpret domain envelopes, automatic validation, review-row projections,
+   and export/submission readiness.
 
 ## Override Behavior
 
@@ -273,6 +288,9 @@ At system startup:
   startup errors.
 - Tool binding collisions require an explicit selection in
   `runtime/config/overrides.yaml`.
+- Domain-pack IDs must be unique and validated. Domain-pack metadata is the
+  canonical home for object definitions, field paths, validator bindings, and
+  required/export-blocking policy.
 
 See [docs/deployment/modular-packages.md](../docs/deployment/modular-packages.md)
 for the full runtime layout, package model, and upgrade workflow.
@@ -283,6 +301,8 @@ The system validates configuration at startup:
 
 - **Schema validation**: YAML structure matches expected format
 - **Reference validation**: Tools referenced by agents exist
+- **Domain-pack validation**: domain-pack schemas, fixtures, object/field
+  references, and validator metadata are normalized before runtime use
 - **Health checks**: External connections are reachable
 - **Group validation**: Group rules reference valid group IDs
 

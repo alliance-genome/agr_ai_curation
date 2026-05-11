@@ -79,11 +79,13 @@ packages.
 │   │   │   ├── package.yaml
 │   │   │   ├── agents/
 │   │   │   ├── config/
+│   │   │   ├── domain_packs/
 │   │   │   ├── python/src/...
 │   │   │   ├── requirements/
 │   │   ├── alliance/                    # `agr.alliance` (Alliance Defaults)
 │   │   │   ├── package.yaml
 │   │   │   ├── agents/
+│   │   │   ├── domain_packs/
 │   │   │   ├── python/src/...
 │   │   │   ├── requirements/
 │   │   │   └── tools/bindings.yaml
@@ -110,17 +112,21 @@ agr_ai_curation/
 │   │   ├── package.yaml
 │   │   ├── agents/
 │   │   ├── config/
+│   │   ├── domain_packs/
 │   │   ├── python/src/agr_ai_curation_core/
 │   │   ├── requirements/
 │   │   └── ...
 │   └── alliance/
 │       ├── package.yaml
 │       ├── agents/
+│       ├── domain_packs/
 │       ├── python/src/agr_ai_curation_alliance/
 │       ├── requirements/
 │       └── tools/bindings.yaml
 ├── backend/
 │   ├── src/lib/config/                  # Runtime config/package loaders
+│   ├── src/lib/domain_packs/            # Domain-pack registry, validation, repair, materialization
+│   ├── src/lib/domain_envelopes/        # Persisted envelope checkpoints and field patches
 │   ├── src/lib/packages/                # Package discovery, manifests, registry, runner
 │   ├── src/lib/agent_studio/            # Agent Studio services and runtime catalog
 │   └── src/models/sql/                  # Database models
@@ -163,12 +169,13 @@ At system startup:
    `runtime/packages/*/config/`.
 4. The deployment override files in `runtime/config/` are merged on top.
 5. Package-owned agent bundles are discovered from `runtime/packages/*/agents/`.
-6. Group rules are associated with agents based on `group_id` matching.
-7. Schemas are dynamically imported from each bundle's `schema.py`.
-8. Provider runtime contracts are validated (cross-checks providers, models,
+6. Domain packs are discovered from `runtime/packages/*/domain_packs/`.
+7. Group rules are associated with agents based on `group_id` matching.
+8. Schemas are dynamically imported from each bundle's `schema.py`.
+9. Provider runtime contracts are validated (cross-checks providers, models,
    and API keys).
-9. System agents are seeded into the unified `agents` database table.
-10. Tool policies are loaded from the `tool_policies` table.
+10. System agents are seeded into the unified `agents` database table.
+11. Tool policies are loaded from the `tool_policies` table.
 
 ### Thread Safety
 
@@ -225,7 +232,39 @@ model_config:
 
 # Whether to inject group-specific rules
 group_rules_enabled: true
+
+# Optional curation metadata. Extraction agents that produce domain envelopes
+# should name the domain pack that owns object definitions, field paths,
+# validators, review projections, and export/submission policy.
+curation:
+  domain_pack_id: gene
 ```
+
+### Domain Packs
+
+Domain packs are package-owned curation contracts. They define the semantic shape
+of new domain-pack extraction runs while core runtime code stays
+provider-agnostic.
+
+```text
+runtime/packages/org-custom/domain_packs/my_domain/
+├── domain_pack.yaml
+└── fixtures/
+    └── smoke.yaml
+```
+
+Use `domain_pack.yaml` for object definitions, field paths, schema/provider
+refs, validator bindings, required/export-blocking policy, repair hints,
+workspace display metadata, and export/submission behavior. Extraction agents
+link to the pack through `agent.yaml` curation metadata.
+
+New domain-pack runs produce persisted `DomainEnvelope` objects. Workspace
+candidate rows, review tables, draft fields, export bundles, and submission
+payloads are projections over envelope objects at a known revision. Do not add
+new code that treats legacy prep candidates or normalized payloads as the
+semantic store for those runs.
+
+See [DOMAIN_ENVELOPES.md](DOMAIN_ENVELOPES.md) for the full contract.
 
 ### prompt.yaml
 

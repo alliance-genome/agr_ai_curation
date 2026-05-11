@@ -36,6 +36,7 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 - **Visual Flow Builder** - Create multi-agent workflows using drag-and-drop
 - **Chain Specialists Together** - Connect extraction, validation, and output agents
+- **Automatic Validation** - Extraction agents can carry domain-pack validation rules that run automatically after extraction
 - **Export Results** - Generate CSV, TSV, or JSON files from your workflows
 - **Save and Reuse** - Store flows for repeated use across documents
 - **Batch Processing** - Run saved flows against multiple documents automatically with real-time progress tracking
@@ -51,6 +52,13 @@ The AI Curation System provides intelligent assistance for biological curation t
 ## How It Works
 
 Behind the scenes, a **supervisor agent** analyzes your question and routes it to the appropriate specialist agent(s). Each specialist agent connects to specific databases or APIs to retrieve accurate, up-to-date information.
+
+For curation workflows, extraction agents now produce **domain envelopes**. A
+domain envelope is the durable record of what the AI extracted: curatable
+objects, their field paths, evidence links, validation findings, repair history,
+and export/submission state. The review table shows a projection of those
+objects so you can scan and edit them, but the envelope remains the source of
+truth.
 
 ### Simple Questions
 
@@ -91,6 +99,8 @@ Tools for understanding, building, and improving AI behavior:
 **Flows Tab (Curation Flows)**
 - Build visual workflows with drag-and-drop
 - Chain 15 agents together (PDF extraction, validation, output)
+- See domain-envelope object and validation metadata for extraction agents
+- Keep automatic validators enabled by default, or opt out only where policy allows a saved reason
 - Output to chat, CSV, TSV, or JSON files
 - Use "Verify with Claude" to check your flow before running
 - Save and reuse flows across documents
@@ -112,6 +122,15 @@ Real-time transparency into AI operations:
 - Shows which databases were queried
 - Displays what information was retrieved
 - Provides full traceability
+
+### Curation Review and Export
+Domain-pack review sessions show envelope object rows with projected summary
+fields, evidence anchors, and validation status. Export and submission previews
+check the current envelope revision before sending data anywhere. If an object is
+missing required fields, has unresolved validation findings, uses draft
+definitions, or needs missing context, the preview shows a readiness blocker.
+Curator overrides only unblock export when the domain-pack policy allows the
+override and any required reason has been saved.
 
 ## Available Agents
 
@@ -140,6 +159,11 @@ Curation Flows can output results in multiple ways:
 Each flow uses one output agent. Use Chat Output to review results first, then swap to a File Formatter when ready to export.
 
 File outputs appear in the chat as downloadable cards with metadata including file size and download count.
+
+For domain-pack curation, file output is only one form of export. Review-session
+export and submission previews also run readiness checks against the underlying
+domain envelope objects. Resolve validation and readiness blockers before using
+final export or direct submission actions.
 
 ## Questions or Feedback?
 

@@ -11,6 +11,7 @@ This index defines where authoritative project knowledge lives.
 | Curator documentation index | `docs/curator/README.md` | Entry point for curator workflows |
 | Configuration model | `config/README.md` | Configuration hierarchy and ownership |
 | Test scope and intent | `docs/developer/TEST_STRATEGY.md` | Test boundaries and health guidance |
+| Domain-envelope architecture | `docs/developer/guides/DOMAIN_ENVELOPES.md` | 0.7.0 envelope/domain-pack source-of-truth, validation, materialization, export, and submission contracts |
 | Symphony execution contract | `.symphony/WORKFLOW.md` | State and behavior for unattended execution |
 | Deployment procedures | `docs/deployment/` | Environment and rollout runbooks |
 
@@ -29,4 +30,3 @@ When documentation conflicts:
 - Use automation to detect drift:
   - `./scripts/testing/agent_pr_gate.sh`
   - `./scripts/maintenance/harness_hygiene.sh`
-
