@@ -1176,6 +1176,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
         GENE_EXPRESSION_TARGET_KEY,
     )
     from src.lib.curation_workspace.models import (
+        CurationCandidate,
         CurationReviewSession,
         DomainEnvelopeHistory,
         DomainEnvelopeModel,
@@ -1245,6 +1246,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     assert patch_payload["previous_revision"] == 1
     assert patch_payload["envelope_revision"] == 2
     assert patch_payload["candidate"]["projection_ref"]["envelope_revision"] == 2
+    assert patch_payload["candidate"]["normalized_payload"] == {}
     assert patch_payload["history_event_ids"]
 
     submit_response = client.post(
@@ -1285,6 +1287,11 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
         if item["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
     )
     assert persisted_object["payload"]["where_expressed_statement"] == repaired_statement
+
+    candidate_row = test_db.get(CurationCandidate, UUID(candidate_id))
+    assert candidate_row is not None
+    assert candidate_row.envelope_revision == 2
+    assert candidate_row.normalized_payload == {}
 
     history_event_types = [
         row.event_type.value

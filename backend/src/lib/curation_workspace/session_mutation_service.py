@@ -896,7 +896,8 @@ def _refresh_candidate_projection_from_envelope(
     updated_at: datetime,
 ) -> None:
     candidate.envelope_revision = envelope_revision
-    candidate.normalized_payload = copy.deepcopy(domain_object.payload)
+    # Envelope-backed candidates keep semantic truth in persisted envelopes.
+    candidate.normalized_payload = {}
     candidate.updated_at = updated_at
 
     if candidate.draft is None:

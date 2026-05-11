@@ -54,12 +54,6 @@ from src.schemas.domain_envelope import (
 )
 
 
-UPDATED_PAYLOAD = {
-    "gene": {"symbol": "abc-2"},
-    "protected_note": "do not edit",
-}
-
-
 @compiles(PostgresUUID, "sqlite")
 def _compile_pg_uuid_for_sqlite(_type, _compiler, **_kwargs):
     return "CHAR(36)"
@@ -173,18 +167,14 @@ def _loaded_pack(tmp_path: Path) -> LoadedDomainPack:
     )
 
 
-class _Registry:
-    def __init__(self, pack: LoadedDomainPack) -> None:
-        self._pack = pack
-
-    def get_pack(self, pack_id: str) -> LoadedDomainPack | None:
-        return self._pack if pack_id == self._pack.pack_id else None
-
-
 @pytest.fixture
 def loaded_pack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> LoadedDomainPack:
     pack = _loaded_pack(tmp_path)
-    monkeypatch.setattr(module, "load_domain_pack_registry", lambda: _Registry(pack))
+    monkeypatch.setattr(
+        module,
+        "resolve_curation_domain_pack_by_id",
+        lambda pack_id: pack if pack_id == pack.pack_id else None,
+    )
     return pack
 
 
@@ -332,11 +322,12 @@ def _request(
     )
 
 
-def test_patch_envelope_field_checkpoints_envelope_and_refreshes_projection(
+def test_patch_envelope_field_refreshes_projection_without_legacy_payload(
     db_session,
     loaded_pack,
 ):
     session, candidate = _create_session_with_envelope_projection(db_session)
+    assert candidate.normalized_payload == {"gene": {"symbol": "abc-1"}}
 
     response = module.patch_envelope_field(
         db_session,
@@ -352,7 +343,7 @@ def test_patch_envelope_field_checkpoints_envelope_and_refreshes_projection(
     assert response.candidate is not None
     assert response.candidate.projection_ref is not None
     assert response.candidate.projection_ref.envelope_revision == 2
-    assert response.candidate.normalized_payload == UPDATED_PAYLOAD
+    assert response.candidate.normalized_payload == {}
     assert response.candidate.draft.fields[0].value == "abc-2"
     assert response.candidate.draft.fields[0].seed_value == "abc-2"
     assert response.candidate.draft.fields[0].dirty is False
@@ -366,7 +357,7 @@ def test_patch_envelope_field_checkpoints_envelope_and_refreshes_projection(
 
     updated_candidate = db_session.get(CurationCandidate, candidate.id)
     assert updated_candidate.envelope_revision == 2
-    assert updated_candidate.normalized_payload == UPDATED_PAYLOAD
+    assert updated_candidate.normalized_payload == {}
 
     history_events = db_session.scalars(
         select(DomainEnvelopeHistory).order_by(DomainEnvelopeHistory.event_index)
