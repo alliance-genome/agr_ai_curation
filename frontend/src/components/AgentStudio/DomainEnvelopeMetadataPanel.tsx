@@ -12,6 +12,7 @@ import {
 } from '@mui/material'
 import { alpha } from '@mui/material/styles'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import type { ReactNode } from 'react'
 
 import type {
   DomainEnvelopeFieldMetadata,
@@ -28,9 +29,34 @@ interface DomainEnvelopeMetadataPanelProps {
   metadata?: DomainEnvelopeMetadata | null
   validationAttachments?: ValidationAttachmentView[]
   compact?: boolean
+  layout?: 'standard' | 'flow-editor'
   title?: string
   validationModeNote?: string
 }
+
+interface SectionAccordionProps {
+  title: string
+  summary?: string
+  defaultExpanded?: boolean
+  children: ReactNode
+}
+
+const monoTextSx = {
+  fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace',
+  overflowWrap: 'anywhere',
+  wordBreak: 'break-word',
+} as const
+
+const compactChipSx = {
+  height: 18,
+  fontSize: '0.6rem',
+  maxWidth: '100%',
+  '& .MuiChip-label': {
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+} as const
 
 function humanizeState(value: string): string {
   return value.replace(/_/g, ' ')
@@ -106,19 +132,19 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
   return (
     <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
       {counts.enabled > 0 && (
-        <Chip size="small" color="success" variant="outlined" label={`${counts.enabled} auto`} />
+        <Chip size="small" color="success" variant="outlined" label={`${counts.enabled} auto`} sx={compactChipSx} />
       )}
       {counts.active > 0 && counts.enabled === 0 && (
-        <Chip size="small" color="success" variant="outlined" label={`${counts.active} active`} />
+        <Chip size="small" color="success" variant="outlined" label={`${counts.active} active`} sx={compactChipSx} />
       )}
       {counts.optedOut > 0 && (
-        <Chip size="small" color="warning" variant="outlined" label={`${counts.optedOut} opted out`} />
+        <Chip size="small" color="warning" variant="outlined" label={`${counts.optedOut} opted out`} sx={compactChipSx} />
       )}
       {counts.planned > 0 && (
-        <Chip size="small" color="warning" variant="outlined" label={`${counts.planned} planned`} />
+        <Chip size="small" color="warning" variant="outlined" label={`${counts.planned} planned`} sx={compactChipSx} />
       )}
       {counts.blocked > 0 && (
-        <Chip size="small" color="error" variant="outlined" label={`${counts.blocked} blocked`} />
+        <Chip size="small" color="error" variant="outlined" label={`${counts.blocked} blocked`} sx={compactChipSx} />
       )}
     </Stack>
   )
@@ -132,20 +158,193 @@ function ProviderRefs({ refs }: { refs: Record<string, unknown> }) {
     <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
       {entries.map(([providerKey, value]) => (
         <Tooltip key={providerKey} title={formatProviderRef(providerKey, value)}>
-          <Chip size="small" variant="outlined" label={providerKey} />
+          <Chip size="small" variant="outlined" label={providerKey} sx={compactChipSx} />
         </Tooltip>
       ))}
     </Stack>
   )
 }
 
-function FieldRow({ field }: { field: DomainEnvelopeFieldMetadata }) {
+function SummaryMetric({
+  label,
+  value,
+  mono = false,
+}: {
+  label: string
+  value: ReactNode
+  mono?: boolean
+}) {
+  return (
+    <Box
+      sx={{
+        minWidth: 0,
+        borderTop: (theme) => `1px solid ${alpha(theme.palette.divider, 0.8)}`,
+        pt: 0.75,
+      }}
+    >
+      <Typography
+        variant="caption"
+        color="text.secondary"
+        sx={{ display: 'block', fontSize: '0.62rem', textTransform: 'uppercase', letterSpacing: 0 }}
+      >
+        {label}
+      </Typography>
+      <Typography
+        variant="body2"
+        sx={{
+          mt: 0.15,
+          fontSize: '0.76rem',
+          fontWeight: 650,
+          ...(mono ? monoTextSx : {}),
+        }}
+      >
+        {value}
+      </Typography>
+    </Box>
+  )
+}
+
+function SectionAccordion({
+  title,
+  summary,
+  defaultExpanded = false,
+  children,
+}: SectionAccordionProps) {
+  return (
+    <Accordion
+      disableGutters
+      defaultExpanded={defaultExpanded}
+      sx={{
+        backgroundColor: 'transparent',
+        boxShadow: 'none',
+        border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.65)}`,
+        borderRadius: 1,
+        overflow: 'hidden',
+        '&::before': { display: 'none' },
+      }}
+    >
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon fontSize="small" />}
+        sx={{
+          minHeight: 42,
+          px: 1.25,
+          '& .MuiAccordionSummary-content': { my: 0.75 },
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" sx={{ fontWeight: 700, fontSize: '0.78rem' }}>
+            {title}
+          </Typography>
+          {summary && (
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: 'block', fontSize: '0.68rem', lineHeight: 1.25 }}
+            >
+              {summary}
+            </Typography>
+          )}
+        </Box>
+      </AccordionSummary>
+      <AccordionDetails sx={{ px: 1.25, pt: 0, pb: 1.25 }}>
+        {children}
+      </AccordionDetails>
+    </Accordion>
+  )
+}
+
+function FieldMetaLabel({ children }: { children: ReactNode }) {
+  return (
+    <Typography
+      variant="caption"
+      color="text.secondary"
+      sx={{ display: 'block', fontSize: '0.58rem', lineHeight: 1.2, textTransform: 'uppercase', letterSpacing: 0 }}
+    >
+      {children}
+    </Typography>
+  )
+}
+
+function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetadata; compact?: boolean }) {
   const label = field.display_name || field.field_path
   const schemaDetails = [
     field.enum_ref ? `enum ${field.enum_ref}` : null,
     field.model_ref ? `model ${field.model_ref}` : null,
     field.object_type_ref ? `object ${field.object_type_ref}` : null,
   ].filter(Boolean).join(' / ')
+
+  if (compact) {
+    return (
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: {
+            xs: 'minmax(0, 1fr)',
+            sm: 'minmax(180px, 1.35fr) minmax(120px, 0.7fr) minmax(150px, 0.9fr) minmax(150px, 0.85fr)',
+          },
+          gap: { xs: 0.75, sm: 1.25 },
+          py: 0.95,
+          borderBottom: (theme) => `1px solid ${alpha(theme.palette.divider, 0.6)}`,
+          '&:last-of-type': { borderBottom: 0 },
+        }}
+      >
+        <Box sx={{ minWidth: 0 }}>
+          <Typography variant="body2" sx={{ fontSize: '0.76rem', fontWeight: 700, lineHeight: 1.25 }}>
+            {label}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.2 }}>
+            {field.field_path}
+          </Typography>
+          {field.description && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35, lineHeight: 1.35 }}>
+              {field.description}
+            </Typography>
+          )}
+        </Box>
+
+        <Box sx={{ minWidth: 0 }}>
+          <FieldMetaLabel>Type</FieldMetaLabel>
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.35 }}>
+            <Chip size="small" variant="outlined" label={field.field_type} sx={compactChipSx} />
+            {field.required && (
+              <Chip size="small" color="primary" variant="outlined" label="required" sx={compactChipSx} />
+            )}
+          </Stack>
+          {schemaDetails && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35, lineHeight: 1.35 }}>
+              {schemaDetails}
+            </Typography>
+          )}
+        </Box>
+
+        <Box sx={{ minWidth: 0 }}>
+          <FieldMetaLabel>Source</FieldMetaLabel>
+          <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.35 }}>
+            {field.source_of_truth || 'metadata'}
+          </Typography>
+          <Box sx={{ mt: 0.45 }}>
+            <ProviderRefs refs={field.provider_refs} />
+          </Box>
+        </Box>
+
+        <Box sx={{ minWidth: 0 }}>
+          <FieldMetaLabel>Validation</FieldMetaLabel>
+          <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.35 }}>
+            {field.definition_state !== 'stable' && (
+              <Chip
+                size="small"
+                color={chipColorForState(field.definition_state)}
+                variant="outlined"
+                label={humanizeState(field.definition_state)}
+                sx={compactChipSx}
+              />
+            )}
+            <ValidationChips attachments={field.validation_attachments} />
+          </Stack>
+        </Box>
+      </Box>
+    )
+  }
 
   return (
     <Box
@@ -157,21 +356,25 @@ function FieldRow({ field }: { field: DomainEnvelopeFieldMetadata }) {
         backgroundColor: (theme) => alpha(theme.palette.background.default, 0.25),
       }}
     >
-      <Stack direction="row" alignItems="flex-start" spacing={1}>
+      <Stack
+        direction={{ xs: 'column', sm: compact ? 'row' : 'row' }}
+        alignItems="flex-start"
+        spacing={1}
+      >
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
             <Typography variant="body2" sx={{ fontSize: '0.75rem', fontWeight: 600 }}>
               {label}
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+            <Typography variant="caption" color="text.secondary" sx={monoTextSx}>
               {field.field_path}
             </Typography>
-            <Chip size="small" variant="outlined" label={field.field_type} sx={{ height: 18, fontSize: '0.6rem' }} />
+            <Chip size="small" variant="outlined" label={field.field_type} sx={compactChipSx} />
             {field.required && (
-              <Chip size="small" color="primary" variant="outlined" label="required" sx={{ height: 18, fontSize: '0.6rem' }} />
+              <Chip size="small" color="primary" variant="outlined" label="required" sx={compactChipSx} />
             )}
             {field.source_of_truth && (
-              <Chip size="small" color="success" variant="outlined" label={`truth: ${field.source_of_truth}`} sx={{ height: 18, fontSize: '0.6rem' }} />
+              <Chip size="small" color="success" variant="outlined" label={`truth: ${field.source_of_truth}`} sx={compactChipSx} />
             )}
             {field.definition_state !== 'stable' && (
               <Chip
@@ -179,7 +382,7 @@ function FieldRow({ field }: { field: DomainEnvelopeFieldMetadata }) {
                 color={chipColorForState(field.definition_state)}
                 variant="outlined"
                 label={humanizeState(field.definition_state)}
-                sx={{ height: 18, fontSize: '0.6rem' }}
+                sx={compactChipSx}
               />
             )}
           </Stack>
@@ -203,63 +406,121 @@ function FieldRow({ field }: { field: DomainEnvelopeFieldMetadata }) {
   )
 }
 
-function ObjectPanel({ object }: { object: DomainEnvelopeObjectMetadata }) {
+function ObjectPanel({
+  object,
+  defaultExpanded = true,
+  fieldsDefaultExpanded = true,
+  compact = false,
+}: {
+  object: DomainEnvelopeObjectMetadata
+  defaultExpanded?: boolean
+  fieldsDefaultExpanded?: boolean
+  compact?: boolean
+}) {
   const schemaLabel = formatSchemaRef(object.schema_ref)
 
   return (
     <Accordion
       disableGutters
-      defaultExpanded
+      defaultExpanded={defaultExpanded}
       sx={{
         backgroundColor: 'transparent',
         boxShadow: 'none',
         border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.65)}`,
+        borderRadius: 1,
+        overflow: 'hidden',
         '&::before': { display: 'none' },
       }}
     >
-      <AccordionSummary expandIcon={<ExpandMoreIcon fontSize="small" />} sx={{ minHeight: 38 }}>
-        <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Typography variant="body2" sx={{ fontWeight: 600, fontSize: '0.8rem' }}>
-            {object.display_name}
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-            {object.object_type}
-          </Typography>
-          {object.object_role && (
-            <Chip size="small" variant="outlined" label={object.object_role} sx={{ height: 18, fontSize: '0.6rem' }} />
-          )}
-          {object.definition_state !== 'stable' && (
-            <Chip
-              size="small"
-              color={chipColorForState(object.definition_state)}
-              variant="outlined"
-              label={humanizeState(object.definition_state)}
-              sx={{ height: 18, fontSize: '0.6rem' }}
-            />
-          )}
-        </Stack>
+      <AccordionSummary
+        expandIcon={<ExpandMoreIcon fontSize="small" />}
+        sx={{
+          minHeight: compact ? 48 : 38,
+          px: compact ? 1.25 : 2,
+          '& .MuiAccordionSummary-content': { minWidth: 0, my: compact ? 0.9 : 1 },
+        }}
+      >
+        <Box
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: compact ? 'minmax(0, 1fr) auto' : 'minmax(0, 1fr)' },
+            gap: 1,
+            alignItems: 'center',
+            width: '100%',
+            minWidth: 0,
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" sx={{ fontWeight: 700, fontSize: compact ? '0.82rem' : '0.8rem', lineHeight: 1.25 }}>
+              {object.display_name}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.2 }}>
+              {object.object_type}
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Chip size="small" variant="outlined" label={`${object.fields.length} fields`} sx={compactChipSx} />
+            {object.object_role && (
+              <Chip size="small" variant="outlined" label={object.object_role} sx={compactChipSx} />
+            )}
+            {object.definition_state !== 'stable' && (
+              <Chip
+                size="small"
+                color={chipColorForState(object.definition_state)}
+                variant="outlined"
+                label={humanizeState(object.definition_state)}
+                sx={compactChipSx}
+              />
+            )}
+          </Stack>
+        </Box>
       </AccordionSummary>
-      <AccordionDetails sx={{ pt: 0 }}>
-        <Stack spacing={1}>
+      <AccordionDetails sx={{ px: compact ? 1.25 : 2, pt: 0, pb: compact ? 1.25 : 2 }}>
+        <Stack spacing={compact ? 1.25 : 1}>
           {object.description && (
-            <Typography variant="caption" color="text.secondary">
+            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.45 }}>
               {object.description}
             </Typography>
           )}
           {schemaLabel && (
-            <Typography variant="caption" color="text.secondary">
-              Schema: {schemaLabel}
-            </Typography>
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: '1fr', sm: '88px minmax(0, 1fr)' },
+                gap: 0.75,
+                alignItems: 'baseline',
+              }}
+            >
+              <FieldMetaLabel>Schema</FieldMetaLabel>
+              <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, lineHeight: 1.4 }}>
+                {schemaLabel}
+              </Typography>
+            </Box>
           )}
           <ProviderRefs refs={object.provider_refs} />
           {object.validation_attachments.length > 0 && (
             <ValidationChips attachments={object.validation_attachments} />
           )}
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, maxHeight: 320, overflow: 'auto' }}>
-            {object.fields.map((field) => (
-              <FieldRow key={field.field_path} field={field} />
-            ))}
-          </Box>
+          <SectionAccordion
+            title={`Fields (${object.fields.length})`}
+            summary={compact ? 'Open for LinkML/database-backed field paths and validation metadata.' : undefined}
+            defaultExpanded={fieldsDefaultExpanded}
+          >
+            <Box
+              sx={{
+                display: 'flex',
+                flexDirection: 'column',
+                maxHeight: compact ? 520 : 320,
+                overflow: 'auto',
+                borderTop: compact ? (theme) => `1px solid ${alpha(theme.palette.divider, 0.7)}` : 0,
+                borderBottom: compact ? (theme) => `1px solid ${alpha(theme.palette.divider, 0.7)}` : 0,
+              }}
+            >
+              {object.fields.map((field) => (
+                <FieldRow key={field.field_path} field={field} compact={compact} />
+              ))}
+            </Box>
+          </SectionAccordion>
         </Stack>
       </AccordionDetails>
     </Accordion>
@@ -270,12 +531,19 @@ function DomainEnvelopeMetadataPanel({
   metadata,
   validationAttachments,
   compact = false,
+  layout = 'standard',
   title = 'Domain Envelope',
   validationModeNote,
 }: DomainEnvelopeMetadataPanelProps) {
   if (!metadata) return null
 
   const attachmentView = validationAttachments ?? metadata.validation_attachments
+  const isFlowEditor = layout === 'flow-editor'
+  const fieldCount = metadata.object_definitions.reduce(
+    (count, object) => count + object.fields.length,
+    0
+  )
+  const noteCount = Math.max(metadata.source_of_truth_notes.length - 1, 0)
 
   return (
     <Box
@@ -283,98 +551,237 @@ function DomainEnvelopeMetadataPanel({
       sx={{
         border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.75)}`,
         borderRadius: 1,
-        p: compact ? 1 : 1.5,
+        p: isFlowEditor ? 1.25 : compact ? 1 : 1.5,
         backgroundColor: (theme) => alpha(theme.palette.background.default, 0.28),
+        overflow: 'hidden',
       }}
     >
       <Stack spacing={compact ? 1 : 1.5}>
-        <Box>
-          <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" useFlexGap>
-            <Typography variant="subtitle2" sx={{ fontSize: compact ? '0.8rem' : '0.9rem', fontWeight: 700 }}>
-              {title}
-            </Typography>
-            <Chip size="small" variant="outlined" label={metadata.domain_pack_id} sx={{ height: 20, fontSize: '0.65rem' }} />
-            <Chip size="small" variant="outlined" label={`v${metadata.domain_pack_version}`} sx={{ height: 20, fontSize: '0.65rem' }} />
-            <Chip
-              size="small"
-              color={chipColorForState(metadata.status)}
-              variant="outlined"
-              label={humanizeState(metadata.status)}
-              sx={{ height: 20, fontSize: '0.65rem' }}
-            />
-          </Stack>
-          <Typography variant="body2" sx={{ mt: 0.5, fontSize: compact ? '0.75rem' : '0.8rem' }}>
-            {metadata.display_name}
-          </Typography>
-          {metadata.description && !compact && (
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
-              {metadata.description}
-            </Typography>
-          )}
-        </Box>
-
-        <Alert severity="info" sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
-          {metadata.semantic_source_note}
-        </Alert>
-
-        {validationModeNote && (
-          <Alert severity="success" sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
-            {validationModeNote}
-          </Alert>
-        )}
-
-        <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-          <Chip size="small" label={`${metadata.object_definitions.length} object type${metadata.object_definitions.length === 1 ? '' : 's'}`} />
-          <Chip size="small" label={`${metadata.validation_summary.default_enabled} default validator${metadata.validation_summary.default_enabled === 1 ? '' : 's'}`} />
-          {metadata.validation_summary.export_blocking > 0 && (
-            <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} export-blocking`} />
-          )}
-          {metadata.validation_summary.opt_out_allowed > 0 && (
-            <Chip size="small" color="warning" variant="outlined" label={`${metadata.validation_summary.opt_out_allowed} opt-out allowed`} />
-          )}
-        </Stack>
-
-        <ValidationChips attachments={attachmentView} />
-
-        {metadata.schema_refs.length > 0 && (
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-              Schema references
-            </Typography>
-            <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-              {metadata.schema_refs.map((schemaRef) => (
-                <Tooltip key={schemaRef.schema_id} title={schemaRef.uri || formatSchemaRef(schemaRef)}>
-                  <Chip size="small" variant="outlined" label={formatSchemaRef(schemaRef)} />
-                </Tooltip>
-              ))}
-            </Stack>
-          </Box>
-        )}
-
-        <ProviderRefs refs={metadata.provider_refs} />
-
-        {metadata.source_of_truth_notes.length > 1 && (
-          <Box>
-            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-              Source-of-truth notes
-            </Typography>
-            <Stack spacing={0.25}>
-              {metadata.source_of_truth_notes.slice(1, compact ? 3 : 6).map((note) => (
-                <Typography key={note} variant="caption" color="text.secondary">
-                  {note}
+        {isFlowEditor ? (
+          <Box
+            sx={{
+              p: 1,
+              borderRadius: 1,
+              backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.58),
+              border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.65)}`,
+            }}
+          >
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: { xs: 'minmax(0, 1fr)', md: 'minmax(0, 1fr) auto' },
+                gap: 1,
+                alignItems: 'start',
+              }}
+            >
+              <Box sx={{ minWidth: 0 }}>
+                <Typography variant="subtitle2" sx={{ fontSize: '0.88rem', fontWeight: 750, lineHeight: 1.25 }}>
+                  {title}
                 </Typography>
-              ))}
-            </Stack>
+                <Typography variant="body2" sx={{ mt: 0.35, fontSize: '0.78rem', lineHeight: 1.35 }}>
+                  {metadata.display_name}
+                </Typography>
+              </Box>
+              <Chip
+                size="small"
+                color={chipColorForState(metadata.status)}
+                variant="outlined"
+                label={humanizeState(metadata.status)}
+                sx={compactChipSx}
+              />
+            </Box>
+
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: {
+                  xs: 'repeat(2, minmax(0, 1fr))',
+                  md: '1.4fr 0.7fr 0.9fr 1fr',
+                },
+                gap: 1,
+                mt: 1,
+              }}
+            >
+              <SummaryMetric label="Domain pack" value={metadata.domain_pack_id} mono />
+              <SummaryMetric label="Version" value={`v${metadata.domain_pack_version}`} mono />
+              <SummaryMetric
+                label="Objects"
+                value={`${metadata.object_definitions.length} types / ${fieldCount} fields`}
+              />
+              <SummaryMetric
+                label="Validators"
+                value={`${metadata.validation_summary.default_enabled} default`}
+              />
+            </Box>
+
+            {(metadata.validation_summary.export_blocking > 0
+              || metadata.validation_summary.opt_out_allowed > 0
+              || attachmentView.length > 0) && (
+              <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                {metadata.validation_summary.export_blocking > 0 && (
+                  <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} export-blocking`} sx={compactChipSx} />
+                )}
+                {metadata.validation_summary.opt_out_allowed > 0 && (
+                  <Chip size="small" color="warning" variant="outlined" label={`${metadata.validation_summary.opt_out_allowed} opt-out allowed`} sx={compactChipSx} />
+                )}
+                <ValidationChips attachments={attachmentView} />
+              </Stack>
+            )}
           </Box>
+        ) : (
+          <>
+            <Box>
+              <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap" useFlexGap>
+                <Typography variant="subtitle2" sx={{ fontSize: compact ? '0.8rem' : '0.9rem', fontWeight: 700 }}>
+                  {title}
+                </Typography>
+                <Chip size="small" variant="outlined" label={metadata.domain_pack_id} sx={{ ...compactChipSx, height: 20, fontSize: '0.65rem' }} />
+                <Chip size="small" variant="outlined" label={`v${metadata.domain_pack_version}`} sx={{ ...compactChipSx, height: 20, fontSize: '0.65rem' }} />
+                <Chip
+                  size="small"
+                  color={chipColorForState(metadata.status)}
+                  variant="outlined"
+                  label={humanizeState(metadata.status)}
+                  sx={{ ...compactChipSx, height: 20, fontSize: '0.65rem' }}
+                />
+              </Stack>
+              <Typography variant="body2" sx={{ mt: 0.5, fontSize: compact ? '0.75rem' : '0.8rem' }}>
+                {metadata.display_name}
+              </Typography>
+              {metadata.description && !compact && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                  {metadata.description}
+                </Typography>
+              )}
+            </Box>
+
+            <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+              <Chip size="small" label={`${metadata.object_definitions.length} object type${metadata.object_definitions.length === 1 ? '' : 's'}`} />
+              <Chip size="small" label={`${metadata.validation_summary.default_enabled} default validator${metadata.validation_summary.default_enabled === 1 ? '' : 's'}`} />
+              {metadata.validation_summary.export_blocking > 0 && (
+                <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} export-blocking`} />
+              )}
+              {metadata.validation_summary.opt_out_allowed > 0 && (
+                <Chip size="small" color="warning" variant="outlined" label={`${metadata.validation_summary.opt_out_allowed} opt-out allowed`} />
+              )}
+            </Stack>
+
+            <ValidationChips attachments={attachmentView} />
+          </>
         )}
 
-        <Divider />
+        {isFlowEditor ? (
+          <>
+            <SectionAccordion
+              title="Guidance"
+              summary={`${noteCount} source-of-truth note${noteCount === 1 ? '' : 's'} plus automatic validation behavior.`}
+            >
+              <Stack spacing={1}>
+                <Alert severity="info" sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
+                  {metadata.semantic_source_note}
+                </Alert>
 
-        <Stack spacing={1}>
-          {metadata.object_definitions.map((object) => (
-            <ObjectPanel key={object.object_type} object={object} />
-          ))}
-        </Stack>
+                {validationModeNote && (
+                  <Alert severity="success" sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
+                    {validationModeNote}
+                  </Alert>
+                )}
+
+                {metadata.source_of_truth_notes.length > 1 && (
+                  <Stack spacing={0.5}>
+                    {metadata.source_of_truth_notes.slice(1).map((note) => (
+                      <Typography key={note} variant="caption" color="text.secondary">
+                        {note}
+                      </Typography>
+                    ))}
+                  </Stack>
+                )}
+              </Stack>
+            </SectionAccordion>
+
+            <SectionAccordion
+              title="Schema References"
+              summary={`${metadata.schema_refs.length} schema reference${metadata.schema_refs.length === 1 ? '' : 's'} and ${Object.keys(metadata.provider_refs).length} provider reference${Object.keys(metadata.provider_refs).length === 1 ? '' : 's'}.`}
+            >
+              <Stack spacing={1}>
+                {metadata.schema_refs.length > 0 && (
+                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                    {metadata.schema_refs.map((schemaRef) => (
+                      <Tooltip key={schemaRef.schema_id} title={schemaRef.uri || formatSchemaRef(schemaRef)}>
+                        <Chip size="small" variant="outlined" label={formatSchemaRef(schemaRef)} />
+                      </Tooltip>
+                    ))}
+                  </Stack>
+                )}
+                <ProviderRefs refs={metadata.provider_refs} />
+              </Stack>
+            </SectionAccordion>
+
+            <Stack spacing={1}>
+              {metadata.object_definitions.map((object) => (
+                <ObjectPanel
+                  key={object.object_type}
+                  object={object}
+                  defaultExpanded={false}
+                  fieldsDefaultExpanded={false}
+                  compact
+                />
+              ))}
+            </Stack>
+          </>
+        ) : (
+          <>
+            <Alert severity="info" sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
+              {metadata.semantic_source_note}
+            </Alert>
+
+            {validationModeNote && (
+              <Alert severity="success" sx={{ py: 0.5, '& .MuiAlert-message': { fontSize: '0.75rem' } }}>
+                {validationModeNote}
+              </Alert>
+            )}
+
+            {metadata.schema_refs.length > 0 && (
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                  Schema references
+                </Typography>
+                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                  {metadata.schema_refs.map((schemaRef) => (
+                    <Tooltip key={schemaRef.schema_id} title={schemaRef.uri || formatSchemaRef(schemaRef)}>
+                      <Chip size="small" variant="outlined" label={formatSchemaRef(schemaRef)} />
+                    </Tooltip>
+                  ))}
+                </Stack>
+              </Box>
+            )}
+
+            <ProviderRefs refs={metadata.provider_refs} />
+
+            {metadata.source_of_truth_notes.length > 1 && (
+              <Box>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                  Source-of-truth notes
+                </Typography>
+                <Stack spacing={0.25}>
+                  {metadata.source_of_truth_notes.slice(1, compact ? 3 : 6).map((note) => (
+                    <Typography key={note} variant="caption" color="text.secondary">
+                      {note}
+                    </Typography>
+                  ))}
+                </Stack>
+              </Box>
+            )}
+
+            <Divider />
+
+            <Stack spacing={1}>
+              {metadata.object_definitions.map((object) => (
+                <ObjectPanel key={object.object_type} object={object} />
+              ))}
+            </Stack>
+          </>
+        )}
       </Stack>
     </Box>
   )

@@ -46,14 +46,19 @@ const EditorContainer = styled(Paper)(({ theme }) => ({
   top: 0,
   right: 0,
   bottom: 0,
-  width: '100%',
-  maxWidth: 320,
+  width: 'clamp(720px, 58vw, 1120px)',
+  maxWidth: 'calc(100vw - 96px)',
   backgroundColor: theme.palette.background.paper,
   borderLeft: `1px solid ${theme.palette.divider}`,
   display: 'flex',
   flexDirection: 'column',
   zIndex: 10,
   overflow: 'hidden',
+  boxShadow: theme.shadows[8],
+  [theme.breakpoints.down('md')]: {
+    width: '100%',
+    maxWidth: '100%',
+  },
 }))
 
 const EditorHeader = styled(Box)(({ theme }) => ({
@@ -305,6 +310,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
             metadata={domainEnvelopeMetadata}
             validationAttachments={validationAttachments}
             compact
+            layout="flow-editor"
             validationModeNote="Active default validators run automatically for this extraction step. Add a Data Validation agent after the extractor for custom checks; its steering prompt is saved as normal flow node configuration."
           />
         )}
