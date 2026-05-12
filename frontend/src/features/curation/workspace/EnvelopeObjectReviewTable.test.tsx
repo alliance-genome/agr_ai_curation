@@ -154,7 +154,7 @@ describe('EnvelopeObjectReviewTable', () => {
     vi.restoreAllMocks()
   })
 
-  it('renders unknown validation states as explicit review data problems', () => {
+  it('renders unexpected validation states without exposing raw error copy', () => {
     renderTable([
       buildRow({
         reviewRow: buildReviewRow({
@@ -163,10 +163,11 @@ describe('EnvelopeObjectReviewTable', () => {
       }),
     ])
 
-    expect(screen.getByText('Unknown validation state: schema_provider_timeout')).toBeInTheDocument()
+    expect(screen.getByText('Schema Provider Timeout')).toBeInTheDocument()
+    expect(screen.queryByText(/Unknown validation state/i)).not.toBeInTheDocument()
   })
 
-  it('surfaces a missing review-row display label instead of substituting an object id', () => {
+  it('uses a readable object fallback when a review-row display label is missing', () => {
     renderTable([
       buildRow({
         reviewRow: buildReviewRow({
@@ -175,9 +176,9 @@ describe('EnvelopeObjectReviewTable', () => {
       }),
     ])
 
-    expect(screen.getAllByText('Display label missing').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('Tmem67 gene object').length).toBeGreaterThan(0)
     expect(
-      screen.getByRole('button', { name: 'Accept review row with missing display label' }),
+      screen.getByRole('button', { name: 'Accept Tmem67 gene object' }),
     ).toBeInTheDocument()
   })
 
@@ -200,7 +201,7 @@ describe('EnvelopeObjectReviewTable', () => {
       }),
     ])
 
-    expect(screen.getByText('No evidence text projected.')).toBeInTheDocument()
+    expect(screen.getByText('No evidence text is available for this anchor.')).toBeInTheDocument()
   })
 
   it('propagates projected summary serialization failures', () => {

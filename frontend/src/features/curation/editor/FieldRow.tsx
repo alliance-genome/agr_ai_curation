@@ -274,9 +274,9 @@ export default function FieldRow({
         display: 'grid',
         gridTemplateColumns: {
           xs: '1fr',
-          md: '120px minmax(0, 1fr) auto auto auto',
+          md: 'minmax(144px, 0.34fr) minmax(220px, 1fr) auto auto auto',
         },
-        gap: 1.25,
+        gap: 1.1,
         alignItems: {
           xs: 'stretch',
           md: 'center',
@@ -292,14 +292,13 @@ export default function FieldRow({
             xs: 'flex-start',
             md: 'center',
           },
+          fontWeight: 600,
+          lineHeight: 1.3,
           pt: {
             xs: 0,
             md: 0.5,
           },
-          textAlign: {
-            xs: 'left',
-            md: 'right',
-          },
+          textAlign: 'left',
         }}
         variant="body2"
       >

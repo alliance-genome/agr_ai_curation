@@ -6,19 +6,17 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Divider,
   Stack,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
   Tooltip,
   Typography,
   type ChipProps,
 } from '@mui/material'
 import { alpha, useTheme } from '@mui/material/styles'
 
+import { EvidenceNavigationQuoteCard } from '@/features/curation/evidence'
+import { buildQuoteCentricEvidenceNavigationCommand } from '@/features/curation/evidence/navigationCommandBuilder'
+import type { EvidenceNavigationCommand } from '@/features/curation/evidence/types'
 import type {
   CurationCandidateStatus,
   DomainEnvelopeEvidenceAnchorProjection,
@@ -50,6 +48,15 @@ const VALIDATION_STATUS_COLOR: Record<DomainEnvelopeValidationStatus, ChipProps[
 }
 
 const VALIDATION_STATUS_VALUES = new Set<string>(DOMAIN_ENVELOPE_VALIDATION_STATUSES)
+const TECHNICAL_SUMMARY_FIELD_PATTERNS = [
+  /^association_kind$/,
+  /^evidence_record_ids(?:\[|$)/,
+  /^metadata_refs(?:\[|$)/,
+]
+const TECHNICAL_SUMMARY_LABEL_PATTERNS = [
+  /^association kind$/i,
+  /evidence record id/i,
+]
 
 function formatStatusLabel(value: string): string {
   return value
@@ -57,6 +64,101 @@ function formatStatusLabel(value: string): string {
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(' ')
+}
+
+function formatReadableIdentifier(value: string): string {
+  const readable = value
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!readable) {
+    return value
+  }
+
+  return `${readable.charAt(0).toUpperCase()}${readable.slice(1)}`
+}
+
+function formatObjectType(value?: string | null): string {
+  return value ? formatReadableIdentifier(value) : 'Curation object'
+}
+
+function objectTypeTokens(value?: string | null): Set<string> {
+  if (!value) {
+    return new Set()
+  }
+
+  return new Set(
+    formatReadableIdentifier(value)
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean),
+  )
+}
+
+function conciseObjectId(objectId: string, objectType?: string | null): string {
+  const rawTokens = objectId
+    .split(/[._-]+/)
+    .map((token) => token.trim())
+    .filter(Boolean)
+  const typeTokens = objectTypeTokens(objectType)
+  const genericLeadingTokens = new Set([
+    'annotation',
+    'association',
+    'curatable',
+    'evidence',
+    'object',
+    'pending',
+    'reference',
+  ])
+  let firstMeaningfulIndex = 0
+
+  while (
+    firstMeaningfulIndex < rawTokens.length - 1 &&
+    (
+      typeTokens.has(rawTokens[firstMeaningfulIndex].toLowerCase()) ||
+      genericLeadingTokens.has(rawTokens[firstMeaningfulIndex].toLowerCase())
+    )
+  ) {
+    firstMeaningfulIndex += 1
+  }
+
+  return formatReadableIdentifier(rawTokens.slice(firstMeaningfulIndex).join(' ') || objectId)
+}
+
+function isTechnicalDisplayLabel(value: string): boolean {
+  const trimmedValue = value.trim()
+  return /^[a-z0-9_.:-]+$/.test(trimmedValue) && /[_:.]/.test(trimmedValue)
+}
+
+function isEmptyProjectedValue(value: unknown): boolean {
+  if (value === null || value === undefined) {
+    return true
+  }
+
+  if (typeof value === 'string') {
+    return value.trim().length === 0
+  }
+
+  if (Array.isArray(value)) {
+    return value.length === 0
+  }
+
+  return false
+}
+
+function isTechnicalSummaryField(field: DomainEnvelopeReviewRowSummaryField): boolean {
+  return TECHNICAL_SUMMARY_FIELD_PATTERNS.some((pattern) => pattern.test(field.field_path)) ||
+    TECHNICAL_SUMMARY_LABEL_PATTERNS.some((pattern) => pattern.test(field.label))
+}
+
+function curatorSummaryFields(row: DomainEnvelopeReviewRow): DomainEnvelopeReviewRowSummaryField[] {
+  return row.summary_fields.filter((field) => !isTechnicalSummaryField(field))
+}
+
+function rowNeedsCuratorReview(row: DomainEnvelopeReviewRow): boolean {
+  return curatorSummaryFields(row).some((field) => isEmptyProjectedValue(field.value))
 }
 
 export function formatProjectedSummaryValue(value: unknown): string {
@@ -111,22 +213,35 @@ function isDomainEnvelopeValidationStatus(value: unknown): value is DomainEnvelo
   return typeof value === 'string' && VALIDATION_STATUS_VALUES.has(value)
 }
 
-function formatUnknownValidationState(value: unknown): string {
-  if (typeof value !== 'string') {
-    return String(value)
-  }
-
-  return value.trim() || 'empty value'
-}
-
 function validationChipPresentation(row: DomainEnvelopeReviewRow): {
   color: ChipProps['color']
   label: string
 } {
+  if (rowNeedsCuratorReview(row)) {
+    return {
+      color: 'warning',
+      label: 'Needs review',
+    }
+  }
+
+  if (row.validation_state === 'clear') {
+    return {
+      color: 'success',
+      label: 'No issues found',
+    }
+  }
+
+  if (!row.validation_state) {
+    return {
+      color: 'default',
+      label: 'Not checked',
+    }
+  }
+
   if (!isDomainEnvelopeValidationStatus(row.validation_state)) {
     return {
-      color: 'error',
-      label: `Unknown validation state: ${formatUnknownValidationState(row.validation_state)}`,
+      color: 'default',
+      label: formatStatusLabel(String(row.validation_state)),
     }
   }
 
@@ -136,36 +251,47 @@ function validationChipPresentation(row: DomainEnvelopeReviewRow): {
   }
 }
 
-function renderSummaryFields(fields: DomainEnvelopeReviewRowSummaryField[]) {
+function renderSummaryFields(row: DomainEnvelopeReviewRow) {
+  const fields = curatorSummaryFields(row)
+
   if (fields.length === 0) {
     return (
       <Typography color="text.secondary" variant="caption">
-        No projected summary fields
+        No curator-facing fields
       </Typography>
     )
   }
 
-  const visibleFields = fields.slice(0, 4)
+  const visibleFields = fields.slice(0, 3)
   const hiddenCount = fields.length - visibleFields.length
 
   return (
-    <Stack spacing={0.35}>
+    <Stack spacing={0.45}>
       {visibleFields.map((field) => (
-        <Typography
+        <Box
           key={field.field_path}
-          variant="caption"
-          sx={{ display: 'block', lineHeight: 1.35 }}
+          sx={{
+            alignItems: 'baseline',
+            display: 'grid',
+            gap: 0.75,
+            gridTemplateColumns: 'minmax(104px, 0.42fr) minmax(0, 1fr)',
+          }}
         >
-          <Box component="span" sx={{ color: 'text.secondary' }}>
+          <Typography color="text.secondary" variant="caption">
             {field.label}
-          </Box>
-          {': '}
-          {truncateValue(formatProjectedSummaryValue(field.value))}
-        </Typography>
+          </Typography>
+          <Typography
+            color={isEmptyProjectedValue(field.value) ? 'warning.main' : 'text.primary'}
+            variant="caption"
+            sx={{ fontWeight: isEmptyProjectedValue(field.value) ? 700 : 500 }}
+          >
+            {truncateValue(formatProjectedSummaryValue(field.value), 72)}
+          </Typography>
+        </Box>
       ))}
       {hiddenCount > 0 ? (
         <Typography color="text.secondary" variant="caption">
-          {hiddenCount} more projected fields
+          {hiddenCount} more fields in the editor
         </Typography>
       ) : null}
     </Stack>
@@ -174,7 +300,7 @@ function renderSummaryFields(fields: DomainEnvelopeReviewRowSummaryField[]) {
 
 function validationSummaryLabel(row: WorkspaceEnvelopeObjectReviewRow): string {
   if (row.validationSummaries.length === 0) {
-    return 'No projected findings'
+    return 'No validation findings'
   }
 
   const openFindingCount = row.validationSummaries.reduce(
@@ -191,10 +317,10 @@ function validationSummaryLabel(row: WorkspaceEnvelopeObjectReviewRow): string {
 
 function evidenceLabel(anchors: DomainEnvelopeEvidenceAnchorProjection[]): string {
   if (anchors.length === 0) {
-    return 'No projected evidence'
+    return 'No evidence'
   }
 
-  return `${anchors.length} projected evidence anchor${anchors.length === 1 ? '' : 's'}`
+  return `${anchors.length} evidence quote${anchors.length === 1 ? '' : 's'}`
 }
 
 function reviewRowDisplayLabel(reviewRow: DomainEnvelopeReviewRow): string | null {
@@ -202,12 +328,23 @@ function reviewRowDisplayLabel(reviewRow: DomainEnvelopeReviewRow): string | nul
   return displayLabel && displayLabel.length > 0 ? displayLabel : null
 }
 
-function selectedRowLabel(row: WorkspaceEnvelopeObjectReviewRow): string {
-  if (!row.reviewRow) {
-    return `object ${row.projectionRef.object_id} with missing review row`
+function reviewRowTitle(row: WorkspaceEnvelopeObjectReviewRow): string {
+  const reviewRow = row.reviewRow
+  const displayLabel = reviewRow ? reviewRowDisplayLabel(reviewRow) : null
+
+  if (displayLabel && !isTechnicalDisplayLabel(displayLabel)) {
+    return displayLabel
   }
 
-  return reviewRowDisplayLabel(row.reviewRow) ?? 'review row with missing display label'
+  return conciseObjectId(row.projectionRef.object_id, reviewRow?.object_type)
+}
+
+function selectedRowLabel(row: WorkspaceEnvelopeObjectReviewRow): string {
+  if (!row.reviewRow) {
+    return reviewRowTitle(row)
+  }
+
+  return reviewRowTitle(row)
 }
 
 function evidenceAnchorText(anchor: DomainEnvelopeEvidenceAnchorProjection): string | null {
@@ -229,6 +366,51 @@ function evidenceAnchorText(anchor: DomainEnvelopeEvidenceAnchorProjection): str
   return null
 }
 
+function evidenceProjectionCommand(
+  projection: DomainEnvelopeEvidenceAnchorProjection,
+): EvidenceNavigationCommand | null {
+  const quote = evidenceAnchorText(projection)
+  const pageNumber = projection.page_number ?? projection.anchor.page_number ?? null
+  const sectionTitle = projection.section_title ?? projection.anchor.section_title ?? null
+  const subsectionTitle = projection.subsection_title ?? projection.anchor.subsection_title ?? null
+  const anchor = {
+    ...projection.anchor,
+    page_number: pageNumber,
+    section_title: sectionTitle,
+    subsection_title: subsectionTitle,
+    chunk_ids: projection.chunk_ids.length > 0 ? projection.chunk_ids : projection.anchor.chunk_ids,
+  }
+
+  if (quote) {
+    return buildQuoteCentricEvidenceNavigationCommand({
+      anchorId: projection.anchor_id,
+      anchor,
+      quote,
+      pageNumber,
+      sectionTitle,
+      mode: 'select',
+    })
+  }
+
+  if (
+    anchor.viewer_search_text ||
+    pageNumber !== null ||
+    sectionTitle !== null ||
+    anchor.locator_quality === 'document_only'
+  ) {
+    return {
+      anchorId: projection.anchor_id,
+      anchor,
+      searchText: anchor.viewer_search_text ?? null,
+      pageNumber,
+      sectionTitle,
+      mode: 'select',
+    }
+  }
+
+  return null
+}
+
 function EnvelopeObjectRow({
   isSelected,
   onAcceptRow,
@@ -244,21 +426,48 @@ function EnvelopeObjectRow({
 }) {
   const theme = useTheme()
   const reviewRow = row.reviewRow
-  const displayLabel = reviewRow ? reviewRowDisplayLabel(reviewRow) : null
   const rowLabel = selectedRowLabel(row)
   const decision = row.candidate.status
   const validationChip = reviewRow ? validationChipPresentation(reviewRow) : null
 
   return (
-    <TableRow
-      hover
+    <Box
+      aria-current={isSelected ? 'true' : undefined}
+      data-testid={`envelope-object-review-row-${row.candidate.candidate_id}`}
       onClick={() => onSelectRow(row.candidate.candidate_id)}
-      selected={isSelected}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onSelectRow(row.candidate.candidate_id)
+        }
+      }}
+      role="button"
       sx={{
+        border: `1px solid ${isSelected ? alpha(theme.palette.primary.main, 0.72) : alpha(theme.palette.divider, 0.82)}`,
+        borderRadius: 1,
+        backgroundColor: isSelected
+          ? alpha(theme.palette.primary.main, 0.11)
+          : alpha(theme.palette.background.paper, 0.72),
+        boxShadow: isSelected
+          ? `inset 3px 0 0 ${theme.palette.primary.main}`
+          : `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.03)}`,
         cursor: 'pointer',
-        ...(isSelected && {
-          borderLeft: `3px solid ${theme.palette.primary.main}`,
-        }),
+        display: 'grid',
+        gap: 1,
+        gridTemplateColumns: { xs: '1fr', lg: 'minmax(170px, 0.72fr) minmax(220px, 1fr) auto' },
+        p: 1,
+        transition: 'border-color 160ms ease, background-color 160ms ease, transform 160ms ease',
+        '&:hover': {
+          borderColor: alpha(theme.palette.primary.main, 0.56),
+          backgroundColor: alpha(theme.palette.primary.main, isSelected ? 0.13 : 0.055),
+        },
+        '&:focus-visible': {
+          outline: `2px solid ${theme.palette.primary.main}`,
+          outlineOffset: 2,
+        },
+        '&:active': {
+          transform: 'translateY(1px)',
+        },
         ...(decision === 'accepted' && {
           backgroundColor: alpha(theme.palette.success.main, 0.06),
         }),
@@ -266,138 +475,79 @@ function EnvelopeObjectRow({
           opacity: 0.58,
         }),
       }}
+      tabIndex={0}
     >
-      <TableCell sx={{ minWidth: 250, py: 0.85 }}>
-        <Stack spacing={0.4}>
-          {reviewRow ? (
-            displayLabel ? (
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                {displayLabel}
-              </Typography>
-            ) : (
-              <Typography color="warning.main" variant="body2" sx={{ fontWeight: 600 }}>
-                Display label missing
-              </Typography>
-            )
-          ) : (
-            <Typography color="warning.main" variant="body2" sx={{ fontWeight: 600 }}>
-              Review row missing
-            </Typography>
-          )}
-          {reviewRow?.secondary_label ? (
-            <Typography color="text.secondary" variant="caption">
-              {reviewRow.secondary_label}
-            </Typography>
-          ) : null}
-          <Typography color="text.secondary" variant="caption">
-            Object {row.projectionRef.object_id}
-          </Typography>
-          <Typography color="text.secondary" variant="caption">
-            Envelope {row.projectionRef.envelope_id} r{row.projectionRef.envelope_revision}
-          </Typography>
-        </Stack>
-      </TableCell>
-
-      <TableCell sx={{ minWidth: 210, py: 0.85 }}>
+      <Stack spacing={0.45} sx={{ minWidth: 0 }}>
+        <Typography
+          variant="body2"
+          sx={{
+            fontWeight: 700,
+            lineHeight: 1.25,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {rowLabel}
+        </Typography>
         {reviewRow ? (
-          <Stack spacing={0.45}>
-            <Typography variant="body2">{reviewRow.object_type}</Typography>
+          <>
             <Typography color="text.secondary" variant="caption">
-              {reviewRow.object_role || 'No object role'}
+              {formatObjectType(reviewRow.object_type)}
             </Typography>
-            <Typography color="text.secondary" variant="caption">
-              {reviewRow.domain_pack_version
-                ? `${reviewRow.domain_pack_id}@${reviewRow.domain_pack_version}`
-                : reviewRow.domain_pack_id}
-            </Typography>
-          </Stack>
+            {reviewRow.object_role ? (
+              <Typography color="text.secondary" variant="caption">
+                {formatReadableIdentifier(reviewRow.object_role)}
+              </Typography>
+            ) : null}
+          </>
         ) : (
-          <Alert severity="warning" sx={{ py: 0 }}>
-            Review row missing for this envelope object.
-          </Alert>
+          <Typography color="warning.main" variant="caption">
+            Review row unavailable
+          </Typography>
         )}
-      </TableCell>
-
-      <TableCell sx={{ minWidth: 170, py: 0.85 }}>
-        <Stack spacing={0.5} alignItems="flex-start">
+        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
           <Chip
             color={decisionColor(decision)}
             label={formatStatusLabel(decision)}
             size="small"
             variant="outlined"
           />
-          {reviewRow ? (
-            <>
-              <Chip
-                color="default"
-                label={formatStatusLabel(reviewRow.status)}
-                size="small"
-                variant="outlined"
-              />
-              {validationChip ? (
-                <Chip
-                  color={validationChip.color}
-                  label={validationChip.label}
-                  size="small"
-                  variant="outlined"
-                />
-              ) : null}
-            </>
+          {reviewRow?.secondary_label ? (
+            <Chip label={reviewRow.secondary_label} size="small" variant="outlined" />
           ) : null}
         </Stack>
-      </TableCell>
+      </Stack>
 
-      <TableCell sx={{ minWidth: 260, py: 0.85 }}>
+      <Stack spacing={0.75} sx={{ minWidth: 0 }}>
         {reviewRow ? (
-          <Stack spacing={0.35}>
-            <Typography variant="caption">
-              <Box component="span" sx={{ color: 'text.secondary' }}>
-                Type
-              </Box>
-              {`: ${reviewRow.projection_type}`}
-            </Typography>
-            <Typography variant="caption">
-              <Box component="span" sx={{ color: 'text.secondary' }}>
-                Key
-              </Box>
-              {`: ${reviewRow.projection_key}`}
-            </Typography>
-            {reviewRow.schema_provider ? (
-              <Typography variant="caption">
-                <Box component="span" sx={{ color: 'text.secondary' }}>
-                  Schema
-                </Box>
-                {`: ${reviewRow.schema_provider}`}
-              </Typography>
-            ) : null}
-          </Stack>
+          renderSummaryFields(reviewRow)
         ) : (
           <Typography color="text.secondary" variant="caption">
-            Projection metadata unavailable
+            Summary unavailable
           </Typography>
         )}
-      </TableCell>
-
-      <TableCell sx={{ minWidth: 300, py: 0.85 }}>
-        {reviewRow ? renderSummaryFields(reviewRow.summary_fields) : (
-          <Typography color="text.secondary" variant="caption">
-            Summary fields unavailable
-          </Typography>
-        )}
-      </TableCell>
-
-      <TableCell sx={{ minWidth: 210, py: 0.85 }}>
-        <Stack spacing={0.35}>
-          <Typography variant="caption">{validationSummaryLabel(row)}</Typography>
-          <Typography color="text.secondary" variant="caption">
-            {evidenceLabel(row.evidenceAnchors)}
-          </Typography>
+        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+          {validationChip ? (
+            <Chip
+              color={validationChip.color}
+              label={validationChip.label}
+              size="small"
+              variant="outlined"
+            />
+          ) : null}
+          <Chip label={validationSummaryLabel(row)} size="small" variant="outlined" />
+          <Chip label={evidenceLabel(row.evidenceAnchors)} size="small" variant="outlined" />
         </Stack>
-      </TableCell>
+      </Stack>
 
-      <TableCell
+      <Box
         onClick={(event) => event.stopPropagation()}
-        sx={{ minWidth: 190, py: 0.85 }}
+        sx={{
+          alignItems: { xs: 'flex-start', lg: 'center' },
+          display: 'flex',
+          justifyContent: { xs: 'flex-start', lg: 'flex-end' },
+        }}
       >
         {decision === 'pending' ? (
           <Stack direction="row" spacing={0.75}>
@@ -435,8 +585,8 @@ function EnvelopeObjectRow({
             {formatStatusLabel(decision)}
           </Typography>
         )}
-      </TableCell>
-    </TableRow>
+      </Box>
+    </Box>
   )
 }
 
@@ -445,6 +595,8 @@ function EvidenceProjectionPanel({
 }: {
   row: WorkspaceEnvelopeObjectReviewRow | null
 }) {
+  const theme = useTheme()
+
   if (!row) {
     return (
       <Box sx={{ p: 1.5 }}>
@@ -457,43 +609,67 @@ function EvidenceProjectionPanel({
 
   return (
     <Box sx={{ p: 1.5 }}>
-      <Stack spacing={1}>
+      <Stack spacing={1.25}>
         <Stack spacing={0.25}>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            {selectedRowLabel(row)}
-          </Typography>
           <Typography color="text.secondary" variant="caption">
-            {row.projectionRef.envelope_id} / {row.projectionRef.object_id} / r{row.projectionRef.envelope_revision}
+            Evidence for selected object
+          </Typography>
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+            {selectedRowLabel(row)}
           </Typography>
         </Stack>
 
         {row.evidenceAnchors.length === 0 ? (
           <Typography color="text.secondary" variant="body2">
-            No projected evidence anchors.
+            No evidence quote is linked to this object.
           </Typography>
         ) : (
           <Stack spacing={0.75}>
             {row.evidenceAnchors.slice(0, 5).map((anchor) => {
               const projectedText = evidenceAnchorText(anchor)
+              const command = evidenceProjectionCommand(anchor)
+              const footerText = [
+                anchor.page_label || (anchor.page_number ? `page ${anchor.page_number}` : null),
+                anchor.section_title,
+              ].filter(Boolean).join(' / ')
+
+              if (projectedText && command) {
+                return (
+                  <EvidenceNavigationQuoteCard
+                    accentColor={theme.palette.primary.main}
+                    appearance="workspace"
+                    ariaLabel={`Highlight evidence on PDF: ${projectedText}`}
+                    command={command}
+                    debugContext={{
+                      source: 'curation-envelope-object-review',
+                      anchorId: anchor.anchor_id,
+                      objectId: anchor.object_id,
+                      fieldPath: anchor.field_path ?? null,
+                    }}
+                    footerText={footerText || 'Click to highlight this passage in the PDF'}
+                    key={anchor.anchor_id}
+                    quote={projectedText}
+                  />
+                )
+              }
 
               return (
-                <Box key={anchor.anchor_id}>
-                  {projectedText ? (
-                    <Typography variant="body2">
-                      {projectedText}
-                    </Typography>
-                  ) : (
-                    <Typography color="text.secondary" variant="body2" sx={{ fontStyle: 'italic' }}>
-                      No evidence text projected.
-                    </Typography>
-                  )}
-                  <Typography color="text.secondary" variant="caption">
-                    {[
-                      anchor.field_path,
-                      anchor.page_label || (anchor.page_number ? `page ${anchor.page_number}` : null),
-                      anchor.section_title,
-                    ].filter(Boolean).join(' / ') || anchor.anchor_id}
+                <Box
+                  key={anchor.anchor_id}
+                  sx={{
+                    border: `1px solid ${theme.palette.divider}`,
+                    borderRadius: 1,
+                    p: 1,
+                  }}
+                >
+                  <Typography color="text.secondary" variant="body2" sx={{ fontStyle: 'italic' }}>
+                    No evidence text is available for this anchor.
                   </Typography>
+                  {command ? (
+                    <Typography color="text.secondary" variant="caption">
+                      A page or section locator is available, but there is no quote text.
+                    </Typography>
+                  ) : null}
                 </Box>
               )
             })}
@@ -528,14 +704,14 @@ export default function EnvelopeObjectReviewTable({
         sx={{ borderBottom: 1, borderColor: 'divider', px: 1.5, py: 1 }}
       >
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-            Envelope objects
+          <Typography variant="body2" sx={{ fontWeight: 700 }}>
+            Objects to review
           </Typography>
-          <Chip label={`${rows.length} rows`} size="small" variant="outlined" />
+          <Chip label={`${rows.length} object${rows.length === 1 ? '' : 's'}`} size="small" variant="outlined" />
           {isLoading ? (
             <Chip
               icon={<CircularProgress size={12} />}
-              label="Loading projections"
+              label="Loading"
               size="small"
               variant="outlined"
             />
@@ -554,59 +730,40 @@ export default function EnvelopeObjectReviewTable({
         </Box>
       ) : null}
 
-      <TableContainer sx={{ flex: 1, overflow: 'auto' }}>
-        <Table size="small" stickyHeader sx={{ minWidth: 1600 }}>
-          <TableHead>
-            <TableRow>
-              {[
-                'Object',
-                'Domain',
-                'Status',
-                'Projection',
-                'Projected fields',
-                'Validation',
-                'Decision',
-              ].map((label) => (
-                <TableCell
-                  key={label}
-                  sx={{ fontSize: '0.7rem', fontWeight: 600, py: 0.75, px: 1 }}
-                >
-                  {label}
-                </TableCell>
-              ))}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {rows.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} sx={{ py: 5 }}>
-                  <Stack spacing={1} alignItems="center">
-                    {isLoading ? <CircularProgress size={22} /> : null}
-                    <Typography color="text.secondary" variant="body2">
-                      {isLoading
-                        ? 'Loading envelope object rows...'
-                        : 'No envelope object rows are available for this workspace.'}
-                    </Typography>
-                  </Stack>
-                </TableCell>
-              </TableRow>
-            ) : (
-              rows.map((row) => (
-                <EnvelopeObjectRow
-                  isSelected={row.candidate.candidate_id === selectedCandidateId}
-                  key={`${row.projectionRef.envelope_id}:${row.projectionRef.object_id}:${row.candidate.candidate_id}`}
-                  onAcceptRow={onAcceptRow}
-                  onRejectRow={onRejectRow}
-                  onSelectRow={onSelectRow}
-                  row={row}
-                />
-              ))
-            )}
-          </TableBody>
-        </Table>
-      </TableContainer>
+      <Stack
+        divider={<Divider flexItem />}
+        spacing={1}
+        sx={{
+          flex: 1,
+          minHeight: 0,
+          overflow: 'auto',
+          p: 1,
+        }}
+      >
+        {rows.length === 0 ? (
+          <Stack spacing={1} alignItems="center" sx={{ py: 5 }}>
+            {isLoading ? <CircularProgress size={22} /> : null}
+            <Typography color="text.secondary" variant="body2">
+              {isLoading
+                ? 'Loading curation objects...'
+                : 'No curation objects are available for this workspace.'}
+            </Typography>
+          </Stack>
+        ) : (
+          rows.map((row) => (
+            <EnvelopeObjectRow
+              isSelected={row.candidate.candidate_id === selectedCandidateId}
+              key={`${row.projectionRef.envelope_id}:${row.projectionRef.object_id}:${row.candidate.candidate_id}`}
+              onAcceptRow={onAcceptRow}
+              onRejectRow={onRejectRow}
+              onSelectRow={onSelectRow}
+              row={row}
+            />
+          ))
+        )}
+      </Stack>
 
-      <Box sx={{ flex: '0 0 auto', minHeight: 120, borderTop: 1, borderColor: 'divider' }}>
+      <Box sx={{ flex: '0 0 auto', minHeight: 190, borderTop: 1, borderColor: 'divider' }}>
         <EvidenceProjectionPanel row={selectedRow} />
       </Box>
     </Box>

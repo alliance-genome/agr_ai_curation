@@ -91,9 +91,24 @@ const STATUS_PRESENTATION: Record<DomainEnvelopeValidationStatus, StatusPresenta
 const METADATA_KEYS_TO_SKIP = new Set([
   'options',
   'placeholder',
+  'projection_key',
+  'projection_type',
+  'provider_refs',
+  'repair',
+  'semantic_source',
   'source_field_path',
+  'source_of_truth',
   'widget',
 ])
+const TECHNICAL_FIELD_PATH_PATTERNS = [
+  /^association_kind$/,
+  /^evidence_record_ids(?:\[|$)/,
+  /^metadata_refs(?:\[|$)/,
+]
+const TECHNICAL_FIELD_LABEL_PATTERNS = [
+  /^association kind$/i,
+  /evidence record id/i,
+]
 
 function humanizeKey(value?: string | null): string {
   if (!value) {
@@ -107,13 +122,40 @@ function humanizeKey(value?: string | null): string {
     .replace(/\b\w/g, (match) => match.toUpperCase())
 }
 
+function isTechnicalDisplayLabel(value: string): boolean {
+  const trimmedValue = value.trim()
+  return /^[a-z0-9_.:-]+$/.test(trimmedValue) && /[_:.]/.test(trimmedValue)
+}
+
+function humanizeObjectIdentifier(value: string): string {
+  const suffixParts = value.split(/(?:association|annotation|object|evidence|reference)[_-]+/i)
+  const meaningfulValue = suffixParts.at(-1)?.trim() || value
+  return humanizeKey(meaningfulValue)
+}
+
+function candidateDisplayTitle(candidate: CurationCandidate): string {
+  const explicitTitle = candidate.display_label?.trim()
+    || candidate.draft.title?.trim()
+    || ''
+
+  if (explicitTitle && !isTechnicalDisplayLabel(explicitTitle)) {
+    return explicitTitle
+  }
+
+  if (candidate.projection_ref?.object_id) {
+    return humanizeObjectIdentifier(candidate.projection_ref.object_id)
+  }
+
+  return explicitTitle ? humanizeKey(explicitTitle) : 'Selected curation object'
+}
+
 function groupLabel(field: CurationDraftField): string {
   const label = field.group_label?.trim()
   if (label) {
     return label
   }
 
-  return humanizeKey(field.group_key) || 'Ungrouped fields'
+  return humanizeKey(field.group_key) || 'Fields to review'
 }
 
 function buildSections(fields: CurationDraftField[]): FieldSection[] {
@@ -143,6 +185,13 @@ function buildSections(fields: CurationDraftField[]): FieldSection[] {
       left.label.localeCompare(right.label) ||
       left.key.localeCompare(right.key),
   )
+}
+
+function isTechnicalCurationField(field: CurationDraftField): boolean {
+  const fieldPath = resolveEnvelopeFieldPath(field)
+
+  return TECHNICAL_FIELD_PATH_PATTERNS.some((pattern) => pattern.test(fieldPath)) ||
+    TECHNICAL_FIELD_LABEL_PATTERNS.some((pattern) => pattern.test(field.label))
 }
 
 function fieldPathCandidates(field: CurationDraftField): Set<string> {
@@ -474,14 +523,31 @@ function FieldSupportDetails({
   }
 
   return (
-    <Typography
-      color="text.secondary"
+    <Box
+      component="details"
       data-testid={`field-support-details-${field.field_key}`}
-      sx={{ pl: { md: '132px' } }}
-      variant="caption"
+      sx={{
+        color: 'text.secondary',
+        pl: { md: '164px' },
+        '& summary': {
+          cursor: 'pointer',
+          display: 'inline-flex',
+          fontSize: '0.72rem',
+          fontWeight: 600,
+          lineHeight: 1.4,
+          outline: 0,
+        },
+        '& summary:focus-visible': {
+          borderRadius: 0.5,
+          boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}`,
+        },
+      }}
     >
-      {details.join(' · ')}
-    </Typography>
+      <Box component="summary">Technical details</Box>
+      <Typography color="text.secondary" sx={{ display: 'block', mt: 0.5 }} variant="caption">
+        {details.join(' · ')}
+      </Typography>
+    </Box>
   )
 }
 
@@ -523,9 +589,21 @@ function ObjectValidationAlerts({
 export default function CandidateFieldEditor() {
   const { activeCandidate, workspace } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
-  const sections = useMemo(
-    () => buildSections(activeCandidate?.draft.fields ?? []),
+  const curatorFields = useMemo(
+    () => (activeCandidate?.draft.fields ?? []).filter((field) => !isTechnicalCurationField(field)),
     [activeCandidate?.draft.fields],
+  )
+  const technicalFields = useMemo(
+    () => (activeCandidate?.draft.fields ?? []).filter(isTechnicalCurationField),
+    [activeCandidate?.draft.fields],
+  )
+  const sections = useMemo(
+    () => buildSections(curatorFields),
+    [curatorFields],
+  )
+  const technicalSections = useMemo(
+    () => buildSections(technicalFields),
+    [technicalFields],
   )
   const objectSummaries = useMemo(
     () => objectValidationSummaries(activeCandidate),
@@ -554,8 +632,8 @@ export default function CandidateFieldEditor() {
       }}
     >
       <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-        <Typography sx={{ flex: '1 1 auto', minWidth: 180 }} variant="subtitle1">
-          {activeCandidate.display_label ?? activeCandidate.draft.title ?? 'Selected curation row'}
+        <Typography sx={{ flex: '1 1 auto', fontWeight: 700, minWidth: 180 }} variant="subtitle1">
+          {candidateDisplayTitle(activeCandidate)}
         </Typography>
         {activeCandidate.projection_ref ? (
           <Chip
@@ -572,10 +650,20 @@ export default function CandidateFieldEditor() {
 
       <ObjectValidationAlerts summaries={objectSummaries} />
 
+      {sections.length === 0 ? (
+        <Alert severity="info" variant="outlined">
+          No curator-facing fields are available for this object.
+        </Alert>
+      ) : null}
+
       {sections.map((section) => (
         <Box key={section.key}>
-          <Typography color="text.secondary" sx={{ letterSpacing: 0 }} variant="overline">
-            {section.label.toUpperCase()}
+          <Typography
+            color="text.secondary"
+            sx={{ display: 'block', fontWeight: 700, mb: 1 }}
+            variant="body2"
+          >
+            {section.label}
           </Typography>
           <Stack divider={<Divider flexItem />} spacing={0.25}>
             {section.fields.map((field) => {
@@ -629,6 +717,85 @@ export default function CandidateFieldEditor() {
           </Stack>
         </Box>
       ))}
+
+      {technicalSections.length > 0 ? (
+        <Box
+          component="details"
+          sx={{
+            border: 1,
+            borderColor: 'divider',
+            borderRadius: 1,
+            p: 1.25,
+            '& summary': {
+              cursor: 'pointer',
+              fontSize: '0.8rem',
+              fontWeight: 700,
+              outline: 0,
+            },
+            '& summary:focus-visible': {
+              borderRadius: 0.5,
+              boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}`,
+            },
+          }}
+        >
+          <Box component="summary">
+            Technical fields
+          </Box>
+          <Typography color="text.secondary" sx={{ display: 'block', mt: 0.75 }} variant="caption">
+            Internal routing and evidence identifiers are kept here for debugging.
+          </Typography>
+          <Stack divider={<Divider flexItem />} spacing={0.25} sx={{ mt: 1 }}>
+            {technicalSections.flatMap((section) => section.fields).map((field) => {
+              const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
+
+              return (
+                <Stack key={field.field_key} spacing={0.6} sx={{ py: 1 }}>
+                  <FieldRow
+                    evidenceSlot={(
+                      <FieldEvidenceSlot
+                        projections={evidenceProjectionsForField(activeCandidate, field)}
+                      />
+                    )}
+                    field={field}
+                    onChange={(value) => {
+                      autosave.queueFieldChange({
+                        field_key: field.field_key,
+                        value,
+                      })
+                    }}
+                    revertSlot={field.dirty ? (
+                      <Button
+                        onClick={() =>
+                          autosave.queueFieldChange({
+                            field_key: field.field_key,
+                            revert_to_seed: true,
+                          })}
+                        size="small"
+                        type="button"
+                        variant="text"
+                      >
+                        Revert
+                      </Button>
+                    ) : null}
+                    validationSlot={(
+                      <FieldValidationSlot
+                        field={field}
+                        summaries={validationSummariesForField(activeCandidate, field)}
+                      />
+                    )}
+                    value={field.value}
+                  />
+                  <FieldSupportDetails
+                    candidate={activeCandidate}
+                    field={field}
+                    history={history}
+                  />
+                </Stack>
+              )
+            })}
+          </Stack>
+        </Box>
+      ) : null}
     </Stack>
   )
 }

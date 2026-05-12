@@ -439,13 +439,13 @@ describe('CandidateFieldEditor', () => {
     )
   })
 
-  it('does not hide missing field groups behind a generic details label', () => {
+  it('labels missing field groups with curator-facing review language', () => {
     const workspace = buildWorkspace()
     workspace.candidates[0]!.draft.fields[0]!.group_key = null
     workspace.candidates[0]!.draft.fields[0]!.group_label = null
 
     renderEditor(workspace)
 
-    expect(screen.getByText('UNGROUPED FIELDS')).toBeInTheDocument()
+    expect(screen.getByText('Fields to review')).toBeInTheDocument()
   })
 })
