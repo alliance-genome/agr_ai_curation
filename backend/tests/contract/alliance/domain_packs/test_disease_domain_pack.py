@@ -172,7 +172,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     pending_validator = validator_bindings[0]
     assert pending_validator == {
         "binding_id": DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
-        "display_name": "Pending disease envelope validation",
+        "display_name": "Data check",
         "validator": (
             "agr_ai_curation_alliance.domain_packs.disease."
             "validate_pending_disease_envelope"

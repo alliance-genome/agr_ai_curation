@@ -211,7 +211,7 @@ object_definitions:
               slot: where_expressed_statement
               range: string
   - object_type: Gene
-    display_name: Gene validated reference
+    display_name: Gene
     description: Validated gene reference object shared by curatable units.
     model_ref: GeneReferencePayload
     schema_ref:
@@ -264,7 +264,7 @@ object_definitions:
               slot: gene_symbol
               range: GeneSymbolSlotAnnotation
   - object_type: Reference
-    display_name: Reference validated reference
+    display_name: Reference
     description: Validated literature/reference object shared by curatable units.
     model_ref: ReferencePayload
     schema_ref:
@@ -304,7 +304,7 @@ object_definitions:
               slot: reference_id
               range: integer
   - object_type: ExpressionPatternContext
-    display_name: Expression pattern metadata context
+    display_name: Expression pattern context
     description: Metadata-only object for spatiotemporal expression context.
     model_ref: ExpressionPatternContextPayload
     schema_ref:

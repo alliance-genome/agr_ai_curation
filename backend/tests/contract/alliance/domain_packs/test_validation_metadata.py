@@ -94,6 +94,7 @@ def test_alliance_validator_metadata_has_curator_facing_display_names():
 
     missing_display_names: list[str] = []
     technical_labels: list[str] = []
+    duplicate_labels: list[str] = []
     for pack_id in sorted(pack_ids):
         registry = DomainPackValidationRegistry.from_domain_pack(
             alliance_registry.get_pack(pack_id)
@@ -105,17 +106,32 @@ def test_alliance_validator_metadata_has_curator_facing_display_names():
             if not binding.display_name:
                 missing_display_names.append(f"{pack_id}:binding:{binding.binding_id}")
 
+        seen_labels: set[tuple[str, str, str, str, str]] = set()
         for option in registry.validation_attachment_options():
             if option.label and (
                 "." in option.label
                 or "_" in option.label
                 or "(" in option.label
                 or ")" in option.label
+                or "validated reference" in option.label.lower()
+                or "envelope validation" in option.label.lower()
+                or "export projection" in option.label.lower()
             ):
                 technical_labels.append(f"{pack_id}:{option.attachment_id}:{option.label}")
+            label_key = (
+                option.state.value,
+                option.label,
+                option.scope,
+                option.object_type or "",
+                option.field_path or "",
+            )
+            if label_key in seen_labels:
+                duplicate_labels.append(f"{pack_id}:{option.label}")
+            seen_labels.add(label_key)
 
     assert missing_display_names == []
     assert technical_labels == []
+    assert duplicate_labels == []
 
 
 def test_alliance_relative_validator_metadata_targets_fields_and_policies():

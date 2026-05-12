@@ -1,5 +1,5 @@
 pack_id: gene
-display_name: Gene Validated Reference Domain Pack
+display_name: Gene Evidence Domain Pack
 version: 0.1.0
 metadata_api_version: 1.0.0
 description: Exportable, non-mutating validated-reference evidence for extracted Alliance gene mentions.
@@ -53,7 +53,7 @@ model_definitions:
       - Payload is evidence/reference data only and is not an Alliance Gene write DTO.
 object_definitions:
   - object_type: gene_mention_evidence
-    display_name: Gene mention evidence
+    display_name: Gene mention
     description: A tool-verified paper gene mention normalized to an existing Alliance Gene reference.
     model_ref: GeneMentionEvidencePayload
     schema_ref:
@@ -97,7 +97,7 @@ object_definitions:
           - chunk_id
       validator_bindings:
         - binding_id: alliance_gene_reference_lookup
-          display_name: Alliance gene reference lookup
+          display_name: Alliance gene lookup
           validation_kind: db_backed_reference_lookup
           provider: alliance_curation_db
           tool_name: agr_curation_query
@@ -142,7 +142,7 @@ object_definitions:
             reason: Paper mention text is the source evidence anchor, not a normalized repair target.
       - field_path: primary_external_id
         field_type: string
-        display_name: Primary external ID
+        display_name: Gene ID
         description: Alliance Gene primary external identifier resolved by validation tooling.
         required: true
         metadata:

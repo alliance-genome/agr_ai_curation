@@ -205,7 +205,7 @@ object_definitions:
         field_type: string
         display_name: First evidence record ID
   - object_type: Allele
-    display_name: Allele validated reference
+    display_name: Allele
     description: Pending validated-reference object for an existing Alliance allele.
     model_ref: AlleleReferencePayload
     schema_ref:
@@ -264,7 +264,7 @@ object_definitions:
               slot: allele_symbol
               range: AlleleSymbolSlotAnnotation
   - object_type: Reference
-    display_name: Reference validated reference
+    display_name: Reference
     description: Pending literature/reference object for the source paper.
     model_ref: ReferencePayload
     schema_ref:
@@ -387,7 +387,7 @@ metadata:
       cache_script: scripts/testing/cache_agr_curation_schema.sh
   validator_bindings:
     - binding_id: allele_pending_envelope_validator
-      display_name: Pending allele envelope validation
+      display_name: Data check
       validator: agr_ai_curation_alliance.domain_packs.allele.validate_pending_allele_envelope
       applies_to:
         domain_pack_id: agr.alliance.allele

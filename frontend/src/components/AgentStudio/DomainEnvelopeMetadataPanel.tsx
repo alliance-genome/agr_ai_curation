@@ -420,9 +420,8 @@ function FieldMetaLabel({ children }: { children: ReactNode }) {
 function FieldRow({ field, compact = false }: { field: DomainEnvelopeFieldMetadata; compact?: boolean }) {
   const label = field.display_name || field.field_path
   const schemaDetails = [
-    field.enum_ref ? `enum ${field.enum_ref}` : null,
-    field.model_ref ? `model ${field.model_ref}` : null,
-    field.object_type_ref ? `object ${field.object_type_ref}` : null,
+    field.enum_ref ? `choice list: ${field.enum_ref}` : null,
+    field.object_type_ref ? `linked object: ${field.object_type_ref}` : null,
   ].filter(Boolean).join(' / ')
 
   if (compact) {

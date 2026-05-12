@@ -296,7 +296,7 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     callable_option = by_id[
         "fixture.validation:binding:fixture.callable_validator:object:GeneAssertion:*"
     ]
-    assert callable_option.label == "Gene assertion envelope validation"
+    assert callable_option.label == "Gene assertion data check"
 
 
 def test_registry_rejects_conflicting_status_and_state_metadata(tmp_path: Path):

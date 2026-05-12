@@ -178,7 +178,7 @@ def test_gene_pack_declares_reference_validator_binding():
     assert bindings == [
         {
             "binding_id": GENE_REFERENCE_VALIDATOR_BINDING_ID,
-            "display_name": "Alliance gene reference lookup",
+            "display_name": "Alliance gene lookup",
             "validation_kind": "db_backed_reference_lookup",
             "provider": "alliance_curation_db",
             "tool_name": GENE_REFERENCE_TOOL_NAME,

@@ -569,7 +569,9 @@ class DomainPackValidationRegistry:
                 )
             )
 
-        return tuple(sorted(options, key=lambda option: option.attachment_id))
+        return _dedupe_validation_attachment_options(
+            tuple(sorted(options, key=lambda option: option.attachment_id))
+        )
 
 
 def _collect_validator_metadata(
@@ -1146,6 +1148,36 @@ def _metadata_attachment_option(
     )
 
 
+def _dedupe_validation_attachment_options(
+    options: tuple[ValidationAttachmentOption, ...],
+) -> tuple[ValidationAttachmentOption, ...]:
+    """Collapse duplicate pack-level options that represent the same curator note."""
+
+    deduped: list[ValidationAttachmentOption] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for option in sorted(
+        options,
+        key=lambda item: (
+            item.label,
+            item.state.value,
+            0 if item.validator_binding_id else 1,
+            item.attachment_id,
+        ),
+    ):
+        key = (
+            option.state.value,
+            option.label,
+            option.scope,
+            option.object_type or "",
+            option.field_path or "",
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(option)
+    return tuple(sorted(deduped, key=lambda option: option.attachment_id))
+
+
 def _binding_attachment_option(
     *,
     domain_pack: LoadedDomainPack,
@@ -1270,8 +1302,8 @@ def _binding_attachment_label(
         return base_label
     if _label_already_names_target(base_label, target_label):
         return base_label
-    if "envelope validation" in base_label.lower():
-        return f"{target_label} envelope validation"
+    if "envelope validation" in base_label.lower() or base_label.lower() == "data check":
+        return f"{target_label} data check"
     return f"{target_label}: {base_label}"
 
 
@@ -1322,7 +1354,8 @@ def _humanize_field_path(value: str | None) -> str | None:
 def _remove_redundant_leading_word(field_label: str, object_label: str) -> str:
     field_words = field_label.split()
     object_words = object_label.split()
-    if len(field_words) > 1 and object_words and field_words[0].lower() == object_words[0].lower():
+    object_words_normalized = {word.lower() for word in object_words}
+    if len(field_words) > 1 and field_words[0].lower() in object_words_normalized:
         return " ".join(field_words[1:])
     return field_label
 
@@ -1343,6 +1376,9 @@ def _binding_target_object_definitions(
     binding: ValidatorBinding,
     object_definitions: Mapping[str, DomainPackObjectDefinition],
 ) -> tuple[DomainPackObjectDefinition, ...]:
+    if not binding.object_types and not binding.object_roles:
+        return ()
+
     matches: list[DomainPackObjectDefinition] = []
     for object_definition in object_definitions.values():
         if binding.object_types and object_definition.object_type not in binding.object_types:
