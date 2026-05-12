@@ -284,7 +284,7 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
   return (
     <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
       {counts.enabled > 0 && (
-        <Chip size="small" color="success" variant="outlined" label={`${counts.enabled} auto`} sx={compactChipSx} />
+        <Chip size="small" color="success" variant="outlined" label={`${counts.enabled} active`} sx={compactChipSx} />
       )}
       {counts.active > 0 && counts.enabled === 0 && (
         <Chip size="small" color="success" variant="outlined" label={`${counts.active} active`} sx={compactChipSx} />
@@ -299,6 +299,80 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
         <Chip size="small" color="error" variant="outlined" label={`${counts.blocked} unavailable`} sx={compactChipSx} />
       )}
     </Stack>
+  )
+}
+
+function validationAttachmentStateLabel(attachment: ValidationAttachmentView): string {
+  if (attachment.state === 'blocked') return 'unavailable'
+  return attachment.state
+}
+
+function validationAttachmentTargetLabel(attachment: ValidationAttachmentView): string {
+  if (attachment.target_label) return attachment.target_label
+  if (attachment.scope === 'pack') return 'All extracted data'
+  if (attachment.scope === 'object') return attachment.object_type || 'Extracted object'
+  if (attachment.scope === 'field') return attachment.field_path || 'Field'
+  return 'Validation metadata'
+}
+
+function ValidationAttachmentRows({ attachments }: { attachments: ValidationAttachmentView[] }) {
+  if (attachments.length === 0) return null
+
+  return (
+    <Box
+      sx={{
+        border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.65)}`,
+        borderRadius: 1,
+        overflow: 'hidden',
+        backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.38),
+      }}
+    >
+      {attachments.map((attachment) => (
+        <Box
+          key={attachment.attachment_id}
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: '92px minmax(0, 1fr)' },
+            gap: 0.85,
+            px: 1,
+            py: 0.8,
+            borderBottom: (theme) => `1px solid ${alpha(theme.palette.divider, 0.5)}`,
+            '&:last-of-type': { borderBottom: 0 },
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Chip
+              size="small"
+              color={chipColorForState(attachment.state)}
+              variant="outlined"
+              label={validationAttachmentStateLabel(attachment)}
+              sx={compactChipSx}
+            />
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" sx={{ fontSize: '0.74rem', fontWeight: 700, lineHeight: 1.3 }}>
+              {attachment.label || attachment.validator_id}
+            </Typography>
+            <Typography
+              variant="caption"
+              color="text.secondary"
+              sx={{ display: 'block', mt: 0.2, fontSize: '0.65rem', lineHeight: 1.3, textWrap: 'pretty' }}
+            >
+              {validationAttachmentTargetLabel(attachment)}
+            </Typography>
+            {attachment.description && (
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: 'block', mt: 0.25, fontSize: '0.64rem', lineHeight: 1.35, textWrap: 'pretty' }}
+              >
+                {attachment.description}
+              </Typography>
+            )}
+          </Box>
+        </Box>
+      ))}
+    </Box>
   )
 }
 
@@ -650,7 +724,13 @@ function ObjectPanel({
           )}
           <ProviderRefs refs={object.provider_refs} />
           {object.validation_attachments.length > 0 && (
-            <ValidationChips attachments={object.validation_attachments} />
+            <Box>
+              <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 0.55 }}>
+                <FieldMetaLabel>Object validation</FieldMetaLabel>
+                <ValidationChips attachments={object.validation_attachments} />
+              </Stack>
+              <ValidationAttachmentRows attachments={object.validation_attachments} />
+            </Box>
           )}
           <SectionAccordion
             title={`Fields (${object.fields.length})`}
