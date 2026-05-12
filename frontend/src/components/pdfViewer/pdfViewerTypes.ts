@@ -32,6 +32,7 @@ export interface ViewerTelemetry {
 export interface PdfViewerProps {
   activeDocumentOwnerToken?: string
   storageUserId?: string | null
+  variant?: 'default' | 'curation'
   pendingNavigation?: EvidenceNavigationCommand | null
   onNavigationComplete?: () => void
   onNavigationStateChange?: (result: PdfViewerNavigationResult | null) => void

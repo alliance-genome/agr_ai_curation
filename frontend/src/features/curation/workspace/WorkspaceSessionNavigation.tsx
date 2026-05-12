@@ -155,7 +155,21 @@ export default function WorkspaceSessionNavigation({
         size="small"
         startIcon={<NavigateBeforeRoundedIcon sx={{ fontSize: '1rem' }} />}
         variant="outlined"
-        sx={{ fontSize: '0.75rem', py: 0.5 }}
+        sx={(theme) => ({
+          borderColor: 'divider',
+          borderRadius: 1,
+          color: 'text.primary',
+          fontSize: '0.75rem',
+          fontWeight: 500,
+          letterSpacing: 0,
+          minHeight: 32,
+          py: 0.5,
+          textTransform: 'none',
+          '&:hover': {
+            borderColor: theme.palette.primary.main,
+            backgroundColor: 'action.hover',
+          },
+        })}
       >
         Prev
       </Button>
@@ -166,7 +180,21 @@ export default function WorkspaceSessionNavigation({
         onClick={() => handleQueueNavigation(nextQuery.data)}
         size="small"
         variant="outlined"
-        sx={{ fontSize: '0.75rem', py: 0.5 }}
+        sx={(theme) => ({
+          borderColor: 'divider',
+          borderRadius: 1,
+          color: 'text.primary',
+          fontSize: '0.75rem',
+          fontWeight: 500,
+          letterSpacing: 0,
+          minHeight: 32,
+          py: 0.5,
+          textTransform: 'none',
+          '&:hover': {
+            borderColor: theme.palette.primary.main,
+            backgroundColor: 'action.hover',
+          },
+        })}
       >
         Next
       </Button>

@@ -2,16 +2,13 @@ import type { ReactNode } from 'react'
 
 import { Box, Stack, useMediaQuery } from '@mui/material'
 import { alpha, styled, useTheme } from '@mui/material/styles'
+import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 
 export interface WorkspaceShellProps {
   headerSlot?: ReactNode
   entityTableSlot: ReactNode
   reviewTableLabel?: string
   fieldEditorSlot?: ReactNode
-}
-
-interface DesktopPanelsProps {
-  hasFieldEditor: boolean
 }
 
 const ShellRoot = styled(Box)(() => ({
@@ -37,10 +34,11 @@ const PanelSurface = styled(Box)(({ theme }) => ({
   display: 'flex',
   flexDirection: 'column',
   overflow: 'hidden',
-  borderRadius: theme.shape.borderRadius * 1.25,
-  border: `1px solid ${alpha(theme.palette.divider, 0.85)}`,
-  backgroundColor: alpha(theme.palette.background.paper, 0.86),
-  boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.03)}`,
+  borderRadius: theme.shape.borderRadius,
+  border: `1px solid ${alpha(theme.palette.primary.light, 0.18)}`,
+  background:
+    `linear-gradient(180deg, ${alpha(theme.palette.common.white, 0.035)}, ${alpha(theme.palette.common.white, 0.01)}), #071524`,
+  boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.05)}, 0 18px 42px ${alpha(theme.palette.common.black, 0.24)}`,
 }))
 
 const SlotFrame = styled(Box)(() => ({
@@ -55,22 +53,39 @@ const SlotFrame = styled(Box)(() => ({
   },
 }))
 
-const DesktopPanels = styled(Box, {
-  shouldForwardProp: (prop) => prop !== 'hasFieldEditor',
-})<DesktopPanelsProps>(({ theme, hasFieldEditor }) => ({
+const DesktopPanels = styled(Box)(({ theme }) => ({
   flex: 1,
   minHeight: 0,
   height: '100%',
-  display: 'grid',
-  gridTemplateColumns: hasFieldEditor
-    ? 'minmax(360px, 0.95fr) minmax(420px, 1.05fr)'
-    : 'minmax(0, 1fr)',
-  gap: theme.spacing(1.5),
+  display: 'flex',
   overflow: 'hidden',
-  paddingTop: theme.spacing(1.5),
-  '& > [data-panel-group]': {
-    flex: 1,
-    minHeight: 0,
+  paddingTop: theme.spacing(1),
+}))
+
+const ResizeHandle = styled(PanelResizeHandle)(({ theme }) => ({
+  width: 4,
+  flex: '0 0 4px',
+  marginLeft: theme.spacing(0.5),
+  marginRight: theme.spacing(0.5),
+  backgroundColor: alpha(theme.palette.primary.light, 0.12),
+  cursor: 'col-resize',
+  transition: 'background-color 160ms ease',
+  borderRadius: theme.shape.borderRadius,
+  position: 'relative',
+  '&:hover, &[data-resize-handle-active="true"]': {
+    backgroundColor: theme.palette.primary.main,
+  },
+  '&::after': {
+    content: '""',
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    transform: 'translate(-50%, -50%)',
+    width: 2,
+    height: 32,
+    borderRadius: 1,
+    backgroundColor: alpha(theme.palette.common.white, 0.32),
+    pointerEvents: 'none',
   },
 }))
 
@@ -78,7 +93,7 @@ const MobilePanels = styled(Stack)(({ theme }) => ({
   flex: 1,
   minHeight: 0,
   overflow: 'auto',
-  paddingTop: theme.spacing(1.5),
+  paddingTop: theme.spacing(1),
 }))
 
 function WorkspacePane({
@@ -105,6 +120,7 @@ export default function WorkspaceShell({
 }: WorkspaceShellProps) {
   const theme = useTheme()
   const isCompactLayout = useMediaQuery(theme.breakpoints.down('md'))
+  const hasFieldEditor = Boolean(fieldEditorSlot)
 
   return (
     <ShellRoot data-testid="workspace-shell">
@@ -123,8 +139,40 @@ export default function WorkspaceShell({
             </WorkspacePane>
           ) : null}
         </MobilePanels>
+      ) : hasFieldEditor ? (
+        <DesktopPanels>
+          <PanelGroup
+            autoSaveId="workspace-shell-mid-right"
+            direction="horizontal"
+            style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden' }}
+          >
+            <Panel defaultSize={56} minSize={32} maxSize={78} order={1}>
+              <PanelSection>
+                <WorkspacePane
+                  label={reviewTableLabel}
+                  testId="workspace-shell-entity-table-panel"
+                >
+                  {entityTableSlot}
+                </WorkspacePane>
+              </PanelSection>
+            </Panel>
+
+            <ResizeHandle aria-label="Resize object list and field editor panels" />
+
+            <Panel defaultSize={44} minSize={22} maxSize={68} order={2}>
+              <PanelSection>
+                <WorkspacePane
+                  label="Field editor panel"
+                  testId="workspace-shell-field-editor-panel"
+                >
+                  {fieldEditorSlot}
+                </WorkspacePane>
+              </PanelSection>
+            </Panel>
+          </PanelGroup>
+        </DesktopPanels>
       ) : (
-        <DesktopPanels hasFieldEditor={Boolean(fieldEditorSlot)}>
+        <DesktopPanels>
           <PanelSection>
             <WorkspacePane
               label={reviewTableLabel}
@@ -133,16 +181,6 @@ export default function WorkspaceShell({
               {entityTableSlot}
             </WorkspacePane>
           </PanelSection>
-          {fieldEditorSlot ? (
-            <PanelSection>
-              <WorkspacePane
-                label="Field editor panel"
-                testId="workspace-shell-field-editor-panel"
-              >
-                {fieldEditorSlot}
-              </WorkspacePane>
-            </PanelSection>
-          ) : null}
         </DesktopPanels>
       )}
     </ShellRoot>

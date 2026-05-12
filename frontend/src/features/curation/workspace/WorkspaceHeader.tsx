@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded'
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import {
   Box,
   Button,
@@ -42,6 +43,14 @@ function getDocumentMetaLabel(session: CurationReviewSession): string {
   return session.document.citation_label ?? session.document.document_id
 }
 
+function compactSessionId(sessionId: string): string {
+  if (sessionId.length <= 18) {
+    return sessionId
+  }
+
+  return `${sessionId.slice(0, 8)}-${sessionId.slice(-8)}`
+}
+
 export default function WorkspaceHeader({
   session,
   backHref = '/curation',
@@ -54,33 +63,59 @@ export default function WorkspaceHeader({
     <Box
       sx={(theme) => ({
         display: 'flex',
-        flexDirection: 'column',
-        gap: 1,
-        px: { xs: 1.5, md: 2 },
-        py: 1.25,
-        borderRadius: theme.shape.borderRadius * 1.25,
-        border: `1px solid ${alpha(theme.palette.divider, 0.85)}`,
-        backgroundColor: alpha(theme.palette.background.paper, 0.92),
-        boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.03)}`,
+        flexDirection: { xs: 'column', xl: 'row' },
+        alignItems: { xs: 'stretch', xl: 'center' },
+        gap: { xs: 1, xl: 1.5 },
+        px: { xs: 1.25, md: 1.5 },
+        py: 1,
+        borderRadius: theme.shape.borderRadius,
+        border: `1px solid ${alpha(theme.palette.primary.light, 0.18)}`,
+        background:
+          `linear-gradient(180deg, ${alpha(theme.palette.common.white, 0.035)}, ${alpha(theme.palette.common.white, 0.01)}), #071524`,
+        boxShadow: `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.05)}, 0 18px 42px ${alpha(theme.palette.common.black, 0.22)}`,
       })}
     >
-      {/* Row 1: Back + Title + Meta label + Chips */}
       <Stack
         direction="row"
         alignItems="center"
-        spacing={1.5}
-        sx={{ minWidth: 0 }}
+        spacing={1.25}
+        sx={{ flex: '1 1 auto', minWidth: 0 }}
       >
         <Button
           aria-label="Back to inventory"
           component={RouterLink}
           size="small"
           startIcon={<ArrowBackRoundedIcon sx={{ fontSize: '1rem' }} />}
-          sx={{ px: 0.5, minWidth: 'auto', flexShrink: 0, fontSize: '0.75rem' }}
+          sx={(theme) => ({
+            color: theme.palette.primary.light,
+            flexShrink: 0,
+            fontSize: '0.78rem',
+            fontWeight: 500,
+            letterSpacing: 0,
+            minWidth: 'auto',
+            px: 0.5,
+            textTransform: 'none',
+            '&:hover': {
+              backgroundColor: alpha(theme.palette.primary.main, 0.12),
+            },
+          })}
           to={backHref}
         >
           Back
         </Button>
+
+        <Box
+          sx={(theme) => ({
+            alignItems: 'center',
+            borderLeft: `1px solid ${alpha(theme.palette.common.white, 0.1)}`,
+            display: { xs: 'none', sm: 'flex' },
+            flexShrink: 0,
+            height: 28,
+            pl: 1.25,
+          })}
+        >
+          <DescriptionOutlinedIcon sx={{ color: 'text.secondary', fontSize: 22 }} />
+        </Box>
 
         <Typography
           variant="subtitle2"
@@ -91,10 +126,29 @@ export default function WorkspaceHeader({
             textOverflow: 'ellipsis',
             whiteSpace: 'nowrap',
             fontWeight: 600,
+            letterSpacing: -0.1,
           }}
           title={getDocumentMetaLabel(session)}
         >
           {session.document.title}
+        </Typography>
+
+        <Typography
+          color="text.secondary"
+          variant="caption"
+          sx={{
+            flexShrink: 0,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            display: { xs: 'none', lg: 'block' },
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            maxWidth: 210,
+          }}
+          title={session.session_id}
+        >
+          {compactSessionId(session.session_id)}
         </Typography>
 
         <Typography
@@ -120,31 +174,31 @@ export default function WorkspaceHeader({
             label={getAdapterLabel(session.adapter)}
             size="small"
             variant="outlined"
-            sx={{ height: 22, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+            sx={{ borderRadius: 1, height: 26, '& .MuiChip-label': { px: 0.9, fontSize: '0.72rem', fontWeight: 600 } }}
           />
           <Chip
             color="success"
             label={`${session.progress.reviewed_candidates}/${session.progress.total_candidates}`}
             size="small"
             variant="outlined"
-            sx={{ height: 22, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+            sx={{ borderRadius: 1, height: 26, '& .MuiChip-label': { px: 0.9, fontSize: '0.72rem', fontWeight: 600 } }}
           />
           <Chip
             color={statusChipColor}
             label={getStatusLabel(session.status)}
             size="small"
             variant={statusChipColor === 'default' ? 'outlined' : 'filled'}
-            sx={{ height: 22, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+            sx={{ borderRadius: 1, height: 26, '& .MuiChip-label': { px: 0.9, fontSize: '0.72rem', fontWeight: 600 } }}
           />
         </Stack>
       </Stack>
 
-      {/* Row 2: Navigation slot (right-aligned) */}
       {navigationSlot ? (
         <Stack
           direction="row"
-          justifyContent="flex-end"
+          justifyContent={{ xs: 'flex-start', xl: 'flex-end' }}
           data-testid="workspace-header-navigation-slot"
+          sx={{ flex: '0 0 auto' }}
         >
           {navigationSlot}
         </Stack>

@@ -1,13 +1,21 @@
+import { useMemo, useState } from 'react'
+
 import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
+import FilterListRoundedIcon from '@mui/icons-material/FilterListRounded'
+import KeyboardArrowRightRoundedIcon from '@mui/icons-material/KeyboardArrowRightRounded'
 import HighlightOffIcon from '@mui/icons-material/HighlightOff'
+import RadioButtonUncheckedRoundedIcon from '@mui/icons-material/RadioButtonUncheckedRounded'
+import SearchRoundedIcon from '@mui/icons-material/SearchRounded'
 import {
   Alert,
   Box,
   Button,
   Chip,
   CircularProgress,
-  Divider,
+  InputAdornment,
   Stack,
+  TextField,
   Tooltip,
   Typography,
   type ChipProps,
@@ -283,7 +291,7 @@ function renderSummaryFields(row: DomainEnvelopeReviewRow) {
           <Typography
             color={isEmptyProjectedValue(field.value) ? 'warning.main' : 'text.primary'}
             variant="caption"
-            sx={{ fontWeight: isEmptyProjectedValue(field.value) ? 700 : 500 }}
+            sx={{ fontWeight: isEmptyProjectedValue(field.value) ? 600 : 500 }}
           >
             {truncateValue(formatProjectedSummaryValue(field.value), 72)}
           </Typography>
@@ -321,6 +329,26 @@ function evidenceLabel(anchors: DomainEnvelopeEvidenceAnchorProjection[]): strin
   }
 
   return `${anchors.length} evidence quote${anchors.length === 1 ? '' : 's'}`
+}
+
+function rowSearchText(row: WorkspaceEnvelopeObjectReviewRow): string {
+  const reviewRow = row.reviewRow
+  const summaryText = reviewRow?.summary_fields
+    .map((field) => `${field.label} ${formatProjectedSummaryValue(field.value)}`)
+    .join(' ') ?? ''
+
+  return [
+    selectedRowLabel(row),
+    reviewRow?.display_label,
+    reviewRow?.secondary_label,
+    reviewRow?.object_type,
+    reviewRow?.object_role,
+    row.candidate.status,
+    summaryText,
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase()
 }
 
 function reviewRowDisplayLabel(reviewRow: DomainEnvelopeReviewRow): string | null {
@@ -443,23 +471,23 @@ function EnvelopeObjectRow({
       }}
       role="button"
       sx={{
-        border: `1px solid ${isSelected ? alpha(theme.palette.primary.main, 0.72) : alpha(theme.palette.divider, 0.82)}`,
+        border: `1px solid ${isSelected ? alpha(theme.palette.primary.main, 0.82) : alpha(theme.palette.primary.light, 0.14)}`,
         borderRadius: 1,
         backgroundColor: isSelected
-          ? alpha(theme.palette.primary.main, 0.11)
-          : alpha(theme.palette.background.paper, 0.72),
+          ? alpha(theme.palette.primary.main, 0.12)
+          : alpha('#081a2b', 0.74),
         boxShadow: isSelected
-          ? `inset 3px 0 0 ${theme.palette.primary.main}`
-          : `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.03)}`,
+          ? `inset 3px 0 0 ${theme.palette.primary.main}, 0 14px 28px ${alpha(theme.palette.common.black, 0.16)}`
+          : `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.035)}`,
         cursor: 'pointer',
         display: 'grid',
-        gap: 1,
-        gridTemplateColumns: { xs: '1fr', lg: 'minmax(170px, 0.72fr) minmax(220px, 1fr) auto' },
-        p: 1,
+        gap: 1.25,
+        gridTemplateColumns: { xs: '1fr', sm: 'auto minmax(0, 1fr) auto' },
+        p: 1.25,
         transition: 'border-color 160ms ease, background-color 160ms ease, transform 160ms ease',
         '&:hover': {
-          borderColor: alpha(theme.palette.primary.main, 0.56),
-          backgroundColor: alpha(theme.palette.primary.main, isSelected ? 0.13 : 0.055),
+          borderColor: alpha(theme.palette.primary.main, 0.58),
+          backgroundColor: alpha(theme.palette.primary.main, isSelected ? 0.14 : 0.07),
         },
         '&:focus-visible': {
           outline: `2px solid ${theme.palette.primary.main}`,
@@ -477,49 +505,51 @@ function EnvelopeObjectRow({
       }}
       tabIndex={0}
     >
-      <Stack spacing={0.45} sx={{ minWidth: 0 }}>
-        <Typography
-          variant="body2"
-          sx={{
-            fontWeight: 700,
-            lineHeight: 1.25,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {rowLabel}
-        </Typography>
-        {reviewRow ? (
-          <>
-            <Typography color="text.secondary" variant="caption">
-              {formatObjectType(reviewRow.object_type)}
-            </Typography>
-            {reviewRow.object_role ? (
-              <Typography color="text.secondary" variant="caption">
-                {formatReadableIdentifier(reviewRow.object_role)}
-              </Typography>
-            ) : null}
-          </>
+      <Box
+        sx={{
+          alignItems: 'center',
+          color: isSelected ? theme.palette.primary.main : alpha(theme.palette.common.white, 0.36),
+          display: { xs: 'none', sm: 'flex' },
+          pt: 0.25,
+        }}
+      >
+        {isSelected ? (
+          <CheckCircleRoundedIcon fontSize="small" />
         ) : (
-          <Typography color="warning.main" variant="caption">
-            Review row unavailable
-          </Typography>
+          <RadioButtonUncheckedRoundedIcon fontSize="small" />
         )}
-        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-          <Chip
-            color={decisionColor(decision)}
-            label={formatStatusLabel(decision)}
-            size="small"
-            variant="outlined"
-          />
-          {reviewRow?.secondary_label ? (
-            <Chip label={reviewRow.secondary_label} size="small" variant="outlined" />
-          ) : null}
-        </Stack>
-      </Stack>
+      </Box>
 
-      <Stack spacing={0.75} sx={{ minWidth: 0 }}>
+      <Stack spacing={0.9} sx={{ minWidth: 0 }}>
+        <Stack spacing={0.25} sx={{ minWidth: 0 }}>
+          <Typography
+            variant="body2"
+            sx={{
+              color: alpha(theme.palette.common.white, 0.94),
+              fontWeight: 600,
+              fontSize: '0.95rem',
+              letterSpacing: -0.1,
+              lineHeight: 1.3,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {rowLabel}
+          </Typography>
+          {reviewRow ? (
+            <Typography color="text.secondary" variant="caption" sx={{ fontWeight: 500 }}>
+              {[
+                formatObjectType(reviewRow.object_type),
+                reviewRow.object_role ? formatReadableIdentifier(reviewRow.object_role) : null,
+              ].filter(Boolean).join(' · ')}
+            </Typography>
+          ) : (
+            <Typography color="warning.main" variant="caption">
+              Review row unavailable
+            </Typography>
+          )}
+        </Stack>
         {reviewRow ? (
           renderSummaryFields(reviewRow)
         ) : (
@@ -528,27 +558,86 @@ function EnvelopeObjectRow({
           </Typography>
         )}
         <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+          {reviewRow?.secondary_label ? (
+            <Chip
+              label={reviewRow.secondary_label}
+              size="small"
+              variant="outlined"
+              sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { fontSize: '0.68rem', fontWeight: 500, px: 0.75 } }}
+            />
+          ) : null}
           {validationChip ? (
             <Chip
               color={validationChip.color}
               label={validationChip.label}
               size="small"
               variant="outlined"
+              icon={(
+                <Box
+                  component="span"
+                  sx={{
+                    width: 6,
+                    height: 6,
+                    borderRadius: '50%',
+                    backgroundColor: 'currentColor',
+                    ml: 0.65,
+                    mr: -0.2,
+                  }}
+                />
+              )}
+              sx={{
+                borderRadius: 1,
+                height: 22,
+                '& .MuiChip-label': { fontSize: '0.68rem', fontWeight: 600, px: 0.75 },
+                '& .MuiChip-icon': { color: 'inherit' },
+              }}
             />
           ) : null}
-          <Chip label={validationSummaryLabel(row)} size="small" variant="outlined" />
-          <Chip label={evidenceLabel(row.evidenceAnchors)} size="small" variant="outlined" />
+          <Chip
+            label={validationSummaryLabel(row)}
+            size="small"
+            variant="outlined"
+            sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { fontSize: '0.68rem', fontWeight: 500, px: 0.75 } }}
+          />
+          <Chip
+            label={evidenceLabel(row.evidenceAnchors)}
+            size="small"
+            variant="outlined"
+            sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { fontSize: '0.68rem', fontWeight: 500, px: 0.75 } }}
+          />
         </Stack>
       </Stack>
 
       <Box
         onClick={(event) => event.stopPropagation()}
         sx={{
-          alignItems: { xs: 'flex-start', lg: 'center' },
+          alignItems: { xs: 'flex-start', sm: 'flex-end' },
+          alignSelf: 'stretch',
           display: 'flex',
-          justifyContent: { xs: 'flex-start', lg: 'flex-end' },
+          flexDirection: 'column',
+          gap: 1,
+          justifyContent: 'space-between',
         }}
       >
+        <Stack direction="row" spacing={0.5} alignItems="center" sx={{ pt: 0.25 }}>
+          <Chip
+            color={decisionColor(decision)}
+            label={formatStatusLabel(decision)}
+            size="small"
+            variant={decision === 'pending' ? 'outlined' : 'filled'}
+            sx={{
+              borderRadius: 999,
+              height: 22,
+              '& .MuiChip-label': {
+                fontSize: '0.68rem',
+                fontWeight: 600,
+                letterSpacing: 0.2,
+                px: 0.9,
+              },
+            }}
+          />
+          <KeyboardArrowRightRoundedIcon sx={{ color: 'text.secondary', fontSize: 18, opacity: 0.55 }} />
+        </Stack>
         {decision === 'pending' ? (
           <Stack direction="row" spacing={0.75}>
             <Tooltip title={`Accept ${rowLabel}`}>
@@ -558,6 +647,15 @@ function EnvelopeObjectRow({
                 size="small"
                 startIcon={<CheckCircleOutlineIcon sx={{ fontSize: 16 }} />}
                 variant="outlined"
+                sx={{
+                  borderRadius: 1,
+                  fontSize: '0.74rem',
+                  fontWeight: 500,
+                  letterSpacing: 0,
+                  minHeight: 28,
+                  px: 1.25,
+                  textTransform: 'none',
+                }}
               >
                 Accept
               </Button>
@@ -569,22 +667,21 @@ function EnvelopeObjectRow({
                 size="small"
                 startIcon={<HighlightOffIcon sx={{ fontSize: 16 }} />}
                 variant="outlined"
+                sx={{
+                  borderRadius: 1,
+                  fontSize: '0.74rem',
+                  fontWeight: 500,
+                  letterSpacing: 0,
+                  minHeight: 28,
+                  px: 1.25,
+                  textTransform: 'none',
+                }}
               >
                 Reject
               </Button>
             </Tooltip>
           </Stack>
-        ) : (
-          <Typography
-            variant="caption"
-            sx={{
-              color: decision === 'accepted' ? 'success.main' : 'text.secondary',
-              fontWeight: 600,
-            }}
-          >
-            {formatStatusLabel(decision)}
-          </Typography>
-        )}
+        ) : null}
       </Box>
     </Box>
   )
@@ -610,13 +707,16 @@ function EvidenceProjectionPanel({
   return (
     <Box sx={{ p: 1.5 }}>
       <Stack spacing={1.25}>
-        <Stack spacing={0.25}>
-          <Typography color="text.secondary" variant="caption">
-            Evidence for selected object
+        <Stack direction="row" spacing={1} alignItems="center" justifyContent="space-between">
+          <Typography variant="body2" sx={{ color: alpha(theme.palette.common.white, 0.94), fontWeight: 600, letterSpacing: -0.1 }}>
+            Evidence & context
           </Typography>
-          <Typography variant="body2" sx={{ fontWeight: 700 }}>
-            {selectedRowLabel(row)}
-          </Typography>
+          <Chip
+            label={evidenceLabel(row.evidenceAnchors)}
+            size="small"
+            variant="outlined"
+            sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { fontSize: '0.68rem', fontWeight: 500, px: 0.75 } }}
+          />
         </Stack>
 
         {row.evidenceAnchors.length === 0 ? (
@@ -690,38 +790,136 @@ export default function EnvelopeObjectReviewTable({
   rows,
   selectedCandidateId,
 }: EnvelopeObjectReviewTableProps) {
+  const theme = useTheme()
+  const [searchQuery, setSearchQuery] = useState('')
+  const [pendingOnly, setPendingOnly] = useState(false)
+  const displayedRows = useMemo(() => {
+    const normalizedQuery = searchQuery.trim().toLowerCase()
+
+    return rows.filter((row) => {
+      if (pendingOnly && row.candidate.status !== 'pending') {
+        return false
+      }
+
+      if (!normalizedQuery) {
+        return true
+      }
+
+      return rowSearchText(row).includes(normalizedQuery)
+    })
+  }, [pendingOnly, rows, searchQuery])
   const selectedRow = rows.find((row) => row.candidate.candidate_id === selectedCandidateId)
     ?? rows[0]
     ?? null
+  const objectCountLabel = `${displayedRows.length} of ${rows.length} object${rows.length === 1 ? '' : 's'}`
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+    <Box
+      sx={{
+        background:
+          `linear-gradient(180deg, ${alpha(theme.palette.primary.main, 0.04)}, transparent 42%)`,
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        overflow: 'hidden',
+      }}
+    >
       <Stack
-        direction={{ xs: 'column', md: 'row' }}
-        spacing={1}
-        alignItems={{ xs: 'stretch', md: 'center' }}
+        spacing={1.25}
         justifyContent="space-between"
-        sx={{ borderBottom: 1, borderColor: 'divider', px: 1.5, py: 1 }}
+        sx={{
+          borderBottom: `1px solid ${alpha(theme.palette.primary.light, 0.16)}`,
+          px: 1.5,
+          py: 1.25,
+        }}
       >
-        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-          <Typography variant="body2" sx={{ fontWeight: 700 }}>
-            Objects to review
-          </Typography>
-          <Chip label={`${rows.length} object${rows.length === 1 ? '' : 's'}`} size="small" variant="outlined" />
-          {isLoading ? (
+        <Stack
+          direction="row"
+          spacing={1}
+          alignItems="center"
+          justifyContent="space-between"
+          sx={{ minWidth: 0 }}
+        >
+          <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 0 }}>
+            <Typography variant="body2" sx={{ color: alpha(theme.palette.common.white, 0.94), fontWeight: 600, letterSpacing: -0.1 }}>
+              Objects to review
+            </Typography>
             <Chip
-              icon={<CircularProgress size={12} />}
-              label="Loading"
+              label={objectCountLabel}
               size="small"
               variant="outlined"
+              sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { fontSize: '0.68rem', fontWeight: 500, px: 0.75 } }}
             />
+            {isLoading ? (
+              <Chip
+                icon={<CircularProgress size={12} />}
+                label="Loading"
+                size="small"
+                variant="outlined"
+                sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { fontSize: '0.68rem', fontWeight: 500, px: 0.75 } }}
+              />
+            ) : null}
+          </Stack>
+          {errorMessage ? (
+            <Button onClick={onRetry} size="small" variant="outlined" sx={{ borderRadius: 1, fontWeight: 500, textTransform: 'none' }}>
+              Retry
+            </Button>
           ) : null}
         </Stack>
-        {errorMessage ? (
-          <Button onClick={onRetry} size="small" variant="outlined">
-            Retry
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+          <TextField
+            fullWidth
+            inputProps={{ 'aria-label': 'Search curation objects' }}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Search objects..."
+            size="small"
+            value={searchQuery}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchRoundedIcon sx={{ color: 'text.secondary', fontSize: 18 }} />
+                </InputAdornment>
+              ),
+            }}
+            sx={{
+              '& .MuiOutlinedInput-root': {
+                backgroundColor: alpha('#020915', 0.52),
+                borderRadius: 1,
+                '& fieldset': {
+                  borderColor: alpha(theme.palette.common.white, 0.12),
+                },
+                '&:hover fieldset': {
+                  borderColor: alpha(theme.palette.primary.light, 0.36),
+                },
+                '&.Mui-focused fieldset': {
+                  borderColor: theme.palette.primary.main,
+                },
+              },
+              '& .MuiInputBase-input': {
+                fontSize: '0.82rem',
+              },
+            }}
+          />
+          <Button
+            aria-pressed={pendingOnly}
+            onClick={() => setPendingOnly((currentValue) => !currentValue)}
+            size="small"
+            startIcon={<FilterListRoundedIcon sx={{ fontSize: 18 }} />}
+            variant={pendingOnly ? 'contained' : 'outlined'}
+            sx={{
+              borderRadius: 1,
+              flex: { xs: '1 1 auto', sm: '0 0 auto' },
+              fontWeight: 500,
+              letterSpacing: 0,
+              minHeight: 40,
+              px: 1.5,
+              textTransform: 'none',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Filter
           </Button>
-        ) : null}
+        </Stack>
       </Stack>
 
       {errorMessage ? (
@@ -731,26 +929,27 @@ export default function EnvelopeObjectReviewTable({
       ) : null}
 
       <Stack
-        divider={<Divider flexItem />}
         spacing={1}
         sx={{
           flex: 1,
           minHeight: 0,
           overflow: 'auto',
-          p: 1,
+          p: 1.25,
         }}
       >
-        {rows.length === 0 ? (
+        {displayedRows.length === 0 ? (
           <Stack spacing={1} alignItems="center" sx={{ py: 5 }}>
             {isLoading ? <CircularProgress size={22} /> : null}
             <Typography color="text.secondary" variant="body2">
               {isLoading
                 ? 'Loading curation objects...'
-                : 'No curation objects are available for this workspace.'}
+                : rows.length === 0
+                  ? 'No curation objects are available for this workspace.'
+                  : 'No curation objects match the current filters.'}
             </Typography>
           </Stack>
         ) : (
-          rows.map((row) => (
+          displayedRows.map((row) => (
             <EnvelopeObjectRow
               isSelected={row.candidate.candidate_id === selectedCandidateId}
               key={`${row.projectionRef.envelope_id}:${row.projectionRef.object_id}:${row.candidate.candidate_id}`}
@@ -763,7 +962,13 @@ export default function EnvelopeObjectReviewTable({
         )}
       </Stack>
 
-      <Box sx={{ flex: '0 0 auto', minHeight: 190, borderTop: 1, borderColor: 'divider' }}>
+      <Box
+        sx={{
+          borderTop: `1px solid ${alpha(theme.palette.primary.light, 0.16)}`,
+          flex: '0 0 auto',
+          minHeight: 190,
+        }}
+      >
         <EvidenceProjectionPanel row={selectedRow} />
       </Box>
     </Box>

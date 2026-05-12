@@ -112,6 +112,7 @@ const PDFJS_FIND_STATE_NOT_FOUND = 1
 export function PdfViewer({
   activeDocumentOwnerToken,
   storageUserId = null,
+  variant = 'default',
   pendingNavigation = null,
   onNavigationComplete,
   onNavigationStateChange,
@@ -2060,6 +2061,7 @@ export function PdfViewer({
       searchCurrent={viewerUiState.searchCurrent}
       searchTotal={viewerUiState.searchTotal}
       searchNotFound={viewerUiState.searchNotFound}
+      variant={variant}
       onDragEnter={handleDragEnter}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}

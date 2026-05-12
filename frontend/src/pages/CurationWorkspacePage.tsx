@@ -549,7 +549,15 @@ function CurationWorkspacePageContent({
                   onClick={() => setSubmissionDialogOpen(true)}
                   size="small"
                   variant="contained"
-                  sx={{ fontSize: '0.75rem', py: 0.5 }}
+                  sx={{
+                    borderRadius: 1,
+                    fontSize: '0.75rem',
+                    fontWeight: 500,
+                    letterSpacing: 0,
+                    minHeight: 32,
+                    py: 0.5,
+                    textTransform: 'none',
+                  }}
                 >
                   Preview submission
                 </Button>
@@ -587,7 +595,12 @@ function CurationWorkspacePageContent({
             />
           )
         )}
-        fieldEditorSlot={<CandidateFieldEditor />}
+        fieldEditorSlot={(
+          <CandidateFieldEditor
+            onAcceptCandidate={handleAcceptTag}
+            onRejectCandidate={handleRejectTag}
+          />
+        )}
       />
 
       <SubmissionPreviewDialog

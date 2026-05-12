@@ -66,13 +66,27 @@ export default function PersistentPdfWorkspaceLayout() {
   const curationMatch = matchPath('/curation/:sessionId/:candidateId', location.pathname)
     ?? matchPath('/curation/:sessionId', location.pathname)
   const layoutKind = curationMatch ? 'curation' : 'home'
+  const isCurationLayout = layoutKind === 'curation'
   const activeDocumentOwnerToken = curationMatch?.params.sessionId
     ? buildCurationPDFViewerOwner(curationMatch.params.sessionId)
     : HOME_PDF_VIEWER_OWNER
+  const rootWorkbenchSx = isCurationLayout
+    ? {
+        background:
+          'radial-gradient(circle at 18% 0%, rgba(10, 124, 171, 0.16), transparent 34%), #05111f',
+        gap: 1,
+        padding: { xs: 1, md: 1.25 },
+        paddingTop: { xs: 1, md: 0.75 },
+      }
+    : undefined
 
   if (isCompactLayout) {
     return (
-      <Root data-layout-kind={layoutKind} data-testid="persistent-pdf-workspace-layout">
+      <Root
+        data-layout-kind={layoutKind}
+        data-testid="persistent-pdf-workspace-layout"
+        sx={rootWorkbenchSx}
+      >
         <Box
           sx={{
             width: '100%',
@@ -96,6 +110,7 @@ export default function PersistentPdfWorkspaceLayout() {
             <PdfViewer
               activeDocumentOwnerToken={activeDocumentOwnerToken}
               storageUserId={user?.uid ?? null}
+              variant={isCurationLayout ? 'curation' : 'default'}
             />
           </Box>
           <Box
@@ -116,17 +131,22 @@ export default function PersistentPdfWorkspaceLayout() {
   }
 
   return (
-    <Root data-layout-kind={layoutKind} data-testid="persistent-pdf-workspace-layout">
+    <Root
+      data-layout-kind={layoutKind}
+      data-testid="persistent-pdf-workspace-layout"
+      sx={rootWorkbenchSx}
+    >
       <PanelGroup
         autoSaveId={`persistent-pdf-workspace-layout-${layoutKind}`}
         direction="horizontal"
         style={{ width: '100%', height: '100%', display: 'flex', overflow: 'hidden' }}
       >
-        <Panel defaultSize={34} minSize={20} maxSize={60} order={1}>
+        <Panel defaultSize={isCurationLayout ? 36 : 34} minSize={20} maxSize={60} order={1}>
           <PanelSection data-testid="persistent-pdf-viewer-panel">
             <PdfViewer
               activeDocumentOwnerToken={activeDocumentOwnerToken}
               storageUserId={user?.uid ?? null}
+              variant={isCurationLayout ? 'curation' : 'default'}
             />
           </PanelSection>
         </Panel>

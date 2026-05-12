@@ -1,13 +1,18 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
+import HighlightOffIcon from '@mui/icons-material/HighlightOff'
+import SaveOutlinedIcon from '@mui/icons-material/SaveOutlined'
 import {
   Alert,
   Box,
   Button,
   ButtonBase,
   Chip,
-  Divider,
+  FormControlLabel,
   Stack,
+  Switch,
+  TextField,
   Tooltip,
   Typography,
 } from '@mui/material'
@@ -21,16 +26,21 @@ import {
 import type {
   CurationActionLogEntry,
   CurationCandidate,
+  CurationCandidateDraftUpdateResponse,
   CurationDraftField,
   DomainEnvelopeEvidenceAnchorProjection,
   DomainEnvelopeValidationStatus,
   DomainEnvelopeValidationSummaryProjection,
 } from '@/features/curation/types'
+import { autosaveCurationCandidateDraft } from '@/features/curation/services/curationWorkspaceService'
 import {
   useCurationWorkspaceAutosave,
   useCurationWorkspaceContext,
 } from '@/features/curation/workspace/CurationWorkspaceContext'
-import { resolveEnvelopeFieldPath } from '@/features/curation/workspace/workspaceState'
+import {
+  mergeSavedDraftIntoWorkspace,
+  resolveEnvelopeFieldPath,
+} from '@/features/curation/workspace/workspaceState'
 import FieldRow from './FieldRow'
 
 interface FieldSection {
@@ -45,6 +55,13 @@ interface StatusPresentation {
   color: ChipProps['color']
   severity: 'error' | 'warning' | 'info' | 'success'
 }
+
+interface CandidateFieldEditorProps {
+  onAcceptCandidate?: (candidateId: string) => Promise<void> | void
+  onRejectCandidate?: (candidateId: string) => Promise<void> | void
+}
+
+const NOTES_MAX_LENGTH = 500
 
 const STATUS_RANK: Record<DomainEnvelopeValidationStatus, number> = {
   resolved: 0,
@@ -501,10 +518,12 @@ function FieldSupportDetails({
   candidate,
   field,
   history,
+  show,
 }: {
   candidate: CurationCandidate
   field: CurationDraftField
   history: CurationActionLogEntry[]
+  show: boolean
 }) {
   const fieldPath = resolveEnvelopeFieldPath(field)
   const latestHistory = history[0]
@@ -524,27 +543,26 @@ function FieldSupportDetails({
 
   return (
     <Box
-      component="details"
       data-testid={`field-support-details-${field.field_key}`}
       sx={{
         color: 'text.secondary',
-        pl: { md: '164px' },
-        '& summary': {
-          cursor: 'pointer',
-          display: 'inline-flex',
-          fontSize: '0.72rem',
-          fontWeight: 600,
-          lineHeight: 1.4,
-          outline: 0,
-        },
-        '& summary:focus-visible': {
-          borderRadius: 0.5,
-          boxShadow: (theme) => `0 0 0 2px ${theme.palette.primary.main}`,
-        },
+        display: show ? 'block' : 'none',
+        mt: 0.25,
       }}
     >
-      <Box component="summary">Technical details</Box>
-      <Typography color="text.secondary" sx={{ display: 'block', mt: 0.5 }} variant="caption">
+      <Typography
+        color="text.secondary"
+        sx={{
+          display: 'block',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+          fontSize: '0.66rem',
+          letterSpacing: 0,
+          lineHeight: 1.35,
+          opacity: 0.72,
+          wordBreak: 'break-word',
+        }}
+        variant="caption"
+      >
         {details.join(' · ')}
       </Typography>
     </Box>
@@ -586,9 +604,16 @@ function ObjectValidationAlerts({
   )
 }
 
-export default function CandidateFieldEditor() {
-  const { activeCandidate, workspace } = useCurationWorkspaceContext()
+export default function CandidateFieldEditor({
+  onAcceptCandidate,
+  onRejectCandidate,
+}: CandidateFieldEditorProps = {}) {
+  const { activeCandidate, setWorkspace, workspace } = useCurationWorkspaceContext()
   const autosave = useCurationWorkspaceAutosave()
+  const [draftNotes, setDraftNotes] = useState('')
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null)
+  const [isSavingDraft, setIsSavingDraft] = useState(false)
+  const [showTechnicalDetails, setShowTechnicalDetails] = useState(false)
   const curatorFields = useMemo(
     () => (activeCandidate?.draft.fields ?? []).filter((field) => !isTechnicalCurationField(field)),
     [activeCandidate?.draft.fields],
@@ -609,6 +634,90 @@ export default function CandidateFieldEditor() {
     () => objectValidationSummaries(activeCandidate),
     [activeCandidate],
   )
+  const persistedDraftNotes = activeCandidate?.draft.notes ?? ''
+  const notesDirty = draftNotes !== persistedDraftNotes
+  const activeDecisionDisabled =
+    !activeCandidate ||
+    activeCandidate.status !== 'pending' ||
+    isSavingDraft ||
+    autosave.isSaving
+
+  useEffect(() => {
+    setDraftNotes(activeCandidate?.draft.notes ?? '')
+    setDraftSaveError(null)
+  }, [activeCandidate?.candidate_id, activeCandidate?.draft.notes])
+
+  const mergeDraftResponse = useCallback(
+    (response: CurationCandidateDraftUpdateResponse) => {
+      setWorkspace((currentWorkspace) => mergeSavedDraftIntoWorkspace(currentWorkspace, response))
+    },
+    [setWorkspace],
+  )
+
+  const saveCurrentDraft = useCallback(async (): Promise<boolean> => {
+    if (!activeCandidate) {
+      return false
+    }
+
+    setDraftSaveError(null)
+    setIsSavingDraft(true)
+
+    try {
+      const pendingSaved = await autosave.flush()
+      if (!pendingSaved) {
+        throw new Error('Unable to save pending field changes.')
+      }
+
+      if (notesDirty) {
+        const response = await autosaveCurationCandidateDraft({
+          session_id: workspace.session.session_id,
+          candidate_id: activeCandidate.candidate_id,
+          draft_id: activeCandidate.draft.draft_id,
+          expected_version: activeCandidate.draft.version,
+          notes: draftNotes.trim().length > 0 ? draftNotes : null,
+          autosave: false,
+        })
+        mergeDraftResponse(response)
+      }
+
+      return true
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to save this draft.'
+      setDraftSaveError(message)
+      return false
+    } finally {
+      setIsSavingDraft(false)
+    }
+  }, [
+    activeCandidate,
+    autosave,
+    draftNotes,
+    mergeDraftResponse,
+    notesDirty,
+    workspace.session.session_id,
+  ])
+
+  const handleAcceptActiveCandidate = useCallback(async () => {
+    if (!activeCandidate || !onAcceptCandidate) {
+      return
+    }
+
+    const saved = await saveCurrentDraft()
+    if (saved) {
+      await onAcceptCandidate(activeCandidate.candidate_id)
+    }
+  }, [activeCandidate, onAcceptCandidate, saveCurrentDraft])
+
+  const handleRejectActiveCandidate = useCallback(async () => {
+    if (!activeCandidate || !onRejectCandidate) {
+      return
+    }
+
+    const saved = await saveCurrentDraft()
+    if (saved) {
+      await onRejectCandidate(activeCandidate.candidate_id)
+    }
+  }, [activeCandidate, onRejectCandidate, saveCurrentDraft])
 
   if (!activeCandidate) {
     return (
@@ -623,30 +732,82 @@ export default function CandidateFieldEditor() {
   return (
     <Stack
       data-testid="candidate-field-editor"
-      spacing={1.75}
+      spacing={0.75}
       sx={{
         height: '100%',
         minHeight: 0,
         overflow: 'auto',
-        p: 2,
+        px: 1.5,
+        py: 1.25,
+        background:
+          (theme) => `linear-gradient(180deg, ${alpha(theme.palette.primary.main, 0.04)}, transparent 44%)`,
       }}
     >
-      <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
-        <Typography sx={{ flex: '1 1 auto', fontWeight: 700, minWidth: 180 }} variant="subtitle1">
-          {candidateDisplayTitle(activeCandidate)}
-        </Typography>
-        {activeCandidate.projection_ref ? (
-          <Chip
-            data-testid="field-editor-envelope-revision"
-            label={`r${activeCandidate.projection_ref.envelope_revision}`}
-            size="small"
-            variant="outlined"
+      <Stack spacing={0.25}>
+        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+          <Typography
+            sx={{
+              color: (theme) => alpha(theme.palette.common.white, 0.94),
+              flex: '1 1 auto',
+              fontWeight: 600,
+              letterSpacing: -0.1,
+              minWidth: 180,
+            }}
+            variant="subtitle1"
+          >
+            Editable fields
+          </Typography>
+          {activeCandidate.projection_ref ? (
+            <Chip
+              data-testid="field-editor-envelope-revision"
+              label={`r${activeCandidate.projection_ref.envelope_revision}`}
+              size="small"
+              variant="outlined"
+              sx={{ borderRadius: 1, height: 22, '& .MuiChip-label': { fontSize: '0.68rem', fontWeight: 500, px: 0.75 } }}
+            />
+          ) : null}
+          {autosave.isSaving || isSavingDraft ? (
+            <Chip color="info" label="Saving" size="small" sx={{ borderRadius: 1, height: 22 }} />
+          ) : null}
+        </Stack>
+        <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+          <Typography
+            color="text.secondary"
+            sx={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            title={candidateDisplayTitle(activeCandidate)}
+            variant="body2"
+          >
+            {candidateDisplayTitle(activeCandidate)}
+          </Typography>
+          <FormControlLabel
+            control={(
+              <Switch
+                checked={showTechnicalDetails}
+                onChange={(event) => setShowTechnicalDetails(event.target.checked)}
+                size="small"
+                inputProps={{ 'aria-label': 'Show technical details' }}
+              />
+            )}
+            label="Show technical details"
+            sx={{
+              flexShrink: 0,
+              ml: 0,
+              mr: 0,
+              '& .MuiFormControlLabel-label': {
+                color: 'text.secondary',
+                fontSize: '0.72rem',
+                fontWeight: 500,
+              },
+            }}
           />
-        ) : null}
-        {autosave.isSaving ? (
-          <Chip color="info" label="Saving" size="small" />
-        ) : null}
+        </Stack>
       </Stack>
+
+      {draftSaveError ? (
+        <Alert severity="error" variant="outlined">
+          {draftSaveError}
+        </Alert>
+      ) : null}
 
       <ObjectValidationAlerts summaries={objectSummaries} />
 
@@ -658,19 +819,32 @@ export default function CandidateFieldEditor() {
 
       {sections.map((section) => (
         <Box key={section.key}>
-          <Typography
-            color="text.secondary"
-            sx={{ display: 'block', fontWeight: 700, mb: 1 }}
-            variant="body2"
-          >
-            {section.label}
-          </Typography>
-          <Stack divider={<Divider flexItem />} spacing={0.25}>
+          <Stack direction="row" spacing={1.25} alignItems="center" sx={{ mb: 0.5 }}>
+            <Typography
+              sx={{
+                color: (theme) => alpha(theme.palette.common.white, 0.82),
+                flexShrink: 0,
+                fontSize: '0.78rem',
+                fontWeight: 600,
+              }}
+              variant="body2"
+            >
+              {section.label}
+            </Typography>
+            <Box
+              sx={(theme) => ({
+                backgroundColor: alpha(theme.palette.common.white, 0.07),
+                flex: 1,
+                height: 1,
+              })}
+            />
+          </Stack>
+          <Stack spacing={0.5}>
             {section.fields.map((field) => {
               const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
 
               return (
-                <Stack key={field.field_key} spacing={0.6} sx={{ py: 1 }}>
+                <Box key={field.field_key}>
                   <FieldRow
                     evidenceSlot={(
                       <FieldEvidenceSlot
@@ -678,6 +852,14 @@ export default function CandidateFieldEditor() {
                       />
                     )}
                     field={field}
+                    labelSubtitleSlot={(
+                      <FieldSupportDetails
+                        candidate={activeCandidate}
+                        field={field}
+                        history={history}
+                        show={showTechnicalDetails}
+                      />
+                    )}
                     onChange={(value) => {
                       autosave.queueFieldChange({
                         field_key: field.field_key,
@@ -706,12 +888,7 @@ export default function CandidateFieldEditor() {
                     )}
                     value={field.value}
                   />
-                  <FieldSupportDetails
-                    candidate={activeCandidate}
-                    field={field}
-                    history={history}
-                  />
-                </Stack>
+                </Box>
               )
             })}
           </Stack>
@@ -722,9 +899,9 @@ export default function CandidateFieldEditor() {
         <Box
           component="details"
           sx={{
-            border: 1,
-            borderColor: 'divider',
+            border: (theme) => `1px solid ${alpha(theme.palette.common.white, 0.1)}`,
             borderRadius: 1,
+            backgroundColor: (theme) => alpha(theme.palette.common.black, 0.12),
             p: 1.25,
             '& summary': {
               cursor: 'pointer',
@@ -744,13 +921,21 @@ export default function CandidateFieldEditor() {
           <Typography color="text.secondary" sx={{ display: 'block', mt: 0.75 }} variant="caption">
             Internal routing and evidence identifiers are kept here for debugging.
           </Typography>
-          <Stack divider={<Divider flexItem />} spacing={0.25} sx={{ mt: 1 }}>
+          <Stack spacing={0.5} sx={{ mt: 1 }}>
             {technicalSections.flatMap((section) => section.fields).map((field) => {
               const history = fieldPatchHistory(workspace.action_log, activeCandidate, field)
 
               return (
-                <Stack key={field.field_key} spacing={0.6} sx={{ py: 1 }}>
+                <Box key={field.field_key}>
                   <FieldRow
+                    labelSubtitleSlot={(
+                      <FieldSupportDetails
+                        candidate={activeCandidate}
+                        field={field}
+                        history={history}
+                        show={showTechnicalDetails}
+                      />
+                    )}
                     evidenceSlot={(
                       <FieldEvidenceSlot
                         projections={evidenceProjectionsForField(activeCandidate, field)}
@@ -785,17 +970,125 @@ export default function CandidateFieldEditor() {
                     )}
                     value={field.value}
                   />
-                  <FieldSupportDetails
-                    candidate={activeCandidate}
-                    field={field}
-                    history={history}
-                  />
-                </Stack>
+                </Box>
               )
             })}
           </Stack>
         </Box>
       ) : null}
+
+      <Box>
+        <Typography
+          sx={{
+            color: (theme) => alpha(theme.palette.common.white, 0.82),
+            fontSize: '0.78rem',
+            fontWeight: 600,
+            mb: 0.5,
+          }}
+          variant="body2"
+        >
+          Notes <Typography component="span" color="text.secondary" variant="caption">(optional)</Typography>
+        </Typography>
+        <TextField
+          fullWidth
+          inputProps={{
+            'aria-label': 'Curator notes',
+            maxLength: NOTES_MAX_LENGTH,
+          }}
+          minRows={3}
+          multiline
+          onChange={(event) => setDraftNotes(event.target.value.slice(0, NOTES_MAX_LENGTH))}
+          placeholder="Add a note for this object..."
+          size="small"
+          value={draftNotes}
+          sx={{
+            '& .MuiOutlinedInput-root': {
+              backgroundColor: 'rgba(2, 9, 21, 0.5)',
+              borderRadius: 1,
+              color: 'rgba(255, 255, 255, 0.9)',
+              '& fieldset': {
+                borderColor: 'rgba(255, 255, 255, 0.12)',
+              },
+              '&:hover fieldset': {
+                borderColor: 'rgba(100, 181, 246, 0.38)',
+              },
+              '&.Mui-focused fieldset': {
+                borderColor: '#2196f3',
+              },
+            },
+            '& .MuiInputBase-input': {
+              fontSize: '0.82rem',
+            },
+          }}
+        />
+        <Typography
+          color="text.secondary"
+          sx={{
+            display: 'block',
+            fontVariantNumeric: 'tabular-nums',
+            mt: 0.35,
+            textAlign: 'right',
+          }}
+          variant="caption"
+        >
+          {draftNotes.length} / {NOTES_MAX_LENGTH}
+        </Typography>
+      </Box>
+
+      <Box
+        sx={(theme) => ({
+          background:
+            `linear-gradient(180deg, ${alpha('#071524', 0.72)}, #071524)`,
+          borderTop: `1px solid ${alpha(theme.palette.common.white, 0.1)}`,
+          bottom: 0,
+          mt: 'auto',
+          mx: -1.5,
+          pb: 0,
+          position: 'sticky',
+          px: 1.5,
+          pt: 1,
+          zIndex: 1,
+        })}
+      >
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent="flex-end">
+          <Button
+            disabled={isSavingDraft || autosave.isSaving}
+            onClick={() => void saveCurrentDraft()}
+            size="medium"
+            startIcon={<SaveOutlinedIcon />}
+            variant="outlined"
+            sx={{ borderRadius: 1, fontWeight: 500, letterSpacing: 0, minHeight: 36, px: 1.75, textTransform: 'none' }}
+          >
+            Save draft
+          </Button>
+          {onRejectCandidate ? (
+            <Button
+              color="error"
+              disabled={activeDecisionDisabled}
+              onClick={() => void handleRejectActiveCandidate()}
+              size="medium"
+              startIcon={<HighlightOffIcon />}
+              variant="outlined"
+              sx={{ borderRadius: 1, fontWeight: 500, letterSpacing: 0, minHeight: 36, px: 2, textTransform: 'none' }}
+            >
+              Reject
+            </Button>
+          ) : null}
+          {onAcceptCandidate ? (
+            <Button
+              color="success"
+              disabled={activeDecisionDisabled}
+              onClick={() => void handleAcceptActiveCandidate()}
+              size="medium"
+              startIcon={<CheckCircleOutlineIcon />}
+              variant="outlined"
+              sx={{ borderRadius: 1, fontWeight: 500, letterSpacing: 0, minHeight: 36, px: 2, textTransform: 'none' }}
+            >
+              Accept
+            </Button>
+          ) : null}
+        </Stack>
+      </Box>
     </Stack>
   )
 }

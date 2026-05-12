@@ -213,3 +213,11 @@ presentation/
 .collabwork/
 
 .collab/
+
+# Locally installed agent skills (npx skills add ...)
+.agents/
+skills-lock.json
+
+# Local design notes not intended for the repo
+/docs/design/2026-05-07-domain-pack-curatable-unit-notes.md
+/docs/design/domain-pack-migration/

@@ -53,6 +53,7 @@ interface PdfViewerChromeProps {
   searchCurrent: number | null
   searchTotal: number | null
   searchNotFound: boolean
+  variant?: 'default' | 'curation'
   onDragEnter: DragEventHandler<HTMLDivElement>
   onDragOver: DragEventHandler<HTMLDivElement>
   onDragLeave: DragEventHandler<HTMLDivElement>
@@ -89,6 +90,7 @@ export function PdfViewerChrome({
   searchCurrent,
   searchTotal,
   searchNotFound,
+  variant = 'default',
   onDragEnter,
   onDragOver,
   onDragLeave,
@@ -105,6 +107,7 @@ export function PdfViewerChrome({
   onSearchPrevious,
 }: PdfViewerChromeProps) {
   const theme = useTheme()
+  const isCurationVariant = variant === 'curation'
   const controlsDisabled = !activeDocument || status !== 'ready'
   const searchDisabled = controlsDisabled || searchQuery.trim().length === 0
   const searchMatchLabel = searchNotFound
@@ -128,21 +131,75 @@ export function PdfViewerChrome({
 
   return (
     <Paper
-      elevation={3}
+      elevation={isCurationVariant ? 0 : 3}
       sx={{
         height: '100%',
         display: 'flex',
         flexDirection: 'column',
-        backgroundColor: 'background.paper',
+        overflow: 'hidden',
+        borderRadius: isCurationVariant ? 1 : undefined,
+        border: isCurationVariant
+          ? `1px solid ${alpha(theme.palette.primary.light, 0.2)}`
+          : undefined,
+        backgroundColor: isCurationVariant
+          ? '#071524'
+          : 'background.paper',
+        boxShadow: isCurationVariant
+          ? `inset 0 1px 0 ${alpha(theme.palette.common.white, 0.05)}, 0 18px 40px ${alpha('#000', 0.24)}`
+          : undefined,
       }}
     >
-      <Box sx={{ padding: 2, borderBottom: 1, borderColor: 'divider' }}>
+      <Box
+        sx={{
+          px: isCurationVariant ? 1.5 : 2,
+          py: isCurationVariant ? 1.25 : 2,
+          borderBottom: 1,
+          borderColor: isCurationVariant ? alpha(theme.palette.primary.light, 0.16) : 'divider',
+          background: isCurationVariant
+            ? `linear-gradient(180deg, ${alpha(theme.palette.primary.main, 0.08)}, ${alpha('#071524', 0)})`
+            : undefined,
+        }}
+      >
         {activeDocument ? (
-          <Stack spacing={0.5}>
-            <Typography variant="h6">{activeDocument.filename}</Typography>
-            <Typography variant="body2" color="text.secondary">
-              {activeDocument.pageCount} pages · Serving from {activeDocument.viewerUrl}
-            </Typography>
+          <Stack spacing={isCurationVariant ? 1 : 0.5}>
+            <Stack
+              direction="row"
+              spacing={1}
+              alignItems="baseline"
+              justifyContent="space-between"
+              sx={{ minWidth: 0 }}
+            >
+              <Typography
+                variant={isCurationVariant ? 'subtitle2' : 'h6'}
+                sx={{
+                  color: isCurationVariant ? alpha(theme.palette.common.white, 0.92) : undefined,
+                  fontWeight: isCurationVariant ? 800 : undefined,
+                  letterSpacing: isCurationVariant ? 0 : undefined,
+                }}
+              >
+                {isCurationVariant ? 'Document viewer' : activeDocument.filename}
+              </Typography>
+              {isCurationVariant ? (
+                <Typography
+                  title={activeDocument.filename}
+                  variant="caption"
+                  sx={{
+                    color: alpha(theme.palette.common.white, 0.62),
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {activeDocument.filename}
+                </Typography>
+              ) : null}
+            </Stack>
+            {!isCurationVariant ? (
+              <Typography variant="body2" color="text.secondary">
+                {activeDocument.pageCount} pages · Serving from {activeDocument.viewerUrl}
+              </Typography>
+            ) : null}
             {navigationResult && (
               <>
                 <Stack direction="row" spacing={1} flexWrap="wrap">
@@ -150,20 +207,46 @@ export function PdfViewerChrome({
                     size="small"
                     color={getNavigationBadgeColor(navigationResult)}
                     label={formatLocatorQualityLabel(navigationResult.locatorQuality)}
-                    sx={{ marginTop: 0.5 }}
+                    sx={{
+                      marginTop: 0.5,
+                      ...(isCurationVariant && {
+                        height: 24,
+                        borderRadius: 999,
+                        fontWeight: 700,
+                        '& .MuiChip-label': { px: 1 },
+                      }),
+                    }}
                   />
                   <Chip
                     size="small"
                     variant="outlined"
                     label={navigationResult.mode === 'hover' ? 'Hover sync' : 'Selection sync'}
-                    sx={{ marginTop: 0.5 }}
+                    sx={{
+                      marginTop: 0.5,
+                      ...(isCurationVariant && {
+                        height: 24,
+                        borderColor: alpha(theme.palette.primary.main, 0.54),
+                        color: theme.palette.primary.light,
+                        fontWeight: 700,
+                        '& .MuiChip-label': { px: 1 },
+                      }),
+                    }}
                   />
                   {navigationResult.matchedPage !== null && (
                     <Chip
                       size="small"
                       variant="outlined"
                       label={`Page ${navigationResult.matchedPage}`}
-                      sx={{ marginTop: 0.5 }}
+                      sx={{
+                        marginTop: 0.5,
+                        ...(isCurationVariant && {
+                          height: 24,
+                          borderColor: alpha(theme.palette.common.white, 0.18),
+                          color: alpha(theme.palette.common.white, 0.78),
+                          fontWeight: 700,
+                          '& .MuiChip-label': { px: 1 },
+                        }),
+                      }}
                     />
                   )}
                 </Stack>
@@ -186,7 +269,22 @@ export function PdfViewerChrome({
               direction={{ xs: 'column', sm: 'row' }}
               spacing={1}
               alignItems={{ xs: 'stretch', sm: 'center' }}
-              sx={{ pt: 0.75 }}
+              sx={{
+                pt: isCurationVariant ? 0 : 0.75,
+                '& .MuiIconButton-root': isCurationVariant
+                  ? {
+                      border: `1px solid ${alpha(theme.palette.common.white, 0.1)}`,
+                      borderRadius: 1,
+                      color: alpha(theme.palette.common.white, 0.82),
+                      height: 32,
+                      width: 32,
+                      '&:hover': {
+                        backgroundColor: alpha(theme.palette.primary.main, 0.14),
+                        borderColor: alpha(theme.palette.primary.main, 0.42),
+                      },
+                    }
+                  : undefined,
+              }}
             >
               <Stack direction="row" spacing={0.5} alignItems="center">
                 <Tooltip title="Previous page">
@@ -204,7 +302,15 @@ export function PdfViewerChrome({
                 <Typography
                   variant="body2"
                   color="text.secondary"
-                  sx={{ minWidth: 72, textAlign: 'center' }}
+                  sx={{
+                    minWidth: 72,
+                    textAlign: 'center',
+                    ...(isCurationVariant && {
+                      color: alpha(theme.palette.common.white, 0.82),
+                      fontVariantNumeric: 'tabular-nums',
+                      fontWeight: 700,
+                    }),
+                  }}
                 >
                   {currentPage} / {activeDocument.pageCount}
                 </Typography>
@@ -238,7 +344,15 @@ export function PdfViewerChrome({
                 <Typography
                   variant="body2"
                   color="text.secondary"
-                  sx={{ minWidth: 48, textAlign: 'center' }}
+                  sx={{
+                    minWidth: 48,
+                    textAlign: 'center',
+                    ...(isCurationVariant && {
+                      color: alpha(theme.palette.common.white, 0.82),
+                      fontVariantNumeric: 'tabular-nums',
+                      fontWeight: 700,
+                    }),
+                  }}
                 >
                   {zoomLevel}%
                 </Typography>
@@ -278,6 +392,25 @@ export function PdfViewerChrome({
                 sx={{
                   flex: 1,
                   minWidth: { xs: '100%', sm: 180 },
+                  ...(isCurationVariant && {
+                    '& .MuiOutlinedInput-root': {
+                      backgroundColor: alpha('#020915', 0.58),
+                      borderRadius: 1,
+                      color: alpha(theme.palette.common.white, 0.88),
+                      '& fieldset': {
+                        borderColor: alpha(theme.palette.common.white, 0.13),
+                      },
+                      '&:hover fieldset': {
+                        borderColor: alpha(theme.palette.primary.light, 0.38),
+                      },
+                      '&.Mui-focused fieldset': {
+                        borderColor: theme.palette.primary.main,
+                      },
+                    },
+                    '& .MuiInputBase-input': {
+                      fontSize: '0.82rem',
+                    },
+                  }),
                 }}
                 InputProps={{
                   startAdornment: (
@@ -331,7 +464,14 @@ export function PdfViewerChrome({
         )}
       </Box>
 
-      <Box sx={{ flex: 1, position: 'relative' }}>
+      <Box
+        sx={{
+          flex: 1,
+          position: 'relative',
+          minHeight: 0,
+          backgroundColor: isCurationVariant ? '#030a13' : undefined,
+        }}
+      >
         {activeDocument && navigationResult?.degraded && navigationBannerMessage && (
           <Box
             sx={{
@@ -469,7 +609,7 @@ export function PdfViewerChrome({
             border: 'none',
             width: '100%',
             height: '100%',
-            backgroundColor: theme.palette.background.default,
+            backgroundColor: isCurationVariant ? '#030a13' : theme.palette.background.default,
           }}
         />
       </Box>

@@ -59,9 +59,9 @@ export default function EvidenceNavigationQuoteCard({
             ? theme.palette.mode === 'dark'
               ? alpha(chatSurfaceTextColor, 0.08)
               : alpha(theme.palette.background.paper, 0.72)
-            : alpha(theme.palette.success.main, 0.06),
+            : alpha(theme.palette.primary.main, 0.08),
           borderRadius: '8px',
-          border: 0,
+          border: isChatAppearance ? 0 : `1px solid ${alpha(theme.palette.primary.main, 0.42)}`,
           px: '12px',
           py: '10px',
           pr: onCopy ? '44px' : '12px',
@@ -79,7 +79,7 @@ export default function EvidenceNavigationQuoteCard({
               ? theme.palette.mode === 'dark'
                 ? alpha(chatSurfaceTextColor, 0.12)
                 : alpha(theme.palette.background.paper, 0.9)
-              : alpha(theme.palette.success.main, 0.1),
+              : alpha(theme.palette.primary.main, 0.12),
             transform: 'translateX(2px)',
           },
           '&:focus-visible': {
@@ -94,6 +94,7 @@ export default function EvidenceNavigationQuoteCard({
             fontSize: '11px',
             color: 'text.secondary',
             mb: '4px',
+            fontWeight: isChatAppearance ? 400 : 700,
           }}
         >
           {locationLabel}
@@ -105,6 +106,7 @@ export default function EvidenceNavigationQuoteCard({
             fontStyle: 'italic',
             lineHeight: 1.5,
             color: 'text.primary',
+            fontWeight: isChatAppearance ? 400 : 500,
           }}
         >
           &ldquo;{quoteContent ?? quote}&rdquo;

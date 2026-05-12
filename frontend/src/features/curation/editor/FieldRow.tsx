@@ -13,6 +13,37 @@ import {
   resolveEnvelopeFieldPath,
 } from '../workspace/workspaceState'
 
+const fieldInputSx = {
+  '& .MuiOutlinedInput-root': {
+    backgroundColor: 'rgba(2, 9, 21, 0.5)',
+    borderRadius: 1,
+    color: 'rgba(255, 255, 255, 0.9)',
+    transition: 'background-color 160ms ease, border-color 160ms ease',
+    '& fieldset': {
+      borderColor: 'rgba(255, 255, 255, 0.12)',
+    },
+    '&:hover fieldset': {
+      borderColor: 'rgba(100, 181, 246, 0.38)',
+    },
+    '&.Mui-focused fieldset': {
+      borderColor: '#2196f3',
+    },
+    '&.Mui-disabled': {
+      backgroundColor: 'rgba(255, 255, 255, 0.035)',
+    },
+  },
+  '& .MuiOutlinedInput-input': {
+    paddingTop: '6px',
+    paddingBottom: '6px',
+  },
+  '& .MuiInputBase-input': {
+    fontSize: '0.84rem',
+  },
+  '& .MuiInputBase-input.Mui-disabled': {
+    WebkitTextFillColor: 'rgba(255, 255, 255, 0.58)',
+  },
+}
+
 interface ResolvedFieldOption {
   key: string
   label: string
@@ -34,6 +65,7 @@ export interface FieldRowProps {
   validationSlot?: ReactNode
   evidenceSlot?: ReactNode
   revertSlot?: ReactNode
+  labelSubtitleSlot?: ReactNode
   renderInput?: (props: FieldRowInputProps) => ReactNode
   onChange: (value: unknown) => void
 }
@@ -154,6 +186,7 @@ function renderDefaultInput({
         }}
         select
         size="small"
+        sx={fieldInputSx}
         value={selectedKey}
       >
         {options.map((option) => (
@@ -191,6 +224,7 @@ function renderDefaultInput({
         }}
         placeholder={placeholder}
         size="small"
+        sx={fieldInputSx}
         value={normalizeFieldTextValue(value)}
       />
     )
@@ -221,6 +255,7 @@ function renderDefaultInput({
         }}
         placeholder={placeholder}
         size="small"
+        sx={fieldInputSx}
         type="number"
         value={normalizeFieldTextValue(value)}
       />
@@ -240,6 +275,7 @@ function renderDefaultInput({
       onChange={(event) => onChange(event.target.value)}
       placeholder={placeholder}
       size="small"
+      sx={fieldInputSx}
       value={normalizeFieldTextValue(value)}
     />
   )
@@ -251,6 +287,7 @@ export default function FieldRow({
   validationSlot,
   evidenceSlot,
   revertSlot,
+  labelSubtitleSlot,
   renderInput,
   onChange,
 }: FieldRowProps) {
@@ -274,36 +311,44 @@ export default function FieldRow({
         display: 'grid',
         gridTemplateColumns: {
           xs: '1fr',
-          md: 'minmax(144px, 0.34fr) minmax(220px, 1fr) auto auto auto',
+          md: 'minmax(128px, 0.34fr) minmax(0, 1fr)',
         },
-        gap: 1.1,
+        columnGap: 1.25,
+        rowGap: 0.15,
         alignItems: {
           xs: 'stretch',
-          md: 'center',
+          md: 'start',
         },
       }}
     >
-      <Typography
-        color="text.secondary"
-        component="label"
-        htmlFor={inputId}
+      <Box
         sx={{
           alignSelf: {
             xs: 'flex-start',
-            md: 'center',
+            md: 'flex-start',
           },
-          fontWeight: 600,
-          lineHeight: 1.3,
           pt: {
             xs: 0,
             md: 0.5,
           },
-          textAlign: 'left',
         }}
-        variant="body2"
       >
-        {field.label}
-      </Typography>
+        <Typography
+          color="text.secondary"
+          component="label"
+          htmlFor={inputId}
+          sx={{
+            display: 'block',
+            fontWeight: 600,
+            lineHeight: 1.25,
+            textAlign: 'left',
+          }}
+          variant="body2"
+        >
+          {field.label}
+        </Typography>
+        {labelSubtitleSlot}
+      </Box>
 
       <Box sx={{ minWidth: 0 }}>
         {renderInput ? renderInput(inputProps) : renderDefaultInput(inputProps)}
@@ -312,13 +357,14 @@ export default function FieldRow({
       <Box
         data-testid={`field-validation-slot-${field.field_key}`}
         sx={{
-          minHeight: 24,
-          display: 'flex',
+          gridColumn: { md: '2' },
+          display: validationSlot ? 'flex' : 'none',
           alignItems: 'center',
           justifyContent: {
             xs: 'flex-start',
-            md: 'center',
+            md: 'flex-start',
           },
+          '&:empty': { display: 'none' },
         }}
       >
         {validationSlot}
@@ -327,11 +373,13 @@ export default function FieldRow({
       <Box
         data-testid={`field-evidence-slot-${field.field_key}`}
         sx={{
-          minHeight: 24,
-          display: 'flex',
+          gridColumn: { md: '2' },
+          display: evidenceSlot ? 'flex' : 'none',
           alignItems: 'center',
           flexWrap: 'wrap',
-          gap: 0.75,
+          gap: 0.5,
+          mt: evidenceSlot ? 0.25 : 0,
+          '&:empty': { display: 'none', marginTop: 0 },
         }}
       >
         {evidenceSlot}
@@ -340,13 +388,14 @@ export default function FieldRow({
       <Box
         data-testid={`field-revert-slot-${field.field_key}`}
         sx={{
-          minHeight: 24,
-          display: 'flex',
+          gridColumn: { md: '2' },
+          display: revertSlot ? 'flex' : 'none',
           alignItems: 'center',
           justifyContent: {
             xs: 'flex-start',
             md: 'flex-end',
           },
+          '&:empty': { display: 'none' },
         }}
       >
         {revertSlot}
