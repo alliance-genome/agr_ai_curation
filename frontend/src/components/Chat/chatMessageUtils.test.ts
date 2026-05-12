@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { getChatLocalStorageKeys } from '@/lib/chatCacheKeys'
 import type { EvidenceRecord } from '@/features/curation/types'
 
 import {
+  buildTurnId,
   loadMessagesFromStorage,
   sanitizeStoredMessage,
   withMissingEvidenceReviewAndCurateTargets,
@@ -21,6 +22,16 @@ const evidenceRecord: EvidenceRecord = {
 describe('chatMessageUtils', () => {
   beforeEach(() => {
     localStorage.clear()
+    vi.restoreAllMocks()
+  })
+
+  it('builds a usable turn ID when crypto.randomUUID is unavailable', () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID')
+      .mockImplementation(() => { throw new TypeError('crypto.randomUUID is not a function') })
+
+    const turnId = buildTurnId()
+
+    expect(turnId).toMatch(/^turn-[a-z0-9]+-[a-z0-9]+-[a-z0-9]+$/)
   })
 
   it('sanitizes unavailable stored messages with a Date timestamp', () => {
