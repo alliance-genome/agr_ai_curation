@@ -128,6 +128,21 @@ const BUILT_IN_TEMPLATE_VARIABLES = [
   'timestamp',
 ] as const
 
+const validationStateLabel = (state: ValidationAttachmentSelection['state']) => {
+  if (state === 'blocked') return 'not available'
+  return state
+}
+
+const validationStateHelpText = (attachment: ValidationAttachmentSelection) => {
+  if (attachment.state === 'blocked') {
+    return attachment.blocked_by
+      ? `Not available yet; tracked by ${attachment.blocked_by}`
+      : 'Not available yet'
+  }
+  if (attachment.state === 'planned') return 'Planned for a later implementation step'
+  return ''
+}
+
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
@@ -431,7 +446,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 <Typography variant="caption" fontWeight={600}>
                   Validation Attachments
                 </Typography>
-                <Tooltip title="Checked active validators run automatically. Planned, blocked, and metadata-only validators are shown below as read-only domain-pack context.">
+                <Tooltip title="Checked active validators run automatically. Planned, unavailable, and metadata-only validators are shown below as read-only domain-pack context.">
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
                 </Tooltip>
               </FieldLabel>
@@ -493,7 +508,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                             <Chip
                               size="small"
                               color={stateColor}
-                              label={attachment.state}
+                              label={validationStateLabel(attachment.state)}
                               sx={{ height: 18, fontSize: '0.6rem' }}
                             />
                             {attachment.export_blocking && (
@@ -501,7 +516,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                                 size="small"
                                 color="error"
                                 variant="outlined"
-                                label="blocks export"
+                                label="required for export"
                                 sx={{ height: 18, fontSize: '0.6rem' }}
                               />
                             )}
@@ -519,14 +534,14 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                           >
                             {[attachment.object_type, attachment.field_path].filter(Boolean).join(' / ') || attachment.scope}
                           </Typography>
-                          {attachment.state === 'blocked' && attachment.blocked_by && (
+                          {attachment.state === 'blocked' && (
                             <Typography variant="caption" color="error.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
-                              Blocked by {attachment.blocked_by}
+                              {validationStateHelpText(attachment)}
                             </Typography>
                           )}
                           {attachment.state === 'planned' && (
                             <Typography variant="caption" color="warning.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
-                              Planned metadata only
+                              {validationStateHelpText(attachment)}
                             </Typography>
                           )}
                           {attachment.state === 'active' && !attachment.allow_opt_out && (
@@ -569,7 +584,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                     color="text.secondary"
                     sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}
                   >
-                    Planned, blocked, and metadata-only validators are not scheduled by this checkbox list.
+                    Planned, unavailable, and metadata-only validators are not scheduled by this checkbox list.
                   </Typography>
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                     {metadataValidationAttachments.map((attachment) => {
@@ -593,7 +608,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                               size="small"
                               color={stateColor}
                               variant="outlined"
-                              label={attachment.state === 'active' ? 'metadata' : attachment.state}
+                              label={attachment.state === 'active' ? 'metadata' : validationStateLabel(attachment.state)}
                               sx={{ height: 18, fontSize: '0.6rem', mt: 0.1, flexShrink: 0 }}
                             />
                             <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -623,9 +638,9 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                               >
                                 {[attachment.object_type, attachment.field_path].filter(Boolean).join(' / ') || attachment.scope}
                               </Typography>
-                              {attachment.state === 'blocked' && attachment.blocked_by && (
+                              {attachment.state === 'blocked' && (
                                 <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.63rem' }}>
-                                  Blocked by {attachment.blocked_by}
+                                  {validationStateHelpText(attachment)}
                                 </Typography>
                               )}
                             </Box>

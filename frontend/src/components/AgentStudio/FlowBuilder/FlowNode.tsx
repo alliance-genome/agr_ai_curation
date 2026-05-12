@@ -233,13 +233,13 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
               </ValidationPill>
             )}
             {exportBlockingValidationCount > 0 && (
-              <ValidationPill>{exportBlockingValidationCount} export-blocking</ValidationPill>
+              <ValidationPill>{exportBlockingValidationCount} required for export</ValidationPill>
             )}
             {plannedValidationCount > 0 && (
               <ValidationPill>{plannedValidationCount} planned</ValidationPill>
             )}
             {blockedValidationCount > 0 && (
-              <ValidationPill>{blockedValidationCount} blocked</ValidationPill>
+              <ValidationPill>{blockedValidationCount} unavailable</ValidationPill>
             )}
           </ValidationSummary>
         )}

@@ -429,7 +429,7 @@ object_definitions:
                 - phenotypeannotation_conditionrelation.annotation_id
                 - geneexpressionannotation_conditionrelation.annotation_id
   - object_type: ChemicalTerm
-    display_name: Chemical term validated reference
+    display_name: Chemical term
     description: Pending validated-reference object for the chemical ontology term used by the condition.
     model_ref: ChemicalTermPayload
     schema_ref:
@@ -489,7 +489,7 @@ object_definitions:
         field_type: string
         display_name: First source mention
   - object_type: Reference
-    display_name: Reference validated reference
+    display_name: Reference
     description: Pending literature/reference object for the source paper.
     model_ref: ReferencePayload
     schema_ref:
@@ -591,7 +591,7 @@ metadata:
         display_name: Required chemical condition fields
         description: Required chemical-condition field paths declared in this pack must be present in each pending object payload.
       - validator_id: chemical_condition.chebi_curie_format
-        display_name: ChEBI CURIE format
+        display_name: ChEBI CURIE check
         description: Require CHEBI CURIE syntax for condition_chemical.curie and ChemicalTerm.curie until external ChEBI lookup is wired.
       - validator_id: chemical_condition.export_context_blocker
         display_name: Export context blocker
@@ -612,7 +612,7 @@ metadata:
   validator_bindings:
     active:
       - binding_id: chemical_condition.pending_envelope_validator
-        display_name: Pending chemical condition envelope validation
+        display_name: Envelope validation
         validator: agr_ai_curation_alliance.domain_packs.chemical_condition.validate_pending_chemical_condition_envelope
         applies_to:
           domain_pack_id: agr.alliance.chemical_condition
@@ -623,7 +623,7 @@ metadata:
             - EvidenceQuote
         definition_state: in_development
       - binding_id: chemical_condition.chebi_curie_format
-        display_name: ChEBI CURIE format
+        display_name: ChEBI CURIE check
         validation_kind: curie_prefix_format
         prefix: CHEBI
         applies_to:

@@ -71,6 +71,7 @@ const compactChipSx = {
 } as const
 
 function humanizeState(value: string): string {
+  if (value === 'blocked') return 'not available'
   return value.replace(/_/g, ' ')
 }
 
@@ -295,7 +296,7 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
         <Chip size="small" color="warning" variant="outlined" label={`${counts.planned} planned`} sx={compactChipSx} />
       )}
       {counts.blocked > 0 && (
-        <Chip size="small" color="error" variant="outlined" label={`${counts.blocked} blocked`} sx={compactChipSx} />
+        <Chip size="small" color="error" variant="outlined" label={`${counts.blocked} unavailable`} sx={compactChipSx} />
       )}
     </Stack>
   )
@@ -776,7 +777,7 @@ function DomainEnvelopeMetadataPanel({
               || attachmentView.length > 0) && (
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
                 {metadata.validation_summary.export_blocking > 0 && (
-                  <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} export-blocking`} sx={compactChipSx} />
+                  <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} required for export`} sx={compactChipSx} />
                 )}
                 {metadata.validation_summary.opt_out_allowed > 0 && (
                   <Chip size="small" color="warning" variant="outlined" label={`${metadata.validation_summary.opt_out_allowed} opt-out allowed`} sx={compactChipSx} />
@@ -816,7 +817,7 @@ function DomainEnvelopeMetadataPanel({
               <Chip size="small" label={`${metadata.object_definitions.length} object type${metadata.object_definitions.length === 1 ? '' : 's'}`} />
               <Chip size="small" label={`${metadata.validation_summary.default_enabled} default validator${metadata.validation_summary.default_enabled === 1 ? '' : 's'}`} />
               {metadata.validation_summary.export_blocking > 0 && (
-                <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} export-blocking`} />
+                <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} required for export`} />
               )}
               {metadata.validation_summary.opt_out_allowed > 0 && (
                 <Chip size="small" color="warning" variant="outlined" label={`${metadata.validation_summary.opt_out_allowed} opt-out allowed`} />

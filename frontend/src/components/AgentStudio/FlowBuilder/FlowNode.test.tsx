@@ -121,8 +121,8 @@ describe('FlowNode', () => {
 
     expect(screen.getByText('1 active validation')).toBeInTheDocument()
     expect(screen.getByText('1 envelope object')).toBeInTheDocument()
-    expect(screen.getByText('1 export-blocking')).toBeInTheDocument()
+    expect(screen.getByText('1 required for export')).toBeInTheDocument()
     expect(screen.getByText('1 planned')).toBeInTheDocument()
-    expect(screen.getByText('1 blocked')).toBeInTheDocument()
+    expect(screen.getByText('1 unavailable')).toBeInTheDocument()
   })
 })

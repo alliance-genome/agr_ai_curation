@@ -417,7 +417,7 @@ describe('PromptWorkshop', () => {
     expect(screen.getByText('Gene mention evidence')).toBeInTheDocument()
     expect(screen.getByText('gene_symbol')).toBeInTheDocument()
     expect(screen.getByText('1 default validator')).toBeInTheDocument()
-    expect(screen.getByText('1 export-blocking')).toBeInTheDocument()
+    expect(screen.getByText('1 required for export')).toBeInTheDocument()
   }, 15000)
 
   it('disables non-attachable tools in tool library modal', async () => {
