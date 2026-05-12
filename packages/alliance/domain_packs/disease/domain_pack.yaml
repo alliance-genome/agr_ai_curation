@@ -648,7 +648,7 @@ object_definitions:
               db_table: diseaseannotation_conditionrelation
       - field_path: condition_relations[0].condition_relation_type.name
         field_type: string
-        display_name: First condition relation type
+        display_name: Condition relation type
         definition_state: in_development
         metadata:
           validatable: true
@@ -670,7 +670,7 @@ object_definitions:
               db_column: name
       - field_path: condition_relations[0].conditions
         field_type: array
-        display_name: First condition list
+        display_name: Experimental conditions
         model_ref: ExperimentalConditionPayload
         definition_state: in_development
         metadata:
@@ -692,7 +692,7 @@ object_definitions:
               db_table: conditionrelation_experimentalcondition
       - field_path: condition_relations[0].conditions[0].condition_class.curie
         field_type: string
-        display_name: First condition class CURIE
+        display_name: Condition class CURIE
         definition_state: in_development
         metadata:
           validatable: true
@@ -714,7 +714,7 @@ object_definitions:
               db_column: curie
       - field_path: condition_relations[0].conditions[0].condition_id.curie
         field_type: string
-        display_name: First condition ID CURIE
+        display_name: Condition ID CURIE
         definition_state: in_development
         metadata:
           validatable: true
@@ -736,7 +736,7 @@ object_definitions:
               db_column: curie
       - field_path: condition_relations[0].conditions[0].condition_chemical.curie
         field_type: string
-        display_name: First condition chemical CURIE
+        display_name: Chemical CURIE
         definition_state: in_development
         metadata:
           validatable: true
@@ -758,7 +758,7 @@ object_definitions:
               db_column: curie
       - field_path: condition_relations[0].conditions[0].condition_taxon.curie
         field_type: string
-        display_name: First condition taxon CURIE
+        display_name: Taxon CURIE
         definition_state: in_development
         metadata:
           validatable: true
@@ -780,7 +780,7 @@ object_definitions:
               db_column: curie
       - field_path: condition_relations[0].conditions[0].condition_free_text
         field_type: string
-        display_name: First condition free text
+        display_name: Condition free text
         definition_state: in_development
         metadata:
           definition_state_category: under_development
@@ -796,7 +796,7 @@ object_definitions:
               db_column: conditionfreetext
       - field_path: condition_relations[0].conditions[0].condition_summary
         field_type: string
-        display_name: First condition summary
+        display_name: Condition summary
         definition_state: in_development
         metadata:
           definition_state_category: under_development

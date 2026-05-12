@@ -143,6 +143,14 @@ const validationStateHelpText = (attachment: ValidationAttachmentSelection) => {
   return ''
 }
 
+const validationTargetText = (attachment: ValidationAttachmentSelection) => {
+  if (attachment.target_label) return attachment.target_label
+  if (attachment.scope === 'pack') return 'All extracted data'
+  if (attachment.object_type && attachment.field_path) return 'Specific field'
+  if (attachment.object_type) return 'Specific extracted object'
+  return 'Validation metadata'
+}
+
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
@@ -532,7 +540,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                               wordBreak: 'break-word',
                             }}
                           >
-                            {[attachment.object_type, attachment.field_path].filter(Boolean).join(' / ') || attachment.scope}
+                            {validationTargetText(attachment)}
                           </Typography>
                           {attachment.state === 'blocked' && (
                             <Typography variant="caption" color="error.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
@@ -636,7 +644,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                                   wordBreak: 'break-word',
                                 }}
                               >
-                                {[attachment.object_type, attachment.field_path].filter(Boolean).join(' / ') || attachment.scope}
+                                {validationTargetText(attachment)}
                               </Typography>
                               {attachment.state === 'blocked' && (
                                 <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.63rem' }}>

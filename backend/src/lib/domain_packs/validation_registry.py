@@ -177,6 +177,7 @@ class ValidationAttachmentOption:
     field_path: str | None = None
     field_type: DomainPackFieldType | None = None
     label: str = ""
+    target_label: str | None = None
     description: str = ""
     definition_state: DefinitionState = DefinitionState.STABLE
     blocked_by: str | None = None
@@ -206,6 +207,7 @@ class ValidationAttachmentOption:
             "field_path": self.field_path,
             "field_type": self.field_type.value if self.field_type is not None else None,
             "label": self.label,
+            "target_label": self.target_label,
             "description": self.description,
             "definition_state": self.definition_state.value,
             "blocked_by": self.blocked_by,
@@ -1203,6 +1205,12 @@ def _binding_attachment_option(
         or binding.tool_name
         or binding.binding_id
     )
+    target_label = _binding_attachment_target_label(
+        object_display_name=object_display_name,
+        object_type=object_type,
+        field_display_name=field_display_name,
+        field_path=field_path,
+    )
     return ValidationAttachmentOption(
         attachment_id=_validation_attachment_id(
             domain_pack.pack_id,
@@ -1228,11 +1236,11 @@ def _binding_attachment_option(
         label=_binding_attachment_label(
             binding=binding,
             fallback_validator_id=validator_id,
-            object_display_name=object_display_name,
-            object_type=object_type,
+            target_label=target_label,
             field_display_name=field_display_name,
             field_path=field_path,
         ),
+        target_label=target_label,
         description=binding.reason or "",
         definition_state=binding.definition_state,
         blocked_by=binding.blocked_by,
@@ -1279,8 +1287,7 @@ def _binding_attachment_label(
     *,
     binding: ValidatorBinding,
     fallback_validator_id: str,
-    object_display_name: str | None,
-    object_type: str | None,
+    target_label: str | None,
     field_display_name: str | None,
     field_path: str | None,
 ) -> str:
@@ -1288,16 +1295,9 @@ def _binding_attachment_label(
         binding.display_name or fallback_validator_id,
         None,
     )
-    object_label = _clean_display_label(object_display_name) or _humanize_identifier(object_type)
     field_label = _clean_display_label(field_display_name) or _humanize_field_path(field_path)
     if field_label and _label_already_names_target(base_label, field_label):
         return base_label
-    if object_label and not field_label and _label_already_names_target(base_label, object_label):
-        return base_label
-    target_label = _friendly_target_label(
-        object_label=object_label,
-        field_label=field_label,
-    )
     if not target_label:
         return base_label
     if _label_already_names_target(base_label, target_label):
@@ -1305,6 +1305,18 @@ def _binding_attachment_label(
     if "envelope validation" in base_label.lower() or base_label.lower() == "data check":
         return f"{target_label} data check"
     return f"{target_label}: {base_label}"
+
+
+def _binding_attachment_target_label(
+    *,
+    object_display_name: str | None,
+    object_type: str | None,
+    field_display_name: str | None,
+    field_path: str | None,
+) -> str | None:
+    object_label = _clean_display_label(object_display_name) or _humanize_identifier(object_type)
+    field_label = _clean_display_label(field_display_name) or _humanize_field_path(field_path)
+    return _friendly_target_label(object_label=object_label, field_label=field_label)
 
 
 def _friendly_target_label(

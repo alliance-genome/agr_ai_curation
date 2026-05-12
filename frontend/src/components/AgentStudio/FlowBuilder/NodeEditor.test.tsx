@@ -154,7 +154,8 @@ describe('NodeEditor', () => {
     })
     const planned = buildValidationAttachmentSelection({
       attachment_id: 'disease:condition-relation',
-      label: 'curation db reference lookup (condition_relations[0].condition_relation_type.name)',
+      label: 'Condition relation type lookup',
+      target_label: 'Disease annotation Condition relation type',
       validator_binding_id: 'disease_condition_relation_lookup',
       field_path: 'condition_relations[0].condition_relation_type.name',
       state: 'planned',
@@ -185,7 +186,9 @@ describe('NodeEditor', () => {
 
     expect(screen.getAllByRole('checkbox')).toHaveLength(1)
     expect(screen.getByText('Pending disease envelope validator')).toBeInTheDocument()
-    expect(screen.getAllByText(/condition_relations\[0\]\.condition_relation_type\.name/i).length).toBeGreaterThan(0)
+    expect(screen.getByText('Condition relation type lookup')).toBeInTheDocument()
+    expect(screen.getByText('Disease annotation Condition relation type')).toBeInTheDocument()
+    expect(screen.queryByText(/condition_relations\[0\]\.condition_relation_type\.name/i)).not.toBeInTheDocument()
     expect(screen.getByText('disease required payload fields')).toBeInTheDocument()
     expect(screen.getByText(/not scheduled by this checkbox list/i)).toBeInTheDocument()
   })
