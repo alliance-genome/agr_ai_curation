@@ -81,6 +81,43 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
     } >= {ValidationBindingState.PLANNED, ValidationBindingState.BLOCKED}
 
 
+def test_alliance_validator_metadata_has_curator_facing_display_names():
+    alliance_registry = load_alliance_domain_pack_registry()
+    pack_ids = {
+        "agr.alliance.gene_expression",
+        "gene",
+        "agr.alliance.allele",
+        "agr.alliance.disease",
+        "agr.alliance.chemical_condition",
+        "agr.alliance.phenotype",
+    }
+
+    missing_display_names: list[str] = []
+    technical_labels: list[str] = []
+    for pack_id in sorted(pack_ids):
+        registry = DomainPackValidationRegistry.from_domain_pack(
+            alliance_registry.get_pack(pack_id)
+        )
+        for entry in registry.validator_metadata:
+            if not entry.display_name:
+                missing_display_names.append(f"{pack_id}:validator:{entry.validator_id}")
+        for binding in registry.bindings:
+            if not binding.display_name:
+                missing_display_names.append(f"{pack_id}:binding:{binding.binding_id}")
+
+        for option in registry.validation_attachment_options():
+            if option.label and (
+                "." in option.label
+                or "_" in option.label
+                or "(" in option.label
+                or ")" in option.label
+            ):
+                technical_labels.append(f"{pack_id}:{option.attachment_id}:{option.label}")
+
+    assert missing_display_names == []
+    assert technical_labels == []
+
+
 def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     alliance_registry = load_alliance_domain_pack_registry()
     registries = {

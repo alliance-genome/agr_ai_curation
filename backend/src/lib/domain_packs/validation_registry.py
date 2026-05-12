@@ -44,6 +44,7 @@ class ValidatorMetadataEntry:
 
     validator_id: str
     state: ValidationBindingState
+    display_name: str | None = None
     description: str = ""
     definition_state: DefinitionState = DefinitionState.STABLE
     blocked_by: str | None = None
@@ -62,6 +63,8 @@ class ValidatorMetadataEntry:
         }
         if self.description:
             details["description"] = self.description
+        if self.display_name:
+            details["display_name"] = self.display_name
         if self.blocked_by:
             details["blocked_by"] = self.blocked_by
         if self.reason:
@@ -80,6 +83,7 @@ class ValidatorBinding:
     source_scope: str
     source_object_type: str | None = None
     source_field_path: str | None = None
+    display_name: str | None = None
     validator: str | None = None
     validation_kind: str | None = None
     tool_name: str | None = None
@@ -123,6 +127,7 @@ class ValidatorBinding:
             "opt_out_reason_required": self.opt_out_reason_required,
         }
         optional_values = {
+            "display_name": self.display_name,
             "validator": self.validator,
             "validation_kind": self.validation_kind,
             "tool_name": self.tool_name,
@@ -569,6 +574,7 @@ def _collect_validator_metadata(
             ValidatorMetadataEntry(
                 validator_id=validator_id,
                 state=state,
+                display_name=_optional_string(raw_item.get("display_name")),
                 description=_optional_string(raw_item.get("description")),
                 definition_state=_definition_state(raw_item),
                 blocked_by=_optional_string(raw_item.get("blocked_by")),
@@ -640,6 +646,7 @@ def _collect_validator_bindings(
                 source_scope=source_scope,
                 source_object_type=source_object_type,
                 source_field_path=source_field_path,
+                display_name=_optional_string(raw_item.get("display_name")),
                 validator=_optional_string(raw_item.get("validator")),
                 validation_kind=_optional_string(raw_item.get("validation_kind")),
                 tool_name=_optional_string(raw_item.get("tool_name")),
@@ -1119,7 +1126,7 @@ def _metadata_attachment_option(
         state=entry.state,
         scope="pack",
         tool_name=entry.tool_name,
-        label=_validation_attachment_label(entry.validator_id, None),
+        label=_validation_attachment_label(entry.display_name or entry.validator_id, None),
         description=entry.description,
         definition_state=entry.definition_state,
         blocked_by=entry.blocked_by,
@@ -1173,7 +1180,10 @@ def _binding_attachment_option(
         object_role=object_role,
         field_path=field_path,
         field_type=field_type,
-        label=_validation_attachment_label(validator_id, field_path or object_type),
+        label=_validation_attachment_label(
+            binding.display_name or validator_id,
+            None if binding.display_name else field_path or object_type,
+        ),
         description=binding.reason or "",
         definition_state=binding.definition_state,
         blocked_by=binding.blocked_by,

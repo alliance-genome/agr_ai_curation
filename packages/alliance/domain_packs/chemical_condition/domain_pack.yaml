@@ -585,26 +585,34 @@ metadata:
   validators:
     active:
       - validator_id: chemical_condition.domain_envelope_shape
+        display_name: Chemical condition envelope shape
         description: Load the envelope through the provider-agnostic DomainEnvelope contract.
       - validator_id: chemical_condition.required_payload_fields
+        display_name: Required chemical condition fields
         description: Required chemical-condition field paths declared in this pack must be present in each pending object payload.
       - validator_id: chemical_condition.chebi_curie_format
+        display_name: ChEBI CURIE format
         description: Require CHEBI CURIE syntax for condition_chemical.curie and ChemicalTerm.curie until external ChEBI lookup is wired.
       - validator_id: chemical_condition.export_context_blocker
+        display_name: Export context blocker
         description: Emit blocker findings when host annotation or source reference materialization is missing.
     planned:
       - validator_id: chemical_condition.chebi_api_lookup
+        display_name: ChEBI lookup
         tool_name: chebi_api_call
         description: Validate ChEBI identity and label against ChEBI once domain-pack validator runtime can call tool bindings.
       - validator_id: chemical_condition.condition_ontology_lookup
+        display_name: Condition ontology lookup
         description: Validate ZECO/XCO condition class and condition ID terms against configured ontology sources once condition validators are wired.
     blocked:
       - validator_id: chemical_condition.export_submission_projection
+        display_name: Chemical condition export projection
         blocked_by: ALL-425
         description: Export/submission adapter validation waits for the disease, phenotype, and chemical export/submission adapters.
   validator_bindings:
     active:
       - binding_id: chemical_condition.pending_envelope_validator
+        display_name: Pending chemical condition envelope validation
         validator: agr_ai_curation_alliance.domain_packs.chemical_condition.validate_pending_chemical_condition_envelope
         applies_to:
           domain_pack_id: agr.alliance.chemical_condition
@@ -615,6 +623,7 @@ metadata:
             - EvidenceQuote
         definition_state: in_development
       - binding_id: chemical_condition.chebi_curie_format
+        display_name: ChEBI CURIE format
         validation_kind: curie_prefix_format
         prefix: CHEBI
         applies_to:
@@ -629,6 +638,7 @@ metadata:
         allow_opt_out: true
     planned:
       - binding_id: chemical_condition.chebi_api_lookup
+        display_name: ChEBI lookup
         validation_kind: external_ontology_lookup
         provider: ontology_provider
         tool_name: chebi_api_call
@@ -637,6 +647,7 @@ metadata:
           name: condition_chemical.name
         definition_state: in_development
       - binding_id: chemical_condition.condition_ontology_lookup
+        display_name: Condition ontology lookup
         validation_kind: ontology_lookup
         provider: ontology_provider
         target_terms:
@@ -645,6 +656,7 @@ metadata:
         definition_state: in_development
     blocked:
       - binding_id: chemical_condition.export_projection_validator
+        display_name: Chemical condition export projection
         blocked_by: ALL-425
         reason: Host annotation export/submission projections are owned by the downstream adapter ticket.
   provider_refs:

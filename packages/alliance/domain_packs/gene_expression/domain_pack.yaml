@@ -821,22 +821,30 @@ metadata:
   validators:
     active:
       - validator_id: gene_expression.domain_envelope_shape
+        display_name: Gene expression envelope shape
         description: Load the envelope through the provider-agnostic DomainEnvelope contract.
       - validator_id: gene_expression.required_payload_fields
+        display_name: Required gene expression fields
         description: Required GeneExpressionAnnotation field paths declared in this pack must be present in each pending object payload.
       - validator_id: gene_expression.no_legacy_semantic_lists
+        display_name: No legacy semantic lists
         description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
       - validator_id: gene_expression.extractor_output_migration
+        display_name: Extractor output migration
         description: Validate runtime extractor output through the GeneExpressionAnnotation domain-envelope schema and pending-envelope conversion.
       - validator_id: gene_expression.export_submission_projection
+        display_name: Gene expression export projection
         description: Validate GeneExpressionAnnotation export/submission target projection payloads.
     planned:
       - validator_id: gene_expression.linkml_anatomical_site_postcondition
+        display_name: Anatomical site postcondition
         description: Enforce the LinkML AnatomicalSite rule requiring anatomical_structure or cellular_component once validator runtime wiring lands.
       - validator_id: gene_expression.ontology_term_resolution
+        display_name: Expression ontology term resolution
         description: Validate embedded MMO, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
     blocked:
       - validator_id: gene_expression.live_write_transport
+        display_name: Live write transport
         blocked_by: read_only_curation_db
         description: Direct live DB writes remain blocked until an approved Alliance write transport replaces the read-only submission handoff adapter.
   provider_refs:

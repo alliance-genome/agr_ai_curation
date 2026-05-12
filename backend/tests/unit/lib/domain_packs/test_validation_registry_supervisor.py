@@ -90,6 +90,7 @@ metadata:
   validators:
     active:
       - validator_id: fixture.shape
+        display_name: Fixture envelope shape
         description: Envelope shape validation is active.
     planned:
       - validator_id: fixture.future_lookup
@@ -101,6 +102,7 @@ metadata:
   validator_bindings:
     active:
       - binding_id: fixture.callable_validator
+        display_name: Callable envelope validation
         validator: fixture.validators.validate
         applies_to:
           domain_pack_id: fixture.validation
@@ -133,6 +135,7 @@ metadata:
             - confidence
     planned:
       - binding_id: fixture.planned_symbol_lookup
+        display_name: Gene symbol lookup
         validation_kind: db_backed_reference_lookup
         applies_to:
           domain_pack_id: fixture.validation
@@ -279,6 +282,7 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     ]
     assert planned_option.state is ValidationBindingState.PLANNED
     assert planned_option.default_enabled is False
+    assert planned_option.label == "Gene symbol lookup"
 
     blocked_option = by_id[
         "fixture.validation:binding:fixture.blocked_export_validator:object:GeneAssertion:*"
@@ -286,13 +290,22 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     assert blocked_option.state is ValidationBindingState.BLOCKED
     assert blocked_option.blocked_by == "ALL-999"
 
+    metadata_option = by_id["fixture.validation:metadata:fixture.shape:pack:*:*"]
+    assert metadata_option.label == "Fixture envelope shape"
+
+    callable_option = by_id[
+        "fixture.validation:binding:fixture.callable_validator:object:GeneAssertion:*"
+    ]
+    assert callable_option.label == "Callable envelope validation"
+
 
 def test_registry_rejects_conflicting_status_and_state_metadata(tmp_path: Path):
     metadata_text = _validation_pack_text().replace(
-        "validator_id: fixture.shape\n        description:",
+        "validator_id: fixture.shape\n        display_name: Fixture envelope shape\n        description:",
         "\n".join(
             (
                 "validator_id: fixture.shape",
+                "        display_name: Fixture envelope shape",
                 "        status: planned",
                 "        state: active",
                 "        description:",

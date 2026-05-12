@@ -133,6 +133,7 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
     assert validator_bindings == [
         {
             "binding_id": "allele_pending_envelope_validator",
+            "display_name": "Pending allele envelope validation",
             "validator": (
                 "agr_ai_curation_alliance.domain_packs.allele."
                 "validate_pending_allele_envelope"

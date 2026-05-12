@@ -558,6 +558,7 @@ metadata:
       cache_script: scripts/testing/cache_agr_curation_schema.sh
   validator_bindings:
     - binding_id: phenotype_pending_envelope_validator
+      display_name: Pending phenotype envelope validation
       validator: agr_ai_curation_alliance.domain_packs.phenotype.validate_pending_phenotype_envelope
       applies_to:
         domain_pack_id: agr.alliance.phenotype
@@ -569,6 +570,7 @@ metadata:
           - EvidenceQuote
       definition_state: in_development
     - binding_id: phenotype_subject_entity_validator
+      display_name: Phenotype subject lookup
       validation_kind: db_backed_entity_lookup
       provider: alliance_curation_db
       input_fields:
@@ -582,6 +584,7 @@ metadata:
       blocking: true
       definition_state: in_development
     - binding_id: phenotype_term_ontology_validator
+      display_name: Phenotype ontology term lookup
       validation_kind: db_backed_ontology_lookup
       provider: alliance_curation_db
       input_fields:
@@ -590,6 +593,7 @@ metadata:
       blocking: true
       definition_state: in_development
     - binding_id: phenotype_reference_validator
+      display_name: Reference lookup
       validation_kind: db_backed_reference_lookup
       provider: alliance_curation_db
       input_fields:
@@ -600,21 +604,28 @@ metadata:
   validators:
     active:
       - validator_id: phenotype.domain_envelope_shape
+        display_name: Phenotype envelope shape
         description: Load the envelope through the provider-agnostic DomainEnvelope contract.
       - validator_id: phenotype.pending_envelope_policy
+        display_name: Pending phenotype envelope policy
         description: Pending PhenotypeAnnotation objects must carry blocked export/write policy until subject, reference, and ontology targets are resolved.
       - validator_id: phenotype.no_legacy_semantic_lists
+        display_name: No legacy semantic lists
         description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
     planned:
       - validator_id: phenotype.subject_entity_resolution
+        display_name: Phenotype subject resolution
         description: Resolve phenotype_annotation_subject to Gene, Allele, or AGM DB rows before export.
       - validator_id: phenotype.ontology_term_resolution
+        display_name: Phenotype ontology term resolution
         description: Validate phenotype term CURIEs against ontologyterm rows and configured Alliance ontology sources.
     blocked:
       - validator_id: phenotype.export_submission_projection
+        display_name: Phenotype export projection
         blocked_by: ALL-425
         description: Export/submission adapter validation waits for disease phenotype and chemical export/submission adapters.
       - validator_id: phenotype.extractor_output_migration
+        display_name: Phenotype extractor output migration
         blocked_by: ALL-412
         description: Runtime extractor output validation waits for the phenotype extractor migration to domain envelopes.
   curation_db_grounding:
