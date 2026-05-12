@@ -16,11 +16,14 @@ from sqlalchemy.orm import Session
 from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGENT_ID
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
+    domain_envelope_field_validation_results,
     field_validation_status,
     increment_validation_count,
 )
+from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.models import (
     CurationExtractionResultRecord as ExtractionResultModel,
+    DomainEnvelopeModel,
 )
 from src.lib.curation_workspace.session_service import (
     PreparedCandidateInput,
@@ -35,6 +38,7 @@ from src.models.sql.database import SessionLocal
 from src.schemas.curation_prep import (
     CurationPrepAgentOutput,
     CurationPrepCandidate,
+    CurationPrepEnvelopeRef,
 )
 from src.schemas.curation_workspace import (
     CurationCandidateSource,
@@ -50,6 +54,12 @@ from src.schemas.curation_workspace import (
     FieldValidationStatus,
 )
 from src.lib.domain_packs.materialization import materialize_persisted_envelope_review_rows
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopeCheckpointRequest,
+    write_domain_envelope_checkpoint,
+)
+from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
+from src.schemas.domain_envelope import DomainEnvelope
 
 
 logger = logging.getLogger(__name__)
@@ -366,6 +376,7 @@ def _prepared_candidates_from_envelope_refs(
         for index, review_row in enumerate(review_rows)
     ]
     validation_outcome = _validate_prepared_review_rows(
+        db,
         prepared_candidates,
         adapter_key=adapter_key,
         validated_at=validated_at,
@@ -397,16 +408,56 @@ def _materialized_review_rows(
 
     rows: list[DomainEnvelopeReviewRow] = []
     for envelope_ref in request.prep_output.envelope_refs:
+        envelope_revision = _refresh_domain_envelope_validation_for_ref(
+            db,
+            envelope_ref,
+        )
         response = materialize_persisted_envelope_review_rows(
             db,
             envelope_ref.envelope_id,
-            revision=envelope_ref.envelope_revision,
+            revision=envelope_revision,
         )
         rows.extend(response.rows)
 
     if not rows:
         raise ValueError("Domain-envelope post-curation pipeline materialized no review rows")
     return rows
+
+
+def _refresh_domain_envelope_validation_for_ref(
+    db: Session,
+    envelope_ref: CurationPrepEnvelopeRef,
+) -> int:
+    envelope_row = db.get(DomainEnvelopeModel, envelope_ref.envelope_id)
+    if envelope_row is None:
+        return envelope_ref.envelope_revision
+
+    envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+    if domain_pack is None:
+        raise ValueError(
+            f"No domain pack is registered for domain_pack_id={envelope.domain_pack_id!r}"
+        )
+
+    validation_result = run_validation_supervisor(envelope, domain_pack)
+    if not validation_result.appended_findings:
+        return envelope_row.revision
+
+    checkpoint = write_domain_envelope_checkpoint(
+        db,
+        DomainEnvelopeCheckpointRequest(
+            project_key=envelope_row.project_key,
+            envelope=validation_result.envelope,
+            expected_revision=envelope_row.revision,
+            document_id=envelope_row.document_id,
+            session_id=envelope_row.session_id,
+            flow_run_id=envelope_row.flow_run_id,
+            object_model_ref_json=envelope_row.object_model_ref_json or {},
+            model_field_ref_json=envelope_row.model_field_ref_json or {},
+        ),
+        manage_transaction=False,
+    )
+    return checkpoint.revision
 
 
 def _prepared_candidate_input_from_review_row(
@@ -499,6 +550,7 @@ def _draft_fields_from_review_row(
 
 
 def _validate_prepared_review_rows(
+    db: Session,
     candidates: Sequence[PreparedCandidateInput],
     *,
     adapter_key: str,
@@ -514,17 +566,27 @@ def _validate_prepared_review_rows(
         candidate_counts = CurationValidationCounts()
         field_results: dict[str, FieldValidationResult] = {}
         candidate_warnings: list[str] = []
+        envelope_field_results, envelope_warnings = _envelope_field_results_for_candidate(
+            db,
+            candidate,
+        )
+        candidate_warnings.extend(envelope_warnings)
 
         for draft_field in candidate.draft_fields:
-            field_status, field_warnings = _field_validation_status(draft_field.value)
-            field_results[draft_field.field_key] = FieldValidationResult(
-                status=field_status,
-                resolver="domain_envelope_review_row_materializer",
-                warnings=field_warnings,
-            )
-            _increment_validation_count(candidate_counts, field_status)
-            _increment_validation_count(session_counts, field_status)
-            candidate_warnings.extend(field_warnings)
+            validation_result = envelope_field_results.get(draft_field.field_key)
+            if validation_result is None:
+                field_status, field_warnings = _field_validation_status(
+                    draft_field.value
+                )
+                validation_result = FieldValidationResult(
+                    status=field_status,
+                    resolver="domain_envelope_review_row_materializer",
+                    warnings=field_warnings,
+                )
+            field_results[draft_field.field_key] = validation_result
+            _increment_validation_count(candidate_counts, validation_result.status)
+            _increment_validation_count(session_counts, validation_result.status)
+            candidate_warnings.extend(validation_result.warnings)
 
         candidate_summary = CurationValidationSummary(
             state=CurationValidationSnapshotState.COMPLETED,
@@ -565,6 +627,54 @@ def _validate_prepared_review_rows(
             completed_at=validated_at,
         ),
     )
+
+
+def _envelope_field_results_for_candidate(
+    db: Session,
+    candidate: PreparedCandidateInput,
+) -> tuple[dict[str, FieldValidationResult], list[str]]:
+    if (
+        candidate.envelope_id is None
+        or candidate.object_id is None
+        or candidate.envelope_revision is None
+    ):
+        return {}, []
+
+    envelope_row = db.get(DomainEnvelopeModel, candidate.envelope_id)
+    if envelope_row is None:
+        warning = (
+            f"Domain envelope {candidate.envelope_id} was unavailable during "
+            "workspace validation."
+        )
+        return (
+            {
+                draft_field.field_key: FieldValidationResult(
+                    status=FieldValidationStatus.CONFLICT,
+                    resolver="domain_envelope_validation_findings",
+                    warnings=[warning],
+                )
+                for draft_field in candidate.draft_fields
+            },
+            [warning],
+        )
+
+    envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    field_results, warnings = domain_envelope_field_validation_results(
+        envelope,
+        envelope_revision=envelope_row.revision,
+        object_id=candidate.object_id,
+        field_keys=[draft_field.field_key for draft_field in candidate.draft_fields],
+    )
+    if candidate.envelope_revision != envelope_row.revision:
+        warnings = [
+            *warnings,
+            (
+                f"Domain envelope {candidate.envelope_id} validation used revision "
+                f"{envelope_row.revision}; prep selected revision "
+                f"{candidate.envelope_revision}."
+            ),
+        ]
+    return field_results, _dedupe(warnings)
 
 
 def _resolve_prep_extraction_result(

@@ -1763,6 +1763,145 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
     assert response.candidate.validation.stale_field_keys == ["field_b"]
 
 
+def test_validate_candidate_uses_envelope_findings_and_preserves_dirty_overrides(db_session):
+    document = _create_document(db_session)
+    session_row = _create_review_session(
+        db_session,
+        document_id=str(document.id),
+        flow_run_id="flow-alpha",
+        status=CurationSessionStatus.IN_PROGRESS,
+        prepared_at=_now(),
+        last_worked_at=_now(),
+        reviewed_candidates=0,
+        pending_candidates=1,
+    )
+    object_ref = ObjectRef(pending_ref_id="object-1", object_type="GeneAssertion")
+    envelope = DomainEnvelope(
+        envelope_id="env-validation-on-demand",
+        domain_pack_id="fixture.pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id="object-1",
+                payload={
+                    "gene": {
+                        "symbol": "ABC-1",
+                        "identifier": "AGR:0001",
+                    }
+                },
+            )
+        ],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.INFO,
+                status=ValidationFindingStatus.RESOLVED,
+                code="domain_pack.validator_lookup_resolved",
+                message="Gene symbol resolved through AGR lookup.",
+                field_ref=FieldRef(object_ref=object_ref, field_path="gene.symbol"),
+                details={
+                    "lookup_status": "success",
+                    "lookup_attempts": [
+                        {
+                            "lookup_status": "success",
+                            "resolved_id": "AGR:0001",
+                            "resolved_label": "ABC-1",
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+    db_session.add(
+        DomainEnvelopeModel(
+            envelope_id=envelope.envelope_id,
+            revision=1,
+            project_key="fixture",
+            domain_pack_key="fixture.pack",
+            status=envelope.status,
+            envelope_json=envelope.model_dump(mode="json"),
+            created_at=_now(),
+            updated_at=_now(),
+            checkpointed_at=_now(),
+        )
+    )
+    candidate = CurationCandidate(
+        id=uuid4(),
+        session_id=session_row.id,
+        source=CurationCandidateSource.EXTRACTED,
+        status=CurationCandidateStatus.PENDING,
+        order=0,
+        adapter_key="test",
+        profile_key="primary",
+        display_label="Candidate",
+        envelope_id=envelope.envelope_id,
+        object_id="object-1",
+        envelope_revision=1,
+        normalized_payload={},
+        candidate_metadata={"semantic_source": "domain_envelope.objects"},
+        created_at=_now(),
+        updated_at=_now(),
+    )
+    db_session.add(candidate)
+    db_session.flush()
+    db_session.add(
+        DraftModel(
+            id=uuid4(),
+            candidate_id=candidate.id,
+            adapter_key="test",
+            version=1,
+            title="Candidate draft",
+            fields=[
+                {
+                    "field_key": "gene.symbol",
+                    "label": "Gene symbol",
+                    "value": "ABC-1",
+                    "seed_value": "ABC-1",
+                    "order": 0,
+                    "dirty": False,
+                    "stale_validation": True,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                },
+                {
+                    "field_key": "gene.identifier",
+                    "label": "Gene ID",
+                    "value": "AGR:0002",
+                    "seed_value": "AGR:0001",
+                    "order": 1,
+                    "dirty": True,
+                    "stale_validation": True,
+                    "evidence_anchor_ids": [],
+                    "metadata": {},
+                },
+            ],
+            created_at=_now(),
+            updated_at=_now(),
+            draft_metadata={"semantic_source": "domain_envelope.objects"},
+        )
+    )
+    db_session.commit()
+
+    response = module.validate_candidate(
+        db_session,
+        candidate.id,
+        CurationCandidateValidationRequest(
+            session_id=str(session_row.id),
+            candidate_id=str(candidate.id),
+            force=True,
+        ),
+    )
+
+    fields_by_key = {field.field_key: field for field in response.candidate.draft.fields}
+    assert fields_by_key["gene.symbol"].validation_result.status == "validated"
+    assert fields_by_key["gene.symbol"].validation_result.resolver == (
+        "domain_envelope_validation_findings"
+    )
+    assert fields_by_key["gene.identifier"].validation_result.status == "overridden"
+    assert response.validation_snapshot.summary.counts.validated == 1
+    assert response.validation_snapshot.summary.counts.overridden == 1
+    assert response.validation_snapshot.summary.counts.skipped == 0
+
+
 def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_session):
     seeded = _create_decision_session(
         db_session,

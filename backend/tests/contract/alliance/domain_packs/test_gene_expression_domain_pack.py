@@ -120,6 +120,7 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     assert validators["blocked"] == [
         {
             "validator_id": "gene_expression.live_write_transport",
+            "display_name": "Live database write path",
             "blocked_by": "read_only_curation_db",
             "description": (
                 "Direct live DB writes remain blocked until an approved Alliance "

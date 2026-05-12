@@ -132,6 +132,13 @@ after retry or a detail fetch. Consumers should use the top-level
 `lookup_status` for final outcome and preserve `lookup_attempts` for audit,
 repair, and debugging context.
 
+A successful lookup is not enough to resolve every declared field. When
+domain-pack `expected_result_fields` say that a result value validates an
+envelope field, that value must be present in the lookup response. If the lookup
+partially succeeds but omits a declared result value, the supervisor retries the
+validator once with the missing projection context and records an open
+field-level finding if the value is still absent.
+
 Shared status constants live in `backend/src/lib/lookup_status.py`; the backend
 tool and packaged Alliance tool both use
 `backend/src/agr_ai_curation_runtime/agr_lookup.py` to avoid drift.

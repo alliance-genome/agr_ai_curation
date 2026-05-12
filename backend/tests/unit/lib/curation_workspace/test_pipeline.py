@@ -27,7 +27,17 @@ from src.lib.curation_workspace.models import (
     CurationSubmissionRecord as SubmissionModel,
     CurationValidationSnapshot as ValidationSnapshotModel,
     DomainEnvelopeModel,
+    DomainEnvelopeHistory,
+    DomainEnvelopeObject,
+    DomainEnvelopeProjectionIndex,
+    DomainValidationFinding,
 )
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopeCheckpointRequest,
+    write_domain_envelope_checkpoint,
+)
+from src.lib.domain_packs.loader import load_domain_pack_metadata
+from src.lib.domain_packs.registry import LoadedDomainPack
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_prep import CurationPrepAgentOutput, CurationPrepCandidate
@@ -46,6 +56,7 @@ from src.schemas.curation_workspace import (
     DomainEnvelopeReviewRowSummaryField,
     FieldValidationStatus,
 )
+from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 
 
 @compiles(PostgresUUID, "sqlite")
@@ -63,6 +74,10 @@ TEST_TABLES = [
     ReviewSessionModel.__table__,
     ExtractionResultModel.__table__,
     DomainEnvelopeModel.__table__,
+    DomainEnvelopeObject.__table__,
+    DomainValidationFinding.__table__,
+    DomainEnvelopeHistory.__table__,
+    DomainEnvelopeProjectionIndex.__table__,
     CurationCandidate.__table__,
     EvidenceRecordModel.__table__,
     DraftModel.__table__,
@@ -70,6 +85,12 @@ TEST_TABLES = [
     ValidationSnapshotModel.__table__,
     SessionActionLogModel.__table__,
 ]
+
+
+_REAL_REFRESH_DOMAIN_ENVELOPE_VALIDATION_FOR_REF = (
+    module._refresh_domain_envelope_validation_for_ref
+)
+_REAL_ENVELOPE_FIELD_RESULTS_FOR_CANDIDATE = module._envelope_field_results_for_candidate
 
 
 @pytest.fixture
@@ -269,6 +290,16 @@ def _stub_domain_envelope_review_row_materializer(monkeypatch):
         "materialize_persisted_envelope_review_rows",
         _fake_materialize,
     )
+    monkeypatch.setattr(
+        module,
+        "_refresh_domain_envelope_validation_for_ref",
+        lambda _db, envelope_ref: envelope_ref.envelope_revision,
+    )
+    monkeypatch.setattr(
+        module,
+        "_envelope_field_results_for_candidate",
+        lambda _db, _candidate: ({}, []),
+    )
 
 
 def _persist_matching_prep_result(
@@ -438,6 +469,216 @@ def test_execute_post_curation_pipeline_creates_session_candidates_and_validatio
         CurationActionType.SESSION_CREATED,
         CurationActionType.VALIDATION_COMPLETED,
     }
+
+
+def test_execute_post_curation_pipeline_refreshes_envelope_validation_before_materializing(
+    db_session,
+    monkeypatch,
+    tmp_path,
+):
+    document = _create_document(db_session)
+    metadata_path = tmp_path / "domain_pack.yaml"
+    metadata_path.write_text(
+        """
+pack_id: fixture.pack
+display_name: Fixture Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+model_definitions:
+  - model_id: GeneAssertionPayload
+    display_name: Gene assertion payload
+object_definitions:
+  - object_type: GeneAssertion
+    display_name: Gene assertion
+    model_ref: GeneAssertionPayload
+    metadata:
+      workspace_display:
+        primary_label_field: gene.symbol
+        summary_fields:
+          - gene.identifier
+          - gene.symbol
+      validator_bindings:
+        - binding_id: fixture.identifier_prefix
+          validation_kind: curie_prefix_format
+          prefix: AGR
+          applies_to:
+            domain_pack_id: fixture.pack
+            object_types:
+              - GeneAssertion
+            field_paths:
+              - gene.identifier
+          blocking: true
+    fields:
+      - field_path: gene.identifier
+        field_type: string
+        required: true
+      - field_path: gene.symbol
+        field_type: string
+        required: true
+""".strip(),
+        encoding="utf-8",
+    )
+    metadata = load_domain_pack_metadata(metadata_path)
+    loaded_pack = LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=tmp_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+    monkeypatch.setattr(
+        module,
+        "_refresh_domain_envelope_validation_for_ref",
+        _REAL_REFRESH_DOMAIN_ENVELOPE_VALIDATION_FOR_REF,
+    )
+    monkeypatch.setattr(
+        module,
+        "_envelope_field_results_for_candidate",
+        _REAL_ENVELOPE_FIELD_RESULTS_FOR_CANDIDATE,
+    )
+    monkeypatch.setattr(
+        module,
+        "resolve_curation_domain_pack_by_id",
+        lambda domain_pack_id: loaded_pack if domain_pack_id == "fixture.pack" else None,
+    )
+
+    envelope = DomainEnvelope(
+        envelope_id="env-validation-1",
+        domain_pack_id="fixture.pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id="object-1",
+                payload={
+                    "gene": {
+                        "identifier": "BAD:0001",
+                        "symbol": "ABC-1",
+                    }
+                },
+            )
+        ],
+    )
+    checkpoint = write_domain_envelope_checkpoint(
+        db_session,
+        DomainEnvelopeCheckpointRequest(
+            project_key="fixture",
+            envelope=envelope,
+            expected_revision=0,
+            document_id=document.id,
+        ),
+    )
+    assert checkpoint.revision == 1
+
+    prep_output = CurationPrepAgentOutput.model_validate(
+        {
+            "envelope_refs": [
+                {
+                    "envelope_id": "env-validation-1",
+                    "envelope_revision": 1,
+                    "source_extraction_result_id": "extract-domain-1",
+                    "domain_pack_id": "fixture.pack",
+                    "review_row_count": 1,
+                }
+            ],
+            "review_row_count": 1,
+            "run_metadata": {
+                "model_name": "deterministic_programmatic_mapper_v1",
+                "token_usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "total_tokens": 0,
+                },
+                "processing_notes": ["Envelope refs selected."],
+                "warnings": [],
+            },
+        }
+    )
+    _persist_matching_prep_result(
+        db_session,
+        document_id=str(document.id),
+        prep_output=prep_output,
+    )
+
+    def _fake_materialize(db, envelope_id, *, revision=None, materializer=None):
+        assert envelope_id == "env-validation-1"
+        assert revision == 2
+        envelope_row = db.get(DomainEnvelopeModel, envelope_id)
+        return DomainEnvelopeReviewRowsResponse(
+            envelope_id=envelope_id,
+            envelope_revision=revision,
+            row_count=1,
+            rows=[
+                DomainEnvelopeReviewRow(
+                    envelope_id=envelope_id,
+                    object_id="object-1",
+                    envelope_revision=envelope_row.revision,
+                    domain_pack_id="fixture.pack",
+                    domain_pack_version="0.1.0",
+                    object_type="GeneAssertion",
+                    object_role="curatable_unit",
+                    status="pending",
+                    validation_state="blocked",
+                    projection_type="workspace_review_row",
+                    projection_key="object-1",
+                    display_label="ABC-1",
+                    summary_fields=[
+                        DomainEnvelopeReviewRowSummaryField(
+                            field_path="gene.identifier",
+                            label="Gene ID",
+                            value="BAD:0001",
+                            field_type="string",
+                        ),
+                        DomainEnvelopeReviewRowSummaryField(
+                            field_path="gene.symbol",
+                            label="Gene symbol",
+                            value="ABC-1",
+                            field_type="string",
+                        ),
+                    ],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(module, "materialize_persisted_envelope_review_rows", _fake_materialize)
+
+    result = module.execute_post_curation_pipeline(
+        _make_request(prep_output, document_id=str(document.id)),
+        db=db_session,
+    )
+
+    envelope_row = db_session.get(DomainEnvelopeModel, "env-validation-1")
+    assert envelope_row.revision == 2
+    assert envelope_row.envelope_json["validation_findings"][0]["code"] == (
+        "domain_pack.curie_prefix_mismatch"
+    )
+    indexed_findings = db_session.scalars(select(DomainValidationFinding)).all()
+    assert len(indexed_findings) == 1
+    assert indexed_findings[0].field_path == "gene.identifier"
+
+    candidate_row = db_session.scalars(
+        select(CurationCandidate).where(CurationCandidate.session_id == UUID(result.session_id))
+    ).one()
+    assert candidate_row.envelope_revision == 2
+    draft_row = db_session.scalars(
+        select(DraftModel).where(DraftModel.candidate_id == candidate_row.id)
+    ).one()
+    fields_by_key = {field["field_key"]: field for field in draft_row.fields}
+    assert fields_by_key["gene.identifier"]["validation_result"]["status"] == (
+        FieldValidationStatus.INVALID_FORMAT.value
+    )
+    assert fields_by_key["gene.symbol"]["validation_result"]["status"] == (
+        FieldValidationStatus.SKIPPED.value
+    )
+
+    candidate_snapshot = db_session.scalars(
+        select(ValidationSnapshotModel).where(
+            ValidationSnapshotModel.candidate_id == candidate_row.id,
+        )
+    ).one()
+    assert candidate_snapshot.summary["counts"]["invalid_format"] == 1
+    assert candidate_snapshot.summary["counts"]["skipped"] == 1
 
 
 def test_execute_post_curation_pipeline_persists_domain_envelope_projection_ref_from_envelope_row(

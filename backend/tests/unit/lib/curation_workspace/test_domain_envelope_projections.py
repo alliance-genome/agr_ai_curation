@@ -16,6 +16,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.lib.curation_workspace import session_service
+from src.lib.curation_workspace.validation_runtime import (
+    domain_envelope_field_validation_results,
+)
 from src.lib.curation_workspace.models import (
     CurationActionLogEntry as SessionActionLogModel,
     CurationCandidate,
@@ -48,6 +51,7 @@ from src.schemas.curation_workspace import (
     CurationCandidateStatus,
     CurationSessionStatus,
     DomainEnvelopeValidationStatus,
+    FieldValidationStatus,
 )
 
 
@@ -420,6 +424,48 @@ def test_validation_summary_projection_keeps_active_blocker_findings_unresolved(
     assert summary.highest_severity == ValidationFindingSeverity.BLOCKER.value
     assert summary.open_finding_count == 1
     assert summary.findings[0].summary_status is DomainEnvelopeValidationStatus.UNRESOLVED
+
+
+def test_field_validation_maps_partial_lookup_success_to_conflict():
+    envelope = DomainEnvelope(
+        envelope_id="env-partial-lookup",
+        domain_pack_id="fixture-pack",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                object_id="gene-1",
+                payload={"gene": {"symbol": "abc-1"}},
+            )
+        ],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.ERROR,
+                status=ValidationFindingStatus.OPEN,
+                code="domain_pack.validator_lookup_projection_missing",
+                message=(
+                    "Lookup partially succeeded but failed to return declared "
+                    "result value 'symbol'."
+                ),
+                field_ref=_field_ref("gene.symbol"),
+                details={
+                    "lookup_status": "success",
+                    "failure_classification": "missing_expected_result_field",
+                },
+            )
+        ],
+    )
+
+    field_results, warnings = domain_envelope_field_validation_results(
+        envelope,
+        envelope_revision=2,
+        object_id="gene-1",
+        field_keys=["gene.symbol"],
+    )
+
+    assert field_results["gene.symbol"].status is FieldValidationStatus.CONFLICT
+    assert warnings == [
+        "Lookup partially succeeded but failed to return declared result value 'symbol'."
+    ]
 
 
 def test_workspace_response_includes_domain_envelope_projections():

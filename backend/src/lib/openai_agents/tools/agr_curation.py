@@ -398,7 +398,8 @@ def agr_curation_query(
     include_synonyms: bool = True,
     limit: Optional[int] = None,
     force: bool = False,
-    force_reason: Optional[str] = None
+    force_reason: Optional[str] = None,
+    validation_retry_context: Optional[Dict[str, Any]] = None
 ) -> AgrQueryResult:
     """
     Query the Alliance Genome Resources Curation Database.
@@ -432,6 +433,8 @@ def agr_curation_query(
         limit: Maximum results to return
         force: Skip symbol validation (default: False). Requires force_reason.
         force_reason: Explanation for why validation is being skipped (required if force=True)
+        validation_retry_context: Optional supervisor-owned context for bounded
+            validator reruns, such as missing declared result projections.
 
     Returns:
         AgrQueryResult with status='ok', 'error', or 'validation_warning'

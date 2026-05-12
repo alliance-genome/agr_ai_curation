@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, selectinload
 from src.lib.curation_workspace.models import (
     CurationCandidate,
     CurationReviewSession as ReviewSessionModel,
+    DomainEnvelopeModel,
 )
 from src.lib.curation_workspace.session_common import _latest_snapshot_record, _normalize_uuid
 from src.lib.curation_workspace.session_loading import DETAIL_LOAD_OPTIONS
@@ -29,6 +30,7 @@ from src.lib.curation_workspace.session_types import (
 )
 from src.lib.curation_workspace.validation_runtime import (
     dedupe,
+    domain_envelope_field_validation_results,
     field_validation_status,
     increment_validation_count,
 )
@@ -44,7 +46,10 @@ from src.schemas.curation_workspace import (
     CurationValidationSnapshotState,
     CurationValidationSummary,
     FieldValidationResult,
+    FieldValidationStatus,
 )
+from src.schemas.domain_envelope import DomainEnvelope
+
 
 def _load_candidate_for_write(
     db: Session,
@@ -64,6 +69,7 @@ def _load_candidate_for_write(
             ),
             selectinload(CurationCandidate.draft),
             selectinload(CurationCandidate.evidence_anchors),
+            selectinload(CurationCandidate.domain_envelope),
             selectinload(CurationCandidate.validation_snapshots),
         )
     ).first()
@@ -101,13 +107,22 @@ def _load_session_for_validation(
         )
     return session_row
 
-def _validation_result_for_field(field: CurationDraftFieldSchema) -> FieldValidationResult:
+def _validation_result_for_field(
+    field: CurationDraftFieldSchema,
+    *,
+    envelope_results: dict[str, FieldValidationResult] | None = None,
+) -> FieldValidationResult:
     if field.dirty:
         return FieldValidationResult(
             status="overridden",
             resolver="curator_override",
             warnings=["Curator value differs from the AI-seeded draft."],
         )
+
+    if envelope_results is not None:
+        envelope_result = envelope_results.get(field.field_key)
+        if envelope_result is not None:
+            return envelope_result
 
     field_status, field_warnings = field_validation_status(field.value)
     return FieldValidationResult(
@@ -118,6 +133,7 @@ def _validation_result_for_field(field: CurationDraftFieldSchema) -> FieldValida
 
 
 def _compute_candidate_validation(
+    db: Session,
     candidate: CurationCandidate,
     *,
     force: bool,
@@ -163,6 +179,12 @@ def _compute_candidate_validation(
         latest_snapshot is None
         or latest_snapshot.state != CurationValidationSnapshotState.COMPLETED
     )
+    envelope_results, envelope_warnings = _envelope_validation_results_for_candidate(
+        db,
+        candidate,
+        draft_fields=draft_fields,
+    )
+    warnings.extend(envelope_warnings)
 
     for draft_field in draft_fields:
         existing_result = _existing_result(draft_field)
@@ -180,12 +202,18 @@ def _compute_candidate_validation(
             )
         )
         next_result = (
-            _validation_result_for_field(draft_field)
+            _validation_result_for_field(
+                draft_field,
+                envelope_results=envelope_results,
+            )
             if should_refresh
             else existing_result
         )
         if next_result is None:
-            next_result = _validation_result_for_field(draft_field)
+            next_result = _validation_result_for_field(
+                draft_field,
+                envelope_results=envelope_results,
+            )
 
         field_results[draft_field.field_key] = next_result
         increment_validation_count(counts, next_result.status)
@@ -236,6 +264,7 @@ def _apply_candidate_validation(
     field_keys: Sequence[str] | None = None,
 ) -> tuple[CurationValidationSnapshotSchema, bool]:
     computation = _compute_candidate_validation(
+        db,
         candidate,
         force=force,
         validated_at=validated_at,
@@ -263,6 +292,58 @@ def _apply_candidate_validation(
     db.flush()
     candidate.validation_snapshots.append(snapshot_row)
     return _validation_snapshot(snapshot_row), True
+
+
+def _envelope_validation_results_for_candidate(
+    db: Session,
+    candidate: CurationCandidate,
+    *,
+    draft_fields: Sequence[CurationDraftFieldSchema],
+) -> tuple[dict[str, FieldValidationResult] | None, list[str]]:
+    if (
+        candidate.envelope_id is None
+        or candidate.object_id is None
+        or candidate.envelope_revision is None
+    ):
+        return None, []
+
+    envelope_row = candidate.domain_envelope
+    if envelope_row is None:
+        envelope_row = db.get(DomainEnvelopeModel, candidate.envelope_id)
+    if envelope_row is None:
+        warning = (
+            f"Domain envelope {candidate.envelope_id} was unavailable during "
+            "candidate validation."
+        )
+        return (
+            {
+                field.field_key: FieldValidationResult(
+                    status=FieldValidationStatus.CONFLICT,
+                    resolver="domain_envelope_validation_findings",
+                    warnings=[warning],
+                )
+                for field in draft_fields
+            },
+            [warning],
+        )
+
+    envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    field_results, warnings = domain_envelope_field_validation_results(
+        envelope,
+        envelope_revision=envelope_row.revision,
+        object_id=candidate.object_id,
+        field_keys=[field.field_key for field in draft_fields],
+    )
+    if candidate.envelope_revision != envelope_row.revision:
+        warnings = [
+            *warnings,
+            (
+                f"Domain envelope {candidate.envelope_id} validation used revision "
+                f"{envelope_row.revision}; candidate references revision "
+                f"{candidate.envelope_revision}."
+            ),
+        ]
+    return field_results, dedupe(warnings)
 
 
 def _aggregate_session_validation_snapshot(

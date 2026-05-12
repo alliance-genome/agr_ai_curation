@@ -9,8 +9,13 @@ from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
 )
+from src.lib.domain_packs import validation_supervisor
 from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
-from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    DomainEnvelope,
+    ValidationFindingStatus,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -349,3 +354,212 @@ def test_db_backed_validator_bindings_emit_lookup_attempts_and_provider_projecti
     )
     assert history_event.details["lookup_attempts"] == ontology_finding.details["lookup_attempts"]
     assert history_event.details["provider_projections"] == ontology_finding.details["provider_projections"]
+
+
+def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior(monkeypatch):
+    alliance_registry = load_alliance_domain_pack_registry()
+
+    monkeypatch.setattr(
+        validation_supervisor,
+        "_agr_curation_query_callable",
+        lambda method, **kwargs: {
+            "status": "ok",
+            "data": {
+                "curie": kwargs["gene_id"],
+                "symbol": "ninaE",
+                "taxon": "NCBITaxon:7227",
+            },
+            "count": 1,
+            "lookup_status": "success",
+            "explanation": "Resolved ninaE.",
+            "lookup_attempts": [
+                {
+                    "attempted_query": {"method": method, **kwargs},
+                    "lookup_status": "success",
+                    "candidate_count": 1,
+                    "resolved_id": kwargs["gene_id"],
+                    "resolved_label": "ninaE",
+                }
+            ],
+            "result_projections": [
+                {
+                    "provider": "alliance_curation_db",
+                    "resolved_id": kwargs["gene_id"],
+                    "resolved_label": "ninaE",
+                }
+            ],
+        },
+    )
+
+    gene_result = run_validation_supervisor(
+        DomainEnvelope(
+            envelope_id="gene-env",
+            domain_pack_id="gene",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="gene_mention_evidence",
+                    pending_ref_id="gene-1",
+                    payload={
+                        "mention": "ninaE",
+                        "primary_external_id": "FB:FBgn0002940",
+                        "gene_symbol": "ninaE",
+                        "taxon": "NCBITaxon:7227",
+                        "confidence": "high",
+                        "evidence_record_id": "evidence-1",
+                        "verified_quote": "ninaE",
+                        "page": 1,
+                        "section": "Results",
+                    },
+                )
+            ],
+        ),
+        alliance_registry.get_pack("gene"),
+    )
+    gene_resolved_fields = {
+        finding.field_ref.field_path
+        for finding in gene_result.envelope.validation_findings
+        if finding.code == "domain_pack.validator_lookup_resolved"
+    }
+    assert gene_resolved_fields == {"primary_external_id", "gene_symbol", "taxon"}
+    assert any(
+        finding.status is ValidationFindingStatus.RESOLVED
+        for finding in gene_result.envelope.validation_findings
+    )
+
+    allele_result = run_validation_supervisor(
+        DomainEnvelope(
+            envelope_id="allele-env",
+            domain_pack_id="agr.alliance.allele",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="AllelePaperEvidenceAssociation",
+                    pending_ref_id="allele-association-1",
+                    payload={},
+                )
+            ],
+        ),
+        alliance_registry.get_pack("agr.alliance.allele"),
+    )
+    assert any(
+        finding.code == "alliance.allele.association_refs_missing"
+        for finding in allele_result.envelope.validation_findings
+    )
+
+    chemical_result = run_validation_supervisor(
+        DomainEnvelope(
+            envelope_id="chemical-env",
+            domain_pack_id="agr.alliance.chemical_condition",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="ChemicalCondition",
+                    pending_ref_id="condition-1",
+                    payload={
+                        "condition_chemical": {
+                            "curie": "BAD:1",
+                            "name": "bad chemical",
+                        },
+                        "condition_class": {
+                            "curie": "ZECO:0000101",
+                            "name": "chemical treatment",
+                        },
+                        "source_chemical_mention": "bad chemical",
+                        "evidence_record_ids": ["evidence-1"],
+                        "confidence": "high",
+                    },
+                )
+            ],
+        ),
+        alliance_registry.get_pack("agr.alliance.chemical_condition"),
+    )
+    assert any(
+        finding.code == "domain_pack.curie_prefix_mismatch"
+        for finding in chemical_result.envelope.validation_findings
+    )
+
+    disease_result = run_validation_supervisor(
+        DomainEnvelope(
+            envelope_id="disease-env",
+            domain_pack_id="agr.alliance.disease",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="DiseaseAnnotation",
+                    pending_ref_id="disease-1",
+                    payload={
+                        "disease_annotation_object": {
+                            "curie": "DOID:0050434",
+                            "name": "Andersen-Tawil syndrome",
+                        },
+                        "condition_relations": [
+                            {
+                                "condition_relation_type": {
+                                    "name": "has_condition",
+                                }
+                            }
+                        ],
+                        "single_reference": {"curie": "PMID:1"},
+                        "evidence_code_curies": ["ECO:0000315"],
+                        "data_provider": {"abbreviation": "WB"},
+                    },
+                )
+            ],
+        ),
+        alliance_registry.get_pack("agr.alliance.disease"),
+    )
+    assert any(
+        finding.code == "domain_pack.validator_binding_planned"
+        for finding in disease_result.envelope.validation_findings
+    )
+    assert any(
+        finding.code == "domain_pack.validator_binding_blocked"
+        for finding in disease_result.envelope.validation_findings
+    )
+
+    phenotype_result = run_validation_supervisor(
+        DomainEnvelope(
+            envelope_id="phenotype-env",
+            domain_pack_id="agr.alliance.phenotype",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="PhenotypeSubject",
+                    pending_ref_id="subject-1",
+                    payload={
+                        "subject_identifier": "WB:WBGene00000001",
+                        "subject_type": "gene",
+                        "taxon": "NCBITaxon:6239",
+                    },
+                )
+            ],
+        ),
+        alliance_registry.get_pack("agr.alliance.phenotype"),
+    )
+    assert any(
+        finding.code == "domain_pack.validator_dispatch_unavailable"
+        for finding in phenotype_result.envelope.validation_findings
+    )
+
+    expression_result = run_validation_supervisor(
+        DomainEnvelope(
+            envelope_id="expression-env",
+            domain_pack_id="agr.alliance.gene_expression",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="GeneExpressionAnnotation",
+                    pending_ref_id="expression-1",
+                    payload={},
+                )
+            ],
+        ),
+        alliance_registry.get_pack("agr.alliance.gene_expression"),
+    )
+    assert not any(
+        finding.code == "domain_pack.validator_dispatch_unavailable"
+        for finding in expression_result.envelope.validation_findings
+    )
+    assert any(
+        finding.code == "domain_pack.validator_planned"
+        for finding in expression_result.envelope.validation_findings
+    )
+    assert any(
+        finding.code == "domain_pack.validator_blocked"
+        for finding in expression_result.envelope.validation_findings
+    )

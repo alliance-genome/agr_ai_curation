@@ -116,14 +116,18 @@ class DomainEnvelopeCheckpointResult:
 def write_domain_envelope_checkpoint(
     db: Session,
     request: DomainEnvelopeCheckpointRequest,
+    *,
+    manage_transaction: bool = True,
 ) -> DomainEnvelopeCheckpointResult:
     """Persist a completed envelope checkpoint and regenerate current indexes.
 
     The caller supplies the fully patched ``DomainEnvelope`` for the next
-    revision. This service commits exactly one transaction: it locks the current
-    envelope row, verifies the expected revision, writes the new envelope JSON,
-    regenerates object/finding/projection indexes from that stored JSON, appends
-    unseen history events by event_id, then commits.
+    revision. By default this service commits exactly one transaction: it locks
+    the current envelope row, verifies the expected revision, writes the new
+    envelope JSON, regenerates object/finding/projection indexes from that
+    stored JSON, appends unseen history events by event_id, then commits.
+    Callers that are already composing a larger unit of work may pass
+    ``manage_transaction=False`` and commit or roll back themselves.
     """
 
     envelope = request.envelope
@@ -186,9 +190,11 @@ def write_domain_envelope_checkpoint(
 
         index_counts = _regenerate_indexes_for_row(db, envelope_row)
         inserted_history_event_count = _append_history_events_for_row(db, envelope_row)
-        db.commit()
+        if manage_transaction:
+            db.commit()
     except Exception:
-        db.rollback()
+        if manage_transaction:
+            db.rollback()
         raise
 
     return DomainEnvelopeCheckpointResult(
@@ -254,6 +260,7 @@ def _regenerate_indexes_for_row(
     envelope_row: DomainEnvelopeModel,
 ) -> DomainEnvelopeIndexCounts:
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    indexed_at = datetime.now(timezone.utc)
     object_id_by_ref = _object_id_by_ref(envelope)
     validation_state_by_object = _validation_state_by_object(envelope, object_id_by_ref)
 
@@ -299,6 +306,8 @@ def _regenerate_indexes_for_row(
                 model_field_ref_json=_model_field_ref_json(object_metadata),
                 payload_json=dict(domain_object.payload),
                 object_json=domain_object.model_dump(mode="json"),
+                created_at=indexed_at,
+                updated_at=indexed_at,
             )
         )
         object_count += 1
@@ -320,6 +329,8 @@ def _regenerate_indexes_for_row(
                 object_model_ref_json=_object_model_ref_json(finding.details),
                 model_field_ref_json=_model_field_ref_json(finding.details),
                 finding_json=finding.model_dump(mode="json"),
+                created_at=indexed_at,
+                updated_at=indexed_at,
             )
         )
         finding_count += 1
@@ -349,6 +360,7 @@ def _append_history_events_for_row(
     envelope_row: DomainEnvelopeModel,
 ) -> int:
     envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    indexed_at = datetime.now(timezone.utc)
     existing_event_ids = set(
         db.scalars(
             select(DomainEnvelopeHistory.event_id).where(
@@ -378,6 +390,7 @@ def _append_history_events_for_row(
                 field_path=field_path,
                 model_field_ref_json=_model_field_ref_json(event.details),
                 event_json=event.model_dump(mode="json"),
+                created_at=indexed_at,
             )
         )
         existing_event_ids.add(event_id)
@@ -524,6 +537,8 @@ def _projection_row(
         object_model_ref_json=dict(object_model_ref_json),
         model_field_ref_json=dict(model_field_ref_json),
         projection_json=projection_json,
+        created_at=envelope_row.updated_at,
+        updated_at=envelope_row.updated_at,
     )
 
 
