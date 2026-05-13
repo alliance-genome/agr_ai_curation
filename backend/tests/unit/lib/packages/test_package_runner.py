@@ -681,6 +681,45 @@ def test_package_runner_executes_alliance_agr_curation_binding_in_isolation(
     ]
 
 
+def test_package_runner_alliance_agr_bulk_contract_reports_no_matches(
+    monkeypatch,
+    tmp_path,
+):
+    runtime_root = _write_fake_agr_runtime(tmp_path)
+    fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
+
+    runner, env_manager = _build_alliance_runner(tmp_path)
+
+    result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "search_genes_bulk",
+            "gene_symbols": ["NopeA", "NopeB"],
+            "data_provider": "FB",
+            "limit": 5,
+        },
+    )
+
+    assert result.ok is True
+    assert result.error is None
+    _assert_isolated_python(env_manager)
+    assert result.result["status"] == "ok"
+    assert result.result["count"] == 0
+    assert result.result["lookup_status"] == "not_found"
+    assert result.result["failure_classification"] == "not_found"
+    assert result.result["data"]["requested_count"] == 2
+    assert result.result["data"]["resolved_count"] == 0
+    assert result.result["data"]["total_matches"] == 0
+    assert result.result["data"]["resolution_status"] == "no_matches"
+    assert result.result["data"]["status_counts"] == {"no_matches": 2}
+    assert [item["status"] for item in result.result["data"]["items"]] == [
+        "no_matches",
+        "no_matches",
+    ]
+
+
 def test_package_runner_entrypoint_resolves_public_runtime_outside_backend_cwd(tmp_path):
     runtime_root = _write_fake_agr_runtime(tmp_path)
     fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)

@@ -24,6 +24,24 @@ logger = logging.getLogger(__name__)
 AGR_CURATION_DB_PROVIDER = "alliance_curation_db"
 AGR_CURATION_TOOL_NAME = "agr_curation_query"
 DETAIL_RETRY_STRATEGY_PER_CURIE = "per_curie"
+_DETAIL_LOOKUP_STAGES = frozenset(
+    {
+        "batch_setup_gene_details",
+        "batch_fetch_gene_details",
+        "fetch_gene_details",
+        "batch_setup_allele_details",
+        "batch_fetch_allele_details",
+        "fetch_allele_details",
+    }
+)
+_BULK_ITEM_STATUS_BY_LOOKUP_STATUS = {
+    LOOKUP_STATUS_SUCCESS: "resolved",
+    LOOKUP_STATUS_NOT_FOUND: "no_matches",
+    LOOKUP_STATUS_AMBIGUOUS: LOOKUP_STATUS_AMBIGUOUS,
+    LOOKUP_STATUS_TRANSIENT: "transient_failure",
+    LOOKUP_STATUS_BLOCKED: "blocked",
+    LOOKUP_STATUS_UNDER_DEVELOPMENT: LOOKUP_STATUS_UNDER_DEVELOPMENT,
+}
 
 
 def clean_mapping(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -362,12 +380,98 @@ def lookup_status_from_count(
         return LOOKUP_STATUS_AMBIGUOUS
     if count > 0:
         return LOOKUP_STATUS_SUCCESS
-    if attempts and any(
-        attempt.get("lookup_status") == LOOKUP_STATUS_TRANSIENT
-        for attempt in attempts
-    ):
-        return LOOKUP_STATUS_TRANSIENT
+    if attempts:
+        attempt_statuses = [
+            attempt.get("lookup_status")
+            for attempt in attempts
+            if attempt.get("lookup_status")
+        ]
+        if any(status == LOOKUP_STATUS_TRANSIENT for status in attempt_statuses):
+            return LOOKUP_STATUS_TRANSIENT
+        if attempt_statuses and all(
+            status == LOOKUP_STATUS_BLOCKED for status in attempt_statuses
+        ):
+            return LOOKUP_STATUS_BLOCKED
     return LOOKUP_STATUS_NOT_FOUND
+
+
+def _attempts_include_detail_lookup(
+    attempts: list[dict[str, Any]] | None,
+) -> bool:
+    if not attempts:
+        return False
+    for attempt in attempts:
+        attempted_query = attempt.get("attempted_query")
+        if not isinstance(attempted_query, Mapping):
+            continue
+        lookup_stage = attempted_query.get("lookup_stage")
+        if lookup_stage in _DETAIL_LOOKUP_STAGES:
+            return True
+    return False
+
+
+def bulk_item_status_from_lookup_status(
+    lookup_status: str,
+    *,
+    count: int,
+    attempts: list[dict[str, Any]] | None = None,
+) -> str:
+    """Map lookup metadata to explicit per-input bulk resolution status."""
+    if count > 0:
+        return "resolved"
+    if _attempts_include_detail_lookup(attempts):
+        return "detail_failure"
+    try:
+        return _BULK_ITEM_STATUS_BY_LOOKUP_STATUS[lookup_status]
+    except KeyError as exc:
+        raise ValueError(f"Unexpected bulk lookup status: {lookup_status!r}") from exc
+
+
+def bulk_resolution_summary(items: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Summarize bulk lookup resolution without confusing inputs with matches."""
+    status_counts: dict[str, int] = {}
+    resolved_count = 0
+    resolved_input_count = 0
+
+    for item in items:
+        status = str(item["status"])
+        status_counts[status] = status_counts.get(status, 0) + 1
+        item_count = item["count"]
+        resolved_count += item_count
+        if status == "resolved":
+            resolved_input_count += 1
+
+    requested_count = len(items)
+    unresolved_input_count = requested_count - resolved_input_count
+    blocked_input_count = (
+        status_counts.get("blocked", 0)
+        + status_counts.get("validation_warning", 0)
+    )
+
+    if requested_count == 0:
+        resolution_status = "no_matches"
+    elif resolved_input_count == requested_count:
+        resolution_status = "resolved"
+    elif resolved_input_count > 0:
+        resolution_status = "partial"
+    elif status_counts.get("detail_failure", 0) > 0:
+        resolution_status = "detail_failure"
+    elif status_counts.get("transient_failure", 0) > 0:
+        resolution_status = "transient_failure"
+    elif blocked_input_count == requested_count:
+        resolution_status = "blocked"
+    else:
+        resolution_status = "no_matches"
+
+    return {
+        "requested_count": requested_count,
+        "resolved_count": resolved_count,
+        "total_matches": resolved_count,
+        "resolved_input_count": resolved_input_count,
+        "unresolved_input_count": unresolved_input_count,
+        "resolution_status": resolution_status,
+        "status_counts": status_counts,
+    }
 
 
 def lookup_explanation(
@@ -786,6 +890,8 @@ __all__ = [
     "entity_detail_lookup_attempt",
     "entity_detail_lookup_attempts",
     "lookup_status_from_count",
+    "bulk_item_status_from_lookup_status",
+    "bulk_resolution_summary",
     "lookup_explanation",
     "lookup_response_payload",
     "chunk_values",
