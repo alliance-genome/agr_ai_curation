@@ -657,7 +657,7 @@ describe('CurationWorkspacePage', () => {
 
     renderPage('/curation/session-1')
 
-    expect(await screen.findByText('Envelope objects')).toBeInTheDocument()
+    expect(await screen.findByText('Objects to review')).toBeInTheDocument()
     const envelopeObjectTablePanel = screen.getByRole('region', {
       name: /envelope object table panel/i,
     })
@@ -667,13 +667,17 @@ describe('CurationWorkspacePage', () => {
       expect(serviceMocks.fetchCurationWorkspaceEnvelopeReviewRows).toHaveBeenCalledTimes(1)
     })
 
-    expect(screen.getAllByText('TMEM67').length).toBeGreaterThan(0)
-    expect(screen.getByText('Object tmem67-gene-object')).toBeInTheDocument()
-    expect(screen.getByText('fixture.alliance.gene@0.7.0')).toBeInTheDocument()
-    expect(screen.getByText('GeneAssertion')).toBeInTheDocument()
-    expect(screen.getByText(/workspace_review_row/)).toBeInTheDocument()
-    expect(screen.getByText('1 open / 1 findings')).toBeInTheDocument()
-    expect(screen.getByText('Projected evidence sentence for TMEM67.')).toBeInTheDocument()
+    expect(within(envelopeObjectTablePanel).getAllByText('TMEM67').length).toBeGreaterThan(0)
+    expect(within(envelopeObjectTablePanel).getByText('Gene Assertion · Curatable unit')).toBeInTheDocument()
+    expect(within(envelopeObjectTablePanel).getByText('Gene assertion')).toBeInTheDocument()
+    expect(within(envelopeObjectTablePanel).getByText('Symbol')).toBeInTheDocument()
+    expect(within(envelopeObjectTablePanel).getByText('Evidence count')).toBeInTheDocument()
+    expect(within(envelopeObjectTablePanel).getByText('1 open / 1 findings')).toBeInTheDocument()
+    expect(
+      screen.getByRole('button', {
+        name: /Projected evidence sentence for TMEM67\./,
+      }),
+    ).toBeInTheDocument()
     expect(
       within(envelopeObjectTablePanel).queryByText('Legacy should not render'),
     ).not.toBeInTheDocument()
@@ -1050,7 +1054,10 @@ describe('CurationWorkspacePage', () => {
       expect(screen.getByText('APOE')).toBeInTheDocument()
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Accept' }))
+    const entityTablePanel = screen.getByRole('region', {
+      name: /entity table panel/i,
+    })
+    fireEvent.click(within(entityTablePanel).getByRole('button', { name: 'Accept' }))
 
     await waitFor(() => {
       expect(serviceMocks.submitCurationCandidateDecision).toHaveBeenCalledWith({
