@@ -612,45 +612,84 @@ def validate_active_validator_agent_references(
     errors: list[str] = []
     for registry in registries:
         owner_package_id = registry.domain_pack.package_id
+        for entry in registry.validator_metadata:
+            if entry.state is not ValidationBindingState.ACTIVE:
+                continue
+            if entry.validator_agent is None:
+                continue
+
+            _validate_active_validator_agent_reference(
+                errors=errors,
+                registry=registry,
+                owner_package_id=owner_package_id,
+                ref=entry.validator_agent,
+                reference_kind="validator",
+                reference_id=entry.validator_id,
+                package_registry=package_registry,
+                agent_resolver=agent_resolver,
+            )
+
         for binding in registry.bindings:
             if binding.state is not ValidationBindingState.ACTIVE:
                 continue
             if binding.validator_agent is None:
                 continue
 
-            ref = binding.validator_agent
-            if package_registry.get_package(ref.package_id) is None:
-                errors.append(
-                    f"Domain pack '{registry.domain_pack.pack_id}' binding "
-                    f"'{binding.binding_id}' references missing validator package "
-                    f"'{ref.package_id}'"
-                )
-                continue
-
-            if agent_resolver(ref.package_id, ref.agent_id) is None:
-                errors.append(
-                    f"Domain pack '{registry.domain_pack.pack_id}' binding "
-                    f"'{binding.binding_id}' references missing validator agent "
-                    f"'{ref.package_id}:{ref.agent_id}'"
-                )
-
-            if (
-                owner_package_id is not None
-                and owner_package_id != ref.package_id
-                and not package_registry.package_declares_dependency(
-                    owner_package_id,
-                    ref.package_id,
-                )
-            ):
-                errors.append(
-                    f"Package '{owner_package_id}' must declare dependency "
-                    f"'{ref.package_id}' for domain pack "
-                    f"'{registry.domain_pack.pack_id}' binding "
-                    f"'{binding.binding_id}'"
-                )
+            _validate_active_validator_agent_reference(
+                errors=errors,
+                registry=registry,
+                owner_package_id=owner_package_id,
+                ref=binding.validator_agent,
+                reference_kind="binding",
+                reference_id=binding.binding_id,
+                package_registry=package_registry,
+                agent_resolver=agent_resolver,
+            )
 
     if errors:
         raise ValidationRegistryError("; ".join(errors))
+
+
+def _validate_active_validator_agent_reference(
+    *,
+    errors: list[str],
+    registry: DomainPackValidationRegistry,
+    owner_package_id: str | None,
+    ref: ValidatorAgentRef,
+    reference_kind: str,
+    reference_id: str,
+    package_registry: Any,
+    agent_resolver: Any,
+) -> None:
+    if package_registry.get_package(ref.package_id) is None:
+        errors.append(
+            f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}' references missing validator package "
+            f"'{ref.package_id}'"
+        )
+        return
+
+    if agent_resolver(ref.package_id, ref.agent_id) is None:
+        errors.append(
+            f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}' references missing validator agent "
+            f"'{ref.package_id}:{ref.agent_id}'"
+        )
+
+    if (
+        owner_package_id is not None
+        and owner_package_id != ref.package_id
+        and not package_registry.package_declares_dependency(
+            owner_package_id,
+            ref.package_id,
+        )
+    ):
+        errors.append(
+            f"Package '{owner_package_id}' must declare dependency "
+            f"'{ref.package_id}' for domain pack "
+            f"'{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}'"
+        )
 
 
 def _collect_validator_metadata(
