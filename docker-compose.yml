@@ -198,6 +198,11 @@ services:
       # External Database URLs (read-only access via SSH tunnel)
       - CURATION_DB_URL=${CURATION_DB_URL}
       - LITERATURE_DB_URL=${LITERATURE_DB_URL}
+      # Literature reference search via agr-curation-api-client/OpenSearch
+      - ELASTICSEARCH_HOST=${ELASTICSEARCH_HOST:-}
+      - ELASTICSEARCH_PORT=${ELASTICSEARCH_PORT:-443}
+      - ELASTICSEARCH_INDEX=${ELASTICSEARCH_INDEX:-references_index}
+      - ELASTICSEARCH_SCHEME=${ELASTICSEARCH_SCHEME:-}
       # Curation Database Credentials Configuration
       - CURATION_DB_CREDENTIALS_SOURCE=${CURATION_DB_CREDENTIALS_SOURCE}
       - CURATION_DB_AWS_SECRET_ID=${CURATION_DB_AWS_SECRET_ID:-}

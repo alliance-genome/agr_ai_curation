@@ -28,7 +28,7 @@ sqlalchemy>=2.0
 psycopg2-binary
 alembic
 agr-abc-document-parsers>=1.5.0
-agr-curation-api-client  # Use the published client release; see backend/DEPENDENCY_ALERT_DISPOSITIONS.md for the unresolved transitive ecdsa alert.
+agr-curation-api-client>=0.10.1  # Includes literature ES reference lookup/search helpers.
 
 # Ontology processing
 pronto  # OBO file parsing for biological ontologies
