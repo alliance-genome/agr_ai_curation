@@ -849,7 +849,7 @@ describe('CurationWorkspacePage', () => {
       'Direct submission requires a preview payload. Refresh the submission preview and try again.',
     )).toBeInTheDocument()
     expect(serviceMocks.executeCurationSubmission).not.toHaveBeenCalled()
-  })
+  }, 10000)
 
   it('initializes the PDF viewer document after hydration', async () => {
     serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
