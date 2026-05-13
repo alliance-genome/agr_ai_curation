@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
+from src.lib.packages.registry import PackageRegistry
 from src.schemas.domain_pack_metadata import DomainPackFixturePackRef, DomainPackMetadata
 
 from .loader import load_domain_pack_metadata
@@ -220,7 +221,7 @@ def load_domain_pack_registry(
 
 
 def load_package_domain_pack_registry(
-    package_registry,
+    package_registry: PackageRegistry,
 ) -> DomainPackRegistry:
     """Load domain packs embedded beneath loaded runtime packages."""
 

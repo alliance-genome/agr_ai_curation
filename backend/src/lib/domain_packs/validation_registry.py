@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -36,6 +36,23 @@ class ValidationBindingState(str, Enum):
 
 class ValidationRegistryError(ValueError):
     """Raised when domain-pack validation metadata is malformed."""
+
+
+class PackageRegistryForValidatorReferences(Protocol):
+    """Package registry behavior needed to validate validator agent refs."""
+
+    def get_package(self, package_id: str) -> object | None:
+        """Return a loaded package by package ID, if present."""
+
+    def package_declares_dependency(
+        self,
+        source_package_id: str,
+        target_package_id: str,
+    ) -> bool:
+        """Return whether source package declares target package as a dependency."""
+
+
+ValidatorAgentResolver = Callable[[str, str], object | None]
 
 
 @dataclass(frozen=True)
@@ -599,8 +616,8 @@ class DomainPackValidationRegistry:
 
 def validate_active_validator_agent_references(
     registries: Iterable[DomainPackValidationRegistry],
-    package_registry: Any,
-    agent_resolver: Any | None = None,
+    package_registry: PackageRegistryForValidatorReferences,
+    agent_resolver: ValidatorAgentResolver | None = None,
 ) -> None:
     """Validate active package-scoped validator agent refs across loaded packages."""
 
@@ -658,8 +675,8 @@ def _validate_active_validator_agent_reference(
     ref: ValidatorAgentRef,
     reference_kind: str,
     reference_id: str,
-    package_registry: Any,
-    agent_resolver: Any,
+    package_registry: PackageRegistryForValidatorReferences,
+    agent_resolver: ValidatorAgentResolver,
 ) -> None:
     if package_registry.get_package(ref.package_id) is None:
         errors.append(

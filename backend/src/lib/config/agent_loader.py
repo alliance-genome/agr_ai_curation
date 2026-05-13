@@ -285,13 +285,18 @@ def build_package_scoped_agent_resolver(
     """Build a package-scoped agent resolver without changing the shared cache."""
 
     agents_by_package_and_id: Dict[tuple[str, str], AgentDefinition] | None = None
+    resolver_lock = threading.Lock()
 
     def resolve(package_id: str, agent_id: str) -> Optional[AgentDefinition]:
         nonlocal agents_by_package_and_id
         if agents_by_package_and_id is None:
-            _registry, _folders, agents_by_package_and_id = _load_agent_definition_indexes(
-                agents_path,
-            )
+            with resolver_lock:
+                if agents_by_package_and_id is None:
+                    (
+                        _registry,
+                        _folders,
+                        agents_by_package_and_id,
+                    ) = _load_agent_definition_indexes(agents_path)
         return agents_by_package_and_id.get((package_id, agent_id))
 
     return resolve
