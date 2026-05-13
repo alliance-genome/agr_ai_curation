@@ -98,6 +98,60 @@ def test_package_scoped_agent_lookup_allows_duplicate_agent_ids(tmp_path):
     assert second_agent.package_id == "org.second"
 
 
+def test_package_scoped_agent_resolver_does_not_mutate_global_cache(tmp_path):
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / "validators"
+    _write_package_manifest(
+        package_dir,
+        {
+            "package_id": "org.validators",
+            "display_name": "Validator Package",
+            "version": "1.0.0",
+            "package_api_version": "1.0.0",
+            "min_runtime_version": "1.0.0",
+            "max_runtime_version": "2.0.0",
+            "python_package_root": "python/src/org_validators",
+            "requirements_file": "requirements/runtime.txt",
+            "agent_bundles": [{"name": "validator"}],
+        },
+    )
+    _write_agent_bundle(
+        package_dir,
+        "validator",
+        agent_id="shared_validator",
+        name="Package Validator",
+    )
+
+    legacy_agents_dir = tmp_path / "legacy_agents"
+    legacy_core_dir = legacy_agents_dir / "core"
+    legacy_core_dir.mkdir(parents=True)
+    (legacy_core_dir / "agent.yaml").write_text(
+        "agent_id: core_agent\nname: Core Agent\n",
+        encoding="utf-8",
+    )
+    (legacy_core_dir / "prompt.yaml").write_text(
+        "content: Core prompt\n",
+        encoding="utf-8",
+    )
+    agent_loader.load_agent_definitions(legacy_agents_dir, force_reload=True)
+
+    resolver = agent_loader.build_package_scoped_agent_resolver(packages_dir)
+
+    resolved = resolver("org.validators", "shared_validator")
+
+    assert resolved is not None
+    assert resolved.package_id == "org.validators"
+    assert resolved.folder_name == "validator"
+    assert agent_loader.get_agent_definition("core_agent") is not None
+    assert (
+        agent_loader.get_agent_definition_for_package(
+            "org.validators",
+            "shared_validator",
+        )
+        is None
+    )
+
+
 def test_load_agent_definitions_raises_clear_error_for_missing_package_agent_yaml(tmp_path):
     packages_dir = tmp_path / "packages"
     package_dir = packages_dir / "demo_core"

@@ -175,7 +175,7 @@ def _options_for_agent_entry(
 
 def _load_package_domain_pack_registry():
     from src.lib.config.package_default_sources import resolve_packages_dir
-    from src.lib.config.agent_loader import load_agent_definitions
+    from src.lib.config.agent_loader import build_package_scoped_agent_resolver
     from src.lib.domain_packs.registry import load_package_domain_pack_registry
     from src.lib.packages import load_package_registry
 
@@ -186,16 +186,10 @@ def _load_package_domain_pack_registry():
         DomainPackValidationRegistry.from_domain_pack(domain_pack)
         for domain_pack in registry.loaded_packs
     ]
-    if any(
-        binding.validator_agent is not None
-        and binding.state.value == "active"
-        for validation_registry in validation_registries
-        for binding in validation_registry.bindings
-    ):
-        load_agent_definitions(packages_dir, force_reload=True)
     validate_active_validator_agent_references(
         validation_registries,
         runtime_package_registry,
+        agent_resolver=build_package_scoped_agent_resolver(packages_dir),
     )
     return registry
 

@@ -24,7 +24,7 @@ import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Callable, Dict, List, Optional, Any
 
 import yaml
 
@@ -215,6 +215,88 @@ _agents_by_package_and_id: Dict[tuple[str, str], AgentDefinition] = {}
 _initialized: bool = False
 
 
+def _load_agent_definition_indexes(
+    agents_path: Optional[Path] = None,
+) -> tuple[
+    Dict[str, AgentDefinition],
+    Dict[str, AgentDefinition],
+    Dict[tuple[str, str], AgentDefinition],
+]:
+    """Load agent definition indexes from sources without mutating module cache."""
+
+    agent_registry: Dict[str, AgentDefinition] = {}
+    agents_by_folder: Dict[str, AgentDefinition] = {}
+    agents_by_package_and_id: Dict[tuple[str, str], AgentDefinition] = {}
+
+    for source in resolve_agent_config_sources(agents_path):
+        agent_yaml = source.agent_yaml
+        if source.package_id and (agent_yaml is None or not agent_yaml.exists()):
+            raise FileNotFoundError(
+                f"Package '{source.package_id}' agent bundle '{source.folder_name}' "
+                f"is missing agent.yaml at {agent_yaml}"
+            )
+
+        if agent_yaml is None or not agent_yaml.exists():
+            logger.debug('Skipping %s: no agent.yaml found', source.folder_name)
+            continue
+
+        try:
+            with open(agent_yaml, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+
+            if not data:
+                logger.warning('Empty agent.yaml in %s', source.folder_name)
+                continue
+
+            agent = AgentDefinition.from_yaml(
+                source.folder_name,
+                data,
+                package_id=source.package_id,
+                package_path=source.package_path,
+            )
+            agent_registry[agent.agent_id] = agent
+            agents_by_folder[source.folder_name] = agent
+            if agent.package_id is not None:
+                agents_by_package_and_id[(agent.package_id, agent.agent_id)] = agent
+
+            logger.info(
+                f"Loaded agent: {agent.agent_id} "
+                f"(folder={source.folder_name}, tool={agent.tool_name})"
+            )
+
+        except yaml.YAMLError as e:
+            logger.error('Failed to parse %s: %s', agent_yaml, e)
+            raise
+        except Exception as e:
+            logger.error(
+                'Failed to load agent from %s%s: %s',
+                source.folder_name,
+                f" in package {source.package_id}" if source.package_id else "",
+                e,
+            )
+            raise
+
+    return agent_registry, agents_by_folder, agents_by_package_and_id
+
+
+def build_package_scoped_agent_resolver(
+    agents_path: Optional[Path] = None,
+) -> Callable[[str, str], Optional[AgentDefinition]]:
+    """Build a package-scoped agent resolver without changing the shared cache."""
+
+    agents_by_package_and_id: Dict[tuple[str, str], AgentDefinition] | None = None
+
+    def resolve(package_id: str, agent_id: str) -> Optional[AgentDefinition]:
+        nonlocal agents_by_package_and_id
+        if agents_by_package_and_id is None:
+            _registry, _folders, agents_by_package_and_id = _load_agent_definition_indexes(
+                agents_path,
+            )
+        return agents_by_package_and_id.get((package_id, agent_id))
+
+    return resolve
+
+
 def load_agent_definitions(
     agents_path: Optional[Path] = None,
     force_reload: bool = False,
@@ -252,57 +334,11 @@ def load_agent_definitions(
             agents_path or "default runtime package search path",
         )
 
-        _agent_registry = {}
-        _agents_by_folder = {}
-        _agents_by_package_and_id = {}
-
-        for source in resolve_agent_config_sources(agents_path):
-            agent_yaml = source.agent_yaml
-            if source.package_id and (agent_yaml is None or not agent_yaml.exists()):
-                raise FileNotFoundError(
-                    f"Package '{source.package_id}' agent bundle '{source.folder_name}' "
-                    f"is missing agent.yaml at {agent_yaml}"
-                )
-
-            if agent_yaml is None or not agent_yaml.exists():
-                logger.debug('Skipping %s: no agent.yaml found', source.folder_name)
-                continue
-
-            try:
-                with open(agent_yaml, "r", encoding="utf-8") as f:
-                    data = yaml.safe_load(f)
-
-                if not data:
-                    logger.warning('Empty agent.yaml in %s', source.folder_name)
-                    continue
-
-                agent = AgentDefinition.from_yaml(
-                    source.folder_name,
-                    data,
-                    package_id=source.package_id,
-                    package_path=source.package_path,
-                )
-                _agent_registry[agent.agent_id] = agent
-                _agents_by_folder[source.folder_name] = agent
-                if agent.package_id is not None:
-                    _agents_by_package_and_id[(agent.package_id, agent.agent_id)] = agent
-
-                logger.info(
-                    f"Loaded agent: {agent.agent_id} "
-                    f"(folder={source.folder_name}, tool={agent.tool_name})"
-                )
-
-            except yaml.YAMLError as e:
-                logger.error('Failed to parse %s: %s', agent_yaml, e)
-                raise
-            except Exception as e:
-                logger.error(
-                    'Failed to load agent from %s%s: %s',
-                    source.folder_name,
-                    f" in package {source.package_id}" if source.package_id else "",
-                    e,
-                )
-                raise
+        (
+            _agent_registry,
+            _agents_by_folder,
+            _agents_by_package_and_id,
+        ) = _load_agent_definition_indexes(agents_path)
 
         _initialized = True
         logger.info('Loaded %s agent definitions', len(_agent_registry))

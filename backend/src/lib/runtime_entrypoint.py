@@ -126,7 +126,7 @@ def validate_runtime_packages() -> PackageRegistry:
         packages_dir,
         fail_on_validation_error=True,
     )
-    from src.lib.config.agent_loader import load_agent_definitions
+    from src.lib.config.agent_loader import build_package_scoped_agent_resolver
     from src.lib.domain_packs.registry import load_package_domain_pack_registry
     from src.lib.domain_packs.validation_registry import (
         DomainPackValidationRegistry,
@@ -138,16 +138,10 @@ def validate_runtime_packages() -> PackageRegistry:
         DomainPackValidationRegistry.from_domain_pack(domain_pack)
         for domain_pack in domain_pack_registry.loaded_packs
     )
-    if any(
-        binding.validator_agent is not None
-        and binding.state.value == "active"
-        for validation_registry in domain_pack_validation_registries
-        for binding in validation_registry.bindings
-    ):
-        load_agent_definitions(packages_dir, force_reload=True)
     validate_active_validator_agent_references(
         domain_pack_validation_registries,
         registry,
+        agent_resolver=build_package_scoped_agent_resolver(packages_dir),
     )
     logger.info(
         "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s domain_packs=%s",
