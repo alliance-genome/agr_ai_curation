@@ -10,6 +10,9 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+VERSION_RANGE_CLAUSE_PATTERN = re.compile(
+    r"^(?:>=|<=|>|<|==|=)?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$"
+)
 PACKAGE_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
 SYMBOLIC_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 PYTHON_CALLABLE_PATTERN = re.compile(
@@ -66,6 +69,30 @@ def _core_semver(value: str) -> tuple[int, int, int]:
         raise ValueError(f"Invalid semantic version: {value}")
     major, minor, patch = (int(part) for part in match.groups())
     return (major, minor, patch)
+
+
+def _validate_version_range(value: str, field_name: str) -> str:
+    if not value or not value.strip():
+        raise ValueError(f"{field_name} must not be empty")
+    if value != value.strip():
+        raise ValueError(f"{field_name} must not include surrounding whitespace")
+
+    clauses = [clause.strip() for clause in value.split(",")]
+    if any(not clause for clause in clauses):
+        raise ValueError(
+            f"{field_name} must use comma-separated semantic version constraints"
+        )
+    invalid_clauses = [
+        clause
+        for clause in clauses
+        if VERSION_RANGE_CLAUSE_PATTERN.match(clause) is None
+    ]
+    if invalid_clauses:
+        invalid_list = ", ".join(invalid_clauses)
+        raise ValueError(
+            f"{field_name} contains invalid semantic version constraint(s): {invalid_list}"
+        )
+    return value
 
 
 def _require_unique(values: list[str], field_name: str) -> list[str]:
@@ -131,6 +158,25 @@ class PackageExport(BaseModel):
         return _validate_relative_package_path(value, "path")
 
 
+class PackageDependency(BaseModel):
+    """One package dependency declared by a runtime package manifest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    package_id: str
+    version_range: str = Field(min_length=1)
+
+    @field_validator("package_id")
+    @classmethod
+    def _validate_package_id(cls, value: str) -> str:
+        return _validate_package_id(value)
+
+    @field_validator("version_range")
+    @classmethod
+    def _validate_version_range(cls, value: str) -> str:
+        return _validate_version_range(value, "dependencies.version_range")
+
+
 class AgentBundleSpec(BaseModel):
     """Shorthand description for one agent export bundle in a package manifest."""
 
@@ -174,6 +220,7 @@ class PackageManifest(BaseModel):
     max_runtime_version: str
     python_package_root: str = Field(min_length=1)
     requirements_file: str = Field(min_length=1)
+    dependencies: list[PackageDependency] = Field(default_factory=list)
     exports: list[PackageExport] = Field(min_length=1)
 
     @model_validator(mode="before")
@@ -257,6 +304,10 @@ class PackageManifest(BaseModel):
 
         export_keys = [f"{export.kind.value}:{export.name}" for export in self.exports]
         _require_unique(export_keys, "exports")
+        dependency_ids = [dependency.package_id for dependency in self.dependencies]
+        _require_unique(dependency_ids, "dependencies")
+        if self.package_id in dependency_ids:
+            raise ValueError("dependencies must not include the package itself")
         return self
 
 

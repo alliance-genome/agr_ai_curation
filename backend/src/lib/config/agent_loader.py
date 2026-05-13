@@ -104,6 +104,8 @@ class AgentDefinition:
     folder_name: str
     agent_id: str
     name: str
+    package_id: Optional[str] = None
+    package_path: Optional[Path] = None
     description: str = ""
     category: str = ""
     subcategory: str = ""
@@ -124,7 +126,14 @@ class AgentDefinition:
         return f"ask_{self.folder_name}_specialist"
 
     @classmethod
-    def from_yaml(cls, folder_name: str, data: Dict[str, Any]) -> "AgentDefinition":
+    def from_yaml(
+        cls,
+        folder_name: str,
+        data: Dict[str, Any],
+        *,
+        package_id: Optional[str] = None,
+        package_path: Optional[Path] = None,
+    ) -> "AgentDefinition":
         """
         Create an AgentDefinition from parsed YAML data.
 
@@ -181,6 +190,8 @@ class AgentDefinition:
             folder_name=folder_name,
             agent_id=data.get("agent_id", folder_name),
             name=data.get("name", folder_name.replace("_", " ").title()),
+            package_id=package_id,
+            package_path=package_path,
             description=data.get("description", "").strip(),
             category=data.get("category", ""),
             subcategory=data.get("subcategory", ""),
@@ -200,6 +211,7 @@ class AgentDefinition:
 # Module-level cache for loaded agents
 _agent_registry: Dict[str, AgentDefinition] = {}
 _agents_by_folder: Dict[str, AgentDefinition] = {}
+_agents_by_package_and_id: Dict[tuple[str, str], AgentDefinition] = {}
 _initialized: bool = False
 
 
@@ -228,7 +240,7 @@ def load_agent_definitions(
         FileNotFoundError: If agents_path doesn't exist
         yaml.YAMLError: If YAML parsing fails
     """
-    global _agent_registry, _agents_by_folder, _initialized
+    global _agent_registry, _agents_by_folder, _agents_by_package_and_id, _initialized
 
     # Thread-safe initialization
     with _init_lock:
@@ -242,6 +254,7 @@ def load_agent_definitions(
 
         _agent_registry = {}
         _agents_by_folder = {}
+        _agents_by_package_and_id = {}
 
         for source in resolve_agent_config_sources(agents_path):
             agent_yaml = source.agent_yaml
@@ -263,9 +276,16 @@ def load_agent_definitions(
                     logger.warning('Empty agent.yaml in %s', source.folder_name)
                     continue
 
-                agent = AgentDefinition.from_yaml(source.folder_name, data)
+                agent = AgentDefinition.from_yaml(
+                    source.folder_name,
+                    data,
+                    package_id=source.package_id,
+                    package_path=source.package_path,
+                )
                 _agent_registry[agent.agent_id] = agent
                 _agents_by_folder[source.folder_name] = agent
+                if agent.package_id is not None:
+                    _agents_by_package_and_id[(agent.package_id, agent.agent_id)] = agent
 
                 logger.info(
                     f"Loaded agent: {agent.agent_id} "
@@ -320,6 +340,17 @@ def get_agent_by_folder(folder_name: str) -> Optional[AgentDefinition]:
         load_agent_definitions()
 
     return _agents_by_folder.get(folder_name)
+
+
+def get_agent_definition_for_package(
+    package_id: str,
+    agent_id: str,
+) -> Optional[AgentDefinition]:
+    """Get an agent definition by package owner and agent ID."""
+    if not _initialized:
+        load_agent_definitions()
+
+    return _agents_by_package_and_id.get((package_id, agent_id))
 
 
 def get_agent_by_tool_name(tool_name: str) -> Optional[AgentDefinition]:
@@ -417,7 +448,8 @@ def is_initialized() -> bool:
 
 def reset_cache() -> None:
     """Reset the agent cache (for testing)."""
-    global _agent_registry, _agents_by_folder, _initialized
+    global _agent_registry, _agents_by_folder, _agents_by_package_and_id, _initialized
     _agent_registry = {}
     _agents_by_folder = {}
+    _agents_by_package_and_id = {}
     _initialized = False

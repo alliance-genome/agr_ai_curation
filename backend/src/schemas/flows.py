@@ -31,6 +31,8 @@ class FlowValidationAttachmentSelection(BaseModel):
     validation_kind: Optional[str] = Field(None, max_length=255)
     tool_name: Optional[str] = Field(None, max_length=255)
     tool_method: Optional[str] = Field(None, max_length=255)
+    validator_package_id: Optional[str] = Field(None, max_length=255)
+    validator_agent_id: Optional[str] = Field(None, max_length=255)
     state: Literal["active", "planned", "blocked"]
     scope: Literal["pack", "object", "field"]
     object_type: Optional[str] = Field(None, max_length=255)

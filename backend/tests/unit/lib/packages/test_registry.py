@@ -29,6 +29,32 @@ def _write_package(packages_dir: Path, directory_name: str, manifest_text: str |
     return package_dir
 
 
+def _package_manifest_text(
+    package_id: str,
+    *,
+    display_name: str | None = None,
+    version: str = "1.0.0",
+    dependencies: str = "",
+) -> str:
+    dependency_block = f"\ndependencies:\n{dependencies.rstrip()}" if dependencies else ""
+    return (
+        f"package_id: {package_id}\n"
+        f"display_name: {display_name or package_id}\n"
+        f"version: {version}\n"
+        "package_api_version: 1.0.0\n"
+        "min_runtime_version: 1.0.0\n"
+        "max_runtime_version: 2.0.0\n"
+        f"python_package_root: python/src/{package_id.replace('.', '_')}\n"
+        "requirements_file: requirements/runtime.txt"
+        f"{dependency_block}\n"
+        "exports:\n"
+        "  - kind: tool_binding\n"
+        "    name: default\n"
+        "    path: tools/bindings.yaml\n"
+        "    description: Default bindings\n"
+    )
+
+
 def test_load_package_registry_discovers_compatible_packages(tmp_path):
     packages_dir = tmp_path / "packages"
     _write_package(packages_dir, "agr.base", _fixture_text("valid_package.yaml"))
@@ -42,6 +68,77 @@ def test_load_package_registry_discovers_compatible_packages(tmp_path):
     assert loaded_package.package_id == "agr.base"
     assert loaded_package.display_name == "AGR Base Package"
     assert registry.get_package("agr.base") == loaded_package
+
+
+def test_load_package_registry_validates_declared_dependency_version_ranges(tmp_path):
+    packages_dir = tmp_path / "packages"
+    _write_package(
+        packages_dir,
+        "agr.base",
+        _package_manifest_text("agr.base", version="1.4.0"),
+    )
+    _write_package(
+        packages_dir,
+        "org.custom",
+        _package_manifest_text(
+            "org.custom",
+            dependencies=(
+                "  - package_id: agr.base\n"
+                "    version_range: \">=1.0.0,<2.0.0\""
+            ),
+        ),
+    )
+
+    registry = load_package_registry(packages_dir, runtime_version="1.5.0")
+
+    assert registry.validation_errors == ()
+    assert registry.package_declares_dependency("org.custom", "agr.base") is True
+    assert registry.package_declares_dependency("agr.base", "org.custom") is False
+
+
+def test_load_package_registry_fails_missing_dependency(tmp_path):
+    packages_dir = tmp_path / "packages"
+    _write_package(
+        packages_dir,
+        "org.custom",
+        _package_manifest_text(
+            "org.custom",
+            dependencies=(
+                "  - package_id: missing.package\n"
+                "    version_range: \">=1.0.0\""
+            ),
+        ),
+    )
+
+    with pytest.raises(PackageRegistryValidationError) as exc_info:
+        load_package_registry(packages_dir, runtime_version="1.5.0")
+
+    assert "declares dependency 'missing.package' but it is not loaded" in str(exc_info.value)
+
+
+def test_load_package_registry_fails_unsatisfied_dependency_version(tmp_path):
+    packages_dir = tmp_path / "packages"
+    _write_package(
+        packages_dir,
+        "agr.base",
+        _package_manifest_text("agr.base", version="2.0.0"),
+    )
+    _write_package(
+        packages_dir,
+        "org.custom",
+        _package_manifest_text(
+            "org.custom",
+            dependencies=(
+                "  - package_id: agr.base\n"
+                "    version_range: \">=1.0.0,<2.0.0\""
+            ),
+        ),
+    )
+
+    with pytest.raises(PackageRegistryValidationError) as exc_info:
+        load_package_registry(packages_dir, runtime_version="1.5.0")
+
+    assert "requires 'agr.base' version '>=1.0.0,<2.0.0'" in str(exc_info.value)
 
 
 def test_load_package_registry_uses_runtime_version_from_config_by_default(tmp_path, monkeypatch):

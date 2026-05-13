@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from .discovery import discover_package_manifests
-from .models import PackageManifest
+from .models import PackageDependency, PackageManifest
 from .paths import get_runtime_packages_dir
 
 _SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
@@ -47,6 +47,35 @@ def _runtime_version_is_compatible(
         <= runtime_core
         <= _parse_core_semver(manifest.max_runtime_version)
     )
+
+
+def _dependency_version_is_compatible(
+    dependency: PackageDependency,
+    loaded_version: str,
+) -> bool:
+    loaded_core = _parse_core_semver(loaded_version)
+    for raw_clause in dependency.version_range.split(","):
+        clause = raw_clause.strip()
+        operator = "=="
+        version_text = clause
+        for candidate in (">=", "<=", "==", ">", "<", "="):
+            if clause.startswith(candidate):
+                operator = "==" if candidate == "=" else candidate
+                version_text = clause[len(candidate):]
+                break
+
+        required_core = _parse_core_semver(version_text)
+        if operator == "==" and loaded_core != required_core:
+            return False
+        if operator == ">=" and loaded_core < required_core:
+            return False
+        if operator == "<=" and loaded_core > required_core:
+            return False
+        if operator == ">" and loaded_core <= required_core:
+            return False
+        if operator == "<" and loaded_core >= required_core:
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -96,6 +125,22 @@ class PackageRegistry:
     def get_package(self, package_id: str) -> LoadedPackage | None:
         """Return one loaded package by ID, if present."""
         return self.packages_by_id.get(package_id)
+
+    def package_declares_dependency(
+        self,
+        source_package_id: str,
+        target_package_id: str,
+    ) -> bool:
+        """Return whether one loaded package declares a dependency on another."""
+        if source_package_id == target_package_id:
+            return True
+        source_package = self.get_package(source_package_id)
+        if source_package is None:
+            return False
+        return any(
+            dependency.package_id == target_package_id
+            for dependency in source_package.manifest.dependencies
+        )
 
     def raise_for_validation_errors(self) -> None:
         """Raise a single actionable error if registry validation failed."""
@@ -219,6 +264,27 @@ def load_package_registry(
                 manifest=manifest,
             )
         )
+
+    loaded_by_id = {package.package_id: package for package in loaded_packages}
+    for package in loaded_packages:
+        for dependency in package.manifest.dependencies:
+            dependency_package = loaded_by_id.get(dependency.package_id)
+            if dependency_package is None:
+                validation_errors.append(
+                    f"Package '{package.package_id}' declares dependency "
+                    f"'{dependency.package_id}' but it is not loaded"
+                )
+                continue
+            if not _dependency_version_is_compatible(
+                dependency,
+                dependency_package.version,
+            ):
+                validation_errors.append(
+                    f"Package '{package.package_id}' requires "
+                    f"'{dependency.package_id}' version "
+                    f"'{dependency.version_range}', but loaded version is "
+                    f"'{dependency_package.version}'"
+                )
 
     registry = PackageRegistry(
         packages_dir=resolved_packages_dir,

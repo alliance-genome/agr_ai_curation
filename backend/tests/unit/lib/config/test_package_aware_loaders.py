@@ -35,6 +35,69 @@ def _write_package_manifest(package_dir: Path, payload: dict) -> None:
     (package_dir / "requirements" / "runtime.txt").write_text("", encoding="utf-8")
 
 
+def _write_agent_bundle(
+    package_dir: Path,
+    folder_name: str,
+    *,
+    agent_id: str,
+    name: str,
+) -> None:
+    agent_dir = package_dir / "agents" / folder_name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "agent.yaml").write_text(
+        f"agent_id: {agent_id}\nname: {name}\n",
+        encoding="utf-8",
+    )
+    (agent_dir / "prompt.yaml").write_text("content: Demo prompt\n", encoding="utf-8")
+
+
+def test_package_scoped_agent_lookup_allows_duplicate_agent_ids(tmp_path):
+    packages_dir = tmp_path / "packages"
+    first_package = packages_dir / "first"
+    second_package = packages_dir / "second"
+    for package_dir, package_id, bundle_name in (
+        (first_package, "org.first", "first_validator"),
+        (second_package, "org.second", "second_validator"),
+    ):
+        _write_package_manifest(
+            package_dir,
+            {
+                "package_id": package_id,
+                "display_name": package_id,
+                "version": "1.0.0",
+                "package_api_version": "1.0.0",
+                "min_runtime_version": "1.0.0",
+                "max_runtime_version": "2.0.0",
+                "python_package_root": f"python/src/{package_id.replace('.', '_')}",
+                "requirements_file": "requirements/runtime.txt",
+                "agent_bundles": [{"name": bundle_name}],
+            },
+        )
+        _write_agent_bundle(
+            package_dir,
+            bundle_name,
+            agent_id="shared_validator",
+            name=f"{package_id} validator",
+        )
+
+    agent_loader.load_agent_definitions(packages_dir, force_reload=True)
+
+    first_agent = agent_loader.get_agent_definition_for_package(
+        "org.first",
+        "shared_validator",
+    )
+    second_agent = agent_loader.get_agent_definition_for_package(
+        "org.second",
+        "shared_validator",
+    )
+    assert first_agent is not None
+    assert second_agent is not None
+    assert first_agent.folder_name == "first_validator"
+    assert second_agent.folder_name == "second_validator"
+    assert first_agent.package_id == "org.first"
+    assert second_agent.package_id == "org.second"
+
+
 def test_load_agent_definitions_raises_clear_error_for_missing_package_agent_yaml(tmp_path):
     packages_dir = tmp_path / "packages"
     package_dir = packages_dir / "demo_core"
