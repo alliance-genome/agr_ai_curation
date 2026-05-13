@@ -159,12 +159,6 @@ function blockerAllowsCuratorOverride(
   return blocker.details.allow_opt_out === true
 }
 
-function blockerRequiresOverrideReason(
-  blocker: CurationSubmissionReadinessBlocker,
-): boolean {
-  return blocker.details.opt_out_reason_required === true
-}
-
 function blockerPolicyLabels(blocker: CurationSubmissionReadinessBlocker): string[] {
   const labels: string[] = []
   const code = blocker.code ?? ''
@@ -272,14 +266,6 @@ function BlockerList({
                     size="small"
                     variant="outlined"
                   />
-                  {blockerRequiresOverrideReason(blocker) ? (
-                    <Chip
-                      color="warning"
-                      label="Reason required"
-                      size="small"
-                      variant="outlined"
-                    />
-                  ) : null}
                 </Stack>
               ) : null}
             </Stack>
@@ -515,7 +501,7 @@ export default function SubmissionPreviewDialog({
           {!loading && response && mode === 'direct_submit' && blockedCount > 0 ? (
             <Alert severity="warning">
               Resolve readiness blockers before submission. Curator overrides only unblock when
-              metadata allows them and a reason is saved.
+              metadata allows them.
             </Alert>
           ) : null}
 

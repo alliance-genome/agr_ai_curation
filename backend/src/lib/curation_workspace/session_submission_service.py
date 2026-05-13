@@ -321,8 +321,6 @@ def _readiness_blocker_details(
     metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
     if any(_metadata_allows_curator_override(metadata) for metadata in metadata_sources):
         normalized["allow_opt_out"] = True
-    if any(_metadata_override_requires_reason(metadata) for metadata in metadata_sources):
-        normalized["opt_out_reason_required"] = True
     return normalized
 
 
@@ -443,21 +441,6 @@ def _metadata_allows_curator_override(metadata: Mapping[str, Any]) -> bool:
     return False
 
 
-def _metadata_override_requires_reason(metadata: Mapping[str, Any]) -> bool:
-    if metadata.get("opt_out_reason_required") is True:
-        return True
-    if metadata.get("reason_required") is True:
-        return True
-    for key in ("curator_override", "override", "validation"):
-        raw_policy = metadata.get(key)
-        if isinstance(raw_policy, Mapping) and (
-            raw_policy.get("reason_required") is True
-            or raw_policy.get("opt_out_reason_required") is True
-        ):
-            return True
-    return False
-
-
 def _field_allows_curator_override(
     field_definition: DomainPackFieldDefinition | None,
     field_policy: FieldValidationPolicy | None = None,
@@ -468,22 +451,6 @@ def _field_allows_curator_override(
     ):
         return True
     return field_policy is not None and field_policy.allow_opt_out
-
-
-def _field_override_requires_reason(
-    field_definition: DomainPackFieldDefinition | None,
-    field_policy: FieldValidationPolicy | None = None,
-) -> bool:
-    if (
-        field_definition is not None
-        and _metadata_override_requires_reason(field_definition.metadata)
-    ):
-        return True
-    return (
-        field_policy is not None
-        and field_policy.allow_opt_out
-        and field_policy.opt_out_reason_required
-    )
 
 
 def _curator_override_for_field(
@@ -524,10 +491,7 @@ def _curator_override_satisfies_policy(
         field_policy,
     ):
         return False
-    if not _field_override_requires_reason(field_definition, field_policy):
-        return True
-    reason = override.get("reason") or override.get("opt_out_reason")
-    return isinstance(reason, str) and bool(reason.strip())
+    return True
 
 
 def _definition_state_blockers(

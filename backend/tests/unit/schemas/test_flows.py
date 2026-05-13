@@ -77,7 +77,6 @@ def make_validation_attachment(**overrides) -> dict:
         "export_blocking": True,
         "default_enabled": True,
         "allow_opt_out": True,
-        "opt_out_reason_required": False,
         "enabled": True,
     }
     attachment.update(overrides)
@@ -356,8 +355,8 @@ class TestFlowDefinitionOtherValidations:
         )
         assert flow.nodes[1].data.validation_attachments[0].enabled is True
 
-    def test_required_validation_opt_out_can_skip_reason_by_default(self):
-        """Required/export-blocking opt-outs do not need reasons by default."""
+    def test_required_validation_opt_out_can_be_disabled_when_policy_allows(self):
+        """Required/export-blocking validators can be disabled when policy allows."""
         flow_data = {
             "version": "1.0",
             "nodes": [
@@ -367,7 +366,7 @@ class TestFlowDefinitionOtherValidations:
                     "gene_extractor",
                     "gene_output",
                     validation_attachments=[
-                        make_validation_attachment(enabled=False, opt_out_reason="")
+                        make_validation_attachment(enabled=False)
                     ],
                 ),
             ],
@@ -378,63 +377,6 @@ class TestFlowDefinitionOtherValidations:
         flow = FlowDefinition(**flow_data)
 
         assert flow.nodes[1].data.validation_attachments[0].enabled is False
-        assert flow.nodes[1].data.validation_attachments[0].opt_out_reason is None
-
-    def test_validation_opt_out_requires_reason_when_policy_requests_it(self):
-        """Domain-pack metadata can explicitly require a persisted opt-out reason."""
-        flow_data = {
-            "version": "1.0",
-            "nodes": [
-                make_task_input_node("task_1", "Extract genes"),
-                make_agent_node(
-                    "n1",
-                    "gene_extractor",
-                    "gene_output",
-                    validation_attachments=[
-                        make_validation_attachment(
-                            enabled=False,
-                            opt_out_reason="",
-                            opt_out_reason_required=True,
-                        )
-                    ],
-                ),
-            ],
-            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
-            "entry_node_id": "task_1",
-        }
-
-        with pytest.raises(ValidationError) as exc_info:
-            FlowDefinition(**flow_data)
-
-        assert "opt_out_reason is required" in str(exc_info.value)
-
-    def test_required_validation_opt_out_reason_round_trips(self):
-        """Allowed opt-outs should normalize and persist their curator reason."""
-        flow_data = {
-            "version": "1.0",
-            "nodes": [
-                make_task_input_node("task_1", "Extract genes"),
-                make_agent_node(
-                    "n1",
-                    "gene_extractor",
-                    "gene_output",
-                    validation_attachments=[
-                        make_validation_attachment(
-                            enabled=False,
-                            opt_out_reason="  Paper has no stable external ID yet.  ",
-                        )
-                    ],
-                ),
-            ],
-            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
-            "entry_node_id": "task_1",
-        }
-
-        flow = FlowDefinition(**flow_data)
-
-        assert flow.nodes[1].data.validation_attachments[0].opt_out_reason == (
-            "Paper has no stable external ID yet."
-        )
 
     def test_required_validation_cannot_be_disabled_without_policy(self):
         """Required/export-blocking validators need explicit opt-out policy."""
@@ -450,7 +392,6 @@ class TestFlowDefinitionOtherValidations:
                         make_validation_attachment(
                             enabled=False,
                             allow_opt_out=False,
-                            opt_out_reason="Curator reason",
                         )
                     ],
                 ),

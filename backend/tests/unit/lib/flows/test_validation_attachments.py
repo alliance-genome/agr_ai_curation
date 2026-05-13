@@ -84,7 +84,7 @@ def test_apply_defaults_selects_active_and_keeps_planned_blocked_visible():
     )
 
 
-def test_apply_defaults_preserves_allowed_opt_out_reason():
+def test_apply_defaults_preserves_allowed_opt_out_selection():
     agent_registry = {
         "fixture_extractor": {
             "curation": {"domain_pack_id": "agr" + ".alliance.chemical_condition"}
@@ -101,7 +101,6 @@ def test_apply_defaults_preserves_allowed_opt_out_reason():
     )
 
     opt_out_attachment.enabled = False
-    opt_out_attachment.opt_out_reason = "Curator confirmed this paper needs manual lookup."
 
     hydrated = apply_flow_validation_attachment_defaults(
         _flow_definition(
@@ -117,9 +116,6 @@ def test_apply_defaults_preserves_allowed_opt_out_reason():
     )
 
     assert updated_attachment.enabled is False
-    assert updated_attachment.opt_out_reason == (
-        "Curator confirmed this paper needs manual lookup."
-    )
 
 
 def test_apply_defaults_rejects_unknown_attachment_ids():
@@ -162,7 +158,6 @@ def test_validation_schedule_splits_active_opt_out_and_inactive_metadata():
                     "scope": "field",
                     "enabled": False,
                     "required": True,
-                    "opt_out_reason": "Manual review",
                 },
                 {
                     "attachment_id": "planned",

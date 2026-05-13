@@ -94,7 +94,6 @@ class ValidatorBinding:
     blocking: bool = False
     required: bool = False
     allow_opt_out: bool = False
-    opt_out_reason_required: bool = False
     required_only: bool = False
     applies_to_domain_pack_id: str | None = None
     object_types: tuple[str, ...] = ()
@@ -124,7 +123,6 @@ class ValidatorBinding:
             "blocking": self.blocking,
             "required": self.required,
             "allow_opt_out": self.allow_opt_out,
-            "opt_out_reason_required": self.opt_out_reason_required,
         }
         optional_values = {
             "display_name": self.display_name,
@@ -186,7 +184,6 @@ class ValidationAttachmentOption:
     export_blocking: bool = False
     default_enabled: bool = False
     allow_opt_out: bool = False
-    opt_out_reason_required: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Return JSON-serializable option metadata for APIs and flow payloads."""
@@ -216,7 +213,6 @@ class ValidationAttachmentOption:
             "export_blocking": self.export_blocking,
             "default_enabled": self.default_enabled,
             "allow_opt_out": self.allow_opt_out,
-            "opt_out_reason_required": self.opt_out_reason_required,
         }
         return {key: value for key, value in payload.items() if value is not None}
 
@@ -240,7 +236,6 @@ class FieldValidationPolicy:
     validator_binding_ids: tuple[str, ...] = ()
     blocking_validator_binding_ids: tuple[str, ...] = ()
     allow_opt_out: bool = False
-    opt_out_reason_required: bool = False
 
     def identity_details(self) -> dict[str, Any]:
         """Return stable structured details suitable for findings."""
@@ -255,7 +250,6 @@ class FieldValidationPolicy:
             "export_blocking": self.export_blocking,
             "definition_state": self.definition_state.value,
             "allow_opt_out": self.allow_opt_out,
-            "opt_out_reason_required": self.opt_out_reason_required,
         }
         if self.object_role:
             details["object_role"] = self.object_role
@@ -670,10 +664,6 @@ def _collect_validator_bindings(
                 blocking=blocking,
                 required=required,
                 allow_opt_out=allow_opt_out,
-                opt_out_reason_required=_optional_bool_with_default(
-                    raw_item.get("opt_out_reason_required"),
-                    False,
-                ),
                 required_only=_optional_bool(raw_item.get("required_only")),
                 applies_to_domain_pack_id=_optional_string(
                     applies_to.get("domain_pack_id", raw_item.get("domain_pack_id"))
@@ -1098,9 +1088,6 @@ def _build_field_policies(
                     ),
                     blocking_validator_binding_ids=blocking_binding_ids,
                     allow_opt_out=bool(opt_out_bindings),
-                    opt_out_reason_required=any(
-                        binding.opt_out_reason_required for binding in opt_out_bindings
-                    ),
                 )
             )
     return tuple(sorted(policies, key=lambda item: (item.object_type, item.field_path)))
@@ -1197,7 +1184,6 @@ def _binding_attachment_option(
     required = active and binding.required
     blocks_export = active and bool(export_blocking)
     allow_opt_out = active and binding.allow_opt_out
-    opt_out_reason_required = active and allow_opt_out and binding.opt_out_reason_required
 
     validator_id = (
         binding.validator
@@ -1249,7 +1235,6 @@ def _binding_attachment_option(
         export_blocking=blocks_export,
         default_enabled=active,
         allow_opt_out=allow_opt_out,
-        opt_out_reason_required=opt_out_reason_required,
     )
 
 

@@ -279,7 +279,10 @@ When adding a new tool that agents reference:
 1. For a standalone install or custom org package, create the tool module inside the package's `python/src/.../tools/` tree and declare it in that package's `tools/bindings.yaml`.
 2. For shipped-package maintenance, update `packages/alliance/python/src/agr_ai_curation_alliance/tools/` and `packages/alliance/tools/bindings.yaml`, keeping the repo mirror docs aligned.
 3. Only edit `catalog_service.py` or the package runtime modules when the runtime needs new binding semantics, validation, or resolver behavior.
-4. See [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md) for the package-authoring walkthrough.
+4. If the tool wraps an upstream client or shared dependency, complete the
+   dependency-backed activation gate in [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md)
+   before granting agents access or marking dependent validators active.
+5. See [ADDING_NEW_TOOL.md](./ADDING_NEW_TOOL.md) for the package-authoring walkthrough.
 
 ### Tool Resolution at Runtime
 

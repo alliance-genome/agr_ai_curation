@@ -84,7 +84,6 @@ describe('FlowNode', () => {
               export_blocking: true,
               default_enabled: true,
               allow_opt_out: false,
-              opt_out_reason_required: false,
               enabled: true,
             },
             {
@@ -97,7 +96,6 @@ describe('FlowNode', () => {
               export_blocking: false,
               default_enabled: false,
               allow_opt_out: false,
-              opt_out_reason_required: false,
               enabled: false,
             },
             {
@@ -110,7 +108,6 @@ describe('FlowNode', () => {
               export_blocking: false,
               default_enabled: false,
               allow_opt_out: false,
-              opt_out_reason_required: false,
               enabled: false,
             },
           ],

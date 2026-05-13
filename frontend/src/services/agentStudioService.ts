@@ -74,7 +74,6 @@ export interface ValidationAttachmentOption {
   export_blocking: boolean
   default_enabled: boolean
   allow_opt_out: boolean
-  opt_out_reason_required: boolean
 }
 
 export interface DomainEnvelopeSchemaRef {

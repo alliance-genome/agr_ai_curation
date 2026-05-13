@@ -564,8 +564,7 @@ def _museum_pack_text(
 ) -> str:
     title_metadata = (
         """
-          allow_curator_override: true
-          opt_out_reason_required: true"""
+          allow_curator_override: true"""
         if allow_title_override
         else " {}"
     )
@@ -585,8 +584,7 @@ metadata:
           field_types:
             - string
         blocking: true
-        allow_opt_out: true
-        opt_out_reason_required: true"""
+        allow_opt_out: true"""
         if title_binding_allows_opt_out
         else ""
     )
@@ -2717,9 +2715,9 @@ def test_submission_export_allows_missing_required_field_with_curator_override_p
     readiness = response.submission.readiness[0]
     assert readiness.ready is True
     assert readiness.blockers == []
-    assert readiness.warnings == [
-        "Curator override accepted for export-blocking field artifact.title."
-    ]
+    assert "Curator override accepted for export-blocking field artifact.title." in (
+        readiness.warnings
+    )
 
 
 def test_submission_export_allows_binding_policy_curator_override(
@@ -2756,12 +2754,12 @@ def test_submission_export_allows_binding_policy_curator_override(
     readiness = response.submission.readiness[0]
     assert readiness.ready is True
     assert readiness.blockers == []
-    assert readiness.warnings == [
-        "Curator override accepted for export-blocking field artifact.title."
-    ]
+    assert "Curator override accepted for export-blocking field artifact.title." in (
+        readiness.warnings
+    )
 
 
-def test_submission_export_blocks_binding_policy_override_without_required_reason(
+def test_submission_export_allows_binding_policy_curator_override_without_reason(
     db_session,
     tmp_path,
     monkeypatch,
@@ -2791,13 +2789,12 @@ def test_submission_export_blocks_binding_policy_override_without_required_reaso
         ),
     )
 
-    blocker = response.submission.readiness[0].blockers[0]
-    assert blocker.code == "domain_envelope.curator_override_not_allowed"
-    assert blocker.details["allow_opt_out"] is True
-    assert blocker.details["opt_out_reason_required"] is True
-    assert blocker.details["blocking_validator_binding_ids"] == [
-        "museum.title_catalog_check"
-    ]
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is True
+    assert readiness.blockers == []
+    assert "Curator override accepted for export-blocking field artifact.title." in (
+        readiness.warnings
+    )
 
 
 def test_submission_export_blocks_open_export_blocking_validation_findings(
@@ -2833,7 +2830,6 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
                     },
                     "validation_metadata": {
                         "allow_curator_override": True,
-                        "reason_required": True,
                     },
                 },
             )
@@ -2861,7 +2857,6 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
         "catalog_schema": {"class": "Artifact", "field": "title"}
     }
     assert blocker.details["allow_opt_out"] is True
-    assert blocker.details["opt_out_reason_required"] is True
 
 
 def test_submission_export_allows_waived_finding_with_field_override_policy(
@@ -2953,7 +2948,6 @@ def test_submission_export_allows_waived_finding_with_binding_validation_metadat
                         "validator_binding_id": "museum.title_catalog_check",
                         "binding_state": "active",
                         "allow_opt_out": True,
-                        "opt_out_reason_required": True,
                     }
                 },
             )

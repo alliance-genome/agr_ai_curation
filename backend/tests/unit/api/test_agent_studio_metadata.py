@@ -61,7 +61,6 @@ class TestGetRegistryMetadata:
                     "export_blocking": True,
                     "default_enabled": True,
                     "allow_opt_out": False,
-                    "opt_out_reason_required": False,
                 }
             ],
         )

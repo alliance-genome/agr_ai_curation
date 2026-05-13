@@ -122,11 +122,10 @@ metadata:
             - curatable_unit
           field_paths:
             - gene.identifier
-          field_types:
+        field_types:
             - string
         blocking: true
         allow_opt_out: true
-        opt_out_reason_required: true
       - binding_id: fixture.optional_confidence_check
         validation_kind: enum_value_check
         required: false
@@ -221,7 +220,6 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
     assert identifier_policy.required is True
     assert identifier_policy.export_blocking is True
     assert identifier_policy.allow_opt_out is True
-    assert identifier_policy.opt_out_reason_required is True
 
     metadata_only_matches = registry.match_bindings(
         _envelope(object_role="metadata_only"),
@@ -263,7 +261,6 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     assert identifier_option.export_blocking is True
     assert identifier_option.default_enabled is True
     assert identifier_option.allow_opt_out is True
-    assert identifier_option.opt_out_reason_required is True
 
     callable_option = by_id[
         "fixture.validation:binding:fixture.callable_validator:object:GeneAssertion:*"
@@ -271,7 +268,6 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     assert callable_option.required is False
     assert callable_option.default_enabled is True
     assert callable_option.allow_opt_out is True
-    assert callable_option.opt_out_reason_required is False
 
     optional_option = by_id[
         "fixture.validation:binding:fixture.optional_confidence_check:field:GeneAssertion:confidence"

@@ -160,6 +160,54 @@ Repo-maintainer note:
 
 ---
 
+## Dependency-Backed Tool Activation Gate
+
+A branch, local clone, or live database probe can prove that a helper method is
+possible, but agents cannot depend on that capability until it is available
+through the AI Curation tool path end to end. This matters for validator tools
+especially: a domain-pack validator binding must remain `under_development`
+until the agent-visible tool surface, prompt, schema, and tests all exist.
+
+For any tool that wraps an upstream client or shared dependency, complete this
+gate before granting an agent access to the new capability or marking a
+dependent validator binding `active`:
+
+1. Merge and release, or otherwise pin, the upstream dependency change.
+2. Update backend dependencies and lockfiles when the backend imports that
+   dependency. For the Alliance curation client this means
+   `backend/requirements.txt` and `backend/requirements.lock.txt`.
+3. Update the package runtime dependency file used by isolated package tools.
+   For the shipped Alliance package this means
+   `packages/alliance/requirements/runtime.txt`.
+4. Expose the helper through a package-owned tool wrapper. For shipped Alliance
+   curation DB/API helpers, extend
+   `packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py`
+   or add a new package-owned tool module.
+5. Export that wrapper through `tools/bindings.yaml`; for shipped Alliance tools,
+   update `packages/alliance/tools/bindings.yaml`.
+6. Grant the tool to the consuming agent in `agent.yaml` or the custom agent's
+   DB `tool_ids`.
+7. Update the consuming prompt so it explains when and how to call the helper,
+   including the lookup ladder, ambiguity behavior, and when to stop unresolved.
+8. Update the consuming output schema so it can return the fields the prompt
+   promises and any domain-pack binding declares in `expected_result_fields`.
+9. Add unit tests for the package tool wrapper, using mocked upstream-client
+   responses where practical.
+10. Add contract, integration, or focused runtime tests proving the consuming
+    agent/validator can call the exposed tool surface and project the declared
+    result fields.
+
+For example, a new `agr_curation_api_client` method that can search references
+by PMID or title is not enough by itself. A `reference_validation` agent should
+not depend on it until the released or pinned client is consumed by both backend
+and package runtime dependencies, the method is exposed through
+`agr_curation_query` or a new package tool, `reference_validation/agent.yaml`
+lists that tool, the prompt describes the lookup path, the schema returns
+reference fields such as `reference_id`, `curie`, `title`, candidates, and
+lookup attempts, and tests cover the full path.
+
+---
+
 ## Step 3: Reference in Agent Configuration
 
 Add the tool to your agent's `tools` list. This can be done in:
@@ -504,6 +552,10 @@ def test_my_tool_empty_query():
 - [ ] Error handling returns dict (not raises)
 - [ ] `tools/bindings.yaml` export added with correct `binding_kind` and `required_context`
 - [ ] Tool added to a package-owned agent `tools` list in `agent.yaml` or to `tool_ids` in DB
+- [ ] Upstream dependencies are merged/released or pinned before agent use
+- [ ] Backend dependency files and package runtime dependency files are aligned when the tool uses a shared client
+- [ ] Consuming prompt explains when and how to use the tool
+- [ ] Consuming output schema can return the fields the prompt and bindings require
 - [ ] Binding metadata includes a useful description and source file (optional but recommended)
 - [ ] Backend restarted and tool verified in logs
 - [ ] Unit test written

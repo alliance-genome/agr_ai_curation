@@ -254,7 +254,6 @@ def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(mo
                                 "enabled": False,
                                 "required": False,
                                 "export_blocking": True,
-                                "opt_out_reason": "Curator reviewed manually.",
                             },
                             {
                                 "attachment_id": "planned-binding",

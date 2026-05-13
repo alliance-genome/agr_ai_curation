@@ -254,8 +254,6 @@ automatically. Planned and blocked validators remain visible metadata. Active
 validators are enabled by default and curator-opt-out by default so a flow can
 replace automatic validation with a custom validation step. Domain packs may
 explicitly forbid an opt-out with `allow_opt_out: false`.
-`opt_out_reason_required: true` is reserved for the uncommon cases where a pack
-deliberately wants a saved reason.
 
 Custom validation agents are regular flow steps. Their steering prompts are
 stored as normal node configuration and should target envelope objects, field

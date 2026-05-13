@@ -36,7 +36,6 @@ export type NodeType = 'agent' | 'decision' | 'output' | 'task_input'
 
 export interface ValidationAttachmentSelection extends ValidationAttachmentOption {
   enabled: boolean
-  opt_out_reason?: string
 }
 
 export interface FlowNodePosition {

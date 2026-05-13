@@ -94,6 +94,10 @@ Choose the path that matches your goal:
 - Standard install or org customization: add Python code plus `tools/bindings.yaml` to a runtime package under `~/.agr_ai_curation/runtime/packages/<package>/`.
 - Repository package maintenance: update the shipped tool sources in `packages/alliance/python/src/...` and `packages/alliance/tools/bindings.yaml`.
 - Runtime-internal development: only edit `backend/src/...` when the runtime itself needs new loader, resolver, or execution behavior.
+- Dependency-backed tools are not agent-ready until the upstream dependency is
+  released or pinned, backend and package runtime dependencies are aligned, the
+  package tool wrapper is exported, consuming agent prompts/schemas are updated,
+  and tests cover the end-to-end path.
 
 See [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) and
 [backend/tools/README.md](../../backend/tools/README.md) for details.

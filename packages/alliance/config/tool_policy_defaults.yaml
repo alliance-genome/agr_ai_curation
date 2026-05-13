@@ -9,4 +9,3 @@ tool_policies:
     config:
       validation_attachment_policy:
         reference_lookup_capable: true
-        opt_out_reason_required_for_required_validators: true

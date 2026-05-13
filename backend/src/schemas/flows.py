@@ -46,21 +46,11 @@ class FlowValidationAttachmentSelection(BaseModel):
     export_blocking: bool = False
     default_enabled: bool = False
     allow_opt_out: bool = False
-    opt_out_reason_required: bool = False
     enabled: bool = False
-    opt_out_reason: Optional[str] = Field(None, max_length=1000)
 
     @model_validator(mode="after")
     def validate_attachment_policy(self) -> "FlowValidationAttachmentSelection":
         """Enforce explicit validator opt-out policy at persistence time."""
-
-        normalized_reason = (
-            self.opt_out_reason.strip()
-            if isinstance(self.opt_out_reason, str)
-            else None
-        )
-        if normalized_reason == "":
-            normalized_reason = None
 
         if self.state in {"planned", "blocked"} and self.enabled:
             raise ValueError(
@@ -76,13 +66,6 @@ class FlowValidationAttachmentSelection(BaseModel):
                 raise ValueError(
                     "this validator cannot be disabled by flow configuration"
                 )
-            if self.opt_out_reason_required and not normalized_reason:
-                raise ValueError(
-                    "opt_out_reason is required by validator policy when "
-                    "disabling this validator"
-                )
-
-        self.opt_out_reason = normalized_reason
         return self
 
 

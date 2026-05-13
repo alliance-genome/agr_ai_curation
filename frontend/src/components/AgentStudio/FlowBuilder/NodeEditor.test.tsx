@@ -101,7 +101,6 @@ describe('NodeEditor', () => {
     )
 
     fireEvent.click(screen.getByRole('checkbox'))
-    expect(screen.queryByPlaceholderText('Reason for disabling this validator')).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
 
     expect(onSave).toHaveBeenCalledWith('node_1', expect.any(Object))
@@ -110,37 +109,6 @@ describe('NodeEditor', () => {
       attachment_id: 'gene:lookup',
       enabled: false,
     }))
-    expect(savedAttachment).not.toHaveProperty('opt_out_reason')
-  })
-
-  it('requires a reason only when the attachment policy explicitly asks for one', () => {
-    metadataMocks.agents = {
-      gene_extractor: {
-        name: 'Gene Extractor',
-        icon: 'G',
-        category: 'Extraction',
-        domain_envelope: buildDomainEnvelopeMetadata(),
-      },
-    }
-    const onSave = vi.fn()
-
-    render(
-      <NodeEditor
-        node={buildNode({
-          validation_attachments: [
-            buildValidationAttachmentSelection({ opt_out_reason_required: true }),
-          ],
-        })}
-        onSave={onSave}
-        onClose={vi.fn()}
-        availableVariables={[]}
-      />
-    )
-
-    fireEvent.click(screen.getByRole('checkbox'))
-    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
-    expect(onSave).not.toHaveBeenCalled()
-    expect(screen.getByText('A reason is required for this opt-out.')).toBeInTheDocument()
   })
 
   it('separates read-only validation metadata from actionable validator checkboxes', () => {

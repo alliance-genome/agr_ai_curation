@@ -279,7 +279,6 @@ export interface CurationCandidateSubmissionReadiness {
 export interface CurationSubmissionReadinessBlockerDetails {
   [key: string]: unknown
   allow_opt_out?: boolean
-  opt_out_reason_required?: boolean
   required?: boolean
   export_blocking?: boolean
   finding_id?: string

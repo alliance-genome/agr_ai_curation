@@ -121,7 +121,6 @@ def _validation_attachment(
     required: bool = True,
     export_blocking: bool = False,
     validator_binding_id: str | None = "binding-1",
-    opt_out_reason: str | None = None,
 ) -> dict:
     return {
         "attachment_id": attachment_id,
@@ -135,7 +134,6 @@ def _validation_attachment(
         "required": required,
         "export_blocking": export_blocking,
         "enabled": enabled,
-        **({"opt_out_reason": opt_out_reason} if opt_out_reason else {}),
     }
 
 
@@ -1026,7 +1024,6 @@ class TestGetAllAgentToolsStepOrderRuntime:
                         "manual-opt-out",
                         enabled=False,
                         export_blocking=True,
-                        opt_out_reason="Curator disabled for manual review.",
                     ),
                     _validation_attachment(
                         "planned-lookup",
@@ -1362,7 +1359,6 @@ class TestBuildSupervisorCustomInstructions:
                         "manual-opt-out",
                         enabled=False,
                         export_blocking=True,
-                        opt_out_reason="Manual lookup required.",
                     ),
                     _validation_attachment(
                         "planned-lookup",

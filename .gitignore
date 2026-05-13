@@ -123,6 +123,7 @@ scripts/testing/test_*.sh
 *secrets*
 scripts/local_db_tunnel.sh
 scripts/local_db_tunnel_env.sh
+scripts/literature_db_tunnel_env.sh
 
 # Backup files
 *.tar.gz

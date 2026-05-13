@@ -118,7 +118,6 @@ const buildDefaultValidationSelections = (
   agentMetadata[agentId]?.validation_attachments?.map((attachment) => ({
     ...attachment,
     enabled: attachment.default_enabled,
-    opt_out_reason: undefined,
   })) ?? []
 )
 

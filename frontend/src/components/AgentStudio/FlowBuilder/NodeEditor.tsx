@@ -183,15 +183,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const customInstructionsTooltip = isValidationAgentNode
     ? 'Use this prompt to focus a validation agent on a specific envelope object, field path, or curator concern. It is saved with this flow step.'
     : 'These instructions take the highest priority and override the agent\'s base prompt and group rules for this flow step. Use them to add constraints or focus the agent\'s behavior.'
-  const missingOptOutReason = validationAttachments.some(
-    (attachment) => (
-      attachment.state === 'active'
-      && !attachment.enabled
-      && attachment.allow_opt_out
-      && attachment.opt_out_reason_required
-      && !attachment.opt_out_reason?.trim()
-    )
-  )
   const actionableValidationAttachments = validationAttachments.filter(
     (attachment) => attachment.state === 'active' && Boolean(attachment.validator_binding_id)
   )
@@ -228,7 +219,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   const handleSave = () => {
     if (!node) return
     if (customInputError) return
-    if (missingOptOutReason) return
 
     const nextIncludeEvidence = agentMetadataEntry
       ? resolveOutputFormatterIncludeEvidence(
@@ -271,14 +261,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
     setValidationAttachments((current) => current.map((attachment) => (
       attachment.attachment_id === attachmentId
         ? { ...attachment, enabled }
-        : attachment
-    )))
-  }
-
-  const handleValidationReasonChange = (attachmentId: string, optOutReason: string) => {
-    setValidationAttachments((current) => current.map((attachment) => (
-      attachment.attachment_id === attachmentId
-        ? { ...attachment, opt_out_reason: optOutReason }
         : attachment
     )))
   }
@@ -465,12 +447,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                   const canToggle = attachment.state === 'active'
                     && hasBinding
                     && attachment.allow_opt_out
-                  const showReason = attachment.state === 'active'
-                    && !attachment.enabled
-                    && attachment.allow_opt_out
-                    && attachment.opt_out_reason_required
-                  const reasonError = showReason
-                    && !attachment.opt_out_reason?.trim()
                   const stateColor: 'success' | 'warning' | 'error' = attachment.state === 'active'
                     ? 'success'
                     : attachment.state === 'planned'
@@ -564,21 +540,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                           )}
                         </Box>
                       </Box>
-                      {showReason && (
-                        <TextField
-                          fullWidth
-                          size="small"
-                          value={attachment.opt_out_reason || ''}
-                          onChange={(event) => handleValidationReasonChange(
-                            attachment.attachment_id,
-                            event.target.value
-                          )}
-                          placeholder="Reason for disabling this validator"
-                          error={reasonError}
-                          helperText={reasonError ? 'A reason is required for this opt-out.' : undefined}
-                          sx={{ mt: 1 }}
-                        />
-                      )}
                     </Box>
                   )
                 })}
@@ -874,7 +835,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
           size="small"
           startIcon={<SaveIcon />}
           onClick={handleSave}
-          disabled={customInputError || missingOptOutReason}
+          disabled={customInputError}
         >
           Apply
         </Button>

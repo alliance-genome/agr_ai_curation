@@ -23,7 +23,6 @@ export function buildValidationAttachmentOption(
     export_blocking: true,
     default_enabled: true,
     allow_opt_out: true,
-    opt_out_reason_required: false,
     ...overrides,
   }
 }

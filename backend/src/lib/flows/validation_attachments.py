@@ -113,8 +113,6 @@ def apply_flow_validation_attachment_defaults(
             payload["enabled"] = (
                 existing.enabled if existing is not None else option.default_enabled
             )
-            if existing is not None and existing.opt_out_reason:
-                payload["opt_out_reason"] = existing.opt_out_reason
             selections.append(FlowValidationAttachmentSelection(**payload))
 
         node.data.validation_attachments = selections
@@ -238,8 +236,6 @@ def _schedule_entry(attachment: Mapping[str, Any]) -> dict[str, Any]:
         "required",
         "export_blocking",
         "allow_opt_out",
-        "opt_out_reason_required",
-        "opt_out_reason",
         "blocked_by",
         "reason",
     )
