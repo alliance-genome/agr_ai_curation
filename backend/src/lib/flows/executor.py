@@ -44,7 +44,7 @@ from src.lib.curation_workspace import (
 )
 from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
 from src.lib.curation_workspace.curation_prep_service import (
-    _ensure_domain_envelope_materialization,
+    ensure_domain_envelope_materialization,
 )
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.curation_prep_constants import (
@@ -67,7 +67,7 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.lib.domain_packs.validation_supervisor import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import (
-    _run_package_scoped_validator_agent,
+    run_package_scoped_validator_agent,
     unresolved_validator_result_for_dispatch_problem,
     validator_result_from_agent_output,
 )
@@ -927,7 +927,7 @@ async def _collect_flow_validator_materialization_inputs(
                         source_envelope_revision=source_envelope_revision,
                     )
                 else:
-                    raw_output = _run_package_scoped_validator_agent(
+                    raw_output = run_package_scoped_validator_agent(
                         request,
                         binding=match.binding,
                     )
@@ -1019,7 +1019,7 @@ async def _execute_validation_groups_for_step(
     if not persisted_records:
         raise RuntimeError("Validation groups could not persist the source envelope.")
 
-    source_ref = _ensure_domain_envelope_materialization(
+    source_ref = ensure_domain_envelope_materialization(
         persisted_records[0],
         persist=True,
     )

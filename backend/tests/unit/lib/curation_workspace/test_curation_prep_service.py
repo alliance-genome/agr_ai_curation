@@ -271,7 +271,7 @@ async def test_run_curation_prep_selects_envelope_refs_and_persists_output(monke
     object_db = object()
     monkeypatch.setattr(
         module,
-        "_ensure_domain_envelope_materialization",
+        "ensure_domain_envelope_materialization",
         _fake_ensure_domain_envelope_materialization,
     )
     monkeypatch.setattr(module, "persist_extraction_result", _fake_persist_extraction_result)
@@ -347,7 +347,7 @@ def test_summarize_curation_prep_scope_counts_materialized_envelope_rows(monkeyp
             review_row_count=3,
         )
 
-    monkeypatch.setattr(module, "_ensure_domain_envelope_materialization", _fake_ensure)
+    monkeypatch.setattr(module, "ensure_domain_envelope_materialization", _fake_ensure)
 
     summary = module.summarize_curation_prep_scope(
         [extraction_result],
@@ -452,7 +452,7 @@ async def test_run_curation_prep_allele_scope_uses_envelope_refs_not_prep_candid
     def _fake_persist(request, *, db=None):
         captured["request"] = request
 
-    monkeypatch.setattr(module, "_ensure_domain_envelope_materialization", _fake_ensure)
+    monkeypatch.setattr(module, "ensure_domain_envelope_materialization", _fake_ensure)
     monkeypatch.setattr(module, "persist_extraction_result", _fake_persist)
 
     prep_output = await module.run_curation_prep(

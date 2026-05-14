@@ -84,7 +84,7 @@ def dispatch_active_validator_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
-    agent_runner = runner or _run_package_scoped_validator_agent
+    agent_runner = runner or run_package_scoped_validator_agent
 
     selector_findings: list[ValidationFinding] = []
     materialization_items: list[ValidatorResultMaterializationInput] = []
@@ -203,7 +203,7 @@ def unresolved_validator_result_for_dispatch_problem(
     )
 
 
-def _run_package_scoped_validator_agent(
+def run_package_scoped_validator_agent(
     request: DomainValidationRequest,
     *,
     binding: ValidatorBinding,
@@ -384,6 +384,7 @@ __all__ = [
     "ActiveValidatorDispatchResult",
     "DomainValidatorAgentRunner",
     "dispatch_active_validator_bindings",
+    "run_package_scoped_validator_agent",
     "unresolved_validator_result_for_dispatch_problem",
     "validator_result_from_agent_output",
 ]
