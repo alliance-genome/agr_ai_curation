@@ -37,6 +37,11 @@ object_definitions:
     fields:
       - field_path: value
         field_type: string
+        metadata:
+          provider_refs:
+            fixture_provider:
+              schema_ref: fixture.schema
+              slot: value
       - field_path: aliases
         field_type: array
       - field_path: ref
@@ -167,6 +172,22 @@ def test_active_payload_selector_path_is_validated_at_registry_load(tmp_path: Pa
     )
 
     with pytest.raises(ValidationRegistryError, match="missing_value"):
+        DomainPackValidationRegistry.from_domain_pack(pack)
+
+
+def test_active_payload_selector_rejects_provider_slot_final_segment_guessing(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: bogus.value
+""",
+    )
+
+    with pytest.raises(ValidationRegistryError, match="bogus.value"):
         DomainPackValidationRegistry.from_domain_pack(pack)
 
 

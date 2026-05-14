@@ -1339,8 +1339,6 @@ def _provider_refs_ground_payload_path(
     object_definition: DomainPackObjectDefinition,
     field_path: str,
 ) -> bool:
-    path_parts = field_path.replace("[0]", "").split(".")
-    final_segment = path_parts[-1] if path_parts else field_path
     for field_definition in object_definition.fields:
         provider_refs = _metadata_provider_refs(field_definition.metadata)
         for provider_ref in provider_refs.values():
@@ -1350,7 +1348,7 @@ def _provider_refs_ground_payload_path(
                 continue
             for key in ("slot", "attribute"):
                 provider_path = provider_ref.get(key)
-                if provider_path in {field_path, final_segment}:
+                if provider_path == field_path:
                     return True
     return False
 
