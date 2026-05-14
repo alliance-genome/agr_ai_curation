@@ -74,6 +74,7 @@ def make_validation_attachment(**overrides) -> dict:
         "field_path": "gene.identifier",
         "field_type": "string",
         "required": True,
+        "blocking": True,
         "export_blocking": True,
         "default_enabled": True,
         "allow_opt_out": True,

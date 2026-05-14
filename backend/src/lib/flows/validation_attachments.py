@@ -365,7 +365,7 @@ def _resolved_validation_groups(
                     attachment_id=selection.attachment_id,
                     label=selection.label,
                     required=selection.required,
-                    blocking=selection.blocking or selection.export_blocking,
+                    blocking=selection.blocking,
                     allow_opt_out=selection.allow_opt_out,
                     sidecar_group=sidecar_group,
                 )

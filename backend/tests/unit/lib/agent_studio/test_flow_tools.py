@@ -322,6 +322,82 @@ def test_get_current_flow_handler_detects_parallel_and_disconnected_nodes():
     assert "Parallel flows not yet supported" in result["execution_order_markdown"]
 
 
+def test_get_current_flow_handler_ignores_validation_attachment_sidecar_edges():
+    handler = flow_tools._get_current_flow_handler()
+    flow_tools.set_current_flow_context(
+        {
+            "flow_name": "Validator Sidecar Flow",
+            "entry_node_id": "task_input_0",
+            "nodes": [
+                {
+                    "id": "task_input_0",
+                    "type": "task_input",
+                    "data": {
+                        "agent_id": "task_input",
+                        "agent_display_name": "Initial Instructions",
+                        "task_instructions": "Extract genes.",
+                        "output_key": "task_input",
+                    },
+                },
+                {
+                    "id": "extract_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "gene_extractor",
+                        "agent_display_name": "Gene Extraction",
+                        "output_key": "genes",
+                    },
+                },
+                {
+                    "id": "custom_validator_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "custom_gene_validator",
+                        "agent_display_name": "Custom Gene Validator",
+                        "output_key": "gene_validation",
+                    },
+                },
+                {
+                    "id": "output_1",
+                    "type": "agent",
+                    "data": {
+                        "agent_id": "chat_output",
+                        "agent_display_name": "Output",
+                        "output_key": "out",
+                    },
+                },
+            ],
+            "edges": [
+                {"source": "task_input_0", "target": "extract_1"},
+                {"source": "extract_1", "target": "output_1"},
+                {
+                    "source": "extract_1",
+                    "target": "custom_validator_1",
+                    "role": "validation_attachment",
+                    "satisfies_binding_id": "alliance.gene.identity",
+                },
+            ],
+        }
+    )
+
+    result = handler()
+
+    assert result["success"] is True
+    assert result["step_count"] == 3
+    assert result["disconnected_count"] == 0
+    assert result["has_critical_issues"] is False
+    assert [step["node_id"] for step in result["steps"]] == [
+        "task_input_0",
+        "extract_1",
+        "output_1",
+    ]
+    assert "Parallel flows not yet supported" not in result["execution_order_markdown"]
+    assert not any(
+        warning["node_id"] == "custom_validator_1"
+        for warning in result["validation_warnings"]
+    )
+
+
 def test_get_current_flow_handler_only_adds_preview_ellipsis_when_truncated():
     handler = flow_tools._get_current_flow_handler()
     flow_tools.set_current_flow_context(
