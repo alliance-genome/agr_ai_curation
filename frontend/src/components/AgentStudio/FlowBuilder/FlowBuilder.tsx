@@ -164,8 +164,6 @@ export const rebuildValidationGroupsFromEdges = (
   let changed = false
 
   const nextNodes = currentNodes.map((node) => {
-    if (!node.data.validation_attachments) return node
-
     const replacementsByBinding = new Map<string, { edgeId: string; target: string }>()
     currentEdges.forEach((edge) => {
       if (edgeRole(edge) !== 'validation_attachment' || edge.source !== node.id) return
@@ -177,8 +175,25 @@ export const rebuildValidationGroupsFromEdges = (
       })
     })
 
-    const validationGroups = node.data.validation_attachments.map((attachment) => {
-      const existingGroup = node.data.validation_groups?.find((group) => (
+    const validationAttachments = node.data.validation_attachments ?? []
+    const existingGroups = node.data.validation_groups ?? []
+
+    if (
+      validationAttachments.length === 0
+      && existingGroups.length === 0
+      && replacementsByBinding.size === 0
+    ) {
+      return node
+    }
+
+    const declaredBindingIds = new Set(
+      validationAttachments
+        .map((attachment) => attachment.validator_binding_id)
+        .filter((bindingId): bindingId is string => Boolean(bindingId))
+    )
+
+    const validationGroups: ValidationAttachmentGroup[] = validationAttachments.map((attachment) => {
+      const existingGroup = existingGroups.find((group) => (
         group.attachment_id === attachment.attachment_id
         || (attachment.validator_binding_id && group.binding_id === attachment.validator_binding_id)
       ))
@@ -208,16 +223,44 @@ export const rebuildValidationGroupsFromEdges = (
       }
     })
 
+    replacementsByBinding.forEach((replacement, bindingId) => {
+      if (declaredBindingIds.has(bindingId)) return
+
+      const existingGroup = existingGroups.find((group) => (
+        group.state === 'supplemental'
+        && (group.binding_id === bindingId || group.edge_id === replacement.edgeId)
+      ))
+
+      validationGroups.push({
+        group_id: existingGroup?.group_id ?? `edge:${replacement.edgeId}`,
+        state: 'supplemental',
+        binding_id: bindingId,
+        attachment_id: existingGroup?.attachment_id ?? null,
+        edge_id: replacement.edgeId,
+        validator_node_id: replacement.target,
+        replaces_attachment_id: existingGroup?.replaces_attachment_id,
+        label: existingGroup?.label,
+        required: false,
+        blocking: false,
+        allow_opt_out: false,
+      })
+    })
+
+    const nullableEqual = <T,>(left: T | null | undefined, right: T | null | undefined) => (
+      (left ?? undefined) === (right ?? undefined)
+    )
+
     if (
       node.data.validation_groups?.length === validationGroups.length
       && node.data.validation_groups.every((group, index) => (
         group.group_id === validationGroups[index].group_id
         && group.state === validationGroups[index].state
-        && group.binding_id === validationGroups[index].binding_id
-        && group.attachment_id === validationGroups[index].attachment_id
-        && group.edge_id === validationGroups[index].edge_id
-        && group.validator_node_id === validationGroups[index].validator_node_id
-        && group.label === validationGroups[index].label
+        && nullableEqual(group.binding_id, validationGroups[index].binding_id)
+        && nullableEqual(group.attachment_id, validationGroups[index].attachment_id)
+        && nullableEqual(group.edge_id, validationGroups[index].edge_id)
+        && nullableEqual(group.validator_node_id, validationGroups[index].validator_node_id)
+        && nullableEqual(group.replaces_attachment_id, validationGroups[index].replaces_attachment_id)
+        && nullableEqual(group.label, validationGroups[index].label)
         && group.required === validationGroups[index].required
         && group.blocking === validationGroups[index].blocking
         && group.allow_opt_out === validationGroups[index].allow_opt_out

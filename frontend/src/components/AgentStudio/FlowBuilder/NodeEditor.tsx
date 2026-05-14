@@ -186,6 +186,26 @@ const validationGroupStateLabel = (
   return attachment.enabled ? 'automatic' : 'skipped'
 }
 
+const supplementalGroupLabel = (group: ValidationAttachmentGroup) => (
+  group.label?.trim()
+    || (group.binding_id ? `Supplemental validator: ${group.binding_id}` : 'Supplemental validator')
+)
+
+const supplementalGroupTargetText = (group: ValidationAttachmentGroup) => {
+  if (group.replaces_attachment_id) return `Supplements attachment ${group.replaces_attachment_id}`
+  if (group.binding_id) return `Binding ${group.binding_id}`
+  return 'Validation attachment edge'
+}
+
+const supplementalGroupOwnerText = (group: ValidationAttachmentGroup) => {
+  const parts = [
+    group.validator_node_id ? `validator node ${group.validator_node_id}` : null,
+    group.edge_id ? `edge ${group.edge_id}` : null,
+  ].filter(Boolean)
+
+  return parts.length > 0 ? parts.join(' / ') : 'Custom supplemental validator'
+}
+
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
@@ -223,6 +243,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   )
   const metadataValidationAttachments = validationAttachments.filter(
     (attachment) => !(attachment.state === 'active' && Boolean(attachment.validator_binding_id))
+  )
+  const supplementalValidationGroups = (node?.data.validation_groups || []).filter(
+    (group) => group.state === 'supplemental'
+      && !validationAttachments.some((attachment) => (
+        (group.attachment_id && attachment.attachment_id === group.attachment_id)
+        || (group.binding_id && attachment.validator_binding_id === group.binding_id)
+      ))
   )
 
   // Initialize form when node changes
@@ -471,7 +498,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
 
         <Divider />
 
-        {validationAttachments.length > 0 && (
+        {(validationAttachments.length > 0 || supplementalValidationGroups.length > 0) && (
           <>
             <Box>
               <FieldLabel>
@@ -628,8 +655,85 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 </Box>
               )}
 
-              {metadataValidationAttachments.length > 0 && (
+              {supplementalValidationGroups.length > 0 && (
                 <Box sx={{ mt: actionableValidationAttachments.length > 0 ? 1.25 : 0 }}>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}
+                  >
+                    Supplemental validators are custom validation edges that add checks outside the declared automatic bindings.
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                    {supplementalValidationGroups.map((group) => (
+                      <Box
+                        key={group.group_id}
+                        sx={{
+                          border: (theme) => `1px solid ${alpha(theme.palette.info.main, 0.35)}`,
+                          borderRadius: 1,
+                          p: 0.85,
+                          backgroundColor: (theme) => alpha(theme.palette.info.main, 0.08),
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.75 }}>
+                          <Chip
+                            size="small"
+                            color="info"
+                            variant="outlined"
+                            label="supplemental"
+                            sx={{ height: 18, fontSize: '0.6rem', mt: 0.1, flexShrink: 0 }}
+                          />
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                fontSize: '0.72rem',
+                                fontWeight: 650,
+                                lineHeight: 1.3,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {supplementalGroupLabel(group)}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{
+                                display: 'block',
+                                mt: 0.2,
+                                fontSize: '0.63rem',
+                                lineHeight: 1.3,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {supplementalGroupTargetText(group)}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{
+                                display: 'block',
+                                mt: 0.15,
+                                fontSize: '0.61rem',
+                                lineHeight: 1.3,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {supplementalGroupOwnerText(group)}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+              )}
+
+              {metadataValidationAttachments.length > 0 && (
+                <Box sx={{ mt: actionableValidationAttachments.length > 0 || supplementalValidationGroups.length > 0 ? 1.25 : 0 }}>
                   <Typography
                     variant="caption"
                     color="text.secondary"

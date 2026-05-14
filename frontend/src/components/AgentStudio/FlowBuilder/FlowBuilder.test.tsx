@@ -400,6 +400,93 @@ describe('FlowBuilder', () => {
     ])
   })
 
+  it('preserves supplemental validation groups for unmatched validator attachment edges', () => {
+    const [extractorNode] = rebuildValidationGroupsFromEdges(
+      [
+        {
+          id: 'node_1',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: {
+            agent_id: 'allele_extractor',
+            agent_display_name: 'Allele Extractor',
+            input_source: 'previous_output',
+            output_key: 'alleles',
+            validation_attachments: [
+              {
+                attachment_id: 'allele:symbol',
+                domain_pack_id: 'allele',
+                validator_id: 'agr.alliance:allele_validation',
+                validator_binding_id: 'symbol',
+                label: 'Allele symbol lookup',
+                state: 'active',
+                scope: 'field',
+                field_path: 'symbol',
+                required: true,
+                blocking: false,
+                default_enabled: true,
+                allow_opt_out: true,
+                enabled: true,
+              },
+            ],
+            validation_groups: [
+              {
+                group_id: 'allele:symbol',
+                attachment_id: 'allele:symbol',
+                binding_id: 'symbol',
+                state: 'automatic',
+                label: 'Allele symbol lookup',
+                required: true,
+                blocking: false,
+                allow_opt_out: true,
+              },
+              {
+                group_id: 'edge:validation_3',
+                attachment_id: null,
+                binding_id: 'curator_extra_lookup',
+                state: 'supplemental',
+                edge_id: 'validation_3',
+                validator_node_id: 'node_4',
+                label: null,
+                required: false,
+                blocking: false,
+                allow_opt_out: false,
+              },
+            ],
+          },
+        },
+      ],
+      [
+        {
+          id: 'validation_3',
+          source: 'node_1',
+          target: 'node_4',
+          role: 'validation_attachment',
+          satisfies_binding_id: 'curator_extra_lookup',
+        },
+      ]
+    )
+
+    expect(extractorNode.data.validation_groups).toEqual([
+      expect.objectContaining({
+        attachment_id: 'allele:symbol',
+        binding_id: 'symbol',
+        state: 'automatic',
+      }),
+      expect.objectContaining({
+        group_id: 'edge:validation_3',
+        attachment_id: null,
+        binding_id: 'curator_extra_lookup',
+        state: 'supplemental',
+        edge_id: 'validation_3',
+        validator_node_id: 'node_4',
+        required: false,
+        blocking: false,
+        allow_opt_out: false,
+      }),
+    ])
+  })
+
   it('preserves prompt_version when creating a node from catalog drag data', async () => {
     const user = userEvent.setup()
 

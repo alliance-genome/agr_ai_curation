@@ -42,12 +42,12 @@ export interface ValidationAttachmentSelection extends ValidationAttachmentOptio
 export interface ValidationAttachmentGroup {
   group_id: string
   state: 'automatic' | 'skipped' | 'replaced' | 'supplemental'
-  binding_id?: string
-  attachment_id?: string
-  edge_id?: string
-  validator_node_id?: string
-  replaces_attachment_id?: string
-  label?: string
+  binding_id?: string | null
+  attachment_id?: string | null
+  edge_id?: string | null
+  validator_node_id?: string | null
+  replaces_attachment_id?: string | null
+  label?: string | null
   required: boolean
   blocking: boolean
   allow_opt_out: boolean

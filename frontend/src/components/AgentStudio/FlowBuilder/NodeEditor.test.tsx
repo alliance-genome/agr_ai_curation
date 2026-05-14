@@ -294,6 +294,39 @@ describe('NodeEditor', () => {
     expect(screen.getByText('supplemental')).toBeInTheDocument()
   })
 
+  it('shows supplemental validation groups without declared attachment metadata', () => {
+    render(
+      <NodeEditor
+        node={buildNode({
+          validation_attachments: [],
+          validation_groups: [
+            {
+              group_id: 'edge:validation_3',
+              state: 'supplemental',
+              binding_id: 'curator_extra_lookup',
+              attachment_id: null,
+              edge_id: 'validation_3',
+              validator_node_id: 'node_4',
+              label: null,
+              required: false,
+              blocking: false,
+              allow_opt_out: false,
+            },
+          ],
+        })}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        availableVariables={[]}
+      />
+    )
+
+    expect(screen.queryAllByRole('checkbox')).toHaveLength(0)
+    expect(screen.getByText('supplemental')).toBeInTheDocument()
+    expect(screen.getByText('Supplemental validator: curator_extra_lookup')).toBeInTheDocument()
+    expect(screen.getByText('Binding curator_extra_lookup')).toBeInTheDocument()
+    expect(screen.getByText('validator node node_4 / edge validation_3')).toBeInTheDocument()
+  })
+
   it('labels validation agent instructions as a steering prompt', () => {
     metadataMocks.agents = {
       gene_validator: {
