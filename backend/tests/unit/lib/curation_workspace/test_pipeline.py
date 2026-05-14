@@ -499,16 +499,18 @@ object_definitions:
           - gene.identifier
           - gene.symbol
       validator_bindings:
-        - binding_id: fixture.identifier_prefix
-          validation_kind: curie_prefix_format
-          prefix: AGR
-          applies_to:
-            domain_pack_id: fixture.pack
-            object_types:
-              - GeneAssertion
-            field_paths:
-              - gene.identifier
-          blocking: true
+        active:
+          - binding_id: fixture.identifier_prefix
+            validator_agent:
+              package_id: fixture.pack
+              agent_id: identifier_prefix_validator
+            applies_to:
+              domain_pack_id: fixture.pack
+              object_types:
+                - GeneAssertion
+              field_paths:
+                - gene.identifier
+            blocking: true
     fields:
       - field_path: gene.identifier
         field_type: string
@@ -651,7 +653,7 @@ object_definitions:
     envelope_row = db_session.get(DomainEnvelopeModel, "env-validation-1")
     assert envelope_row.revision == 2
     assert envelope_row.envelope_json["validation_findings"][0]["code"] == (
-        "domain_pack.curie_prefix_mismatch"
+        "domain_pack.validator_dispatch_unavailable"
     )
     indexed_findings = db_session.scalars(select(DomainValidationFinding)).all()
     assert len(indexed_findings) == 1
@@ -666,7 +668,7 @@ object_definitions:
     ).one()
     fields_by_key = {field["field_key"]: field for field in draft_row.fields}
     assert fields_by_key["gene.identifier"]["validation_result"]["status"] == (
-        FieldValidationStatus.INVALID_FORMAT.value
+        FieldValidationStatus.CONFLICT.value
     )
     assert fields_by_key["gene.symbol"]["validation_result"]["status"] == (
         FieldValidationStatus.SKIPPED.value
@@ -677,7 +679,7 @@ object_definitions:
             ValidationSnapshotModel.candidate_id == candidate_row.id,
         )
     ).one()
-    assert candidate_snapshot.summary["counts"]["invalid_format"] == 1
+    assert candidate_snapshot.summary["counts"]["conflict"] == 1
     assert candidate_snapshot.summary["counts"]["skipped"] == 1
 
 

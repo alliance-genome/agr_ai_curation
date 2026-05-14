@@ -279,7 +279,6 @@ def test_under_development_validator_bindings_emit_metadata_only_findings():
         item.binding_id: item
         for item in registry.bindings
     }["disease_ontology_term_lookup"]
-    assert binding.provider_projection == {}
     assert binding.state is ValidationBindingState.UNDER_DEVELOPMENT
     assert binding.required is False
     assert binding.blocking is False
@@ -326,7 +325,7 @@ def test_under_development_validator_bindings_emit_metadata_only_findings():
     )
     attempt = ontology_finding.details["lookup_attempts"][0]
     assert attempt["lookup_status"] == "under_development"
-    assert attempt["provider"] is None
+    assert "provider" not in attempt
     assert attempt["attempted_query"]["input_fields"]["curie"]["value"] == "DOID:0050434"
     assert ontology_finding.details["failure_classification"] == "under_development"
     assert "provider_projections" not in ontology_finding.details
