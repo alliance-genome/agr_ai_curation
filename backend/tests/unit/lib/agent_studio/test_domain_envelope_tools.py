@@ -340,6 +340,7 @@ def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(mo
                                 "state": "active",
                                 "enabled": True,
                                 "required": True,
+                                "blocking": True,
                                 "export_blocking": True,
                             },
                             {
@@ -350,6 +351,7 @@ def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(mo
                                 "state": "active",
                                 "enabled": False,
                                 "required": False,
+                                "blocking": True,
                                 "export_blocking": True,
                             },
                             {

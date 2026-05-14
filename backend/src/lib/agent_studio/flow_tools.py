@@ -22,6 +22,8 @@ from contextvars import ContextVar
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE_ROLE
+
 from .catalog_service import AGENT_REGISTRY
 from .diagnostic_tools import get_diagnostic_tools_registry
 from .domain_envelope_tools import current_flow_domain_envelope_analysis
@@ -46,6 +48,10 @@ def _truncate_preview(text: str, max_chars: int) -> str:
     """Return a preview string with ellipsis only when truncation occurred."""
 
     return text[:max_chars] + ("..." if len(text) > max_chars else "")
+
+
+def _is_validation_attachment_edge(edge: Dict[str, Any]) -> bool:
+    return edge.get("role", DEFAULT_FLOW_EDGE_ROLE) == VALIDATION_ATTACHMENT_EDGE_ROLE
 
 
 def set_workflow_user_context(user_id: int, user_email: Optional[str] = None) -> None:
@@ -891,8 +897,16 @@ def _get_current_flow_handler():
         node_by_id = {n.get("id"): n for n in nodes}
         edges_from = {}  # source_id -> list of target_ids
         edges_to = {}    # target_id -> list of source_ids
+        control_flow_edges = [
+            edge for edge in edges if not _is_validation_attachment_edge(edge)
+        ]
+        validation_attachment_target_ids = {
+            edge.get("target")
+            for edge in edges
+            if _is_validation_attachment_edge(edge) and edge.get("target")
+        }
 
-        for edge in edges:
+        for edge in control_flow_edges:
             source = edge.get("source")
             target = edge.get("target")
             if source and target:
@@ -930,7 +944,8 @@ def _get_current_flow_handler():
         # Include any disconnected nodes at the end (with warning)
         disconnected = []
         for node in nodes:
-            if node.get("id") not in visited:
+            node_id = node.get("id")
+            if node_id not in visited and node_id not in validation_attachment_target_ids:
                 disconnected.append(node)
 
         # Build the response
@@ -1048,7 +1063,7 @@ def _get_current_flow_handler():
         # Check for parallel/branching flows (not yet supported)
         # Count outgoing edges per node
         outgoing_edge_counts: dict[str, int] = {}
-        for edge in edges:
+        for edge in control_flow_edges:
             source_id = edge.get("source")
             if source_id:
                 outgoing_edge_counts[source_id] = outgoing_edge_counts.get(source_id, 0) + 1

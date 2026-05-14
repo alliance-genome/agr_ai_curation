@@ -255,6 +255,7 @@ class ValidationAttachmentOption:
             "state_explanation": self.state_explanation,
             "affected_fields": list(self.affected_fields),
             "required": self.required,
+            "blocking": self.export_blocking,
             "export_blocking": self.export_blocking,
             "default_enabled": self.default_enabled,
             "allow_opt_out": self.allow_opt_out,

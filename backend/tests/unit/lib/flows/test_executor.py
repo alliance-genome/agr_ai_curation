@@ -58,6 +58,35 @@ def _make_flow(nodes):
     return flow
 
 
+def test_ordered_executable_nodes_treats_validation_edges_as_sidecars():
+    """Validation attachment targets should not become ordinary flow steps."""
+    flow = MagicMock()
+    flow.flow_definition = {
+        "nodes": [
+            _task_input_node(),
+            _agent_node("extract_1", "gene_extractor", output_key="extract_output"),
+            _agent_node("validator_1", "custom_validator", output_key="validator_output"),
+            _agent_node("prep_1", "curation_prep", output_key="prep_output"),
+        ],
+        "edges": [
+            {"id": "e1", "source": "node_task", "target": "extract_1"},
+            {
+                "id": "e2",
+                "source": "extract_1",
+                "target": "validator_1",
+                "role": "validation_attachment",
+                "satisfies_binding_id": "alliance.gene.identity",
+            },
+            {"id": "e3", "source": "extract_1", "target": "prep_1"},
+        ],
+        "entry_node_id": "node_task",
+    }
+
+    ordered = _executor_module()._get_ordered_executable_nodes(flow)
+
+    assert [node["id"] for node in ordered] == ["extract_1", "prep_1"]
+
+
 def _agent_node(
     node_id,
     agent_id,

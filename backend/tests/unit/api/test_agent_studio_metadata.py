@@ -58,6 +58,7 @@ class TestGetRegistryMetadata:
                     "state": "active",
                     "scope": "field",
                     "required": True,
+                    "blocking": True,
                     "export_blocking": True,
                     "default_enabled": True,
                     "allow_opt_out": False,
