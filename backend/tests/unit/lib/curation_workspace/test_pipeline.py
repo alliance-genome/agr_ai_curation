@@ -545,6 +545,52 @@ object_definitions:
         "resolve_curation_domain_pack_by_id",
         lambda domain_pack_id: loaded_pack if domain_pack_id == "fixture.pack" else None,
     )
+    real_dispatch = module.dispatch_active_validator_bindings
+    dispatch_calls = []
+
+    def _fake_validator_dispatch(envelope, domain_pack, *, registry=None):
+        def _runner(request, *, binding):
+            dispatch_calls.append(
+                {
+                    "request": request,
+                    "max_tool_calls": binding.max_tool_calls,
+                }
+            )
+            return {
+                "status": "unresolved",
+                "request_id": request.request_id,
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": request.validator_agent.model_dump(mode="json"),
+                "target": request.target.model_dump(mode="json"),
+                "resolved_values": {},
+                "resolved_objects": [],
+                "missing_expected_fields": ["identifier"],
+                "candidates": [],
+                "lookup_attempts": [
+                    {
+                        "provider": "fixture",
+                        "method": "identifier_prefix",
+                        "query": dict(request.selected_inputs),
+                        "result_count": 0,
+                        "outcome": "not_found",
+                    }
+                ],
+                "curator_message": "Identifier prefix was not resolved.",
+                "explanation": "Fixture validator could not resolve the identifier.",
+            }
+
+        return real_dispatch(
+            envelope,
+            domain_pack,
+            registry=registry,
+            runner=_runner,
+        )
+
+    monkeypatch.setattr(
+        module,
+        "dispatch_active_validator_bindings",
+        _fake_validator_dispatch,
+    )
 
     envelope = DomainEnvelope(
         envelope_id="env-validation-1",
@@ -652,9 +698,14 @@ object_definitions:
 
     envelope_row = db_session.get(DomainEnvelopeModel, "env-validation-1")
     assert envelope_row.revision == 2
+    assert len(dispatch_calls) == 1
+    assert dispatch_calls[0]["request"].selected_inputs == {}
     assert envelope_row.envelope_json["validation_findings"][0]["code"] == (
-        "domain_pack.validator_dispatch_unavailable"
+        "domain_pack.validator_unresolved"
     )
+    assert envelope_row.envelope_json["validation_findings"][0]["details"][
+        "validation_request"
+    ]["target"]["input_values"] == {}
     indexed_findings = db_session.scalars(select(DomainValidationFinding)).all()
     assert len(indexed_findings) == 1
     assert indexed_findings[0].field_path == "gene.identifier"
@@ -668,7 +719,7 @@ object_definitions:
     ).one()
     fields_by_key = {field["field_key"]: field for field in draft_row.fields}
     assert fields_by_key["gene.identifier"]["validation_result"]["status"] == (
-        FieldValidationStatus.CONFLICT.value
+        FieldValidationStatus.NOT_FOUND.value
     )
     assert fields_by_key["gene.symbol"]["validation_result"]["status"] == (
         FieldValidationStatus.SKIPPED.value
@@ -679,7 +730,7 @@ object_definitions:
             ValidationSnapshotModel.candidate_id == candidate_row.id,
         )
     ).one()
-    assert candidate_snapshot.summary["counts"]["conflict"] == 1
+    assert candidate_snapshot.summary["counts"]["not_found"] == 1
     assert candidate_snapshot.summary["counts"]["skipped"] == 1
 
 

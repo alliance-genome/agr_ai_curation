@@ -54,6 +54,7 @@ from src.schemas.curation_workspace import (
     FieldValidationStatus,
 )
 from src.lib.domain_packs.materialization import materialize_persisted_envelope_review_rows
+from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     write_domain_envelope_checkpoint,
@@ -439,15 +440,28 @@ def _refresh_domain_envelope_validation_for_ref(
             f"No domain pack is registered for domain_pack_id={envelope.domain_pack_id!r}"
         )
 
-    validation_result = run_validation_supervisor(envelope, domain_pack)
-    if not validation_result.appended_findings:
+    policy_result = run_validation_supervisor(
+        envelope,
+        domain_pack,
+        include_active_binding_findings=False,
+    )
+    dispatch_result = dispatch_active_validator_bindings(
+        policy_result.envelope,
+        domain_pack,
+        registry=policy_result.registry,
+    )
+    appended_findings = (
+        *policy_result.appended_findings,
+        *dispatch_result.appended_findings,
+    )
+    if not appended_findings:
         return envelope_row.revision
 
     checkpoint = write_domain_envelope_checkpoint(
         db,
         DomainEnvelopeCheckpointRequest(
             project_key=envelope_row.project_key,
-            envelope=validation_result.envelope,
+            envelope=dispatch_result.envelope,
             expected_revision=envelope_row.revision,
             document_id=envelope_row.document_id,
             session_id=envelope_row.session_id,

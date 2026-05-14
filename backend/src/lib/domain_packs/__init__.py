@@ -41,6 +41,10 @@ from .validation_supervisor import (
     append_validation_findings_to_envelope,
     run_validation_supervisor,
 )
+from .validator_dispatch import (
+    ActiveValidatorDispatchResult,
+    dispatch_active_validator_bindings,
+)
 from .materialization import (
     project_evidence_anchor_projections,
     project_validation_summary_projections,
@@ -72,6 +76,7 @@ __all__ = [
     "DomainEnvelopeMaterializationError",
     "DomainEnvelopeRevisionUnavailableError",
     "DomainEnvelopeReviewRowMaterializer",
+    "ActiveValidatorDispatchResult",
     "DomainPackMetadataReviewRowMaterializer",
     "DomainPackMetadataError",
     "DomainPackRegistry",
@@ -103,6 +108,7 @@ __all__ = [
     "append_validation_findings_to_envelope",
     "apply_repair_patch",
     "build_repair_request",
+    "dispatch_active_validator_bindings",
     "load_domain_fixture_pack",
     "load_domain_pack_metadata",
     "load_package_domain_pack_registry",

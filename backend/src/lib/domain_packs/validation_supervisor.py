@@ -54,6 +54,7 @@ def run_validation_supervisor(
     actor_id: str = "domain_validation_supervisor",
     provider_model_ref: Mapping[str, Any] | None = None,
     registry: DomainPackValidationRegistry | None = None,
+    include_active_binding_findings: bool = True,
 ) -> ValidationSupervisorResult:
     """Run metadata-driven validation and return an updated envelope.
 
@@ -87,12 +88,13 @@ def run_validation_supervisor(
         state: tuple(match for match in all_matches if match.binding.state is state)
         for state in ValidationBindingState
     }
-    new_findings.extend(
-        _active_binding_findings(
-            matches=state_matches[ValidationBindingState.ACTIVE],
-            provider_model_ref=provider_model_ref,
+    if include_active_binding_findings:
+        new_findings.extend(
+            _active_binding_findings(
+                matches=state_matches[ValidationBindingState.ACTIVE],
+                provider_model_ref=provider_model_ref,
+            )
         )
-    )
 
     updated_envelope, appended_findings = append_validation_findings_to_envelope(
         envelope,

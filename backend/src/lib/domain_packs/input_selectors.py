@@ -48,6 +48,9 @@ class _SelectorProblem:
     field_path: str | None = None
 
 
+_OPTIONAL_INPUT_MISSING = object()
+
+
 def build_domain_validation_request(
     match: ValidatorBindingMatch,
 ) -> SelectorBuildResult:
@@ -63,6 +66,8 @@ def build_domain_validation_request(
         value, problem = _resolve_selector(match, input_name, selector)
         if problem is not None:
             problems.append(problem)
+            continue
+        if value is _OPTIONAL_INPUT_MISSING:
             continue
         selected_inputs[input_name] = value
 
@@ -335,7 +340,9 @@ def _single_value(
     *,
     field_path: str | None = None,
 ) -> tuple[Any, _SelectorProblem | None]:
-    if value is None and selector.required:
+    if value is None:
+        if not selector.required:
+            return _OPTIONAL_INPUT_MISSING, None
         return _missing(
             input_name,
             selector,
@@ -369,7 +376,9 @@ def _missing(
     *,
     details: dict[str, Any] | None = None,
     field_path: str | None = None,
-) -> tuple[Any, _SelectorProblem]:
+) -> tuple[Any, _SelectorProblem | None]:
+    if not selector.required:
+        return _OPTIONAL_INPUT_MISSING, None
     return (
         None,
         _SelectorProblem(
@@ -389,7 +398,9 @@ def _missing_field(
     message: str,
     *,
     field_path: str | None = None,
-) -> tuple[Any, _SelectorProblem]:
+) -> tuple[Any, _SelectorProblem | None]:
+    if not selector.required:
+        return _OPTIONAL_INPUT_MISSING, None
     return (
         None,
         _SelectorProblem(
