@@ -13,7 +13,10 @@ from .materialization import (
     DomainEnvelopeReviewRowMaterializer,
     DomainPackMetadataReviewRowMaterializer,
     REVIEW_ROW_PROJECTION_TYPE,
+    ValidatorResultMaterializationInput,
+    ValidatorResultMaterializationResult,
     materialize_persisted_envelope_review_rows,
+    materialize_validator_results_into_envelope,
     stable_object_id,
 )
 from .registry import (
@@ -105,6 +108,8 @@ __all__ = [
     "ValidatorBinding",
     "ValidatorBindingMatch",
     "ValidatorMetadataEntry",
+    "ValidatorResultMaterializationInput",
+    "ValidatorResultMaterializationResult",
     "append_validation_findings_to_envelope",
     "apply_repair_patch",
     "build_repair_request",
@@ -114,6 +119,7 @@ __all__ = [
     "load_package_domain_pack_registry",
     "load_domain_pack_registry",
     "materialize_persisted_envelope_review_rows",
+    "materialize_validator_results_into_envelope",
     "project_evidence_anchor_projections",
     "project_validation_summary_projections",
     "record_repair_final_classification",

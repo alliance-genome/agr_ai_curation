@@ -14,6 +14,7 @@ from src.schemas.domain_envelope import (
     SchemaRef,
     ValidationFinding,
     ValidationFindingSeverity,
+    ValidationFindingStatus,
     parse_field_path,
 )
 
@@ -198,3 +199,64 @@ def test_object_envelope_carries_definition_state_and_notes():
     assert obj.definition_notes == [
         "Initial contract for a domain pack still under design."
     ]
+
+
+def test_validation_finding_persists_validator_request_and_result_details():
+    envelope = DomainEnvelope(
+        envelope_id="env-validator-details",
+        domain_pack_id="fixture.core",
+        objects=[_pending_gene_object()],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.INFO,
+                status=ValidationFindingStatus.RESOLVED,
+                code="domain_pack.validator_resolved",
+                message="Gene reference resolved.",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(pending_ref_id="pending-gene-1"),
+                    field_path="gene.identifiers[0].curie",
+                ),
+                details={
+                    "validation_request": {
+                        "request_id": "domain-validation:abc",
+                        "input_selectors": {
+                            "gene_id": {
+                                "source": "payload",
+                                "path": "gene.identifiers[0].curie",
+                            }
+                        },
+                    },
+                    "validation_result": {
+                        "status": "resolved",
+                        "resolved_values": {"curie": "AGR:0001"},
+                        "resolved_objects": [
+                            {
+                                "object_type": "Gene",
+                                "canonical_id": "AGR:0001",
+                                "payload": {"primary_external_id": "AGR:0001"},
+                            }
+                        ],
+                    },
+                    "lookup_attempts": [
+                        {
+                            "provider": "fixture_lookup",
+                            "method": "exact_id",
+                            "lookup_status": "success",
+                        }
+                    ],
+                },
+            )
+        ],
+    )
+
+    reparsed = DomainEnvelope.model_validate(envelope.model_dump(mode="json"))
+    finding = reparsed.validation_findings[0]
+    assert finding.details["validation_request"]["input_selectors"]["gene_id"] == {
+        "source": "payload",
+        "path": "gene.identifiers[0].curie",
+    }
+    assert finding.details["validation_result"]["resolved_objects"][0] == {
+        "object_type": "Gene",
+        "canonical_id": "AGR:0001",
+        "payload": {"primary_external_id": "AGR:0001"},
+    }

@@ -35,6 +35,17 @@ object_definitions:
         field_type: string
       - field_path: gene.symbol
         field_type: string
+  - object_type: Gene
+    display_name: Gene reference
+    metadata:
+      object_role: validated_reference
+    fields:
+      - field_path: identifier
+        field_type: string
+        required: true
+      - field_path: symbol
+        field_type: string
+        required: true
 metadata:
   validator_bindings:
     active:
@@ -198,6 +209,20 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
     assert finding.status.value == "resolved"
     assert finding.code == "domain_pack.validator_resolved"
     assert finding.field_ref.field_path == "gene.identifier"
+    assert finding.details["validation_result"]["resolved_objects"][0]["object_type"] == "Gene"
+    materialized_gene = next(
+        domain_object
+        for domain_object in result.envelope.objects
+        if domain_object.object_type == "Gene"
+    )
+    assert materialized_gene.status.value == "validated"
+    assert materialized_gene.payload == {
+        "identifier": "AGR:0001",
+        "symbol": "ABC-1",
+    }
+    assert result.envelope.objects[0].object_refs == [
+        materialized_gene.to_object_ref()
+    ]
     assert result.validator_results[0].status == "resolved"
 
 
@@ -343,6 +368,7 @@ def test_resolved_validator_missing_expected_fields_is_unresolved(
     assert result.validator_results[0].status == "unresolved"
     assert result.validator_results[0].missing_expected_fields == ["symbol"]
     assert finding.details["failure_classification"] == "missing_expected_result_field"
+    assert finding.details["missing_expected_fields"] == ["symbol"]
 
 
 def test_runner_error_becomes_controlled_unresolved_result(tmp_path: Path):

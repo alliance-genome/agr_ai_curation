@@ -75,6 +75,7 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
+    CuratableObjectStatus,
     DefinitionState,
     DomainEnvelope,
     DomainEnvelopeStatus,
@@ -648,6 +649,8 @@ def _create_domain_envelope_submission_session(
     monkeypatch,
     payload: dict,
     validation_findings: list[ValidationFinding] | None = None,
+    additional_objects: list[CuratableObjectEnvelope] | None = None,
+    object_refs: list[ObjectRef] | None = None,
     object_metadata: dict | None = None,
     object_definition_state: DefinitionState = DefinitionState.STABLE,
     allow_title_override: bool = False,
@@ -696,9 +699,11 @@ def _create_domain_envelope_submission_session(
                 object_type="MuseumArtifact",
                 object_id="artifact-1",
                 payload=payload,
+                object_refs=object_refs or [],
                 metadata=object_metadata or {},
                 definition_state=object_definition_state,
-            )
+            ),
+            *(additional_objects or []),
         ],
         validation_findings=validation_findings or [],
     )
@@ -2383,6 +2388,73 @@ def test_domain_envelope_snapshot_includes_selected_object_reference_closure():
             )
         }
     )
+
+
+def test_session_serializer_preserves_materialized_validator_findings_and_refs(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    reference_ref = ObjectRef(object_id="gene-reference-1", object_type="Gene")
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={"artifact": {"title": "Gene mention"}},
+        additional_objects=[
+            CuratableObjectEnvelope(
+                object_type="Gene",
+                object_id="gene-reference-1",
+                status=CuratableObjectStatus.VALIDATED,
+                payload={"primary_external_id": "AGR:0001", "gene_symbol": "abc-1"},
+                metadata={
+                    "object_role": "validated_reference",
+                    "validator_materialization": {
+                        "source": "domain_validator_result",
+                        "validator_binding_id": "fixture.gene_lookup",
+                    },
+                },
+            )
+        ],
+        object_refs=[reference_ref],
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.INFO,
+                status=ValidationFindingStatus.RESOLVED,
+                code="domain_pack.validator_resolved",
+                message="Gene reference resolved.",
+                object_ref=ObjectRef(
+                    object_id="artifact-1",
+                    object_type="MuseumArtifact",
+                ),
+                details={
+                    "validation_result": {
+                        "status": "resolved",
+                        "resolved_objects": [
+                            {
+                                "object_type": "Gene",
+                                "canonical_id": "AGR:0001",
+                                "payload": {"primary_external_id": "AGR:0001"},
+                            }
+                        ],
+                    }
+                },
+            )
+        ],
+    )
+    candidate = db_session.get(CurationCandidate, UUID(seeded["candidate_id"]))
+
+    envelope = serializer_module._candidate_domain_envelope(candidate)
+
+    assert envelope is not None
+    assert envelope.objects[0].object_refs == [reference_ref]
+    assert envelope.objects[1].metadata["validator_materialization"] == {
+        "source": "domain_validator_result",
+        "validator_binding_id": "fixture.gene_lookup",
+    }
+    assert envelope.validation_findings[0].details["validation_result"][
+        "resolved_objects"
+    ][0]["canonical_id"] == "AGR:0001"
 
 
 def test_submission_export_reports_stale_domain_envelope_revision_blocker(
