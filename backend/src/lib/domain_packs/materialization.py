@@ -75,6 +75,7 @@ SEVERITY_RANK: dict[str, int] = {
     ValidationFindingSeverity.BLOCKER.value: 3,
 }
 
+
 class DomainEnvelopeMaterializationError(RuntimeError):
     """Raised when a persisted envelope cannot be materialized for review."""
 
