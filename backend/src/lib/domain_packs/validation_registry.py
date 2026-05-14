@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping, Protocol
 
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -38,6 +38,37 @@ class ValidationRegistryError(ValueError):
     """Raised when domain-pack validation metadata is malformed."""
 
 
+class PackageRegistryForValidatorReferences(Protocol):
+    """Package registry behavior needed to validate validator agent refs."""
+
+    def get_package(self, package_id: str) -> object | None:
+        """Return a loaded package by package ID, if present."""
+
+    def package_declares_dependency(
+        self,
+        source_package_id: str,
+        target_package_id: str,
+    ) -> bool:
+        """Return whether source package declares target package as a dependency."""
+
+
+ValidatorAgentResolver = Callable[[str, str], object | None]
+
+
+@dataclass(frozen=True)
+class ValidatorAgentRef:
+    """Package-scoped validator agent reference declared by a domain pack."""
+
+    package_id: str
+    agent_id: str
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "package_id": self.package_id,
+            "agent_id": self.agent_id,
+        }
+
+
 @dataclass(frozen=True)
 class ValidatorMetadataEntry:
     """One declarative entry from ``metadata.validators``."""
@@ -49,6 +80,7 @@ class ValidatorMetadataEntry:
     definition_state: DefinitionState = DefinitionState.STABLE
     blocked_by: str | None = None
     reason: str | None = None
+    validator_agent: ValidatorAgentRef | None = None
     tool_name: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -69,6 +101,8 @@ class ValidatorMetadataEntry:
             details["blocked_by"] = self.blocked_by
         if self.reason:
             details["reason"] = self.reason
+        if self.validator_agent:
+            details["validator_agent"] = self.validator_agent.to_dict()
         if self.tool_name:
             details["tool_name"] = self.tool_name
         return details
@@ -88,6 +122,7 @@ class ValidatorBinding:
     validation_kind: str | None = None
     tool_name: str | None = None
     tool_method: str | None = None
+    validator_agent: ValidatorAgentRef | None = None
     definition_state: DefinitionState = DefinitionState.STABLE
     blocked_by: str | None = None
     reason: str | None = None
@@ -130,6 +165,11 @@ class ValidatorBinding:
             "validation_kind": self.validation_kind,
             "tool_name": self.tool_name,
             "tool_method": self.tool_method,
+            "validator_agent": (
+                self.validator_agent.to_dict()
+                if self.validator_agent is not None
+                else None
+            ),
             "blocked_by": self.blocked_by,
             "reason": self.reason,
             "source_object_type": self.source_object_type,
@@ -170,6 +210,8 @@ class ValidationAttachmentOption:
     validation_kind: str | None = None
     tool_name: str | None = None
     tool_method: str | None = None
+    validator_package_id: str | None = None
+    validator_agent_id: str | None = None
     object_type: str | None = None
     object_role: str | None = None
     field_path: str | None = None
@@ -197,6 +239,8 @@ class ValidationAttachmentOption:
             "validation_kind": self.validation_kind,
             "tool_name": self.tool_name,
             "tool_method": self.tool_method,
+            "validator_package_id": self.validator_package_id,
+            "validator_agent_id": self.validator_agent_id,
             "state": self.state.value,
             "scope": self.scope,
             "object_type": self.object_type,
@@ -570,6 +614,101 @@ class DomainPackValidationRegistry:
         )
 
 
+def validate_active_validator_agent_references(
+    registries: Iterable[DomainPackValidationRegistry],
+    package_registry: PackageRegistryForValidatorReferences,
+    agent_resolver: ValidatorAgentResolver | None = None,
+) -> None:
+    """Validate active package-scoped validator agent refs across loaded packages."""
+
+    if agent_resolver is None:
+        from src.lib.config.agent_loader import get_agent_definition_for_package
+
+        agent_resolver = get_agent_definition_for_package
+
+    errors: list[str] = []
+    for registry in registries:
+        owner_package_id = registry.domain_pack.package_id
+        for entry in registry.validator_metadata:
+            if entry.state is not ValidationBindingState.ACTIVE:
+                continue
+            if entry.validator_agent is None:
+                continue
+
+            _validate_active_validator_agent_reference(
+                errors=errors,
+                registry=registry,
+                owner_package_id=owner_package_id,
+                ref=entry.validator_agent,
+                reference_kind="validator",
+                reference_id=entry.validator_id,
+                package_registry=package_registry,
+                agent_resolver=agent_resolver,
+            )
+
+        for binding in registry.bindings:
+            if binding.state is not ValidationBindingState.ACTIVE:
+                continue
+            if binding.validator_agent is None:
+                continue
+
+            _validate_active_validator_agent_reference(
+                errors=errors,
+                registry=registry,
+                owner_package_id=owner_package_id,
+                ref=binding.validator_agent,
+                reference_kind="binding",
+                reference_id=binding.binding_id,
+                package_registry=package_registry,
+                agent_resolver=agent_resolver,
+            )
+
+    if errors:
+        raise ValidationRegistryError("; ".join(errors))
+
+
+def _validate_active_validator_agent_reference(
+    *,
+    errors: list[str],
+    registry: DomainPackValidationRegistry,
+    owner_package_id: str | None,
+    ref: ValidatorAgentRef,
+    reference_kind: str,
+    reference_id: str,
+    package_registry: PackageRegistryForValidatorReferences,
+    agent_resolver: ValidatorAgentResolver,
+) -> None:
+    if package_registry.get_package(ref.package_id) is None:
+        errors.append(
+            f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}' references missing validator package "
+            f"'{ref.package_id}'"
+        )
+        return
+
+    if agent_resolver(ref.package_id, ref.agent_id) is None:
+        errors.append(
+            f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}' references missing validator agent "
+            f"'{ref.package_id}:{ref.agent_id}'"
+        )
+
+    if (
+        owner_package_id is not None
+        and owner_package_id != ref.package_id
+        and not package_registry.package_declares_dependency(
+            owner_package_id,
+            ref.package_id,
+        )
+    ):
+        errors.append(
+            f"Package '{owner_package_id}' must declare dependency "
+            f"'{ref.package_id}' for domain pack "
+            f"'{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}'"
+        )
+
+
 def _collect_validator_metadata(
     owner_metadata: Mapping[str, Any],
 ) -> list[ValidatorMetadataEntry]:
@@ -586,6 +725,7 @@ def _collect_validator_metadata(
                 definition_state=_definition_state(raw_item),
                 blocked_by=_optional_string(raw_item.get("blocked_by")),
                 reason=_optional_string(raw_item.get("reason")),
+                validator_agent=_validator_agent_ref(raw_item),
                 tool_name=_optional_string(raw_item.get("tool_name")),
                 raw=dict(raw_item),
             )
@@ -658,6 +798,7 @@ def _collect_validator_bindings(
                 validation_kind=_optional_string(raw_item.get("validation_kind")),
                 tool_name=_optional_string(raw_item.get("tool_name")),
                 tool_method=_optional_string(raw_item.get("tool_method")),
+                validator_agent=_validator_agent_ref(raw_item),
                 definition_state=_definition_state(raw_item),
                 blocked_by=_optional_string(raw_item.get("blocked_by")),
                 reason=_optional_string(raw_item.get("reason")),
@@ -864,6 +1005,31 @@ def _optional_string(value: Any) -> str | None:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def _validator_agent_ref(raw_item: Mapping[str, Any]) -> ValidatorAgentRef | None:
+    raw_ref = raw_item.get("validator_agent")
+    if raw_ref is None:
+        return None
+    if not isinstance(raw_ref, Mapping):
+        raise ValidationRegistryError(
+            "validator_agent must be a mapping with package_id and agent_id"
+        )
+    package_id = raw_ref.get("package_id")
+    agent_id = raw_ref.get("agent_id")
+    if not isinstance(package_id, str) or not package_id.strip():
+        raise ValidationRegistryError("validator_agent.package_id must be a non-empty string")
+    if package_id != package_id.strip():
+        raise ValidationRegistryError(
+            "validator_agent.package_id must not have leading or trailing whitespace"
+        )
+    if not isinstance(agent_id, str) or not agent_id.strip():
+        raise ValidationRegistryError("validator_agent.agent_id must be a non-empty string")
+    if agent_id != agent_id.strip():
+        raise ValidationRegistryError(
+            "validator_agent.agent_id must not have leading or trailing whitespace"
+        )
+    return ValidatorAgentRef(package_id=package_id, agent_id=agent_id)
 
 
 def _optional_bool(value: Any) -> bool:
@@ -1127,6 +1293,16 @@ def _metadata_attachment_option(
         validator_id=entry.validator_id,
         state=entry.state,
         scope="pack",
+        validator_package_id=(
+            entry.validator_agent.package_id
+            if entry.validator_agent is not None
+            else None
+        ),
+        validator_agent_id=(
+            entry.validator_agent.agent_id
+            if entry.validator_agent is not None
+            else None
+        ),
         tool_name=entry.tool_name,
         label=_validation_attachment_label(entry.display_name or entry.validator_id, None),
         description=entry.description,
@@ -1186,7 +1362,12 @@ def _binding_attachment_option(
     allow_opt_out = active and binding.allow_opt_out
 
     validator_id = (
-        binding.validator
+        (
+            f"{binding.validator_agent.package_id}:{binding.validator_agent.agent_id}"
+            if binding.validator_agent is not None
+            else None
+        )
+        or binding.validator
         or binding.validation_kind
         or binding.tool_name
         or binding.binding_id
@@ -1213,6 +1394,16 @@ def _binding_attachment_option(
         validation_kind=binding.validation_kind,
         tool_name=binding.tool_name,
         tool_method=binding.tool_method,
+        validator_package_id=(
+            binding.validator_agent.package_id
+            if binding.validator_agent is not None
+            else None
+        ),
+        validator_agent_id=(
+            binding.validator_agent.agent_id
+            if binding.validator_agent is not None
+            else None
+        ),
         state=binding.state,
         scope=scope,
         object_type=object_type,
@@ -1490,7 +1681,9 @@ __all__ = [
     "ValidationBindingState",
     "ValidationRegistryError",
     "ValidationAttachmentOption",
+    "ValidatorAgentRef",
     "ValidatorBinding",
     "ValidatorBindingMatch",
     "ValidatorMetadataEntry",
+    "validate_active_validator_agent_references",
 ]

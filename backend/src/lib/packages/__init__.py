@@ -30,6 +30,7 @@ from .manifest_loader import (
 )
 from .models import (
     ExportKind,
+    PackageDependency,
     PackageExport,
     PackageManifest,
     RuntimeOverrideSelection,
@@ -109,6 +110,7 @@ __all__ = [
     "PROTOCOL_VERSION",
     "AgentBundleRegistrationError",
     "PackageContractError",
+    "PackageDependency",
     "PackageDiscoveryFailure",
     "PackageEnvironment",
     "PackageEnvironmentBootstrapError",

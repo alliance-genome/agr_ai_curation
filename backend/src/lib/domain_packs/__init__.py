@@ -21,6 +21,7 @@ from .registry import (
     DomainPackRegistry,
     DomainPackRegistryValidationError,
     LoadedDomainPack,
+    load_package_domain_pack_registry,
     load_domain_pack_registry,
 )
 from .validation_registry import (
@@ -29,9 +30,11 @@ from .validation_registry import (
     ValidationAttachmentOption,
     ValidationBindingState,
     ValidationRegistryError,
+    ValidatorAgentRef,
     ValidatorBinding,
     ValidatorBindingMatch,
     ValidatorMetadataEntry,
+    validate_active_validator_agent_references,
 )
 from .validation_supervisor import (
     ValidationSupervisorResult,
@@ -93,6 +96,7 @@ __all__ = [
     "ValidationBindingState",
     "ValidationRegistryError",
     "ValidationSupervisorResult",
+    "ValidatorAgentRef",
     "ValidatorBinding",
     "ValidatorBindingMatch",
     "ValidatorMetadataEntry",
@@ -101,6 +105,7 @@ __all__ = [
     "build_repair_request",
     "load_domain_fixture_pack",
     "load_domain_pack_metadata",
+    "load_package_domain_pack_registry",
     "load_domain_pack_registry",
     "materialize_persisted_envelope_review_rows",
     "project_evidence_anchor_projections",
@@ -110,4 +115,5 @@ __all__ = [
     "record_validator_rerun_request",
     "run_validation_supervisor",
     "stable_object_id",
+    "validate_active_validator_agent_references",
 ]

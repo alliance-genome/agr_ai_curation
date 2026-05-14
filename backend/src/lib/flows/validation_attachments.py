@@ -9,6 +9,7 @@ from src.lib.domain_packs.registry import load_domain_pack_registry
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationAttachmentOption,
+    validate_active_validator_agent_references,
 )
 from src.schemas.flows import FlowDefinition, FlowValidationAttachmentSelection
 
@@ -174,36 +175,22 @@ def _options_for_agent_entry(
 
 def _load_package_domain_pack_registry():
     from src.lib.config.package_default_sources import resolve_packages_dir
-    from src.lib.domain_packs.registry import (
-        DomainPackRegistry,
-        load_domain_pack_registry,
-    )
+    from src.lib.config.agent_loader import build_package_scoped_agent_resolver
+    from src.lib.domain_packs.registry import load_package_domain_pack_registry
+    from src.lib.packages import load_package_registry
 
     packages_dir = resolve_packages_dir(None)
-    loaded_packs = []
-    failed_packs = []
-    validation_errors = []
-
-    if packages_dir.exists():
-        for package_dir in sorted(packages_dir.iterdir(), key=lambda path: path.name):
-            domain_packs_dir = package_dir / "domain_packs"
-            if not domain_packs_dir.is_dir():
-                continue
-            package_registry = load_domain_pack_registry(
-                domain_packs_dir,
-                fail_on_validation_error=False,
-            )
-            loaded_packs.extend(package_registry.loaded_packs)
-            failed_packs.extend(package_registry.failed_packs)
-            validation_errors.extend(package_registry.validation_errors)
-
-    registry = DomainPackRegistry(
-        packs_dir=packages_dir,
-        loaded_packs=tuple(sorted(loaded_packs, key=lambda pack: pack.pack_id)),
-        failed_packs=tuple(sorted(failed_packs, key=lambda item: item.pack_id)),
-        validation_errors=tuple(validation_errors),
+    runtime_package_registry = load_package_registry(packages_dir)
+    registry = load_package_domain_pack_registry(runtime_package_registry)
+    validation_registries = [
+        DomainPackValidationRegistry.from_domain_pack(domain_pack)
+        for domain_pack in registry.loaded_packs
+    ]
+    validate_active_validator_agent_references(
+        validation_registries,
+        runtime_package_registry,
+        agent_resolver=build_package_scoped_agent_resolver(packages_dir),
     )
-    registry.raise_for_validation_errors()
     return registry
 
 
@@ -227,6 +214,8 @@ def _schedule_entry(attachment: Mapping[str, Any]) -> dict[str, Any]:
         "validation_kind",
         "tool_name",
         "tool_method",
+        "validator_package_id",
+        "validator_agent_id",
         "state",
         "scope",
         "object_type",

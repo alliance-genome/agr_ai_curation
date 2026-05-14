@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 
+from src.lib.packages.registry import PackageRegistry
 from src.schemas.domain_pack_metadata import DomainPackFixturePackRef, DomainPackMetadata
 
 from .loader import load_domain_pack_metadata
@@ -22,6 +23,9 @@ class LoadedDomainPack:
     pack_path: Path
     metadata_path: Path
     metadata: DomainPackMetadata
+    package_id: str | None = None
+    package_display_name: str | None = None
+    package_version: str | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +105,10 @@ def iter_domain_pack_dirs(packs_dir: Path | None = None) -> tuple[Path, ...]:
 
 def discover_domain_pack_metadata(
     packs_dir: Path | None = None,
+    *,
+    package_id: str | None = None,
+    package_display_name: str | None = None,
+    package_version: str | None = None,
 ) -> tuple[tuple[LoadedDomainPack, ...], tuple[DomainPackDiscoveryFailure, ...]]:
     """Load every domain-pack metadata file beneath the domain-pack directory."""
 
@@ -130,6 +138,9 @@ def discover_domain_pack_metadata(
                 pack_path=pack_path,
                 metadata_path=metadata_path,
                 metadata=metadata,
+                package_id=package_id,
+                package_display_name=package_display_name,
+                package_version=package_version,
             )
         )
 
@@ -142,6 +153,9 @@ def discover_domain_pack_metadata(
 def load_domain_pack_registry(
     packs_dir: Path | None = None,
     *,
+    package_id: str | None = None,
+    package_display_name: str | None = None,
+    package_version: str | None = None,
     fail_on_validation_error: bool = True,
 ) -> DomainPackRegistry:
     """Discover domain packs on disk and build the in-memory registry."""
@@ -149,7 +163,12 @@ def load_domain_pack_registry(
     resolved_packs_dir = (packs_dir or get_domain_packs_dir()).expanduser().resolve(
         strict=False
     )
-    discovered_packs, discovery_failures = discover_domain_pack_metadata(resolved_packs_dir)
+    discovered_packs, discovery_failures = discover_domain_pack_metadata(
+        resolved_packs_dir,
+        package_id=package_id,
+        package_display_name=package_display_name,
+        package_version=package_version,
+    )
 
     validation_errors: list[str] = []
     failed_packs: list[DomainPackDiscoveryFailure] = list(discovery_failures)
@@ -201,6 +220,40 @@ def load_domain_pack_registry(
     return registry
 
 
+def load_package_domain_pack_registry(
+    package_registry: PackageRegistry,
+) -> DomainPackRegistry:
+    """Load domain packs embedded beneath loaded runtime packages."""
+
+    loaded_packs: list[LoadedDomainPack] = []
+    failed_packs: list[DomainPackDiscoveryFailure] = []
+    validation_errors: list[str] = []
+
+    for runtime_package in package_registry.loaded_packages:
+        domain_packs_dir = runtime_package.package_path / "domain_packs"
+        if not domain_packs_dir.is_dir():
+            continue
+        registry = load_domain_pack_registry(
+            domain_packs_dir,
+            package_id=runtime_package.package_id,
+            package_display_name=runtime_package.display_name,
+            package_version=runtime_package.version,
+            fail_on_validation_error=False,
+        )
+        loaded_packs.extend(registry.loaded_packs)
+        failed_packs.extend(registry.failed_packs)
+        validation_errors.extend(registry.validation_errors)
+
+    registry = DomainPackRegistry(
+        packs_dir=package_registry.packages_dir,
+        loaded_packs=tuple(sorted(loaded_packs, key=lambda pack: pack.pack_id)),
+        failed_packs=tuple(sorted(failed_packs, key=lambda item: item.pack_id)),
+        validation_errors=tuple(validation_errors),
+    )
+    registry.raise_for_validation_errors()
+    return registry
+
+
 __all__ = [
     "DomainPackDiscoveryFailure",
     "DomainPackRegistry",
@@ -208,5 +261,6 @@ __all__ = [
     "LoadedDomainPack",
     "discover_domain_pack_metadata",
     "iter_domain_pack_dirs",
+    "load_package_domain_pack_registry",
     "load_domain_pack_registry",
 ]

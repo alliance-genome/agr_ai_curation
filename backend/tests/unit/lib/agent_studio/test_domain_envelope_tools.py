@@ -15,6 +15,9 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import src.lib.agent_studio.domain_envelope_tools as domain_tools
+from src.lib.domain_packs.loader import load_domain_pack_metadata
+from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 from src.lib.curation_workspace.models import (
     CurationCandidate,
     CurationExtractionResultRecord,
@@ -55,6 +58,71 @@ TEST_TABLES = [
     DomainEnvelopeModel.__table__,
     CurationCandidate.__table__,
 ]
+
+
+def test_domain_pack_validation_plan_exposes_validator_agent_owner(
+    monkeypatch,
+    tmp_path,
+):
+    pack_path = tmp_path / "fixture.validation"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(
+        """
+pack_id: fixture.validation
+display_name: Fixture Validation Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+model_definitions:
+  - model_id: AssertionPayload
+    display_name: Assertion payload
+object_definitions:
+  - object_type: Assertion
+    display_name: Assertion
+    model_ref: AssertionPayload
+metadata:
+  validator_bindings:
+    active:
+      - binding_id: fixture.agent_validator
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
+        applies_to:
+          domain_pack_id: fixture.validation
+""".strip(),
+        encoding="utf-8",
+    )
+    metadata = load_domain_pack_metadata(metadata_path)
+    loaded_pack = LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+        package_id="org.owner",
+    )
+    registry = DomainPackValidationRegistry.from_domain_pack(loaded_pack)
+    monkeypatch.setattr(
+        domain_tools,
+        "domain_pack_validation_registries",
+        lambda: {"fixture.validation": registry},
+    )
+
+    result = domain_tools.get_domain_pack_validation_plan(
+        domain_pack_id="fixture.validation",
+    )
+
+    assert result["success"] is True
+    binding = result["validator_bindings"][0]
+    attachment = result["validation_attachments"][0]
+    assert binding["validator_agent"] == {
+        "package_id": "org.validators",
+        "agent_id": "shared_validator",
+    }
+    assert attachment["validator_package_id"] == "org.validators"
+    assert attachment["validator_agent_id"] == "shared_validator"
 
 
 @pytest.fixture

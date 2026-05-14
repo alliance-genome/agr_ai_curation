@@ -35,6 +35,123 @@ def _write_package_manifest(package_dir: Path, payload: dict) -> None:
     (package_dir / "requirements" / "runtime.txt").write_text("", encoding="utf-8")
 
 
+def _write_agent_bundle(
+    package_dir: Path,
+    folder_name: str,
+    *,
+    agent_id: str,
+    name: str,
+) -> None:
+    agent_dir = package_dir / "agents" / folder_name
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "agent.yaml").write_text(
+        f"agent_id: {agent_id}\nname: {name}\n",
+        encoding="utf-8",
+    )
+    (agent_dir / "prompt.yaml").write_text("content: Demo prompt\n", encoding="utf-8")
+
+
+def test_package_scoped_agent_lookup_allows_duplicate_agent_ids(tmp_path):
+    packages_dir = tmp_path / "packages"
+    first_package = packages_dir / "first"
+    second_package = packages_dir / "second"
+    for package_dir, package_id, bundle_name in (
+        (first_package, "org.first", "first_validator"),
+        (second_package, "org.second", "second_validator"),
+    ):
+        _write_package_manifest(
+            package_dir,
+            {
+                "package_id": package_id,
+                "display_name": package_id,
+                "version": "1.0.0",
+                "package_api_version": "1.0.0",
+                "min_runtime_version": "1.0.0",
+                "max_runtime_version": "2.0.0",
+                "python_package_root": f"python/src/{package_id.replace('.', '_')}",
+                "requirements_file": "requirements/runtime.txt",
+                "agent_bundles": [{"name": bundle_name}],
+            },
+        )
+        _write_agent_bundle(
+            package_dir,
+            bundle_name,
+            agent_id="shared_validator",
+            name=f"{package_id} validator",
+        )
+
+    agent_loader.load_agent_definitions(packages_dir, force_reload=True)
+
+    first_agent = agent_loader.get_agent_definition_for_package(
+        "org.first",
+        "shared_validator",
+    )
+    second_agent = agent_loader.get_agent_definition_for_package(
+        "org.second",
+        "shared_validator",
+    )
+    assert first_agent is not None
+    assert second_agent is not None
+    assert first_agent.folder_name == "first_validator"
+    assert second_agent.folder_name == "second_validator"
+    assert first_agent.package_id == "org.first"
+    assert second_agent.package_id == "org.second"
+
+
+def test_package_scoped_agent_resolver_does_not_mutate_global_cache(tmp_path):
+    packages_dir = tmp_path / "packages"
+    package_dir = packages_dir / "validators"
+    _write_package_manifest(
+        package_dir,
+        {
+            "package_id": "org.validators",
+            "display_name": "Validator Package",
+            "version": "1.0.0",
+            "package_api_version": "1.0.0",
+            "min_runtime_version": "1.0.0",
+            "max_runtime_version": "2.0.0",
+            "python_package_root": "python/src/org_validators",
+            "requirements_file": "requirements/runtime.txt",
+            "agent_bundles": [{"name": "validator"}],
+        },
+    )
+    _write_agent_bundle(
+        package_dir,
+        "validator",
+        agent_id="shared_validator",
+        name="Package Validator",
+    )
+
+    legacy_agents_dir = tmp_path / "legacy_agents"
+    legacy_core_dir = legacy_agents_dir / "core"
+    legacy_core_dir.mkdir(parents=True)
+    (legacy_core_dir / "agent.yaml").write_text(
+        "agent_id: core_agent\nname: Core Agent\n",
+        encoding="utf-8",
+    )
+    (legacy_core_dir / "prompt.yaml").write_text(
+        "content: Core prompt\n",
+        encoding="utf-8",
+    )
+    agent_loader.load_agent_definitions(legacy_agents_dir, force_reload=True)
+
+    resolver = agent_loader.build_package_scoped_agent_resolver(packages_dir)
+
+    resolved = resolver("org.validators", "shared_validator")
+
+    assert resolved is not None
+    assert resolved.package_id == "org.validators"
+    assert resolved.folder_name == "validator"
+    assert agent_loader.get_agent_definition("core_agent") is not None
+    assert (
+        agent_loader.get_agent_definition_for_package(
+            "org.validators",
+            "shared_validator",
+        )
+        is None
+    )
+
+
 def test_load_agent_definitions_raises_clear_error_for_missing_package_agent_yaml(tmp_path):
     packages_dir = tmp_path / "packages"
     package_dir = packages_dir / "demo_core"

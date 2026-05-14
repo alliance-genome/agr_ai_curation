@@ -2429,6 +2429,11 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
             "requires_document": requires_document,
             "required_params": required_params,
             "curation": curation_metadata,
+            "package_id": (
+                agent_definition.package_id
+                if agent_definition is not None
+                else None
+            ),
         }
 
     if agent_id == "task_input":
@@ -2439,6 +2444,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
             "requires_document": False,
             "required_params": [],
             "curation": None,
+            "package_id": None,
         }
 
     if agent_definition is not None:
@@ -2449,6 +2455,7 @@ def get_agent_metadata(agent_id: str, **kwargs: Any) -> Dict[str, Any]:
             "requires_document": agent_definition.requires_document,
             "required_params": list(agent_definition.required_params),
             "curation": curation_metadata,
+            "package_id": agent_definition.package_id,
         }
 
     raise ValueError(

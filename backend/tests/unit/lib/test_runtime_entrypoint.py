@@ -144,6 +144,50 @@ tools:
     assert "Skipping runtime package" not in caplog.text
 
 
+def test_validate_runtime_packages_does_not_replace_agent_cache_for_validator_refs(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from src.lib.config import agent_loader
+
+    agent_loader.reset_cache()
+    legacy_agents_dir = tmp_path / "legacy_agents"
+    legacy_agent_dir = legacy_agents_dir / "core"
+    legacy_agent_dir.mkdir(parents=True)
+    (legacy_agent_dir / "agent.yaml").write_text(
+        "agent_id: core_agent\nname: Core Agent\n",
+        encoding="utf-8",
+    )
+    (legacy_agent_dir / "prompt.yaml").write_text(
+        "content: Core prompt\n",
+        encoding="utf-8",
+    )
+    agent_loader.load_agent_definitions(legacy_agents_dir, force_reload=True)
+
+    runtime_root = tmp_path / "runtime"
+    packages_dir = runtime_root / "packages"
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    runtime_entrypoint.ensure_runtime_layout()
+    _write_runtime_validator_package(packages_dir / "demo.validators")
+
+    try:
+        registry = runtime_entrypoint.validate_runtime_packages()
+
+        assert [package.package_id for package in registry.loaded_packages] == [
+            "demo.validators"
+        ]
+        assert agent_loader.get_agent_definition("core_agent") is not None
+        assert (
+            agent_loader.get_agent_definition_for_package(
+                "demo.validators",
+                "runtime_validator",
+            )
+            is None
+        )
+    finally:
+        agent_loader.reset_cache()
+
+
 def test_bootstrap_package_environments_only_targets_tool_packages(monkeypatch, tmp_path: Path):
     package_dir = tmp_path / "packages"
     package_dir.mkdir()
@@ -449,4 +493,61 @@ def _loaded_package(
         package_path=package_path,
         manifest_path=manifest_path,
         manifest=manifest,
+    )
+
+
+def _write_runtime_validator_package(package_dir: Path) -> None:
+    package_dir.mkdir(parents=True)
+    (package_dir / "requirements").mkdir()
+    (package_dir / "requirements" / "runtime.txt").write_text("", encoding="utf-8")
+    (package_dir / "package.yaml").write_text(
+        """package_id: demo.validators
+display_name: Demo Validators
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/demo_validators
+requirements_file: requirements/runtime.txt
+agent_bundles:
+  - name: runtime_validator
+""",
+        encoding="utf-8",
+    )
+    agent_dir = package_dir / "agents" / "runtime_validator"
+    agent_dir.mkdir(parents=True)
+    (agent_dir / "agent.yaml").write_text(
+        "agent_id: runtime_validator\nname: Runtime Validator\n",
+        encoding="utf-8",
+    )
+    (agent_dir / "prompt.yaml").write_text(
+        "content: Runtime validator prompt\n",
+        encoding="utf-8",
+    )
+    domain_pack_dir = package_dir / "domain_packs" / "fixture_validation"
+    domain_pack_dir.mkdir(parents=True)
+    (domain_pack_dir / "domain_pack.yaml").write_text(
+        """pack_id: fixture.validation
+display_name: Fixture Validation Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+model_definitions:
+  - model_id: GeneAssertionPayload
+    display_name: Gene assertion payload
+object_definitions:
+  - object_type: GeneAssertion
+    display_name: Gene assertion
+    model_ref: GeneAssertionPayload
+metadata:
+  validator_bindings:
+    active:
+      - binding_id: fixture.agent_validator
+        validator_agent:
+          package_id: demo.validators
+          agent_id: runtime_validator
+        applies_to:
+          domain_pack_id: fixture.validation
+""",
+        encoding="utf-8",
     )

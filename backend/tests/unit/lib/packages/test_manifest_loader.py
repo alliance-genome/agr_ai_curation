@@ -34,6 +34,69 @@ def test_load_package_manifest_parses_representative_fixture():
     assert manifest.exports[0].path == "agents/supervisor"
 
 
+def test_load_package_manifest_parses_package_dependencies(tmp_path: Path):
+    manifest_path = tmp_path / "package.yaml"
+    manifest_path.write_text(
+        """
+package_id: org.custom
+display_name: Custom Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/org_custom
+requirements_file: requirements/runtime.txt
+dependencies:
+  - package_id: agr.alliance
+    version_range: ">=1.0.0,<2.0.0"
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default bindings
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manifest = load_package_manifest(manifest_path)
+
+    assert len(manifest.dependencies) == 1
+    assert manifest.dependencies[0].package_id == "agr.alliance"
+    assert manifest.dependencies[0].version_range == ">=1.0.0,<2.0.0"
+
+
+def test_load_package_manifest_rejects_duplicate_dependencies(tmp_path: Path):
+    manifest_path = tmp_path / "package.yaml"
+    manifest_path.write_text(
+        """
+package_id: org.custom
+display_name: Custom Package
+version: 1.0.0
+package_api_version: 1.0.0
+min_runtime_version: 1.0.0
+max_runtime_version: 2.0.0
+python_package_root: python/src/org_custom
+requirements_file: requirements/runtime.txt
+dependencies:
+  - package_id: agr.alliance
+    version_range: ">=1.0.0"
+  - package_id: agr.alliance
+    version_range: "<2.0.0"
+exports:
+  - kind: tool_binding
+    name: default
+    path: tools/bindings.yaml
+    description: Default bindings
+""".strip(),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(PackageManifestError) as exc_info:
+        load_package_manifest(manifest_path)
+
+    assert "dependencies contains duplicate entries: agr.alliance" in str(exc_info.value)
+
+
 def test_load_package_manifest_expands_agent_bundles_shorthand(tmp_path: Path):
     manifest_path = tmp_path / "package.yaml"
     manifest_path.write_text(

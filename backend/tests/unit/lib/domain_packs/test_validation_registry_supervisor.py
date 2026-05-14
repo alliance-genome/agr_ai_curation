@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,6 +15,7 @@ from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationRegistryError,
     ValidationBindingState,
+    validate_active_validator_agent_references,
 )
 from src.lib.domain_packs import validation_supervisor
 from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
@@ -172,6 +174,232 @@ def _loaded_pack(tmp_path: Path, metadata_text: str | None = None) -> LoadedDoma
         metadata_path=metadata_path,
         metadata=metadata,
     )
+
+
+def _loaded_owned_pack(
+    tmp_path: Path,
+    metadata_text: str,
+    *,
+    package_id: str = "org.owner",
+) -> LoadedDomainPack:
+    pack = _loaded_pack(tmp_path, metadata_text)
+    return LoadedDomainPack(
+        pack_id=pack.pack_id,
+        display_name=pack.display_name,
+        version=pack.version,
+        pack_path=pack.pack_path,
+        metadata_path=pack.metadata_path,
+        metadata=pack.metadata,
+        package_id=package_id,
+        package_display_name=package_id,
+        package_version="1.0.0",
+    )
+
+
+def _package_registry(*package_ids: str, dependencies: set[tuple[str, str]] | None = None):
+    dependency_pairs = dependencies or set()
+
+    class _Registry:
+        def get_package(self, package_id: str):
+            if package_id not in package_ids:
+                return None
+            return SimpleNamespace(package_id=package_id)
+
+        def package_declares_dependency(
+            self,
+            source_package_id: str,
+            target_package_id: str,
+        ) -> bool:
+            return (
+                source_package_id == target_package_id
+                or (source_package_id, target_package_id) in dependency_pairs
+            )
+
+    return _Registry()
+
+
+def _validator_agent_pack_text() -> str:
+    return """
+pack_id: fixture.validation
+display_name: Fixture Validation Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+model_definitions:
+  - model_id: GeneAssertionPayload
+    display_name: Gene assertion payload
+object_definitions:
+  - object_type: GeneAssertion
+    display_name: Gene assertion
+    model_ref: GeneAssertionPayload
+metadata:
+  validator_bindings:
+    active:
+      - binding_id: fixture.agent_validator
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
+        applies_to:
+          domain_pack_id: fixture.validation
+""".strip()
+
+
+def _metadata_validator_agent_pack_text() -> str:
+    return """
+pack_id: fixture.validation
+display_name: Fixture Validation Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+model_definitions:
+  - model_id: GeneAssertionPayload
+    display_name: Gene assertion payload
+object_definitions:
+  - object_type: GeneAssertion
+    display_name: Gene assertion
+    model_ref: GeneAssertionPayload
+metadata:
+  validators:
+    active:
+      - validator_id: fixture.agent_validator
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
+""".strip()
+
+
+def test_active_validator_agent_reference_validates_package_agent_and_dependency(tmp_path: Path):
+    pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    validate_active_validator_agent_references(
+        [registry],
+        _package_registry(
+            "org.owner",
+            "org.validators",
+            dependencies={("org.owner", "org.validators")},
+        ),
+        agent_resolver=lambda package_id, agent_id: (
+            SimpleNamespace(package_id=package_id, agent_id=agent_id)
+            if (package_id, agent_id) == ("org.validators", "shared_validator")
+            else None
+        ),
+    )
+
+    option = registry.validation_attachment_options()[0].to_dict()
+    assert option["validator_id"] == "org.validators:shared_validator"
+    assert option["validator_package_id"] == "org.validators"
+    assert option["validator_agent_id"] == "shared_validator"
+
+
+def test_active_validator_agent_reference_fails_for_undeclared_cross_package_dependency(
+    tmp_path: Path,
+):
+    pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    with pytest.raises(ValidationRegistryError) as exc_info:
+        validate_active_validator_agent_references(
+            [registry],
+            _package_registry("org.owner", "org.validators"),
+            agent_resolver=lambda _package_id, _agent_id: SimpleNamespace(),
+        )
+
+    assert "must declare dependency 'org.validators'" in str(exc_info.value)
+
+
+def test_active_metadata_validator_agent_reference_requires_declared_dependency(
+    tmp_path: Path,
+):
+    pack = _loaded_owned_pack(tmp_path, _metadata_validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    with pytest.raises(ValidationRegistryError) as exc_info:
+        validate_active_validator_agent_references(
+            [registry],
+            _package_registry("org.owner", "org.validators"),
+            agent_resolver=lambda _package_id, _agent_id: SimpleNamespace(),
+        )
+
+    message = str(exc_info.value)
+    assert "must declare dependency 'org.validators'" in message
+    assert "validator 'fixture.agent_validator'" in message
+
+
+def test_active_validator_agent_reference_fails_for_missing_agent(tmp_path: Path):
+    pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    with pytest.raises(ValidationRegistryError) as exc_info:
+        validate_active_validator_agent_references(
+            [registry],
+            _package_registry(
+                "org.owner",
+                "org.validators",
+                dependencies={("org.owner", "org.validators")},
+            ),
+            agent_resolver=lambda _package_id, _agent_id: None,
+        )
+
+    assert "references missing validator agent 'org.validators:shared_validator'" in str(
+        exc_info.value
+    )
+
+
+def test_active_metadata_validator_agent_reference_fails_for_missing_package(
+    tmp_path: Path,
+):
+    pack = _loaded_owned_pack(tmp_path, _metadata_validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    with pytest.raises(ValidationRegistryError) as exc_info:
+        validate_active_validator_agent_references(
+            [registry],
+            _package_registry("org.owner"),
+            agent_resolver=lambda _package_id, _agent_id: SimpleNamespace(),
+        )
+
+    message = str(exc_info.value)
+    assert "references missing validator package 'org.validators'" in message
+    assert "validator 'fixture.agent_validator'" in message
+
+
+def test_active_metadata_validator_agent_reference_fails_for_missing_agent(
+    tmp_path: Path,
+):
+    pack = _loaded_owned_pack(tmp_path, _metadata_validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    with pytest.raises(ValidationRegistryError) as exc_info:
+        validate_active_validator_agent_references(
+            [registry],
+            _package_registry(
+                "org.owner",
+                "org.validators",
+                dependencies={("org.owner", "org.validators")},
+            ),
+            agent_resolver=lambda _package_id, _agent_id: None,
+        )
+
+    message = str(exc_info.value)
+    assert (
+        "references missing validator agent 'org.validators:shared_validator'"
+        in message
+    )
+    assert "validator 'fixture.agent_validator'" in message
+
+
+def test_validator_agent_reference_rejects_bare_agent_id(tmp_path: Path):
+    bare_ref_text = _validator_agent_pack_text().replace(
+        "validator_agent:\n"
+        "          package_id: org.validators\n"
+        "          agent_id: shared_validator",
+        "validator_agent: shared_validator",
+    )
+    pack = _loaded_owned_pack(tmp_path, bare_ref_text)
+
+    with pytest.raises(ValidationRegistryError, match="validator_agent must be a mapping"):
+        DomainPackValidationRegistry.from_domain_pack(pack)
 
 
 def _envelope(

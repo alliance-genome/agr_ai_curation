@@ -126,12 +126,30 @@ def validate_runtime_packages() -> PackageRegistry:
         packages_dir,
         fail_on_validation_error=True,
     )
+    from src.lib.config.agent_loader import build_package_scoped_agent_resolver
+    from src.lib.domain_packs.registry import load_package_domain_pack_registry
+    from src.lib.domain_packs.validation_registry import (
+        DomainPackValidationRegistry,
+        validate_active_validator_agent_references,
+    )
+
+    domain_pack_registry = load_package_domain_pack_registry(registry)
+    domain_pack_validation_registries = tuple(
+        DomainPackValidationRegistry.from_domain_pack(domain_pack)
+        for domain_pack in domain_pack_registry.loaded_packs
+    )
+    validate_active_validator_agent_references(
+        domain_pack_validation_registries,
+        registry,
+        agent_resolver=build_package_scoped_agent_resolver(packages_dir),
+    )
     logger.info(
-        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s",
+        "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s domain_packs=%s",
         len(registry.loaded_packages),
         len(registry.failed_packages),
         report["status"],
         len(tool_registry.bindings),
+        len(domain_pack_registry.loaded_packs),
     )
     if registry.failed_packages:
         for failure in registry.failed_packages:

@@ -912,6 +912,7 @@ def _agent_definition_to_registry_entry(
         "description": agent_def.description,
         "category": agent_def.category,
         "subcategory": agent_def.subcategory,
+        "package_id": agent_def.package_id,
         "has_group_rules": agent_def.group_rules_enabled,
         "tools": agent_def.tools,
         "factory": None,
@@ -961,6 +962,7 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
         "description": "Define the curator's task that starts the flow",
         "category": "Input",
         "subcategory": "Input",
+        "package_id": None,
         "has_group_rules": False,
         "tools": [],
         "factory": None,  # Not an executable agent
