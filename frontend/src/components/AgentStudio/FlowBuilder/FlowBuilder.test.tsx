@@ -320,8 +320,10 @@ describe('FlowBuilder', () => {
           id: 'validation_2',
           source: 'node_1',
           target: 'node_3',
-          role: 'validation_attachment',
-          satisfies_binding_id: 'identifier',
+          data: {
+            role: 'validation_attachment',
+            satisfies_binding_id: 'identifier',
+          },
         },
       ]
     )
@@ -461,8 +463,10 @@ describe('FlowBuilder', () => {
           id: 'validation_3',
           source: 'node_1',
           target: 'node_4',
-          role: 'validation_attachment',
-          satisfies_binding_id: 'curator_extra_lookup',
+          data: {
+            role: 'validation_attachment',
+            satisfies_binding_id: 'curator_extra_lookup',
+          },
         },
       ]
     )

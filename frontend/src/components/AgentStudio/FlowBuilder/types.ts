@@ -39,6 +39,13 @@ export interface ValidationAttachmentSelection extends ValidationAttachmentOptio
   enabled: boolean
 }
 
+export const validationAttachmentForPersistence = <T extends { export_blocking?: boolean }>(
+  attachment: T
+): Omit<T, 'export_blocking'> => {
+  const { export_blocking: _exportBlocking, ...selection } = attachment
+  return selection
+}
+
 export interface ValidationAttachmentGroup {
   group_id: string
   state: 'automatic' | 'skipped' | 'replaced' | 'supplemental'
@@ -178,11 +185,7 @@ export type FlowEdge = Edge<{
   replaces_attachment_id?: string
   validationLabel?: string
   onDeleteEdge?: (edgeId: string) => void
-}> & {
-  role?: FlowEdgeRole
-  satisfies_binding_id?: string
-  replaces_attachment_id?: string
-}
+}>
 
 // ============================================================================
 // UI Component Props

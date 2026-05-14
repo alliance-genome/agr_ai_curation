@@ -32,6 +32,7 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import DescriptionIcon from '@mui/icons-material/Description'
 import SchemaIcon from '@mui/icons-material/Schema'
 
+import { validationAttachmentForPersistence } from './types'
 import type {
   NodeEditorProps,
   InputSource,
@@ -169,13 +170,6 @@ const validationOwnerText = (attachment: ValidationAttachmentSelection) => {
   return `${attachment.domain_pack_id}${attachment.domain_pack_version ? ` v${attachment.domain_pack_version}` : ''} / ${owner}`
 }
 
-const validationAttachmentForPersistence = (
-  attachment: ValidationAttachmentSelection
-): ValidationAttachmentSelection => {
-  const { export_blocking: _exportBlocking, ...selection } = attachment
-  return selection
-}
-
 const validationGroupStateLabel = (
   attachment: ValidationAttachmentSelection,
   group?: ValidationAttachmentGroup
@@ -203,7 +197,7 @@ const supplementalGroupOwnerText = (group: ValidationAttachmentGroup) => {
     group.edge_id ? `edge ${group.edge_id}` : null,
   ].filter(Boolean)
 
-  return parts.length > 0 ? parts.join(' / ') : 'Custom supplemental validator'
+  return parts.length > 0 ? parts.join(' / ') : 'Missing supplemental edge metadata'
 }
 
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {

@@ -60,6 +60,7 @@ import NodeEditor from './NodeEditor'
 import TaskInputEditor from './TaskInputEditor'
 import PromptViewer from './PromptViewer'
 import DomainEnvelopeViewer from './DomainEnvelopeViewer'
+import { validationAttachmentForPersistence } from './types'
 import type {
   FlowBuilderProps,
   FlowState,
@@ -68,6 +69,7 @@ import type {
   FlowDefinition,
   FlowResponse,
   FlowEdge,
+  FlowEdgeRole,
   ValidationAttachmentGroup,
   ValidationAttachmentSelection,
 } from './types'
@@ -123,13 +125,6 @@ const buildDefaultValidationSelections = (
   })) ?? []
 )
 
-const validationAttachmentForPersistence = <T extends { export_blocking?: boolean }>(
-  attachment: T
-): Omit<T, 'export_blocking'> => {
-  const { export_blocking: _exportBlocking, ...selection } = attachment
-  return selection
-}
-
 const activeValidationBindingOptions = (
   node?: AgentNode
 ): ValidationAttachmentSelection[] => (
@@ -140,11 +135,11 @@ const activeValidationBindingOptions = (
   )) ?? []
 )
 
-const edgeRole = (edge: FlowEdge): 'control_flow' | 'validation_attachment' =>
-  edge.role ?? edge.data?.role ?? 'control_flow'
+const edgeRole = (edge: FlowEdge): FlowEdgeRole =>
+  edge.data?.role ?? 'control_flow'
 
 const validationEdgeLabel = (binding: ValidationAttachmentSelection): string =>
-  binding.target_label || binding.label || binding.validator_binding_id || 'Validator binding'
+  binding.target_label || binding.label
 
 const nextValidationEdgeId = (existingEdges: FlowEdge[]): string => {
   let index = existingEdges.length + 1
@@ -167,7 +162,7 @@ export const rebuildValidationGroupsFromEdges = (
     const replacementsByBinding = new Map<string, { edgeId: string; target: string }>()
     currentEdges.forEach((edge) => {
       if (edgeRole(edge) !== 'validation_attachment' || edge.source !== node.id) return
-      const bindingId = edge.satisfies_binding_id ?? edge.data?.satisfies_binding_id
+      const bindingId = edge.data?.satisfies_binding_id
       if (!bindingId) return
       replacementsByBinding.set(bindingId, {
         edgeId: edge.id,
@@ -623,9 +618,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         id: e.id,
         source: e.source,
         target: e.target,
-        role: e.role ?? 'control_flow',
-        satisfies_binding_id: e.satisfies_binding_id,
-        replaces_attachment_id: e.replaces_attachment_id,
         type: 'deletable',
         animated: e.role !== 'validation_attachment',
         data: {
@@ -733,8 +725,8 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           source: e.source,
           target: e.target,
           role: edgeRole(e as FlowEdge),
-          satisfies_binding_id: (e as FlowEdge).satisfies_binding_id ?? e.data?.satisfies_binding_id,
-          replaces_attachment_id: (e as FlowEdge).replaces_attachment_id ?? e.data?.replaces_attachment_id,
+          satisfies_binding_id: e.data?.satisfies_binding_id,
+          replaces_attachment_id: e.data?.replaces_attachment_id,
         })),
       }
       onFlowChange(flowState)
@@ -896,10 +888,10 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
             target: e.target,
             role,
             satisfies_binding_id: role === 'validation_attachment'
-              ? ((e as FlowEdge).satisfies_binding_id ?? e.data?.satisfies_binding_id)
+              ? e.data?.satisfies_binding_id
               : undefined,
             replaces_attachment_id: role === 'validation_attachment'
-              ? ((e as FlowEdge).replaces_attachment_id ?? e.data?.replaces_attachment_id)
+              ? e.data?.replaces_attachment_id
               : undefined,
           }
         }),
@@ -969,10 +961,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       const duplicate = existing.some((edge) => (
         edgeRole(edge) === 'validation_attachment'
         && edge.source === source
-        && (
-          edge.satisfies_binding_id === bindingId
-          || edge.data?.satisfies_binding_id === bindingId
-        )
+        && edge.data?.satisfies_binding_id === bindingId
       ))
       if (duplicate) {
         setSnackbar({
@@ -989,8 +978,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         target,
         type: 'deletable',
         animated: false,
-        role: 'validation_attachment',
-        satisfies_binding_id: bindingId,
         data: {
           role: 'validation_attachment',
           satisfies_binding_id: bindingId,
@@ -1054,7 +1041,6 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         ...params,
         animated: true,
         type: 'deletable',
-        role: 'control_flow',
         data: { role: 'control_flow' },
       } as FlowEdge, eds))
 
