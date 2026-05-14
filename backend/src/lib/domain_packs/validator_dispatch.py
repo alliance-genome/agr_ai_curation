@@ -229,6 +229,7 @@ def _validated_result_from_agent_output(
 
 def _extract_structured_output(raw_output: Any) -> Any:
     output = raw_output
+    # Support OpenAI SDK run results, Pydantic models, and lightweight fake runners.
     if hasattr(output, "final_output"):
         output = output.final_output
     if hasattr(output, "model_dump"):
