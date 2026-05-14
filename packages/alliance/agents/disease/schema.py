@@ -1,40 +1,26 @@
-"""Disease validation agent schema.
+"""Disease validation agent schema."""
 
-This module defines the envelope schema for the disease validation agent.
-The envelope class is discovered at startup and registered in the schema registry.
+from typing import Any, Optional
 
-Naming convention: {AgentFunction}Envelope -> DiseaseValidationEnvelope
-"""
+from pydantic import Field
 
-from typing import List, Optional
-from pydantic import Field, ConfigDict
-
-# Import base class from shared schemas location
-from src.schemas.models.base import StructuredMessageEnvelope
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 
-class DiseaseValidationEnvelope(StructuredMessageEnvelope):
-    """Envelope for disease validation agent responses.
+class DiseaseResultEnvelope(DomainValidatorResultBase):
+    """Canonical result schema for Alliance disease validator agents."""
 
-    Contains disease ontology lookup results from DOID.
-    """
-    model_config = ConfigDict(extra='forbid')
-
-    # Required: Marker for schema discovery
     __envelope_class__ = True
 
-    actor: str = Field(
-        default="disease_validation_specialist",
-        description="The disease validation agent"
-    )
-    findings: str = Field(
-        description="Disease ontology information"
-    )
-    disease_ids: List[str] = Field(
+    results: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="List of Disease Ontology IDs found (e.g., DOID:0050686)"
+        description="Resolved disease ontology facts returned by the lookup",
     )
-    disease_names: Optional[List[str]] = Field(
+    query_summary: Optional[str] = Field(
         default=None,
-        description="Human-readable disease names"
+        description="Brief summary of what was queried and found",
+    )
+    not_found: list[str] = Field(
+        default_factory=list,
+        description="Terms or IDs that were not found in the ontology",
     )

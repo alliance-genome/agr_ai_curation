@@ -511,17 +511,30 @@ python_package_root: python/src/demo_validators
 requirements_file: requirements/runtime.txt
 agent_bundles:
   - name: runtime_validator
+    has_schema: true
 """,
         encoding="utf-8",
     )
     agent_dir = package_dir / "agents" / "runtime_validator"
     agent_dir.mkdir(parents=True)
     (agent_dir / "agent.yaml").write_text(
-        "agent_id: runtime_validator\nname: Runtime Validator\n",
+        (
+            "agent_id: runtime_validator\n"
+            "name: Runtime Validator\n"
+            "output_schema: RuntimeValidatorResult\n"
+        ),
         encoding="utf-8",
     )
     (agent_dir / "prompt.yaml").write_text(
         "content: Runtime validator prompt\n",
+        encoding="utf-8",
+    )
+    (agent_dir / "schema.py").write_text(
+        (
+            "from src.schemas.domain_validator import DomainValidatorResultBase\n\n"
+            "class RuntimeValidatorResult(DomainValidatorResultBase):\n"
+            "    __envelope_class__ = True\n"
+        ),
         encoding="utf-8",
     )
     domain_pack_dir = package_dir / "domain_packs" / "fixture_validation"

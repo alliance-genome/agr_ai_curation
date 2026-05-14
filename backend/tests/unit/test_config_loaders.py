@@ -197,31 +197,32 @@ class TestSchemaDiscovery:
         assert len(schemas) >= 5, f"Expected at least 5 schemas, got {len(schemas)}"
 
         # Check some expected schemas exist
-        expected_schemas = ["GeneValidationEnvelope", "AlleleValidationEnvelope"]
+        expected_schemas = ["GeneResultEnvelope", "AlleleResultEnvelope"]
         for schema_name in expected_schemas:
             assert schema_name in schemas, f"Expected schema {schema_name} not found"
 
     def test_gene_validation_envelope(self):
-        """Test that GeneValidationEnvelope is discovered and valid."""
+        """Test that GeneResultEnvelope is discovered and valid."""
         from src.lib.config.schema_discovery import discover_agent_schemas, get_agent_schema
         from pydantic import BaseModel
 
         discover_agent_schemas(ALLIANCE_AGENTS_PATH)
-        GeneEnvelope = get_agent_schema("GeneValidationEnvelope")
+        GeneEnvelope = get_agent_schema("GeneResultEnvelope")
 
-        assert GeneEnvelope is not None, "GeneValidationEnvelope not found"
+        assert GeneEnvelope is not None, "GeneResultEnvelope not found"
         assert issubclass(GeneEnvelope, BaseModel)
 
         # Check it has expected fields
         field_names = list(GeneEnvelope.model_fields.keys())
-        assert "gene_curies" in field_names, f"Expected 'gene_curies' field, got: {field_names}"
+        assert "validator_binding_id" in field_names, f"Expected shared validator fields, got: {field_names}"
+        assert "results" in field_names, f"Expected domain result fields, got: {field_names}"
 
     def test_get_schema_json(self):
         """Test generating JSON schema."""
         from src.lib.config.schema_discovery import discover_agent_schemas, get_schema_json
 
         discover_agent_schemas(ALLIANCE_AGENTS_PATH)
-        json_schema = get_schema_json("GeneValidationEnvelope")
+        json_schema = get_schema_json("GeneResultEnvelope")
 
         assert json_schema is not None
         assert "properties" in json_schema
@@ -245,7 +246,7 @@ class TestSchemaDiscovery:
         gene_schema = get_schema_for_agent("gene")
 
         assert gene_schema is not None
-        assert gene_schema.__name__ == "GeneValidationEnvelope"
+        assert gene_schema.__name__ == "GeneResultEnvelope"
 
     def test_configured_output_schema_must_exist_in_agent_schema_module(self, tmp_path):
         """agent.yaml output_schema typos fail instead of falling back to another class."""

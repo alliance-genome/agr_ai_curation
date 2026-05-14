@@ -414,11 +414,14 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             canonical_tool_ids=[],
         )
 
-    import src.lib.openai_agents as openai_agents_pkg
+    import src.lib.config.schema_discovery as schema_discovery
 
-    monkeypatch.setattr(openai_agents_pkg, "models", SimpleNamespace(MySchema=object()), raising=False)
+    monkeypatch.setattr(
+        schema_discovery,
+        "resolve_output_schema",
+        lambda schema_key: object() if schema_key == "MySchema" else None,
+    )
     assert catalog_service._resolve_output_schema("MySchema") is not None
-    monkeypatch.setattr(openai_agents_pkg, "models", SimpleNamespace(), raising=False)
     assert catalog_service._resolve_output_schema("Missing") is None
 
     fake_db = SimpleNamespace(close=lambda: None)
@@ -498,7 +501,7 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
 
 def test_create_db_agent_wraps_domain_repair_schema_for_runtime(monkeypatch):
     from agents.agent_output import AgentOutputSchema
-    from src.lib.openai_agents.models import GeneExtractorRepairResponse
+    from src.lib.config import schema_discovery
 
     fake_row = SimpleNamespace(
         id="agent-id",
@@ -523,10 +526,11 @@ def test_create_db_agent_wraps_domain_repair_schema_for_runtime(monkeypatch):
     monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row)
+    canonical_schema = schema_discovery.get_agent_schema("GeneExtractorRepairResponse")
 
     assert "GeneExtractorRepairResponse" in built.instructions
     assert isinstance(built.output_type, AgentOutputSchema)
-    assert built.output_type.output_type is GeneExtractorRepairResponse
+    assert built.output_type.output_type is canonical_schema
     assert built.output_type.is_strict_json_schema() is False
     assert built.output_type.__name__ == "GeneExtractorRepairResponse"
     assert built.output_type.json_schema().get("type") == "object"

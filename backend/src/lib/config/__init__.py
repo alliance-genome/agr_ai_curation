@@ -34,6 +34,8 @@ from .schema_discovery import (
     get_schema_for_agent,
     get_schema_json,
     list_agent_schemas,
+    resolve_output_schema,
+    build_package_scoped_output_schema_resolver,
     is_initialized as is_schemas_initialized,
     reset_cache as reset_schema_cache,
 )
@@ -126,6 +128,8 @@ __all__ = [
     "get_schema_for_agent",
     "get_schema_json",
     "list_agent_schemas",
+    "resolve_output_schema",
+    "build_package_scoped_output_schema_resolver",
     "is_schemas_initialized",
     "reset_schema_cache",
     # Groups loader

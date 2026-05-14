@@ -1,40 +1,26 @@
-"""Gene ontology lookup agent schema.
+"""Gene ontology lookup agent schema."""
 
-This module defines the envelope schema for the gene ontology lookup agent.
-The envelope class is discovered at startup and registered in the schema registry.
+from typing import Any, Optional
 
-Naming convention: {AgentFunction}Envelope -> GOTermEnvelope
-"""
+from pydantic import Field
 
-from typing import List, Optional
-from pydantic import Field, ConfigDict
-
-# Import base class from shared schemas location
-from src.schemas.models.base import StructuredMessageEnvelope
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 
-class GOTermEnvelope(StructuredMessageEnvelope):
-    """Envelope for gene ontology lookup agent responses.
+class GOTermResultEnvelope(DomainValidatorResultBase):
+    """Canonical result schema for Alliance GO term validator agents."""
 
-    Contains GO term definitions and hierarchy information.
-    """
-    model_config = ConfigDict(extra='forbid')
-
-    # Required: Marker for schema discovery
     __envelope_class__ = True
 
-    actor: str = Field(
-        default="gene_ontology_specialist",
-        description="The gene ontology lookup agent"
-    )
-    findings: str = Field(
-        description="GO term information and definitions"
-    )
-    go_ids: List[str] = Field(
+    results: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="List of GO IDs found (e.g., GO:0008150)"
+        description="Resolved GO term facts returned by the lookup",
     )
-    go_terms: Optional[List[dict]] = Field(
+    query_summary: Optional[str] = Field(
         default=None,
-        description="GO term details including name, namespace, definition"
+        description="Brief summary of what was queried and found",
+    )
+    not_found: list[str] = Field(
+        default_factory=list,
+        description="Terms or IDs that were not found in the ontology",
     )

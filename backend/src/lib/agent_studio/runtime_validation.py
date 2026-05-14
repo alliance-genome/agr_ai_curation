@@ -34,12 +34,10 @@ def get_agent_runtime_validation_strict_mode() -> bool:
 
 
 def _resolve_output_schema(schema_key: str) -> Optional[Any]:
-    """Resolve output schema class by name from shared OpenAI agent models."""
-    try:
-        from src.lib.openai_agents import models as agent_models
-    except Exception:
-        return None
-    return getattr(agent_models, schema_key, None)
+    """Resolve output schema class by canonical package registration first."""
+    from src.lib.config.schema_discovery import resolve_output_schema
+
+    return resolve_output_schema(schema_key)
 
 
 def _load_runtime_policy() -> Dict[str, Any]:

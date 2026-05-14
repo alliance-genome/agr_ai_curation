@@ -1,41 +1,26 @@
-"""Gene validation agent schema.
+"""Gene validation agent schema."""
 
-This module defines the envelope schema for the gene validation agent.
-The envelope class is discovered at startup and registered in the schema registry.
+from typing import Any, Optional
 
-Naming convention: {AgentFunction}Envelope -> GeneValidationEnvelope
-"""
+from pydantic import Field
 
-from typing import List, Optional
-from pydantic import Field, ConfigDict
-
-# Import base class from shared schemas location
-# TODO: After full migration, this import path will change to a shared base
-from src.schemas.models.base import StructuredMessageEnvelope
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 
-class GeneValidationEnvelope(StructuredMessageEnvelope):
-    """Envelope for gene validation agent responses.
+class GeneResultEnvelope(DomainValidatorResultBase):
+    """Canonical result schema for Alliance gene validator agents."""
 
-    Contains gene lookup results from the Alliance Curation Database.
-    """
-    model_config = ConfigDict(extra='forbid')
-
-    # Required: Marker for schema discovery
     __envelope_class__ = True
 
-    actor: str = Field(
-        default="gene_validation_specialist",
-        description="The gene validation agent"
-    )
-    findings: str = Field(
-        description="Gene information from curation database"
-    )
-    gene_curies: List[str] = Field(
+    results: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="List of gene CURIEs found (e.g., WB:WBGene00006763)"
+        description="Resolved Alliance Gene facts returned by the lookup",
     )
-    species: Optional[List[str]] = Field(
+    query_summary: Optional[str] = Field(
         default=None,
-        description="Species/taxa mentioned (e.g., NCBITaxon:6239)"
+        description="Brief summary of what was queried and found",
+    )
+    not_found: list[str] = Field(
+        default_factory=list,
+        description="Symbols or IDs that were not found in the database",
     )

@@ -2132,16 +2132,10 @@ def _build_runtime_instructions(
 
 
 def _resolve_output_schema(schema_key: str) -> Optional[Any]:
-    """Resolve output schema class by name from shared OpenAI agent models."""
-    try:
-        from src.lib.openai_agents import models as agent_models
-    except Exception:
-        return None
+    """Resolve output schema class by canonical package registration first."""
+    from src.lib.config.schema_discovery import resolve_output_schema
 
-    schema = getattr(agent_models, schema_key, None)
-    if schema is None:
-        return None
-    return schema
+    return resolve_output_schema(schema_key)
 
 
 def _runtime_output_type_for_schema(output_schema: Optional[Any]) -> Optional[Any]:

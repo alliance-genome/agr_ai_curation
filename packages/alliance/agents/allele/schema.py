@@ -1,40 +1,26 @@
-"""Allele validation agent schema.
+"""Allele validation agent schema."""
 
-This module defines the envelope schema for the allele validation agent.
-The envelope class is discovered at startup and registered in the schema registry.
+from typing import Any, Optional
 
-Naming convention: {AgentFunction}Envelope -> AlleleValidationEnvelope
-"""
+from pydantic import Field
 
-from typing import List, Optional
-from pydantic import Field, ConfigDict
-
-# Import base class from shared schemas location
-from src.schemas.models.base import StructuredMessageEnvelope
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 
-class AlleleValidationEnvelope(StructuredMessageEnvelope):
-    """Envelope for allele validation agent responses.
+class AlleleResultEnvelope(DomainValidatorResultBase):
+    """Canonical result schema for Alliance allele validator agents."""
 
-    Contains allele lookup results from the Alliance Curation Database.
-    """
-    model_config = ConfigDict(extra='forbid')
-
-    # Required: Marker for schema discovery
     __envelope_class__ = True
 
-    actor: str = Field(
-        default="allele_validation_specialist",
-        description="The allele validation agent"
-    )
-    findings: str = Field(
-        description="Allele information from curation database"
-    )
-    allele_curies: List[str] = Field(
+    results: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="List of allele CURIEs found (e.g., WB:WBVar00000001)"
+        description="Resolved Alliance allele facts returned by the lookup",
     )
-    species: Optional[List[str]] = Field(
+    query_summary: Optional[str] = Field(
         default=None,
-        description="Species/taxa mentioned (e.g., NCBITaxon:6239)"
+        description="Brief summary of what was queried and found",
+    )
+    not_found: list[str] = Field(
+        default_factory=list,
+        description="Symbols or IDs that were not found in the database",
     )
