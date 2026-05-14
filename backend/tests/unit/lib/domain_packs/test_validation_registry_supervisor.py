@@ -167,6 +167,7 @@ metadata:
             path: gene.identifier
         expected_result_fields:
           curie: gene.identifier
+        required: true
         blocking: true
         allow_opt_out: true
       - binding_id: fixture.optional_confidence_check
@@ -551,7 +552,7 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
     identifier_policy = registry.policy_for("GeneAssertion", "gene.identifier")
     assert identifier_policy is not None
     assert identifier_policy.required is True
-    assert identifier_policy.export_blocking is True
+    assert identifier_policy.blocking is True
     assert identifier_policy.allow_opt_out is True
 
     metadata_only_matches = registry.match_bindings(
@@ -601,7 +602,7 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     ]
     assert identifier_option.state is ValidationBindingState.ACTIVE
     assert identifier_option.field_path == "gene.identifier"
-    assert identifier_option.required is False
+    assert identifier_option.required is True
     assert identifier_option.export_blocking is True
     assert identifier_option.default_enabled is True
     assert identifier_option.allow_opt_out is True
@@ -830,6 +831,24 @@ def test_under_development_binding_rejects_runtime_policy(tmp_path: Path):
         load_domain_pack_metadata(metadata_path)
 
 
+def test_active_binding_rejects_blocking_without_required(tmp_path: Path):
+    metadata_text = _validation_pack_text().replace(
+        "        required: true\n        blocking: true",
+        "        required: false\n        blocking: true",
+        1,
+    )
+    pack_path = tmp_path / "fixture.validation"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(metadata_text, encoding="utf-8")
+
+    with pytest.raises(
+        DomainPackMetadataError,
+        match="blocking: true unless required: true",
+    ):
+        load_domain_pack_metadata(metadata_path)
+
+
 def test_under_development_binding_requires_display_name(tmp_path: Path):
     metadata_text = _validation_pack_text().replace(
         "        display_name: Gene symbol lookup\n"
@@ -870,7 +889,7 @@ def test_supervisor_treats_under_development_bindings_as_metadata_only(
     )
     assert (
         required_finding.details["validation_metadata"]["field_policy"][
-            "export_blocking"
+            "blocking"
         ]
         is True
     )

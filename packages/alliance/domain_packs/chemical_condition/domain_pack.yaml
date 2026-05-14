@@ -643,6 +643,7 @@ metadata:
             path: condition_chemical.curie
         expected_result_fields:
           chebi_id: condition_chemical.curie
+        required: true
         blocking: true
         allow_opt_out: true
       - binding_id: chemical_condition.term_chebi_curie_format
@@ -662,6 +663,7 @@ metadata:
             path: curie
         expected_result_fields:
           chebi_id: curie
+        required: true
         blocking: true
         allow_opt_out: true
     under_development:

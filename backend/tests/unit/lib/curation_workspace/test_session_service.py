@@ -590,6 +590,7 @@ metadata:
             - artifact.title
           field_types:
             - string
+        required: true
         blocking: true
         curator_override:
           allowed: true"""
@@ -2794,7 +2795,7 @@ def test_submission_export_allows_missing_required_field_with_curator_override_p
     readiness = response.submission.readiness[0]
     assert readiness.ready is True
     assert readiness.blockers == []
-    assert "Curator override accepted for export-blocking field artifact.title." in (
+    assert "Curator override accepted for blocking field artifact.title." in (
         readiness.warnings
     )
 
@@ -2833,7 +2834,7 @@ def test_submission_export_allows_binding_policy_curator_override(
     readiness = response.submission.readiness[0]
     assert readiness.ready is True
     assert readiness.blockers == []
-    assert "Curator override accepted for export-blocking field artifact.title." in (
+    assert "Curator override accepted for blocking field artifact.title." in (
         readiness.warnings
     )
 
@@ -2871,12 +2872,12 @@ def test_submission_export_allows_binding_policy_curator_override_without_reason
     readiness = response.submission.readiness[0]
     assert readiness.ready is True
     assert readiness.blockers == []
-    assert "Curator override accepted for export-blocking field artifact.title." in (
+    assert "Curator override accepted for blocking field artifact.title." in (
         readiness.warnings
     )
 
 
-def test_submission_export_blocks_open_export_blocking_validation_findings(
+def test_submission_export_blocks_open_blocking_validation_findings(
     db_session,
     tmp_path,
     monkeypatch,
@@ -2908,7 +2909,10 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
                         "catalog_schema": {"class": "Artifact", "field": "title"}
                     },
                     "validation_metadata": {
-                        "allow_curator_override": True,
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "required": True,
+                        "blocking": True,
                     },
                 },
             )
@@ -2936,6 +2940,178 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
         "catalog_schema": {"class": "Artifact", "field": "title"}
     }
     assert "curator_override" not in blocker.details
+
+
+def test_submission_export_keeps_required_non_blocking_findings_visible_without_blocking(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Title still needs reviewer completeness confirmation.",
+                code="museum.catalog.title_review_required",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "required": True,
+                        "blocking": False,
+                    }
+                },
+            )
+        ],
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is True
+    assert readiness.blockers == []
+    assert response.submission.payload is not None
+    assert response.submission.payload.payload_json is not None
+    envelope_snapshot = next(
+        item
+        for item in response.submission.payload.payload_json["domain_envelopes"]
+        if item["envelope_id"] == seeded["envelope_id"]
+    )
+    assert envelope_snapshot["validation_findings"][0]["code"] == (
+        "museum.catalog.title_review_required"
+    )
+
+
+def test_submission_export_ignores_under_development_validation_metadata(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Future title validator is not active yet.",
+                code="museum.catalog.future_title_check",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.future_title_check",
+                        "binding_state": "under_development",
+                        "required": True,
+                        "blocking": True,
+                    }
+                },
+            )
+        ],
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is True
+    assert readiness.blockers == []
+
+
+def test_submission_export_rejects_blocking_finding_metadata_without_required(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Title policy is malformed.",
+                code="museum.catalog.malformed_title_policy",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "required": False,
+                        "blocking": True,
+                    }
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        module.submission_preview(
+            db_session,
+            seeded["session_id"],
+            CurationSubmissionPreviewRequest(
+                session_id=seeded["session_id"],
+                mode=SubmissionMode.EXPORT,
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            ),
+        )
+
+    assert exc_info.value.status_code == 500
+    assert "blocking: true unless required: true" in exc_info.value.detail
 
 
 def test_submission_export_blocks_waived_finding_with_only_field_override_policy(
@@ -2975,6 +3151,14 @@ def test_submission_export_blocks_waived_finding_with_only_field_override_policy
                     ),
                     field_path="artifact.title",
                 ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "required": True,
+                        "blocking": True,
+                    }
+                },
             )
         ],
     )
@@ -3027,6 +3211,8 @@ def test_submission_export_blocks_waived_finding_with_alias_validation_metadata(
                     "validation_metadata": {
                         "validator_binding_id": "museum.title_catalog_check",
                         "binding_state": "active",
+                        "required": True,
+                        "blocking": True,
                         "allow_opt_out": True,
                     }
                 },
@@ -3082,6 +3268,8 @@ def test_submission_export_allows_waived_finding_with_curator_override_policy(
                     "validation_metadata": {
                         "validator_binding_id": "museum.title_catalog_check",
                         "binding_state": "active",
+                        "required": True,
+                        "blocking": True,
                         "curator_override": {"allowed": True},
                     }
                 },

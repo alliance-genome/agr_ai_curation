@@ -60,6 +60,7 @@ metadata:
             - GeneAssertion
           field_paths:
             - gene.identifier
+        required: true
         blocking: true
 {max_tool_calls_yaml}        input_fields:
           identifier:
