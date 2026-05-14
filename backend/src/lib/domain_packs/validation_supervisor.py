@@ -32,7 +32,6 @@ from .registry import LoadedDomainPack
 from .validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
-    ValidatorBinding,
     ValidatorBindingMatch,
     ValidatorMetadataEntry,
 )

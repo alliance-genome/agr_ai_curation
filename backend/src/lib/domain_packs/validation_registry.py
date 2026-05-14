@@ -386,10 +386,6 @@ class DomainPackValidationRegistry:
         """Build a validation registry from one loaded domain pack."""
 
         metadata = domain_pack.metadata
-        object_definitions = {
-            object_definition.object_type: object_definition
-            for object_definition in metadata.object_definitions
-        }
         validator_metadata = _collect_validator_metadata(metadata.metadata)
         bindings = _collect_validator_bindings(metadata.metadata)
 
