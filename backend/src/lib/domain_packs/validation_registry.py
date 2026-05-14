@@ -268,7 +268,7 @@ class ValidationAttachmentOption:
 
 @dataclass(frozen=True)
 class FieldValidationPolicy:
-    """Required/export-blocking validation policy for one object field."""
+    """Required/blocking validation policy for one object field."""
 
     domain_pack_id: str
     object_type: str
@@ -287,6 +287,10 @@ class FieldValidationPolicy:
     allow_opt_out: bool = False
     curator_override_allowed: bool = False
 
+    @property
+    def blocking(self) -> bool:
+        return self.export_blocking
+
     def identity_details(self) -> dict[str, Any]:
         """Return stable structured details suitable for findings."""
 
@@ -297,7 +301,7 @@ class FieldValidationPolicy:
             "field_type": self.field_type.value,
             "policy_source": "field_policy",
             "required": self.required,
-            "export_blocking": self.export_blocking,
+            "blocking": self.blocking,
             "definition_state": self.definition_state.value,
             "allow_opt_out": self.allow_opt_out,
         }
@@ -839,6 +843,12 @@ def _collect_validator_bindings(
         blocking = active and _optional_bool(raw_item.get("blocking"))
         required = active and _optional_bool(raw_item.get("required"))
         allow_opt_out = active and _optional_bool(raw_item.get("allow_opt_out"))
+        if blocking and not required:
+            binding_id = _required_string(raw_item, "binding_id", "validator_bindings")
+            raise ValidationRegistryError(
+                "validator_bindings.active entry "
+                f"{binding_id!r} cannot set blocking: true unless required: true"
+            )
         curator_override = _optional_mapping(
             raw_item.get("curator_override"),
             "curator_override",

@@ -109,10 +109,6 @@ from src.schemas.domain_pack_metadata import (
 logger = logging.getLogger(__name__)
 SUBMISSION_TRANSPORT_FAILURE_MESSAGE = "Submission failed unexpectedly. Please try again."
 
-_DOMAIN_BLOCKER_SEVERITIES = {
-    ValidationFindingSeverity.ERROR,
-    ValidationFindingSeverity.BLOCKER,
-}
 _BLOCKING_EXPORT_STATUSES = {"blocked", "not_supported", "unsupported"}
 _NON_EXPORTABLE_FLAGS = ("exportable", "submit", "submittable")
 _MISSING = object()
@@ -661,7 +657,7 @@ def _field_policy_blockers(
 
     for field_path, policy in sorted(field_policies.items()):
         field_definition = field_definitions.get(field_path)
-        field_is_gate = policy.required or policy.export_blocking
+        field_is_gate = policy.required or policy.blocking
         if not field_is_gate and policy.definition_state is DefinitionState.STABLE:
             continue
 
@@ -679,7 +675,8 @@ def _field_policy_blockers(
                     status_value="definition_state",
                     code="domain_envelope.field_definition_state_blocked",
                     message=(
-                        "Domain-pack field definition is not stable for export: "
+                        "Domain-pack field definition is not stable for "
+                        "blocking validation: "
                         f"{field_path}."
                     ),
                     provider_refs=provider_refs,
@@ -706,7 +703,7 @@ def _field_policy_blockers(
             field_path=field_path,
         ):
             warnings.append(
-                f"Curator override accepted for export-blocking field {field_path}."
+                f"Curator override accepted for blocking field {field_path}."
             )
             continue
 
@@ -717,9 +714,9 @@ def _field_policy_blockers(
             else "domain_envelope.required_field_missing"
         )
         message = (
-            f"Curator override is not allowed for export-blocking field {field_path}."
+            f"Curator override is not allowed for blocking field {field_path}."
             if override_exists
-            else f"Required export field is missing: {field_path}."
+            else f"Required blocking field is missing: {field_path}."
         )
         blockers.append(
             _readiness_blocker(
@@ -751,7 +748,7 @@ def _validation_finding_blockers(
         target_object_id, field_path = _finding_target(finding, object_id_by_ref)
         if target_object_id != object_id:
             continue
-        if finding.severity not in _DOMAIN_BLOCKER_SEVERITIES:
+        if not _finding_blocks_readiness(finding):
             continue
         if finding.status is ValidationFindingStatus.RESOLVED:
             continue
@@ -783,6 +780,42 @@ def _validation_finding_blockers(
             )
         )
     return blockers
+
+
+def _finding_blocks_readiness(finding: ValidationFinding) -> bool:
+    details = finding.details or {}
+    validation_metadata = details.get("validation_metadata")
+    if not isinstance(validation_metadata, Mapping):
+        return False
+
+    binding_state = _normalized_optional_string(
+        validation_metadata.get("binding_state"),
+        field_name="validation_metadata.binding_state",
+    )
+    if binding_state is not None and binding_state != "active":
+        return False
+
+    return _policy_metadata_blocks_readiness(validation_metadata)
+
+
+def _policy_metadata_blocks_readiness(metadata: Mapping[str, Any]) -> bool:
+    blocking = metadata.get("blocking") is True
+    required = metadata.get("required") is True
+    if blocking and not required:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Active validator binding policy cannot set blocking: true "
+                "unless required: true"
+            ),
+        )
+    if blocking and required:
+        return True
+
+    field_policy = metadata.get("field_policy")
+    if isinstance(field_policy, Mapping):
+        return _policy_metadata_blocks_readiness(field_policy)
+    return False
 
 
 def _finding_waiver_allowed(finding: ValidationFinding) -> bool:
@@ -1191,13 +1224,18 @@ def _candidate_submission_readiness(
         if validation_snapshot is not None
         else {}
     )
+    domain_envelope_candidate = (
+        domain_context is not None
+        and domain_context.has_domain_candidate(str(candidate.id))
+    )
     for field_key, validation_result in field_results.items():
-        blocking_reason = _submission_validation_blocking_reason(
-            field_map.get(field_key),
-            validation_result,
-        )
-        if blocking_reason is not None:
-            blocking_reasons.append(blocking_reason)
+        if not domain_envelope_candidate:
+            blocking_reason = _submission_validation_blocking_reason(
+                field_map.get(field_key),
+                validation_result,
+            )
+            if blocking_reason is not None:
+                blocking_reasons.append(blocking_reason)
         warnings.extend(validation_result.warnings)
 
     blockers = list(

@@ -166,8 +166,8 @@ function blockerPolicyLabels(blocker: CurationSubmissionReadinessBlocker): strin
   if (blocker.details.required === true) {
     labels.push('Required')
   }
-  if (blocker.details.export_blocking === true) {
-    labels.push('Export-blocking')
+  if (blocker.details.blocking === true) {
+    labels.push('Blocking')
   }
   if (blocker.status === 'definition_state' || code.includes('definition_state')) {
     labels.push('Definition state')

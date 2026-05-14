@@ -244,7 +244,7 @@ def _required_field_findings(
                 ValidationFinding(
                     severity=(
                         ValidationFindingSeverity.BLOCKER
-                        if policy is not None and policy.export_blocking
+                        if policy is not None and policy.blocking
                         else ValidationFindingSeverity.ERROR
                     ),
                     code="domain_pack.required_field_missing",
@@ -492,7 +492,7 @@ def _field_definition_details(
         "field_type": field_type,
         "policy_source": "field_definition",
         "required": True,
-        "export_blocking": False,
+        "blocking": False,
     }
 
 

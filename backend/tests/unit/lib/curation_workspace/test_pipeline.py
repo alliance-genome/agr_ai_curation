@@ -510,6 +510,7 @@ object_definitions:
                 - GeneAssertion
               field_paths:
                 - gene.identifier
+            required: true
             blocking: true
     fields:
       - field_path: gene.identifier

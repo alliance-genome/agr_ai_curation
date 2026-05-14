@@ -274,6 +274,17 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     def _validate_binding_id(cls, value: str) -> str:
         return _validate_symbolic_name(value, "validator_bindings.binding_id")
 
+    @model_validator(mode="after")
+    def validate_blocking_policy(self) -> "DomainPackActiveValidatorBinding":
+        """Require blocking validator policy to also be required."""
+
+        if self.blocking and not self.required:
+            raise ValueError(
+                "validator_bindings.active entries cannot set blocking: true "
+                "unless required: true"
+            )
+        return self
+
 
 class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     """Informational validator capability that must not affect runtime policy."""

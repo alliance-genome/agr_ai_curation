@@ -283,7 +283,7 @@ export interface CurationSubmissionReadinessBlockerDetails {
     allowed?: boolean
   }
   required?: boolean
-  export_blocking?: boolean
+  blocking?: boolean
   finding_id?: string
 }
 

@@ -363,14 +363,14 @@ describe('SubmissionPreviewDialog', () => {
       severity: 'blocker',
       status: 'open',
       code: 'domain_envelope.required_field_missing',
-      message: 'Required export field is missing: artifact.title.',
+      message: 'Required blocking field is missing: artifact.title.',
       provider_refs: {},
       projection_ref: {
         envelope_revision: 3,
       },
       details: {
         required: true,
-        export_blocking: true,
+        blocking: true,
         curator_override: { allowed: true },
       },
     }
@@ -395,7 +395,7 @@ describe('SubmissionPreviewDialog', () => {
         readyCandidateIds: ['candidate-pending'],
         readyCandidateBlockers: [blocker, revisionBlocker],
         readyCandidateWarnings: [
-          'Curator override accepted for export-blocking field artifact.note.',
+          'Curator override accepted for blocking field artifact.note.',
         ],
       }),
     )
@@ -405,12 +405,12 @@ describe('SubmissionPreviewDialog', () => {
     expect(await screen.findAllByText('Object artifact-1')).toHaveLength(2)
     expect(screen.getByText('Field artifact.title')).toBeInTheDocument()
     expect(screen.getByText('Required')).toBeInTheDocument()
-    expect(screen.getByText('Export-blocking')).toBeInTheDocument()
+    expect(screen.getByText('Blocking')).toBeInTheDocument()
     expect(screen.getByText('Waiver allowed')).toBeInTheDocument()
     expect(screen.getByText('Revision mismatch')).toBeInTheDocument()
-    expect(screen.getByText('Required export field is missing: artifact.title.')).toBeInTheDocument()
+    expect(screen.getByText('Required blocking field is missing: artifact.title.')).toBeInTheDocument()
     expect(screen.getByText(
-      'Curator override accepted for export-blocking field artifact.note.',
+      'Curator override accepted for blocking field artifact.note.',
     )).toBeInTheDocument()
   })
 
@@ -422,12 +422,12 @@ describe('SubmissionPreviewDialog', () => {
       severity: 'blocker',
       status: 'open',
       code: 'domain_envelope.required_field_missing',
-      message: 'Required export field is missing: artifact.title.',
+      message: 'Required blocking field is missing: artifact.title.',
       provider_refs: {},
       projection_ref: {},
       details: {
         required: true,
-        export_blocking: true,
+        blocking: true,
         allow_curator_override: true,
       },
     }
@@ -442,7 +442,7 @@ describe('SubmissionPreviewDialog', () => {
     renderDialog()
 
     expect(
-      await screen.findByText('Required export field is missing: artifact.title.'),
+      await screen.findByText('Required blocking field is missing: artifact.title.'),
     ).toBeInTheDocument()
     expect(screen.queryByText('Waiver allowed')).not.toBeInTheDocument()
   })
