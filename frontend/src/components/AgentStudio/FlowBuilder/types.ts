@@ -177,6 +177,7 @@ export type FlowEdge = Edge<{
   satisfies_binding_id?: string
   replaces_attachment_id?: string
   validationLabel?: string
+  onDeleteEdge?: (edgeId: string) => void
 }> & {
   role?: FlowEdgeRole
   satisfies_binding_id?: string

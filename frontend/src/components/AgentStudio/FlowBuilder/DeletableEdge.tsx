@@ -82,9 +82,13 @@ function DeletableEdge({
   const onDelete = useCallback(
     (event: React.MouseEvent) => {
       event.stopPropagation()
+      if (data?.onDeleteEdge) {
+        data.onDeleteEdge(id)
+        return
+      }
       setEdges((edges) => edges.filter((edge) => edge.id !== id))
     },
-    [id, setEdges]
+    [data, id, setEdges]
   )
 
   // Handle hover states

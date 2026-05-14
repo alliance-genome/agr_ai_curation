@@ -1,4 +1,5 @@
 import { render, screen } from '@/test/test-utils'
+import { fireEvent } from '@testing-library/react'
 import type React from 'react'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -52,5 +53,25 @@ describe('DeletableEdge', () => {
       stroke: '#2e7d32',
       strokeDasharray: '6 4',
     })
+  })
+
+  it('uses the Flow Builder delete callback when provided', () => {
+    const onDeleteEdge = vi.fn()
+
+    render(
+      <svg>
+        <TestEdge
+          {...baseProps}
+          data={{
+            role: 'validation_attachment',
+            onDeleteEdge,
+          }}
+        />
+      </svg>
+    )
+
+    fireEvent.click(screen.getByTitle('Delete connection'))
+
+    expect(onDeleteEdge).toHaveBeenCalledWith('edge-1')
   })
 })
