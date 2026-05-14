@@ -25,6 +25,10 @@ import { alpha, useTheme } from '@mui/material/styles'
 import { EvidenceNavigationQuoteCard } from '@/features/curation/evidence'
 import { buildQuoteCentricEvidenceNavigationCommand } from '@/features/curation/evidence/navigationCommandBuilder'
 import type { EvidenceNavigationCommand } from '@/features/curation/evidence/types'
+import {
+  unavailableCapabilityMessage,
+  unavailableValidatorCapabilities,
+} from '@/features/curation/unavailableValidatorCapabilities'
 import type {
   CurationCandidateStatus,
   DomainEnvelopeEvidenceAnchorProjection,
@@ -261,6 +265,9 @@ function validationChipPresentation(row: DomainEnvelopeReviewRow): {
 
 function renderSummaryFields(row: DomainEnvelopeReviewRow) {
   const fields = curatorSummaryFields(row)
+  const unavailableCapabilities = unavailableValidatorCapabilities(
+    row.metadata.unavailable_validator_capabilities,
+  )
 
   if (fields.length === 0) {
     return (
@@ -301,6 +308,19 @@ function renderSummaryFields(row: DomainEnvelopeReviewRow) {
         <Typography color="text.secondary" variant="caption">
           {hiddenCount} more fields in the editor
         </Typography>
+      ) : null}
+      {unavailableCapabilities.length > 0 ? (
+        <Tooltip
+          arrow
+          placement="top"
+          title={unavailableCapabilities.map(unavailableCapabilityMessage).join('\n')}
+        >
+          <Typography color="text.secondary" variant="caption">
+            {unavailableCapabilities.length === 1
+              ? '1 validator capability under development'
+              : `${unavailableCapabilities.length} validator capabilities under development`}
+          </Typography>
+        </Tooltip>
       ) : null}
     </Stack>
   )

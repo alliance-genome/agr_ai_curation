@@ -58,18 +58,20 @@ export interface ValidationAttachmentOption {
   validation_kind?: string
   tool_name?: string
   tool_method?: string
-  state: 'active' | 'planned' | 'blocked'
+  state: 'active' | 'planned' | 'blocked' | 'under_development'
   scope: 'pack' | 'object' | 'field'
   object_type?: string
   object_role?: string
   field_path?: string
   field_type?: string
-  label?: string
+  label: string
   target_label?: string
   description?: string
   definition_state?: string
   blocked_by?: string
   reason?: string
+  state_explanation?: string
+  affected_fields?: string[]
   required: boolean
   export_blocking: boolean
   default_enabled: boolean
@@ -131,7 +133,7 @@ export interface DomainEnvelopeObjectMetadata {
 
 export interface DomainEnvelopeValidationSummary {
   total: number
-  by_state: Record<'active' | 'planned' | 'blocked', number>
+  by_state: Record<'active' | 'planned' | 'blocked' | 'under_development', number>
   by_scope: Record<'pack' | 'object' | 'field', number>
   default_enabled: number
   required: number

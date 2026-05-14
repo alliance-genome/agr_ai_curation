@@ -23,6 +23,11 @@ import {
   buildEvidenceLocationLabel,
   dispatchEvidenceNavigationCommand,
 } from '@/features/curation/evidence'
+import {
+  unavailableCapabilityMessage,
+  unavailableValidatorCapabilities,
+  type UnavailableValidatorCapability,
+} from '@/features/curation/unavailableValidatorCapabilities'
 import type {
   CurationActionLogEntry,
   CurationCandidate,
@@ -215,6 +220,40 @@ function fieldPathCandidates(field: CurationDraftField): Set<string> {
   return new Set([field.field_key, resolveEnvelopeFieldPath(field)])
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function unavailableCapabilitiesForField(field: CurationDraftField): UnavailableValidatorCapability[] {
+  const fieldMetadata = field.metadata.field_metadata
+  if (!isRecord(fieldMetadata)) {
+    return []
+  }
+
+  return unavailableValidatorCapabilities(fieldMetadata.unavailable_validator_capabilities)
+}
+
+function unavailableCapabilitiesForCandidate(
+  candidate: CurationCandidate | null,
+): UnavailableValidatorCapability[] {
+  return unavailableValidatorCapabilities(candidate?.metadata.unavailable_validator_capabilities)
+}
+
+function unavailableCapabilityMessages(
+  capabilities: UnavailableValidatorCapability[],
+): string[] {
+  const messages: string[] = []
+
+  for (const capability of capabilities) {
+    const message = unavailableCapabilityMessage(capability)
+    if (!messages.includes(message)) {
+      messages.push(message)
+    }
+  }
+
+  return messages
+}
+
 function isProjectionForCandidate(
   candidate: CurationCandidate,
   objectId?: string | null,
@@ -296,15 +335,21 @@ function uniqueMessages(summaries: DomainEnvelopeValidationSummaryProjection[]):
 function FieldValidationSlot({
   field,
   summaries,
+  unavailableCapabilities,
 }: {
   field: CurationDraftField
   summaries: DomainEnvelopeValidationSummaryProjection[]
+  unavailableCapabilities: UnavailableValidatorCapability[]
 }) {
   const status = strongestStatus(summaries)
   const presentation = status ? STATUS_PRESENTATION[status] : null
-  const messages = uniqueMessages(summaries)
+  const messages = [
+    ...uniqueMessages(summaries),
+    ...unavailableCapabilityMessages(unavailableCapabilities),
+  ]
+  const hasUnavailableCapabilities = unavailableCapabilities.length > 0
 
-  if (!presentation && !field.stale_validation) {
+  if (!presentation && !field.stale_validation && !hasUnavailableCapabilities) {
     return null
   }
 
@@ -320,6 +365,14 @@ function FieldValidationSlot({
           label={presentation.label}
           size="small"
           variant={presentation.color === 'default' ? 'outlined' : 'filled'}
+        />
+      ) : null}
+      {!presentation && hasUnavailableCapabilities ? (
+        <Chip
+          color="secondary"
+          label="Under development"
+          size="small"
+          variant="outlined"
         />
       ) : null}
       {field.stale_validation ? (
@@ -571,15 +624,32 @@ function FieldSupportDetails({
 
 function ObjectValidationAlerts({
   summaries,
+  unavailableCapabilities,
 }: {
   summaries: DomainEnvelopeValidationSummaryProjection[]
+  unavailableCapabilities: UnavailableValidatorCapability[]
 }) {
-  if (summaries.length === 0) {
+  if (summaries.length === 0 && unavailableCapabilities.length === 0) {
     return null
   }
 
   return (
     <Stack spacing={1}>
+      {unavailableCapabilityMessages(unavailableCapabilities).map((message) => (
+        <Alert
+          data-testid="object-validation-state-under_development"
+          key={message}
+          severity="info"
+          variant="outlined"
+        >
+          <Typography component="span" sx={{ fontWeight: 700 }} variant="body2">
+            Under development
+          </Typography>
+          <Typography component="span" variant="body2">
+            {`: ${message}`}
+          </Typography>
+        </Alert>
+      ))}
       {summaries.map((summary) => {
         const presentation = STATUS_PRESENTATION[summary.status]
         const message = uniqueMessages([summary])[0] ?? presentation.label
@@ -632,6 +702,10 @@ export default function CandidateFieldEditor({
   )
   const objectSummaries = useMemo(
     () => objectValidationSummaries(activeCandidate),
+    [activeCandidate],
+  )
+  const objectUnavailableCapabilities = useMemo(
+    () => unavailableCapabilitiesForCandidate(activeCandidate),
     [activeCandidate],
   )
   const persistedDraftNotes = activeCandidate?.draft.notes ?? ''
@@ -809,7 +883,10 @@ export default function CandidateFieldEditor({
         </Alert>
       ) : null}
 
-      <ObjectValidationAlerts summaries={objectSummaries} />
+      <ObjectValidationAlerts
+        summaries={objectSummaries}
+        unavailableCapabilities={objectUnavailableCapabilities}
+      />
 
       {sections.length === 0 ? (
         <Alert severity="info" variant="outlined">
@@ -884,6 +961,7 @@ export default function CandidateFieldEditor({
                       <FieldValidationSlot
                         field={field}
                         summaries={validationSummariesForField(activeCandidate, field)}
+                        unavailableCapabilities={unavailableCapabilitiesForField(field)}
                       />
                     )}
                     value={field.value}
@@ -966,6 +1044,7 @@ export default function CandidateFieldEditor({
                       <FieldValidationSlot
                         field={field}
                         summaries={validationSummariesForField(activeCandidate, field)}
+                        unavailableCapabilities={unavailableCapabilitiesForField(field)}
                       />
                     )}
                     value={field.value}

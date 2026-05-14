@@ -77,6 +77,7 @@ describe('FlowNode', () => {
               attachment_id: 'active',
               domain_pack_id: 'fixture',
               validator_id: 'active',
+              label: 'Active validator',
               state: 'active',
               scope: 'field',
               field_path: 'gene_symbol',
@@ -90,6 +91,7 @@ describe('FlowNode', () => {
               attachment_id: 'planned',
               domain_pack_id: 'fixture',
               validator_id: 'planned',
+              label: 'Planned validator',
               state: 'planned',
               scope: 'pack',
               required: false,
@@ -102,8 +104,23 @@ describe('FlowNode', () => {
               attachment_id: 'blocked',
               domain_pack_id: 'fixture',
               validator_id: 'blocked',
+              label: 'Blocked validator',
               state: 'blocked',
               scope: 'pack',
+              required: false,
+              export_blocking: false,
+              default_enabled: false,
+              allow_opt_out: false,
+              enabled: false,
+            },
+            {
+              attachment_id: 'under-development',
+              domain_pack_id: 'fixture',
+              validator_id: 'under-development',
+              label: 'Gene symbol lookup',
+              state: 'under_development',
+              scope: 'field',
+              field_path: 'gene_symbol',
               required: false,
               export_blocking: false,
               default_enabled: false,
@@ -121,5 +138,6 @@ describe('FlowNode', () => {
     expect(screen.getByText('1 required for export')).toBeInTheDocument()
     expect(screen.getByText('1 planned')).toBeInTheDocument()
     expect(screen.getByText('1 unavailable')).toBeInTheDocument()
+    expect(screen.getByText('1 under development')).toBeInTheDocument()
   })
 })

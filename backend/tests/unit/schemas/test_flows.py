@@ -355,6 +355,46 @@ class TestFlowDefinitionOtherValidations:
         )
         assert flow.nodes[1].data.validation_attachments[0].enabled is True
 
+    def test_under_development_validation_attachment_metadata_round_trips(self):
+        """Unavailable validator metadata should survive flow persistence dumps."""
+        attachment = make_validation_attachment(
+            attachment_id="fixture:metadata:under-development",
+            validator_binding_id=None,
+            state="under_development",
+            required=False,
+            export_blocking=False,
+            default_enabled=False,
+            enabled=False,
+            state_explanation="Lookup dispatch is pending.",
+            affected_fields=["gene.symbol"],
+        )
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract genes"),
+                make_agent_node(
+                    "n1",
+                    "gene_extractor",
+                    "gene_output",
+                    validation_attachments=[attachment],
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        flow = FlowDefinition(**flow_data)
+        persisted = flow.model_dump()
+        persisted_attachment = (
+            persisted["nodes"][1]["data"]["validation_attachments"][0]
+        )
+
+        assert persisted_attachment["state"] == "under_development"
+        assert persisted_attachment["state_explanation"] == (
+            "Lookup dispatch is pending."
+        )
+        assert persisted_attachment["affected_fields"] == ["gene.symbol"]
+
     def test_required_validation_opt_out_can_be_disabled_when_policy_allows(self):
         """Required/export-blocking validators can be disabled when policy allows."""
         flow_data = {

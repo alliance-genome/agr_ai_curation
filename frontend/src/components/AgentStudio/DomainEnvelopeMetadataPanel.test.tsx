@@ -71,7 +71,7 @@ describe('DomainEnvelopeMetadataPanel', () => {
       ],
       validation_summary: {
         total: 2,
-        by_state: { active: 1, planned: 1, blocked: 0 },
+        by_state: { active: 1, planned: 1, blocked: 0, under_development: 0 },
         by_scope: { pack: 0, object: 1, field: 1 },
         default_enabled: 1,
         required: 0,

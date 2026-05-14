@@ -469,6 +469,16 @@ def _prepared_candidate_input_from_review_row(
     candidate_index: int,
 ) -> PreparedCandidateInput:
     draft_fields = _draft_fields_from_review_row(review_row)
+    unavailable_capabilities = review_row.metadata.get(
+        "unavailable_validator_capabilities",
+    )
+    if unavailable_capabilities is not None and not isinstance(
+        unavailable_capabilities,
+        list,
+    ):
+        raise ValueError(
+            "review_row.metadata.unavailable_validator_capabilities must be a list"
+        )
     metadata = {
         "semantic_source": "domain_envelope.objects",
         "projection_type": review_row.projection_type,
@@ -479,6 +489,12 @@ def _prepared_candidate_input_from_review_row(
         "object_role": review_row.object_role,
         "object_status": review_row.status,
         "validation_state": review_row.validation_state,
+        "review_row_metadata": dict(review_row.metadata),
+        "unavailable_validator_capabilities": (
+            list(unavailable_capabilities)
+            if unavailable_capabilities is not None
+            else []
+        ),
         "summary_fields": [
             field.model_dump(mode="json")
             for field in review_row.summary_fields

@@ -270,7 +270,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     ).validator_binding_ids
 
 
-def test_under_development_validator_bindings_emit_metadata_only_findings():
+def test_under_development_validator_bindings_remain_metadata_only():
     alliance_registry = load_alliance_domain_pack_registry()
     disease_pack = alliance_registry.get_pack("agr.alliance.disease")
     registry = DomainPackValidationRegistry.from_domain_pack(disease_pack)
@@ -315,28 +315,20 @@ def test_under_development_validator_bindings_emit_metadata_only_findings():
     )
 
     result = run_validation_supervisor(envelope, disease_pack, registry=registry)
-    ontology_finding = next(
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.details.get("lookup_attempts")
-        and finding.details["lookup_attempts"][0]["attempted_query"][
-            "validator_binding_id"
-        ] == "disease_ontology_term_lookup"
-    )
-    attempt = ontology_finding.details["lookup_attempts"][0]
-    assert attempt["lookup_status"] == "under_development"
-    assert "provider" not in attempt
-    assert attempt["attempted_query"]["input_fields"]["curie"]["value"] == "DOID:0050434"
-    assert ontology_finding.details["failure_classification"] == "under_development"
-    assert "provider_projections" not in ontology_finding.details
 
-    history_event = next(
-        event
-        for event in result.envelope.history
-        if event.details.get("finding_id") == ontology_finding.finding_id
+    assert all(
+        finding.code != "domain_pack.validator_binding_under_development"
+        for finding in result.envelope.validation_findings
     )
-    assert history_event.details["lookup_attempts"] == ontology_finding.details["lookup_attempts"]
-    assert "provider_projections" not in history_event.details
+    assert all(
+        event.details.get("code") != "domain_pack.validator_binding_under_development"
+        for event in result.envelope.history
+    )
+    assert "disease_ontology_term_lookup" in {
+        match.binding.binding_id
+        for match in result.matched_bindings
+        if match.binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    }
 
 
 def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior():
@@ -450,7 +442,7 @@ def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior():
         ),
         alliance_registry.get_pack("agr.alliance.disease"),
     )
-    assert any(
+    assert not any(
         finding.code == "domain_pack.validator_binding_under_development"
         for finding in disease_result.envelope.validation_findings
     )
@@ -473,7 +465,7 @@ def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior():
         ),
         alliance_registry.get_pack("agr.alliance.phenotype"),
     )
-    assert any(
+    assert not any(
         finding.code == "domain_pack.validator_binding_under_development"
         for finding in phenotype_result.envelope.validation_findings
     )

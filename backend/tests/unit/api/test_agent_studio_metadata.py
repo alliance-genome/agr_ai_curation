@@ -162,6 +162,32 @@ class TestGetRegistryMetadata:
             option["state"] for option in chemical_extractor.validation_attachments
         }.issuperset({"active", "planned", "blocked"})
 
+    def test_get_registry_metadata_projects_under_development_validator_bindings(self):
+        """Under-development bindings should be visible metadata with explanations."""
+        import asyncio
+        from src.api.agent_studio import get_registry_metadata
+
+        result = asyncio.run(get_registry_metadata())
+        disease_extractor = result.agents.get("disease_extractor")
+
+        assert disease_extractor is not None
+        assert disease_extractor.validation_attachments
+        under_development = [
+            option
+            for option in disease_extractor.validation_attachments
+            if option["state"] == "under_development"
+        ]
+
+        assert under_development
+        assert all(option["default_enabled"] is False for option in under_development)
+        assert all(option["required"] is False for option in under_development)
+        assert all(option["export_blocking"] is False for option in under_development)
+        assert all(option.get("state_explanation") for option in under_development)
+        assert any(
+            "disease_annotation_object.curie" in option.get("affected_fields", [])
+            for option in under_development
+        )
+
     def test_get_registry_metadata_includes_domain_envelope_authoring_metadata(self):
         """Extraction agents should expose domain-pack envelope metadata."""
         import asyncio

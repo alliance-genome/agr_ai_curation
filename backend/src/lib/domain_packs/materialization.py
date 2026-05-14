@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 import json
+from pathlib import Path
 from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
@@ -36,6 +37,12 @@ from src.schemas.domain_pack_metadata import (
     DomainPackFieldDefinition,
     DomainPackMetadata,
     DomainPackObjectDefinition,
+)
+from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
+    ValidatorBindingMatch,
 )
 
 
@@ -108,6 +115,10 @@ class DomainPackMetadataReviewRowMaterializer:
             for definition in self.metadata.object_definitions
         }
         validation_state_by_object = _validation_state_by_object(envelope)
+        unavailable_capabilities = _unavailable_validator_capabilities_by_target(
+            envelope,
+            metadata=self.metadata,
+        )
         rows: list[DomainEnvelopeReviewRow] = []
 
         for object_index, domain_object in enumerate(envelope.objects):
@@ -126,6 +137,9 @@ class DomainPackMetadataReviewRowMaterializer:
                 domain_object,
                 object_definition=object_definition,
                 display_config=display_config,
+                unavailable_capabilities_by_field=(
+                    unavailable_capabilities["by_field"]
+                ),
             )
             display_label = _display_label(
                 domain_object,
@@ -170,6 +184,12 @@ class DomainPackMetadataReviewRowMaterializer:
                         "semantic_source": "domain_envelope.objects",
                         "materializer": type(self).__name__,
                         "object_index": object_index,
+                        **_unavailable_capabilities_metadata(
+                            _capabilities_for_object(
+                                object_id,
+                                unavailable_capabilities=unavailable_capabilities,
+                            )
+                        ),
                     },
                 )
             )
@@ -370,6 +390,7 @@ def _summary_fields(
     *,
     object_definition: DomainPackObjectDefinition | None,
     display_config: Mapping[str, Any],
+    unavailable_capabilities_by_field: Mapping[tuple[str, str], tuple[dict[str, Any], ...]],
 ) -> list[DomainEnvelopeReviewRowSummaryField]:
     field_definitions = {
         field.field_path: field
@@ -398,6 +419,15 @@ def _summary_fields(
             continue
         seen.add(field_path)
         field_definition = field_definitions.get(field_path)
+        metadata = dict(field_definition.metadata) if field_definition is not None else {}
+        metadata.update(
+            _unavailable_capabilities_metadata(
+                unavailable_capabilities_by_field.get(
+                    (stable_object_id(domain_object), field_path),
+                    (),
+                )
+            )
+        )
         summary_fields.append(
             DomainEnvelopeReviewRowSummaryField(
                 field_path=field_path,
@@ -408,15 +438,124 @@ def _summary_fields(
                     if field_definition is not None
                     else _value_field_type(value)
                 ),
-                metadata=(
-                    dict(field_definition.metadata)
-                    if field_definition is not None
-                    else {}
-                ),
+                metadata=metadata,
             )
         )
 
     return summary_fields
+
+
+def _unavailable_validator_capabilities_by_target(
+    envelope: DomainEnvelope,
+    *,
+    metadata: DomainPackMetadata,
+) -> dict[str, Any]:
+    registry = DomainPackValidationRegistry.from_domain_pack(
+        LoadedDomainPack(
+            pack_id=metadata.pack_id,
+            display_name=metadata.display_name,
+            version=metadata.version,
+            pack_path=Path("."),
+            metadata_path=Path("."),
+            metadata=metadata,
+        )
+    )
+    matches = registry.match_bindings(
+        envelope,
+        states=[ValidationBindingState.UNDER_DEVELOPMENT],
+    )
+    by_object: dict[str, list[dict[str, Any]]] = {}
+    by_field: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    global_capabilities: list[dict[str, Any]] = []
+
+    for match in matches:
+        capability = _unavailable_validator_capability(match)
+        if match.object_envelope is None:
+            global_capabilities.append(capability)
+            continue
+
+        object_id = stable_object_id(match.object_envelope)
+        if match.field_path is None:
+            by_object.setdefault(object_id, []).append(capability)
+            continue
+
+        by_field.setdefault((object_id, match.field_path), []).append(capability)
+
+    return {
+        "global": tuple(global_capabilities),
+        "by_object": {
+            object_id: tuple(capabilities)
+            for object_id, capabilities in by_object.items()
+        },
+        "by_field": {
+            target: tuple(capabilities)
+            for target, capabilities in by_field.items()
+        },
+    }
+
+
+def _unavailable_validator_capability(
+    match: ValidatorBindingMatch,
+) -> dict[str, Any]:
+    binding = match.binding
+    if not binding.display_name:
+        raise DomainEnvelopeMaterializationError(
+            "Under-development validator binding "
+            f"{binding.binding_id!r} must declare display_name"
+        )
+    if not binding.reason:
+        raise DomainEnvelopeMaterializationError(
+            "Under-development validator binding "
+            f"{binding.binding_id!r} must declare state_explanation"
+        )
+    affected_fields = _match_affected_fields(match)
+    payload: dict[str, Any] = {
+        "validator_binding_id": binding.binding_id,
+        "state": binding.state.value,
+        "label": binding.display_name,
+        "state_explanation": binding.reason,
+        "scope": "field" if match.field_path is not None else (
+            "object" if match.object_envelope is not None else "pack"
+        ),
+        "affected_fields": affected_fields,
+    }
+    if match.object_type is not None:
+        payload["object_type"] = match.object_type
+    return {key: value for key, value in payload.items() if value not in (None, "", [])}
+
+
+def _match_affected_fields(match: ValidatorBindingMatch) -> list[str]:
+    if match.field_path is not None:
+        return [match.field_path]
+    if match.object_definition is not None:
+        return [field.field_path for field in match.object_definition.fields]
+    return list(match.binding.field_paths)
+
+
+def _capabilities_for_object(
+    object_id: str,
+    *,
+    unavailable_capabilities: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    capabilities = list(unavailable_capabilities.get("global", ()))
+    by_object = unavailable_capabilities.get("by_object", {})
+    if isinstance(by_object, Mapping):
+        capabilities.extend(by_object.get(object_id, ()))
+    by_field = unavailable_capabilities.get("by_field", {})
+    if isinstance(by_field, Mapping):
+        for (field_object_id, _field_path), field_capabilities in by_field.items():
+            if field_object_id == object_id:
+                capabilities.extend(field_capabilities)
+    return tuple(capabilities)
+
+
+def _unavailable_capabilities_metadata(
+    capabilities: Iterable[Mapping[str, Any]],
+) -> dict[str, Any]:
+    payload = [dict(capability) for capability in capabilities]
+    if not payload:
+        return {}
+    return {"unavailable_validator_capabilities": payload}
 
 
 def _display_label(

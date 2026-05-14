@@ -140,11 +140,23 @@ describe('NodeEditor', () => {
       default_enabled: false,
       allow_opt_out: false,
     })
+    const underDevelopment = buildValidationAttachmentSelection({
+      attachment_id: 'disease:ontology-term',
+      label: 'Disease ontology term lookup',
+      target_label: 'Disease annotation Disease term',
+      validator_binding_id: 'disease_ontology_term_lookup',
+      field_path: 'disease_annotation_object.curie',
+      state: 'under_development',
+      state_explanation: 'Ontology dispatch is being wired in the domain pack.',
+      enabled: false,
+      default_enabled: false,
+      allow_opt_out: false,
+    })
 
     render(
       <NodeEditor
         node={buildNode({
-          validation_attachments: [actionable, planned, metadataOnly],
+          validation_attachments: [actionable, planned, metadataOnly, underDevelopment],
         })}
         onSave={vi.fn()}
         onClose={vi.fn()}
@@ -158,6 +170,9 @@ describe('NodeEditor', () => {
     expect(screen.getByText('Disease annotation Condition relation type')).toBeInTheDocument()
     expect(screen.queryByText(/condition_relations\[0\]\.condition_relation_type\.name/i)).not.toBeInTheDocument()
     expect(screen.getByText('disease required payload fields')).toBeInTheDocument()
+    expect(screen.getByText('Disease ontology term lookup')).toBeInTheDocument()
+    expect(screen.getByText('under development')).toBeInTheDocument()
+    expect(screen.getByText('Ontology dispatch is being wired in the domain pack.')).toBeInTheDocument()
     expect(screen.getByText(/not scheduled by this checkbox list/i)).toBeInTheDocument()
   })
 

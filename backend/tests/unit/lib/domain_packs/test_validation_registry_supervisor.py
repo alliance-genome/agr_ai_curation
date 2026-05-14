@@ -629,6 +629,11 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     assert under_development_option.export_blocking is False
     assert under_development_option.allow_opt_out is False
     assert under_development_option.label == "Gene symbol lookup"
+    assert (
+        under_development_option.state_explanation
+        == "Gene symbol lookup waits for package-scoped dispatch."
+    )
+    assert under_development_option.affected_fields == ("gene.symbol",)
 
     metadata_only_option = by_id[
         "fixture.validation:binding:fixture.export_validator:object:GeneAssertion:*"
@@ -825,7 +830,23 @@ def test_under_development_binding_rejects_runtime_policy(tmp_path: Path):
         load_domain_pack_metadata(metadata_path)
 
 
-def test_supervisor_appends_required_under_development_findings_and_history(
+def test_under_development_binding_requires_display_name(tmp_path: Path):
+    metadata_text = _validation_pack_text().replace(
+        "        display_name: Gene symbol lookup\n"
+        "        state_explanation: Gene symbol lookup waits for package-scoped dispatch.",
+        "        state_explanation: Gene symbol lookup waits for package-scoped dispatch.",
+        1,
+    )
+    pack_path = tmp_path / "fixture.validation"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(metadata_text, encoding="utf-8")
+
+    with pytest.raises(DomainPackMetadataError, match="display_name"):
+        load_domain_pack_metadata(metadata_path)
+
+
+def test_supervisor_treats_under_development_bindings_as_metadata_only(
     tmp_path: Path,
 ):
     pack = _loaded_pack(tmp_path)
@@ -854,21 +875,9 @@ def test_supervisor_appends_required_under_development_findings_and_history(
         is True
     )
 
-    under_development_binding = next(
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_binding_under_development"
-        and finding.details["validation_metadata"]["validator_binding_id"]
-        == "fixture.symbol_lookup"
-    )
-    assert under_development_binding.field_ref.field_path == "gene.symbol"
-    assert under_development_binding.details["validation_metadata"][
-        "validator_binding_id"
-    ] == ("fixture.symbol_lookup")
-    under_development_attempt = under_development_binding.details["lookup_attempts"][0]
-    assert under_development_attempt["lookup_status"] == "under_development"
-    assert "provider_projections" not in under_development_binding.details
-
+    assert {
+        finding.code for finding in result.envelope.validation_findings
+    }.isdisjoint({"domain_pack.validator_binding_under_development"})
     blocked_metadata = [
         finding
         for finding in result.envelope.validation_findings
