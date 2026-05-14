@@ -173,7 +173,7 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
     (attachment) => attachment.state === 'active' && attachment.enabled
   ).length
   const exportBlockingValidationCount = validationAttachments.filter(
-    (attachment) => attachment.state === 'active' && attachment.enabled && attachment.export_blocking
+    (attachment) => attachment.state === 'active' && attachment.enabled && attachment.blocking
   ).length
   const plannedValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'planned'
@@ -236,7 +236,7 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
               </ValidationPill>
             )}
             {exportBlockingValidationCount > 0 && (
-              <ValidationPill>{exportBlockingValidationCount} required for export</ValidationPill>
+              <ValidationPill>{exportBlockingValidationCount} blocking</ValidationPill>
             )}
             {plannedValidationCount > 0 && (
               <ValidationPill>{plannedValidationCount} planned</ValidationPill>

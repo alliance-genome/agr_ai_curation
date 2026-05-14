@@ -33,9 +33,24 @@ export interface AgentCategory {
 
 export type InputSource = 'user_query' | 'previous_output' | 'custom'
 export type NodeType = 'agent' | 'decision' | 'output' | 'task_input'
+export type FlowEdgeRole = 'control_flow' | 'validation_attachment'
 
 export interface ValidationAttachmentSelection extends ValidationAttachmentOption {
   enabled: boolean
+}
+
+export interface ValidationAttachmentGroup {
+  group_id: string
+  state: 'automatic' | 'skipped' | 'replaced' | 'supplemental'
+  binding_id?: string
+  attachment_id?: string
+  edge_id?: string
+  validator_node_id?: string
+  replaces_attachment_id?: string
+  label?: string
+  required: boolean
+  blocking: boolean
+  allow_opt_out: boolean
 }
 
 export interface FlowNodePosition {
@@ -60,6 +75,7 @@ export interface FlowNodeData {
   output_filename_template?: string
   output_key: string
   validation_attachments?: ValidationAttachmentSelection[]
+  validation_groups?: ValidationAttachmentGroup[]
 }
 
 export interface FlowNodeDefinition {
@@ -78,6 +94,9 @@ export interface FlowEdgeDefinition {
   id: string
   source: string
   target: string
+  role?: FlowEdgeRole
+  satisfies_binding_id?: string
+  replaces_attachment_id?: string
   condition?: FlowEdgeCondition
 }
 
@@ -154,7 +173,15 @@ export type AgentNode = Node<AgentNodeData, 'agent' | 'task_input'>
 export type FlowEdge = Edge<{
   animated?: boolean
   isHovered?: boolean
-}>
+  role?: FlowEdgeRole
+  satisfies_binding_id?: string
+  replaces_attachment_id?: string
+  validationLabel?: string
+}> & {
+  role?: FlowEdgeRole
+  satisfies_binding_id?: string
+  replaces_attachment_id?: string
+}
 
 // ============================================================================
 // UI Component Props
@@ -174,10 +201,14 @@ export interface FlowState {
     output_filename_template?: string
     output_key: string
     validation_attachments?: ValidationAttachmentSelection[]
+    validation_groups?: ValidationAttachmentGroup[]
   }>
   edges: Array<{
     source: string
     target: string
+    role?: FlowEdgeRole
+    satisfies_binding_id?: string
+    replaces_attachment_id?: string
   }>
 }
 

@@ -24,6 +24,7 @@ const agentMetadataMocks = vi.hoisted(() => ({
 const reactFlowMocks = vi.hoisted(() => ({
   fitView: vi.fn(),
   screenToFlowPosition: vi.fn(({ x, y }: { x: number; y: number }) => ({ x, y })),
+  onConnect: undefined as undefined | ((connection: { source: string; target: string }) => void),
 }))
 
 vi.mock('@/services/agentStudioService', () => ({
@@ -86,6 +87,7 @@ vi.mock('reactflow', async () => {
       onInit,
       onDrop,
       onDragOver,
+      onConnect,
     }: {
       children?: React.ReactNode
       onInit?: (instance: {
@@ -94,6 +96,7 @@ vi.mock('reactflow', async () => {
       }) => void
       onDrop?: (event: React.DragEvent<HTMLDivElement>) => void
       onDragOver?: (event: React.DragEvent<HTMLDivElement>) => void
+      onConnect?: (connection: { source: string; target: string }) => void
     }) => {
       react.useEffect(() => {
         onInit?.({
@@ -101,6 +104,12 @@ vi.mock('reactflow', async () => {
           screenToFlowPosition: reactFlowMocks.screenToFlowPosition,
         })
       }, [onInit])
+      react.useEffect(() => {
+        reactFlowMocks.onConnect = onConnect
+        return () => {
+          reactFlowMocks.onConnect = undefined
+        }
+      }, [onConnect])
 
       return (
         <div data-testid="react-flow" onDrop={onDrop} onDragOver={onDragOver}>
@@ -229,6 +238,7 @@ describe('FlowBuilder', () => {
     invalidationMocks.notifyFlowListInvalidated.mockReset()
     reactFlowMocks.fitView.mockClear()
     reactFlowMocks.screenToFlowPosition.mockClear()
+    reactFlowMocks.onConnect = undefined
     agentMetadataMocks.agents = {}
   })
 
@@ -310,7 +320,7 @@ describe('FlowBuilder', () => {
             object_type: 'Allele',
             field_path: 'allele_identifier',
             required: true,
-            export_blocking: true,
+            blocking: true,
             default_enabled: true,
             allow_opt_out: true,
           },
@@ -322,7 +332,7 @@ describe('FlowBuilder', () => {
             state: 'planned',
             scope: 'pack',
             required: false,
-            export_blocking: false,
+            blocking: false,
             default_enabled: false,
             allow_opt_out: false,
           },
@@ -382,6 +392,142 @@ describe('FlowBuilder', () => {
                       attachment_id: 'agr.alliance.allele:metadata:future',
                       state: 'planned',
                       enabled: false,
+                    }),
+                  ]),
+                }),
+              }),
+            ]),
+          }),
+        })
+      )
+    })
+  }, 15000)
+
+  it('persists validation attachment edges with an explicit selected binding', async () => {
+    const user = userEvent.setup()
+
+    agentMetadataMocks.agents = {
+      allele_extractor: {
+        category: 'Extraction',
+        subcategory: 'PDF extraction',
+        validation_attachments: [
+          {
+            attachment_id: 'allele:identifier',
+            domain_pack_id: 'agr.alliance.allele',
+            domain_pack_version: '0.1.0',
+            validator_id: 'allele_identifier_lookup',
+            validator_binding_id: 'identifier',
+            validator_package_id: 'agr.alliance',
+            validator_agent_id: 'allele_validation',
+            label: 'Allele identifier lookup',
+            target_label: 'Allele identifier',
+            state: 'active',
+            scope: 'field',
+            object_type: 'Allele',
+            field_path: 'allele_identifier',
+            required: true,
+            blocking: true,
+            default_enabled: true,
+            allow_opt_out: true,
+          },
+          {
+            attachment_id: 'allele:symbol',
+            domain_pack_id: 'agr.alliance.allele',
+            domain_pack_version: '0.1.0',
+            validator_id: 'allele_symbol_lookup',
+            validator_binding_id: 'symbol',
+            validator_package_id: 'agr.alliance',
+            validator_agent_id: 'allele_validation',
+            label: 'Allele symbol lookup',
+            target_label: 'Allele symbol',
+            state: 'active',
+            scope: 'field',
+            object_type: 'Allele',
+            field_path: 'allele_symbol',
+            required: false,
+            blocking: false,
+            default_enabled: true,
+            allow_opt_out: true,
+          },
+        ],
+      },
+      custom_validator: {
+        category: 'Validation',
+        subcategory: 'Data Validation',
+      },
+    }
+    serviceMocks.createFlow.mockResolvedValue(buildFlowResponse({ name: 'Validator Edge Flow' }))
+    serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Validator Edge Flow'))
+
+    render(<FlowBuilder />)
+
+    await screen.findByText('1 step')
+
+    const dropAgent = (agentId: string, agentName: string, agentDescription: string, y: number) => {
+      fireEvent.drop(screen.getByTestId('react-flow'), {
+        clientX: 320,
+        clientY: y,
+        dataTransfer: {
+          getData: vi.fn((format: string) => (
+            format === 'application/reactflow'
+              ? JSON.stringify({
+                type: 'agent',
+                agentId,
+                agentName,
+                agentDescription,
+              })
+              : ''
+          )),
+        },
+      })
+    }
+
+    dropAgent('allele_extractor', 'Allele Extractor', 'Extract allele mentions', 220)
+    dropAgent('custom_validator', 'Custom Validator', 'Validate extracted alleles', 340)
+
+    await waitFor(() => {
+      expect(reactFlowMocks.onConnect).toBeTypeOf('function')
+    })
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_2' })
+    })
+
+    const bindingDialog = (await screen.findByText('Choose Validator Binding')).closest('[role="dialog"]')
+    expect(bindingDialog).not.toBeNull()
+    await user.click(within(bindingDialog as HTMLElement).getByText('Allele symbol lookup'))
+
+    await user.click(screen.getByText('File'))
+    await user.click(within(await screen.findByRole('menu')).getByText('Save'))
+
+    const saveDialog = await screen.findByRole('dialog', { name: 'Save Flow' })
+    await user.type(within(saveDialog).getByPlaceholderText('Flow name'), 'Validator Edge Flow')
+    await user.click(within(saveDialog).getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(serviceMocks.createFlow).toHaveBeenCalledWith(
+        expect.objectContaining({
+          flow_definition: expect.objectContaining({
+            edges: expect.arrayContaining([
+              expect.objectContaining({
+                source: 'node_1',
+                target: 'node_2',
+                role: 'validation_attachment',
+                satisfies_binding_id: 'symbol',
+              }),
+            ]),
+            nodes: expect.arrayContaining([
+              expect.objectContaining({
+                id: 'node_1',
+                data: expect.objectContaining({
+                  validation_attachments: expect.arrayContaining([
+                    expect.not.objectContaining({
+                      export_blocking: expect.anything(),
+                    }),
+                    expect.objectContaining({
+                      validator_binding_id: 'identifier',
+                      blocking: true,
+                      enabled: true,
                     }),
                   ]),
                 }),

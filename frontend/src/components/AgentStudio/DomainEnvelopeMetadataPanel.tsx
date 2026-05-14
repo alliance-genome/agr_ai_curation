@@ -162,7 +162,7 @@ function validationStateCounts(attachments: ValidationAttachmentView[]) {
         'enabled' in attachment
         && !attachment.enabled
         && attachment.state === 'active'
-        && (attachment.required || attachment.export_blocking)
+        && (attachment.required || attachment.blocking)
       ) {
         counts.optedOut += 1
       }
@@ -324,6 +324,106 @@ function validationAttachmentTargetLabel(attachment: ValidationAttachmentView): 
   if (attachment.scope === 'object') return attachment.object_type || 'Extracted object'
   if (attachment.scope === 'field') return attachment.field_path || 'Field'
   return 'Validation metadata'
+}
+
+function validationAttachmentOwnerLabel(attachment: ValidationAttachmentView): string {
+  if (attachment.validator_package_id && attachment.validator_agent_id) {
+    return `${attachment.validator_package_id}:${attachment.validator_agent_id}`
+  }
+  return attachment.validator_id
+}
+
+function ValidatorCapabilityGroups({ attachments }: { attachments: ValidationAttachmentView[] }) {
+  const active = attachments.filter((attachment) => attachment.state === 'active')
+  const underDevelopment = attachments.filter((attachment) => attachment.state === 'under_development')
+
+  if (active.length === 0 && underDevelopment.length === 0) return null
+
+  const renderRows = (rows: ValidationAttachmentView[], stateLabel: string) => (
+    <Box
+      sx={{
+        border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.65)}`,
+        borderRadius: 1,
+        overflow: 'hidden',
+      }}
+    >
+      {rows.map((attachment) => (
+        <Box
+          key={attachment.attachment_id}
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: { xs: 'minmax(0, 1fr)', sm: 'minmax(0, 1fr) minmax(140px, 0.55fr)' },
+            gap: 1,
+            px: 1,
+            py: 0.8,
+            borderBottom: (theme) => `1px solid ${alpha(theme.palette.divider, 0.5)}`,
+            '&:last-of-type': { borderBottom: 0 },
+          }}
+        >
+          <Box sx={{ minWidth: 0 }}>
+            <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography variant="body2" sx={{ fontSize: '0.74rem', fontWeight: 700, lineHeight: 1.3 }}>
+                {attachment.label}
+              </Typography>
+              <Chip size="small" color={chipColorForState(attachment.state)} variant="outlined" label={stateLabel} sx={compactChipSx} />
+              {attachment.required && (
+                <Chip size="small" color="primary" variant="outlined" label="required" sx={compactChipSx} />
+              )}
+              {attachment.blocking && (
+                <Chip size="small" color="error" variant="outlined" label="blocking" sx={compactChipSx} />
+              )}
+              {attachment.allow_opt_out && (
+                <Chip size="small" color="warning" variant="outlined" label="opt-out allowed" sx={compactChipSx} />
+              )}
+            </Stack>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.2, fontSize: '0.65rem', lineHeight: 1.35 }}>
+              {validationAttachmentTargetLabel(attachment)}
+            </Typography>
+            {attachment.state === 'under_development' && (
+              <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.64rem', lineHeight: 1.35 }}>
+                {underDevelopmentStateExplanation(attachment)}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+            <FieldMetaLabel>Owner</FieldMetaLabel>
+            <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.25, fontSize: '0.63rem' }}>
+              {attachment.domain_pack_id}{attachment.domain_pack_version ? ` v${attachment.domain_pack_version}` : ''}
+            </Typography>
+            <Typography variant="caption" color="text.secondary" sx={{ ...monoTextSx, display: 'block', mt: 0.15, fontSize: '0.63rem' }}>
+              {validationAttachmentOwnerLabel(attachment)}
+            </Typography>
+          </Box>
+        </Box>
+      ))}
+    </Box>
+  )
+
+  return (
+    <SectionAccordion
+      title="Validator capabilities"
+      summary={`${active.length} active and ${underDevelopment.length} under-development capability${underDevelopment.length === 1 ? '' : 'ies'}.`}
+      defaultExpanded={active.length > 0 || underDevelopment.length > 0}
+    >
+      <Stack spacing={1}>
+        {active.length > 0 && (
+          <Box>
+            <FieldMetaLabel>Active</FieldMetaLabel>
+            <Box sx={{ mt: 0.5 }}>{renderRows(active, 'active')}</Box>
+          </Box>
+        )}
+        {underDevelopment.length > 0 && (
+          <Box>
+            <FieldMetaLabel>Under development</FieldMetaLabel>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25, mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}>
+              Visible for planning only. These rows are not runnable and do not create replacement obligations.
+            </Typography>
+            {renderRows(underDevelopment, 'under development')}
+          </Box>
+        )}
+      </Stack>
+    </SectionAccordion>
+  )
 }
 
 function ValidationAttachmentRows({ attachments }: { attachments: ValidationAttachmentView[] }) {
@@ -871,12 +971,12 @@ function DomainEnvelopeMetadataPanel({
               />
             </Box>
 
-            {(metadata.validation_summary.export_blocking > 0
+            {(metadata.validation_summary.blocking > 0
               || metadata.validation_summary.opt_out_allowed > 0
               || attachmentView.length > 0) && (
               <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
-                {metadata.validation_summary.export_blocking > 0 && (
-                  <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} required for export`} sx={compactChipSx} />
+                {metadata.validation_summary.blocking > 0 && (
+                  <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.blocking} blocking`} sx={compactChipSx} />
                 )}
                 {metadata.validation_summary.opt_out_allowed > 0 && (
                   <Chip size="small" color="warning" variant="outlined" label={`${metadata.validation_summary.opt_out_allowed} opt-out allowed`} sx={compactChipSx} />
@@ -915,8 +1015,8 @@ function DomainEnvelopeMetadataPanel({
             <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
               <Chip size="small" label={`${metadata.object_definitions.length} object type${metadata.object_definitions.length === 1 ? '' : 's'}`} />
               <Chip size="small" label={`${metadata.validation_summary.default_enabled} default validator${metadata.validation_summary.default_enabled === 1 ? '' : 's'}`} />
-              {metadata.validation_summary.export_blocking > 0 && (
-                <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.export_blocking} required for export`} />
+              {metadata.validation_summary.blocking > 0 && (
+                <Chip size="small" color="error" variant="outlined" label={`${metadata.validation_summary.blocking} blocking`} />
               )}
               {metadata.validation_summary.opt_out_allowed > 0 && (
                 <Chip size="small" color="warning" variant="outlined" label={`${metadata.validation_summary.opt_out_allowed} opt-out allowed`} />
@@ -924,11 +1024,14 @@ function DomainEnvelopeMetadataPanel({
             </Stack>
 
             <ValidationChips attachments={attachmentView} />
+            <ValidatorCapabilityGroups attachments={attachmentView} />
           </>
         )}
 
         {isFlowEditor ? (
           <>
+            <ValidatorCapabilityGroups attachments={attachmentView} />
+
             <SectionAccordion
               title="Guidance"
               summary={`${guidanceNoteCount} workflow note${guidanceNoteCount === 1 ? '' : 's'}; field source map is separated below.`}

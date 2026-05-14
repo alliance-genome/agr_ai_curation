@@ -13,8 +13,9 @@ import {
   useReactFlow,
   type EdgeProps,
 } from 'reactflow'
-import { styled, alpha } from '@mui/material/styles'
+import { styled } from '@mui/material/styles'
 import CloseIcon from '@mui/icons-material/Close'
+import CheckCircleOutlineIcon from '@mui/icons-material/CheckCircleOutline'
 
 // Styled delete button that appears on hover
 const DeleteButton = styled('button')<{ visible: boolean }>(({ theme, visible }) => ({
@@ -61,9 +62,11 @@ function DeletableEdge({
   targetPosition,
   style = {},
   markerEnd,
+  data,
 }: EdgeProps) {
   const { setEdges } = useReactFlow()
   const [isHovered, setIsHovered] = useState(false)
+  const isValidationAttachment = data?.role === 'validation_attachment'
 
   // Generate the bezier path
   const [edgePath, labelX, labelY] = getBezierPath({
@@ -103,8 +106,13 @@ function DeletableEdge({
         markerEnd={markerEnd}
         style={{
           ...style,
-          stroke: isHovered ? '#1976d2' : style.stroke,
-          strokeWidth: isHovered ? 2.5 : (style.strokeWidth as number) || 2,
+          stroke: isHovered
+            ? '#1976d2'
+            : isValidationAttachment
+              ? '#2e7d32'
+              : style.stroke,
+          strokeDasharray: isValidationAttachment ? '6 4' : style.strokeDasharray,
+          strokeWidth: isHovered ? 2.5 : (style.strokeWidth as number) || (isValidationAttachment ? 2.25 : 2),
         }}
       />
 
@@ -120,6 +128,25 @@ function DeletableEdge({
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
         >
+          {isValidationAttachment && (
+            <span
+              title={data?.validationLabel || 'Validation attachment'}
+              style={{
+                width: 18,
+                height: 18,
+                borderRadius: '50%',
+                background: '#2e7d32',
+                color: '#fff',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginRight: 4,
+                boxShadow: '0 1px 3px rgba(0,0,0,0.22)',
+              }}
+            >
+              <CheckCircleOutlineIcon sx={{ fontSize: 14 }} />
+            </span>
+          )}
           <DeleteButton
             visible={isHovered}
             onClick={onDelete}

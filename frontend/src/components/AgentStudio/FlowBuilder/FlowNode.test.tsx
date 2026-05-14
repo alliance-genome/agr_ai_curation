@@ -82,7 +82,7 @@ describe('FlowNode', () => {
               scope: 'field',
               field_path: 'gene_symbol',
               required: true,
-              export_blocking: true,
+              blocking: true,
               default_enabled: true,
               allow_opt_out: false,
               enabled: true,
@@ -95,7 +95,7 @@ describe('FlowNode', () => {
               state: 'planned',
               scope: 'pack',
               required: false,
-              export_blocking: false,
+              blocking: false,
               default_enabled: false,
               allow_opt_out: false,
               enabled: false,
@@ -108,7 +108,7 @@ describe('FlowNode', () => {
               state: 'blocked',
               scope: 'pack',
               required: false,
-              export_blocking: false,
+              blocking: false,
               default_enabled: false,
               allow_opt_out: false,
               enabled: false,
@@ -122,7 +122,7 @@ describe('FlowNode', () => {
               scope: 'field',
               field_path: 'gene_symbol',
               required: false,
-              export_blocking: false,
+              blocking: false,
               default_enabled: false,
               allow_opt_out: false,
               enabled: false,
@@ -135,7 +135,7 @@ describe('FlowNode', () => {
 
     expect(screen.getByText('1 active validation')).toBeInTheDocument()
     expect(screen.getByText('1 envelope object')).toBeInTheDocument()
-    expect(screen.getByText('1 required for export')).toBeInTheDocument()
+    expect(screen.getByText('1 blocking')).toBeInTheDocument()
     expect(screen.getByText('1 planned')).toBeInTheDocument()
     expect(screen.getByText('1 unavailable')).toBeInTheDocument()
     expect(screen.getByText('1 under development')).toBeInTheDocument()

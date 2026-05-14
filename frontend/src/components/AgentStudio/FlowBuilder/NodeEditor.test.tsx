@@ -109,6 +109,7 @@ describe('NodeEditor', () => {
       attachment_id: 'gene:lookup',
       enabled: false,
     }))
+    expect(savedAttachment).not.toHaveProperty('export_blocking')
   })
 
   it('separates read-only validation metadata from actionable validator checkboxes', () => {
@@ -174,6 +175,46 @@ describe('NodeEditor', () => {
     expect(screen.getByText('under development')).toBeInTheDocument()
     expect(screen.getByText('Ontology dispatch is being wired in the domain pack.')).toBeInTheDocument()
     expect(screen.getByText(/not scheduled by this checkbox list/i)).toBeInTheDocument()
+  })
+
+  it('shows custom replacement status for validation groups', () => {
+    const replaced = buildValidationAttachmentSelection({
+      attachment_id: 'gene:lookup',
+      validator_binding_id: 'gene_lookup',
+      validator_package_id: 'agr.alliance',
+      validator_agent_id: 'gene_validation',
+      label: 'Gene lookup',
+      blocking: true,
+      enabled: true,
+    })
+
+    render(
+      <NodeEditor
+        node={buildNode({
+          validation_attachments: [replaced],
+          validation_groups: [
+            {
+              group_id: 'gene:lookup',
+              state: 'replaced',
+              binding_id: 'gene_lookup',
+              attachment_id: 'gene:lookup',
+              validator_node_id: 'node_2',
+              label: 'Gene lookup',
+              required: false,
+              blocking: true,
+              allow_opt_out: true,
+            },
+          ],
+        })}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        availableVariables={[]}
+      />
+    )
+
+    expect(screen.getByText('custom replacement')).toBeInTheDocument()
+    expect(screen.getByText('blocking')).toBeInTheDocument()
+    expect(screen.getByText('gene v0.1.0 / agr.alliance:gene_validation')).toBeInTheDocument()
   })
 
   it('labels validation agent instructions as a steering prompt', () => {

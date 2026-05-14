@@ -157,6 +157,26 @@ const validationTargetText = (attachment: ValidationAttachmentSelection) => {
   return 'Validation metadata'
 }
 
+const validationOwnerText = (attachment: ValidationAttachmentSelection) => {
+  const owner = attachment.validator_package_id && attachment.validator_agent_id
+    ? `${attachment.validator_package_id}:${attachment.validator_agent_id}`
+    : attachment.validator_id
+  return `${attachment.domain_pack_id}${attachment.domain_pack_version ? ` v${attachment.domain_pack_version}` : ''} / ${owner}`
+}
+
+const validationAttachmentForPersistence = (
+  attachment: ValidationAttachmentSelection
+): ValidationAttachmentSelection => {
+  const { export_blocking: _exportBlocking, ...selection } = attachment
+  return selection
+}
+
+const validationGroupStateLabel = (attachment: ValidationAttachmentSelection) => {
+  if (attachment.state !== 'active') return validationStateLabel(attachment.state)
+  if (!attachment.enabled) return 'skipped'
+  return 'automatic'
+}
+
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
@@ -244,7 +264,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         : undefined,
       output_key: outputKey,
       validation_attachments: validationAttachments.length > 0
-        ? validationAttachments
+        ? validationAttachments.map(validationAttachmentForPersistence)
         : undefined,
     })
 
@@ -450,6 +470,9 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   {actionableValidationAttachments.map((attachment) => {
                   const hasBinding = Boolean(attachment.validator_binding_id)
+                  const group = node.data.validation_groups?.find(
+                    (candidate) => candidate.attachment_id === attachment.attachment_id
+                  )
                   const canToggle = attachment.state === 'active'
                     && hasBinding
                     && attachment.allow_opt_out
@@ -498,15 +521,33 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                             <Chip
                               size="small"
                               color={stateColor}
-                              label={validationStateLabel(attachment.state)}
+                              label={group?.state === 'replaced' ? 'custom replacement' : validationGroupStateLabel(attachment)}
                               sx={{ height: 18, fontSize: '0.6rem' }}
                             />
-                            {attachment.export_blocking && (
+                            {attachment.required && (
+                              <Chip
+                                size="small"
+                                color="primary"
+                                variant="outlined"
+                                label="required"
+                                sx={{ height: 18, fontSize: '0.6rem' }}
+                              />
+                            )}
+                            {attachment.blocking && (
                               <Chip
                                 size="small"
                                 color="error"
                                 variant="outlined"
-                                label="required for export"
+                                label="blocking"
+                                sx={{ height: 18, fontSize: '0.6rem' }}
+                              />
+                            )}
+                            {attachment.allow_opt_out && (
+                              <Chip
+                                size="small"
+                                color="warning"
+                                variant="outlined"
+                                label="opt-out allowed"
                                 sx={{ height: 18, fontSize: '0.6rem' }}
                               />
                             )}
@@ -524,6 +565,24 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                           >
                             {validationTargetText(attachment)}
                           </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{
+                              display: 'block',
+                              fontSize: '0.62rem',
+                              lineHeight: 1.3,
+                              overflowWrap: 'anywhere',
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {validationOwnerText(attachment)}
+                          </Typography>
+                          {group?.state === 'replaced' && (
+                            <Typography variant="caption" color="success.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                              Replaced by a custom validator edge
+                            </Typography>
+                          )}
                           {attachment.state === 'blocked' && (
                             <Typography variant="caption" color="error.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
                               {validationStateHelpText(attachment)}
@@ -612,6 +671,20 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                                 }}
                               >
                                 {validationTargetText(attachment)}
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{
+                                  display: 'block',
+                                  mt: 0.15,
+                                  fontSize: '0.61rem',
+                                  lineHeight: 1.3,
+                                  overflowWrap: 'anywhere',
+                                  wordBreak: 'break-word',
+                                }}
+                              >
+                                {validationOwnerText(attachment)}
                               </Typography>
                               {attachment.state === 'blocked' && (
                                 <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.63rem' }}>
