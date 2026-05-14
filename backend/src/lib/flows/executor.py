@@ -696,7 +696,7 @@ def _plain_validation_group(raw_group: Any) -> dict[str, Any]:
         return raw_group.model_dump()
     if isinstance(raw_group, Mapping):
         return dict(raw_group)
-    return {}
+    raise ValueError(f"Unexpected validation group type: {type(raw_group).__name__}")
 
 
 def _validation_groups_from_node_data(node_data: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -2131,7 +2131,7 @@ def _persist_flow_extraction_candidates(
         request_keys.append(flow_step_key)
 
     if requests:
-        responses = persist_extraction_results(requests) or []
+        responses = persist_extraction_results(requests)
         persisted_by_key = {
             key: response.extraction_result
             for key, response in zip(request_keys, responses)

@@ -87,6 +87,14 @@ def test_ordered_executable_nodes_treats_validation_edges_as_sidecars():
     assert [node["id"] for node in ordered] == ["extract_1", "prep_1"]
 
 
+def test_validation_groups_from_node_data_rejects_unexpected_group_type():
+    """Malformed validation group values should fail instead of being ignored."""
+    with pytest.raises(ValueError, match="Unexpected validation group type: str"):
+        _executor_module()._validation_groups_from_node_data(
+            {"validation_groups": ["not-a-group"]}
+        )
+
+
 def _agent_node(
     node_id,
     agent_id,
@@ -255,6 +263,36 @@ def _make_completed_step(
         "evidence_records": step_evidence_records,
         "evidence_count": len(step_evidence_records),
     }
+
+
+def _recording_persist_extraction_results(persisted_requests=None):
+    """Build a test double that records requests and returns persistence responses."""
+
+    recorded_requests = persisted_requests if persisted_requests is not None else []
+
+    def _persist(requests):
+        recorded_requests.extend(requests)
+        return [
+            SimpleNamespace(
+                extraction_result=SimpleNamespace(
+                    extraction_result_id=f"persisted-{index}",
+                    document_id=request.document_id,
+                    adapter_key=request.adapter_key,
+                    source_kind=request.source_kind,
+                    origin_session_id=request.origin_session_id,
+                    trace_id=request.trace_id,
+                    flow_run_id=request.flow_run_id,
+                    user_id=request.user_id,
+                    candidate_count=request.candidate_count,
+                    conversation_summary=request.conversation_summary,
+                    payload_json=request.payload_json,
+                    metadata=dict(request.metadata),
+                )
+            )
+            for index, request in enumerate(requests)
+        ]
+
+    return _persist
 
 
 def _make_flow_execution_state(*completed_steps):
@@ -2383,7 +2421,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: persisted_requests.extend(requests),
+            _recording_persist_extraction_results(persisted_requests),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.uuid4",
@@ -2479,7 +2517,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: requests,
+            _recording_persist_extraction_results(),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -2546,7 +2584,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: persisted_requests.extend(requests),
+            _recording_persist_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -2625,7 +2663,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: persisted_requests.extend(requests),
+            _recording_persist_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -2737,7 +2775,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: persisted_requests.extend(requests),
+            _recording_persist_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
