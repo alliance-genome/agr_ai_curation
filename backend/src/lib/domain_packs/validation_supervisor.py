@@ -121,6 +121,12 @@ def run_validation_supervisor(
     }
     new_findings.extend(
         _planned_or_blocked_binding_findings(
+            matches=state_matches[ValidationBindingState.UNDER_DEVELOPMENT],
+            provider_model_ref=provider_model_ref,
+        )
+    )
+    new_findings.extend(
+        _planned_or_blocked_binding_findings(
             matches=state_matches[ValidationBindingState.PLANNED],
             provider_model_ref=provider_model_ref,
         )
@@ -395,12 +401,20 @@ def _planned_or_blocked_binding_findings(
         details = _match_details(match, provider_model_ref=provider_model_ref)
         lookup_status = (
             LOOKUP_STATUS_UNDER_DEVELOPMENT
-            if binding.state is ValidationBindingState.PLANNED
+            if binding.state
+            in {
+                ValidationBindingState.PLANNED,
+                ValidationBindingState.UNDER_DEVELOPMENT,
+            }
             else LOOKUP_STATUS_BLOCKED
         )
         severity = (
             ValidationFindingSeverity.INFO
-            if binding.state is ValidationBindingState.PLANNED
+            if binding.state
+            in {
+                ValidationBindingState.PLANNED,
+                ValidationBindingState.UNDER_DEVELOPMENT,
+            }
             else ValidationFindingSeverity.BLOCKER
         )
         message = _state_message(
@@ -437,37 +451,9 @@ def _active_binding_findings(
     findings: list[ValidationFinding] = []
     matches_by_binding = _matches_by_binding(matches)
     for binding_id in sorted(matches_by_binding):
-        binding_matches = matches_by_binding[binding_id]
-        binding = binding_matches[0].binding
-        if binding.is_executable:
-            findings.extend(
-                _callable_binding_findings(
-                    envelope=envelope,
-                    binding=binding,
-                    provider_model_ref=provider_model_ref,
-                )
-            )
-            continue
-        if binding.validation_kind == "curie_prefix_format":
-            findings.extend(
-                _curie_prefix_findings(
-                    matches=binding_matches,
-                    provider_model_ref=provider_model_ref,
-                )
-            )
-            continue
-        if _binding_uses_agr_curation_lookup(binding):
-            findings.extend(
-                _agr_curation_lookup_findings(
-                    matches=binding_matches,
-                    provider_model_ref=provider_model_ref,
-                )
-            )
-            continue
-
         findings.extend(
             _unsupported_active_binding_findings(
-                matches=binding_matches,
+                matches=matches_by_binding[binding_id],
                 provider_model_ref=provider_model_ref,
             )
         )
@@ -1521,7 +1507,6 @@ def _lookup_attempt_for_match(
     binding = match.binding
     attempted_query = {
         "validator_binding_id": binding.binding_id,
-        "validation_kind": binding.validation_kind,
     }
     input_fields = _attempt_input_fields(match)
     if input_fields:
@@ -1530,9 +1515,11 @@ def _lookup_attempt_for_match(
     return {
         "source": {
             "validator_binding_id": binding.binding_id,
-            "tool_name": binding.tool_name,
-            "tool_method": binding.tool_method,
-            "validator": binding.validator,
+            "validator_agent": (
+                binding.validator_agent.to_dict()
+                if binding.validator_agent is not None
+                else None
+            ),
         },
         "provider": provider_projection.get("provider"),
         "target_projection": provider_projection or None,
@@ -1661,6 +1648,16 @@ def _state_message(
         return (
             f"Validator '{identifier}' is planned in domain-pack metadata and was "
             "not executed."
+        )
+    if state is ValidationBindingState.UNDER_DEVELOPMENT:
+        if reason:
+            return (
+                f"Validator '{identifier}' is under development in domain-pack "
+                f"metadata and was not executed: {reason}."
+            )
+        return (
+            f"Validator '{identifier}' is under development in domain-pack metadata "
+            "and was not executed."
         )
     if blocked_by:
         return (

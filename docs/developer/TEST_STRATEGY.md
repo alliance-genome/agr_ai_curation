@@ -132,12 +132,12 @@ Domain-envelope tests should cover the implemented contract, not design notes:
   history.
 - `DomainPackMetadata` validation for object definitions, field definitions,
   schema refs, fixture packs, and metadata references.
-- `DomainPackValidationRegistry` normalization of active/planned/blocked
-  validators, default-enabled attachment policy, export-blocking policy, and
+- `DomainPackValidationRegistry` handling of active/under-development validator
+  bindings, default-enabled attachment policy, export-blocking policy, and
   explicit opt-out locks or reason requirements.
-- `run_validation_supervisor()` behavior for required fields, planned/blocked
-  findings, active bindings, dispatch-unavailable findings, and stable finding
-  IDs.
+- `run_validation_supervisor()` behavior for required fields,
+  under-development findings, active bindings, dispatch-unavailable findings,
+  and stable finding IDs.
 - `lookup_attempts` as an audit trail, including transient attempts that may
   exist even when the top-level lookup status succeeds after retry.
 - `DomainEnvelopeRepairRequest`, `DomainEnvelopeRepairPatch`, retry budgets,

@@ -613,7 +613,9 @@ metadata:
     active:
       - binding_id: chemical_condition.pending_envelope_validator
         display_name: Data check
-        validator: agr_ai_curation_alliance.domain_packs.chemical_condition.validate_pending_chemical_condition_envelope
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: chemical_validation
         applies_to:
           domain_pack_id: agr.alliance.chemical_condition
           object_types:
@@ -621,11 +623,14 @@ metadata:
             - ChemicalTerm
             - Reference
             - EvidenceQuote
+        input_fields: {}
+        expected_result_fields: {}
         definition_state: in_development
       - binding_id: chemical_condition.chebi_curie_format
         display_name: ChEBI CURIE check
-        validation_kind: curie_prefix_format
-        prefix: CHEBI
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: chemical_validation
         applies_to:
           domain_pack_id: agr.alliance.chemical_condition
           object_types:
@@ -634,31 +639,41 @@ metadata:
           field_paths:
             - condition_chemical.curie
             - curie
+        input_fields:
+          curie: condition_chemical.curie
+        expected_result_fields:
+          chebi_id: condition_chemical.curie
         blocking: true
         allow_opt_out: true
-    planned:
+    under_development:
       - binding_id: chemical_condition.chebi_api_lookup
         display_name: ChEBI lookup
-        validation_kind: external_ontology_lookup
-        provider: ontology_provider
-        tool_name: chebi_api_call
+        state_explanation: ChEBI lookup remains informational until package-scoped validator dispatch owns external ontology calls.
         expected_result_fields:
           chebi_id: condition_chemical.curie
           name: condition_chemical.name
+        applies_to:
+          domain_pack_id: agr.alliance.chemical_condition
+          object_types:
+            - ChemicalCondition
+          field_paths:
+            - condition_chemical.curie
+            - condition_chemical.name
         definition_state: in_development
       - binding_id: chemical_condition.condition_ontology_lookup
         display_name: Condition ontology lookup
-        validation_kind: ontology_lookup
-        provider: ontology_provider
-        target_terms:
-          - condition_class.curie
-          - condition_id.curie
+        state_explanation: Condition ontology lookup remains informational until ontology validator dispatch is wired.
+        applies_to:
+          domain_pack_id: agr.alliance.chemical_condition
+          object_types:
+            - ChemicalCondition
+          field_paths:
+            - condition_class.curie
+            - condition_id.curie
         definition_state: in_development
-    blocked:
       - binding_id: chemical_condition.export_projection_validator
         display_name: Chemical condition ready for export
-        blocked_by: ALL-425
-        reason: Host annotation export/submission projections are owned by the downstream adapter ticket.
+        state_explanation: Host annotation export/submission projections are owned by ALL-425.
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

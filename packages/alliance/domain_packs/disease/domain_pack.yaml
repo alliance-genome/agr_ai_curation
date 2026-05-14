@@ -862,102 +862,115 @@ metadata:
         blocked_by: ALL-425
         description: Durable reference IDs and ECO evidence-code mapping must be verified before writes can be enabled.
   validator_bindings:
-    - binding_id: disease_pending_envelope_validator
-      display_name: Data check
-      validator: agr_ai_curation_alliance.domain_packs.disease.validate_pending_disease_envelope
-      applies_to:
-        domain_pack_id: agr.alliance.disease
-        object_types:
-          - DiseaseAnnotation
-      definition_state: in_development
-    - binding_id: disease_ontology_term_lookup
-      display_name: Disease ontology lookup
-      validation_kind: curation_db_reference_lookup
-      provider: alliance_curation_db
-      status: planned
-      table: public.ontologyterm
-      input_fields:
-        curie: disease_annotation_object.curie
-        name: disease_annotation_object.name
-      expected_result_fields:
-        curie: disease_annotation_object.curie
-        name: disease_annotation_object.name
-        ontologytermtype: DOTerm
-    - binding_id: disease_relation_cv_lookup
-      display_name: Disease relation vocabulary lookup
-      validation_kind: curation_db_reference_lookup
-      provider: alliance_curation_db
-      status: planned
-      table: public.vocabularyterm
-      input_fields:
-        name: disease_relation_name
-      expected_result_fields:
-        name: disease_relation_name
-        vocabulary_name: Disease Relation
-    - binding_id: disease_experimental_condition_lookup
-      display_name: Experimental condition lookup
-      validation_kind: curation_db_reference_lookup
-      provider: alliance_curation_db
-      status: planned
-      tables:
-        - public.conditionrelation
-        - public.experimentalcondition
-        - public.ontologyterm
-    - binding_id: disease_condition_relation_lookup
-      display_name: Condition relation type lookup
-      validation_kind: curation_db_reference_lookup
-      provider: alliance_curation_db
-      status: planned
-      tables:
-        - public.conditionrelation
-        - public.vocabularyterm
-      input_fields:
-        condition_relation_type_name: condition_relations[0].condition_relation_type.name
-      expected_result_fields:
-        condition_relation_type_name: condition_relations[0].condition_relation_type.name
-        vocabulary_name: Condition Relation Type
-    - binding_id: disease_subject_materialization
-      display_name: Disease subject lookup
-      validation_kind: curation_db_reference_lookup
-      provider: alliance_curation_db
-      status: blocked
-      blocked_by: ALL-410
-    - binding_id: disease_reference_materialization
-      display_name: Reference lookup
-      validation_kind: curation_db_reference_lookup
-      provider: alliance_curation_db
-      status: blocked
-      blocked_by: ALL-425
-      table: public.informationcontententity
-      input_fields:
-        curie: single_reference.curie
-      expected_result_fields:
-        curie: single_reference.curie
-    - binding_id: disease_evidence_code_lookup
-      display_name: Evidence code lookup
-      validation_kind: curation_db_reference_lookup
-      provider: alliance_curation_db
-      status: blocked
-      blocked_by: ALL-425
-      table: public.ontologyterm
-      input_fields:
-        curie: evidence_code_curies[0]
-      expected_result_fields:
-        curie: evidence_code_curies[0]
-        ontologytermtype: ECOTerm
-    - binding_id: disease_data_provider_lookup
-      display_name: Data provider lookup
-      validation_kind: curation_db_reference_lookup
-      provider: alliance_curation_db
-      status: blocked
-      blocked_by: ALL-425
-      tables:
-        - public.diseaseannotation
-        - public.organization
-      input_fields:
-        abbreviation: data_provider.abbreviation
-      expected_result_fields:
-        abbreviation: data_provider.abbreviation
+    active:
+      - binding_id: disease_pending_envelope_validator
+        display_name: Data check
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: disease_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+        input_fields: {}
+        expected_result_fields: {}
+        definition_state: in_development
+    under_development:
+      - binding_id: disease_ontology_term_lookup
+        display_name: Disease ontology lookup
+        state_explanation: Disease ontology lookup remains informational until package-scoped validator dispatch owns curation DB lookups.
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+          field_paths:
+            - disease_annotation_object.curie
+            - disease_annotation_object.name
+        input_fields:
+          curie: disease_annotation_object.curie
+          name: disease_annotation_object.name
+        expected_result_fields:
+          curie: disease_annotation_object.curie
+          name: disease_annotation_object.name
+          ontologytermtype: DOTerm
+      - binding_id: disease_relation_cv_lookup
+        display_name: Disease relation vocabulary lookup
+        state_explanation: Disease relation vocabulary lookup remains informational until package-scoped validator dispatch owns curation DB lookups.
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+        input_fields:
+          name: disease_relation_name
+        expected_result_fields:
+          name: disease_relation_name
+          vocabulary_name: Disease Relation
+      - binding_id: disease_experimental_condition_lookup
+        display_name: Experimental condition lookup
+        state_explanation: Experimental condition lookup remains informational until condition relation validator dispatch is wired.
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+      - binding_id: disease_condition_relation_lookup
+        display_name: Condition relation type lookup
+        state_explanation: Condition relation type lookup remains informational until package-scoped validator dispatch owns curation DB lookups.
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+          field_paths:
+            - condition_relations[0].condition_relation_type.name
+        input_fields:
+          condition_relation_type_name: condition_relations[0].condition_relation_type.name
+        expected_result_fields:
+          condition_relation_type_name: condition_relations[0].condition_relation_type.name
+          vocabulary_name: Condition Relation Type
+      - binding_id: disease_subject_materialization
+        display_name: Disease subject lookup
+        state_explanation: Disease subject materialization is blocked by ALL-410.
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+      - binding_id: disease_reference_materialization
+        display_name: Reference lookup
+        state_explanation: Durable reference ID materialization is blocked by ALL-425.
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+          field_paths:
+            - single_reference.curie
+        input_fields:
+          curie: single_reference.curie
+        expected_result_fields:
+          curie: single_reference.curie
+      - binding_id: disease_evidence_code_lookup
+        display_name: Evidence code lookup
+        state_explanation: ECO evidence-code mapping is blocked by ALL-425.
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+          field_paths:
+            - evidence_code_curies[0]
+        input_fields:
+          curie: evidence_code_curies[0]
+        expected_result_fields:
+          curie: evidence_code_curies[0]
+          ontologytermtype: ECOTerm
+      - binding_id: disease_data_provider_lookup
+        display_name: Data provider lookup
+        state_explanation: Data-provider lookup is blocked by ALL-425.
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+        input_fields:
+          abbreviation: data_provider.abbreviation
+        expected_result_fields:
+          abbreviation: data_provider.abbreviation
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

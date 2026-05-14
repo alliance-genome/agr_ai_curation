@@ -30,6 +30,7 @@ class ValidationBindingState(str, Enum):
     """Lifecycle state for a domain-pack validator binding."""
 
     ACTIVE = "active"
+    UNDER_DEVELOPMENT = "under_development"
     PLANNED = "planned"
     BLOCKED = "blocked"
 
@@ -130,6 +131,8 @@ class ValidatorBinding:
     blocking: bool = False
     required: bool = False
     allow_opt_out: bool = False
+    max_tool_calls: int | None = None
+    curator_override_allowed: bool = False
     required_only: bool = False
     applies_to_domain_pack_id: str | None = None
     object_types: tuple[str, ...] = ()
@@ -194,6 +197,10 @@ class ValidatorBinding:
             details["expected_result_fields"] = dict(self.expected_result_fields)
         if self.provider_projection:
             details["provider_projection"] = dict(self.provider_projection)
+        if self.max_tool_calls is not None:
+            details["max_tool_calls"] = self.max_tool_calls
+        if self.curator_override_allowed:
+            details["curator_override"] = {"allowed": True}
         return details
 
 
@@ -804,30 +811,11 @@ def _collect_validator_bindings(
 ) -> list[ValidatorBinding]:
     raw_bindings = owner_metadata.get("validator_bindings")
     bindings: list[ValidatorBinding] = []
-    for state, raw_item in _iter_stateful_metadata_items(
-        raw_bindings,
-        "validator_bindings",
-    ):
+    for state, raw_item in _iter_validator_binding_items(raw_bindings):
         applies_to = _optional_mapping(raw_item.get("applies_to"), "applies_to")
-        object_types = _coerce_string_tuple(
-            applies_to.get("object_types", raw_item.get("object_types"))
-        )
-        field_paths = _coerce_string_tuple(
-            applies_to.get("field_paths", raw_item.get("field_paths"))
-        )
-        field_types = _coerce_field_type_tuple(
-            applies_to.get("field_types", raw_item.get("field_types"))
-        )
-
-        inferred_object_types, inferred_field_paths = _infer_targets_from_binding(
-            raw_item,
-            object_definitions,
-            source_object_type=source_object_type,
-        )
-        if not object_types:
-            object_types = inferred_object_types
-        if not field_paths:
-            field_paths = inferred_field_paths
+        object_types = _coerce_string_tuple(applies_to.get("object_types"))
+        field_paths = _coerce_string_tuple(applies_to.get("field_paths"))
+        field_types = _coerce_field_type_tuple(applies_to.get("field_types"))
 
         if source_object_type is not None and not object_types:
             object_types = (source_object_type,)
@@ -836,14 +824,13 @@ def _collect_validator_bindings(
         if source_field_type is not None and not field_types:
             field_types = (source_field_type,)
 
-        blocking = _optional_bool(raw_item.get("blocking"))
-        required = _optional_bool_with_default(
-            raw_item.get("required"),
-            False,
-        )
-        allow_opt_out = _optional_bool_with_default(
-            raw_item.get("allow_opt_out"),
-            state is ValidationBindingState.ACTIVE,
+        active = state is ValidationBindingState.ACTIVE
+        blocking = active and _optional_bool(raw_item.get("blocking"))
+        required = active and _optional_bool(raw_item.get("required"))
+        allow_opt_out = active and _optional_bool(raw_item.get("allow_opt_out"))
+        curator_override = _optional_mapping(
+            raw_item.get("curator_override"),
+            "curator_override",
         )
 
         bindings.append(
@@ -854,24 +841,22 @@ def _collect_validator_bindings(
                 source_object_type=source_object_type,
                 source_field_path=source_field_path,
                 display_name=_optional_string(raw_item.get("display_name")),
-                validator=_optional_string(raw_item.get("validator")),
-                validation_kind=_optional_string(raw_item.get("validation_kind")),
-                tool_name=_optional_string(raw_item.get("tool_name")),
-                tool_method=_optional_string(raw_item.get("tool_method")),
                 validator_agent=_validator_agent_ref(raw_item),
                 definition_state=_definition_state(raw_item),
-                blocked_by=_optional_string(raw_item.get("blocked_by")),
-                reason=_optional_string(raw_item.get("reason")),
+                reason=_optional_string(
+                    raw_item.get("state_explanation")
+                    if state is ValidationBindingState.UNDER_DEVELOPMENT
+                    else raw_item.get("description")
+                ),
                 blocking=blocking,
                 required=required,
                 allow_opt_out=allow_opt_out,
-                required_only=_optional_bool(raw_item.get("required_only")),
                 applies_to_domain_pack_id=_optional_string(
-                    applies_to.get("domain_pack_id", raw_item.get("domain_pack_id"))
+                    applies_to.get("domain_pack_id")
                 ),
                 object_types=object_types,
                 object_roles=_coerce_string_tuple(
-                    applies_to.get("object_roles", raw_item.get("object_roles"))
+                    applies_to.get("object_roles")
                 ),
                 field_paths=tuple(validate_field_path_syntax(path) for path in field_paths),
                 field_types=field_types,
@@ -882,11 +867,40 @@ def _collect_validator_bindings(
                         "expected_result_fields",
                     )
                 ),
-                provider_projection=_provider_projection(raw_item),
+                max_tool_calls=_optional_int(raw_item.get("max_tool_calls")),
+                curator_override_allowed=active
+                and _optional_bool(curator_override.get("allowed")),
                 raw=dict(raw_item),
             )
         )
     return bindings
+
+
+def _iter_validator_binding_items(
+    raw_items: Any,
+) -> Iterable[tuple[ValidationBindingState, Mapping[str, Any]]]:
+    if raw_items is None:
+        return ()
+    if not isinstance(raw_items, Mapping):
+        raise ValidationRegistryError(
+            "validator_bindings must be a mapping with active and under_development buckets"
+        )
+
+    normalized: list[tuple[ValidationBindingState, Mapping[str, Any]]] = []
+    for state in (
+        ValidationBindingState.ACTIVE,
+        ValidationBindingState.UNDER_DEVELOPMENT,
+    ):
+        state_items = raw_items.get(state.value)
+        if state_items is None:
+            continue
+        if not isinstance(state_items, list):
+            raise ValidationRegistryError(f"validator_bindings.{state.value} must be a list")
+        normalized.extend(
+            (state, _required_mapping_item(raw_item, "validator_bindings"))
+            for raw_item in state_items
+        )
+    return tuple(normalized)
 
 
 def _provider_projection(raw_item: Mapping[str, Any]) -> dict[str, Any]:
@@ -1098,6 +1112,14 @@ def _optional_bool(value: Any) -> bool:
 
 def _optional_bool_with_default(value: Any, default: bool) -> bool:
     return bool(value) if value is not None else default
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValidationRegistryError("Expected an integer value")
+    return value
 
 
 def _definition_state(raw_item: Mapping[str, Any]) -> DefinitionState:

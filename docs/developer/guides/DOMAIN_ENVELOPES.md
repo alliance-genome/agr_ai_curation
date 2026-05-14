@@ -95,17 +95,17 @@ Automatic validation is metadata-driven. `DomainPackValidationRegistry` reads
 `metadata.validators` and `metadata.validator_bindings` from the domain pack,
 object definitions, and field definitions, then normalizes them into:
 
-- active, planned, and blocked validator bindings,
+- active and under-development validator bindings,
 - required/export-blocking field policies,
 - field-level opt-out policy,
 - Agent Studio validation attachment options,
 - supervisor binding matches against envelope objects and fields.
 
-`run_validation_supervisor()` runs active callable validators, handles built-in
-metadata validations such as required fields and CURIE prefix checks, and writes
-new `ValidationFinding` records back into the envelope. Planned and blocked
-validators are visible findings; they are not reported as successful work.
-Unsupported active bindings produce dispatch-unavailable findings.
+`run_validation_supervisor()` handles built-in metadata validations such as
+required fields and writes new `ValidationFinding` records back into the
+envelope. Under-development bindings are visible informational findings; they
+are not reported as successful work. Unsupported active bindings produce
+dispatch-unavailable findings until package-scoped validator dispatch is wired.
 
 Findings are targeted with `object_id`/`pending_ref_id` plus `field_path` where
 possible. Stable finding IDs are derived from the envelope ID, code, severity,
@@ -244,16 +244,14 @@ Agent Studio exposes domain-envelope metadata through
 - object definitions and field paths,
 - definition state and notes,
 - validation attachment counts,
-- active/planned/blocked validation state,
+- active/under-development validation state,
 - required/export-blocking indicators.
 
 Flow Builder validation attachments are derived from domain-pack metadata.
 Defaults are applied to extraction nodes by
-`apply_flow_validation_attachment_defaults()`. Active default validators run
-automatically. Planned and blocked validators remain visible metadata. Active
-validators are enabled by default and curator-opt-out by default so a flow can
-replace automatic validation with a custom validation step. Domain packs may
-explicitly forbid an opt-out with `allow_opt_out: false`.
+`apply_flow_validation_attachment_defaults()`. Active validators are enabled by
+default. Under-development validators remain visible metadata and do not carry
+required, blocking, or opt-out runtime policy.
 
 Custom validation agents are regular flow steps. Their steering prompts are
 stored as normal node configuration and should target envelope objects, field

@@ -9,12 +9,10 @@ from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
 )
-from src.lib.domain_packs import validation_supervisor
 from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
-    ValidationFindingStatus,
 )
 
 
@@ -61,8 +59,7 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         for binding in validation_registries["agr.alliance.disease"].bindings
     } >= {
         ValidationBindingState.ACTIVE,
-        ValidationBindingState.PLANNED,
-        ValidationBindingState.BLOCKED,
+        ValidationBindingState.UNDER_DEVELOPMENT,
     }
     assert {
         binding.state
@@ -71,8 +68,7 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         ].bindings
     } == {
         ValidationBindingState.ACTIVE,
-        ValidationBindingState.PLANNED,
-        ValidationBindingState.BLOCKED,
+        ValidationBindingState.UNDER_DEVELOPMENT,
     }
     assert {
         binding.binding_id
@@ -185,7 +181,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     )
     assert (
         disease_bindings["disease_reference_materialization"].state
-        is ValidationBindingState.BLOCKED
+        is ValidationBindingState.UNDER_DEVELOPMENT
     )
     assert disease_bindings["disease_reference_materialization"].field_paths == (
         "single_reference.curie",
@@ -221,7 +217,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
                 )
             ],
         ),
-        states=[ValidationBindingState.PLANNED, ValidationBindingState.BLOCKED],
+        states=[ValidationBindingState.UNDER_DEVELOPMENT],
     )
     disease_match_targets = {
         (match.binding.binding_id, match.object_type, match.field_path)
@@ -258,6 +254,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "chemical_condition.condition_ontology_lookup"
     ].field_paths == (
         "condition_class.curie",
+        "condition_id.curie",
     )
     assert "chemical_condition.chebi_api_lookup" in registries[
         "agr.alliance.chemical_condition"
@@ -273,7 +270,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     ).validator_binding_ids
 
 
-def test_db_backed_validator_bindings_emit_lookup_attempts_and_provider_projections():
+def test_under_development_validator_bindings_emit_metadata_only_findings():
     alliance_registry = load_alliance_domain_pack_registry()
     disease_pack = alliance_registry.get_pack("agr.alliance.disease")
     registry = DomainPackValidationRegistry.from_domain_pack(disease_pack)
@@ -282,24 +279,11 @@ def test_db_backed_validator_bindings_emit_lookup_attempts_and_provider_projecti
         item.binding_id: item
         for item in registry.bindings
     }["disease_ontology_term_lookup"]
-    assert binding.provider_projection == {
-        "provider": "alliance_curation_db",
-        "projection_type": "curation_db_reference_lookup",
-        "target": {
-            "input_fields": {
-                "curie": "disease_annotation_object.curie",
-                "name": "disease_annotation_object.name",
-            },
-            "expected_result_fields": {
-                "curie": "disease_annotation_object.curie",
-                "name": "disease_annotation_object.name",
-                "ontologytermtype": "DOTerm",
-            },
-        },
-        "provider_fields": {
-            "table": "public.ontologyterm",
-        },
-    }
+    assert binding.provider_projection == {}
+    assert binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert binding.required is False
+    assert binding.blocking is False
+    assert binding.allow_opt_out is False
 
     envelope = DomainEnvelope(
         envelope_id="disease-env",
@@ -342,10 +326,10 @@ def test_db_backed_validator_bindings_emit_lookup_attempts_and_provider_projecti
     )
     attempt = ontology_finding.details["lookup_attempts"][0]
     assert attempt["lookup_status"] == "under_development"
-    assert attempt["provider"] == "alliance_curation_db"
+    assert attempt["provider"] is None
     assert attempt["attempted_query"]["input_fields"]["curie"]["value"] == "DOID:0050434"
     assert ontology_finding.details["failure_classification"] == "under_development"
-    assert ontology_finding.details["provider_projections"][0]["provider"] == "alliance_curation_db"
+    assert "provider_projections" not in ontology_finding.details
 
     history_event = next(
         event
@@ -353,43 +337,11 @@ def test_db_backed_validator_bindings_emit_lookup_attempts_and_provider_projecti
         if event.details.get("finding_id") == ontology_finding.finding_id
     )
     assert history_event.details["lookup_attempts"] == ontology_finding.details["lookup_attempts"]
-    assert history_event.details["provider_projections"] == ontology_finding.details["provider_projections"]
+    assert "provider_projections" not in history_event.details
 
 
-def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior(monkeypatch):
+def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior():
     alliance_registry = load_alliance_domain_pack_registry()
-
-    monkeypatch.setattr(
-        validation_supervisor,
-        "_agr_curation_query_callable",
-        lambda method, **kwargs: {
-            "status": "ok",
-            "data": {
-                "curie": kwargs["gene_id"],
-                "symbol": "ninaE",
-                "taxon": "NCBITaxon:7227",
-            },
-            "count": 1,
-            "lookup_status": "success",
-            "explanation": "Resolved ninaE.",
-            "lookup_attempts": [
-                {
-                    "attempted_query": {"method": method, **kwargs},
-                    "lookup_status": "success",
-                    "candidate_count": 1,
-                    "resolved_id": kwargs["gene_id"],
-                    "resolved_label": "ninaE",
-                }
-            ],
-            "result_projections": [
-                {
-                    "provider": "alliance_curation_db",
-                    "resolved_id": kwargs["gene_id"],
-                    "resolved_label": "ninaE",
-                }
-            ],
-        },
-    )
 
     gene_result = run_validation_supervisor(
         DomainEnvelope(
@@ -415,14 +367,8 @@ def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior(monk
         ),
         alliance_registry.get_pack("gene"),
     )
-    gene_resolved_fields = {
-        finding.field_ref.field_path
-        for finding in gene_result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_lookup_resolved"
-    }
-    assert gene_resolved_fields == {"primary_external_id", "gene_symbol", "taxon"}
     assert any(
-        finding.status is ValidationFindingStatus.RESOLVED
+        finding.code == "domain_pack.validator_dispatch_unavailable"
         for finding in gene_result.envelope.validation_findings
     )
 
@@ -441,7 +387,7 @@ def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior(monk
         alliance_registry.get_pack("agr.alliance.allele"),
     )
     assert any(
-        finding.code == "alliance.allele.association_refs_missing"
+        finding.code == "domain_pack.validator_dispatch_unavailable"
         for finding in allele_result.envelope.validation_findings
     )
 
@@ -472,7 +418,7 @@ def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior(monk
         alliance_registry.get_pack("agr.alliance.chemical_condition"),
     )
     assert any(
-        finding.code == "domain_pack.curie_prefix_mismatch"
+        finding.code == "domain_pack.validator_dispatch_unavailable"
         for finding in chemical_result.envelope.validation_findings
     )
 
@@ -506,11 +452,7 @@ def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior(monk
         alliance_registry.get_pack("agr.alliance.disease"),
     )
     assert any(
-        finding.code == "domain_pack.validator_binding_planned"
-        for finding in disease_result.envelope.validation_findings
-    )
-    assert any(
-        finding.code == "domain_pack.validator_binding_blocked"
+        finding.code == "domain_pack.validator_binding_under_development"
         for finding in disease_result.envelope.validation_findings
     )
 
@@ -533,7 +475,7 @@ def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior(monk
         alliance_registry.get_pack("agr.alliance.phenotype"),
     )
     assert any(
-        finding.code == "domain_pack.validator_dispatch_unavailable"
+        finding.code == "domain_pack.validator_binding_under_development"
         for finding in phenotype_result.envelope.validation_findings
     )
 
