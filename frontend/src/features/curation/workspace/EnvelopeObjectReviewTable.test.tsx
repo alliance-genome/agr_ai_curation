@@ -182,6 +182,27 @@ describe('EnvelopeObjectReviewTable', () => {
     ).toBeInTheDocument()
   })
 
+  it('shows under-development validator capabilities as row metadata', () => {
+    renderTable([
+      buildRow({
+        reviewRow: buildReviewRow({
+          metadata: {
+            unavailable_validator_capabilities: [
+              {
+                validator_binding_id: 'fixture.gene_lookup',
+                label: 'Gene lookup',
+                state: 'under_development',
+                state_explanation: 'Lookup dispatch is being wired.',
+              },
+            ],
+          },
+        }),
+      }),
+    ])
+
+    expect(screen.getByText('1 validator capability under development')).toBeInTheDocument()
+  })
+
   it('renders a distinct empty state when an evidence projection carries no text', () => {
     renderTable([
       buildRow({

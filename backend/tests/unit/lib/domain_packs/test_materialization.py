@@ -35,6 +35,23 @@ def _metadata() -> DomainPackMetadata:
         display_name="Fixture Pack",
         version="0.1.0",
         metadata_api_version="1.0.0",
+        metadata={
+            "validator_bindings": {
+                "active": [],
+                "under_development": [
+                    {
+                        "binding_id": "fixture.gene_symbol_lookup",
+                        "display_name": "Gene symbol lookup",
+                        "state_explanation": "Package-scoped lookup dispatch is pending.",
+                        "applies_to": {
+                            "domain_pack_id": "fixture.pack",
+                            "object_types": ["GeneAssertion"],
+                            "field_paths": ["gene.symbol"],
+                        },
+                    }
+                ],
+            }
+        },
         object_definitions=[
             DomainPackObjectDefinition(
                 object_type="GeneAssertion",
@@ -139,4 +156,18 @@ def test_metadata_materializer_regenerates_review_rows_from_envelope_objects():
         "evidence[0].quote",
     ]
     assert row.summary_fields[0].metadata["provider_refs"]["slot"] == "gene_symbol"
+    assert row.summary_fields[0].metadata["unavailable_validator_capabilities"] == [
+        {
+            "validator_binding_id": "fixture.gene_symbol_lookup",
+            "state": "under_development",
+            "label": "Gene symbol lookup",
+            "state_explanation": "Package-scoped lookup dispatch is pending.",
+            "scope": "field",
+            "affected_fields": ["gene.symbol"],
+            "object_type": "GeneAssertion",
+        }
+    ]
     assert row.metadata["semantic_source"] == "domain_envelope.objects"
+    assert row.metadata["unavailable_validator_capabilities"] == (
+        row.summary_fields[0].metadata["unavailable_validator_capabilities"]
+    )

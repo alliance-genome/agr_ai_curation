@@ -229,6 +229,8 @@ def _schedule_entry(attachment: Mapping[str, Any]) -> dict[str, Any]:
         "allow_opt_out",
         "blocked_by",
         "reason",
+        "state_explanation",
+        "affected_fields",
     )
     return {
         key: attachment[key]

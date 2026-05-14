@@ -130,6 +130,7 @@ const BUILT_IN_TEMPLATE_VARIABLES = [
 
 const validationStateLabel = (state: ValidationAttachmentSelection['state']) => {
   if (state === 'blocked') return 'not available'
+  if (state === 'under_development') return 'under development'
   return state
 }
 
@@ -140,6 +141,9 @@ const validationStateHelpText = (attachment: ValidationAttachmentSelection) => {
       : 'Not available yet'
   }
   if (attachment.state === 'planned') return 'Planned for a later implementation step'
+  if (attachment.state === 'under_development') {
+    return attachment.state_explanation || 'Under development and not available to run yet'
+  }
   return ''
 }
 
@@ -436,7 +440,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 <Typography variant="caption" fontWeight={600}>
                   Validation Attachments
                 </Typography>
-                <Tooltip title="Checked active validators run automatically. Planned, unavailable, and metadata-only validators are shown below as read-only domain-pack context.">
+                <Tooltip title="Checked active validators run automatically. Planned, under-development, unavailable, and metadata-only validators are shown below as read-only domain-pack context.">
                   <InfoOutlinedIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
                 </Tooltip>
               </FieldLabel>
@@ -449,7 +453,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                     && attachment.allow_opt_out
                   const stateColor: 'success' | 'warning' | 'error' = attachment.state === 'active'
                     ? 'success'
-                    : attachment.state === 'planned'
+                    : attachment.state === 'planned' || attachment.state === 'under_development'
                       ? 'warning'
                       : 'error'
                   return (
@@ -528,6 +532,11 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                               {validationStateHelpText(attachment)}
                             </Typography>
                           )}
+                          {attachment.state === 'under_development' && (
+                            <Typography variant="caption" color="warning.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                              {validationStateHelpText(attachment)}
+                            </Typography>
+                          )}
                           {attachment.state === 'active' && !attachment.allow_opt_out && (
                             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.65rem' }}>
                               Locked by policy
@@ -553,13 +562,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                     color="text.secondary"
                     sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}
                   >
-                    Planned, unavailable, and metadata-only validators are not scheduled by this checkbox list.
+                    Planned, under-development, unavailable, and metadata-only validators are not scheduled by this checkbox list.
                   </Typography>
                   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
                     {metadataValidationAttachments.map((attachment) => {
                       const stateColor: 'success' | 'warning' | 'error' = attachment.state === 'active'
                         ? 'success'
-                        : attachment.state === 'planned'
+                        : attachment.state === 'planned' || attachment.state === 'under_development'
                           ? 'warning'
                           : 'error'
                       return (
@@ -609,6 +618,11 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                               </Typography>
                               {attachment.state === 'blocked' && (
                                 <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.63rem' }}>
+                                  {validationStateHelpText(attachment)}
+                                </Typography>
+                              )}
+                              {attachment.state === 'under_development' && (
+                                <Typography variant="caption" color="warning.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.63rem' }}>
                                   {validationStateHelpText(attachment)}
                                 </Typography>
                               )}

@@ -181,6 +181,9 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
   const blockedValidationCount = validationAttachments.filter(
     (attachment) => attachment.state === 'blocked'
   ).length
+  const underDevelopmentValidationCount = validationAttachments.filter(
+    (attachment) => attachment.state === 'under_development'
+  ).length
   const envelopeObjectCount = agentMetadata[data.agent_id]?.domain_envelope?.object_definitions.length ?? 0
 
   return (
@@ -240,6 +243,9 @@ function FlowNodeComponent({ data, selected }: FlowNodeComponentProps) {
             )}
             {blockedValidationCount > 0 && (
               <ValidationPill>{blockedValidationCount} unavailable</ValidationPill>
+            )}
+            {underDevelopmentValidationCount > 0 && (
+              <ValidationPill>{underDevelopmentValidationCount} under development</ValidationPill>
             )}
           </ValidationSummary>
         )}

@@ -81,6 +81,10 @@ object_definitions:
   - object_type: Assertion
     display_name: Assertion
     model_ref: AssertionPayload
+    fields:
+      - field_path: assertion.curie
+        display_name: Assertion CURIE
+        field_type: string
 metadata:
   validator_bindings:
     active:
@@ -90,6 +94,14 @@ metadata:
           agent_id: shared_validator
         applies_to:
           domain_pack_id: fixture.validation
+    under_development:
+      - binding_id: fixture.assertion_curie_lookup
+        display_name: Assertion CURIE lookup
+        state_explanation: Lookup dispatch is still being configured.
+        applies_to:
+          domain_pack_id: fixture.validation
+          object_types: [Assertion]
+          field_paths: [assertion.curie]
 """.strip(),
         encoding="utf-8",
     )
@@ -123,6 +135,23 @@ metadata:
     }
     assert attachment["validator_package_id"] == "org.validators"
     assert attachment["validator_agent_id"] == "shared_validator"
+    under_development_attachment = next(
+        option
+        for option in result["validation_attachments"]
+        if option["state"] == "under_development"
+    )
+    under_development_binding = next(
+        item
+        for item in result["validator_bindings"]
+        if item["binding_state"] == "under_development"
+    )
+    assert under_development_attachment["state_explanation"] == (
+        "Lookup dispatch is still being configured."
+    )
+    assert under_development_attachment["affected_fields"] == ["assertion.curie"]
+    assert under_development_binding["state_explanation"] == (
+        "Lookup dispatch is still being configured."
+    )
 
 
 @pytest.fixture

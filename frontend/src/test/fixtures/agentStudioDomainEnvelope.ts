@@ -116,7 +116,7 @@ export function buildDomainEnvelopeMetadata(
     ],
     validation_summary: {
       total: 1,
-      by_state: { active: 1, planned: 0, blocked: 0 },
+      by_state: { active: 1, planned: 0, blocked: 0, under_development: 0 },
       by_scope: { pack: 0, object: 0, field: 1 },
       default_enabled: 1,
       required: 0,

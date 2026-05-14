@@ -72,6 +72,7 @@ const compactChipSx = {
 
 function humanizeState(value: string): string {
   if (value === 'blocked') return 'not available'
+  if (value === 'under_development') return 'under development'
   return value.replace(/_/g, ' ')
 }
 
@@ -79,7 +80,7 @@ function chipColorForState(
   state?: string | null
 ): 'default' | 'success' | 'warning' | 'error' {
   if (state === 'active' || state === 'stable') return 'success'
-  if (state === 'planned' || state === 'draft' || state === 'in_development') return 'warning'
+  if (state === 'planned' || state === 'under_development' || state === 'draft' || state === 'in_development') return 'warning'
   if (state === 'blocked' || state === 'deprecated') return 'error'
   return 'default'
 }
@@ -167,7 +168,7 @@ function validationStateCounts(attachments: ValidationAttachmentView[]) {
       }
       return counts
     },
-    { active: 0, planned: 0, blocked: 0, enabled: 0, optedOut: 0 }
+    { active: 0, planned: 0, blocked: 0, under_development: 0, enabled: 0, optedOut: 0 }
   )
 }
 
@@ -298,12 +299,16 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
       {counts.blocked > 0 && (
         <Chip size="small" color="error" variant="outlined" label={`${counts.blocked} unavailable`} sx={compactChipSx} />
       )}
+      {counts.under_development > 0 && (
+        <Chip size="small" color="warning" variant="outlined" label={`${counts.under_development} under development`} sx={compactChipSx} />
+      )}
     </Stack>
   )
 }
 
 function validationAttachmentStateLabel(attachment: ValidationAttachmentView): string {
   if (attachment.state === 'blocked') return 'unavailable'
+  if (attachment.state === 'under_development') return 'under development'
   return attachment.state
 }
 
@@ -360,13 +365,13 @@ function ValidationAttachmentRows({ attachments }: { attachments: ValidationAtta
             >
               {validationAttachmentTargetLabel(attachment)}
             </Typography>
-            {attachment.description && (
+            {(attachment.state_explanation || attachment.description) && (
               <Typography
                 variant="caption"
                 color="text.secondary"
                 sx={{ display: 'block', mt: 0.25, fontSize: '0.64rem', lineHeight: 1.35, textWrap: 'pretty' }}
               >
-                {attachment.description}
+                {attachment.state_explanation || attachment.description}
               </Typography>
             )}
           </Box>

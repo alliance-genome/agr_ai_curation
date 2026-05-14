@@ -159,6 +159,11 @@ class ValidatorBinding:
                 else None
             ),
             "reason": self.reason,
+            "state_explanation": (
+                self.reason
+                if self.state is ValidationBindingState.UNDER_DEVELOPMENT
+                else None
+            ),
             "source_object_type": self.source_object_type,
             "source_field_path": self.source_field_path,
             "applies_to_domain_pack_id": self.applies_to_domain_pack_id,
@@ -214,6 +219,8 @@ class ValidationAttachmentOption:
     definition_state: DefinitionState = DefinitionState.STABLE
     blocked_by: str | None = None
     reason: str | None = None
+    state_explanation: str | None = None
+    affected_fields: tuple[str, ...] = ()
     required: bool = False
     export_blocking: bool = False
     default_enabled: bool = False
@@ -245,12 +252,18 @@ class ValidationAttachmentOption:
             "definition_state": self.definition_state.value,
             "blocked_by": self.blocked_by,
             "reason": self.reason,
+            "state_explanation": self.state_explanation,
+            "affected_fields": list(self.affected_fields),
             "required": self.required,
             "export_blocking": self.export_blocking,
             "default_enabled": self.default_enabled,
             "allow_opt_out": self.allow_opt_out,
         }
-        return {key: value for key, value in payload.items() if value is not None}
+        return {
+            key: value
+            for key, value in payload.items()
+            if value is not None and value != []
+        }
 
 
 @dataclass(frozen=True)
@@ -569,6 +582,7 @@ class DomainPackValidationRegistry:
                             field_path=policy.field_path,
                             field_display_name=policy.field_display_name,
                             field_type=policy.field_type,
+                            affected_fields=(policy.field_path,),
                             export_blocking=policy.export_blocking or binding.blocking,
                         )
                     )
@@ -590,6 +604,9 @@ class DomainPackValidationRegistry:
                             object_role=_metadata_object_role(
                                 object_definition.metadata
                             ),
+                            affected_fields=tuple(
+                                field.field_path for field in object_definition.fields
+                            ),
                             export_blocking=binding.blocking,
                         )
                     )
@@ -598,11 +615,16 @@ class DomainPackValidationRegistry:
             options.append(
                 _binding_attachment_option(
                     domain_pack=self.domain_pack,
-                    binding=binding,
-                    scope="pack",
-                    export_blocking=binding.blocking,
-                )
+                binding=binding,
+                scope="pack",
+                affected_fields=tuple(
+                    field.field_path
+                    for object_definition in self.domain_pack.metadata.object_definitions
+                    for field in object_definition.fields
+                ),
+                export_blocking=binding.blocking,
             )
+        )
 
         return _dedupe_validation_attachment_options(
             tuple(sorted(options, key=lambda option: option.attachment_id))
@@ -1470,6 +1492,7 @@ def _binding_attachment_option(
     field_path: str | None = None,
     field_display_name: str | None = None,
     field_type: DomainPackFieldType | None = None,
+    affected_fields: tuple[str, ...] = (),
     export_blocking: bool = False,
 ) -> ValidationAttachmentOption:
     active = binding.state is ValidationBindingState.ACTIVE
@@ -1528,6 +1551,12 @@ def _binding_attachment_option(
         description=binding.reason or "",
         definition_state=binding.definition_state,
         reason=binding.reason,
+        state_explanation=(
+            binding.reason
+            if binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+            else None
+        ),
+        affected_fields=affected_fields,
         required=required,
         export_blocking=blocks_export,
         default_enabled=active,

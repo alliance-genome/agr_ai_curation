@@ -409,6 +409,41 @@ describe('CandidateFieldEditor', () => {
     expect(screen.queryByText('Legacy validation warning.')).not.toBeInTheDocument()
   })
 
+  it('displays under-development validator metadata without validation findings', () => {
+    const workspace = buildWorkspace()
+    const candidate = workspace.candidates[0]!
+    candidate.validation_summary_projections = []
+    candidate.metadata = {
+      unavailable_validator_capabilities: [
+        {
+          validator_binding_id: 'fixture.object_lookup',
+          label: 'Object lookup',
+          state: 'under_development',
+          state_explanation: 'Object lookup is being wired.',
+        },
+      ],
+    }
+    candidate.draft.fields[1]!.metadata.field_metadata = {
+      unavailable_validator_capabilities: [
+        {
+          validator_binding_id: 'fixture.curie_lookup',
+          label: 'CURIE lookup',
+          state: 'under_development',
+          state_explanation: 'CURIE lookup is being wired.',
+        },
+      ],
+    }
+
+    renderEditor(workspace)
+
+    expect(screen.getByTestId('object-validation-state-under_development')).toHaveTextContent(
+      'Object lookup is being wired.',
+    )
+    expect(screen.getByTestId('field-validation-state-field_curie')).toHaveTextContent(
+      'CURIE lookup is being wired.',
+    )
+  })
+
   it('marks missing evidence text explicitly', () => {
     const workspace = buildWorkspace()
     const projection = workspace.candidates[0]!.evidence_anchor_projections![0]!

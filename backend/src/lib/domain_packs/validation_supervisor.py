@@ -27,7 +27,7 @@ from src.schemas.domain_envelope import (
 )
 from src.lib.lookup_status import LOOKUP_STATUS_BLOCKED, LOOKUP_STATUS_UNDER_DEVELOPMENT
 
-from .input_selectors import SelectorBuildResult, build_domain_validation_request
+from .input_selectors import build_domain_validation_request
 from .registry import LoadedDomainPack
 from .validation_registry import (
     DomainPackValidationRegistry,
@@ -57,7 +57,7 @@ def run_validation_supervisor(
 ) -> ValidationSupervisorResult:
     """Run metadata-driven validation and return an updated envelope.
 
-    Under-development bindings are surfaced as visible metadata. Active
+    Under-development bindings are surfaced as visible metadata only. Active
     agent-backed bindings emit explicit dispatch-unavailable findings until the
     package-scoped validator dispatcher owns execution.
     """
@@ -87,12 +87,6 @@ def run_validation_supervisor(
         state: tuple(match for match in all_matches if match.binding.state is state)
         for state in ValidationBindingState
     }
-    new_findings.extend(
-        _under_development_binding_findings(
-            matches=state_matches[ValidationBindingState.UNDER_DEVELOPMENT],
-            provider_model_ref=provider_model_ref,
-        )
-    )
     new_findings.extend(
         _active_binding_findings(
             matches=state_matches[ValidationBindingState.ACTIVE],
@@ -257,42 +251,6 @@ def _required_field_findings(
                     },
                 )
             )
-    return findings
-
-
-def _under_development_binding_findings(
-    *,
-    matches: Iterable[ValidatorBindingMatch],
-    provider_model_ref: Mapping[str, Any] | None,
-) -> list[ValidationFinding]:
-    findings: list[ValidationFinding] = []
-    for match in matches:
-        binding = match.binding
-        selector_result = build_domain_validation_request(match)
-        details = _match_details(match, provider_model_ref=provider_model_ref)
-        message = _state_message(
-            state=binding.state,
-            identifier=binding.binding_id,
-            reason=binding.reason,
-            blocked_by=None,
-        )
-        _attach_lookup_attempt_details(
-            details,
-            match=match,
-            lookup_status=LOOKUP_STATUS_UNDER_DEVELOPMENT,
-            explanation=message,
-            selected_input_details=_selected_input_details(selector_result),
-        )
-        findings.append(
-            ValidationFinding(
-                severity=ValidationFindingSeverity.INFO,
-                code=f"domain_pack.validator_binding_{binding.state.value}",
-                message=message,
-                object_ref=_match_object_ref(match),
-                field_ref=_match_field_ref(match),
-                details=details,
-            )
-        )
     return findings
 
 
@@ -472,16 +430,6 @@ def _lookup_attempt_for_match(
         "resolved_label": None,
         "explanation": explanation,
     }
-
-
-def _selected_input_details(selector_result: SelectorBuildResult) -> dict[str, Any]:
-    details: dict[str, Any] = {}
-    for input_name, value in selector_result.selected_inputs.items():
-        details[input_name] = {
-            "selector": selector_result.input_selectors.get(input_name),
-            "value": value,
-        }
-    return details
 
 
 def _with_provider_model_ref(

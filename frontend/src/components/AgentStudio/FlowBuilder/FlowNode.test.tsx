@@ -110,6 +110,19 @@ describe('FlowNode', () => {
               allow_opt_out: false,
               enabled: false,
             },
+            {
+              attachment_id: 'under-development',
+              domain_pack_id: 'fixture',
+              validator_id: 'under-development',
+              state: 'under_development',
+              scope: 'field',
+              field_path: 'gene_symbol',
+              required: false,
+              export_blocking: false,
+              default_enabled: false,
+              allow_opt_out: false,
+              enabled: false,
+            },
           ],
         })}
         selected={false}
@@ -121,5 +134,6 @@ describe('FlowNode', () => {
     expect(screen.getByText('1 required for export')).toBeInTheDocument()
     expect(screen.getByText('1 planned')).toBeInTheDocument()
     expect(screen.getByText('1 unavailable')).toBeInTheDocument()
+    expect(screen.getByText('1 under development')).toBeInTheDocument()
   })
 })

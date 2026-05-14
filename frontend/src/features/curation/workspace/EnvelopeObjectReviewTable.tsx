@@ -221,6 +221,28 @@ function isDomainEnvelopeValidationStatus(value: unknown): value is DomainEnvelo
   return typeof value === 'string' && VALIDATION_STATUS_VALUES.has(value)
 }
 
+function unavailableValidatorCapabilities(metadata: Record<string, unknown>): Array<Record<string, unknown>> {
+  const value = metadata.unavailable_validator_capabilities
+  return Array.isArray(value)
+    ? value.filter((entry): entry is Record<string, unknown> => (
+        typeof entry === 'object' && entry !== null && !Array.isArray(entry)
+      ))
+    : []
+}
+
+function unavailableCapabilityLabel(capability: Record<string, unknown>): string {
+  const label = typeof capability.label === 'string'
+    ? capability.label
+    : typeof capability.validator_binding_id === 'string'
+      ? capability.validator_binding_id
+      : 'Validator capability'
+  const explanation = typeof capability.state_explanation === 'string'
+    ? capability.state_explanation.trim()
+    : ''
+
+  return explanation ? `${label}: ${explanation}` : `${label} is under development.`
+}
+
 function validationChipPresentation(row: DomainEnvelopeReviewRow): {
   color: ChipProps['color']
   label: string
@@ -261,6 +283,7 @@ function validationChipPresentation(row: DomainEnvelopeReviewRow): {
 
 function renderSummaryFields(row: DomainEnvelopeReviewRow) {
   const fields = curatorSummaryFields(row)
+  const unavailableCapabilities = unavailableValidatorCapabilities(row.metadata)
 
   if (fields.length === 0) {
     return (
@@ -301,6 +324,19 @@ function renderSummaryFields(row: DomainEnvelopeReviewRow) {
         <Typography color="text.secondary" variant="caption">
           {hiddenCount} more fields in the editor
         </Typography>
+      ) : null}
+      {unavailableCapabilities.length > 0 ? (
+        <Tooltip
+          arrow
+          placement="top"
+          title={unavailableCapabilities.map(unavailableCapabilityLabel).join('\n')}
+        >
+          <Typography color="text.secondary" variant="caption">
+            {unavailableCapabilities.length === 1
+              ? '1 validator capability under development'
+              : `${unavailableCapabilities.length} validator capabilities under development`}
+          </Typography>
+        </Tooltip>
       ) : null}
     </Stack>
   )
