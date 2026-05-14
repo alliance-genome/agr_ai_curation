@@ -574,7 +574,9 @@ metadata:
   validator_bindings:
     active:
       - binding_id: museum.title_catalog_check
-        validation_kind: external_catalog_check
+        validator_agent:
+          package_id: museum.catalog
+          agent_id: title_catalog_validator
         applies_to:
           domain_pack_id: museum.catalog
           object_types:

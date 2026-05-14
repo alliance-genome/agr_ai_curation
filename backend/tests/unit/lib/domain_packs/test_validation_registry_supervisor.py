@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from agr_ai_curation_runtime import agr_lookup
 from src.lib import lookup_status
-from src.lib.domain_packs.loader import load_domain_pack_metadata
+from src.lib.domain_packs.loader import DomainPackMetadataError, load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -23,12 +23,7 @@ from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
-    FieldRef,
-    HistoryEventKind,
-    ObjectRef,
-    ValidationFinding,
     ValidationFindingSeverity,
-    ValidationFindingStatus,
 )
 from src.schemas.domain_validator import DomainValidatorResultBase
 
@@ -139,16 +134,20 @@ metadata:
         description: Export projection is intentionally blocked.
   validator_bindings:
     active:
-      - binding_id: fixture.callable_validator
-        display_name: Callable envelope validation
-        validator: fixture.validators.validate
+      - binding_id: fixture.agent_validator
+        display_name: Envelope validation
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
         applies_to:
           domain_pack_id: fixture.validation
           object_types:
             - GeneAssertion
       - binding_id: fixture.identifier_prefix
-        validation_kind: curie_prefix_format
-        prefix: AGR
+        display_name: Identifier lookup
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
         applies_to:
           domain_pack_id: fixture.validation
           object_types:
@@ -157,12 +156,19 @@ metadata:
             - curatable_unit
           field_paths:
             - gene.identifier
-        field_types:
+          field_types:
             - string
+        input_fields:
+          gene_id: gene.identifier
+        expected_result_fields:
+          curie: gene.identifier
         blocking: true
         allow_opt_out: true
       - binding_id: fixture.optional_confidence_check
-        validation_kind: enum_value_check
+        display_name: Confidence check
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
         required: false
         applies_to:
           domain_pack_id: fixture.validation
@@ -170,10 +176,14 @@ metadata:
             - GeneAssertion
           field_paths:
             - confidence
-    planned:
-      - binding_id: fixture.planned_symbol_lookup
+        input_fields:
+          confidence: confidence
+        expected_result_fields:
+          confidence: confidence
+    under_development:
+      - binding_id: fixture.symbol_lookup
         display_name: Gene symbol lookup
-        validation_kind: db_backed_reference_lookup
+        state_explanation: Gene symbol lookup waits for package-scoped dispatch.
         applies_to:
           domain_pack_id: fixture.validation
           object_types:
@@ -181,15 +191,13 @@ metadata:
           field_paths:
             - gene.symbol
         definition_state: in_development
-    blocked:
-      - binding_id: fixture.blocked_export_validator
-        validation_kind: export_projection
+      - binding_id: fixture.export_validator
+        display_name: Export projection
+        state_explanation: Export projection adapter is not available.
         applies_to:
           domain_pack_id: fixture.validation
           object_types:
             - GeneAssertion
-        blocked_by: ALL-999
-        reason: Export projection adapter is not available.
 """.strip()
 
 
@@ -475,10 +483,9 @@ def test_validator_agent_reference_rejects_bare_agent_id(tmp_path: Path):
         "          agent_id: shared_validator",
         "validator_agent: shared_validator",
     )
-    pack = _loaded_owned_pack(tmp_path, bare_ref_text)
 
-    with pytest.raises(ValidationRegistryError, match="validator_agent must be a mapping"):
-        DomainPackValidationRegistry.from_domain_pack(pack)
+    with pytest.raises(DomainPackMetadataError, match="validator_agent"):
+        _loaded_owned_pack(tmp_path, bare_ref_text)
 
 
 def _envelope(
@@ -519,7 +526,7 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
     )
     by_binding = {match.binding.binding_id: match for match in matches}
 
-    assert by_binding["fixture.callable_validator"].object_type == "GeneAssertion"
+    assert by_binding["fixture.agent_validator"].object_type == "GeneAssertion"
     assert by_binding["fixture.identifier_prefix"].field_path == "gene.identifier"
     assert by_binding["fixture.identifier_prefix"].field_definition.field_type.value == "string"
     identifier_policy = registry.policy_for("GeneAssertion", "gene.identifier")
@@ -534,10 +541,10 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
     )
     assert {
         match.binding.binding_id for match in metadata_only_matches
-    } == {"fixture.callable_validator", "fixture.optional_confidence_check"}
+    } == {"fixture.agent_validator", "fixture.optional_confidence_check"}
 
 
-def test_registry_exposes_planned_and_blocked_validator_metadata(tmp_path: Path):
+def test_registry_exposes_under_development_binding_metadata(tmp_path: Path):
     pack = _loaded_pack(tmp_path)
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
 
@@ -548,8 +555,14 @@ def test_registry_exposes_planned_and_blocked_validator_metadata(tmp_path: Path)
 
     assert metadata_by_state[ValidationBindingState.PLANNED] == "fixture.future_lookup"
     assert metadata_by_state[ValidationBindingState.BLOCKED] == "fixture.export_projection"
-    assert binding_states["fixture.planned_symbol_lookup"] is ValidationBindingState.PLANNED
-    assert binding_states["fixture.blocked_export_validator"] is ValidationBindingState.BLOCKED
+    assert (
+        binding_states["fixture.symbol_lookup"]
+        is ValidationBindingState.UNDER_DEVELOPMENT
+    )
+    assert (
+        binding_states["fixture.export_validator"]
+        is ValidationBindingState.UNDER_DEVELOPMENT
+    )
 
 
 def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
@@ -570,37 +583,40 @@ def test_registry_builds_flow_validation_attachment_options(tmp_path: Path):
     assert identifier_option.allow_opt_out is True
 
     callable_option = by_id[
-        "fixture.validation:binding:fixture.callable_validator:object:GeneAssertion:*"
+        "fixture.validation:binding:fixture.agent_validator:object:GeneAssertion:*"
     ]
     assert callable_option.required is False
     assert callable_option.default_enabled is True
-    assert callable_option.allow_opt_out is True
+    assert callable_option.allow_opt_out is False
 
     optional_option = by_id[
         "fixture.validation:binding:fixture.optional_confidence_check:field:GeneAssertion:confidence"
     ]
     assert optional_option.required is False
     assert optional_option.default_enabled is True
-    assert optional_option.allow_opt_out is True
+    assert optional_option.allow_opt_out is False
 
-    planned_option = by_id[
-        "fixture.validation:binding:fixture.planned_symbol_lookup:field:GeneAssertion:gene.symbol"
+    under_development_option = by_id[
+        "fixture.validation:binding:fixture.symbol_lookup:field:GeneAssertion:gene.symbol"
     ]
-    assert planned_option.state is ValidationBindingState.PLANNED
-    assert planned_option.default_enabled is False
-    assert planned_option.label == "Gene symbol lookup"
+    assert under_development_option.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert under_development_option.default_enabled is False
+    assert under_development_option.required is False
+    assert under_development_option.export_blocking is False
+    assert under_development_option.allow_opt_out is False
+    assert under_development_option.label == "Gene symbol lookup"
 
-    blocked_option = by_id[
-        "fixture.validation:binding:fixture.blocked_export_validator:object:GeneAssertion:*"
+    metadata_only_option = by_id[
+        "fixture.validation:binding:fixture.export_validator:object:GeneAssertion:*"
     ]
-    assert blocked_option.state is ValidationBindingState.BLOCKED
-    assert blocked_option.blocked_by == "ALL-999"
+    assert metadata_only_option.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert metadata_only_option.default_enabled is False
 
     metadata_option = by_id["fixture.validation:metadata:fixture.shape:pack:*:*"]
     assert metadata_option.label == "Fixture envelope shape"
 
     callable_option = by_id[
-        "fixture.validation:binding:fixture.callable_validator:object:GeneAssertion:*"
+        "fixture.validation:binding:fixture.agent_validator:object:GeneAssertion:*"
     ]
     assert callable_option.label == "Gene assertion data check"
 
@@ -643,17 +659,153 @@ def test_registry_required_ids_report_edge_whitespace(tmp_path: Path):
         DomainPackValidationRegistry.from_domain_pack(pack)
 
 
-def test_supervisor_appends_required_planned_blocked_findings_and_history(
+@pytest.mark.parametrize(
+    ("legacy_yaml", "expected_error"),
+    [
+        (
+            """
+  validator_bindings:
+    - binding_id: fixture.legacy_list
+      validator_agent:
+        package_id: org.validators
+        agent_id: shared_validator
+      applies_to:
+        domain_pack_id: fixture.validation
+""",
+            "validator_bindings",
+        ),
+        (
+            """
+  validator_bindings:
+    binding_id: fixture.singleton
+    validator_agent:
+      package_id: org.validators
+      agent_id: shared_validator
+    applies_to:
+      domain_pack_id: fixture.validation
+""",
+            "Extra inputs are not permitted",
+        ),
+        (
+            """
+  validator_bindings:
+    planned:
+      - binding_id: fixture.planned
+        state_explanation: Legacy planned bucket.
+""",
+            "Extra inputs are not permitted",
+        ),
+        (
+            """
+  validator_bindings:
+    blocked:
+      - binding_id: fixture.blocked
+        state_explanation: Legacy blocked bucket.
+""",
+            "Extra inputs are not permitted",
+        ),
+        (
+            """
+  validator_bindings:
+    deprecated:
+      - binding_id: fixture.deprecated
+        state_explanation: Legacy deprecated bucket.
+""",
+            "Extra inputs are not permitted",
+        ),
+        (
+            """
+  validator_bindings:
+    active:
+      - binding_id: fixture.item_state
+        status: planned
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
+        applies_to:
+          domain_pack_id: fixture.validation
+""",
+            "Extra inputs are not permitted",
+        ),
+        (
+            """
+  validator_bindings:
+    active:
+      - binding_id: fixture.direct_tool
+        validator: fixture.validators.validate
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
+        applies_to:
+          domain_pack_id: fixture.validation
+""",
+            "Extra inputs are not permitted",
+        ),
+        (
+            """
+  validator_bindings:
+    active:
+      - binding_id: fixture.tool_method
+        validation_kind: db_backed_reference_lookup
+        tool_name: agr_curation_query
+        tool_method: get_gene_by_id
+        validator_agent:
+          package_id: org.validators
+          agent_id: shared_validator
+        applies_to:
+          domain_pack_id: fixture.validation
+""",
+            "Extra inputs are not permitted",
+        ),
+    ],
+)
+def test_validator_bindings_legacy_shapes_fail_at_load_time(
     tmp_path: Path,
-    monkeypatch,
+    legacy_yaml: str,
+    expected_error: str,
+):
+    metadata_text = (
+        _validation_pack_text().split("\nmetadata:\n", 1)[0]
+        + "\nmetadata:\n"
+        + legacy_yaml.strip("\n")
+        + "\n"
+    )
+    pack_path = tmp_path / "fixture.validation"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(metadata_text, encoding="utf-8")
+
+    with pytest.raises(DomainPackMetadataError, match=expected_error):
+        load_domain_pack_metadata(metadata_path)
+
+
+def test_under_development_binding_rejects_runtime_policy(tmp_path: Path):
+    metadata_text = _validation_pack_text().replace(
+        "state_explanation: Gene symbol lookup waits for package-scoped dispatch.",
+        "\n".join(
+            (
+                "state_explanation: Gene symbol lookup waits for package-scoped dispatch.",
+                "        required: true",
+                "        blocking: true",
+                "        allow_opt_out: true",
+            )
+        ),
+        1,
+    )
+    pack_path = tmp_path / "fixture.validation"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(metadata_text, encoding="utf-8")
+
+    with pytest.raises(DomainPackMetadataError, match="Extra inputs are not permitted"):
+        load_domain_pack_metadata(metadata_path)
+
+
+def test_supervisor_appends_required_under_development_findings_and_history(
+    tmp_path: Path,
 ):
     pack = _loaded_pack(tmp_path)
     envelope = _envelope(payload={"gene": {"symbol": "abc-1"}, "confidence": "high"})
-    monkeypatch.setattr(
-        validation_supervisor,
-        "_load_validator_callable",
-        lambda _path: lambda _envelope: (),
-    )
 
     result = run_validation_supervisor(envelope, pack)
     findings_by_code = {finding.code: finding for finding in result.envelope.validation_findings}
@@ -672,18 +824,22 @@ def test_supervisor_appends_required_planned_blocked_findings_and_history(
         "export_blocking"
     ] is True
 
-    planned_binding = [
+    under_development_binding = next(
         finding
         for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_binding_planned"
-    ][0]
-    assert planned_binding.field_ref.field_path == "gene.symbol"
-    assert planned_binding.details["validation_metadata"]["validator_binding_id"] == (
-        "fixture.planned_symbol_lookup"
+        if finding.code == "domain_pack.validator_binding_under_development"
+        and finding.details["validation_metadata"]["validator_binding_id"]
+        == "fixture.symbol_lookup"
     )
-    planned_attempt = planned_binding.details["lookup_attempts"][0]
-    assert planned_attempt["provider"] is None
-    assert "provider" not in planned_binding.details["provider_projections"][0]
+    assert under_development_binding.field_ref.field_path == "gene.symbol"
+    assert under_development_binding.details["validation_metadata"][
+        "validator_binding_id"
+    ] == (
+        "fixture.symbol_lookup"
+    )
+    under_development_attempt = under_development_binding.details["lookup_attempts"][0]
+    assert under_development_attempt["lookup_status"] == "under_development"
+    assert "provider_projections" not in under_development_binding.details
 
     blocked_metadata = [
         finding
@@ -737,593 +893,8 @@ def test_supervisor_marks_field_definition_source_when_policy_absent(tmp_path: P
     assert metadata["field_policy"]["field_path"] == "gene.identifier"
 
 
-def test_supervisor_runs_callable_and_field_prefix_bindings(tmp_path: Path, monkeypatch):
-    pack = _loaded_pack(tmp_path)
-    envelope = _envelope(
-        payload={"gene": {"symbol": "abc-1", "identifier": "BAD:0001"}}
-    )
-
-    def _fake_validator(domain_envelope: DomainEnvelope):
-        assert domain_envelope.envelope_id == "env-1"
-        return (
-            ValidationFinding(
-                severity=ValidationFindingSeverity.WARNING,
-                code="fixture.callable_warning",
-                message="Callable validator warning.",
-                object_ref=ObjectRef(
-                    pending_ref_id="gene-assertion-1",
-                    object_type="GeneAssertion",
-                ),
-            ),
-        )
-
-    monkeypatch.setattr(
-        validation_supervisor,
-        "_load_validator_callable",
-        lambda _path: _fake_validator,
-    )
-
-    result = run_validation_supervisor(
-        envelope,
-        pack,
-        provider_model_ref={"provider": "openai", "model": "gpt-test"},
-    )
-    findings_by_code = {finding.code: finding for finding in result.envelope.validation_findings}
-
-    callable_finding = findings_by_code["fixture.callable_warning"]
-    assert callable_finding.details["validation_metadata"]["validator_binding_id"] == (
-        "fixture.callable_validator"
-    )
-    assert callable_finding.details["validation_metadata"]["provider_model_ref"] == {
-        "provider": "openai",
-        "model": "gpt-test",
-    }
-
-    prefix_finding = findings_by_code["domain_pack.curie_prefix_mismatch"]
-    assert prefix_finding.severity is ValidationFindingSeverity.BLOCKER
-    assert prefix_finding.field_ref.field_path == "gene.identifier"
-    assert prefix_finding.details["observed_value"] == "BAD:0001"
-
-
-def test_supervisor_dispatches_active_agr_lookup_success_as_resolved_findings(
-    tmp_path: Path,
-    monkeypatch,
-):
-    metadata_text = _validation_pack_text().replace(
-        """
-      - binding_id: fixture.callable_validator
-        display_name: Callable envelope validation
-        validator: fixture.validators.validate
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-""",
-        """
-      - binding_id: fixture.agr_gene_lookup
-        display_name: AGR gene lookup
-        validation_kind: db_backed_reference_lookup
-        provider: alliance_curation_db
-        tool_name: agr_curation_query
-        tool_method: get_gene_by_id
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-        input_fields:
-          gene_id: gene.identifier
-        expected_result_fields:
-          curie: gene.identifier
-          symbol: gene.symbol
-""",
-        1,
-    )
-    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
-
-    def _fake_lookup(method: str, **kwargs):
-        assert method == "get_gene_by_id"
-        assert kwargs == {"gene_id": "AGR:0000001"}
-        return {
-            "status": "ok",
-            "data": {
-                "curie": "AGR:0000001",
-                "symbol": "abc-1",
-            },
-            "count": 1,
-            "lookup_status": validation_supervisor.LOOKUP_STATUS_SUCCESS,
-            "explanation": "Resolved AGR gene.",
-            "lookup_attempts": [
-                {
-                    "attempted_query": {
-                        "method": "get_gene_by_id",
-                        "gene_id": "AGR:0000001",
-                    },
-                    "lookup_status": validation_supervisor.LOOKUP_STATUS_SUCCESS,
-                    "candidate_count": 1,
-                    "resolved_id": "AGR:0000001",
-                    "resolved_label": "abc-1",
-                }
-            ],
-            "candidate_matches": [
-                {
-                    "candidate_id": "AGR:0000001",
-                    "candidate_label": "abc-1",
-                }
-            ],
-            "result_projections": [
-                {
-                    "provider": "alliance_curation_db",
-                    "resolved_id": "AGR:0000001",
-                    "resolved_label": "abc-1",
-                }
-            ],
-        }
-
-    monkeypatch.setattr(
-        validation_supervisor,
-        "_agr_curation_query_callable",
-        _fake_lookup,
-    )
-
-    result = run_validation_supervisor(_envelope(), pack)
-    resolved_findings = [
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_lookup_resolved"
-    ]
-
-    assert {
-        finding.field_ref.field_path for finding in resolved_findings
-    } == {"gene.identifier", "gene.symbol"}
-    assert {
-        finding.status for finding in resolved_findings
-    } == {ValidationFindingStatus.RESOLVED}
-    identifier_finding = next(
-        finding
-        for finding in resolved_findings
-        if finding.field_ref.field_path == "gene.identifier"
-    )
-    assert identifier_finding.details["lookup_attempts"][0]["lookup_status"] == "success"
-    assert identifier_finding.details["candidate_matches"][0]["candidate_id"] == "AGR:0000001"
-    assert identifier_finding.details["result_projections"][0]["resolved_label"] == "abc-1"
-
-
-def test_supervisor_retries_partial_agr_lookup_success_before_resolving(
-    tmp_path: Path,
-    monkeypatch,
-):
-    metadata_text = _validation_pack_text().replace(
-        """
-      - binding_id: fixture.callable_validator
-        display_name: Callable envelope validation
-        validator: fixture.validators.validate
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-""",
-        """
-      - binding_id: fixture.agr_gene_lookup
-        display_name: AGR gene lookup
-        validation_kind: db_backed_reference_lookup
-        provider: alliance_curation_db
-        tool_name: agr_curation_query
-        tool_method: get_gene_by_id
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-        input_fields:
-          gene_id: gene.identifier
-        expected_result_fields:
-          curie: gene.identifier
-          symbol: gene.symbol
-""",
-        1,
-    )
-    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
-    calls: list[dict] = []
-
-    def _fake_lookup(method: str, **kwargs):
-        calls.append({"method": method, **kwargs})
-        data = {"symbol": "abc-1"} if len(calls) == 2 else {"curie": "AGR:0000001"}
-        return {
-            "status": "ok",
-            "data": data,
-            "count": 1,
-            "lookup_status": validation_supervisor.LOOKUP_STATUS_SUCCESS,
-            "explanation": "Resolved AGR gene.",
-            "lookup_attempts": [
-                {
-                    "attempted_query": {
-                        "method": method,
-                        **kwargs,
-                    },
-                    "lookup_status": validation_supervisor.LOOKUP_STATUS_SUCCESS,
-                    "candidate_count": 1,
-                    "resolved_id": "AGR:0000001",
-                    "resolved_label": "abc-1",
-                }
-            ],
-        }
-
-    monkeypatch.setattr(
-        validation_supervisor,
-        "_agr_curation_query_callable",
-        _fake_lookup,
-    )
-
-    result = run_validation_supervisor(_envelope(), pack)
-    resolved_findings = [
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_lookup_resolved"
-    ]
-    symbol_finding = next(
-        finding for finding in resolved_findings if finding.field_ref.field_path == "gene.symbol"
-    )
-    identifier_finding = next(
-        finding
-        for finding in resolved_findings
-        if finding.field_ref.field_path == "gene.identifier"
-    )
-
-    assert len(calls) == 2
-    assert "validation_retry_context" not in calls[0]
-    retry_context = calls[1]["validation_retry_context"]
-    assert retry_context["reason"] == "missing_expected_result_field"
-    assert retry_context["missing_expected_result_fields"] == [
-        {
-            "result_field": "symbol",
-            "field_path": "gene.symbol",
-            "observed_value": "abc-1",
-        }
-    ]
-    assert "partially succeeded" in retry_context["prompt"]
-    assert {
-        finding.field_ref.field_path for finding in resolved_findings
-    } == {"gene.identifier", "gene.symbol"}
-    assert identifier_finding.details["resolved_value"] == "AGR:0000001"
-    assert symbol_finding.details["resolved_value"] == "abc-1"
-    assert symbol_finding.details["lookup_attempts"][0]["supervisor_retry_index"] == 0
-    assert symbol_finding.details["lookup_attempts"][1]["supervisor_retry_index"] == 1
-    assert "partially succeeded" in symbol_finding.details["lookup_attempts"][1][
-        "supervisor_retry_prompt"
-    ]
-    assert symbol_finding.details["supervisor_retries"][0]["reason"] == (
-        "missing_expected_result_field"
-    )
-
-
-def test_supervisor_keeps_partial_agr_lookup_success_open_after_retry_exhausted(
-    tmp_path: Path,
-    monkeypatch,
-):
-    metadata_text = _validation_pack_text().replace(
-        """
-      - binding_id: fixture.callable_validator
-        display_name: Callable envelope validation
-        validator: fixture.validators.validate
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-""",
-        """
-      - binding_id: fixture.agr_gene_lookup
-        display_name: AGR gene lookup
-        validation_kind: db_backed_reference_lookup
-        provider: alliance_curation_db
-        tool_name: agr_curation_query
-        tool_method: get_gene_by_id
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-        input_fields:
-          gene_id: gene.identifier
-        expected_result_fields:
-          curie: gene.identifier
-          symbol: gene.symbol
-""",
-        1,
-    )
-    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
-    calls: list[dict] = []
-
-    def _fake_lookup(method: str, **kwargs):
-        calls.append({"method": method, **kwargs})
-        return {
-            "status": "ok",
-            "data": {"curie": "AGR:0000001"},
-            "count": 1,
-            "lookup_status": validation_supervisor.LOOKUP_STATUS_SUCCESS,
-            "explanation": "Resolved AGR gene without symbol projection.",
-            "lookup_attempts": [
-                {
-                    "attempted_query": {
-                        "method": method,
-                        **kwargs,
-                    },
-                    "lookup_status": validation_supervisor.LOOKUP_STATUS_SUCCESS,
-                    "candidate_count": 1,
-                    "resolved_id": "AGR:0000001",
-                    "resolved_label": "abc-1",
-                }
-            ],
-        }
-
-    monkeypatch.setattr(
-        validation_supervisor,
-        "_agr_curation_query_callable",
-        _fake_lookup,
-    )
-
-    result = run_validation_supervisor(_envelope(), pack)
-    projection_missing = [
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_lookup_projection_missing"
-    ]
-    resolved_findings = [
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_lookup_resolved"
-    ]
-
-    assert len(calls) == 2
-    assert "validation_retry_context" not in calls[0]
-    assert calls[1]["validation_retry_context"]["reason"] == (
-        "missing_expected_result_field"
-    )
-    assert {finding.field_ref.field_path for finding in resolved_findings} == {
-        "gene.identifier"
-    }
-    assert len(projection_missing) == 1
-    missing_finding = projection_missing[0]
-    assert missing_finding.status is ValidationFindingStatus.OPEN
-    assert missing_finding.field_ref.field_path == "gene.symbol"
-    assert "partially succeeded but failed" in missing_finding.message
-    assert missing_finding.details["lookup_status"] == "success"
-    assert missing_finding.details["failure_classification"] == (
-        "missing_expected_result_field"
-    )
-    assert missing_finding.details["missing_expected_result_fields"] == [
-        {
-            "result_field": "symbol",
-            "field_path": "gene.symbol",
-            "observed_value": "abc-1",
-        }
-    ]
-    assert missing_finding.details["supervisor_retries"][0]["exhausted"] is True
-    assert "partially succeeded" in missing_finding.details["retry_prompt"]
-
-
-def test_supervisor_supersedes_projection_missing_when_later_lookup_resolves_field(
-    tmp_path: Path,
-    monkeypatch,
-):
-    metadata_text = _validation_pack_text().replace(
-        """
-      - binding_id: fixture.callable_validator
-        display_name: Callable envelope validation
-        validator: fixture.validators.validate
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-""",
-        """
-      - binding_id: fixture.agr_gene_lookup
-        display_name: AGR gene lookup
-        validation_kind: db_backed_reference_lookup
-        provider: alliance_curation_db
-        tool_name: agr_curation_query
-        tool_method: get_gene_by_id
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-        input_fields:
-          gene_id: gene.identifier
-        expected_result_fields:
-          curie: gene.identifier
-          symbol: gene.symbol
-""",
-        1,
-    )
-    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
-    existing_missing = ValidationFinding(
-        finding_id="existing-projection-missing",
-        severity=ValidationFindingSeverity.ERROR,
-        status=ValidationFindingStatus.OPEN,
-        code="domain_pack.validator_lookup_projection_missing",
-        message="Earlier lookup omitted the expected symbol projection.",
-        field_ref=FieldRef(
-            object_ref=ObjectRef(
-                pending_ref_id="gene-assertion-1",
-                object_type="GeneAssertion",
-            ),
-            field_path="gene.symbol",
-        ),
-        details={
-            "expected_result_field": "symbol",
-            "failure_classification": "missing_expected_result_field",
-            "validation_metadata": {
-                "validator_binding_id": "fixture.agr_gene_lookup",
-            },
-        },
-    )
-
-    def _fake_lookup(method: str, **kwargs):
-        assert method == "get_gene_by_id"
-        assert kwargs == {"gene_id": "AGR:0000001"}
-        return {
-            "status": "ok",
-            "data": {
-                "curie": "AGR:0000001",
-                "symbol": "abc-1",
-            },
-            "count": 1,
-            "lookup_status": validation_supervisor.LOOKUP_STATUS_SUCCESS,
-            "explanation": "Resolved AGR gene.",
-        }
-
-    monkeypatch.setattr(
-        validation_supervisor,
-        "_agr_curation_query_callable",
-        _fake_lookup,
-    )
-
-    result = run_validation_supervisor(
-        _envelope().model_copy(update={"validation_findings": [existing_missing]}),
-        pack,
-    )
-    findings_by_id = {
-        finding.finding_id: finding
-        for finding in result.envelope.validation_findings
-        if finding.finding_id is not None
-    }
-    superseded_finding = findings_by_id["existing-projection-missing"]
-    resolved_symbol_finding = next(
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_lookup_resolved"
-        and finding.field_ref is not None
-        and finding.field_ref.field_path == "gene.symbol"
-    )
-
-    assert superseded_finding.status is ValidationFindingStatus.RESOLVED
-    assert superseded_finding.details["superseded_by_finding_id"] == (
-        resolved_symbol_finding.finding_id
-    )
-    status_events = [
-        event
-        for event in result.envelope.history
-        if event.event_type is HistoryEventKind.STATUS_CHANGED
-    ]
-    assert len(status_events) == 1
-    assert status_events[0].details["finding_id"] == "existing-projection-missing"
-    assert status_events[0].details["superseded_by_finding_id"] == (
-        resolved_symbol_finding.finding_id
-    )
-
-
-@pytest.mark.parametrize(
-    ("lookup_status", "expected_code"),
-    [
-        (
-            validation_supervisor.LOOKUP_STATUS_NOT_FOUND,
-            "domain_pack.validator_lookup_not_found",
-        ),
-        (
-            validation_supervisor.LOOKUP_STATUS_AMBIGUOUS,
-            "domain_pack.validator_lookup_ambiguous",
-        ),
-        (
-            validation_supervisor.LOOKUP_STATUS_TRANSIENT,
-            "domain_pack.validator_lookup_transient",
-        ),
-        (
-            validation_supervisor.LOOKUP_STATUS_BLOCKED,
-            "domain_pack.validator_lookup_blocked",
-        ),
-        (
-            validation_supervisor.LOOKUP_STATUS_UNDER_DEVELOPMENT,
-            "domain_pack.validator_lookup_under_development",
-        ),
-    ],
-)
-def test_supervisor_maps_agr_lookup_failures_to_open_findings(
-    tmp_path: Path,
-    monkeypatch,
-    lookup_status: str,
-    expected_code: str,
-):
-    metadata_text = _validation_pack_text().replace(
-        """
-      - binding_id: fixture.callable_validator
-        display_name: Callable envelope validation
-        validator: fixture.validators.validate
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-""",
-        """
-      - binding_id: fixture.agr_gene_lookup
-        display_name: AGR gene lookup
-        validation_kind: db_backed_reference_lookup
-        provider: alliance_curation_db
-        tool_name: agr_curation_query
-        tool_method: get_gene_by_id
-        applies_to:
-          domain_pack_id: fixture.validation
-          object_types:
-            - GeneAssertion
-        input_fields:
-          gene_id: gene.identifier
-        expected_result_fields:
-          curie: gene.identifier
-          symbol: gene.symbol
-""",
-        1,
-    )
-    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
-
-    monkeypatch.setattr(
-        validation_supervisor,
-        "_agr_curation_query_callable",
-        lambda method, **kwargs: {
-            "status": "error" if lookup_status == "blocked" else "ok",
-            "data": None,
-            "count": 0,
-            "lookup_status": lookup_status,
-            "failure_classification": lookup_status,
-            "explanation": f"Lookup ended as {lookup_status}.",
-            "lookup_attempts": [
-                {
-                    "attempted_query": {
-                        "method": method,
-                        **kwargs,
-                    },
-                    "lookup_status": lookup_status,
-                    "candidate_count": 2 if lookup_status == "ambiguous" else 0,
-                }
-            ],
-            "candidate_matches": (
-                [
-                    {
-                        "candidate_id": "AGR:0000001",
-                        "candidate_label": "abc-1",
-                    }
-                ]
-                if lookup_status == "ambiguous"
-                else None
-            ),
-        },
-    )
-
-    result = run_validation_supervisor(_envelope(), pack)
-    lookup_findings = [
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == expected_code
-    ]
-
-    assert lookup_findings
-    assert {finding.status for finding in lookup_findings} == {ValidationFindingStatus.OPEN}
-    assert lookup_findings[0].details["failure_classification"] == lookup_status
-    assert lookup_findings[0].details["lookup_attempts"][0]["lookup_status"] == lookup_status
-
-
 def test_supervisor_does_not_fake_success_for_unsupported_active_binding(tmp_path: Path):
-    metadata_text = _validation_pack_text().replace(
-        "validator: fixture.validators.validate",
-        "validation_kind: db_backed_reference_lookup",
-        1,
-    )
-    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
+    pack = _loaded_pack(tmp_path)
 
     result = run_validation_supervisor(envelope=_envelope(), domain_pack=pack)
 
@@ -1332,6 +903,6 @@ def test_supervisor_does_not_fake_success_for_unsupported_active_binding(tmp_pat
         for finding in result.envelope.validation_findings
         if finding.code == "domain_pack.validator_dispatch_unavailable"
     ]
-    assert len(dispatch_findings) == 2
+    assert len(dispatch_findings) == 3
     assert dispatch_findings[0].severity is ValidationFindingSeverity.WARNING
     assert dispatch_findings[0].object_ref.pending_ref_id == "gene-assertion-1"

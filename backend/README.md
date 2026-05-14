@@ -280,11 +280,11 @@ refs, evidence metadata, and domain-pack metadata. The workspace still stores
 candidate rows for review mechanics, but for domain-pack runs those rows are
 materialized projections with `semantic_source: domain_envelope.objects`.
 
-Automatic validation comes from domain-pack metadata. Active validators run or
-produce explicit dispatch findings, planned/blocked validators remain visible,
-and DB-backed lookup tools preserve `lookup_attempts` as an audit trail. Repair,
-field edits, export, and submission all operate against envelope object field
-paths and expected revisions.
+Automatic validation comes from domain-pack metadata. Active validator bindings
+use package-scoped validator agent refs or produce explicit dispatch findings;
+under-development bindings remain visible metadata. Repair, field edits, export,
+and submission all operate against envelope object field paths and expected
+revisions.
 
 See [DOMAIN_ENVELOPES.md](../docs/developer/guides/DOMAIN_ENVELOPES.md) for the
 full developer contract.

@@ -96,19 +96,27 @@ object_definitions:
           - figure_reference
           - chunk_id
       validator_bindings:
-        - binding_id: alliance_gene_reference_lookup
-          display_name: Alliance gene lookup
-          validation_kind: db_backed_reference_lookup
-          provider: alliance_curation_db
-          tool_name: agr_curation_query
-          tool_method: get_gene_by_id
-          input_fields:
-            gene_id: primary_external_id
-          expected_result_fields:
-            curie: primary_external_id
-            symbol: gene_symbol
-            taxon: taxon
-          blocking: false
+        active:
+          - binding_id: alliance_gene_reference_lookup
+            display_name: Alliance gene lookup
+            validator_agent:
+              package_id: agr.alliance
+              agent_id: gene_validation
+            applies_to:
+              domain_pack_id: gene
+              object_types:
+                - gene_mention_evidence
+              field_paths:
+                - primary_external_id
+                - gene_symbol
+                - taxon
+            input_fields:
+              gene_id: primary_external_id
+            expected_result_fields:
+              curie: primary_external_id
+              symbol: gene_symbol
+              taxon: taxon
+            blocking: false
       export_behavior:
         status: ready
         mode: validated_reference_evidence

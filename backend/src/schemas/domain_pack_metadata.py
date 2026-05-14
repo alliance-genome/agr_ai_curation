@@ -89,6 +89,158 @@ class DomainPackStatus(str, Enum):
     DEPRECATED = "deprecated"
 
 
+class DomainPackValidatorAgentRef(DomainPackMetadataBaseModel):
+    """Package-scoped validator agent reference declared in validator metadata."""
+
+    package_id: str
+    agent_id: str
+
+    @field_validator("package_id")
+    @classmethod
+    def _validate_package_id(cls, value: str) -> str:
+        return _validate_pack_id(value, "validator_agent.package_id")
+
+    @field_validator("agent_id")
+    @classmethod
+    def _validate_agent_id(cls, value: str) -> str:
+        return _validate_symbolic_name(value, "validator_agent.agent_id")
+
+
+class DomainPackValidatorAppliesTo(DomainPackMetadataBaseModel):
+    """Target selector for one validator binding."""
+
+    domain_pack_id: Optional[str] = None
+    object_types: list[str] = Field(default_factory=list)
+    object_roles: list[str] = Field(default_factory=list)
+    field_paths: list[str] = Field(default_factory=list)
+    field_types: list[str] = Field(default_factory=list)
+
+    @field_validator("domain_pack_id")
+    @classmethod
+    def _validate_domain_pack_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return _validate_pack_id(value, "applies_to.domain_pack_id")
+
+    @field_validator("object_types", "object_roles")
+    @classmethod
+    def _validate_symbolic_lists(cls, value: list[str], info) -> list[str]:
+        validated = [
+            _validate_symbolic_name(item, f"applies_to.{info.field_name}")
+            for item in value
+        ]
+        _require_unique(validated, f"applies_to.{info.field_name}")
+        return validated
+
+    @field_validator("field_paths")
+    @classmethod
+    def _validate_field_paths(cls, value: list[str]) -> list[str]:
+        validated = [validate_field_path_syntax(item) for item in value]
+        _require_unique(validated, "applies_to.field_paths")
+        return validated
+
+    @field_validator("field_types")
+    @classmethod
+    def _validate_field_types(cls, value: list[str]) -> list[str]:
+        validated: list[str] = []
+        for item in value:
+            try:
+                validated.append(DomainPackFieldType(item).value)
+            except ValueError as exc:
+                raise ValueError(f"Unknown domain-pack field type '{item}'") from exc
+        _require_unique(validated, "applies_to.field_types")
+        return validated
+
+
+class DomainPackValidatorCuratorOverride(DomainPackMetadataBaseModel):
+    """Curator override policy for one active validator binding."""
+
+    allowed: bool = False
+
+
+class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
+    """Executable package-scoped validator binding metadata."""
+
+    binding_id: str
+    display_name: Optional[str] = None
+    description: str = ""
+    validator_agent: DomainPackValidatorAgentRef
+    applies_to: DomainPackValidatorAppliesTo
+    input_fields: dict[str, Any] = Field(default_factory=dict)
+    expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    max_tool_calls: Optional[int] = Field(default=None, ge=0)
+    required: bool = False
+    blocking: bool = False
+    allow_opt_out: bool = False
+    curator_override: DomainPackValidatorCuratorOverride = Field(
+        default_factory=DomainPackValidatorCuratorOverride
+    )
+    definition_state: DefinitionState = DefinitionState.STABLE
+
+    @field_validator("binding_id")
+    @classmethod
+    def _validate_binding_id(cls, value: str) -> str:
+        return _validate_symbolic_name(value, "validator_bindings.binding_id")
+
+
+class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
+    """Informational validator capability that must not affect runtime policy."""
+
+    binding_id: str
+    display_name: Optional[str] = None
+    description: str = ""
+    state_explanation: str = Field(min_length=1)
+    validator_agent: Optional[DomainPackValidatorAgentRef] = None
+    applies_to: Optional[DomainPackValidatorAppliesTo] = None
+    input_fields: dict[str, Any] = Field(default_factory=dict)
+    expected_result_fields: dict[str, Any] = Field(default_factory=dict)
+    max_tool_calls: Optional[int] = Field(default=None, ge=0)
+    definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
+
+    @field_validator("binding_id")
+    @classmethod
+    def _validate_binding_id(cls, value: str) -> str:
+        return _validate_symbolic_name(value, "validator_bindings.binding_id")
+
+    @field_validator("state_explanation")
+    @classmethod
+    def _validate_state_explanation(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("state_explanation must not include surrounding whitespace")
+        return value
+
+
+class DomainPackValidatorBindings(DomainPackMetadataBaseModel):
+    """Target validator-binding bucket contract."""
+
+    active: list[DomainPackActiveValidatorBinding] = Field(default_factory=list)
+    under_development: list[DomainPackUnderDevelopmentValidatorBinding] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def _validate_unique_binding_ids(self) -> "DomainPackValidatorBindings":
+        _require_unique(
+            [item.binding_id for item in [*self.active, *self.under_development]],
+            "validator_bindings",
+        )
+        return self
+
+
+def _validate_metadata_mapping(value: dict[str, Any]) -> dict[str, Any]:
+    raw_bindings = value.get("validator_bindings")
+    if raw_bindings is None:
+        return value
+    validated_bindings = DomainPackValidatorBindings.model_validate(raw_bindings)
+    return {
+        **value,
+        "validator_bindings": validated_bindings.model_dump(
+            mode="json",
+            exclude_none=True,
+        ),
+    }
+
+
 class DomainPackFieldType(str, Enum):
     """Provider-neutral value types for declared object fields."""
 
@@ -160,6 +312,11 @@ class DomainPackModelDefinition(DomainPackMetadataBaseModel):
     def _validate_model_id(cls, value: str) -> str:
         return _validate_symbolic_name(value, "model_id")
 
+    @field_validator("metadata")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_metadata_mapping(value)
+
 
 class DomainPackFieldDefinition(DomainPackMetadataBaseModel):
     """Field declaration for a provider-neutral curatable object type."""
@@ -189,6 +346,11 @@ class DomainPackFieldDefinition(DomainPackMetadataBaseModel):
     @classmethod
     def _validate_field_path(cls, value: str) -> str:
         return validate_field_path_syntax(value)
+
+    @field_validator("metadata")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_metadata_mapping(value)
 
     @field_validator("enum_ref", "model_ref", "object_type_ref")
     @classmethod
@@ -236,6 +398,11 @@ class DomainPackObjectDefinition(DomainPackMetadataBaseModel):
         if value is None:
             return None
         return _validate_symbolic_name(value, info.field_name)
+
+    @field_validator("metadata")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_metadata_mapping(value)
 
     @model_validator(mode="after")
     def _validate_unique_fields(self) -> "DomainPackObjectDefinition":
@@ -300,6 +467,11 @@ class DomainPackMetadata(DomainPackMetadataBaseModel):
     @classmethod
     def _validate_versions(cls, value: str, info) -> str:
         return _validate_semver(value, info.field_name)
+
+    @field_validator("metadata")
+    @classmethod
+    def _validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _validate_metadata_mapping(value)
 
     @model_validator(mode="after")
     def _validate_references(self) -> "DomainPackMetadata":
@@ -440,4 +612,10 @@ __all__ = [
     "DomainPackModelDefinition",
     "DomainPackObjectDefinition",
     "DomainPackStatus",
+    "DomainPackActiveValidatorBinding",
+    "DomainPackUnderDevelopmentValidatorBinding",
+    "DomainPackValidatorAgentRef",
+    "DomainPackValidatorAppliesTo",
+    "DomainPackValidatorBindings",
+    "DomainPackValidatorCuratorOverride",
 ]

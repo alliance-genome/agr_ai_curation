@@ -24,10 +24,10 @@ For new domain-pack runs, the persisted domain envelope is the semantic source
 of truth. Workspace review rows, candidate rows, export bundles, and submission
 payloads are projections over envelope objects at a known revision.
 
-Validation is metadata-driven. Active validators can run automatically, planned
-and blocked validators are surfaced as findings/metadata, and required or
-export-blocking fields become readiness blockers unless policy allows a curator
-override.
+Validation is metadata-driven. Active validator bindings declare package-scoped
+validator agents, under-development bindings are surfaced as informational
+metadata, and required or export-blocking fields become readiness blockers
+unless policy allows a curator override.
 
 When adding or changing Alliance packs, update the matching contract tests under
 `backend/tests/contract/alliance/domain_packs/` and fixture examples under

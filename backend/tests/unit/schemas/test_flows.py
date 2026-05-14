@@ -434,7 +434,7 @@ class TestFlowDefinitionOtherValidations:
         with pytest.raises(ValidationError) as exc_info:
             FlowDefinition(**flow_data)
 
-        assert "planned or blocked" in str(exc_info.value)
+        assert "inactive validation attachments" in str(exc_info.value)
 
     def test_custom_input_requires_non_empty_template(self):
         """Custom input mode must provide a non-empty template."""
