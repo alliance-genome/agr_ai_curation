@@ -56,6 +56,7 @@ from src.lib.curation_workspace.session_service import (
     update_session,
     validate_candidate,
     validate_session,
+    waive_validation_finding,
 )
 from src.models.sql.database import get_db
 from src.schemas.curation_prep import (
@@ -118,6 +119,8 @@ from src.schemas.curation_workspace import (
     CurationSessionUpdateRequest,
     CurationSessionUpdateResponse,
     CurationSortDirection,
+    CurationValidationFindingWaiveRequest,
+    CurationValidationFindingWaiveResponse,
     CurationWorkspaceResponse,
     DomainEnvelopeReviewRowsResponse,
 )
@@ -617,6 +620,37 @@ async def patch_review_envelope_field(
             detail="Path envelope_id does not match request body envelope_id",
         )
     return patch_envelope_field(
+        db,
+        session_id,
+        request,
+        user,
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/envelopes/{envelope_id}/validation-findings/{finding_id}/waive",
+    response_model=CurationValidationFindingWaiveResponse,
+)
+async def post_review_validation_finding_waiver(
+    session_id: UUID,
+    envelope_id: str,
+    finding_id: str,
+    request: CurationValidationFindingWaiveRequest,
+    user: dict = get_auth_dependency(),
+    db: Session = Depends(get_db),
+) -> CurationValidationFindingWaiveResponse:
+    set_global_user_from_cognito(db, user)
+    if request.envelope_id != envelope_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Path envelope_id does not match request body envelope_id",
+        )
+    if request.finding_id != finding_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Path finding_id does not match request body finding_id",
+        )
+    return waive_validation_finding(
         db,
         session_id,
         request,

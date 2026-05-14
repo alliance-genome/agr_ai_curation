@@ -20,6 +20,7 @@ from src.lib.curation_workspace.session_mutation_service import (
     patch_envelope_field,
     update_candidate_draft,
     update_session,
+    waive_validation_finding,
 )
 from src.lib.curation_workspace.session_queries import (
     _list_session_summaries,
@@ -108,4 +109,5 @@ __all__ = [
     "update_session",
     "validate_candidate",
     "validate_session",
+    "waive_validation_finding",
 ]

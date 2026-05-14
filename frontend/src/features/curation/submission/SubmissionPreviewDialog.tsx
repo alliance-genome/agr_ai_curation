@@ -156,7 +156,7 @@ function hasExpectedEnvelopeRevisions(expectedEnvelopeRevisions: Record<string, 
 function blockerAllowsCuratorOverride(
   blocker: CurationSubmissionReadinessBlocker,
 ): boolean {
-  return blocker.details.allow_opt_out === true
+  return blocker.details.curator_override?.allowed === true
 }
 
 function blockerPolicyLabels(blocker: CurationSubmissionReadinessBlocker): string[] {
@@ -262,7 +262,7 @@ function BlockerList({
                 <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
                   <Chip
                     color="info"
-                    label="Curator override allowed"
+                    label="Waiver allowed"
                     size="small"
                     variant="outlined"
                   />
@@ -500,8 +500,8 @@ export default function SubmissionPreviewDialog({
 
           {!loading && response && mode === 'direct_submit' && blockedCount > 0 ? (
             <Alert severity="warning">
-              Resolve readiness blockers before submission. Curator overrides only unblock when
-              metadata allows them.
+              Resolve readiness blockers before submission. Finding waivers only unblock when
+              validator binding policy allows them.
             </Alert>
           ) : null}
 

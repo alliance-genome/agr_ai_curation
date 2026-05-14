@@ -285,6 +285,7 @@ class FieldValidationPolicy:
     validator_binding_ids: tuple[str, ...] = ()
     blocking_validator_binding_ids: tuple[str, ...] = ()
     allow_opt_out: bool = False
+    curator_override_allowed: bool = False
 
     def identity_details(self) -> dict[str, Any]:
         """Return stable structured details suitable for findings."""
@@ -300,6 +301,8 @@ class FieldValidationPolicy:
             "definition_state": self.definition_state.value,
             "allow_opt_out": self.allow_opt_out,
         }
+        if self.curator_override_allowed:
+            details["curator_override"] = {"allowed": True}
         if self.object_role:
             details["object_role"] = self.object_role
         if self.object_display_name:
@@ -1201,6 +1204,13 @@ def _build_field_policies(
                 and binding.allow_opt_out
                 and (binding.blocking or binding.required)
             )
+            curator_override_bindings = tuple(
+                binding
+                for binding in matching_bindings
+                if binding.state is ValidationBindingState.ACTIVE
+                and binding.curator_override_allowed
+                and (binding.blocking or binding.required)
+            )
             policies.append(
                 FieldValidationPolicy(
                     domain_pack_id=domain_pack.pack_id,
@@ -1226,6 +1236,7 @@ def _build_field_policies(
                     ),
                     blocking_validator_binding_ids=blocking_binding_ids,
                     allow_opt_out=bool(opt_out_bindings),
+                    curator_override_allowed=bool(curator_override_bindings),
                 )
             )
     return tuple(sorted(policies, key=lambda item: (item.object_type, item.field_path)))

@@ -118,19 +118,39 @@ def append_validation_findings_to_envelope(
     """Append findings and matching history events with stable IDs."""
 
     existing_findings = list(envelope.validation_findings)
-    existing_finding_ids = {
-        finding.finding_id
-        for finding in existing_findings
-        if finding.finding_id is not None
-    }
+    existing_findings_by_id: dict[str, list[ValidationFinding]] = {}
+    for existing_finding in existing_findings:
+        if existing_finding.finding_id is None:
+            continue
+        existing_findings_by_id.setdefault(existing_finding.finding_id, []).append(
+            existing_finding
+        )
+    existing_finding_ids = set(existing_findings_by_id)
     appended_findings: list[ValidationFinding] = []
     history_events = list(envelope.history)
 
     for raw_finding in findings:
         finding = _with_stable_finding_id(envelope.envelope_id, raw_finding)
-        if finding.finding_id in existing_finding_ids:
+        finding_id = finding.finding_id
+        if finding_id is None:
             continue
-        existing_finding_ids.add(finding.finding_id)
+        matching_findings = existing_findings_by_id.get(finding_id, [])
+        if any(
+            _same_validation_finding_identity(
+                envelope_id=envelope.envelope_id,
+                existing_finding=existing_finding,
+                new_finding=finding,
+            )
+            for existing_finding in matching_findings
+        ):
+            continue
+        if matching_findings:
+            finding = _with_finding_identity_id(envelope.envelope_id, finding)
+            finding_id = finding.finding_id
+            if finding_id is None or finding_id in existing_finding_ids:
+                continue
+        existing_finding_ids.add(finding_id)
+        existing_findings_by_id.setdefault(finding_id, []).append(finding)
         existing_findings.append(finding)
         appended_findings.append(finding)
         history_events.append(
@@ -513,19 +533,95 @@ def _with_stable_finding_id(
 ) -> ValidationFinding:
     if finding.finding_id is not None:
         return finding
-    target = _finding_target_payload(finding)
-    seed_payload = {
-        "envelope_id": envelope_id,
-        "code": finding.code,
-        "severity": finding.severity.value,
-        "message": finding.message,
-        "target": target,
-        "details": finding.details,
-    }
+    seed_payload = _validation_finding_identity_payload(
+        envelope_id=envelope_id,
+        finding=finding,
+    )
     digest = sha256(
         json.dumps(seed_payload, sort_keys=True).encode("utf-8")
     ).hexdigest()
     return finding.model_copy(update={"finding_id": f"validation:{digest}"})
+
+
+def _with_finding_identity_id(
+    envelope_id: str,
+    finding: ValidationFinding,
+) -> ValidationFinding:
+    seed_payload = {
+        "supplied_finding_id": finding.finding_id,
+        "identity": _validation_finding_identity_payload(
+            envelope_id=envelope_id,
+            finding=finding,
+        ),
+    }
+    digest = sha256(
+        json.dumps(seed_payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return finding.model_copy(
+        update={"finding_id": f"{finding.finding_id}:rerun:{digest}"}
+    )
+
+
+def _same_validation_finding_identity(
+    *,
+    envelope_id: str,
+    existing_finding: ValidationFinding,
+    new_finding: ValidationFinding,
+) -> bool:
+    return _validation_finding_identity_payload(
+        envelope_id=envelope_id,
+        finding=existing_finding,
+    ) == _validation_finding_identity_payload(
+        envelope_id=envelope_id,
+        finding=new_finding,
+    )
+
+
+def _validation_finding_identity_payload(
+    *,
+    envelope_id: str,
+    finding: ValidationFinding,
+) -> dict[str, Any]:
+    return {
+        "envelope_id": envelope_id,
+        "code": finding.code,
+        "severity": finding.severity.value,
+        "message": finding.message,
+        "target": _finding_target_payload(finding),
+        "details": _normalized_finding_identity_details(finding.details),
+    }
+
+
+def _normalized_finding_identity_details(details: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = dict(details)
+    validation_request = normalized.get("validation_request")
+    if isinstance(validation_request, Mapping):
+        normalized["validation_request"] = {
+            key: value
+            for key, value in validation_request.items()
+            if key != "request_id"
+        }
+    lookup_attempts = normalized.get("lookup_attempts")
+    if isinstance(lookup_attempts, list):
+        normalized["lookup_attempts"] = [
+            _normalized_lookup_attempt_identity(attempt)
+            for attempt in lookup_attempts
+        ]
+    return normalized
+
+
+def _normalized_lookup_attempt_identity(attempt: Any) -> Any:
+    if not isinstance(attempt, Mapping):
+        return attempt
+    normalized = dict(attempt)
+    attempted_query = normalized.get("attempted_query")
+    if isinstance(attempted_query, Mapping):
+        normalized["attempted_query"] = {
+            key: value
+            for key, value in attempted_query.items()
+            if key != "request_id"
+        }
+    return normalized
 
 
 def _history_event_for_finding(

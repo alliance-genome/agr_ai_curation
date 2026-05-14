@@ -27,6 +27,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.curation_workspace.session_common import (
     _actor_claims_payload,
+    _metadata_allows_curator_override,
     _normalize_uuid,
     _normalized_optional_string,
 )
@@ -320,7 +321,7 @@ def _readiness_blocker_details(
     normalized = dict(details or {})
     metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
     if any(_metadata_allows_curator_override(metadata) for metadata in metadata_sources):
-        normalized["allow_opt_out"] = True
+        normalized["curator_override"] = {"allowed": True}
     return normalized
 
 
@@ -422,25 +423,6 @@ def _export_behavior_for(
     return behavior
 
 
-def _metadata_allows_curator_override(metadata: Mapping[str, Any]) -> bool:
-    if metadata.get("allow_curator_override") is True:
-        return True
-    if metadata.get("allow_override") is True:
-        return True
-    if metadata.get("allow_opt_out") is True:
-        return True
-    for key in ("curator_override", "override", "validation"):
-        raw_policy = metadata.get(key)
-        if isinstance(raw_policy, Mapping) and (
-            raw_policy.get("allowed") is True
-            or raw_policy.get("allow") is True
-            or raw_policy.get("allow_curator_override") is True
-            or raw_policy.get("allow_opt_out") is True
-        ):
-            return True
-    return False
-
-
 def _field_allows_curator_override(
     field_definition: DomainPackFieldDefinition | None,
     field_policy: FieldValidationPolicy | None = None,
@@ -450,7 +432,7 @@ def _field_allows_curator_override(
         and _metadata_allows_curator_override(field_definition.metadata)
     ):
         return True
-    return field_policy is not None and field_policy.allow_opt_out
+    return field_policy is not None and field_policy.curator_override_allowed
 
 
 def _curator_override_for_field(
@@ -761,10 +743,7 @@ def _validation_finding_blockers(
     *,
     envelope: DomainEnvelope,
     object_id: str,
-    domain_object: CuratableObjectEnvelope,
     object_id_by_ref: Mapping[tuple[str, str], str],
-    field_definitions: Mapping[str, DomainPackFieldDefinition],
-    field_policies: Mapping[str, FieldValidationPolicy],
     projection_ref: Mapping[str, Any],
 ) -> list[CurationSubmissionReadinessBlocker]:
     blockers: list[CurationSubmissionReadinessBlocker] = []
@@ -777,19 +756,7 @@ def _validation_finding_blockers(
         if finding.status is ValidationFindingStatus.RESOLVED:
             continue
         if finding.status is ValidationFindingStatus.WAIVED and _finding_waiver_allowed(
-            finding=finding,
-            domain_object=domain_object,
-            field_definition=(
-                field_definitions.get(field_path)
-                if field_path is not None
-                else None
-            ),
-            field_policy=(
-                field_policies.get(field_path)
-                if field_path is not None
-                else None
-            ),
-            field_path=field_path,
+            finding
         ):
             continue
         code = finding.code or (
@@ -818,25 +785,11 @@ def _validation_finding_blockers(
     return blockers
 
 
-def _finding_waiver_allowed(
-    *,
-    finding: ValidationFinding,
-    domain_object: CuratableObjectEnvelope,
-    field_definition: DomainPackFieldDefinition | None,
-    field_policy: FieldValidationPolicy | None,
-    field_path: str | None,
-) -> bool:
+def _finding_waiver_allowed(finding: ValidationFinding) -> bool:
     details = finding.details or {}
     for metadata in _finding_policy_metadata_sources(details):
         if _metadata_allows_curator_override(metadata):
             return True
-    if field_path is not None and _curator_override_satisfies_policy(
-        domain_object=domain_object,
-        field_definition=field_definition,
-        field_policy=field_policy,
-        field_path=field_path,
-    ):
-        return True
     return False
 
 
@@ -993,10 +946,7 @@ def _build_domain_envelope_object_context(
         _validation_finding_blockers(
             envelope=envelope,
             object_id=object_id,
-            domain_object=domain_object,
             object_id_by_ref=_object_id_by_ref(envelope),
-            field_definitions=field_definitions,
-            field_policies=field_policies,
             projection_ref=projection_ref,
         )
     )

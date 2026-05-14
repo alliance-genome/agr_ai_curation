@@ -378,7 +378,7 @@ describe('CandidateFieldEditor', () => {
     expect(screen.getByText('Blocked')).toBeInTheDocument()
     expect(screen.getByText('Evidence score blocks export.')).toBeInTheDocument()
     expect(screen.getByText('Validated')).toBeInTheDocument()
-    expect(screen.getByText('Opt out')).toBeInTheDocument()
+    expect(screen.getByText('Waived')).toBeInTheDocument()
     expect(screen.getByTestId('object-validation-state-under_development')).toHaveTextContent(
       'The object-level validator is under development.',
     )
