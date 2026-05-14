@@ -47,6 +47,7 @@ class FlowValidationAttachmentSelection(BaseModel):
     state_explanation: Optional[str] = Field(None, max_length=2000)
     affected_fields: Optional[List[str]] = None
     required: bool = False
+    blocking: bool = False
     export_blocking: bool = False
     default_enabled: bool = False
     allow_opt_out: bool = False
@@ -71,6 +72,22 @@ class FlowValidationAttachmentSelection(BaseModel):
                     "this validator cannot be disabled by flow configuration"
                 )
         return self
+
+
+class FlowValidationAttachmentGroup(BaseModel):
+    """Resolved validation group state for one extraction node."""
+
+    group_id: str = Field(..., min_length=1, max_length=500)
+    state: Literal["automatic", "skipped", "replaced", "supplemental"]
+    binding_id: Optional[str] = Field(None, max_length=255)
+    attachment_id: Optional[str] = Field(None, max_length=500)
+    edge_id: Optional[str] = Field(None, max_length=50)
+    validator_node_id: Optional[str] = Field(None, max_length=50)
+    replaces_attachment_id: Optional[str] = Field(None, max_length=500)
+    label: Optional[str] = Field(None, max_length=500)
+    required: bool = False
+    blocking: bool = False
+    allow_opt_out: bool = False
 
 
 class FlowNodeData(BaseModel):
@@ -160,6 +177,10 @@ class FlowNodeData(BaseModel):
             "for extraction nodes."
         ),
     )
+    validation_groups: List[FlowValidationAttachmentGroup] = Field(
+        default_factory=list,
+        description="Resolved validator group state for extraction nodes.",
+    )
 
     @model_validator(mode="after")
     def validate_custom_input_requirements(self) -> "FlowNodeData":
@@ -214,10 +235,49 @@ class FlowEdge(BaseModel):
     id: str = Field(..., min_length=1, max_length=50)
     source: str = Field(..., description="Source node ID")
     target: str = Field(..., description="Target node ID")
+    role: Literal["control_flow", "validation_attachment"] = Field(
+        "control_flow",
+        description="Edge role: ordinary control flow or validator sidecar attachment",
+    )
+    satisfies_binding_id: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Validator binding ID satisfied by a validation attachment edge",
+    )
+    replaces_attachment_id: Optional[str] = Field(
+        None,
+        max_length=500,
+        description="Validation attachment option replaced by a sidecar validator edge",
+    )
     condition: Optional[FlowEdgeCondition] = Field(
         None,
         description="V2: Conditional execution (ignored in V1)"
     )
+
+    @model_validator(mode="after")
+    def validate_validation_attachment_identity(self) -> "FlowEdge":
+        """Require validation sidecar edges to name exactly one target binding."""
+
+        if isinstance(self.satisfies_binding_id, str):
+            self.satisfies_binding_id = self.satisfies_binding_id.strip() or None
+        if isinstance(self.replaces_attachment_id, str):
+            self.replaces_attachment_id = self.replaces_attachment_id.strip() or None
+
+        identity_count = sum(
+            1
+            for value in (self.satisfies_binding_id, self.replaces_attachment_id)
+            if value
+        )
+        if self.role == "validation_attachment" and identity_count != 1:
+            raise ValueError(
+                "validation_attachment edges must name exactly one "
+                "satisfies_binding_id or replaces_attachment_id"
+            )
+        if self.role == "control_flow" and identity_count:
+            raise ValueError(
+                "control_flow edges cannot include validation attachment metadata"
+            )
+        return self
 
 
 class FlowDefinition(BaseModel):

@@ -2,11 +2,14 @@
 
 import asyncio
 import importlib
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+
+from src.schemas.flows import FlowDefinition
 
 flows = importlib.import_module("src.api.flows")
 
@@ -110,3 +113,64 @@ def test_verify_flow_ownership_returns_404_for_missing_or_deleted_flow(monkeypat
     with pytest.raises(HTTPException) as soft_deleted_exc:
         flows.verify_flow_ownership(soft_deleted_db, flow_id, {"sub": "auth-sub"})
     assert soft_deleted_exc.value.status_code == 404
+
+
+def _minimal_flow_definition_payload() -> dict:
+    return {
+        "version": "1.0",
+        "nodes": [
+            {
+                "id": "task_1",
+                "type": "task_input",
+                "position": {"x": 0, "y": 0},
+                "data": {
+                    "agent_id": "task_input",
+                    "agent_display_name": "Initial Instructions",
+                    "task_instructions": "Extract genes",
+                    "input_source": "user_query",
+                    "output_key": "task_input",
+                },
+            },
+            {
+                "id": "extract_1",
+                "type": "agent",
+                "position": {"x": 100, "y": 100},
+                "data": {
+                    "agent_id": "fixture_agent_without_pack",
+                    "agent_display_name": "Fixture Agent",
+                    "input_source": "previous_output",
+                    "output_key": "extract_output",
+                },
+            },
+        ],
+        "edges": [{"id": "e1", "source": "task_1", "target": "extract_1"}],
+        "entry_node_id": "task_1",
+    }
+
+
+def test_flow_definition_payload_defaults_saved_edges_to_control_flow():
+    payload = flows._validated_flow_definition_payload(
+        FlowDefinition.model_validate(_minimal_flow_definition_payload())
+    )
+
+    assert payload["edges"][0]["role"] == "control_flow"
+
+
+def test_flow_response_defaults_legacy_saved_edge_roles():
+    flow_id = uuid4()
+    now = datetime.now(timezone.utc)
+    stored_flow = SimpleNamespace(
+        id=flow_id,
+        user_id=7,
+        name="Legacy saved flow",
+        description=None,
+        flow_definition=_minimal_flow_definition_payload(),
+        execution_count=0,
+        last_executed_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+    response = flows._flow_to_response(stored_flow)
+
+    assert response.flow_definition.edges[0].role == "control_flow"

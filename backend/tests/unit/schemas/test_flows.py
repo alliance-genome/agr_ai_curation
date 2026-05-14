@@ -121,6 +121,73 @@ class TestFlowDefinitionTaskInputRequirement:
         assert len(flow.nodes) == 2
         assert flow.entry_node_id == "task_1"
 
+    def test_saved_edges_default_to_control_flow_role(self):
+        """Edges without an explicit role load as ordinary control flow."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract gene mentions"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        flow = FlowDefinition(**flow_data)
+
+        assert flow.edges[0].role == "control_flow"
+        assert flow.model_dump()["edges"][0]["role"] == "control_flow"
+
+    def test_validation_attachment_edge_requires_binding_identity(self):
+        """Sidecar validator edges must explicitly name their binding target."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract gene mentions"),
+                make_agent_node("extract_1", "gene_extractor", "gene_output"),
+                make_agent_node("validator_1", "custom_validator", "validator_output"),
+            ],
+            "edges": [
+                {"id": "e1", "source": "task_1", "target": "extract_1"},
+                {
+                    "id": "e2",
+                    "source": "extract_1",
+                    "target": "validator_1",
+                    "role": "validation_attachment",
+                },
+            ],
+            "entry_node_id": "task_1",
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            FlowDefinition(**flow_data)
+
+        assert "validation_attachment edges must name exactly one" in str(exc_info.value)
+
+    def test_control_flow_edges_reject_validation_attachment_metadata(self):
+        """Binding metadata is only valid on validation sidecar edges."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract gene mentions"),
+                make_agent_node("n1", "pdf_extraction", "pdf_output"),
+            ],
+            "edges": [
+                {
+                    "id": "e1",
+                    "source": "task_1",
+                    "target": "n1",
+                    "satisfies_binding_id": "alliance.gene.identity",
+                }
+            ],
+            "entry_node_id": "task_1",
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            FlowDefinition(**flow_data)
+
+        assert "control_flow edges cannot include" in str(exc_info.value)
+
     def test_flow_definition_accepts_output_filename_template(self):
         """Formatter/output nodes should accept the explicit filename-template field."""
         flow_data = {

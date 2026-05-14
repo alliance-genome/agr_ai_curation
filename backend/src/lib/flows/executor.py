@@ -780,10 +780,15 @@ def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
 
     edges_from: Dict[str, List[str]] = {}
     incoming_targets: Set[str] = set()
+    validation_attachment_targets: Set[str] = set()
     for edge in edges:
+        edge_role = edge.get("role", "control_flow")
         source = edge.get("source")
         target = edge.get("target")
         if not source or not target:
+            continue
+        if edge_role == "validation_attachment":
+            validation_attachment_targets.add(target)
             continue
         edges_from.setdefault(source, []).append(target)
         incoming_targets.add(target)
@@ -801,7 +806,12 @@ def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
     def _is_executable(node: Dict[str, Any]) -> bool:
         node_type = node.get("type", "agent")
         agent_id = node.get("data", {}).get("agent_id")
-        return node_type != "task_input" and agent_id not in ("task_input", "supervisor")
+        node_id = node.get("id")
+        return (
+            node_id not in validation_attachment_targets
+            and node_type != "task_input"
+            and agent_id not in ("task_input", "supervisor")
+        )
 
     while queue:
         node_id = queue.pop(0)
