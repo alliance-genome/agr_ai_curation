@@ -14,6 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # FlowDefinition Schema (JSONB Validation)
 # =============================================================================
 
+FlowEdgeRole = Literal["control_flow", "validation_attachment"]
+DEFAULT_FLOW_EDGE_ROLE: FlowEdgeRole = "control_flow"
+VALIDATION_ATTACHMENT_EDGE_ROLE: FlowEdgeRole = "validation_attachment"
+
+
 class FlowNodePosition(BaseModel):
     """Position of a node on the canvas."""
     x: float = Field(..., description="X coordinate")
@@ -235,8 +240,8 @@ class FlowEdge(BaseModel):
     id: str = Field(..., min_length=1, max_length=50)
     source: str = Field(..., description="Source node ID")
     target: str = Field(..., description="Target node ID")
-    role: Literal["control_flow", "validation_attachment"] = Field(
-        "control_flow",
+    role: FlowEdgeRole = Field(
+        DEFAULT_FLOW_EDGE_ROLE,
         description="Edge role: ordinary control flow or validator sidecar attachment",
     )
     satisfies_binding_id: Optional[str] = Field(
@@ -268,12 +273,12 @@ class FlowEdge(BaseModel):
             for value in (self.satisfies_binding_id, self.replaces_attachment_id)
             if value
         )
-        if self.role == "validation_attachment" and identity_count != 1:
+        if self.role == VALIDATION_ATTACHMENT_EDGE_ROLE and identity_count != 1:
             raise ValueError(
                 "validation_attachment edges must name exactly one "
                 "satisfies_binding_id or replaces_attachment_id"
             )
-        if self.role == "control_flow" and identity_count:
+        if self.role == DEFAULT_FLOW_EDGE_ROLE and identity_count:
             raise ValueError(
                 "control_flow edges cannot include validation attachment metadata"
             )

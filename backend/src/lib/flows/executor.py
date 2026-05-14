@@ -68,6 +68,7 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 from src.schemas.curation_prep import CurationPrepScopeConfirmation
+from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE_ROLE
 
 logger = logging.getLogger(__name__)
 
@@ -782,12 +783,12 @@ def _get_ordered_executable_nodes(flow: CurationFlow) -> List[Dict[str, Any]]:
     incoming_targets: Set[str] = set()
     validation_attachment_targets: Set[str] = set()
     for edge in edges:
-        edge_role = edge.get("role", "control_flow")
+        edge_role = edge.get("role", DEFAULT_FLOW_EDGE_ROLE)
         source = edge.get("source")
         target = edge.get("target")
         if not source or not target:
             continue
-        if edge_role == "validation_attachment":
+        if edge_role == VALIDATION_ATTACHMENT_EDGE_ROLE:
             validation_attachment_targets.add(target)
             continue
         edges_from.setdefault(source, []).append(target)

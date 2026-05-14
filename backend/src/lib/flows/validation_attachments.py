@@ -13,6 +13,7 @@ from src.lib.domain_packs.validation_registry import (
     validate_active_validator_agent_references,
 )
 from src.schemas.flows import (
+    VALIDATION_ATTACHMENT_EDGE_ROLE,
     FlowDefinition,
     FlowValidationAttachmentGroup,
     FlowValidationAttachmentSelection,
@@ -130,7 +131,6 @@ def apply_flow_validation_attachment_defaults(
         for option in options:
             existing = existing_by_id.get(option.attachment_id)
             payload = option.to_dict()
-            payload["blocking"] = option.export_blocking
             payload["enabled"] = (
                 existing.enabled if existing is not None else option.default_enabled
             )
@@ -177,11 +177,7 @@ def validation_schedule_from_node_data(
             continue
 
         if state == "active" and has_binding:
-            if (
-                attachment.get("required")
-                or attachment.get("blocking")
-                or attachment.get("export_blocking")
-            ):
+            if attachment.get("required") or attachment.get("blocking"):
                 opt_outs.append(_schedule_entry(attachment))
             continue
 
@@ -258,7 +254,7 @@ def _validation_attachment_edge_groups_by_source(
     seen_binding_ids_by_source: dict[str, set[str]] = {}
 
     for edge in flow_definition.edges:
-        if edge.role != "validation_attachment":
+        if edge.role != VALIDATION_ATTACHMENT_EDGE_ROLE:
             continue
 
         source_node = node_by_id.get(edge.source)
