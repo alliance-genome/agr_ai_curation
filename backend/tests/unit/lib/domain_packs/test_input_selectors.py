@@ -352,6 +352,61 @@ def test_runtime_selector_missing_evidence_becomes_structured_finding(tmp_path: 
     )
 
 
+def test_optional_missing_selector_is_omitted_without_suppressing_request(
+    tmp_path: Path,
+):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+          optional_quote:
+            source: evidence_record
+            path: quote
+            required: false
+""",
+        _assertion_envelope(payload={"value": "AGR:1"}),
+    )
+
+    finding = next(
+        item
+        for item in result.envelope.validation_findings
+        if item.code == "domain_pack.validator_dispatch_unavailable"
+    )
+    request = finding.details["validation_request"]
+    assert request["selected_inputs"] == {"selected": "AGR:1"}
+    assert request["target"]["input_values"] == {"selected": "AGR:1"}
+    assert "optional_quote" in request["input_selectors"]
+
+
+def test_optional_ambiguous_selector_still_becomes_structured_finding(
+    tmp_path: Path,
+):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: value
+          optional_alias:
+            source: payload
+            path: aliases
+            required: false
+""",
+        _assertion_envelope(payload={"value": "AGR:1", "aliases": ["A", "B"]}),
+    )
+
+    assert any(
+        finding.code == "selector_ambiguous"
+        for finding in result.envelope.validation_findings
+    )
+    assert not any(
+        finding.code == "domain_pack.validator_dispatch_unavailable"
+        for finding in result.envelope.validation_findings
+    )
+
+
 def test_evidence_selector_uses_canonical_evidence_record_id(tmp_path: Path):
     result = _run_selector(
         tmp_path,
