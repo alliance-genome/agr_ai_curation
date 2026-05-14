@@ -344,6 +344,62 @@ describe('FlowBuilder', () => {
     ])
   })
 
+  it('rebuilds automatic validation groups as skipped when the attachment is opted out', () => {
+    const [extractorNode] = rebuildValidationGroupsFromEdges(
+      [
+        {
+          id: 'node_1',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: {
+            agent_id: 'allele_extractor',
+            agent_display_name: 'Allele Extractor',
+            input_source: 'previous_output',
+            output_key: 'alleles',
+            validation_attachments: [
+              {
+                attachment_id: 'allele:symbol',
+                domain_pack_id: 'allele',
+                validator_id: 'agr.alliance:allele_validation',
+                validator_binding_id: 'symbol',
+                label: 'Allele symbol lookup',
+                state: 'active',
+                scope: 'field',
+                field_path: 'symbol',
+                required: true,
+                blocking: false,
+                default_enabled: true,
+                allow_opt_out: true,
+                enabled: false,
+              },
+            ],
+            validation_groups: [
+              {
+                group_id: 'allele:symbol',
+                attachment_id: 'allele:symbol',
+                binding_id: 'symbol',
+                state: 'automatic',
+                label: 'Allele symbol lookup',
+                required: true,
+                blocking: false,
+                allow_opt_out: true,
+              },
+            ],
+          },
+        },
+      ],
+      []
+    )
+
+    expect(extractorNode.data.validation_groups).toEqual([
+      expect.objectContaining({
+        attachment_id: 'allele:symbol',
+        binding_id: 'symbol',
+        state: 'skipped',
+      }),
+    ])
+  })
+
   it('preserves prompt_version when creating a node from catalog drag data', async () => {
     const user = userEvent.setup()
 

@@ -1174,13 +1174,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Handle node data update from editor
   const handleNodeDataUpdate = useCallback(
     (nodeId: string, data: Partial<AgentNodeData>) => {
-      setNodes((nds) =>
-        nds.map((node) =>
+      setNodes((nds) => {
+        const updatedNodes = nds.map((node) =>
           node.id === nodeId
             ? { ...node, data: { ...node.data, ...data } }
             : node
         )
-      )
+        return rebuildValidationGroupsFromEdges(updatedNodes as AgentNode[], edges as FlowEdge[])
+      })
       // Trigger revalidation after data update so error banners update immediately
       // Clear any pending revalidation timeout to avoid stale updates
       if (revalidateTimeoutRef.current) {
@@ -1191,7 +1192,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         revalidateTimeoutRef.current = null
       }, 50)
     },
-    [setNodes, revalidateValidators]
+    [setNodes, edges, revalidateValidators]
   )
 
   // Handle node deletion by ID (for NodeEditor delete button)

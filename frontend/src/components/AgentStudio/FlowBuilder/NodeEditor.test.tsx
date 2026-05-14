@@ -112,6 +112,37 @@ describe('NodeEditor', () => {
     expect(savedAttachment).not.toHaveProperty('export_blocking')
   })
 
+  it('shows skipped state immediately when an automatic validator is opted out', () => {
+    render(
+      <NodeEditor
+        node={buildNode({
+          validation_groups: [
+            {
+              group_id: 'gene:lookup',
+              state: 'automatic',
+              binding_id: validationAttachment.validator_binding_id,
+              attachment_id: validationAttachment.attachment_id,
+              label: validationAttachment.label,
+              required: validationAttachment.required,
+              blocking: validationAttachment.blocking,
+              allow_opt_out: validationAttachment.allow_opt_out,
+            },
+          ],
+        })}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        availableVariables={[]}
+      />
+    )
+
+    expect(screen.getByText('automatic')).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('checkbox'))
+
+    expect(screen.getByText('skipped')).toBeInTheDocument()
+    expect(screen.queryByText('automatic')).not.toBeInTheDocument()
+  })
+
   it('separates read-only validation metadata from actionable validator checkboxes', () => {
     const actionable = buildValidationAttachmentSelection({
       attachment_id: 'disease:pending-envelope',

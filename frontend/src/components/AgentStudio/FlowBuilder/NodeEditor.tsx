@@ -182,11 +182,8 @@ const validationGroupStateLabel = (
 ) => {
   if (group?.state === 'replaced') return 'custom replacement'
   if (group?.state === 'supplemental') return 'supplemental'
-  if (group?.state === 'skipped') return 'skipped'
-  if (group?.state === 'automatic') return 'automatic'
   if (attachment.state !== 'active') return validationStateLabel(attachment.state)
-  if (!attachment.enabled) return 'skipped'
-  return 'automatic'
+  return attachment.enabled ? 'automatic' : 'skipped'
 }
 
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
