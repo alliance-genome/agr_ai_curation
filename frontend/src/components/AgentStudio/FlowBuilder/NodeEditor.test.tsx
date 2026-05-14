@@ -217,6 +217,41 @@ describe('NodeEditor', () => {
     expect(screen.getByText('gene v0.1.0 / agr.alliance:gene_validation')).toBeInTheDocument()
   })
 
+  it('shows supplemental status for validation groups', () => {
+    const supplemental = buildValidationAttachmentSelection({
+      attachment_id: 'gene:supplemental-lookup',
+      validator_binding_id: 'gene_supplemental_lookup',
+      label: 'Supplemental gene lookup',
+      enabled: true,
+    })
+
+    render(
+      <NodeEditor
+        node={buildNode({
+          validation_attachments: [supplemental],
+          validation_groups: [
+            {
+              group_id: 'gene:supplemental-lookup',
+              state: 'supplemental',
+              binding_id: 'gene_supplemental_lookup',
+              attachment_id: 'gene:supplemental-lookup',
+              label: 'Supplemental gene lookup',
+              required: false,
+              blocking: false,
+              allow_opt_out: true,
+            },
+          ],
+        })}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        availableVariables={[]}
+      />
+    )
+
+    expect(screen.getByText('Supplemental gene lookup')).toBeInTheDocument()
+    expect(screen.getByText('supplemental')).toBeInTheDocument()
+  })
+
   it('labels validation agent instructions as a steering prompt', () => {
     metadataMocks.agents = {
       gene_validator: {

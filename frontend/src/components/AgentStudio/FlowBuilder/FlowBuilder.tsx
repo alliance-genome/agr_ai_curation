@@ -68,6 +68,7 @@ import type {
   FlowDefinition,
   FlowResponse,
   FlowEdge,
+  ValidationAttachmentGroup,
   ValidationAttachmentSelection,
 } from './types'
 import {
@@ -809,42 +810,53 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
       const source = connection.source
       const target = connection.target
       const bindingId = binding.validator_binding_id
+      const existing = edges as FlowEdge[]
 
-      setEdges((currentEdges) => {
-        const existing = currentEdges as FlowEdge[]
-        const duplicate = existing.some((edge) => (
-          edgeRole(edge) === 'validation_attachment'
-          && edge.source === source
-          && (
-            edge.satisfies_binding_id === bindingId
-            || edge.data?.satisfies_binding_id === bindingId
-          )
-        ))
-        if (duplicate) {
-          setSnackbar({
-            message: `"${validationEdgeLabel(binding)}" already has a custom validator edge from this extractor.`,
-            severity: 'error',
-          })
-          return currentEdges
-        }
+      const duplicate = existing.some((edge) => (
+        edgeRole(edge) === 'validation_attachment'
+        && edge.source === source
+        && (
+          edge.satisfies_binding_id === bindingId
+          || edge.data?.satisfies_binding_id === bindingId
+        )
+      ))
+      if (duplicate) {
+        setSnackbar({
+          message: `"${validationEdgeLabel(binding)}" already has a custom validator edge from this extractor.`,
+          severity: 'error',
+        })
+        return
+      }
 
-        const edge: FlowEdge = {
-          ...connection,
-          id: nextValidationEdgeId(existing),
-          source,
-          target,
-          type: 'deletable',
-          animated: false,
+      const edge: FlowEdge = {
+        ...connection,
+        id: nextValidationEdgeId(existing),
+        source,
+        target,
+        type: 'deletable',
+        animated: false,
+        role: 'validation_attachment',
+        satisfies_binding_id: bindingId,
+        data: {
           role: 'validation_attachment',
           satisfies_binding_id: bindingId,
-          data: {
-            role: 'validation_attachment',
-            satisfies_binding_id: bindingId,
-            validationLabel: validationEdgeLabel(binding),
-          },
+          validationLabel: validationEdgeLabel(binding),
+        },
+      }
+      const replacementsByBinding = new Map<string, { edgeId: string; target: string }>()
+      existing.forEach((existingEdge) => {
+        if (edgeRole(existingEdge) !== 'validation_attachment' || existingEdge.source !== source) return
+        const existingBindingId = existingEdge.satisfies_binding_id ?? existingEdge.data?.satisfies_binding_id
+        if (existingBindingId) {
+          replacementsByBinding.set(existingBindingId, {
+            edgeId: existingEdge.id,
+            target: existingEdge.target,
+          })
         }
-        return [...currentEdges, edge]
       })
+      replacementsByBinding.set(bindingId, { edgeId: edge.id, target })
+
+      setEdges((currentEdges) => [...currentEdges, edge])
 
       setNodes((currentNodes) => currentNodes.map((node) => {
         if (node.id !== source || !node.data.validation_attachments) return node
@@ -852,28 +864,40 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           ...node,
           data: {
             ...node.data,
-            validation_groups: node.data.validation_attachments.map((attachment) => ({
-              group_id: attachment.attachment_id,
-              state: (attachment.validator_binding_id === bindingId
+            validation_groups: node.data.validation_attachments.map((attachment) => {
+              const existingGroup = node.data.validation_groups?.find((group) => (
+                group.attachment_id === attachment.attachment_id
+                || (attachment.validator_binding_id && group.binding_id === attachment.validator_binding_id)
+              ))
+              const replacement = attachment.validator_binding_id
+                ? replacementsByBinding.get(attachment.validator_binding_id)
+                : undefined
+              const state: ValidationAttachmentGroup['state'] = replacement
                 ? 'replaced'
-                : attachment.state === 'active' && attachment.enabled
-                  ? 'automatic'
-                  : 'skipped') as 'automatic' | 'skipped' | 'replaced',
-              binding_id: attachment.validator_binding_id,
-              attachment_id: attachment.attachment_id,
-              validator_node_id: attachment.validator_binding_id === bindingId
-                ? target
-                : undefined,
-              label: attachment.label,
-              required: attachment.required,
-              blocking: attachment.blocking,
-              allow_opt_out: attachment.allow_opt_out,
-            })),
+                : existingGroup?.state === 'supplemental'
+                  ? 'supplemental'
+                  : attachment.state === 'active' && attachment.enabled
+                    ? 'automatic'
+                    : 'skipped'
+
+              return {
+                group_id: existingGroup?.group_id ?? attachment.attachment_id,
+                state,
+                binding_id: attachment.validator_binding_id,
+                attachment_id: attachment.attachment_id,
+                edge_id: replacement?.edgeId ?? existingGroup?.edge_id,
+                validator_node_id: replacement?.target,
+                label: attachment.label,
+                required: attachment.required,
+                blocking: attachment.blocking,
+                allow_opt_out: attachment.allow_opt_out,
+              }
+            }),
           },
         }
       }))
     },
-    [setEdges, setNodes]
+    [edges, setEdges, setNodes]
   )
 
   const handleBindingDialogClose = useCallback(() => {

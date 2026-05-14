@@ -455,11 +455,16 @@ describe('FlowBuilder', () => {
         category: 'Validation',
         subcategory: 'Data Validation',
       },
+      custom_validator_two: {
+        category: 'Validation',
+        subcategory: 'Data Validation',
+      },
     }
     serviceMocks.createFlow.mockResolvedValue(buildFlowResponse({ name: 'Validator Edge Flow' }))
     serviceMocks.listFlows.mockResolvedValue(buildFlowListResponse('Validator Edge Flow'))
+    const onFlowChange = vi.fn()
 
-    render(<FlowBuilder />)
+    render(<FlowBuilder onFlowChange={onFlowChange} />)
 
     await screen.findByText('1 step')
 
@@ -484,6 +489,7 @@ describe('FlowBuilder', () => {
 
     dropAgent('allele_extractor', 'Allele Extractor', 'Extract allele mentions', 220)
     dropAgent('custom_validator', 'Custom Validator', 'Validate extracted alleles', 340)
+    dropAgent('custom_validator_two', 'Second Custom Validator', 'Validate extracted allele identifiers', 460)
 
     await waitFor(() => {
       expect(reactFlowMocks.onConnect).toBeTypeOf('function')
@@ -496,6 +502,47 @@ describe('FlowBuilder', () => {
     const bindingDialog = (await screen.findByText('Choose Validator Binding')).closest('[role="dialog"]')
     expect(bindingDialog).not.toBeNull()
     await user.click(within(bindingDialog as HTMLElement).getByText('Allele symbol lookup'))
+
+    await waitFor(() => {
+      const calls = onFlowChange.mock.calls
+      const latestFlowState = calls[calls.length - 1]?.[0]
+      expect(latestFlowState?.edges).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          source: 'node_1',
+          target: 'node_2',
+          role: 'validation_attachment',
+          satisfies_binding_id: 'symbol',
+        }),
+      ]))
+    })
+
+    React.act(() => {
+      reactFlowMocks.onConnect?.({ source: 'node_1', target: 'node_3' })
+    })
+
+    const secondBindingDialog = (await screen.findByText('Choose Validator Binding')).closest('[role="dialog"]')
+    expect(secondBindingDialog).not.toBeNull()
+    await user.click(within(secondBindingDialog as HTMLElement).getByText('Allele identifier lookup'))
+
+    await waitFor(() => {
+      const calls = onFlowChange.mock.calls
+      const latestFlowState = calls[calls.length - 1]?.[0]
+      const extractorNode = latestFlowState?.nodes.find((node: { id: string }) => node.id === 'node_1')
+      expect(extractorNode?.validation_groups).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          attachment_id: 'allele:symbol',
+          binding_id: 'symbol',
+          state: 'replaced',
+          validator_node_id: 'node_2',
+        }),
+        expect.objectContaining({
+          attachment_id: 'allele:identifier',
+          binding_id: 'identifier',
+          state: 'replaced',
+          validator_node_id: 'node_3',
+        }),
+      ]))
+    })
 
     await user.click(screen.getByText('File'))
     await user.click(within(await screen.findByRole('menu')).getByText('Save'))
@@ -514,6 +561,12 @@ describe('FlowBuilder', () => {
                 target: 'node_2',
                 role: 'validation_attachment',
                 satisfies_binding_id: 'symbol',
+              }),
+              expect.objectContaining({
+                source: 'node_1',
+                target: 'node_3',
+                role: 'validation_attachment',
+                satisfies_binding_id: 'identifier',
               }),
             ]),
             nodes: expect.arrayContaining([

@@ -32,7 +32,12 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import DescriptionIcon from '@mui/icons-material/Description'
 import SchemaIcon from '@mui/icons-material/Schema'
 
-import type { NodeEditorProps, InputSource, ValidationAttachmentSelection } from './types'
+import type {
+  NodeEditorProps,
+  InputSource,
+  ValidationAttachmentGroup,
+  ValidationAttachmentSelection,
+} from './types'
 import {
   isValidationAgentFromMetadata,
   isOutputFormatterAgentFromMetadata,
@@ -171,7 +176,14 @@ const validationAttachmentForPersistence = (
   return selection
 }
 
-const validationGroupStateLabel = (attachment: ValidationAttachmentSelection) => {
+const validationGroupStateLabel = (
+  attachment: ValidationAttachmentSelection,
+  group?: ValidationAttachmentGroup
+) => {
+  if (group?.state === 'replaced') return 'custom replacement'
+  if (group?.state === 'supplemental') return 'supplemental'
+  if (group?.state === 'skipped') return 'skipped'
+  if (group?.state === 'automatic') return 'automatic'
   if (attachment.state !== 'active') return validationStateLabel(attachment.state)
   if (!attachment.enabled) return 'skipped'
   return 'automatic'
@@ -521,7 +533,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                             <Chip
                               size="small"
                               color={stateColor}
-                              label={group?.state === 'replaced' ? 'custom replacement' : validationGroupStateLabel(attachment)}
+                              label={validationGroupStateLabel(attachment, group)}
                               sx={{ height: 18, fontSize: '0.6rem' }}
                             />
                             {attachment.required && (
