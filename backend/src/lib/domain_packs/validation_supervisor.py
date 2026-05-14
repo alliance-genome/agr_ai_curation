@@ -237,7 +237,7 @@ def _required_field_findings(
                         "is required by the domain pack but missing from the envelope payload."
                     ),
                     field_ref=FieldRef(
-                        object_ref=_object_ref_for(domain_object),
+                        object_ref=domain_object.to_object_ref(),
                         field_path=field_definition.field_path,
                     ),
                     details={
@@ -496,30 +496,16 @@ def _with_provider_model_ref(
 def _match_object_ref(match: ValidatorBindingMatch) -> ObjectRef | None:
     if match.object_envelope is None or match.field_definition is not None:
         return None
-    return _object_ref_for(match.object_envelope)
+    return match.object_envelope.to_object_ref()
 
 
 def _match_field_ref(match: ValidatorBindingMatch) -> FieldRef | None:
     if match.object_envelope is None or match.field_definition is None:
         return None
     return FieldRef(
-        object_ref=_object_ref_for(match.object_envelope),
+        object_ref=match.object_envelope.to_object_ref(),
         field_path=match.field_definition.field_path,
     )
-
-
-def _object_ref_for(domain_object: CuratableObjectEnvelope) -> ObjectRef:
-    if domain_object.object_id is not None:
-        return ObjectRef(
-            object_id=domain_object.object_id,
-            object_type=domain_object.object_type,
-        )
-    if domain_object.pending_ref_id is not None:
-        return ObjectRef(
-            pending_ref_id=domain_object.pending_ref_id,
-            object_type=domain_object.object_type,
-        )
-    raise ValueError("CuratableObjectEnvelope must provide object_id or pending_ref_id")
 
 
 def _field_definition_details(

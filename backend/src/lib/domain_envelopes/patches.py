@@ -26,7 +26,6 @@ from src.schemas.domain_envelope import (
 )
 from src.schemas.domain_pack_metadata import DomainPackFieldDefinition
 
-
 _MISSING = object()
 
 
@@ -121,7 +120,7 @@ def apply_curator_field_patch(
         )
 
     object_index, domain_object = _object_index_for_stable_id(envelope, patch.object_id)
-    object_ref = _object_ref_for(domain_object) if domain_object is not None else None
+    object_ref = domain_object.to_object_ref() if domain_object is not None else None
     current_before: Any = None
     object_type = domain_object.object_type if domain_object is not None else None
 
@@ -216,7 +215,7 @@ def apply_curator_field_patch(
     updated_objects[object_index] = updated_object
 
     field_ref = FieldRef(
-        object_ref=_object_ref_for(updated_object),
+        object_ref=updated_object.to_object_ref(),
         field_path=patch.field_path,
     )
     details = {
@@ -372,7 +371,9 @@ def _metadata_bool(metadata: Mapping[str, Any], key: str) -> bool:
     return metadata.get(key) is True
 
 
-def _nested_metadata_bool(metadata: Mapping[str, Any], outer_key: str, inner_key: str) -> bool:
+def _nested_metadata_bool(
+    metadata: Mapping[str, Any], outer_key: str, inner_key: str
+) -> bool:
     nested = metadata.get(outer_key)
     return isinstance(nested, Mapping) and nested.get(inner_key) is True
 
@@ -422,12 +423,16 @@ def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> 
                 current[part] = [] if isinstance(next_part, int) else {}
             current = current[part]
             continue
-        if not isinstance(current, list) or isinstance(current, (str, bytes, bytearray)):
+        if not isinstance(current, list) or isinstance(
+            current, (str, bytes, bytearray)
+        ):
             raise ValueError(f"Cannot set '{field_path}' through non-array parent")
         if part == len(current):
             current.append([] if isinstance(next_part, int) else {})
         if part >= len(current):
-            raise ValueError(f"Cannot set '{field_path}' because a list index is missing")
+            raise ValueError(
+                f"Cannot set '{field_path}' because a list index is missing"
+            )
         current = current[part]
 
     final_part = parts[-1]
@@ -445,20 +450,6 @@ def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> 
     if final_part >= len(current):
         raise ValueError(f"Cannot set '{field_path}' because a list index is missing")
     current[final_part] = value
-
-
-def _object_ref_for(domain_object: CuratableObjectEnvelope) -> ObjectRef:
-    if domain_object.object_id is not None:
-        return ObjectRef(
-            object_id=domain_object.object_id,
-            object_type=domain_object.object_type,
-        )
-    if domain_object.pending_ref_id is not None:
-        return ObjectRef(
-            pending_ref_id=domain_object.pending_ref_id,
-            object_type=domain_object.object_type,
-        )
-    raise ValueError("CuratableObjectEnvelope must provide object_id or pending_ref_id")
 
 
 def _curator_event(
@@ -499,7 +490,9 @@ def _ensure_json_compatible(value: Any, *, field_name: str) -> None:
     try:
         json.dumps(value, allow_nan=False)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"{field_name} must contain only JSON-compatible values") from exc
+        raise ValueError(
+            f"{field_name} must contain only JSON-compatible values"
+        ) from exc
 
 
 def _jsonable(value: Any) -> Any:

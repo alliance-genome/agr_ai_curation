@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from hashlib import sha256
 from typing import Any, Mapping, Sequence
 
+from pydantic import ValidationError
+
 from src.lib.domain_packs.validation_registry import ValidatorBindingMatch
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -311,7 +313,7 @@ def _coerce_object_ref(raw_ref: Any) -> ObjectRef | None:
         return None
     try:
         return ObjectRef.model_validate(raw_ref)
-    except ValueError:
+    except ValidationError:
         return None
 
 
@@ -448,7 +450,7 @@ def _problem_finding(
     problem: _SelectorProblem,
 ) -> ValidationFinding:
     object_ref = (
-        _object_ref_for(match.object_envelope) if match.object_envelope else None
+        match.object_envelope.to_object_ref() if match.object_envelope else None
     )
     field_ref = (
         FieldRef(object_ref=object_ref, field_path=problem.field_path)
@@ -537,11 +539,8 @@ def _records_from_mapping(container: Mapping[str, Any]) -> list[Mapping[str, Any
 
 
 def _record_id(record: Mapping[str, Any]) -> str | None:
-    for key in ("evidence_record_id", "id", "record_id"):
-        value = record.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return None
+    value = record.get("evidence_record_id")
+    return value if isinstance(value, str) and value else None
 
 
 def _value_at_path(container: Mapping[str, Any], field_path: str) -> tuple[Any, bool]:
@@ -560,17 +559,3 @@ def _value_at_path(container: Mapping[str, Any], field_path: str) -> tuple[Any, 
             return None, False
         current = current[part]
     return current, True
-
-
-def _object_ref_for(domain_object: CuratableObjectEnvelope) -> ObjectRef:
-    if domain_object.object_id is not None:
-        return ObjectRef(
-            object_id=domain_object.object_id,
-            object_type=domain_object.object_type,
-        )
-    if domain_object.pending_ref_id is not None:
-        return ObjectRef(
-            pending_ref_id=domain_object.pending_ref_id,
-            object_type=domain_object.object_type,
-        )
-    raise ValueError("CuratableObjectEnvelope must provide object_id or pending_ref_id")

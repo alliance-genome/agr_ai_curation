@@ -352,6 +352,36 @@ def test_runtime_selector_missing_evidence_becomes_structured_finding(tmp_path: 
     )
 
 
+def test_evidence_selector_uses_canonical_evidence_record_id(tmp_path: Path):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: evidence_record
+            path: quote
+            record_id: evidence-1
+""",
+        _assertion_envelope(
+            payload={
+                "evidence_records": [
+                    {"id": "evidence-1", "quote": "legacy alias is not canonical"}
+                ]
+            },
+        ),
+    )
+
+    finding = next(
+        item
+        for item in result.envelope.validation_findings
+        if item.code == "selector_missing"
+    )
+    assert finding.details["selector_problem"]["record_id"] == "evidence-1"
+    assert not any(
+        item.code == "domain_pack.validator_dispatch_unavailable"
+        for item in result.envelope.validation_findings
+    )
+
+
 def test_object_ref_selector_uses_explicit_ref_not_sibling_guessing(tmp_path: Path):
     result = _run_selector(
         tmp_path,

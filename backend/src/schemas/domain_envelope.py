@@ -14,8 +14,14 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping, Optional, Sequence
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
-
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 _FIELD_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*")
 _LIST_INDEX_PATTERN = re.compile(r"^\[(\d+)\]")
@@ -107,13 +113,17 @@ class HistoryActorType(str, Enum):
     TOOL = "tool"
 
 
-def _validate_non_empty_identifier(value: Optional[str], field_name: str) -> Optional[str]:
+def _validate_non_empty_identifier(
+    value: Optional[str], field_name: str
+) -> Optional[str]:
     if value is None:
         return None
     if not value.strip():
         raise ValueError(f"{field_name} must not be empty")
     if value != value.strip():
-        raise ValueError(f"{field_name} must not include leading or trailing whitespace")
+        raise ValueError(
+            f"{field_name} must not include leading or trailing whitespace"
+        )
     return value
 
 
@@ -200,8 +210,12 @@ class SchemaRef(DomainEnvelopeBaseModel):
         description="Optional provider key, such as a schema service or local domain pack",
     )
     name: Optional[str] = Field(default=None, description="Human-readable schema name")
-    version: Optional[str] = Field(default=None, description="Provider-owned schema version")
-    uri: Optional[str] = Field(default=None, description="Optional resolvable schema URI")
+    version: Optional[str] = Field(
+        default=None, description="Provider-owned schema version"
+    )
+    uri: Optional[str] = Field(
+        default=None, description="Optional resolvable schema URI"
+    )
     checksum: Optional[str] = Field(
         default=None,
         description="Optional provider-owned checksum for immutable schema content",
@@ -249,7 +263,9 @@ class ObjectRef(DomainEnvelopeBaseModel):
     @model_validator(mode="after")
     def _validate_single_ref_kind(self) -> "ObjectRef":
         if (self.object_id is None) == (self.pending_ref_id is None):
-            raise ValueError("ObjectRef must provide exactly one of object_id or pending_ref_id")
+            raise ValueError(
+                "ObjectRef must provide exactly one of object_id or pending_ref_id"
+            )
         return self
 
     def ref_key(self) -> tuple[str, str]:
@@ -368,7 +384,9 @@ class CuratableObjectEnvelope(DomainEnvelopeBaseModel):
         description="Domain-pack-owned metadata that does not affect core validation",
     )
 
-    @field_validator("object_type", "object_role", "object_id", "pending_ref_id", "model_ref")
+    @field_validator(
+        "object_type", "object_role", "object_id", "pending_ref_id", "model_ref"
+    )
     @classmethod
     def _validate_object_identifiers(cls, value: Optional[str], info) -> Optional[str]:
         return _validate_non_empty_identifier(value, info.field_name)
@@ -390,6 +408,20 @@ class CuratableObjectEnvelope(DomainEnvelopeBaseModel):
         if self.pending_ref_id is not None:
             keys.append(("pending_ref_id", self.pending_ref_id))
         return tuple(keys)
+
+    def to_object_ref(self) -> ObjectRef:
+        """Return this object's canonical envelope reference."""
+
+        if self.object_id is not None:
+            return ObjectRef(object_id=self.object_id, object_type=self.object_type)
+        if self.pending_ref_id is not None:
+            return ObjectRef(
+                pending_ref_id=self.pending_ref_id,
+                object_type=self.object_type,
+            )
+        raise ValueError(
+            "CuratableObjectEnvelope must provide object_id or pending_ref_id"
+        )
 
 
 class ValidationFinding(DomainEnvelopeBaseModel):
@@ -421,7 +453,9 @@ class ValidationFinding(DomainEnvelopeBaseModel):
 
     @field_validator("finding_id", "code")
     @classmethod
-    def _validate_optional_identifiers(cls, value: Optional[str], info) -> Optional[str]:
+    def _validate_optional_identifiers(
+        cls, value: Optional[str], info
+    ) -> Optional[str]:
         return _validate_non_empty_identifier(value, info.field_name)
 
     @model_validator(mode="after")
@@ -431,7 +465,9 @@ class ValidationFinding(DomainEnvelopeBaseModel):
             and self.field_ref is not None
             and self.object_ref.ref_key() != self.field_ref.object_ref.ref_key()
         ):
-            raise ValueError("object_ref must match field_ref.object_ref when both are set")
+            raise ValueError(
+                "object_ref must match field_ref.object_ref when both are set"
+            )
         return self
 
 
@@ -481,7 +517,9 @@ class HistoryEvent(DomainEnvelopeBaseModel):
             and self.field_ref is not None
             and self.object_ref.ref_key() != self.field_ref.object_ref.ref_key()
         ):
-            raise ValueError("object_ref must match field_ref.object_ref when both are set")
+            raise ValueError(
+                "object_ref must match field_ref.object_ref when both are set"
+            )
         return self
 
 
@@ -518,7 +556,9 @@ class DomainEnvelope(DomainEnvelopeBaseModel):
 
     @field_validator("envelope_id", "domain_pack_id", "domain_pack_version")
     @classmethod
-    def _validate_envelope_identifiers(cls, value: Optional[str], info) -> Optional[str]:
+    def _validate_envelope_identifiers(
+        cls, value: Optional[str], info
+    ) -> Optional[str]:
         return _validate_non_empty_identifier(value, info.field_name)
 
     @model_validator(mode="after")

@@ -55,8 +55,30 @@ def test_envelope_validates_pending_object_and_field_refs_after_extraction():
         ],
     )
 
-    assert envelope.validation_findings[0].field_ref.field_path == "gene.identifiers[0].curie"
+    assert (
+        envelope.validation_findings[0].field_ref.field_path
+        == "gene.identifiers[0].curie"
+    )
     assert envelope.history[0].object_ref.pending_ref_id == "pending-gene-1"
+
+
+def test_curatable_object_can_produce_canonical_object_ref():
+    pending = _pending_gene_object()
+    stable = CuratableObjectEnvelope(
+        object_type="GeneAssertion",
+        object_id="WB:WBGene00000001",
+        pending_ref_id="pending-gene-1",
+        payload={},
+    )
+
+    assert pending.to_object_ref() == ObjectRef(
+        pending_ref_id="pending-gene-1",
+        object_type="GeneAssertion",
+    )
+    assert stable.to_object_ref() == ObjectRef(
+        object_id="WB:WBGene00000001",
+        object_type="GeneAssertion",
+    )
 
 
 def test_envelope_schema_provider_accepts_non_linkml_json_schema_refs():
@@ -173,4 +195,6 @@ def test_object_envelope_carries_definition_state_and_notes():
     )
 
     assert obj.definition_state is DefinitionState.IN_DEVELOPMENT
-    assert obj.definition_notes == ["Initial contract for a domain pack still under design."]
+    assert obj.definition_notes == [
+        "Initial contract for a domain pack still under design."
+    ]
