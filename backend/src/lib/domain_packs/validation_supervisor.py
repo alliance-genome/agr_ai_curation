@@ -24,10 +24,10 @@ from src.schemas.domain_envelope import (
     ValidationFinding,
     ValidationFindingSeverity,
     field_path_exists,
-    parse_field_path,
 )
 from src.lib.lookup_status import LOOKUP_STATUS_BLOCKED, LOOKUP_STATUS_UNDER_DEVELOPMENT
 
+from .input_selectors import SelectorBuildResult, build_domain_validation_request
 from .registry import LoadedDomainPack
 from .validation_registry import (
     DomainPackValidationRegistry,
@@ -237,7 +237,7 @@ def _required_field_findings(
                         "is required by the domain pack but missing from the envelope payload."
                     ),
                     field_ref=FieldRef(
-                        object_ref=_object_ref_for(domain_object),
+                        object_ref=domain_object.to_object_ref(),
                         field_path=field_definition.field_path,
                     ),
                     details={
@@ -268,6 +268,7 @@ def _under_development_binding_findings(
     findings: list[ValidationFinding] = []
     for match in matches:
         binding = match.binding
+        selector_result = build_domain_validation_request(match)
         details = _match_details(match, provider_model_ref=provider_model_ref)
         message = _state_message(
             state=binding.state,
@@ -280,6 +281,7 @@ def _under_development_binding_findings(
             match=match,
             lookup_status=LOOKUP_STATUS_UNDER_DEVELOPMENT,
             explanation=message,
+            selected_input_details=_selected_input_details(selector_result),
         )
         findings.append(
             ValidationFinding(
@@ -323,14 +325,25 @@ def _unsupported_active_binding_findings(
     matches: Iterable[ValidatorBindingMatch],
     provider_model_ref: Mapping[str, Any] | None,
 ) -> list[ValidationFinding]:
-    return [
-        _dispatch_unavailable_finding(
-            match=match,
-            provider_model_ref=provider_model_ref,
-            reason="no executable validator is registered for this active binding",
+    findings: list[ValidationFinding] = []
+    for match in matches:
+        selector_result = build_domain_validation_request(match)
+        if selector_result.findings:
+            findings.extend(selector_result.findings)
+            continue
+        findings.append(
+            _dispatch_unavailable_finding(
+                match=match,
+                provider_model_ref=provider_model_ref,
+                reason="no executable validator is registered for this active binding",
+                validation_request=(
+                    selector_result.request.model_dump(mode="json", exclude_none=True)
+                    if selector_result.request is not None
+                    else None
+                ),
+            )
         )
-        for match in matches
-    ]
+    return findings
 
 
 def _dispatch_unavailable_finding(
@@ -338,16 +351,17 @@ def _dispatch_unavailable_finding(
     match: ValidatorBindingMatch,
     provider_model_ref: Mapping[str, Any] | None,
     reason: str,
+    validation_request: Mapping[str, Any] | None = None,
 ) -> ValidationFinding:
     binding = match.binding
     details = {
         **_match_details(match, provider_model_ref=provider_model_ref),
         "dispatch_unavailable_reason": reason,
     }
+    if validation_request is not None:
+        details["validation_request"] = dict(validation_request)
     lookup_status = (
-        LOOKUP_STATUS_BLOCKED
-        if binding.blocking
-        else LOOKUP_STATUS_UNDER_DEVELOPMENT
+        LOOKUP_STATUS_BLOCKED if binding.blocking else LOOKUP_STATUS_UNDER_DEVELOPMENT
     )
     message = (
         f"Active validator binding '{binding.binding_id}' could not be dispatched: "
@@ -358,6 +372,7 @@ def _dispatch_unavailable_finding(
         match=match,
         lookup_status=lookup_status,
         explanation=message,
+        validation_request=validation_request,
     )
     return ValidationFinding(
         severity=(
@@ -407,11 +422,15 @@ def _attach_lookup_attempt_details(
     match: ValidatorBindingMatch,
     lookup_status: str,
     explanation: str,
+    validation_request: Mapping[str, Any] | None = None,
+    selected_input_details: Mapping[str, Any] | None = None,
 ) -> None:
     attempt = _lookup_attempt_for_match(
         match=match,
         lookup_status=lookup_status,
         explanation=explanation,
+        validation_request=validation_request,
+        selected_input_details=selected_input_details,
     )
     details["lookup_attempts"] = [attempt]
     details["lookup_explanation"] = explanation
@@ -423,14 +442,18 @@ def _lookup_attempt_for_match(
     match: ValidatorBindingMatch,
     lookup_status: str,
     explanation: str,
+    validation_request: Mapping[str, Any] | None = None,
+    selected_input_details: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     binding = match.binding
     attempted_query = {
         "validator_binding_id": binding.binding_id,
     }
-    input_fields = _attempt_input_fields(match)
-    if input_fields:
-        attempted_query["input_fields"] = input_fields
+    if validation_request is not None:
+        attempted_query["request_id"] = validation_request.get("request_id")
+        attempted_query["input_fields"] = validation_request.get("selected_inputs", {})
+    elif selected_input_details:
+        attempted_query["input_fields"] = dict(selected_input_details)
     return {
         "source": {
             "validator_binding_id": binding.binding_id,
@@ -451,33 +474,14 @@ def _lookup_attempt_for_match(
     }
 
 
-def _attempt_input_fields(match: ValidatorBindingMatch) -> dict[str, Any]:
-    if not match.binding.input_fields:
-        return {}
-    fields: dict[str, Any] = {}
-    for input_name, raw_field_path in match.binding.input_fields.items():
-        field_path = str(raw_field_path)
-        value = None
-        if match.object_envelope is not None:
-            value = _payload_value(
-                match.object_envelope.payload,
-                _relative_field_path(
-                    field_path,
-                    object_type=match.object_envelope.object_type,
-                ),
-            )
-        fields[str(input_name)] = {
-            "field_path": field_path,
+def _selected_input_details(selector_result: SelectorBuildResult) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    for input_name, value in selector_result.selected_inputs.items():
+        details[input_name] = {
+            "selector": selector_result.input_selectors.get(input_name),
             "value": value,
         }
-    return fields
-
-
-def _relative_field_path(field_path: str, *, object_type: str) -> str:
-    prefix = f"{object_type}."
-    if field_path.startswith(prefix):
-        return field_path[len(prefix):]
-    return field_path
+    return details
 
 
 def _with_provider_model_ref(
@@ -492,48 +496,16 @@ def _with_provider_model_ref(
 def _match_object_ref(match: ValidatorBindingMatch) -> ObjectRef | None:
     if match.object_envelope is None or match.field_definition is not None:
         return None
-    return _object_ref_for(match.object_envelope)
+    return match.object_envelope.to_object_ref()
 
 
 def _match_field_ref(match: ValidatorBindingMatch) -> FieldRef | None:
     if match.object_envelope is None or match.field_definition is None:
         return None
     return FieldRef(
-        object_ref=_object_ref_for(match.object_envelope),
+        object_ref=match.object_envelope.to_object_ref(),
         field_path=match.field_definition.field_path,
     )
-
-
-def _object_ref_for(domain_object: CuratableObjectEnvelope) -> ObjectRef:
-    if domain_object.object_id is not None:
-        return ObjectRef(
-            object_id=domain_object.object_id,
-            object_type=domain_object.object_type,
-        )
-    if domain_object.pending_ref_id is not None:
-        return ObjectRef(
-            pending_ref_id=domain_object.pending_ref_id,
-            object_type=domain_object.object_type,
-        )
-    raise ValueError("CuratableObjectEnvelope must provide object_id or pending_ref_id")
-
-
-def _payload_value(payload: Mapping[str, Any], field_path: str) -> Any:
-    current: Any = payload
-    for part in parse_field_path(field_path):
-        if isinstance(part, str):
-            if not isinstance(current, Mapping) or part not in current:
-                return None
-            current = current[part]
-            continue
-        if (
-            not isinstance(current, list)
-            or isinstance(current, (str, bytes, bytearray))
-            or part >= len(current)
-        ):
-            return None
-        current = current[part]
-    return current
 
 
 def _field_definition_details(
@@ -600,7 +572,9 @@ def _with_stable_finding_id(
         "target": target,
         "details": finding.details,
     }
-    digest = sha256(json.dumps(seed_payload, sort_keys=True).encode("utf-8")).hexdigest()
+    digest = sha256(
+        json.dumps(seed_payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
     return finding.model_copy(update={"finding_id": f"validation:{digest}"})
 
 
@@ -617,11 +591,12 @@ def _history_event_for_finding(
         "target": target,
         "event_type": HistoryEventKind.VALIDATION_FINDING_ADDED.value,
     }
-    digest = sha256(json.dumps(seed_payload, sort_keys=True).encode("utf-8")).hexdigest()
+    digest = sha256(
+        json.dumps(seed_payload, sort_keys=True).encode("utf-8")
+    ).hexdigest()
     field_ref = finding.field_ref
-    if (
-        field_ref is not None
-        and _finding_field_ref_exists(envelope=envelope, field_ref=field_ref)
+    if field_ref is not None and _finding_field_ref_exists(
+        envelope=envelope, field_ref=field_ref
     ):
         event_field_ref = field_ref
         event_object_ref = None

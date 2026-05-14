@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import importlib
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -15,7 +14,6 @@ import yaml
 from src.schemas.curation_workspace import SubmissionMode
 from src.schemas.domain_envelope import CuratableObjectStatus, DefinitionState
 from src.schemas.domain_pack_metadata import DomainPackFieldType
-
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
@@ -130,29 +128,23 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
     }
 
     validator_bindings = metadata.metadata["validator_bindings"]
-    assert validator_bindings == [
-        {
-            "binding_id": "allele_pending_envelope_validator",
-            "display_name": "Data check",
-            "validator": (
-                "agr_ai_curation_alliance.domain_packs.allele."
-                "validate_pending_allele_envelope"
-            ),
-            "applies_to": {
-                "domain_pack_id": ALLELE_DOMAIN_PACK_ID,
-                "object_types": [
-                    "AllelePaperEvidenceAssociation",
-                    "Allele",
-                    "Reference",
-                    "AlleleMention",
-                    "EvidenceQuote",
-                ],
-            },
-            "definition_state": "in_development",
-        }
+    assert validator_bindings["under_development"] == []
+    active_binding = validator_bindings["active"][0]
+    assert active_binding["binding_id"] == "allele_pending_envelope_validator"
+    assert active_binding["display_name"] == "Data check"
+    assert active_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "allele_validation",
+    }
+    assert active_binding["applies_to"]["domain_pack_id"] == ALLELE_DOMAIN_PACK_ID
+    assert active_binding["applies_to"]["object_types"] == [
+        "AllelePaperEvidenceAssociation",
+        "Allele",
+        "Reference",
+        "AlleleMention",
+        "EvidenceQuote",
     ]
-    module_name, _, function_name = validator_bindings[0]["validator"].rpartition(".")
-    assert callable(getattr(importlib.import_module(module_name), function_name))
+    assert active_binding["definition_state"] == "in_development"
 
 
 def test_allele_pack_records_grounded_metadata_and_blocks_writes():
@@ -193,9 +185,10 @@ def test_allele_pack_records_grounded_metadata_and_blocks_writes():
         "public.allelegeneassociation_informationcontententity",
     ]
     assert "update public.allele" in write_behavior["blocked_operations"]
-    assert "Resolve source papers to durable public.reference.id values." in write_behavior[
-        "required_before_write"
-    ]
+    assert (
+        "Resolve source papers to durable public.reference.id values."
+        in write_behavior["required_before_write"]
+    )
 
 
 def test_allele_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path: Path):
@@ -212,9 +205,9 @@ def test_allele_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path: 
 
         class_name = provider_ref.get("class")
         if class_name is not None:
-            assert class_name in index["classes"], (
-                f"LinkML class {class_name} is missing from pinned schema"
-            )
+            assert (
+                class_name in index["classes"]
+            ), f"LinkML class {class_name} is missing from pinned schema"
             actual_file, class_definition = index["classes"][class_name]
             if "slot" not in provider_ref:
                 _assert_source_file_matches(
@@ -233,9 +226,9 @@ def test_allele_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path: 
 
         slot_name = provider_ref.get("slot")
         if slot_name is not None:
-            assert slot_name in index["slots"], (
-                f"LinkML slot {slot_name} is missing from pinned schema"
-            )
+            assert (
+                slot_name in index["slots"]
+            ), f"LinkML slot {slot_name} is missing from pinned schema"
             actual_file, _definition = index["slots"][slot_name]
             _assert_source_file_matches(
                 provider_ref=provider_ref,
@@ -269,7 +262,9 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
     }
 
     association = next(
-        obj for obj in envelope.objects if obj.object_type == "AllelePaperEvidenceAssociation"
+        obj
+        for obj in envelope.objects
+        if obj.object_type == "AllelePaperEvidenceAssociation"
     )
     assert association.payload["allele_identifier"] == "WB:WBVar00000001"
     assert association.payload["evidence_record_ids"] == [
@@ -322,11 +317,14 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         / "tool_verified_pending_envelope.yaml"
     )
     expected = yaml.safe_load(expected_path.read_text(encoding="utf-8"))
-    assert envelope.model_dump(
-        mode="json",
-        exclude_defaults=True,
-        exclude_none=True,
-    ) == expected["envelope"]
+    assert (
+        envelope.model_dump(
+            mode="json",
+            exclude_defaults=True,
+            exclude_none=True,
+        )
+        == expected["envelope"]
+    )
 
 
 def test_tool_verified_allele_fixture_rejects_malformed_required_data():
@@ -343,14 +341,18 @@ def test_tool_verified_allele_fixture_rejects_malformed_required_data():
         build_pending_allele_envelope_from_tool_verified_fixture(legacy_items_only)
 
     missing_evidence_id = copy.deepcopy(fixture)
-    missing_evidence_id["tool_cases"][0]["expected_tool_result"].pop("evidence_record_id")
+    missing_evidence_id["tool_cases"][0]["expected_tool_result"].pop(
+        "evidence_record_id"
+    )
     with pytest.raises(ValueError, match="evidence_record_id"):
         build_pending_allele_envelope_from_tool_verified_fixture(missing_evidence_id)
 
     malformed_normalized_id = copy.deepcopy(fixture)
     malformed_normalized_id["extraction"]["alleles"][0]["normalized_id"] = 42
     with pytest.raises(ValueError, match="normalized_id must be a string"):
-        build_pending_allele_envelope_from_tool_verified_fixture(malformed_normalized_id)
+        build_pending_allele_envelope_from_tool_verified_fixture(
+            malformed_normalized_id
+        )
 
 
 def test_allele_submission_plan_blocks_until_durable_targets_resolve():
@@ -420,7 +422,9 @@ def test_allele_submission_plan_emits_only_verified_non_mutating_operations_when
         "public.allelegeneassociation_informationcontententity",
         "public.allelegeneassociation_informationcontententity",
     ]
-    assert all(operation["mutates_base_rows"] is False for operation in plan["operations"])
+    assert all(
+        operation["mutates_base_rows"] is False for operation in plan["operations"]
+    )
     assert plan["mutates_base_rows"] == {
         "public.allele": False,
         "public.gene": False,

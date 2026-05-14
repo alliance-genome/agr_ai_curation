@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import importlib
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -16,7 +15,6 @@ from pydantic import ValidationError
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.schemas.domain_envelope import CuratableObjectStatus, field_path_exists
 from src.schemas.domain_pack_metadata import DomainPackFieldType
-
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
@@ -50,10 +48,7 @@ from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _load_linkml_index,
 )
 
-
-DISEASE_PACK_DIR = (
-    REPO_ROOT / "packages" / "alliance" / "domain_packs" / "disease"
-)
+DISEASE_PACK_DIR = REPO_ROOT / "packages" / "alliance" / "domain_packs" / "disease"
 DISEASE_RAW_FIXTURE_PATH = (
     REPO_ROOT
     / "backend"
@@ -155,7 +150,11 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     assert all(validators[state] for state in DISEASE_VALIDATOR_STATES)
 
     validator_bindings = metadata.metadata["validator_bindings"]
-    binding_ids = [binding["binding_id"] for binding in validator_bindings]
+    binding_items = [
+        *validator_bindings["active"],
+        *validator_bindings["under_development"],
+    ]
+    binding_ids = [binding["binding_id"] for binding in binding_items]
     assert len(binding_ids) == len(set(binding_ids))
     assert {
         "disease_pending_envelope_validator",
@@ -169,22 +168,18 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_data_provider_lookup",
     }.issubset(binding_ids)
 
-    pending_validator = validator_bindings[0]
-    assert pending_validator == {
-        "binding_id": DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
-        "display_name": "Data check",
-        "validator": (
-            "agr_ai_curation_alliance.domain_packs.disease."
-            "validate_pending_disease_envelope"
-        ),
-        "applies_to": {
-            "domain_pack_id": DISEASE_DOMAIN_PACK_ID,
-            "object_types": [DISEASE_OBJECT_TYPE],
-        },
-        "definition_state": "in_development",
+    pending_validator = validator_bindings["active"][0]
+    assert (
+        pending_validator["binding_id"] == DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID
+    )
+    assert pending_validator["display_name"] == "Data check"
+    assert pending_validator["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "disease_validation",
     }
-    module_name, _, function_name = pending_validator["validator"].rpartition(".")
-    assert callable(getattr(importlib.import_module(module_name), function_name))
+    assert pending_validator["applies_to"]["domain_pack_id"] == DISEASE_DOMAIN_PACK_ID
+    assert pending_validator["applies_to"]["object_types"] == [DISEASE_OBJECT_TYPE]
+    assert pending_validator["definition_state"] == "in_development"
 
 
 def test_disease_pack_records_db_projection_and_representative_rows():
@@ -249,9 +244,13 @@ def test_disease_pack_records_db_projection_and_representative_rows():
 def test_disease_pack_declares_validatable_disease_and_condition_fields():
     disease_object = _disease_object_definition()
     fields_by_path = {field.field_path: field for field in disease_object.fields}
+    raw_validator_bindings = _disease_pack().metadata.metadata["validator_bindings"]
     validator_bindings = {
         binding["binding_id"]: binding
-        for binding in _disease_pack().metadata.metadata["validator_bindings"]
+        for binding in [
+            *raw_validator_bindings["active"],
+            *raw_validator_bindings["under_development"],
+        ]
     }
     referenced_validator_binding_ids = {
         field.metadata["validator_binding_id"]
@@ -261,9 +260,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     assert referenced_validator_binding_ids <= set(validator_bindings)
 
     required_fields = {
-        field.field_path
-        for field in disease_object.fields
-        if field.required
+        field.field_path for field in disease_object.fields if field.required
     }
     assert required_fields == {
         "mention",
@@ -281,7 +278,9 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
 
     disease_curie = fields_by_path["disease_annotation_object.curie"]
     assert disease_curie.metadata["validatable"] is True
-    assert disease_curie.metadata["validator_binding_id"] == "disease_ontology_term_lookup"
+    assert (
+        disease_curie.metadata["validator_binding_id"] == "disease_ontology_term_lookup"
+    )
     assert disease_curie.metadata["validator_state"] == "planned"
 
     condition_fields = {
@@ -298,7 +297,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.metadata["validatable"] is True
         assert field.metadata["validator_state"] == "planned"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
-        assert binding["status"] == "planned"
+        assert binding["state_explanation"]
 
     blocked_fields = {
         "disease_annotation_subject",
@@ -312,7 +311,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.metadata["validator_state"] == "blocked"
         assert field.metadata["definition_state_category"] == "blocked"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
-        assert binding["status"] == "blocked"
+        assert binding["state_explanation"]
 
 
 def test_disease_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path: Path):
@@ -329,9 +328,9 @@ def test_disease_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path:
 
         class_name = provider_ref.get("class")
         if class_name is not None:
-            assert class_name in index["classes"], (
-                f"LinkML class {class_name} is missing from pinned schema"
-            )
+            assert (
+                class_name in index["classes"]
+            ), f"LinkML class {class_name} is missing from pinned schema"
             actual_file, class_definition = index["classes"][class_name]
             if "slot" not in provider_ref:
                 _assert_source_file_matches(
@@ -350,9 +349,9 @@ def test_disease_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path:
 
         slot_name = provider_ref.get("slot")
         if slot_name is not None:
-            assert slot_name in index["slots"], (
-                f"LinkML slot {slot_name} is missing from pinned schema"
-            )
+            assert (
+                slot_name in index["slots"]
+            ), f"LinkML slot {slot_name} is missing from pinned schema"
             actual_file, _definition = index["slots"][slot_name]
             _assert_source_file_matches(
                 provider_ref=provider_ref,
@@ -401,7 +400,9 @@ def test_converted_disease_envelope_omits_legacy_semantic_stores():
     raw_fixture = _load_raw_disease_fixture()
     converted_envelope = tool_verified_disease_output_to_pending_envelope(raw_fixture)
 
-    observed_keys = set(_iter_mapping_keys(converted_envelope.model_dump(mode="python")))
+    observed_keys = set(
+        _iter_mapping_keys(converted_envelope.model_dump(mode="python"))
+    )
     assert FORBIDDEN_LEGACY_COLLECTIONS.isdisjoint(observed_keys)
 
 

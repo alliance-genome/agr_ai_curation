@@ -15,7 +15,14 @@ from hashlib import sha256
 from typing import Any, Iterable, Literal, Mapping
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -33,7 +40,6 @@ from src.schemas.domain_pack_metadata import DomainPackFieldDefinition
 
 from .registry import LoadedDomainPack
 from .validation_registry import DomainPackValidationRegistry
-
 
 REPAIR_CONTEXT_METADATA_KEY = "repair_context"
 DEFAULT_REPAIR_RETRY_BUDGET = 2
@@ -100,7 +106,9 @@ class DomainEnvelopeRepairRequest(RepairContractModel):
     """Supervisor-to-extractor repair request contract."""
 
     repair_action: Literal["repair_request"] = "repair_request"
-    request_id: StrictStr = Field(default_factory=lambda: f"repair-request:{uuid4().hex}")
+    request_id: StrictStr = Field(
+        default_factory=lambda: f"repair-request:{uuid4().hex}"
+    )
     envelope_id: StrictStr
     expected_revision: int = Field(ge=0)
     targets: list[RepairRequestTarget] = Field(min_length=1)
@@ -237,7 +245,9 @@ class DomainEnvelopeExtractorFinalClassification(RepairContractModel):
         return value
 
     @model_validator(mode="after")
-    def _validate_action_status_pair(self) -> "DomainEnvelopeExtractorFinalClassification":
+    def _validate_action_status_pair(
+        self,
+    ) -> "DomainEnvelopeExtractorFinalClassification":
         expected_status = {
             "no_repair_possible": RepairFinalStatus.NO_REPAIR_POSSIBLE,
             "mark_under_development": RepairFinalStatus.UNDER_DEVELOPMENT,
@@ -279,7 +289,9 @@ def build_repair_request(
     validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(
         domain_pack
     )
-    selected_findings = tuple(findings if findings is not None else envelope.validation_findings)
+    selected_findings = tuple(
+        findings if findings is not None else envelope.validation_findings
+    )
     targets: list[RepairRequestTarget] = []
     for finding in selected_findings:
         if finding.field_ref is None:
@@ -295,7 +307,9 @@ def build_repair_request(
         if field_definition is None:
             continue
         repairable, policy_details = _field_repairability(field_definition)
-        current_value = _payload_value(target_object.payload, finding.field_ref.field_path)
+        current_value = _payload_value(
+            target_object.payload, finding.field_ref.field_path
+        )
         if current_value is _MISSING:
             current_value = None
         repair_key = _target_repair_key(
@@ -564,7 +578,7 @@ def apply_repair_patch(
     for operation, object_index, before_value in validated_operations:
         updated_object = updated_objects[object_index]
         field_ref = FieldRef(
-            object_ref=_object_ref_for(updated_object),
+            object_ref=updated_object.to_object_ref(),
             field_path=operation.field_path,
         )
         update_details = {
@@ -877,7 +891,8 @@ def _used_attempts(envelope: DomainEnvelope, repair_key: str) -> int:
         if isinstance(item, Mapping)
         and _attempt_consumed_retry_key(item, repair_key)
         and item.get("kind") == "extractor_patch"
-        and item.get("status") in {
+        and item.get("status")
+        in {
             RepairPatchStatus.ACCEPTED.value,
             RepairPatchStatus.REJECTED.value,
         }
@@ -918,8 +933,12 @@ def _append_repair_context(
 ) -> dict[str, Any]:
     updated_metadata = copy.deepcopy(dict(metadata))
     raw_context = updated_metadata.get(REPAIR_CONTEXT_METADATA_KEY)
-    context = copy.deepcopy(dict(raw_context)) if isinstance(raw_context, Mapping) else {}
-    attempts = list(context.get("attempts") if isinstance(context.get("attempts"), list) else [])
+    context = (
+        copy.deepcopy(dict(raw_context)) if isinstance(raw_context, Mapping) else {}
+    )
+    attempts = list(
+        context.get("attempts") if isinstance(context.get("attempts"), list) else []
+    )
     classifications = list(
         context.get("classifications")
         if isinstance(context.get("classifications"), list)
@@ -960,12 +979,9 @@ def _field_repairability(
     metadata = field_definition.metadata
     source_of_truth = _repair_source_of_truth(metadata)
     provider_refs = metadata.get("provider_refs")
-    provider_ref_grounded = (
-        source_of_truth is None
-        or (
-            isinstance(provider_refs, Mapping)
-            and isinstance(provider_refs.get(source_of_truth), Mapping)
-        )
+    provider_ref_grounded = source_of_truth is None or (
+        isinstance(provider_refs, Mapping)
+        and isinstance(provider_refs.get(source_of_truth), Mapping)
     )
     protected = _metadata_bool(metadata, "protected") or _nested_metadata_bool(
         metadata,
@@ -1020,7 +1036,9 @@ def _metadata_bool(metadata: Mapping[str, Any], key: str) -> bool:
     return metadata.get(key) is True
 
 
-def _nested_metadata_bool(metadata: Mapping[str, Any], outer_key: str, inner_key: str) -> bool:
+def _nested_metadata_bool(
+    metadata: Mapping[str, Any], outer_key: str, inner_key: str
+) -> bool:
     nested = metadata.get(outer_key)
     return isinstance(nested, Mapping) and nested.get(inner_key) is True
 
@@ -1107,12 +1125,16 @@ def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> 
                 current[part] = [] if isinstance(next_part, int) else {}
             current = current[part]
             continue
-        if not isinstance(current, list) or isinstance(current, (str, bytes, bytearray)):
+        if not isinstance(current, list) or isinstance(
+            current, (str, bytes, bytearray)
+        ):
             raise ValueError(f"Cannot set '{field_path}' through non-array parent")
         if part == len(current):
             current.append([] if isinstance(next_part, int) else {})
         if part >= len(current):
-            raise ValueError(f"Cannot set '{field_path}' because a list index is missing")
+            raise ValueError(
+                f"Cannot set '{field_path}' because a list index is missing"
+            )
         current = current[part]
 
     final_part = parts[-1]
@@ -1130,20 +1152,6 @@ def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> 
     if final_part >= len(current):
         raise ValueError(f"Cannot set '{field_path}' because a list index is missing")
     current[final_part] = value
-
-
-def _object_ref_for(domain_object: CuratableObjectEnvelope) -> ObjectRef:
-    if domain_object.object_id is not None:
-        return ObjectRef(
-            object_id=domain_object.object_id,
-            object_type=domain_object.object_type,
-        )
-    if domain_object.pending_ref_id is not None:
-        return ObjectRef(
-            pending_ref_id=domain_object.pending_ref_id,
-            object_type=domain_object.object_type,
-        )
-    raise ValueError("CuratableObjectEnvelope must provide object_id or pending_ref_id")
 
 
 def _repair_event(
@@ -1211,10 +1219,7 @@ def _operation_finding_ids(
         for finding in envelope.validation_findings
         if finding.finding_id is not None
         and finding.field_ref is not None
-        and (
-            not source_finding_ids
-            or finding.finding_id in source_finding_ids
-        )
+        and (not source_finding_ids or finding.finding_id in source_finding_ids)
         and finding.field_ref.object_ref.ref_key() == operation.object_ref.ref_key()
         and finding.field_ref.field_path == operation.field_path
     )

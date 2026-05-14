@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import importlib
 import sys
 from collections import Counter
 from collections.abc import Mapping
@@ -17,7 +16,6 @@ import yaml
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.schemas.domain_envelope import CuratableObjectStatus, field_path_exists
 from src.schemas.domain_pack_metadata import DomainPackFieldType
-
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
@@ -53,7 +51,6 @@ from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _iter_linkml_provider_refs,
     _load_linkml_index,
 )
-
 
 PHENOTYPE_FIXTURE_PATH = (
     REPO_ROOT
@@ -128,7 +125,9 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     metadata = _phenotype_pack().metadata
 
     roles_by_object_type = {
-        object_definition.object_type: object_definition.metadata[OBJECT_ROLE_METADATA_KEY]
+        object_definition.object_type: object_definition.metadata[
+            OBJECT_ROLE_METADATA_KEY
+        ]
         for object_definition in metadata.object_definitions
     }
     assert roles_by_object_type == {
@@ -153,7 +152,9 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     }
 
     validator_bindings = metadata.metadata["validator_bindings"]
-    binding_ids = [binding["binding_id"] for binding in validator_bindings]
+    assert validator_bindings["active"] == []
+    under_development_bindings = validator_bindings["under_development"]
+    binding_ids = [binding["binding_id"] for binding in under_development_bindings]
     assert binding_ids == [
         PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
         PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID,
@@ -161,22 +162,36 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         "phenotype_reference_validator",
     ]
 
-    pending_binding = validator_bindings[0]
-    module_name, _, function_name = pending_binding["validator"].rpartition(".")
-    assert callable(getattr(importlib.import_module(module_name), function_name))
+    pending_binding = under_development_bindings[0]
+    assert pending_binding["state_explanation"]
 
-    subject_binding = validator_bindings[1]
-    assert subject_binding["validation_kind"] == "db_backed_entity_lookup"
+    subject_binding = under_development_bindings[1]
     assert subject_binding["input_fields"] == {
-        "subject_identifier": "PhenotypeSubject.subject_identifier",
-        "subject_type": "PhenotypeSubject.subject_type",
-        "taxon": "PhenotypeSubject.taxon",
+        "subject_identifier": {
+            "source": "payload",
+            "path": "subject_identifier",
+            "required": True,
+        },
+        "subject_type": {
+            "source": "payload",
+            "path": "subject_type",
+            "required": True,
+        },
+        "taxon": {
+            "source": "payload",
+            "path": "taxon",
+            "required": True,
+        },
     }
-    assert subject_binding["blocking"] is True
 
-    term_binding = validator_bindings[2]
-    assert term_binding["validation_kind"] == "db_backed_ontology_lookup"
-    assert term_binding["blocking"] is True
+    term_binding = under_development_bindings[2]
+    assert term_binding["input_fields"] == {
+        "term_curie": {
+            "source": "payload",
+            "path": "curie",
+            "required": True,
+        }
+    }
 
 
 def test_phenotype_pack_records_grounding_and_export_blocker_policy():
@@ -238,9 +253,10 @@ def test_phenotype_annotation_declares_required_linkml_grounded_fields():
     ][ALLIANCE_LINKML_PROVIDER_KEY]
     assert subject_ref["slot"] == "phenotype_annotation_subject"
     assert subject_ref["range"] == "BiologicalEntity"
-    assert fields_by_path["phenotype_annotation_subject"].metadata[
-        "validator_binding_id"
-    ] == PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID
+    assert (
+        fields_by_path["phenotype_annotation_subject"].metadata["validator_binding_id"]
+        == PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID
+    )
 
     term_ref = fields_by_path["phenotype_terms[0].curie"].metadata[
         PROVIDER_REFS_METADATA_KEY
@@ -248,9 +264,10 @@ def test_phenotype_annotation_declares_required_linkml_grounded_fields():
     assert term_ref["class"] == "PhenotypeTerm"
     assert term_ref["slot"] == "curie"
     assert term_ref["range"] == "uriorcurie"
-    assert fields_by_path["phenotype_terms[0].curie"].metadata[
-        "validator_binding_id"
-    ] == PHENOTYPE_TERM_VALIDATOR_BINDING_ID
+    assert (
+        fields_by_path["phenotype_terms[0].curie"].metadata["validator_binding_id"]
+        == PHENOTYPE_TERM_VALIDATOR_BINDING_ID
+    )
 
 
 def test_phenotype_subject_declares_linkml_grounded_taxon_context():
@@ -304,7 +321,9 @@ def test_tool_verified_phenotype_fixture_converts_to_pending_envelope():
         PHENOTYPE_OBJECT_TYPE: 1,
     }
 
-    annotation = next(obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE)
+    annotation = next(
+        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+    )
     assert annotation.payload["phenotype_annotation_object"] == "reduced brood size"
     assert annotation.payload["phenotype_terms"] == [
         {"curie": "WBPhenotype:0000886", "label": "reduced brood size"}
@@ -315,16 +334,20 @@ def test_tool_verified_phenotype_fixture_converts_to_pending_envelope():
     missing_required_fields = [
         field.field_path
         for field in _phenotype_object_definition().fields
-        if field.required and not field_path_exists(annotation.payload, field.field_path)
+        if field.required
+        and not field_path_exists(annotation.payload, field.field_path)
     ]
     assert missing_required_fields == []
 
     expected = yaml.safe_load(PHENOTYPE_FIXTURE_PATH.read_text(encoding="utf-8"))
-    assert envelope.model_dump(
-        mode="json",
-        exclude_defaults=True,
-        exclude_none=True,
-    ) == expected["envelope"]
+    assert (
+        envelope.model_dump(
+            mode="json",
+            exclude_defaults=True,
+            exclude_none=True,
+        )
+        == expected["envelope"]
+    )
 
 
 def test_tool_verified_phenotype_fixture_preserves_subject_taxon_context():
@@ -341,13 +364,16 @@ def test_tool_verified_phenotype_fixture_preserves_subject_taxon_context():
 
     assert validate_pending_phenotype_envelope(envelope) == ()
     subject = next(
-        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_SUBJECT_OBJECT_TYPE
+        obj
+        for obj in envelope.objects
+        if obj.object_type == PHENOTYPE_SUBJECT_OBJECT_TYPE
     )
-    annotation = next(obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE)
+    annotation = next(
+        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+    )
     assert subject.payload["taxon"] == "NCBITaxon:6239"
     assert (
-        annotation.payload["phenotype_annotation_subject"]["taxon"]
-        == "NCBITaxon:6239"
+        annotation.payload["phenotype_annotation_subject"]["taxon"] == "NCBITaxon:6239"
     )
 
 
@@ -387,7 +413,9 @@ def test_pending_phenotype_validator_requires_explicit_blockers():
     ]
 
 
-def test_phenotype_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path: Path):
+def test_phenotype_pack_linkml_class_slot_attribute_and_range_refs_exist(
+    tmp_path: Path,
+):
     schema_cache_dir, _env_values = _cache_schema(tmp_path)
     index = _load_linkml_index(schema_cache_dir)
     metadata = _phenotype_pack().metadata
@@ -401,9 +429,9 @@ def test_phenotype_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_pat
 
         class_name = provider_ref.get("class")
         if class_name is not None:
-            assert class_name in index["classes"], (
-                f"LinkML class {class_name} is missing from pinned schema"
-            )
+            assert (
+                class_name in index["classes"]
+            ), f"LinkML class {class_name} is missing from pinned schema"
             actual_file, class_definition = index["classes"][class_name]
             if "slot" not in provider_ref:
                 _assert_source_file_matches(
@@ -422,9 +450,9 @@ def test_phenotype_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_pat
 
         slot_name = provider_ref.get("slot")
         if slot_name is not None:
-            assert slot_name in index["slots"], (
-                f"LinkML slot {slot_name} is missing from pinned schema"
-            )
+            assert (
+                slot_name in index["slots"]
+            ), f"LinkML slot {slot_name} is missing from pinned schema"
             actual_file, _definition = index["slots"][slot_name]
             _assert_source_file_matches(
                 provider_ref=provider_ref,
@@ -447,12 +475,16 @@ def test_tool_verified_phenotype_fixture_rejects_malformed_required_data():
     legacy_items_missing = copy.deepcopy(fixture)
     legacy_items_missing["extraction"].pop("items")
     with pytest.raises(ValueError, match="extraction.items must be a list"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(legacy_items_missing)
+        build_pending_phenotype_envelope_from_tool_verified_fixture(
+            legacy_items_missing
+        )
 
     missing_normalized_id = copy.deepcopy(fixture)
     missing_normalized_id["extraction"]["items"][0].pop("normalized_id")
     with pytest.raises(ValueError, match="normalized_id"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(missing_normalized_id)
+        build_pending_phenotype_envelope_from_tool_verified_fixture(
+            missing_normalized_id
+        )
 
     missing_label = copy.deepcopy(fixture)
     missing_label["extraction"]["items"][0].pop("label")
@@ -508,9 +540,13 @@ def test_tool_verified_phenotype_fixture_rejects_malformed_required_data():
         )
 
     unknown_evidence_case = copy.deepcopy(fixture)
-    unknown_evidence_case["extraction"]["items"][0]["evidence_case_ids"] = ["missing-case"]
+    unknown_evidence_case["extraction"]["items"][0]["evidence_case_ids"] = [
+        "missing-case"
+    ]
     with pytest.raises(ValueError, match="unknown tool case"):
-        build_pending_phenotype_envelope_from_tool_verified_fixture(unknown_evidence_case)
+        build_pending_phenotype_envelope_from_tool_verified_fixture(
+            unknown_evidence_case
+        )
 
 
 def test_phenotype_constants_include_fixture_id_for_contract_callers():

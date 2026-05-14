@@ -582,9 +582,15 @@ metadata:
             - subject_type
             - taxon
         input_fields:
-          subject_identifier: PhenotypeSubject.subject_identifier
-          subject_type: PhenotypeSubject.subject_type
-          taxon: PhenotypeSubject.taxon
+          subject_identifier:
+            source: payload
+            path: subject_identifier
+          subject_type:
+            source: payload
+            path: subject_type
+          taxon:
+            source: payload
+            path: taxon
         definition_state: in_development
       - binding_id: phenotype_term_ontology_validator
         display_name: Phenotype ontology term lookup
@@ -596,7 +602,9 @@ metadata:
           field_paths:
             - curie
         input_fields:
-          term_curie: PhenotypeTerm.curie
+          term_curie:
+            source: payload
+            path: curie
         definition_state: in_development
       - binding_id: phenotype_reference_validator
         display_name: Reference lookup
@@ -608,7 +616,9 @@ metadata:
           field_paths:
             - reference_id
         input_fields:
-          reference_id: Reference.reference_id
+          reference_id:
+            source: payload
+            path: reference_id
         definition_state: in_development
   validators:
     active:

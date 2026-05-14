@@ -10,7 +10,10 @@ from pydantic import BaseModel
 
 from agr_ai_curation_runtime import agr_lookup
 from src.lib import lookup_status
-from src.lib.domain_packs.loader import DomainPackMetadataError, load_domain_pack_metadata
+from src.lib.domain_packs.loader import (
+    DomainPackMetadataError,
+    load_domain_pack_metadata,
+)
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
@@ -159,7 +162,9 @@ metadata:
           field_types:
             - string
         input_fields:
-          gene_id: gene.identifier
+          gene_id:
+            source: payload
+            path: gene.identifier
         expected_result_fields:
           curie: gene.identifier
         blocking: true
@@ -177,7 +182,9 @@ metadata:
           field_paths:
             - confidence
         input_fields:
-          confidence: confidence
+          confidence:
+            source: payload
+            path: confidence
         expected_result_fields:
           confidence: confidence
     under_development:
@@ -237,7 +244,9 @@ def _loaded_owned_pack(
     )
 
 
-def _package_registry(*package_ids: str, dependencies: set[tuple[str, str]] | None = None):
+def _package_registry(
+    *package_ids: str, dependencies: set[tuple[str, str]] | None = None
+):
     dependency_pairs = dependencies or set()
 
     class _Registry:
@@ -309,7 +318,9 @@ metadata:
 """.strip()
 
 
-def test_active_validator_agent_reference_validates_package_agent_and_dependency(tmp_path: Path):
+def test_active_validator_agent_reference_validates_package_agent_and_dependency(
+    tmp_path: Path,
+):
     pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
 
@@ -367,7 +378,9 @@ def test_active_validator_agent_reference_requires_output_schema(tmp_path: Path)
                 "org.validators",
                 dependencies={("org.owner", "org.validators")},
             ),
-            agent_resolver=lambda _package_id, _agent_id: _validator_agent(output_schema=""),
+            agent_resolver=lambda _package_id, _agent_id: _validator_agent(
+                output_schema=""
+            ),
             output_schema_resolver=_validator_schema_resolver,
         )
 
@@ -426,8 +439,9 @@ def test_active_validator_agent_reference_fails_for_missing_agent(tmp_path: Path
             output_schema_resolver=_validator_schema_resolver,
         )
 
-    assert "references missing validator agent 'org.validators:shared_validator'" in str(
-        exc_info.value
+    assert (
+        "references missing validator agent 'org.validators:shared_validator'"
+        in str(exc_info.value)
     )
 
 
@@ -502,15 +516,17 @@ def _envelope(
                 object_role=object_role,
                 pending_ref_id="gene-assertion-1",
                 model_ref="GeneAssertionPayload",
-                payload=payload
-                if payload is not None
-                else {
-                    "gene": {
-                        "symbol": "abc-1",
-                        "identifier": "AGR:0000001",
-                    },
-                    "confidence": "high",
-                },
+                payload=(
+                    payload
+                    if payload is not None
+                    else {
+                        "gene": {
+                            "symbol": "abc-1",
+                            "identifier": "AGR:0000001",
+                        },
+                        "confidence": "high",
+                    }
+                ),
             )
         ],
     )
@@ -528,7 +544,10 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
 
     assert by_binding["fixture.agent_validator"].object_type == "GeneAssertion"
     assert by_binding["fixture.identifier_prefix"].field_path == "gene.identifier"
-    assert by_binding["fixture.identifier_prefix"].field_definition.field_type.value == "string"
+    assert (
+        by_binding["fixture.identifier_prefix"].field_definition.field_type.value
+        == "string"
+    )
     identifier_policy = registry.policy_for("GeneAssertion", "gene.identifier")
     assert identifier_policy is not None
     assert identifier_policy.required is True
@@ -539,9 +558,10 @@ def test_registry_matches_bindings_by_state_field_type_and_object_role(tmp_path:
         _envelope(object_role="metadata_only"),
         states=[ValidationBindingState.ACTIVE],
     )
-    assert {
-        match.binding.binding_id for match in metadata_only_matches
-    } == {"fixture.agent_validator", "fixture.optional_confidence_check"}
+    assert {match.binding.binding_id for match in metadata_only_matches} == {
+        "fixture.agent_validator",
+        "fixture.optional_confidence_check",
+    }
 
 
 def test_registry_exposes_under_development_binding_metadata(tmp_path: Path):
@@ -551,10 +571,14 @@ def test_registry_exposes_under_development_binding_metadata(tmp_path: Path):
     metadata_by_state = {
         entry.state: entry.validator_id for entry in registry.validator_metadata
     }
-    binding_states = {binding.binding_id: binding.state for binding in registry.bindings}
+    binding_states = {
+        binding.binding_id: binding.state for binding in registry.bindings
+    }
 
     assert metadata_by_state[ValidationBindingState.PLANNED] == "fixture.future_lookup"
-    assert metadata_by_state[ValidationBindingState.BLOCKED] == "fixture.export_projection"
+    assert (
+        metadata_by_state[ValidationBindingState.BLOCKED] == "fixture.export_projection"
+    )
     assert (
         binding_states["fixture.symbol_lookup"]
         is ValidationBindingState.UNDER_DEVELOPMENT
@@ -808,7 +832,9 @@ def test_supervisor_appends_required_under_development_findings_and_history(
     envelope = _envelope(payload={"gene": {"symbol": "abc-1"}, "confidence": "high"})
 
     result = run_validation_supervisor(envelope, pack)
-    findings_by_code = {finding.code: finding for finding in result.envelope.validation_findings}
+    findings_by_code = {
+        finding.code: finding for finding in result.envelope.validation_findings
+    }
 
     required_finding = findings_by_code["domain_pack.required_field_missing"]
     assert required_finding.severity is ValidationFindingSeverity.BLOCKER
@@ -817,12 +843,16 @@ def test_supervisor_appends_required_under_development_findings_and_history(
         required_finding.details["validation_metadata"]["metadata_source"]
         == "field_policy"
     )
-    assert required_finding.details["validation_metadata"]["field_policy"][
-        "policy_source"
-    ] == "field_policy"
-    assert required_finding.details["validation_metadata"]["field_policy"][
-        "export_blocking"
-    ] is True
+    assert (
+        required_finding.details["validation_metadata"]["field_policy"]["policy_source"]
+        == "field_policy"
+    )
+    assert (
+        required_finding.details["validation_metadata"]["field_policy"][
+            "export_blocking"
+        ]
+        is True
+    )
 
     under_development_binding = next(
         finding
@@ -834,9 +864,7 @@ def test_supervisor_appends_required_under_development_findings_and_history(
     assert under_development_binding.field_ref.field_path == "gene.symbol"
     assert under_development_binding.details["validation_metadata"][
         "validator_binding_id"
-    ] == (
-        "fixture.symbol_lookup"
-    )
+    ] == ("fixture.symbol_lookup")
     under_development_attempt = under_development_binding.details["lookup_attempts"][0]
     assert under_development_attempt["lookup_status"] == "under_development"
     assert "provider_projections" not in under_development_binding.details
@@ -849,9 +877,9 @@ def test_supervisor_appends_required_under_development_findings_and_history(
     assert blocked_metadata.details["validation_metadata"]["blocked_by"] == "ALL-999"
 
     assert len(result.envelope.history) == len(result.appended_findings)
-    assert {
-        event.event_type.value for event in result.envelope.history
-    } == {"validation_finding_added"}
+    assert {event.event_type.value for event in result.envelope.history} == {
+        "validation_finding_added"
+    }
     assert any(
         event.details["target"].get("field_path") == "gene.identifier"
         for event in result.envelope.history
@@ -893,7 +921,9 @@ def test_supervisor_marks_field_definition_source_when_policy_absent(tmp_path: P
     assert metadata["field_policy"]["field_path"] == "gene.identifier"
 
 
-def test_supervisor_does_not_fake_success_for_unsupported_active_binding(tmp_path: Path):
+def test_supervisor_does_not_fake_success_for_unsupported_active_binding(
+    tmp_path: Path,
+):
     pack = _loaded_pack(tmp_path)
 
     result = run_validation_supervisor(envelope=_envelope(), domain_pack=pack)

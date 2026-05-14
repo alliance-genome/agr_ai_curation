@@ -10,10 +10,12 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from src.lib.domain_packs.loader import load_domain_fixture_pack, load_domain_pack_metadata
+from src.lib.domain_packs.loader import (
+    load_domain_fixture_pack,
+    load_domain_pack_metadata,
+)
 from src.schemas.curation_workspace import SubmissionMode
 from src.schemas.domain_pack_metadata import DomainPackFieldType
-
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
@@ -34,8 +36,6 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     GENE_LINKML_SCHEMA_ID,
     GENE_MENTION_EVIDENCE_MODEL_ID,
     GENE_MENTION_EVIDENCE_OBJECT_TYPE,
-    GENE_REFERENCE_TOOL_METHOD,
-    GENE_REFERENCE_TOOL_NAME,
     GENE_REFERENCE_VALIDATOR_BINDING_ID,
     GENE_VALIDATED_REFERENCE_EXPORT_TARGET_KEY,
     GeneMentionEvidenceExportAdapter,
@@ -43,7 +43,6 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
     build_gene_mention_evidence_submission_plan,
     tool_verified_gene_output_to_pending_envelope,
 )
-
 
 GENE_PACK_DIR = get_alliance_domain_packs_dir() / GENE_DOMAIN_PACK_ID
 GENE_PACK_METADATA_PATH = GENE_PACK_DIR / "domain_pack.yaml"
@@ -149,8 +148,16 @@ def test_gene_pack_declares_validatable_linkml_grounded_gene_fields():
     assert fields_by_path["confidence"].enum_ref == "GeneMentionConfidence"
 
     expected_linkml_slots = {
-        "primary_external_id": ("model/schema/core.yaml", "primary_external_id", "string"),
-        "gene_symbol": ("model/schema/gene.yaml", "gene_symbol", "GeneSymbolSlotAnnotation"),
+        "primary_external_id": (
+            "model/schema/core.yaml",
+            "primary_external_id",
+            "string",
+        ),
+        "gene_symbol": (
+            "model/schema/gene.yaml",
+            "gene_symbol",
+            "GeneSymbolSlotAnnotation",
+        ),
         "taxon": ("model/schema/core.yaml", "taxon", "NCBITaxonTerm"),
     }
     validatable_fields = set()
@@ -159,7 +166,10 @@ def test_gene_pack_declares_validatable_linkml_grounded_gene_fields():
         validatable_fields.add(field.field_path)
         assert field.required is True
         assert field.metadata["validatable"] is True
-        assert field.metadata["validator_binding_id"] == GENE_REFERENCE_VALIDATOR_BINDING_ID
+        assert (
+            field.metadata["validator_binding_id"]
+            == GENE_REFERENCE_VALIDATOR_BINDING_ID
+        )
 
         provider_ref = _provider_ref(field.metadata)
         assert provider_ref["commit"] == ALLIANCE_LINKML_COMMIT
@@ -175,23 +185,27 @@ def test_gene_pack_declares_reference_validator_binding():
     object_definition = _gene_object_definition()
     bindings = object_definition.metadata["validator_bindings"]
 
-    assert bindings == [
-        {
-            "binding_id": GENE_REFERENCE_VALIDATOR_BINDING_ID,
-            "display_name": "Alliance gene lookup",
-            "validation_kind": "db_backed_reference_lookup",
-            "provider": "alliance_curation_db",
-            "tool_name": GENE_REFERENCE_TOOL_NAME,
-            "tool_method": GENE_REFERENCE_TOOL_METHOD,
-            "input_fields": {"gene_id": "primary_external_id"},
-            "expected_result_fields": {
-                "curie": "primary_external_id",
-                "symbol": "gene_symbol",
-                "taxon": "taxon",
-            },
-            "blocking": False,
+    assert bindings["under_development"] == []
+    binding = bindings["active"][0]
+    assert binding["binding_id"] == GENE_REFERENCE_VALIDATOR_BINDING_ID
+    assert binding["display_name"] == "Alliance gene lookup"
+    assert binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "gene_validation",
+    }
+    assert binding["input_fields"] == {
+        "gene_id": {
+            "source": "payload",
+            "path": "primary_external_id",
+            "required": True,
         }
-    ]
+    }
+    assert binding["expected_result_fields"] == {
+        "curie": "primary_external_id",
+        "symbol": "gene_symbol",
+        "taxon": "taxon",
+    }
+    assert binding["blocking"] is False
 
 
 def test_tool_verified_gene_fixture_converts_to_pending_envelope():

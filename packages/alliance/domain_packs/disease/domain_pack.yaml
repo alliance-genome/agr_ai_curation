@@ -887,8 +887,12 @@ metadata:
             - disease_annotation_object.curie
             - disease_annotation_object.name
         input_fields:
-          curie: disease_annotation_object.curie
-          name: disease_annotation_object.name
+          curie:
+            source: payload
+            path: disease_annotation_object.curie
+          name:
+            source: payload
+            path: disease_annotation_object.name
         expected_result_fields:
           curie: disease_annotation_object.curie
           name: disease_annotation_object.name
@@ -901,7 +905,9 @@ metadata:
           object_types:
             - DiseaseAnnotation
         input_fields:
-          name: disease_relation_name
+          name:
+            source: payload
+            path: disease_relation_name
         expected_result_fields:
           name: disease_relation_name
           vocabulary_name: Disease Relation
@@ -922,7 +928,9 @@ metadata:
           field_paths:
             - condition_relations[0].condition_relation_type.name
         input_fields:
-          condition_relation_type_name: condition_relations[0].condition_relation_type.name
+          condition_relation_type_name:
+            source: payload
+            path: condition_relations[0].condition_relation_type.name
         expected_result_fields:
           condition_relation_type_name: condition_relations[0].condition_relation_type.name
           vocabulary_name: Condition Relation Type
@@ -943,7 +951,9 @@ metadata:
           field_paths:
             - single_reference.curie
         input_fields:
-          curie: single_reference.curie
+          curie:
+            source: payload
+            path: single_reference.curie
         expected_result_fields:
           curie: single_reference.curie
       - binding_id: disease_evidence_code_lookup
@@ -956,7 +966,9 @@ metadata:
           field_paths:
             - evidence_code_curies[0]
         input_fields:
-          curie: evidence_code_curies[0]
+          curie:
+            source: payload
+            path: evidence_code_curies[0]
         expected_result_fields:
           curie: evidence_code_curies[0]
           ontologytermtype: ECOTerm
@@ -968,7 +980,9 @@ metadata:
           object_types:
             - DiseaseAnnotation
         input_fields:
-          abbreviation: data_provider.abbreviation
+          abbreviation:
+            source: payload
+            path: data_provider.abbreviation
         expected_result_fields:
           abbreviation: data_provider.abbreviation
   provider_refs:

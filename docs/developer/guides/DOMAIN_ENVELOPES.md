@@ -107,6 +107,16 @@ envelope. Under-development bindings are visible informational findings; they
 are not reported as successful work. Unsupported active bindings produce
 dispatch-unavailable findings until package-scoped validator dispatch is wired.
 
+Active validator `input_fields` must use explicit selector objects. Supported
+selector sources are `payload`, `envelope_metadata`, `object_metadata`,
+`evidence_record`, `object_ref`, and `literal`. Active payload selectors are
+checked against domain-pack object fields, with pinned provider `schema_ref`
+slot/attribute metadata used only when the domain-pack field list cannot prove
+the path directly. At runtime, selector failures become structured findings
+such as `selector_missing`, `selector_ambiguous`, `selector_unresolved_ref`, or
+`selector_missing_field`; the supervisor must not pick a first object ref or
+guess through sibling objects.
+
 Findings are targeted with `object_id`/`pending_ref_id` plus `field_path` where
 possible. Stable finding IDs are derived from the envelope ID, code, severity,
 message, target, and details when a validator does not provide one.
