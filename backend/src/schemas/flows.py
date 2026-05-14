@@ -44,6 +44,8 @@ class FlowValidationAttachmentSelection(BaseModel):
     definition_state: Optional[str] = Field(None, max_length=100)
     blocked_by: Optional[str] = Field(None, max_length=255)
     reason: Optional[str] = Field(None, max_length=1000)
+    state_explanation: Optional[str] = Field(None, max_length=2000)
+    affected_fields: Optional[List[str]] = None
     required: bool = False
     export_blocking: bool = False
     default_enabled: bool = False
