@@ -60,6 +60,7 @@ import NodeEditor from './NodeEditor'
 import TaskInputEditor from './TaskInputEditor'
 import PromptViewer from './PromptViewer'
 import DomainEnvelopeViewer from './DomainEnvelopeViewer'
+import { validationAttachmentForPersistence } from './types'
 import type {
   FlowBuilderProps,
   FlowState,
@@ -67,6 +68,9 @@ import type {
   AgentNodeData,
   FlowDefinition,
   FlowResponse,
+  FlowEdge,
+  FlowEdgeRole,
+  ValidationAttachmentGroup,
   ValidationAttachmentSelection,
 } from './types'
 import {
@@ -116,10 +120,162 @@ const buildDefaultValidationSelections = (
   agentMetadata: ReturnType<typeof useAgentMetadata>['agents']
 ): ValidationAttachmentSelection[] => (
   agentMetadata[agentId]?.validation_attachments?.map((attachment) => ({
-    ...attachment,
+    ...validationAttachmentForPersistence(attachment),
     enabled: attachment.default_enabled,
   })) ?? []
 )
+
+const activeValidationBindingOptions = (
+  node?: AgentNode
+): ValidationAttachmentSelection[] => (
+  node?.data.validation_attachments?.filter((attachment) => (
+    attachment.state === 'active'
+    && Boolean(attachment.validator_binding_id)
+    && attachment.enabled === true
+  )) ?? []
+)
+
+const edgeRole = (edge: FlowEdge): FlowEdgeRole =>
+  edge.data?.role ?? 'control_flow'
+
+const validationEdgeLabel = (binding: ValidationAttachmentSelection): string =>
+  binding.target_label || binding.label
+
+const nextValidationEdgeId = (existingEdges: FlowEdge[]): string => {
+  let index = existingEdges.length + 1
+  let candidate = `validation_${index}`
+  const existingIds = new Set(existingEdges.map((edge) => edge.id))
+  while (existingIds.has(candidate)) {
+    index += 1
+    candidate = `validation_${index}`
+  }
+  return candidate
+}
+
+export const rebuildValidationGroupsFromEdges = (
+  currentNodes: AgentNode[],
+  currentEdges: FlowEdge[]
+): AgentNode[] => {
+  let changed = false
+
+  const nextNodes = currentNodes.map((node) => {
+    const replacementsByBinding = new Map<string, { edgeId: string; target: string }>()
+    currentEdges.forEach((edge) => {
+      if (edgeRole(edge) !== 'validation_attachment' || edge.source !== node.id) return
+      const bindingId = edge.data?.satisfies_binding_id
+      if (!bindingId) return
+      replacementsByBinding.set(bindingId, {
+        edgeId: edge.id,
+        target: edge.target,
+      })
+    })
+
+    const validationAttachments = node.data.validation_attachments ?? []
+    const existingGroups = node.data.validation_groups ?? []
+
+    if (
+      validationAttachments.length === 0
+      && existingGroups.length === 0
+      && replacementsByBinding.size === 0
+    ) {
+      return node
+    }
+
+    const declaredBindingIds = new Set(
+      validationAttachments
+        .map((attachment) => attachment.validator_binding_id)
+        .filter((bindingId): bindingId is string => Boolean(bindingId))
+    )
+
+    const validationGroups: ValidationAttachmentGroup[] = validationAttachments.map((attachment) => {
+      const existingGroup = existingGroups.find((group) => (
+        group.attachment_id === attachment.attachment_id
+        || (attachment.validator_binding_id && group.binding_id === attachment.validator_binding_id)
+      ))
+      const replacement = attachment.validator_binding_id
+        ? replacementsByBinding.get(attachment.validator_binding_id)
+        : undefined
+      const state: ValidationAttachmentGroup['state'] = replacement
+        ? 'replaced'
+        : existingGroup?.state === 'supplemental'
+          ? 'supplemental'
+          : attachment.state === 'active' && attachment.enabled
+            ? 'automatic'
+            : 'skipped'
+      const preserveSupplementalLink = state === 'supplemental'
+
+      return {
+        group_id: existingGroup?.group_id ?? attachment.attachment_id,
+        state,
+        binding_id: attachment.validator_binding_id,
+        attachment_id: attachment.attachment_id,
+        edge_id: replacement?.edgeId ?? (preserveSupplementalLink ? existingGroup?.edge_id : undefined),
+        validator_node_id: replacement?.target ?? (preserveSupplementalLink ? existingGroup?.validator_node_id : undefined),
+        label: attachment.label,
+        required: attachment.required,
+        blocking: attachment.blocking,
+        allow_opt_out: attachment.allow_opt_out,
+      }
+    })
+
+    replacementsByBinding.forEach((replacement, bindingId) => {
+      if (declaredBindingIds.has(bindingId)) return
+
+      const existingGroup = existingGroups.find((group) => (
+        group.state === 'supplemental'
+        && (group.binding_id === bindingId || group.edge_id === replacement.edgeId)
+      ))
+
+      validationGroups.push({
+        group_id: existingGroup?.group_id ?? `edge:${replacement.edgeId}`,
+        state: 'supplemental',
+        binding_id: bindingId,
+        attachment_id: existingGroup?.attachment_id ?? null,
+        edge_id: replacement.edgeId,
+        validator_node_id: replacement.target,
+        replaces_attachment_id: existingGroup?.replaces_attachment_id,
+        label: existingGroup?.label,
+        required: false,
+        blocking: false,
+        allow_opt_out: false,
+      })
+    })
+
+    const nullableEqual = <T,>(left: T | null | undefined, right: T | null | undefined) => (
+      (left ?? undefined) === (right ?? undefined)
+    )
+
+    if (
+      node.data.validation_groups?.length === validationGroups.length
+      && node.data.validation_groups.every((group, index) => (
+        group.group_id === validationGroups[index].group_id
+        && group.state === validationGroups[index].state
+        && nullableEqual(group.binding_id, validationGroups[index].binding_id)
+        && nullableEqual(group.attachment_id, validationGroups[index].attachment_id)
+        && nullableEqual(group.edge_id, validationGroups[index].edge_id)
+        && nullableEqual(group.validator_node_id, validationGroups[index].validator_node_id)
+        && nullableEqual(group.replaces_attachment_id, validationGroups[index].replaces_attachment_id)
+        && nullableEqual(group.label, validationGroups[index].label)
+        && group.required === validationGroups[index].required
+        && group.blocking === validationGroups[index].blocking
+        && group.allow_opt_out === validationGroups[index].allow_opt_out
+      ))
+    ) {
+      return node
+    }
+
+    changed = true
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        validation_groups: validationGroups,
+      },
+    }
+  })
+
+  return changed ? nextNodes : currentNodes
+}
 
 /**
  * Pure function to compute validation errors for all nodes.
@@ -351,7 +507,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   const reactFlowWrapper = useRef<HTMLDivElement>(null)
   const [reactFlowInstance, setReactFlowInstance] = useState<ReactFlowInstance | null>(null)
   const [nodes, setNodes, onNodesChange] = useNodesState<AgentNodeData>([])
-  const [edges, setEdges, onEdgesChange] = useEdgesState([])
+  const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge['data']>([])
 
   // Node ID counter - useRef to persist across renders without causing HMR issues
   const nodeIdRef = useRef(0)
@@ -388,6 +544,30 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   const [saveDialogOpen, setSaveDialogOpen] = useState(false)
   const [saveDialogName, setSaveDialogName] = useState('')
   const [saveDialogMode, setSaveDialogMode] = useState<'save' | 'save_as'>('save')
+  const [bindingDialog, setBindingDialog] = useState<{
+    connection: Connection
+    bindings: ValidationAttachmentSelection[]
+  } | null>(null)
+
+  const handleDeleteEdge = useCallback((edgeId: string) => {
+    setEdges((currentEdges) => currentEdges.filter((edge) => edge.id !== edgeId))
+  }, [setEdges])
+
+  const canvasEdges = useMemo(
+    () => edges.map((edge) => ({
+      ...edge,
+      data: {
+        ...edge.data,
+        onDeleteEdge: handleDeleteEdge,
+      },
+    })),
+    [edges, handleDeleteEdge]
+  )
+
+  const selectedEditorNode = useMemo(() => {
+    if (!selectedNode) return null
+    return (nodes.find((node) => node.id === selectedNode.id) as AgentNode | undefined) ?? null
+  }, [nodes, selectedNode])
 
   // Manage Flows Dialog state
   const [manageDialogOpen, setManageDialogOpen] = useState(false)
@@ -439,7 +619,12 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         source: e.source,
         target: e.target,
         type: 'deletable',
-        animated: true,
+        animated: e.role !== 'validation_attachment',
+        data: {
+          role: e.role ?? 'control_flow',
+          satisfies_binding_id: e.satisfies_binding_id,
+          replaces_attachment_id: e.replaces_attachment_id,
+        },
       }))
 
       setNodes(flowNodes)
@@ -491,6 +676,13 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     }
   }, [])
 
+  useEffect(() => {
+    setNodes((currentNodes) => rebuildValidationGroupsFromEdges(
+      currentNodes as AgentNode[],
+      edges as FlowEdge[]
+    ))
+  }, [edges]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Load flow if flowId provided (and different from current)
   useEffect(() => {
     // Only load if flowId is provided AND different from what we already have
@@ -527,10 +719,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           output_filename_template: n.data.output_filename_template,
           output_key: n.data.output_key,
           validation_attachments: n.data.validation_attachments,
+          validation_groups: n.data.validation_groups,
         })),
         edges: edges.map((e) => ({
           source: e.source,
           target: e.target,
+          role: edgeRole(e as FlowEdge),
+          satisfies_binding_id: e.data?.satisfies_binding_id,
+          replaces_attachment_id: e.data?.replaces_attachment_id,
         })),
       }
       onFlowChange(flowState)
@@ -627,9 +823,11 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     }
 
     // Check for parallel/branching flows (not yet supported)
-    // Count outgoing edges per node - if any node has more than one, it's a parallel flow
+    // Count ordinary outgoing control-flow edges per node. Validation attachment
+    // sidecars may fan out from one extractor without creating parallel flow.
     const outgoingEdgeCounts = new Map<string, number>()
     edges.forEach(e => {
+      if (edgeRole(e as FlowEdge) !== 'control_flow') return
       outgoingEdgeCounts.set(e.source, (outgoingEdgeCounts.get(e.source) || 0) + 1)
     })
     const parallelNode = nodes.find(n => (outgoingEdgeCounts.get(n.id) || 0) > 1)
@@ -676,13 +874,27 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           id: n.id,
           type: n.data.agent_id === 'task_input' ? 'task_input' : 'agent',
           position: n.position,
-          data: n.data,
+          data: {
+            ...n.data,
+            validation_attachments: n.data.validation_attachments?.map(validationAttachmentForPersistence),
+            validation_groups: undefined,
+          },
         })),
-        edges: edges.map((e) => ({
-          id: e.id,
-          source: e.source,
-          target: e.target,
-        })),
+        edges: edges.map((e) => {
+          const role = edgeRole(e as FlowEdge)
+          return {
+            id: e.id,
+            source: e.source,
+            target: e.target,
+            role,
+            satisfies_binding_id: role === 'validation_attachment'
+              ? e.data?.satisfies_binding_id
+              : undefined,
+            replaces_attachment_id: role === 'validation_attachment'
+              ? e.data?.replaces_attachment_id
+              : undefined,
+          }
+        }),
         entry_node_id: entryNodeId,
       }
 
@@ -738,19 +950,99 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
     nodeIdRef.current = 1  // Start from 1 since node_0 is used
   }
 
+  const addValidationAttachmentEdge = useCallback(
+    (connection: Connection, binding: ValidationAttachmentSelection) => {
+      if (!connection.source || !connection.target || !binding.validator_binding_id) return
+      const source = connection.source
+      const target = connection.target
+      const bindingId = binding.validator_binding_id
+      const existing = edges as FlowEdge[]
+
+      const duplicate = existing.some((edge) => (
+        edgeRole(edge) === 'validation_attachment'
+        && edge.source === source
+        && edge.data?.satisfies_binding_id === bindingId
+      ))
+      if (duplicate) {
+        setSnackbar({
+          message: `"${validationEdgeLabel(binding)}" already has a custom validator edge from this extractor.`,
+          severity: 'error',
+        })
+        return
+      }
+
+      const edge: FlowEdge = {
+        ...connection,
+        id: nextValidationEdgeId(existing),
+        source,
+        target,
+        type: 'deletable',
+        animated: false,
+        data: {
+          role: 'validation_attachment',
+          satisfies_binding_id: bindingId,
+          validationLabel: validationEdgeLabel(binding),
+        },
+      }
+      const nextEdges = [...existing, edge]
+      setEdges(nextEdges)
+      setNodes((currentNodes) => rebuildValidationGroupsFromEdges(
+        currentNodes as AgentNode[],
+        nextEdges
+      ))
+    },
+    [edges, setEdges, setNodes]
+  )
+
+  const handleBindingDialogClose = useCallback(() => {
+    setBindingDialog(null)
+  }, [])
+
+  const handleBindingDialogSelect = useCallback((binding: ValidationAttachmentSelection) => {
+    if (!bindingDialog) return
+    addValidationAttachmentEdge(bindingDialog.connection, binding)
+    setBindingDialog(null)
+  }, [addValidationAttachmentEdge, bindingDialog])
+
   // Handle connection between nodes
   const onConnect = useCallback(
     (params: Connection) => {
+      const sourceNode = params.source
+        ? nodes.find((n) => n.id === params.source) as AgentNode | undefined
+        : undefined
+      const targetNode = params.target
+        ? nodes.find((n) => n.id === params.target) as AgentNode | undefined
+        : undefined
+
       // Prevent connections TO task_input nodes (they can only have outgoing connections)
-      if (params.target) {
-        const targetNode = nodes.find((n) => n.id === params.target)
-        if (targetNode?.data.agent_id === 'task_input') {
-          setSnackbar({ message: 'Initial Instructions node cannot have incoming connections', severity: 'error' })
-          return
-        }
+      if (targetNode?.data.agent_id === 'task_input') {
+        setSnackbar({ message: 'Initial Instructions node cannot have incoming connections', severity: 'error' })
+        return
       }
 
-      setEdges((eds) => addEdge({ ...params, animated: true }, eds))
+      const bindingOptions = activeValidationBindingOptions(sourceNode)
+      const shouldCreateValidationAttachmentEdge = Boolean(
+        sourceNode
+        && targetNode
+        && bindingOptions.length > 0
+        && isValidationAgentDynamic(targetNode.data.agent_id)
+      )
+
+      if (shouldCreateValidationAttachmentEdge) {
+        if (bindingOptions.length === 1) {
+          addValidationAttachmentEdge(params, bindingOptions[0])
+        } else {
+          setBindingDialog({ connection: params, bindings: bindingOptions })
+        }
+        return
+      }
+
+      setEdges((eds) => addEdge({
+        ...params,
+        animated: true,
+        type: 'deletable',
+        data: { role: 'control_flow' },
+      } as FlowEdge, eds))
 
       // Auto-switch target node's input_source to 'previous_output' when connected
       // Skip for:
@@ -777,7 +1069,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         }
       }
     },
-    [setEdges, setNodes, nodes, inputConfigState, isExtractionAgentDynamic]
+    [setEdges, setNodes, nodes, inputConfigState, isExtractionAgentDynamic, isValidationAgentDynamic, addValidationAttachmentEdge]
   )
 
   // Handle node selection
@@ -913,13 +1205,14 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
   // Handle node data update from editor
   const handleNodeDataUpdate = useCallback(
     (nodeId: string, data: Partial<AgentNodeData>) => {
-      setNodes((nds) =>
-        nds.map((node) =>
+      setNodes((nds) => {
+        const updatedNodes = nds.map((node) =>
           node.id === nodeId
             ? { ...node, data: { ...node.data, ...data } }
             : node
         )
-      )
+        return rebuildValidationGroupsFromEdges(updatedNodes as AgentNode[], edges as FlowEdge[])
+      })
       // Trigger revalidation after data update so error banners update immediately
       // Clear any pending revalidation timeout to avoid stale updates
       if (revalidateTimeoutRef.current) {
@@ -930,7 +1223,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
         revalidateTimeoutRef.current = null
       }, 50)
     },
-    [setNodes, revalidateValidators]
+    [setNodes, edges, revalidateValidators]
   )
 
   // Handle node deletion by ID (for NodeEditor delete button)
@@ -950,17 +1243,17 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
 
   // Get available output variables from nodes before the selected node
   const availableVariables = useMemo(() => {
-    if (!selectedNode) return []
+    if (!selectedEditorNode) return []
     return nodes
-      .filter((n) => n.id !== selectedNode.id && n.data.output_key && n.data.output_key.length > 0)
+      .filter((n) => n.id !== selectedEditorNode.id && n.data.output_key && n.data.output_key.length > 0)
       .map((n) => n.data.output_key)
-  }, [nodes, selectedNode])
+  }, [nodes, selectedEditorNode])
 
   // Check if selected node has an incoming edge
   const hasIncomingEdge = useMemo(() => {
-    if (!selectedNode) return false
-    return edges.some((e) => e.target === selectedNode.id)
-  }, [edges, selectedNode])
+    if (!selectedEditorNode) return false
+    return edges.some((e) => e.target === selectedEditorNode.id)
+  }, [edges, selectedEditorNode])
 
   const domainEnvelopeViewerNode = useMemo(() => {
     if (!domainEnvelopeViewerNodeId) return null
@@ -1410,7 +1703,7 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
               ) : (
                 <ReactFlow
                   nodes={nodes}
-                  edges={edges}
+                  edges={canvasEdges}
                   onNodesChange={onNodesChange}
                   onEdgesChange={onEdgesChange}
                   onConnect={onConnect}
@@ -1436,16 +1729,16 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
               )}
 
               {/* Node Editor Panel - Show different editors based on node type */}
-              {selectedNode && (selectedNode.type === 'task_input' || selectedNode.data.agent_id === 'task_input') ? (
+              {selectedEditorNode && (selectedEditorNode.type === 'task_input' || selectedEditorNode.data.agent_id === 'task_input') ? (
                 <TaskInputEditor
-                  node={selectedNode}
+                  node={selectedEditorNode}
                   onSave={handleNodeDataUpdate}
                   onClose={() => setSelectedNode(null)}
                   onDelete={handleDeleteNode}
                 />
-              ) : selectedNode ? (
+              ) : selectedEditorNode ? (
                 <NodeEditor
-                  node={selectedNode}
+                  node={selectedEditorNode}
                   onSave={handleNodeDataUpdate}
                   onClose={() => setSelectedNode(null)}
                   onDelete={handleDeleteNode}
@@ -1481,6 +1774,55 @@ function FlowBuilderInner({ flowId, onFlowSaved, onFlowChange, onVerifyRequest }
           </Panel>
         </PanelGroup>
       </BuilderContent>
+
+      <Dialog
+        open={Boolean(bindingDialog)}
+        onClose={handleBindingDialogClose}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ pb: 1 }}>
+          <Typography variant="h6" sx={{ fontSize: '1rem', fontWeight: 600 }}>
+            Choose Validator Binding
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.35 }}>
+            This custom validator must name the domain-pack binding it satisfies.
+          </Typography>
+        </DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          <List dense disablePadding>
+            {bindingDialog?.bindings.map((binding) => (
+              <ListItem key={binding.attachment_id} disablePadding sx={{ mb: 0.75 }}>
+                <ListItemButton
+                  onClick={() => handleBindingDialogSelect(binding)}
+                  sx={{
+                    border: (theme) => `1px solid ${alpha(theme.palette.divider, 0.75)}`,
+                    borderRadius: 1,
+                    alignItems: 'flex-start',
+                  }}
+                >
+                  <ListItemText
+                    primary={binding.label}
+                    secondary={[
+                      validationEdgeLabel(binding),
+                      binding.validator_package_id && binding.validator_agent_id
+                        ? `${binding.validator_package_id}:${binding.validator_agent_id}`
+                        : binding.validator_id,
+                      binding.blocking ? 'blocking' : null,
+                      binding.required ? 'required' : null,
+                    ].filter(Boolean).join(' / ')}
+                    primaryTypographyProps={{ fontSize: '0.82rem', fontWeight: 650 }}
+                    secondaryTypographyProps={{ fontSize: '0.7rem' }}
+                  />
+                </ListItemButton>
+              </ListItem>
+            ))}
+          </List>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={handleBindingDialogClose}>Cancel</Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Open Flow Dialog */}
       <Dialog

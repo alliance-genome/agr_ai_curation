@@ -32,7 +32,13 @@ import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import DescriptionIcon from '@mui/icons-material/Description'
 import SchemaIcon from '@mui/icons-material/Schema'
 
-import type { NodeEditorProps, InputSource, ValidationAttachmentSelection } from './types'
+import { validationAttachmentForPersistence } from './types'
+import type {
+  NodeEditorProps,
+  InputSource,
+  ValidationAttachmentGroup,
+  ValidationAttachmentSelection,
+} from './types'
 import {
   isValidationAgentFromMetadata,
   isOutputFormatterAgentFromMetadata,
@@ -157,6 +163,43 @@ const validationTargetText = (attachment: ValidationAttachmentSelection) => {
   return 'Validation metadata'
 }
 
+const validationOwnerText = (attachment: ValidationAttachmentSelection) => {
+  const owner = attachment.validator_package_id && attachment.validator_agent_id
+    ? `${attachment.validator_package_id}:${attachment.validator_agent_id}`
+    : attachment.validator_id
+  return `${attachment.domain_pack_id}${attachment.domain_pack_version ? ` v${attachment.domain_pack_version}` : ''} / ${owner}`
+}
+
+const validationGroupStateLabel = (
+  attachment: ValidationAttachmentSelection,
+  group?: ValidationAttachmentGroup
+) => {
+  if (group?.state === 'replaced') return 'custom replacement'
+  if (group?.state === 'supplemental') return 'supplemental'
+  if (attachment.state !== 'active') return validationStateLabel(attachment.state)
+  return attachment.enabled ? 'automatic' : 'skipped'
+}
+
+const supplementalGroupLabel = (group: ValidationAttachmentGroup) => (
+  group.label?.trim()
+    || (group.binding_id ? `Supplemental validator: ${group.binding_id}` : 'Supplemental validator')
+)
+
+const supplementalGroupTargetText = (group: ValidationAttachmentGroup) => {
+  if (group.replaces_attachment_id) return `Supplements attachment ${group.replaces_attachment_id}`
+  if (group.binding_id) return `Binding ${group.binding_id}`
+  return 'Validation attachment edge'
+}
+
+const supplementalGroupOwnerText = (group: ValidationAttachmentGroup) => {
+  const parts = [
+    group.validator_node_id ? `validator node ${group.validator_node_id}` : null,
+    group.edge_id ? `edge ${group.edge_id}` : null,
+  ].filter(Boolean)
+
+  return parts.length > 0 ? parts.join(' / ') : 'Missing supplemental edge metadata'
+}
+
 function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onViewPrompts, onViewDomainEnvelope, hasIncomingEdge = false, onMarkManuallyConfigured }: NodeEditorProps) {
   const { agents: agentMetadata } = useAgentMetadata()
 
@@ -194,6 +237,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   )
   const metadataValidationAttachments = validationAttachments.filter(
     (attachment) => !(attachment.state === 'active' && Boolean(attachment.validator_binding_id))
+  )
+  const supplementalValidationGroups = (node?.data.validation_groups || []).filter(
+    (group) => group.state === 'supplemental'
+      && !validationAttachments.some((attachment) => (
+        (group.attachment_id && attachment.attachment_id === group.attachment_id)
+        || (group.binding_id && attachment.validator_binding_id === group.binding_id)
+      ))
   )
 
   // Initialize form when node changes
@@ -244,7 +294,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
         : undefined,
       output_key: outputKey,
       validation_attachments: validationAttachments.length > 0
-        ? validationAttachments
+        ? validationAttachments.map(validationAttachmentForPersistence)
         : undefined,
     })
 
@@ -264,6 +314,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   }
 
   const handleValidationToggle = (attachmentId: string, enabled: boolean) => {
+    if (!node) return
+
+    const group = node.data.validation_groups?.find(
+      (candidate) => candidate.attachment_id === attachmentId
+    )
+    if (group?.state === 'replaced') return
+
     setValidationAttachments((current) => current.map((attachment) => (
       attachment.attachment_id === attachmentId
         ? { ...attachment, enabled }
@@ -435,7 +492,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
 
         <Divider />
 
-        {validationAttachments.length > 0 && (
+        {(validationAttachments.length > 0 || supplementalValidationGroups.length > 0) && (
           <>
             <Box>
               <FieldLabel>
@@ -450,9 +507,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   {actionableValidationAttachments.map((attachment) => {
                   const hasBinding = Boolean(attachment.validator_binding_id)
+                  const group = node.data.validation_groups?.find(
+                    (candidate) => candidate.attachment_id === attachment.attachment_id
+                  )
                   const canToggle = attachment.state === 'active'
                     && hasBinding
                     && attachment.allow_opt_out
+                    && group?.state !== 'replaced'
                   const stateColor: 'success' | 'warning' | 'error' = attachment.state === 'active'
                     ? 'success'
                     : attachment.state === 'planned' || attachment.state === 'under_development'
@@ -498,15 +559,33 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                             <Chip
                               size="small"
                               color={stateColor}
-                              label={validationStateLabel(attachment.state)}
+                              label={validationGroupStateLabel(attachment, group)}
                               sx={{ height: 18, fontSize: '0.6rem' }}
                             />
-                            {attachment.export_blocking && (
+                            {attachment.required && (
+                              <Chip
+                                size="small"
+                                color="primary"
+                                variant="outlined"
+                                label="required"
+                                sx={{ height: 18, fontSize: '0.6rem' }}
+                              />
+                            )}
+                            {attachment.blocking && (
                               <Chip
                                 size="small"
                                 color="error"
                                 variant="outlined"
-                                label="required for export"
+                                label="blocking"
+                                sx={{ height: 18, fontSize: '0.6rem' }}
+                              />
+                            )}
+                            {attachment.allow_opt_out && (
+                              <Chip
+                                size="small"
+                                color="warning"
+                                variant="outlined"
+                                label="opt-out allowed"
                                 sx={{ height: 18, fontSize: '0.6rem' }}
                               />
                             )}
@@ -524,6 +603,24 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                           >
                             {validationTargetText(attachment)}
                           </Typography>
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            sx={{
+                              display: 'block',
+                              fontSize: '0.62rem',
+                              lineHeight: 1.3,
+                              overflowWrap: 'anywhere',
+                              wordBreak: 'break-word',
+                            }}
+                          >
+                            {validationOwnerText(attachment)}
+                          </Typography>
+                          {group?.state === 'replaced' && (
+                            <Typography variant="caption" color="success.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
+                              Replaced by a custom validator edge
+                            </Typography>
+                          )}
                           {attachment.state === 'blocked' && (
                             <Typography variant="caption" color="error.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
                               {validationStateHelpText(attachment)}
@@ -552,8 +649,85 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                 </Box>
               )}
 
-              {metadataValidationAttachments.length > 0 && (
+              {supplementalValidationGroups.length > 0 && (
                 <Box sx={{ mt: actionableValidationAttachments.length > 0 ? 1.25 : 0 }}>
+                  <Typography
+                    variant="caption"
+                    color="text.secondary"
+                    sx={{ display: 'block', mb: 0.5, fontSize: '0.65rem', lineHeight: 1.35 }}
+                  >
+                    Supplemental validators are custom validation edges that add checks outside the declared automatic bindings.
+                  </Typography>
+                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                    {supplementalValidationGroups.map((group) => (
+                      <Box
+                        key={group.group_id}
+                        sx={{
+                          border: (theme) => `1px solid ${alpha(theme.palette.info.main, 0.35)}`,
+                          borderRadius: 1,
+                          p: 0.85,
+                          backgroundColor: (theme) => alpha(theme.palette.info.main, 0.08),
+                        }}
+                      >
+                        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 0.75 }}>
+                          <Chip
+                            size="small"
+                            color="info"
+                            variant="outlined"
+                            label="supplemental"
+                            sx={{ height: 18, fontSize: '0.6rem', mt: 0.1, flexShrink: 0 }}
+                          />
+                          <Box sx={{ flex: 1, minWidth: 0 }}>
+                            <Typography
+                              variant="body2"
+                              sx={{
+                                fontSize: '0.72rem',
+                                fontWeight: 650,
+                                lineHeight: 1.3,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {supplementalGroupLabel(group)}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{
+                                display: 'block',
+                                mt: 0.2,
+                                fontSize: '0.63rem',
+                                lineHeight: 1.3,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {supplementalGroupTargetText(group)}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              color="text.secondary"
+                              sx={{
+                                display: 'block',
+                                mt: 0.15,
+                                fontSize: '0.61rem',
+                                lineHeight: 1.3,
+                                overflowWrap: 'anywhere',
+                                wordBreak: 'break-word',
+                              }}
+                            >
+                              {supplementalGroupOwnerText(group)}
+                            </Typography>
+                          </Box>
+                        </Box>
+                      </Box>
+                    ))}
+                  </Box>
+                </Box>
+              )}
+
+              {metadataValidationAttachments.length > 0 && (
+                <Box sx={{ mt: actionableValidationAttachments.length > 0 || supplementalValidationGroups.length > 0 ? 1.25 : 0 }}>
                   <Typography
                     variant="caption"
                     color="text.secondary"
@@ -612,6 +786,20 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                                 }}
                               >
                                 {validationTargetText(attachment)}
+                              </Typography>
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{
+                                  display: 'block',
+                                  mt: 0.15,
+                                  fontSize: '0.61rem',
+                                  lineHeight: 1.3,
+                                  overflowWrap: 'anywhere',
+                                  wordBreak: 'break-word',
+                                }}
+                              >
+                                {validationOwnerText(attachment)}
                               </Typography>
                               {attachment.state === 'blocked' && (
                                 <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.2, fontSize: '0.63rem' }}>

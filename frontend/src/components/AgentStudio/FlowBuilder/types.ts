@@ -33,9 +33,31 @@ export interface AgentCategory {
 
 export type InputSource = 'user_query' | 'previous_output' | 'custom'
 export type NodeType = 'agent' | 'decision' | 'output' | 'task_input'
+export type FlowEdgeRole = 'control_flow' | 'validation_attachment'
 
 export interface ValidationAttachmentSelection extends ValidationAttachmentOption {
   enabled: boolean
+}
+
+export const validationAttachmentForPersistence = <T extends { export_blocking?: boolean }>(
+  attachment: T
+): Omit<T, 'export_blocking'> => {
+  const { export_blocking: _exportBlocking, ...selection } = attachment
+  return selection
+}
+
+export interface ValidationAttachmentGroup {
+  group_id: string
+  state: 'automatic' | 'skipped' | 'replaced' | 'supplemental'
+  binding_id?: string | null
+  attachment_id?: string | null
+  edge_id?: string | null
+  validator_node_id?: string | null
+  replaces_attachment_id?: string | null
+  label?: string | null
+  required: boolean
+  blocking: boolean
+  allow_opt_out: boolean
 }
 
 export interface FlowNodePosition {
@@ -60,6 +82,7 @@ export interface FlowNodeData {
   output_filename_template?: string
   output_key: string
   validation_attachments?: ValidationAttachmentSelection[]
+  validation_groups?: ValidationAttachmentGroup[]
 }
 
 export interface FlowNodeDefinition {
@@ -78,6 +101,9 @@ export interface FlowEdgeDefinition {
   id: string
   source: string
   target: string
+  role?: FlowEdgeRole
+  satisfies_binding_id?: string
+  replaces_attachment_id?: string
   condition?: FlowEdgeCondition
 }
 
@@ -154,6 +180,11 @@ export type AgentNode = Node<AgentNodeData, 'agent' | 'task_input'>
 export type FlowEdge = Edge<{
   animated?: boolean
   isHovered?: boolean
+  role?: FlowEdgeRole
+  satisfies_binding_id?: string
+  replaces_attachment_id?: string
+  validationLabel?: string
+  onDeleteEdge?: (edgeId: string) => void
 }>
 
 // ============================================================================
@@ -174,10 +205,14 @@ export interface FlowState {
     output_filename_template?: string
     output_key: string
     validation_attachments?: ValidationAttachmentSelection[]
+    validation_groups?: ValidationAttachmentGroup[]
   }>
   edges: Array<{
     source: string
     target: string
+    role?: FlowEdgeRole
+    satisfies_binding_id?: string
+    replaces_attachment_id?: string
   }>
 }
 

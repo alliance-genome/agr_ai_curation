@@ -58,6 +58,8 @@ export interface ValidationAttachmentOption {
   validation_kind?: string
   tool_name?: string
   tool_method?: string
+  validator_package_id?: string
+  validator_agent_id?: string
   state: 'active' | 'planned' | 'blocked' | 'under_development'
   scope: 'pack' | 'object' | 'field'
   object_type?: string
@@ -73,7 +75,9 @@ export interface ValidationAttachmentOption {
   state_explanation?: string
   affected_fields?: string[]
   required: boolean
-  export_blocking: boolean
+  blocking: boolean
+  /** Deprecated backend metadata retained only as raw API input; UI persistence uses blocking. */
+  export_blocking?: boolean
   default_enabled: boolean
   allow_opt_out: boolean
 }
@@ -137,7 +141,9 @@ export interface DomainEnvelopeValidationSummary {
   by_scope: Record<'pack' | 'object' | 'field', number>
   default_enabled: number
   required: number
-  export_blocking: number
+  blocking: number
+  /** Deprecated backend summary retained only as raw API input; UI labels use blocking. */
+  export_blocking?: number
   opt_out_allowed: number
 }
 
