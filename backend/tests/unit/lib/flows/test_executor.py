@@ -1083,6 +1083,149 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "planned-lookup"
         ]
 
+    def test_supplemental_validation_group_runs_custom_validator_node(self, monkeypatch):
+        """Supplemental validator attachments should execute against the source revision."""
+        executor = _executor_module()
+        from src.lib.domain_packs.validation_registry import (
+            ValidationBindingState,
+            ValidatorAgentRef as RegistryValidatorAgentRef,
+            ValidatorBinding,
+            ValidatorBindingMatch,
+        )
+        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+        from src.schemas.domain_pack_metadata import DomainPackInputSelector
+
+        envelope = DomainEnvelope(
+            envelope_id="env-supplemental",
+            domain_pack_id="fixture.validation",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="GeneAssertion",
+                    pending_ref_id="object-1",
+                    payload={"gene": {"identifier": "AGR:0001"}},
+                )
+            ],
+        )
+        binding = ValidatorBinding(
+            binding_id="custom.supplemental",
+            state=ValidationBindingState.ACTIVE,
+            source_scope="field",
+            source_object_type="GeneAssertion",
+            source_field_path="gene.identifier",
+            validator_agent=RegistryValidatorAgentRef(
+                package_id="fixture.validators",
+                agent_id="package_agent",
+            ),
+            object_types=("GeneAssertion",),
+            field_paths=("gene.identifier",),
+            input_fields={
+                "identifier": DomainPackInputSelector(
+                    source="payload",
+                    path="gene.identifier",
+                )
+            },
+            expected_result_fields={"identifier": "gene.identifier"},
+        )
+        match = ValidatorBindingMatch(
+            binding=binding,
+            envelope=envelope,
+            object_envelope=envelope.objects[0],
+        )
+
+        class _Registry:
+            def match_bindings(self, _envelope, *, states):
+                assert states == [ValidationBindingState.ACTIVE]
+                return (match,)
+
+        calls = []
+
+        async def _fake_custom_validator(
+            request,
+            *,
+            binding_match,
+            validator_node,
+            agent_context,
+            source_envelope_id,
+            source_envelope_revision,
+        ):
+            calls.append(
+                {
+                    "request": request,
+                    "binding_match": binding_match,
+                    "validator_node": validator_node,
+                    "agent_context": dict(agent_context),
+                    "source_envelope_id": source_envelope_id,
+                    "source_envelope_revision": source_envelope_revision,
+                }
+            )
+            return {
+                "status": "resolved",
+                "request_id": request.request_id,
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": request.validator_agent.model_dump(mode="json"),
+                "target": request.target.model_dump(mode="json"),
+                "resolved_values": {"identifier": "AGR:0001"},
+                "resolved_objects": [],
+                "missing_expected_fields": [],
+                "candidates": [],
+                "lookup_attempts": [],
+                "curator_message": None,
+                "explanation": "Supplemental validator passed.",
+            }
+
+        monkeypatch.setattr(
+            executor,
+            "_run_custom_flow_validator_agent",
+            _fake_custom_validator,
+        )
+        flow = _make_flow([
+            _agent_node("supplemental_validator", "custom_validator"),
+        ])
+
+        materialization_inputs, selector_findings, metadata = asyncio.run(
+            executor._collect_flow_validator_materialization_inputs(
+                source_envelope=envelope,
+                source_envelope_revision=7,
+                registry=_Registry(),
+                groups=[
+                    {
+                        "group_id": "edge:validation-1",
+                        "state": "supplemental",
+                        "binding_id": "custom.supplemental",
+                        "edge_id": "validation-1",
+                        "validator_node_id": "supplemental_validator",
+                    }
+                ],
+                flow=flow,
+                agent_context={"user_id": "curator-1"},
+            )
+        )
+
+        assert selector_findings == []
+        assert len(calls) == 1
+        assert calls[0]["binding_match"] is match
+        assert calls[0]["source_envelope_id"] == "env-supplemental"
+        assert calls[0]["source_envelope_revision"] == 7
+        assert calls[0]["request"].validator_binding_id == "custom.supplemental"
+        assert calls[0]["request"].validator_agent.package_id == "flow"
+        assert calls[0]["request"].validator_agent.agent_id == "custom_validator"
+        assert calls[0]["request"].request_id.endswith(
+            ":flow-validator:custom_validator"
+        )
+        assert len(materialization_inputs) == 1
+        assert materialization_inputs[0].match is match
+        assert materialization_inputs[0].request is calls[0]["request"]
+        assert metadata == [
+            {
+                "group_id": "edge:validation-1",
+                "state": "supplemental",
+                "validator_binding_id": "custom.supplemental",
+                "status": "resolved",
+                "request_id": calls[0]["request"].request_id,
+                "missing_expected_fields": [],
+            }
+        ]
+
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_validation_groups_join_before_next_flow_step(

@@ -864,7 +864,7 @@ async def _collect_flow_validator_materialization_inputs(
                 }
             )
             continue
-        if state not in {"automatic", "replaced"} or not binding_id:
+        if state not in {"automatic", "replaced", "supplemental"} or not binding_id:
             continue
 
         binding_matches = _ordered_validation_matches(matches_by_binding.get(binding_id, []))
@@ -880,7 +880,7 @@ async def _collect_flow_validator_materialization_inputs(
             continue
 
         validator_node = None
-        if state == "replaced":
+        if state in {"replaced", "supplemental"}:
             validator_node_id = str(group.get("validator_node_id") or "").strip()
             validator_node = nodes_by_id.get(validator_node_id)
 
@@ -910,13 +910,13 @@ async def _collect_flow_validator_materialization_inputs(
                 continue
 
             request = selector_result.request
-            if state == "replaced" and validator_node is not None:
+            if state in {"replaced", "supplemental"} and validator_node is not None:
                 request = _request_for_flow_validator_node(request, validator_node)
             try:
-                if state == "replaced":
+                if state in {"replaced", "supplemental"}:
                     if validator_node is None:
                         raise ValueError(
-                            "replacement validator node is missing from the flow definition"
+                            "custom validator node is missing from the flow definition"
                         )
                     raw_output = await _run_custom_flow_validator_agent(
                         request,
@@ -985,19 +985,15 @@ async def _execute_validation_groups_for_step(
 ) -> dict[str, Any]:
     groups = _validation_groups_from_node_data(node_data)
     grouped = _groups_by_state(groups)
-    executable_groups = grouped.get("automatic", []) + grouped.get("replaced", [])
+    executable_groups = (
+        grouped.get("automatic", [])
+        + grouped.get("replaced", [])
+        + grouped.get("supplemental", [])
+    )
     if not groups:
         return {}
 
-    result_metadata: list[dict[str, Any]] = [
-        {
-            "group_id": group.get("group_id"),
-            "state": "supplemental",
-            "validator_binding_id": _binding_id_from_group(group),
-            "status": "metadata_only",
-        }
-        for group in grouped.get("supplemental", [])
-    ]
+    result_metadata: list[dict[str, Any]] = []
     if candidate is None:
         if executable_groups:
             raise RuntimeError(
