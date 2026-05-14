@@ -11,13 +11,6 @@ from typing import Any, Protocol
 
 from sqlalchemy.orm import Session
 
-from src.lib.lookup_status import (
-    LOOKUP_STATUS_AMBIGUOUS,
-    LOOKUP_STATUS_BLOCKED,
-    LOOKUP_STATUS_NOT_FOUND,
-    LOOKUP_STATUS_SUCCESS,
-    LOOKUP_STATUS_TRANSIENT,
-)
 from src.schemas.curation_workspace import (
     DomainEnvelopeEvidenceAnchorProjection,
     DomainEnvelopeReviewRow,
@@ -57,6 +50,10 @@ from src.lib.domain_packs.validation_registry import (
     ValidationBindingState,
     ValidatorBindingMatch,
 )
+from src.lib.domain_packs.validator_result_classification import (
+    lookup_status_for_validator_outcome,
+    validator_failure_classification,
+)
 
 
 REVIEW_ROW_PROJECTION_TYPE = "workspace_review_row"
@@ -77,15 +74,6 @@ SEVERITY_RANK: dict[str, int] = {
     ValidationFindingSeverity.ERROR.value: 2,
     ValidationFindingSeverity.BLOCKER.value: 3,
 }
-
-_LOOKUP_OUTCOME_TO_STATUS = {
-    "success": LOOKUP_STATUS_SUCCESS,
-    "not_found": LOOKUP_STATUS_NOT_FOUND,
-    "ambiguous": LOOKUP_STATUS_AMBIGUOUS,
-    "conflict": LOOKUP_STATUS_BLOCKED,
-    "error": LOOKUP_STATUS_TRANSIENT,
-}
-
 
 class DomainEnvelopeMaterializationError(RuntimeError):
     """Raised when a persisted envelope cannot be materialized for review."""
@@ -617,7 +605,10 @@ def _finding_for_validator_result(
         source_envelope_revision=source_envelope_revision,
     )
     if not resolved:
-        details["failure_classification"] = _failure_classification(result)
+        details["failure_classification"] = validator_failure_classification(
+            result,
+            error_type=DomainEnvelopeMaterializationError,
+        )
 
     return ValidationFinding(
         severity=(
@@ -686,7 +677,10 @@ def _lookup_attempt_details(
     attempts = []
     for attempt in item.result.lookup_attempts:
         payload = attempt.model_dump(mode="json", exclude_none=True)
-        lookup_status = _lookup_status_for_attempt(payload.get("outcome"))
+        lookup_status = lookup_status_for_validator_outcome(
+            payload.get("outcome"),
+            error_type=DomainEnvelopeMaterializationError,
+        )
         attempts.append(
             {
                 "source": {
@@ -710,39 +704,6 @@ def _lookup_attempt_details(
             }
         )
     return attempts
-
-
-def _lookup_status_for_attempt(outcome: Any) -> str:
-    try:
-        return _LOOKUP_OUTCOME_TO_STATUS[outcome]
-    except KeyError as exc:
-        raise DomainEnvelopeMaterializationError(
-            f"Unrecognized lookup attempt outcome: {outcome!r}"
-        ) from exc
-
-
-def _failure_classification(result: DomainValidatorResultBase) -> str:
-    methods = {attempt.method for attempt in result.lookup_attempts}
-    if "invalid_schema" in methods:
-        return "invalid_schema"
-    if "validator_agent_error" in methods:
-        return "transient"
-    if result.missing_expected_fields:
-        return "missing_expected_result_field"
-    outcomes = {attempt.outcome for attempt in result.lookup_attempts}
-    if "ambiguous" in outcomes:
-        return "ambiguous"
-    if "not_found" in outcomes:
-        return "not_found"
-    if "conflict" in outcomes:
-        return "conflict"
-    if "error" in outcomes:
-        return "transient"
-    raise DomainEnvelopeMaterializationError(
-        "Unable to classify unresolved validator result "
-        f"{result.request_id!r} with lookup outcomes {sorted(outcomes)!r} "
-        f"and methods {sorted(methods)!r}"
-    )
 
 
 def _candidate_matches(result: DomainValidatorResultBase) -> list[dict[str, Any]]:
