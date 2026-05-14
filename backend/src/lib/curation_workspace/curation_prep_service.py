@@ -201,7 +201,7 @@ def _materialize_extraction_results_to_envelope_refs(
 
     for extraction_result in extraction_results:
         try:
-            envelope_ref = _ensure_domain_envelope_materialization(
+            envelope_ref = ensure_domain_envelope_materialization(
                 extraction_result,
                 persist=persist,
                 db=db,
@@ -256,7 +256,7 @@ def _resolve_extraction_adapter_key(
     return normalized_optional_string(extraction_result.adapter_key)
 
 
-def _ensure_domain_envelope_materialization(
+def ensure_domain_envelope_materialization(
     extraction_result: CurationExtractionResultRecord,
     *,
     persist: bool,
@@ -608,6 +608,7 @@ def _dedupe_strings(values: Iterable[str]) -> list[str]:
 __all__ = [
     "CurationPrepPersistenceContext",
     "CurationPrepScopeSummary",
+    "ensure_domain_envelope_materialization",
     "run_curation_prep",
     "summarize_curation_prep_scope",
 ]

@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import re
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, Dict, List, Optional, Set
+from typing import Any, AsyncGenerator, Dict, List, Mapping, Optional, Set
 from uuid import uuid4
 
 from agents import Agent, function_tool
@@ -42,13 +42,39 @@ from src.lib.curation_workspace import (
     persist_extraction_results,
     run_curation_prep,
 )
+from src.lib.curation_workspace.adapter_registry import resolve_curation_domain_pack_by_id
+from src.lib.curation_workspace.curation_prep_service import (
+    ensure_domain_envelope_materialization,
+)
 from src.lib.curation_workspace.extraction_results import list_extraction_results
 from src.lib.curation_workspace.curation_prep_constants import (
     CURATION_PREP_AGENT_ID,
 )
+from src.lib.curation_workspace.models import DomainEnvelopeModel
+from src.lib.domain_envelopes.persistence import (
+    DomainEnvelopeCheckpointRequest,
+    write_domain_envelope_checkpoint,
+)
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.materialization import (
+    ValidatorResultMaterializationInput,
+    materialize_validator_results_into_envelope,
+)
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
+    ValidatorBindingMatch,
+)
+from src.lib.domain_packs.validation_supervisor import append_validation_findings_to_envelope
+from src.lib.domain_packs.validator_dispatch import (
+    run_package_scoped_validator_agent,
+    unresolved_validator_result_for_dispatch_problem,
+    validator_result_from_agent_output,
+)
 from src.lib.file_outputs import sanitize_output_descriptor
 from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.models.sql.curation_flow import CurationFlow
+from src.models.sql.database import SessionLocal
 from src.lib.agent_studio.catalog_service import (
     get_agent_by_id,
     get_agent_metadata,
@@ -68,6 +94,8 @@ from src.schemas.curation_workspace import (
     CurationExtractionSourceKind,
 )
 from src.schemas.curation_prep import CurationPrepScopeConfirmation
+from src.schemas.domain_envelope import DomainEnvelope, ValidationFinding
+from src.schemas.domain_validator import DomainValidationRequest, ValidatorAgentRef
 from src.schemas.flows import DEFAULT_FLOW_EDGE_ROLE, VALIDATION_ATTACHMENT_EDGE_ROLE
 
 logger = logging.getLogger(__name__)
@@ -505,6 +533,33 @@ def _resolve_flow_candidate_adapter_key(candidate: ExtractionEnvelopeCandidate) 
     return normalized or None
 
 
+def _flow_candidate_persistence_key(candidate: ExtractionEnvelopeCandidate) -> str:
+    """Return the deterministic persistence key for one flow extraction step."""
+
+    metadata = candidate.metadata or {}
+    key_parts = [
+        str(metadata.get("flow_id") or "").strip(),
+        str(metadata.get("step") or "").strip(),
+        str(metadata.get("tool_name") or "").strip(),
+        str(candidate.agent_key or "").strip(),
+    ]
+    return ":".join(part for part in key_parts if part)
+
+
+def _flow_record_persistence_key(record: CurationExtractionResultRecord) -> str:
+    metadata = record.metadata or {}
+    explicit_key = str(metadata.get("flow_step_key") or "").strip()
+    if explicit_key:
+        return explicit_key
+    key_parts = [
+        str(metadata.get("flow_id") or "").strip(),
+        str(metadata.get("step") or "").strip(),
+        str(metadata.get("tool_name") or "").strip(),
+        str(record.agent_key or "").strip(),
+    ]
+    return ":".join(part for part in key_parts if part)
+
+
 def _unique_non_empty_scope_values(values: list[Optional[str]]) -> list[str]:
     """Return distinct non-empty scope values in first-seen order."""
 
@@ -634,6 +689,426 @@ def _collect_completed_step_candidates(
         if isinstance(candidate, ExtractionEnvelopeCandidate):
             candidates.append(candidate)
     return candidates
+
+
+def _plain_validation_group(raw_group: Any) -> dict[str, Any]:
+    if hasattr(raw_group, "model_dump"):
+        return raw_group.model_dump()
+    if isinstance(raw_group, Mapping):
+        return dict(raw_group)
+    raise ValueError(f"Unexpected validation group type: {type(raw_group).__name__}")
+
+
+def _validation_groups_from_node_data(node_data: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return [
+        group
+        for group in (
+            _plain_validation_group(raw_group)
+            for raw_group in node_data.get("validation_groups") or []
+        )
+        if group.get("state") in {"automatic", "replaced", "supplemental", "skipped"}
+    ]
+
+
+def _binding_id_from_group(group: Mapping[str, Any]) -> str | None:
+    binding_id = str(group.get("binding_id") or group.get("validator_binding_id") or "").strip()
+    return binding_id or None
+
+
+def _groups_by_state(groups: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for group in groups:
+        grouped.setdefault(str(group.get("state") or ""), []).append(group)
+    return grouped
+
+
+def _flow_node_by_id(flow: CurationFlow) -> dict[str, dict[str, Any]]:
+    return {
+        str(node.get("id")): node
+        for node in (flow.flow_definition or {}).get("nodes", []) or []
+        if node.get("id")
+    }
+
+
+def _validation_matches_by_binding(
+    matches: tuple[ValidatorBindingMatch, ...],
+) -> dict[str, list[ValidatorBindingMatch]]:
+    by_binding: dict[str, list[ValidatorBindingMatch]] = {}
+    for match in matches:
+        by_binding.setdefault(match.binding.binding_id, []).append(match)
+    return by_binding
+
+
+async def _run_custom_flow_validator_agent(
+    request: DomainValidationRequest,
+    *,
+    binding_match: ValidatorBindingMatch,
+    validator_node: Mapping[str, Any],
+    agent_context: Mapping[str, Any],
+    source_envelope_id: str,
+    source_envelope_revision: int,
+) -> Any:
+    node_data = validator_node.get("data", {}) if isinstance(validator_node, Mapping) else {}
+    validator_agent_id = str(node_data.get("agent_id") or "").strip()
+    if not validator_agent_id:
+        raise ValueError("validation attachment target node is missing agent_id")
+
+    agent = get_agent_by_id(validator_agent_id, **dict(agent_context))
+    instruction_prefix = (
+        "## FLOW VALIDATOR REQUEST\n\n"
+        "You are running as a Flow Builder validation attachment. Validate only the "
+        "DomainValidationRequest JSON supplied in the user message. Return one JSON "
+        "object matching the DomainValidatorResultBase contract. Preserve the supplied "
+        "request_id, validator_binding_id, validator_agent, and target exactly.\n\n"
+        "---\n\n"
+    )
+    agent.instructions = instruction_prefix + (agent.instructions or "")
+
+    tool_name = (
+        "validate_"
+        f"{_tool_safe_agent_id(validator_agent_id)}_"
+        f"{_tool_safe_agent_id(request.validator_binding_id)}"
+    )
+    streaming_tool = _create_streaming_tool(
+        agent=agent,
+        tool_name=tool_name,
+        tool_description=f"Run validator attachment {validator_agent_id}",
+        specialist_name=node_data.get("agent_display_name") or validator_agent_id,
+    )
+    payload = json.dumps(
+        {
+            "source_envelope": {
+                "envelope_id": source_envelope_id,
+                "revision": source_envelope_revision,
+            },
+            "validator_binding": binding_match.binding.identity_details(),
+            "validation_request": request.model_dump(mode="json"),
+        },
+        sort_keys=True,
+    )
+    if hasattr(streaming_tool, "on_invoke_tool"):
+        tool_ctx = SimpleNamespace(tool_name=tool_name)
+        return await streaming_tool.on_invoke_tool(
+            tool_ctx,
+            json.dumps({"query": payload}),
+        )
+    return await streaming_tool(query=payload)
+
+
+def _ordered_validation_matches(
+    matches: list[ValidatorBindingMatch],
+) -> list[ValidatorBindingMatch]:
+    return sorted(
+        matches,
+        key=lambda match: (
+            match.binding.binding_id,
+            json.dumps(match.target_details(), sort_keys=True),
+        ),
+    )
+
+
+def _request_for_flow_validator_node(
+    request: DomainValidationRequest,
+    validator_node: Mapping[str, Any],
+) -> DomainValidationRequest:
+    node_data = validator_node.get("data", {}) if isinstance(validator_node, Mapping) else {}
+    validator_agent_id = str(node_data.get("agent_id") or "").strip()
+    if not validator_agent_id:
+        return request
+    return request.model_copy(
+        update={
+            "request_id": f"{request.request_id}:flow-validator:{validator_agent_id}",
+            "validator_agent": ValidatorAgentRef(
+                package_id="flow",
+                agent_id=validator_agent_id,
+            ),
+        }
+    )
+
+
+async def _collect_flow_validator_materialization_inputs(
+    *,
+    source_envelope: DomainEnvelope,
+    source_envelope_revision: int,
+    registry: DomainPackValidationRegistry,
+    groups: list[dict[str, Any]],
+    flow: CurationFlow,
+    agent_context: Mapping[str, Any],
+) -> tuple[
+    list[ValidatorResultMaterializationInput],
+    list[ValidationFinding],
+    list[dict[str, Any]],
+]:
+    matches_by_binding = _validation_matches_by_binding(
+        registry.match_bindings(
+            source_envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+    )
+    nodes_by_id = _flow_node_by_id(flow)
+    materialization_inputs: list[ValidatorResultMaterializationInput] = []
+    selector_findings: list[ValidationFinding] = []
+    result_metadata: list[dict[str, Any]] = []
+
+    for group in groups:
+        state = str(group.get("state") or "")
+        binding_id = _binding_id_from_group(group)
+        if state == "skipped":
+            result_metadata.append(
+                {
+                    "group_id": group.get("group_id"),
+                    "state": state,
+                    "validator_binding_id": binding_id,
+                    "status": "skipped",
+                    "skipped_by_flow_configuration": True,
+                }
+            )
+            continue
+        if state not in {"automatic", "replaced", "supplemental"} or not binding_id:
+            continue
+
+        binding_matches = _ordered_validation_matches(matches_by_binding.get(binding_id, []))
+        if not binding_matches:
+            result_metadata.append(
+                {
+                    "group_id": group.get("group_id"),
+                    "state": state,
+                    "validator_binding_id": binding_id,
+                    "status": "not_matched",
+                }
+            )
+            continue
+
+        validator_node = None
+        if state in {"replaced", "supplemental"}:
+            validator_node_id = str(group.get("validator_node_id") or "").strip()
+            validator_node = nodes_by_id.get(validator_node_id)
+
+        for match in binding_matches:
+            selector_result = build_domain_validation_request(match)
+            if selector_result.findings:
+                selector_findings.extend(selector_result.findings)
+                result_metadata.append(
+                    {
+                        "group_id": group.get("group_id"),
+                        "state": state,
+                        "validator_binding_id": binding_id,
+                        "status": "selector_failed",
+                        "finding_count": len(selector_result.findings),
+                    }
+                )
+                continue
+            if selector_result.request is None:
+                result_metadata.append(
+                    {
+                        "group_id": group.get("group_id"),
+                        "state": state,
+                        "validator_binding_id": binding_id,
+                        "status": "request_not_available",
+                    }
+                )
+                continue
+
+            request = selector_result.request
+            if state in {"replaced", "supplemental"} and validator_node is not None:
+                request = _request_for_flow_validator_node(request, validator_node)
+            try:
+                if state in {"replaced", "supplemental"}:
+                    if validator_node is None:
+                        raise ValueError(
+                            "custom validator node is missing from the flow definition"
+                        )
+                    raw_output = await _run_custom_flow_validator_agent(
+                        request,
+                        binding_match=match,
+                        validator_node=validator_node,
+                        agent_context=agent_context,
+                        source_envelope_id=source_envelope.envelope_id,
+                        source_envelope_revision=source_envelope_revision,
+                    )
+                else:
+                    raw_output = run_package_scoped_validator_agent(
+                        request,
+                        binding=match.binding,
+                    )
+                validator_result = validator_result_from_agent_output(
+                    raw_output,
+                    request=request,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "[Flow Executor] Validator group '%s' failed for binding %s",
+                    group.get("group_id"),
+                    binding_id,
+                    exc_info=exc,
+                )
+                validator_result = unresolved_validator_result_for_dispatch_problem(
+                    request,
+                    reason="validator_agent_error",
+                    explanation=f"Validator agent execution failed: {exc}",
+                )
+
+            materialization_inputs.append(
+                ValidatorResultMaterializationInput(
+                    match=match,
+                    request=request,
+                    result=validator_result,
+                )
+            )
+            result_metadata.append(
+                {
+                    "group_id": group.get("group_id"),
+                    "state": state,
+                    "validator_binding_id": binding_id,
+                    "status": validator_result.status,
+                    "request_id": request.request_id,
+                    "missing_expected_fields": list(
+                        validator_result.missing_expected_fields
+                    ),
+                }
+            )
+
+    return materialization_inputs, selector_findings, result_metadata
+
+
+async def _execute_validation_groups_for_step(
+    *,
+    flow: CurationFlow,
+    candidate: ExtractionEnvelopeCandidate | None,
+    node_data: Mapping[str, Any],
+    document_id: Optional[str],
+    user_id: Optional[str],
+    session_id: Optional[str],
+    flow_run_id: Optional[str],
+    agent_context: Mapping[str, Any],
+    flow_conversation_summary: str,
+) -> dict[str, Any]:
+    groups = _validation_groups_from_node_data(node_data)
+    grouped = _groups_by_state(groups)
+    executable_groups = (
+        grouped.get("automatic", [])
+        + grouped.get("replaced", [])
+        + grouped.get("supplemental", [])
+    )
+    if not groups:
+        return {}
+
+    result_metadata: list[dict[str, Any]] = []
+    if candidate is None:
+        if executable_groups:
+            raise RuntimeError(
+                "Validation groups require a structured extraction envelope candidate."
+            )
+        return {"validation_group_results": {"groups": result_metadata}}
+    if not executable_groups and not grouped.get("skipped"):
+        return {"validation_group_results": {"groups": result_metadata}}
+    if not document_id or not user_id or not session_id:
+        raise RuntimeError(
+            "Validation groups require document_id, user_id, and session_id so the "
+            "source envelope revision can be persisted."
+        )
+
+    persisted_records = _persist_flow_extraction_candidates(
+        candidates=[candidate],
+        document_id=document_id,
+        user_id=str(user_id),
+        session_id=session_id,
+        trace_id=get_current_trace_id(),
+        flow_run_id=flow_run_id,
+    )
+    if not persisted_records:
+        raise RuntimeError("Validation groups could not persist the source envelope.")
+
+    source_ref = ensure_domain_envelope_materialization(
+        persisted_records[0],
+        persist=True,
+    )
+
+    session = SessionLocal()
+    try:
+        envelope_row = session.get(DomainEnvelopeModel, source_ref.envelope_id)
+        if envelope_row is None:
+            raise RuntimeError(
+                f"Persisted domain envelope {source_ref.envelope_id} was not found."
+            )
+        source_envelope_revision = int(envelope_row.revision)
+        source_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+        domain_pack = resolve_curation_domain_pack_by_id(source_envelope.domain_pack_id)
+        if domain_pack is None:
+            raise RuntimeError(
+                "No domain pack is registered for "
+                f"domain_pack_id={source_envelope.domain_pack_id!r}."
+            )
+        registry = DomainPackValidationRegistry.from_domain_pack(domain_pack)
+
+        materialization_inputs, selector_findings, executable_metadata = (
+            await _collect_flow_validator_materialization_inputs(
+                source_envelope=source_envelope,
+                source_envelope_revision=source_envelope_revision,
+                registry=registry,
+                groups=groups,
+                flow=flow,
+                agent_context=agent_context,
+            )
+        )
+        result_metadata.extend(executable_metadata)
+
+        working_envelope = source_envelope
+        appended_findings: list[ValidationFinding] = []
+        if selector_findings:
+            working_envelope, selector_appended = append_validation_findings_to_envelope(
+                working_envelope,
+                selector_findings,
+                actor_id="flow_validator_group",
+            )
+            appended_findings.extend(selector_appended)
+        if materialization_inputs:
+            materialization_result = materialize_validator_results_into_envelope(
+                working_envelope,
+                domain_pack.metadata,
+                materialization_inputs,
+                actor_id="flow_validator_group",
+                source_envelope_revision=source_envelope_revision,
+            )
+            working_envelope = materialization_result.envelope
+            appended_findings.extend(materialization_result.appended_findings)
+
+        materialized_revision = source_envelope_revision
+        if appended_findings:
+            checkpoint = write_domain_envelope_checkpoint(
+                session,
+                DomainEnvelopeCheckpointRequest(
+                    project_key=envelope_row.project_key,
+                    envelope=working_envelope,
+                    expected_revision=source_envelope_revision,
+                    document_id=envelope_row.document_id,
+                    session_id=envelope_row.session_id,
+                    flow_run_id=envelope_row.flow_run_id,
+                    object_model_ref_json=envelope_row.object_model_ref_json or {},
+                    model_field_ref_json=envelope_row.model_field_ref_json or {},
+                ),
+            )
+            materialized_revision = checkpoint.revision
+
+        return {
+            "validation_group_results": {
+                "source_envelope_id": source_envelope.envelope_id,
+                "source_envelope_revision": source_envelope_revision,
+                "materialized_envelope_revision": materialized_revision,
+                "appended_finding_count": len(appended_findings),
+                "groups": sorted(
+                    result_metadata,
+                    key=lambda item: (
+                        str(item.get("validator_binding_id") or ""),
+                        str(item.get("group_id") or ""),
+                        str(item.get("request_id") or ""),
+                    ),
+                ),
+                "conversation_summary": flow_conversation_summary,
+            }
+        }
+    finally:
+        session.close()
 
 
 def _build_step_evidence_counts(
@@ -1080,6 +1555,17 @@ def get_all_agent_tools(
                 execution_state["evidence_registry"],
                 step_evidence_metadata.get("evidence_records", []),
             )
+            validation_group_metadata = await _execute_validation_groups_for_step(
+                flow=flow,
+                candidate=candidate,
+                node_data=node_data,
+                document_id=document_id,
+                user_id=user_id,
+                session_id=session_id,
+                flow_run_id=flow_run_id,
+                agent_context=context,
+                flow_conversation_summary=flow_conversation_summary,
+            )
             execution_state["completed_steps"].append(
                 {
                     "step": step_number,
@@ -1090,6 +1576,7 @@ def get_all_agent_tools(
                     "output_preview": _truncate_tool_output(result_text),
                     "candidate": candidate,
                     **validation_schedule_metadata,
+                    **validation_group_metadata,
                     **step_evidence,
                 }
             )
@@ -1356,6 +1843,8 @@ def build_supervisor_instructions(
         validation_schedule = validation_schedule_from_node_data(data)
         scheduled_count = len(validation_schedule["scheduled_validators"])
         opt_out_count = len(validation_schedule["opt_outs"])
+        replacement_count = len(validation_schedule["replacement_validators"])
+        supplemental_count = len(validation_schedule["supplemental_validators"])
         planned_count = sum(
             1
             for item in validation_schedule["inactive_metadata"]
@@ -1370,6 +1859,10 @@ def build_supervisor_instructions(
             step_desc += f" [schedule {scheduled_count} validator(s)]"
         if opt_out_count:
             step_desc += f" [validation opt-outs recorded: {opt_out_count}]"
+        if replacement_count:
+            step_desc += f" [replacement validators: {replacement_count}]"
+        if supplemental_count:
+            step_desc += f" [supplemental validators: {supplemental_count}]"
         if planned_count:
             step_desc += f" [planned validators visible: {planned_count}]"
         if blocked_count:
@@ -1585,13 +2078,14 @@ def _persist_flow_extraction_candidates(
     session_id: str,
     trace_id: Optional[str],
     flow_run_id: Optional[str],
-) -> None:
-    """Persist flow-produced extraction envelopes and propagate failures."""
+) -> list[CurationExtractionResultRecord]:
+    """Persist flow-produced extraction envelopes and return stored records."""
 
     if not candidates or not document_id:
-        return
+        return []
 
     normalized_flow_run_id = str(flow_run_id or "").strip() or None
+    existing_by_key: dict[str, CurationExtractionResultRecord] = {}
     if normalized_flow_run_id is not None:
         existing_results = list_extraction_results(
             document_id=document_id,
@@ -1600,21 +2094,25 @@ def _persist_flow_extraction_candidates(
             user_id=user_id,
             source_kind=CurationExtractionSourceKind.FLOW,
         )
-        if existing_results:
-            logger.info(
-                "[Flow Executor] Reusing existing extraction persistence for flow run %s",
-                normalized_flow_run_id,
-                extra={
-                    "document_id": document_id,
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "flow_run_id": normalized_flow_run_id,
-                },
-            )
-            return
+        existing_by_key = {
+            key: result
+            for result in existing_results
+            if (key := _flow_record_persistence_key(result))
+        }
 
-    persist_extraction_results(
-        [
+    ordered_records: list[CurationExtractionResultRecord] = []
+    requests: list[CurationExtractionPersistenceRequest] = []
+    request_keys: list[str] = []
+    for candidate in candidates:
+        flow_step_key = _flow_candidate_persistence_key(candidate)
+        if flow_step_key in existing_by_key:
+            ordered_records.append(existing_by_key[flow_step_key])
+            continue
+
+        metadata = dict(candidate.metadata)
+        if flow_step_key:
+            metadata["flow_step_key"] = flow_step_key
+        requests.append(
             CurationExtractionPersistenceRequest(
                 document_id=document_id,
                 adapter_key=_resolve_flow_candidate_adapter_key(candidate),
@@ -1627,11 +2125,26 @@ def _persist_flow_extraction_candidates(
                 candidate_count=candidate.candidate_count,
                 conversation_summary=candidate.conversation_summary,
                 payload_json=candidate.payload_json,
-                metadata=dict(candidate.metadata),
+                metadata=metadata,
             )
-            for candidate in candidates
-        ]
-    )
+        )
+        request_keys.append(flow_step_key)
+
+    if requests:
+        responses = persist_extraction_results(requests)
+        persisted_by_key = {
+            key: response.extraction_result
+            for key, response in zip(request_keys, responses)
+        }
+        for candidate in candidates:
+            flow_step_key = _flow_candidate_persistence_key(candidate)
+            if flow_step_key in existing_by_key:
+                continue
+            persisted = persisted_by_key.get(flow_step_key)
+            if persisted is not None:
+                ordered_records.append(persisted)
+
+    return ordered_records
 
 
 def _persist_flow_extraction_candidates_or_build_error(

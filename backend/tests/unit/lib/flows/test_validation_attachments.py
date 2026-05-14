@@ -420,7 +420,35 @@ def test_validation_schedule_splits_active_opt_out_and_inactive_metadata():
                     "scope": "pack",
                     "enabled": False,
                 },
-            ]
+                {
+                    "attachment_id": "replaced",
+                    "domain_pack_id": "fixture",
+                    "validator_id": "replaced",
+                    "validator_binding_id": "replaced-binding",
+                    "state": "active",
+                    "scope": "pack",
+                    "enabled": True,
+                },
+            ],
+            "validation_groups": [
+                {
+                    "group_id": "replaced",
+                    "state": "replaced",
+                    "binding_id": "replaced-binding",
+                    "attachment_id": "replaced",
+                    "edge_id": "edge-1",
+                    "validator_node_id": "custom_validator",
+                    "required": True,
+                    "blocking": True,
+                },
+                {
+                    "group_id": "edge:edge-2",
+                    "state": "supplemental",
+                    "binding_id": "custom.supplemental",
+                    "edge_id": "edge-2",
+                    "validator_node_id": "supplemental_validator",
+                },
+            ],
         }
     )
 
@@ -428,9 +456,18 @@ def test_validation_schedule_splits_active_opt_out_and_inactive_metadata():
         "active"
     ]
     assert [item["attachment_id"] for item in schedule["opt_outs"]] == ["opt-out"]
+    assert schedule["opt_outs"][0]["skipped_by_flow_configuration"] is True
     assert [item["attachment_id"] for item in schedule["inactive_metadata"]] == [
         "planned"
     ]
+    assert [item["validator_binding_id"] for item in schedule["replacement_validators"]] == [
+        "replaced-binding"
+    ]
+    assert schedule["replacement_validators"][0]["validator_node_id"] == "custom_validator"
+    assert [
+        item["validator_binding_id"]
+        for item in schedule["supplemental_validators"]
+    ] == ["custom.supplemental"]
 
 
 def test_validation_schedule_rejects_unexpected_attachment_types():

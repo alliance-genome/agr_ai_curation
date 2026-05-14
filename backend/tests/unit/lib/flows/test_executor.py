@@ -87,6 +87,14 @@ def test_ordered_executable_nodes_treats_validation_edges_as_sidecars():
     assert [node["id"] for node in ordered] == ["extract_1", "prep_1"]
 
 
+def test_validation_groups_from_node_data_rejects_unexpected_group_type():
+    """Malformed validation group values should fail instead of being ignored."""
+    with pytest.raises(ValueError, match="Unexpected validation group type: str"):
+        _executor_module()._validation_groups_from_node_data(
+            {"validation_groups": ["not-a-group"]}
+        )
+
+
 def _agent_node(
     node_id,
     agent_id,
@@ -99,6 +107,7 @@ def _agent_node(
     output_key=None,
     output_filename_template=None,
     validation_attachments=None,
+    validation_groups=None,
 ):
     """Build a minimal agent node dict."""
     data = {
@@ -119,6 +128,8 @@ def _agent_node(
         data["output_filename_template"] = output_filename_template
     if validation_attachments is not None:
         data["validation_attachments"] = validation_attachments
+    if validation_groups is not None:
+        data["validation_groups"] = validation_groups
     return {
         "id": node_id,
         "type": "agent",
@@ -252,6 +263,36 @@ def _make_completed_step(
         "evidence_records": step_evidence_records,
         "evidence_count": len(step_evidence_records),
     }
+
+
+def _recording_persist_extraction_results(persisted_requests=None):
+    """Build a test double that records requests and returns persistence responses."""
+
+    recorded_requests = persisted_requests if persisted_requests is not None else []
+
+    def _persist(requests):
+        recorded_requests.extend(requests)
+        return [
+            SimpleNamespace(
+                extraction_result=SimpleNamespace(
+                    extraction_result_id=f"persisted-{index}",
+                    document_id=request.document_id,
+                    adapter_key=request.adapter_key,
+                    source_kind=request.source_kind,
+                    origin_session_id=request.origin_session_id,
+                    trace_id=request.trace_id,
+                    flow_run_id=request.flow_run_id,
+                    user_id=request.user_id,
+                    candidate_count=request.candidate_count,
+                    conversation_summary=request.conversation_summary,
+                    payload_json=request.payload_json,
+                    metadata=dict(request.metadata),
+                )
+            )
+            for index, request in enumerate(requests)
+        ]
+
+    return _persist
 
 
 def _make_flow_execution_state(*completed_steps):
@@ -1079,6 +1120,234 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert [item["attachment_id"] for item in schedule["inactive_metadata"]] == [
             "planned-lookup"
         ]
+
+    def test_supplemental_validation_group_runs_custom_validator_node(self, monkeypatch):
+        """Supplemental validator attachments should execute against the source revision."""
+        executor = _executor_module()
+        from src.lib.domain_packs.validation_registry import (
+            ValidationBindingState,
+            ValidatorAgentRef as RegistryValidatorAgentRef,
+            ValidatorBinding,
+            ValidatorBindingMatch,
+        )
+        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+        from src.schemas.domain_pack_metadata import DomainPackInputSelector
+
+        envelope = DomainEnvelope(
+            envelope_id="env-supplemental",
+            domain_pack_id="fixture.validation",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="GeneAssertion",
+                    pending_ref_id="object-1",
+                    payload={"gene": {"identifier": "AGR:0001"}},
+                )
+            ],
+        )
+        binding = ValidatorBinding(
+            binding_id="custom.supplemental",
+            state=ValidationBindingState.ACTIVE,
+            source_scope="field",
+            source_object_type="GeneAssertion",
+            source_field_path="gene.identifier",
+            validator_agent=RegistryValidatorAgentRef(
+                package_id="fixture.validators",
+                agent_id="package_agent",
+            ),
+            object_types=("GeneAssertion",),
+            field_paths=("gene.identifier",),
+            input_fields={
+                "identifier": DomainPackInputSelector(
+                    source="payload",
+                    path="gene.identifier",
+                )
+            },
+            expected_result_fields={"identifier": "gene.identifier"},
+        )
+        match = ValidatorBindingMatch(
+            binding=binding,
+            envelope=envelope,
+            object_envelope=envelope.objects[0],
+        )
+
+        class _Registry:
+            def match_bindings(self, _envelope, *, states):
+                assert states == [ValidationBindingState.ACTIVE]
+                return (match,)
+
+        calls = []
+
+        async def _fake_custom_validator(
+            request,
+            *,
+            binding_match,
+            validator_node,
+            agent_context,
+            source_envelope_id,
+            source_envelope_revision,
+        ):
+            calls.append(
+                {
+                    "request": request,
+                    "binding_match": binding_match,
+                    "validator_node": validator_node,
+                    "agent_context": dict(agent_context),
+                    "source_envelope_id": source_envelope_id,
+                    "source_envelope_revision": source_envelope_revision,
+                }
+            )
+            return {
+                "status": "resolved",
+                "request_id": request.request_id,
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": request.validator_agent.model_dump(mode="json"),
+                "target": request.target.model_dump(mode="json"),
+                "resolved_values": {"identifier": "AGR:0001"},
+                "resolved_objects": [],
+                "missing_expected_fields": [],
+                "candidates": [],
+                "lookup_attempts": [],
+                "curator_message": None,
+                "explanation": "Supplemental validator passed.",
+            }
+
+        monkeypatch.setattr(
+            executor,
+            "_run_custom_flow_validator_agent",
+            _fake_custom_validator,
+        )
+        flow = _make_flow([
+            _agent_node("supplemental_validator", "custom_validator"),
+        ])
+
+        materialization_inputs, selector_findings, metadata = asyncio.run(
+            executor._collect_flow_validator_materialization_inputs(
+                source_envelope=envelope,
+                source_envelope_revision=7,
+                registry=_Registry(),
+                groups=[
+                    {
+                        "group_id": "edge:validation-1",
+                        "state": "supplemental",
+                        "binding_id": "custom.supplemental",
+                        "edge_id": "validation-1",
+                        "validator_node_id": "supplemental_validator",
+                    }
+                ],
+                flow=flow,
+                agent_context={"user_id": "curator-1"},
+            )
+        )
+
+        assert selector_findings == []
+        assert len(calls) == 1
+        assert calls[0]["binding_match"] is match
+        assert calls[0]["source_envelope_id"] == "env-supplemental"
+        assert calls[0]["source_envelope_revision"] == 7
+        assert calls[0]["request"].validator_binding_id == "custom.supplemental"
+        assert calls[0]["request"].validator_agent.package_id == "flow"
+        assert calls[0]["request"].validator_agent.agent_id == "custom_validator"
+        assert calls[0]["request"].request_id.endswith(
+            ":flow-validator:custom_validator"
+        )
+        assert len(materialization_inputs) == 1
+        assert materialization_inputs[0].match is match
+        assert materialization_inputs[0].request is calls[0]["request"]
+        assert metadata == [
+            {
+                "group_id": "edge:validation-1",
+                "state": "supplemental",
+                "validator_binding_id": "custom.supplemental",
+                "status": "resolved",
+                "request_id": calls[0]["request"].request_id,
+                "missing_expected_fields": [],
+            }
+        ]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_validation_groups_join_before_next_flow_step(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Validator group execution should finish before the next control-flow tool unlocks."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        events = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str):
+                events.append(f"tool:{tool_name}")
+                if tool_name == "ask_gene_specialist":
+                    return _structured_step_output("gene-a")
+                return "formatted"
+
+            return _tool
+
+        async def _fake_validation_groups(**kwargs):
+            if not kwargs["node_data"].get("validation_groups"):
+                return {}
+            events.append("validators:start")
+            assert kwargs["candidate"].metadata["step"] == 1
+            assert kwargs["node_data"]["validation_groups"][0]["binding_id"] == "binding-1"
+            events.append("validators:done")
+            return {
+                "validation_group_results": {
+                    "source_envelope_id": "env-1",
+                    "source_envelope_revision": 3,
+                    "materialized_envelope_revision": 4,
+                    "groups": [
+                        {
+                            "group_id": "active-lookup",
+                            "state": "automatic",
+                            "validator_binding_id": "binding-1",
+                            "status": "resolved",
+                        }
+                    ],
+                }
+            }
+
+        mock_streaming.side_effect = _make_streaming_tool
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node(
+                "n1",
+                "gene",
+                validation_attachments=[_validation_attachment("active-lookup")],
+                validation_groups=[
+                    {
+                        "group_id": "active-lookup",
+                        "state": "automatic",
+                        "binding_id": "binding-1",
+                        "attachment_id": "active-lookup",
+                        "required": True,
+                        "blocking": True,
+                    }
+                ],
+            ),
+            _agent_node("n2", "disease"),
+        ])
+
+        with patch(
+            "src.lib.flows.executor._execute_validation_groups_for_step",
+            side_effect=_fake_validation_groups,
+        ):
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+            asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"})))
+
+        assert events == [
+            "tool:ask_gene_specialist",
+            "validators:start",
+            "validators:done",
+            "tool:ask_disease_specialist",
+        ]
+        assert execution_state["completed_steps"][0]["validation_group_results"][
+            "source_envelope_revision"
+        ] == 3
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -2152,7 +2421,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: persisted_requests.extend(requests),
+            _recording_persist_extraction_results(persisted_requests),
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.uuid4",
@@ -2248,7 +2517,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: requests,
+            _recording_persist_extraction_results(),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -2315,7 +2584,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: persisted_requests.extend(requests),
+            _recording_persist_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -2394,7 +2663,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: persisted_requests.extend(requests),
+            _recording_persist_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
@@ -2506,7 +2775,7 @@ class TestExecuteFlowTermination:
         )
         monkeypatch.setattr(
             "src.lib.flows.executor.persist_extraction_results",
-            lambda requests: persisted_requests.extend(requests),
+            _recording_persist_extraction_results(persisted_requests),
         )
 
         async def _fake_run_agent_streamed(**_kwargs):
