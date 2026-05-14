@@ -53,6 +53,7 @@ class PackageRegistryForValidatorReferences(Protocol):
 
 
 ValidatorAgentResolver = Callable[[str, str], object | None]
+ValidatorSchemaResolver = Callable[[str], object | None]
 
 
 @dataclass(frozen=True)
@@ -618,6 +619,7 @@ def validate_active_validator_agent_references(
     registries: Iterable[DomainPackValidationRegistry],
     package_registry: PackageRegistryForValidatorReferences,
     agent_resolver: ValidatorAgentResolver | None = None,
+    output_schema_resolver: ValidatorSchemaResolver | None = None,
 ) -> None:
     """Validate active package-scoped validator agent refs across loaded packages."""
 
@@ -625,6 +627,10 @@ def validate_active_validator_agent_references(
         from src.lib.config.agent_loader import get_agent_definition_for_package
 
         agent_resolver = get_agent_definition_for_package
+    if output_schema_resolver is None:
+        from src.lib.config.schema_discovery import resolve_output_schema
+
+        output_schema_resolver = resolve_output_schema
 
     errors: list[str] = []
     for registry in registries:
@@ -644,6 +650,7 @@ def validate_active_validator_agent_references(
                 reference_id=entry.validator_id,
                 package_registry=package_registry,
                 agent_resolver=agent_resolver,
+                output_schema_resolver=output_schema_resolver,
             )
 
         for binding in registry.bindings:
@@ -661,6 +668,7 @@ def validate_active_validator_agent_references(
                 reference_id=binding.binding_id,
                 package_registry=package_registry,
                 agent_resolver=agent_resolver,
+                output_schema_resolver=output_schema_resolver,
             )
 
     if errors:
@@ -677,6 +685,7 @@ def _validate_active_validator_agent_reference(
     reference_id: str,
     package_registry: PackageRegistryForValidatorReferences,
     agent_resolver: ValidatorAgentResolver,
+    output_schema_resolver: ValidatorSchemaResolver,
 ) -> None:
     if package_registry.get_package(ref.package_id) is None:
         errors.append(
@@ -686,11 +695,22 @@ def _validate_active_validator_agent_reference(
         )
         return
 
-    if agent_resolver(ref.package_id, ref.agent_id) is None:
+    agent = agent_resolver(ref.package_id, ref.agent_id)
+    if agent is None:
         errors.append(
             f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
             f"'{reference_id}' references missing validator agent "
             f"'{ref.package_id}:{ref.agent_id}'"
+        )
+    else:
+        _validate_active_validator_agent_output_schema(
+            errors=errors,
+            registry=registry,
+            reference_kind=reference_kind,
+            reference_id=reference_id,
+            ref=ref,
+            agent=agent,
+            output_schema_resolver=output_schema_resolver,
         )
 
     if (
@@ -706,6 +726,46 @@ def _validate_active_validator_agent_reference(
             f"'{ref.package_id}' for domain pack "
             f"'{registry.domain_pack.pack_id}' {reference_kind} "
             f"'{reference_id}'"
+        )
+
+
+def _validate_active_validator_agent_output_schema(
+    *,
+    errors: list[str],
+    registry: DomainPackValidationRegistry,
+    reference_kind: str,
+    reference_id: str,
+    ref: ValidatorAgentRef,
+    agent: object,
+    output_schema_resolver: ValidatorSchemaResolver,
+) -> None:
+    from src.schemas.domain_validator import is_domain_validator_result_schema
+
+    output_schema_key = str(getattr(agent, "output_schema", "") or "").strip()
+    if not output_schema_key:
+        errors.append(
+            f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}' references validator agent "
+            f"'{ref.package_id}:{ref.agent_id}' without an output_schema"
+        )
+        return
+
+    schema = output_schema_resolver(output_schema_key)
+    if schema is None:
+        errors.append(
+            f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}' references validator agent "
+            f"'{ref.package_id}:{ref.agent_id}' with unknown output_schema "
+            f"'{output_schema_key}'"
+        )
+        return
+
+    if not is_domain_validator_result_schema(schema):
+        errors.append(
+            f"Domain pack '{registry.domain_pack.pack_id}' {reference_kind} "
+            f"'{reference_id}' references validator agent "
+            f"'{ref.package_id}:{ref.agent_id}' whose output_schema "
+            f"'{output_schema_key}' must inherit from or embed DomainValidatorResultBase"
         )
 
 

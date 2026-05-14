@@ -1,40 +1,31 @@
-"""Orthologs lookup agent schema.
+"""Orthologs lookup agent schema."""
 
-This module defines the envelope schema for the orthologs lookup agent.
-The envelope class is discovered at startup and registered in the schema registry.
+from typing import Any, Optional
 
-Naming convention: {AgentFunction}Envelope -> OrthologsEnvelope
-"""
+from pydantic import Field
 
-from typing import List, Optional
-from pydantic import Field, ConfigDict
-
-# Import base class from shared schemas location
-from src.schemas.models.base import StructuredMessageEnvelope
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 
-class OrthologsEnvelope(StructuredMessageEnvelope):
-    """Envelope for orthologs lookup agent responses.
+class OrthologsResult(DomainValidatorResultBase):
+    """Canonical result schema for Alliance orthology validator agents."""
 
-    Contains ortholog relationships across species from the Alliance Orthology Database.
-    """
-    model_config = ConfigDict(extra='forbid')
-
-    # Required: Marker for schema discovery
     __envelope_class__ = True
 
-    actor: str = Field(
-        default="orthologs_specialist",
-        description="The orthologs lookup agent"
-    )
-    findings: str = Field(
-        description="Ortholog relationship information"
-    )
-    query_gene: Optional[str] = Field(
+    query_gene: Optional[dict[str, Any]] = Field(
         default=None,
-        description="Gene CURIE that was queried for orthologs"
+        description="Gene that was queried for ortholog relationships",
     )
-    orthologs: List[dict] = Field(
+    orthologs: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="List of ortholog records with species and confidence"
+        description="Ortholog records with species and confidence details",
+    )
+    high_confidence_count: int = Field(
+        default=0,
+        ge=0,
+        description="Number of high-confidence orthologs",
+    )
+    species_represented: list[str] = Field(
+        default_factory=list,
+        description="Species with returned orthologs",
     )

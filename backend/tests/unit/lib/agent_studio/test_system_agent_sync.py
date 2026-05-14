@@ -65,7 +65,7 @@ def _agent_definition(
         output_schema=(
             output_schema
             if output_schema is not None
-            else ("GeneValidationEnvelope" if folder_name == "gene" else None)
+            else ("GeneResultEnvelope" if folder_name == "gene" else None)
         ),
         model_config=ModelConfig(model="gpt-5.4-mini", temperature=0.2, reasoning="medium"),
         requires_document=requires_document,
@@ -324,7 +324,7 @@ def test_sync_reactivates_discovered_disabled_agent(monkeypatch):
         model_temperature=0.2,
         model_reasoning="medium",
         tool_ids=["agr_curation_query"],
-        output_schema_key="GeneValidationEnvelope",
+        output_schema_key="GeneResultEnvelope",
         group_rules_enabled=True,
         group_rules_component="gene",
         group_prompt_overrides={},

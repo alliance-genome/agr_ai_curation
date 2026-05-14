@@ -381,6 +381,19 @@ def test_validate_active_agent_output_schemas_passes(monkeypatch):
     catalog_service.validate_active_agent_output_schemas(db)
 
 
+def test_agent_studio_resolves_package_owned_validator_schema(monkeypatch):
+    from src.lib.config import schema_discovery
+
+    repo_root = Path(__file__).resolve().parents[5]
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(repo_root / "packages"))
+    schema_discovery.reset_cache()
+
+    resolved = catalog_service._resolve_output_schema("GeneResultEnvelope")
+
+    assert resolved is schema_discovery.get_agent_schema("GeneResultEnvelope")
+    assert resolved.__module__.startswith("agent_schemas.agr_alliance.gene")
+
+
 def test_validate_active_agent_output_schemas_raises_for_unknown(monkeypatch):
     db = _FakeDB([
         ("gene", "Gene Validation Agent", "GeneResultEnvelope"),

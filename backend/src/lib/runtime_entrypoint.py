@@ -127,6 +127,7 @@ def validate_runtime_packages() -> PackageRegistry:
         fail_on_validation_error=True,
     )
     from src.lib.config.agent_loader import build_package_scoped_agent_resolver
+    from src.lib.config.schema_discovery import build_package_scoped_output_schema_resolver
     from src.lib.domain_packs.registry import load_package_domain_pack_registry
     from src.lib.domain_packs.validation_registry import (
         DomainPackValidationRegistry,
@@ -142,6 +143,7 @@ def validate_runtime_packages() -> PackageRegistry:
         domain_pack_validation_registries,
         registry,
         agent_resolver=build_package_scoped_agent_resolver(packages_dir),
+        output_schema_resolver=build_package_scoped_output_schema_resolver(packages_dir),
     )
     logger.info(
         "Validated runtime packages: loaded=%s failed=%s status=%s tool_bindings=%s domain_packs=%s",

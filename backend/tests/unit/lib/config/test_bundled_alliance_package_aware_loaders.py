@@ -8,6 +8,10 @@ import yaml
 
 from src.lib.config import agent_loader, agent_sources, prompt_loader, schema_discovery
 from src.lib.config.tool_policy_defaults_loader import load_tool_policy_defaults
+from src.schemas.domain_validator import (
+    DomainValidatorResultBase,
+    is_domain_validator_result_schema,
+)
 from src.schemas.models import DomainEnvelopeExtractionResult
 
 from ..packages import find_repo_root
@@ -155,8 +159,46 @@ def test_bundled_alliance_discover_agent_schemas_defaults_to_runtime_packages(mo
 
     schemas = schema_discovery.discover_agent_schemas(force_reload=True)
 
-    assert "GeneValidationEnvelope" in schemas
-    assert schema_discovery.get_schema_for_agent("gene").__name__ == "GeneValidationEnvelope"
+    assert "GeneResultEnvelope" in schemas
+    assert schema_discovery.get_schema_for_agent("gene").__name__ == "GeneResultEnvelope"
+
+
+def test_bundled_alliance_validation_agent_schemas_are_binding_ready(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    schemas = schema_discovery.discover_agent_schemas(force_reload=True)
+    validation_agents = [
+        agent
+        for agent in agents.values()
+        if agent.category == "Validation" and agent.output_schema
+    ]
+
+    readiness = {
+        agent.folder_name: is_domain_validator_result_schema(
+            schema_discovery.resolve_output_schema(agent.output_schema or "")
+        )
+        for agent in validation_agents
+    }
+
+    assert validation_agents
+    assert all(readiness.values()), readiness
+    for agent in validation_agents:
+        schema = schemas[agent.output_schema]
+        assert issubclass(schema, DomainValidatorResultBase)
+        status_schema = schema.model_json_schema()["properties"]["status"]
+        assert "under_development" not in status_schema.get("enum", [])
+
+
+def test_bundled_alliance_output_resolution_prefers_package_schema(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    schema_discovery.discover_agent_schemas(force_reload=True)
+
+    resolved = schema_discovery.resolve_output_schema("GeneResultEnvelope")
+
+    assert resolved is schema_discovery.get_agent_schema("GeneResultEnvelope")
+    assert resolved.__module__.startswith("agent_schemas.agr_alliance.gene")
 
 
 def test_bundled_alliance_extractors_use_repair_response_schema(monkeypatch):

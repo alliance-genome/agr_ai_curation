@@ -176,6 +176,7 @@ def _options_for_agent_entry(
 def _load_package_domain_pack_registry():
     from src.lib.config.package_default_sources import resolve_packages_dir
     from src.lib.config.agent_loader import build_package_scoped_agent_resolver
+    from src.lib.config.schema_discovery import build_package_scoped_output_schema_resolver
     from src.lib.domain_packs.registry import load_package_domain_pack_registry
     from src.lib.packages import load_package_registry
 
@@ -190,6 +191,7 @@ def _load_package_domain_pack_registry():
         validation_registries,
         runtime_package_registry,
         agent_resolver=build_package_scoped_agent_resolver(packages_dir),
+        output_schema_resolver=build_package_scoped_output_schema_resolver(packages_dir),
     )
     return registry
 

@@ -6,7 +6,7 @@ configuration sources. Each agent bundle may contain a schema.py file with
 envelope classes.
 
 Envelope classes are identified by:
-- Class name ending in "Envelope" (e.g., GeneValidationEnvelope)
+- Class name ending in "Envelope" (e.g., GeneResultEnvelope)
 - Or having __envelope_class__ = True attribute
 
 Usage:
@@ -16,7 +16,7 @@ Usage:
     schemas = discover_agent_schemas()
 
     # Get a specific schema
-    GeneEnvelope = get_agent_schema("GeneValidationEnvelope")
+    GeneEnvelope = get_agent_schema("GeneResultEnvelope")
 """
 
 import importlib.util
@@ -72,10 +72,21 @@ def _is_envelope_class(cls: Any) -> bool:
     return False
 
 
+def _is_configured_schema_class(cls: Any, configured_schema: str | None) -> bool:
+    if configured_schema is None:
+        return False
+    if not isinstance(cls, type):
+        return False
+    if not issubclass(cls, BaseModel):
+        return False
+    return cls is not BaseModel and cls.__name__ == configured_schema
+
+
 def _load_schema_module(
     schema_path: Path,
     folder_name: str,
     package_id: str | None = None,
+    configured_schema: str | None = None,
 ) -> Dict[str, Type[BaseModel]]:
     """
     Dynamically load a schema.py file and extract envelope classes.
@@ -130,7 +141,7 @@ def _load_schema_module(
             continue
 
         obj = getattr(module, name)
-        if _is_envelope_class(obj):
+        if _is_envelope_class(obj) or _is_configured_schema_class(obj, configured_schema):
             # Only include classes defined in this module, not imported ones
             # This prevents StructuredMessageEnvelope (imported base class) from being registered
             if getattr(obj, "__module__", None) == module_name:
@@ -150,6 +161,69 @@ def _configured_output_schema_name(agent_yaml: Path | None) -> str | None:
         return None
     schema_name = str(data.get("output_schema") or "").strip()
     return schema_name or None
+
+
+def _discover_schema_indexes(
+    agents_path: Optional[Path] = None,
+) -> tuple[Dict[str, Type[BaseModel]], Dict[str, Type[BaseModel]]]:
+    schema_registry: Dict[str, Type[BaseModel]] = {}
+    schema_by_agent: Dict[str, Type[BaseModel]] = {}
+
+    for source in resolve_agent_config_sources(agents_path):
+        schema_py = source.schema_py
+        if schema_py is None or not schema_py.exists():
+            logger.debug('No schema.py in %s', source.folder_name)
+            continue
+
+        try:
+            configured_schema = _configured_output_schema_name(source.agent_yaml)
+            envelope_classes = _load_schema_module(
+                schema_py,
+                source.folder_name,
+                source.package_id,
+                configured_schema,
+            )
+
+            for class_name, cls in envelope_classes.items():
+                if class_name in schema_registry:
+                    logger.warning(
+                        f"Duplicate schema class name: {class_name} "
+                        f"(already registered, skipping from {source.folder_name})"
+                    )
+                    continue
+
+                schema_registry[class_name] = cls
+                logger.info('Registered schema: %s from %s/schema.py', class_name, source.folder_name)
+
+            # Also map by agent folder for convenience. Prefer the schema
+            # named in agent.yaml when the bundle defines multiple schemas.
+            if envelope_classes:
+                if configured_schema and configured_schema in envelope_classes:
+                    primary_class = envelope_classes[configured_schema]
+                elif configured_schema:
+                    # Package schemas are the canonical owner when a bundle
+                    # ships schema.py; the configured output class must be
+                    # defined there instead of relying on a backend shadow.
+                    available_schemas = ", ".join(sorted(envelope_classes))
+                    raise ValueError(
+                        f"agent.yaml output_schema '{configured_schema}' not found "
+                        f"in {source.folder_name}/schema.py; available schemas: "
+                        f"{available_schemas or '(none)'}"
+                    )
+                else:
+                    primary_class = list(envelope_classes.values())[0]
+                schema_by_agent[source.folder_name] = primary_class
+
+        except Exception as e:
+            logger.error(
+                'Failed to load schemas from %s%s: %s',
+                source.folder_name,
+                f" in package {source.package_id}" if source.package_id else "",
+                e,
+            )
+            raise
+
+    return schema_registry, schema_by_agent
 
 
 def discover_agent_schemas(
@@ -189,63 +263,7 @@ def discover_agent_schemas(
         )
         logger.info('Discovering agent schemas from: %s', resolved_agents_path)
 
-        _schema_registry = {}
-        _schema_by_agent = {}
-
-        for source in resolve_agent_config_sources(agents_path):
-            schema_py = source.schema_py
-            if schema_py is None or not schema_py.exists():
-                logger.debug('No schema.py in %s', source.folder_name)
-                continue
-
-            try:
-                envelope_classes = _load_schema_module(
-                    schema_py,
-                    source.folder_name,
-                    source.package_id,
-                )
-
-                for class_name, cls in envelope_classes.items():
-                    if class_name in _schema_registry:
-                        logger.warning(
-                            f"Duplicate schema class name: {class_name} "
-                            f"(already registered, skipping from {source.folder_name})"
-                        )
-                        continue
-
-                    _schema_registry[class_name] = cls
-                    logger.info('Registered schema: %s from %s/schema.py', class_name, source.folder_name)
-
-                # Also map by agent folder for convenience. Prefer the schema
-                # named in agent.yaml when the bundle defines multiple schemas.
-                if envelope_classes:
-                    configured_schema = _configured_output_schema_name(
-                        source.agent_yaml
-                    )
-                    if configured_schema and configured_schema in envelope_classes:
-                        primary_class = envelope_classes[configured_schema]
-                    elif configured_schema and len(envelope_classes) > 1:
-                        # Single-schema validation bundles may name a shared
-                        # runtime output model; multiple local envelope classes
-                        # require an exact agent.yaml selector.
-                        available_schemas = ", ".join(sorted(envelope_classes))
-                        raise ValueError(
-                            f"agent.yaml output_schema '{configured_schema}' not found "
-                            f"in {source.folder_name}/schema.py; available schemas: "
-                            f"{available_schemas}"
-                        )
-                    else:
-                        primary_class = list(envelope_classes.values())[0]
-                    _schema_by_agent[source.folder_name] = primary_class
-
-            except Exception as e:
-                logger.error(
-                    'Failed to load schemas from %s%s: %s',
-                    source.folder_name,
-                    f" in package {source.package_id}" if source.package_id else "",
-                    e,
-                )
-                raise
+        _schema_registry, _schema_by_agent = _discover_schema_indexes(agents_path)
 
         _initialized = True
         logger.info('Discovered %s schema envelope classes', len(_schema_registry))
@@ -258,7 +276,7 @@ def get_agent_schema(class_name: str) -> Optional[Type[BaseModel]]:
     Get a schema class by its class name.
 
     Args:
-        class_name: The class name (e.g., "GeneValidationEnvelope")
+        class_name: The class name (e.g., "GeneResultEnvelope")
 
     Returns:
         Pydantic model class or None if not found
@@ -267,6 +285,34 @@ def get_agent_schema(class_name: str) -> Optional[Type[BaseModel]]:
         discover_agent_schemas()
 
     return _schema_registry.get(class_name)
+
+
+def resolve_output_schema(schema_key: str) -> Optional[Type[BaseModel]]:
+    """Resolve a runtime output schema from canonical schema registration."""
+
+    if not _initialized:
+        discover_agent_schemas()
+
+    return _schema_registry.get(schema_key)
+
+
+def build_package_scoped_output_schema_resolver(
+    agents_path: Optional[Path] = None,
+) -> Any:
+    """Build an output-schema resolver without replacing the shared schema cache."""
+
+    local_registry: Dict[str, Type[BaseModel]] | None = None
+    resolver_lock = threading.Lock()
+
+    def resolve(schema_key: str) -> Optional[Type[BaseModel]]:
+        nonlocal local_registry
+        if local_registry is None:
+            with resolver_lock:
+                if local_registry is None:
+                    local_registry, _schema_by_folder = _discover_schema_indexes(agents_path)
+        return local_registry.get(schema_key)
+
+    return resolve
 
 
 def get_schema_for_agent(folder_name: str) -> Optional[Type[BaseModel]]:
@@ -309,7 +355,7 @@ def get_schema_json(class_name: str) -> Optional[Dict[str, Any]]:
     Get the JSON schema for a registered envelope class.
 
     Args:
-        class_name: The class name (e.g., "GeneValidationEnvelope")
+        class_name: The class name (e.g., "GeneResultEnvelope")
 
     Returns:
         JSON schema dictionary or None if not found

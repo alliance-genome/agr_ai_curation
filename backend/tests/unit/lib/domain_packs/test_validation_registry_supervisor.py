@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from pydantic import BaseModel
 
 from agr_ai_curation_runtime import agr_lookup
 from src.lib import lookup_status
@@ -29,6 +30,38 @@ from src.schemas.domain_envelope import (
     ValidationFindingSeverity,
     ValidationFindingStatus,
 )
+from src.schemas.domain_validator import DomainValidatorResultBase
+
+
+class BindingReadyValidatorResult(DomainValidatorResultBase):
+    """Fixture validator result that satisfies active binding schema checks."""
+
+
+class SummaryOnlyValidatorResult(BaseModel):
+    """Fixture chat-era schema lacking dispatcher-required validator fields."""
+
+    summary: str
+
+
+def _validator_agent(
+    *,
+    package_id: str = "org.validators",
+    agent_id: str = "shared_validator",
+    output_schema: str = "BindingReadyValidatorResult",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        package_id=package_id,
+        agent_id=agent_id,
+        output_schema=output_schema,
+    )
+
+
+def _validator_schema_resolver(schema_key: str):
+    if schema_key == "BindingReadyValidatorResult":
+        return BindingReadyValidatorResult
+    if schema_key == "SummaryOnlyValidatorResult":
+        return SummaryOnlyValidatorResult
+    return None
 
 
 def test_lookup_status_constants_are_shared_with_agr_lookup_contract():
@@ -280,16 +313,57 @@ def test_active_validator_agent_reference_validates_package_agent_and_dependency
             dependencies={("org.owner", "org.validators")},
         ),
         agent_resolver=lambda package_id, agent_id: (
-            SimpleNamespace(package_id=package_id, agent_id=agent_id)
+            _validator_agent(package_id=package_id, agent_id=agent_id)
             if (package_id, agent_id) == ("org.validators", "shared_validator")
             else None
         ),
+        output_schema_resolver=_validator_schema_resolver,
     )
 
     option = registry.validation_attachment_options()[0].to_dict()
     assert option["validator_id"] == "org.validators:shared_validator"
     assert option["validator_package_id"] == "org.validators"
     assert option["validator_agent_id"] == "shared_validator"
+
+
+def test_active_validator_agent_reference_requires_binding_ready_schema(tmp_path: Path):
+    pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    with pytest.raises(ValidationRegistryError) as exc_info:
+        validate_active_validator_agent_references(
+            [registry],
+            _package_registry(
+                "org.owner",
+                "org.validators",
+                dependencies={("org.owner", "org.validators")},
+            ),
+            agent_resolver=lambda _package_id, _agent_id: _validator_agent(
+                output_schema="SummaryOnlyValidatorResult"
+            ),
+            output_schema_resolver=_validator_schema_resolver,
+        )
+
+    assert "must inherit from or embed DomainValidatorResultBase" in str(exc_info.value)
+
+
+def test_active_validator_agent_reference_requires_output_schema(tmp_path: Path):
+    pack = _loaded_owned_pack(tmp_path, _validator_agent_pack_text())
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    with pytest.raises(ValidationRegistryError) as exc_info:
+        validate_active_validator_agent_references(
+            [registry],
+            _package_registry(
+                "org.owner",
+                "org.validators",
+                dependencies={("org.owner", "org.validators")},
+            ),
+            agent_resolver=lambda _package_id, _agent_id: _validator_agent(output_schema=""),
+            output_schema_resolver=_validator_schema_resolver,
+        )
+
+    assert "without an output_schema" in str(exc_info.value)
 
 
 def test_active_validator_agent_reference_fails_for_undeclared_cross_package_dependency(
@@ -302,7 +376,8 @@ def test_active_validator_agent_reference_fails_for_undeclared_cross_package_dep
         validate_active_validator_agent_references(
             [registry],
             _package_registry("org.owner", "org.validators"),
-            agent_resolver=lambda _package_id, _agent_id: SimpleNamespace(),
+            agent_resolver=lambda _package_id, _agent_id: _validator_agent(),
+            output_schema_resolver=_validator_schema_resolver,
         )
 
     assert "must declare dependency 'org.validators'" in str(exc_info.value)
@@ -318,7 +393,8 @@ def test_active_metadata_validator_agent_reference_requires_declared_dependency(
         validate_active_validator_agent_references(
             [registry],
             _package_registry("org.owner", "org.validators"),
-            agent_resolver=lambda _package_id, _agent_id: SimpleNamespace(),
+            agent_resolver=lambda _package_id, _agent_id: _validator_agent(),
+            output_schema_resolver=_validator_schema_resolver,
         )
 
     message = str(exc_info.value)
@@ -339,6 +415,7 @@ def test_active_validator_agent_reference_fails_for_missing_agent(tmp_path: Path
                 dependencies={("org.owner", "org.validators")},
             ),
             agent_resolver=lambda _package_id, _agent_id: None,
+            output_schema_resolver=_validator_schema_resolver,
         )
 
     assert "references missing validator agent 'org.validators:shared_validator'" in str(
@@ -356,7 +433,8 @@ def test_active_metadata_validator_agent_reference_fails_for_missing_package(
         validate_active_validator_agent_references(
             [registry],
             _package_registry("org.owner"),
-            agent_resolver=lambda _package_id, _agent_id: SimpleNamespace(),
+            agent_resolver=lambda _package_id, _agent_id: _validator_agent(),
+            output_schema_resolver=_validator_schema_resolver,
         )
 
     message = str(exc_info.value)
@@ -379,6 +457,7 @@ def test_active_metadata_validator_agent_reference_fails_for_missing_agent(
                 dependencies={("org.owner", "org.validators")},
             ),
             agent_resolver=lambda _package_id, _agent_id: None,
+            output_schema_resolver=_validator_schema_resolver,
         )
 
     message = str(exc_info.value)
