@@ -3301,6 +3301,7 @@ def test_validation_rerun_keeps_waiver_only_for_identical_finding_identity():
         ],
     )
     original_finding = ValidationFinding(
+        finding_id="museum-title-finding",
         severity=ValidationFindingSeverity.BLOCKER,
         message="Title requires external catalog verification.",
         code="museum.catalog.title_unverified",
@@ -3327,7 +3328,19 @@ def test_validation_rerun_keeps_waiver_only_for_identical_finding_identity():
 
     same_input_envelope, same_input_appended = append_validation_findings_to_envelope(
         envelope,
-        [original_finding],
+        [
+            original_finding.model_copy(
+                update={
+                    "details": {
+                        **original_finding.details,
+                        "validation_request": {
+                            "request_id": "validation-run-2",
+                            "selected_inputs": {"title": "Bronze astrolabe"},
+                        },
+                    }
+                }
+            )
+        ],
     )
     changed_input_envelope, changed_input_appended = append_validation_findings_to_envelope(
         same_input_envelope,
@@ -3337,7 +3350,7 @@ def test_validation_rerun_keeps_waiver_only_for_identical_finding_identity():
                     "details": {
                         **original_finding.details,
                         "validation_request": {
-                            "request_id": "validation-run-2",
+                            "request_id": "validation-run-3",
                             "selected_inputs": {"title": "Silver astrolabe"},
                         },
                     }
@@ -3352,6 +3365,7 @@ def test_validation_rerun_keeps_waiver_only_for_identical_finding_identity():
     assert len(changed_input_envelope.validation_findings) == 2
     assert changed_input_envelope.validation_findings[0].status is ValidationFindingStatus.WAIVED
     assert changed_input_envelope.validation_findings[1].status is ValidationFindingStatus.OPEN
+    assert changed_input_envelope.validation_findings[1].finding_id != "museum-title-finding"
 
 
 def test_submission_preview_rejects_unknown_candidate_ids(db_session):
