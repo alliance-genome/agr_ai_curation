@@ -161,6 +161,28 @@ def test_input_selector_parser_rejects_malformed_selectors(selector: dict):
         DomainPackInputSelector.model_validate(selector)
 
 
+@pytest.mark.parametrize(
+    "selector",
+    [
+        {"source": "literal", "value": "constant", "path": "value"},
+        {"source": "payload", "path": "value", "field_path": "ref"},
+        {"source": "payload", "path": "value", "record_id": "evidence-1"},
+        {"source": "payload", "path": "value", "object_type": "Gene"},
+        {"source": "payload", "path": "value", "value": "constant"},
+        {"source": "envelope_metadata", "path": "run_id", "record_id": "evidence-1"},
+        {"source": "object_metadata", "path": "status", "object_type": "Gene"},
+        {"source": "evidence_record", "path": "quote", "object_type": "Gene"},
+        {"source": "evidence_record", "path": "quote", "field_path": "ref"},
+        {"source": "evidence_record", "path": "quote", "value": "constant"},
+        {"source": "object_ref", "field_path": "ref", "value": "constant"},
+        {"source": "object_ref", "object_type": "RefObject", "record_id": "evidence-1"},
+    ],
+)
+def test_input_selector_parser_rejects_source_specific_extra_fields(selector: dict):
+    with pytest.raises(ValidationError, match="do not support field"):
+        DomainPackInputSelector.model_validate(selector)
+
+
 def test_active_payload_selector_path_is_validated_at_registry_load(tmp_path: Path):
     pack = _loaded_pack(
         tmp_path,

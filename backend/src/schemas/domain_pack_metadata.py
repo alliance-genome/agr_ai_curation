@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 from pathlib import PurePosixPath
-from typing import Any, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -160,6 +160,21 @@ class DomainPackValidatorCuratorOverride(DomainPackMetadataBaseModel):
 class DomainPackInputSelector(DomainPackMetadataBaseModel):
     """Deterministic selector for one validator input value."""
 
+    _ALLOWED_FIELDS_BY_SOURCE: ClassVar[dict[str, set[str]]] = {
+        "payload": {"source", "path", "required"},
+        "envelope_metadata": {"source", "path", "required"},
+        "object_metadata": {"source", "path", "required"},
+        "evidence_record": {"source", "path", "record_id", "required"},
+        "object_ref": {
+            "source",
+            "path",
+            "field_path",
+            "object_type",
+            "required",
+        },
+        "literal": {"source", "value", "required"},
+    }
+
     source: Literal[
         "payload",
         "envelope_metadata",
@@ -204,6 +219,13 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
 
     @model_validator(mode="after")
     def _validate_selector_shape(self) -> "DomainPackInputSelector":
+        allowed_fields = self._ALLOWED_FIELDS_BY_SOURCE[self.source]
+        invalid_fields = sorted(self.model_fields_set - allowed_fields)
+        if invalid_fields:
+            field_list = ", ".join(invalid_fields)
+            raise ValueError(
+                f"{self.source} selectors do not support field(s): {field_list}"
+            )
         if (
             self.source
             in {
