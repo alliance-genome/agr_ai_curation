@@ -8,6 +8,7 @@ reusing the shared selector and envelope finding contracts.
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -15,6 +16,7 @@ from pydantic import ValidationError
 
 from src.lib.lookup_status import (
     LOOKUP_STATUS_AMBIGUOUS,
+    LOOKUP_STATUS_BLOCKED,
     LOOKUP_STATUS_NOT_FOUND,
     LOOKUP_STATUS_SUCCESS,
     LOOKUP_STATUS_TRANSIENT,
@@ -41,6 +43,17 @@ from .validation_registry import (
     ValidatorBindingMatch,
 )
 from .validation_supervisor import append_validation_findings_to_envelope
+
+
+LOGGER = logging.getLogger(__name__)
+
+_LOOKUP_OUTCOME_TO_STATUS = {
+    "success": LOOKUP_STATUS_SUCCESS,
+    "not_found": LOOKUP_STATUS_NOT_FOUND,
+    "ambiguous": LOOKUP_STATUS_AMBIGUOUS,
+    "conflict": LOOKUP_STATUS_BLOCKED,
+    "error": LOOKUP_STATUS_TRANSIENT,
+}
 
 
 class DomainValidatorAgentRunner(Protocol):
@@ -103,6 +116,12 @@ def dispatch_active_validator_bindings(
                 request=request,
             )
         except Exception as exc:
+            LOGGER.warning(
+                "Package-scoped validator agent failed for binding %s request %s",
+                request.validator_binding_id,
+                request.request_id,
+                exc_info=exc,
+            )
             validator_result = _unresolved_result_for_dispatch_problem(
                 request,
                 reason="validator_agent_error",
@@ -110,6 +129,10 @@ def dispatch_active_validator_bindings(
             )
 
         validator_result = _enforce_expected_result_fields(
+            validator_result,
+            request=request,
+        )
+        validator_result = _ensure_classifiable_validator_result(
             validator_result,
             request=request,
         )
@@ -279,6 +302,25 @@ def _unresolved_result_for_dispatch_problem(
     )
 
 
+def _ensure_classifiable_validator_result(
+    result: DomainValidatorResultBase,
+    *,
+    request: DomainValidationRequest,
+) -> DomainValidatorResultBase:
+    try:
+        for attempt in result.lookup_attempts:
+            _lookup_status_for_attempt(attempt.outcome)
+        if result.status == "unresolved":
+            _failure_classification(result)
+    except ValueError as exc:
+        return _unresolved_result_for_dispatch_problem(
+            request,
+            reason="invalid_schema",
+            explanation=f"Validator agent returned incompatible output: {exc}",
+        )
+    return result
+
+
 def _finding_for_validator_result(
     *,
     match: ValidatorBindingMatch,
@@ -354,10 +396,10 @@ def _lookup_attempt_details(
                 "attempted_query": {
                     "request_id": request.request_id,
                     "input_fields": dict(request.selected_inputs),
-                    "provider_query": payload.get("query", {}),
+                    "provider_query": payload["query"],
                 },
                 "lookup_status": lookup_status,
-                "candidate_count": payload.get("result_count", 0),
+                "candidate_count": payload["result_count"],
                 "resolved_id": _resolved_id(result),
                 "resolved_label": _resolved_label(result),
                 "explanation": payload.get("message") or result.explanation,
@@ -369,13 +411,10 @@ def _lookup_attempt_details(
 
 
 def _lookup_status_for_attempt(outcome: Any) -> str:
-    if outcome == "success":
-        return LOOKUP_STATUS_SUCCESS
-    if outcome == "not_found":
-        return LOOKUP_STATUS_NOT_FOUND
-    if outcome == "ambiguous":
-        return LOOKUP_STATUS_AMBIGUOUS
-    return LOOKUP_STATUS_TRANSIENT
+    try:
+        return _LOOKUP_OUTCOME_TO_STATUS[outcome]
+    except KeyError as exc:
+        raise ValueError(f"Unrecognized lookup attempt outcome: {outcome!r}") from exc
 
 
 def _failure_classification(result: DomainValidatorResultBase) -> str:
@@ -393,7 +432,13 @@ def _failure_classification(result: DomainValidatorResultBase) -> str:
         return "not_found"
     if "conflict" in outcomes:
         return "conflict"
-    return "transient" if "error" in outcomes else "conflict"
+    if "error" in outcomes:
+        return "transient"
+    raise ValueError(
+        "Unable to classify unresolved validator result "
+        f"{result.request_id!r} with lookup outcomes {sorted(outcomes)!r} "
+        f"and methods {sorted(methods)!r}"
+    )
 
 
 def _candidate_matches(result: DomainValidatorResultBase) -> list[dict[str, Any]]:

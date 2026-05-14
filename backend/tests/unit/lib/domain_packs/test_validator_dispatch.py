@@ -249,6 +249,79 @@ def test_invalid_validator_schema_becomes_controlled_unresolved_result(
     assert "incompatible output" in result.validator_results[0].explanation
 
 
+def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+
+    def _runner(request, *, binding):
+        return _result_payload(
+            request,
+            status="unresolved",
+            resolved_values={},
+            outcome="timeout",
+        )
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+    )
+
+    finding = _single_result_finding(result)
+    assert result.validator_results[0].status == "unresolved"
+    assert finding.details["failure_classification"] == "invalid_schema"
+    assert "incompatible output" in result.validator_results[0].explanation
+
+
+def test_conflict_lookup_outcome_uses_explicit_blocked_status(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+
+    def _runner(request, *, binding):
+        return _result_payload(
+            request,
+            status="unresolved",
+            resolved_values={},
+            outcome="conflict",
+        )
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+    )
+
+    finding = _single_result_finding(result)
+    assert finding.details["failure_classification"] == "conflict"
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == "blocked"
+
+
+def test_unclassifiable_unresolved_output_becomes_invalid_schema_result(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+
+    def _runner(request, *, binding):
+        payload = _result_payload(
+            request,
+            status="unresolved",
+            resolved_values={},
+        )
+        payload["lookup_attempts"] = []
+        return payload
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+    )
+
+    finding = _single_result_finding(result)
+    assert result.validator_results[0].status == "unresolved"
+    assert finding.details["failure_classification"] == "invalid_schema"
+    assert "Unable to classify unresolved validator result" in (
+        result.validator_results[0].explanation
+    )
+
+
 def test_resolved_validator_missing_expected_fields_is_unresolved(
     tmp_path: Path,
 ):
