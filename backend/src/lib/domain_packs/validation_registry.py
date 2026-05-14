@@ -20,6 +20,7 @@ from src.schemas.domain_envelope import (
 from src.schemas.domain_pack_metadata import (
     DomainPackFieldDefinition,
     DomainPackFieldType,
+    DomainPackInputSelector,
     DomainPackObjectDefinition,
 )
 
@@ -133,7 +134,7 @@ class ValidatorBinding:
     object_roles: tuple[str, ...] = ()
     field_paths: tuple[str, ...] = ()
     field_types: tuple[DomainPackFieldType, ...] = ()
-    input_fields: dict[str, Any] = field(default_factory=dict)
+    input_fields: dict[str, DomainPackInputSelector] = field(default_factory=dict)
     expected_result_fields: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -172,9 +173,14 @@ class ValidatorBinding:
         if self.field_paths:
             details["field_paths"] = list(self.field_paths)
         if self.field_types:
-            details["field_types"] = [field_type.value for field_type in self.field_types]
+            details["field_types"] = [
+                field_type.value for field_type in self.field_types
+            ]
         if self.input_fields:
-            details["input_fields"] = dict(self.input_fields)
+            details["input_fields"] = {
+                input_name: selector.model_dump(mode="json", exclude_none=True)
+                for input_name, selector in self.input_fields.items()
+            }
         if self.expected_result_fields:
             details["expected_result_fields"] = dict(self.expected_result_fields)
         if self.max_tool_calls is not None:
@@ -230,7 +236,9 @@ class ValidationAttachmentOption:
             "object_type": self.object_type,
             "object_role": self.object_role,
             "field_path": self.field_path,
-            "field_type": self.field_type.value if self.field_type is not None else None,
+            "field_type": (
+                self.field_type.value if self.field_type is not None else None
+            ),
             "label": self.label,
             "target_label": self.target_label,
             "description": self.description,
@@ -339,8 +347,8 @@ class ValidatorBindingMatch:
             if self.object_envelope.model_ref is not None:
                 details["object_model_ref"] = self.object_envelope.model_ref
             if self.object_envelope.schema_ref is not None:
-                details["object_schema_ref"] = self.object_envelope.schema_ref.model_dump(
-                    mode="json"
+                details["object_schema_ref"] = (
+                    self.object_envelope.schema_ref.model_dump(mode="json")
                 )
         if self.object_definition is not None:
             if self.object_definition.model_ref is not None:
@@ -376,7 +384,9 @@ class DomainPackValidationRegistry:
     field_policies: tuple[FieldValidationPolicy, ...]
 
     @classmethod
-    def from_domain_pack(cls, domain_pack: LoadedDomainPack) -> "DomainPackValidationRegistry":
+    def from_domain_pack(
+        cls, domain_pack: LoadedDomainPack
+    ) -> "DomainPackValidationRegistry":
         """Build a validation registry from one loaded domain pack."""
 
         metadata = domain_pack.metadata
@@ -403,8 +413,11 @@ class DomainPackValidationRegistry:
                 )
 
         normalized_bindings = tuple(
-            sorted(bindings, key=lambda binding: (binding.state.value, binding.binding_id))
+            sorted(
+                bindings, key=lambda binding: (binding.state.value, binding.binding_id)
+            )
         )
+        _validate_active_binding_selectors(domain_pack, normalized_bindings)
         return cls(
             domain_pack=domain_pack,
             validator_metadata=tuple(
@@ -478,7 +491,9 @@ class DomainPackValidationRegistry:
             if not matched_objects:
                 if _binding_has_target_constraints(binding):
                     continue
-                matches.append(ValidatorBindingMatch(binding=binding, envelope=envelope))
+                matches.append(
+                    ValidatorBindingMatch(binding=binding, envelope=envelope)
+                )
                 continue
 
             for object_envelope, object_definition in matched_objects:
@@ -572,7 +587,9 @@ class DomainPackValidationRegistry:
                             scope="object",
                             object_type=object_definition.object_type,
                             object_display_name=object_definition.display_name,
-                            object_role=_metadata_object_role(object_definition.metadata),
+                            object_role=_metadata_object_role(
+                                object_definition.metadata
+                            ),
                             export_blocking=binding.blocking,
                         )
                     )
@@ -804,7 +821,9 @@ def _collect_validator_bindings(
 
         bindings.append(
             ValidatorBinding(
-                binding_id=_required_string(raw_item, "binding_id", "validator_bindings"),
+                binding_id=_required_string(
+                    raw_item, "binding_id", "validator_bindings"
+                ),
                 state=state,
                 source_scope=source_scope,
                 source_object_type=source_object_type,
@@ -824,12 +843,12 @@ def _collect_validator_bindings(
                     applies_to.get("domain_pack_id")
                 ),
                 object_types=object_types,
-                object_roles=_coerce_string_tuple(
-                    applies_to.get("object_roles")
+                object_roles=_coerce_string_tuple(applies_to.get("object_roles")),
+                field_paths=tuple(
+                    validate_field_path_syntax(path) for path in field_paths
                 ),
-                field_paths=tuple(validate_field_path_syntax(path) for path in field_paths),
                 field_types=field_types,
-                input_fields=dict(_optional_mapping(raw_item.get("input_fields"), "input_fields")),
+                input_fields=_coerce_input_selectors(raw_item.get("input_fields")),
                 expected_result_fields=dict(
                     _optional_mapping(
                         raw_item.get("expected_result_fields"),
@@ -864,7 +883,9 @@ def _iter_validator_binding_items(
         if state_items is None:
             continue
         if not isinstance(state_items, list):
-            raise ValidationRegistryError(f"validator_bindings.{state.value} must be a list")
+            raise ValidationRegistryError(
+                f"validator_bindings.{state.value} must be a list"
+            )
         normalized.extend(
             (state, _required_mapping_item(raw_item, "validator_bindings"))
             for raw_item in state_items
@@ -1013,18 +1034,43 @@ def _validator_agent_ref(raw_item: Mapping[str, Any]) -> ValidatorAgentRef | Non
     package_id = raw_ref.get("package_id")
     agent_id = raw_ref.get("agent_id")
     if not isinstance(package_id, str) or not package_id.strip():
-        raise ValidationRegistryError("validator_agent.package_id must be a non-empty string")
+        raise ValidationRegistryError(
+            "validator_agent.package_id must be a non-empty string"
+        )
     if package_id != package_id.strip():
         raise ValidationRegistryError(
             "validator_agent.package_id must not have leading or trailing whitespace"
         )
     if not isinstance(agent_id, str) or not agent_id.strip():
-        raise ValidationRegistryError("validator_agent.agent_id must be a non-empty string")
+        raise ValidationRegistryError(
+            "validator_agent.agent_id must be a non-empty string"
+        )
     if agent_id != agent_id.strip():
         raise ValidationRegistryError(
             "validator_agent.agent_id must not have leading or trailing whitespace"
         )
     return ValidatorAgentRef(package_id=package_id, agent_id=agent_id)
+
+
+def _coerce_input_selectors(value: Any) -> dict[str, DomainPackInputSelector]:
+    raw_selectors = _optional_mapping(value, "input_fields")
+    selectors: dict[str, DomainPackInputSelector] = {}
+    for raw_name, raw_selector in raw_selectors.items():
+        if not isinstance(raw_name, str) or not raw_name.strip():
+            raise ValidationRegistryError("input_fields keys must be non-empty strings")
+        if raw_name != raw_name.strip():
+            raise ValidationRegistryError(
+                "input_fields keys must not have leading or trailing whitespace"
+            )
+        if not isinstance(raw_selector, Mapping):
+            raise ValidationRegistryError(
+                f"input_fields.{raw_name} must be an explicit selector mapping"
+            )
+        try:
+            selectors[raw_name] = DomainPackInputSelector.model_validate(raw_selector)
+        except ValueError as exc:
+            raise ValidationRegistryError(f"input_fields.{raw_name}: {exc}") from exc
+    return selectors
 
 
 def _optional_bool(value: Any) -> bool:
@@ -1158,13 +1204,155 @@ def _binding_targets_policy_field(
     object_definition: DomainPackObjectDefinition,
     field_definition: DomainPackFieldDefinition,
 ) -> bool:
-    if binding.object_types and object_definition.object_type not in binding.object_types:
+    if (
+        binding.object_types
+        and object_definition.object_type not in binding.object_types
+    ):
         return False
     if binding.field_paths and field_definition.field_path not in binding.field_paths:
         return False
     if binding.field_types and field_definition.field_type not in binding.field_types:
         return False
     return _binding_has_field_constraints(binding)
+
+
+def _validate_active_binding_selectors(
+    domain_pack: LoadedDomainPack,
+    bindings: tuple[ValidatorBinding, ...],
+) -> None:
+    object_definitions = {
+        object_definition.object_type: object_definition
+        for object_definition in domain_pack.metadata.object_definitions
+    }
+    errors: list[str] = []
+    for binding in bindings:
+        if binding.state is not ValidationBindingState.ACTIVE:
+            continue
+        target_definitions = _binding_target_object_definitions(
+            binding,
+            object_definitions,
+        )
+        for input_name, selector in binding.input_fields.items():
+            _validate_active_selector_against_targets(
+                errors=errors,
+                domain_pack_id=domain_pack.pack_id,
+                binding=binding,
+                input_name=input_name,
+                selector=selector,
+                target_definitions=target_definitions,
+                object_definitions=object_definitions,
+            )
+    if errors:
+        raise ValidationRegistryError("; ".join(errors))
+
+
+def _validate_active_selector_against_targets(
+    *,
+    errors: list[str],
+    domain_pack_id: str,
+    binding: ValidatorBinding,
+    input_name: str,
+    selector: DomainPackInputSelector,
+    target_definitions: tuple[DomainPackObjectDefinition, ...],
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+) -> None:
+    location = (
+        f"Domain pack '{domain_pack_id}' active validator binding "
+        f"'{binding.binding_id}' input_fields.{input_name}"
+    )
+
+    if selector.source == "payload":
+        if not target_definitions:
+            return
+        for object_definition in target_definitions:
+            if not _object_definition_declares_payload_path(
+                object_definition,
+                selector.path or "",
+            ):
+                errors.append(
+                    f"{location} payload path '{selector.path}' is not declared for "
+                    f"object_type '{object_definition.object_type}'"
+                )
+        return
+
+    if selector.source == "object_ref":
+        if selector.field_path is not None:
+            for object_definition in target_definitions:
+                field_definition = _field_definition_for_path(
+                    object_definition,
+                    selector.field_path,
+                )
+                if field_definition is None:
+                    errors.append(
+                        f"{location} object_ref field_path '{selector.field_path}' "
+                        f"is not declared for object_type '{object_definition.object_type}'"
+                    )
+                    continue
+                if field_definition.field_type not in {
+                    DomainPackFieldType.OBJECT_REF,
+                    DomainPackFieldType.FIELD_REF,
+                }:
+                    errors.append(
+                        f"{location} object_ref field_path '{selector.field_path}' "
+                        f"must target an object_ref or field_ref field"
+                    )
+        if selector.object_type is not None:
+            ref_definition = object_definitions.get(selector.object_type)
+            if ref_definition is None:
+                errors.append(
+                    f"{location} object_ref object_type '{selector.object_type}' "
+                    "is not declared by the domain pack"
+                )
+            elif (
+                selector.path is not None
+                and not _object_definition_declares_payload_path(
+                    ref_definition,
+                    selector.path,
+                )
+            ):
+                errors.append(
+                    f"{location} object_ref payload path '{selector.path}' is not "
+                    f"declared for referenced object_type '{selector.object_type}'"
+                )
+
+
+def _field_definition_for_path(
+    object_definition: DomainPackObjectDefinition,
+    field_path: str,
+) -> DomainPackFieldDefinition | None:
+    for field_definition in object_definition.fields:
+        if field_definition.field_path == field_path:
+            return field_definition
+    return None
+
+
+def _object_definition_declares_payload_path(
+    object_definition: DomainPackObjectDefinition,
+    field_path: str,
+) -> bool:
+    if _field_definition_for_path(object_definition, field_path) is not None:
+        return True
+    return _provider_refs_ground_payload_path(object_definition, field_path)
+
+
+def _provider_refs_ground_payload_path(
+    object_definition: DomainPackObjectDefinition,
+    field_path: str,
+) -> bool:
+    path_parts = field_path.replace("[0]", "").split(".")
+    final_segment = path_parts[-1] if path_parts else field_path
+    for field_definition in object_definition.fields:
+        provider_refs = _metadata_provider_refs(field_definition.metadata)
+        for provider_ref in provider_refs.values():
+            if not isinstance(provider_ref, Mapping):
+                continue
+            if not provider_ref.get("schema_ref"):
+                continue
+            for key in ("slot", "attribute"):
+                provider_path = provider_ref.get(key)
+                if provider_path in {field_path, final_segment}:
+                    return True
+    return False
 
 
 def _metadata_attachment_option(
@@ -1195,7 +1383,9 @@ def _metadata_attachment_option(
             else None
         ),
         tool_name=entry.tool_name,
-        label=_validation_attachment_label(entry.display_name or entry.validator_id, None),
+        label=_validation_attachment_label(
+            entry.display_name or entry.validator_id, None
+        ),
         description=entry.description,
         definition_state=entry.definition_state,
         blocked_by=entry.blocked_by,
@@ -1352,14 +1542,19 @@ def _binding_attachment_label(
         binding.display_name or fallback_validator_id,
         None,
     )
-    field_label = _clean_display_label(field_display_name) or _humanize_field_path(field_path)
+    field_label = _clean_display_label(field_display_name) or _humanize_field_path(
+        field_path
+    )
     if field_label and _label_already_names_target(base_label, field_label):
         return base_label
     if not target_label:
         return base_label
     if _label_already_names_target(base_label, target_label):
         return base_label
-    if "envelope validation" in base_label.lower() or base_label.lower() == "data check":
+    if (
+        "envelope validation" in base_label.lower()
+        or base_label.lower() == "data check"
+    ):
         return f"{target_label} data check"
     return f"{target_label}: {base_label}"
 
@@ -1371,8 +1566,12 @@ def _binding_attachment_target_label(
     field_display_name: str | None,
     field_path: str | None,
 ) -> str | None:
-    object_label = _clean_display_label(object_display_name) or _humanize_identifier(object_type)
-    field_label = _clean_display_label(field_display_name) or _humanize_field_path(field_path)
+    object_label = _clean_display_label(object_display_name) or _humanize_identifier(
+        object_type
+    )
+    field_label = _clean_display_label(field_display_name) or _humanize_field_path(
+        field_path
+    )
     return _friendly_target_label(object_label=object_label, field_label=field_label)
 
 
@@ -1450,7 +1649,10 @@ def _binding_target_object_definitions(
 
     matches: list[DomainPackObjectDefinition] = []
     for object_definition in object_definitions.values():
-        if binding.object_types and object_definition.object_type not in binding.object_types:
+        if (
+            binding.object_types
+            and object_definition.object_type not in binding.object_types
+        ):
             continue
         if binding.object_roles:
             object_role = _metadata_object_role(object_definition.metadata)
@@ -1466,13 +1668,20 @@ def _matching_objects(
     envelope: DomainEnvelope,
     object_definitions: Mapping[str, DomainPackObjectDefinition],
 ) -> tuple[tuple[CuratableObjectEnvelope, DomainPackObjectDefinition | None], ...]:
-    matches: list[tuple[CuratableObjectEnvelope, DomainPackObjectDefinition | None]] = []
+    matches: list[tuple[CuratableObjectEnvelope, DomainPackObjectDefinition | None]] = (
+        []
+    )
     for object_envelope in envelope.objects:
         object_definition = object_definitions.get(object_envelope.object_type)
-        if binding.object_types and object_envelope.object_type not in binding.object_types:
+        if (
+            binding.object_types
+            and object_envelope.object_type not in binding.object_types
+        ):
             continue
         if binding.object_roles:
-            candidate_roles = _object_role_candidates(object_envelope, object_definition)
+            candidate_roles = _object_role_candidates(
+                object_envelope, object_definition
+            )
             if not set(binding.object_roles).intersection(candidate_roles):
                 continue
         matches.append((object_envelope, object_definition))
@@ -1490,9 +1699,15 @@ def _matching_fields(
 
     matches: list[DomainPackFieldDefinition] = []
     for field_definition in object_definition.fields:
-        if binding.field_paths and field_definition.field_path not in binding.field_paths:
+        if (
+            binding.field_paths
+            and field_definition.field_path not in binding.field_paths
+        ):
             continue
-        if binding.field_types and field_definition.field_type not in binding.field_types:
+        if (
+            binding.field_types
+            and field_definition.field_type not in binding.field_types
+        ):
             continue
         matches.append(field_definition)
     return tuple(matches)

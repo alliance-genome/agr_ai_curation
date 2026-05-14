@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import importlib
 import sys
 from collections import Counter
 from collections.abc import Mapping
@@ -16,7 +15,6 @@ from pydantic import ValidationError
 
 from src.schemas.domain_envelope import CuratableObjectStatus
 from src.schemas.domain_pack_metadata import DomainPackFieldType
-
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
@@ -50,7 +48,6 @@ from .test_alliance_domain_pack_scaffold import (  # noqa: E402
     _iter_linkml_provider_refs,
     _load_linkml_index,
 )
-
 
 RAW_CHEMICAL_FIXTURE_PATH = (
     REPO_ROOT
@@ -99,9 +96,9 @@ def _load_raw_fixture() -> dict[str, Any]:
 def _load_raw_fixture_with_export_context() -> dict[str, Any]:
     raw_fixture = _load_raw_fixture()
     raw_fixture["reference"]["reference_id"] = 12345
-    raw_fixture["chemical_conditions"][0]["host_annotation_type"] = (
-        "PhenotypeAnnotation"
-    )
+    raw_fixture["chemical_conditions"][0][
+        "host_annotation_type"
+    ] = "PhenotypeAnnotation"
     raw_fixture["chemical_conditions"][0]["host_annotation_id"] = "200000001"
     return raw_fixture
 
@@ -144,9 +141,9 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
     assert condition.schema_ref.name == "ExperimentalCondition"
     assert condition.metadata["export_behavior"]["status"] == "blocked"
     assert condition.metadata["export_behavior"]["exportable"] is False
-    assert condition.metadata["export_behavior"]["required_export_context_fields"] == list(
-        CHEMICAL_CONDITION_EXPORT_CONTEXT_FIELDS
-    )
+    assert condition.metadata["export_behavior"][
+        "required_export_context_fields"
+    ] == list(CHEMICAL_CONDITION_EXPORT_CONTEXT_FIELDS)
 
     object_ref_fields = {
         field.field_path: field.object_type_ref
@@ -164,13 +161,35 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
     assert all(validators[state] for state in CHEMICAL_CONDITION_VALIDATOR_STATES)
 
     validator_bindings = metadata.metadata["validator_bindings"]
-    assert tuple(validator_bindings) == CHEMICAL_CONDITION_VALIDATOR_STATES
+    assert tuple(validator_bindings) == ("active", "under_development")
     active_binding = validator_bindings["active"][0]
-    assert active_binding["binding_id"] == "chemical_condition.pending_envelope_validator"
-    module_name, _, function_name = active_binding["validator"].rpartition(".")
-    assert callable(getattr(importlib.import_module(module_name), function_name))
-    assert validator_bindings["planned"][0]["tool_name"] == "chebi_api_call"
-    assert validator_bindings["blocked"][0]["blocked_by"] == "ALL-425"
+    assert (
+        active_binding["binding_id"] == "chemical_condition.pending_envelope_validator"
+    )
+    assert active_binding["validator_agent"] == {
+        "package_id": CHEMICAL_CONDITION_DOMAIN_PACK_ID.rsplit(".", 1)[0],
+        "agent_id": "chemical_validation",
+    }
+    active_binding_ids = {
+        binding["binding_id"] for binding in validator_bindings["active"]
+    }
+    assert active_binding_ids == {
+        "chemical_condition.pending_envelope_validator",
+        "chemical_condition.chebi_curie_format",
+        "chemical_condition.term_chebi_curie_format",
+    }
+    condition_curie_binding = next(
+        binding
+        for binding in validator_bindings["active"]
+        if binding["binding_id"] == "chemical_condition.chebi_curie_format"
+    )
+    assert condition_curie_binding["input_fields"] == {
+        "curie": {
+            "source": "payload",
+            "path": "condition_chemical.curie",
+            "required": True,
+        }
+    }
 
 
 def test_chemical_condition_pack_records_grounding_and_blocks_exports():
@@ -231,9 +250,9 @@ def test_chemical_condition_linkml_class_slot_and_range_refs_exist(tmp_path: Pat
 
         class_name = provider_ref.get("class")
         if class_name is not None:
-            assert class_name in index["classes"], (
-                f"LinkML class {class_name} is missing from pinned schema"
-            )
+            assert (
+                class_name in index["classes"]
+            ), f"LinkML class {class_name} is missing from pinned schema"
             actual_file, _definition = index["classes"][class_name]
             if "slot" not in provider_ref:
                 _assert_source_file_matches(
@@ -245,9 +264,9 @@ def test_chemical_condition_linkml_class_slot_and_range_refs_exist(tmp_path: Pat
 
         slot_name = provider_ref.get("slot")
         if slot_name is not None:
-            assert slot_name in index["slots"], (
-                f"LinkML slot {slot_name} is missing from pinned schema"
-            )
+            assert (
+                slot_name in index["slots"]
+            ), f"LinkML slot {slot_name} is missing from pinned schema"
             actual_file, _definition = index["slots"][slot_name]
             _assert_source_file_matches(
                 provider_ref=provider_ref,
@@ -277,7 +296,9 @@ def test_tool_verified_chemical_fixture_converts_to_pending_envelope():
     }
 
     condition = next(
-        obj for obj in envelope.objects if obj.object_type == CHEMICAL_CONDITION_OBJECT_TYPE
+        obj
+        for obj in envelope.objects
+        if obj.object_type == CHEMICAL_CONDITION_OBJECT_TYPE
     )
     assert condition.payload["condition_class"] == {
         "curie": "ZECO:0000111",
@@ -304,11 +325,14 @@ def test_tool_verified_chemical_fixture_converts_to_pending_envelope():
     expected = yaml.safe_load(
         EXPECTED_CHEMICAL_ENVELOPE_PATH.read_text(encoding="utf-8")
     )
-    assert envelope.model_dump(
-        mode="json",
-        exclude_defaults=True,
-        exclude_none=True,
-    ) == expected["envelope"]
+    assert (
+        envelope.model_dump(
+            mode="json",
+            exclude_defaults=True,
+            exclude_none=True,
+        )
+        == expected["envelope"]
+    )
 
 
 def test_converted_chemical_condition_envelope_omits_legacy_semantic_stores():
@@ -333,7 +357,9 @@ def test_chemical_condition_export_context_can_be_completed_without_fake_success
         for finding in validate_pending_chemical_condition_envelope(envelope)
     ] == []
     condition = next(
-        obj for obj in envelope.objects if obj.object_type == CHEMICAL_CONDITION_OBJECT_TYPE
+        obj
+        for obj in envelope.objects
+        if obj.object_type == CHEMICAL_CONDITION_OBJECT_TYPE
     )
     assert condition.metadata["export_behavior"]["status"] == "blocked"
     chemical_reference = next(

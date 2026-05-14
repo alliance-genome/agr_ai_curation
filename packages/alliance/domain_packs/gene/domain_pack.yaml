@@ -111,7 +111,9 @@ object_definitions:
                 - gene_symbol
                 - taxon
             input_fields:
-              gene_id: primary_external_id
+              gene_id:
+                source: payload
+                path: primary_external_id
             expected_result_fields:
               curie: primary_external_id
               symbol: gene_symbol

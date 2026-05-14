@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from enum import Enum
 from pathlib import PurePosixPath
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -15,7 +15,6 @@ from .domain_envelope import (
     SchemaRef,
     validate_field_path_syntax,
 )
-
 
 _SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 _PACK_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -158,6 +157,77 @@ class DomainPackValidatorCuratorOverride(DomainPackMetadataBaseModel):
     allowed: bool = False
 
 
+class DomainPackInputSelector(DomainPackMetadataBaseModel):
+    """Deterministic selector for one validator input value."""
+
+    source: Literal[
+        "payload",
+        "envelope_metadata",
+        "object_metadata",
+        "evidence_record",
+        "object_ref",
+        "literal",
+    ]
+    path: Optional[str] = None
+    field_path: Optional[str] = None
+    object_type: Optional[str] = None
+    record_id: Optional[str] = None
+    value: Any = None
+    required: bool = True
+
+    @field_validator("path", "field_path")
+    @classmethod
+    def _validate_optional_paths(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return validate_field_path_syntax(value)
+
+    @field_validator("object_type")
+    @classmethod
+    def _validate_object_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return _validate_symbolic_name(value, "input_fields.object_type")
+
+    @field_validator("record_id")
+    @classmethod
+    def _validate_record_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("input_fields.record_id must not be empty")
+        if value != value.strip():
+            raise ValueError(
+                "input_fields.record_id must not include surrounding whitespace"
+            )
+        return value
+
+    @model_validator(mode="after")
+    def _validate_selector_shape(self) -> "DomainPackInputSelector":
+        if (
+            self.source
+            in {
+                "payload",
+                "envelope_metadata",
+                "object_metadata",
+                "evidence_record",
+            }
+            and self.path is None
+        ):
+            raise ValueError(f"{self.source} selectors must provide path")
+        if self.source == "literal" and "value" not in self.model_fields_set:
+            raise ValueError("literal selectors must provide value")
+        if (
+            self.source == "object_ref"
+            and self.field_path is None
+            and self.object_type is None
+        ):
+            raise ValueError(
+                "object_ref selectors must provide field_path or object_type"
+            )
+        return self
+
+
 class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     """Executable package-scoped validator binding metadata."""
 
@@ -166,7 +236,7 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     description: str = ""
     validator_agent: DomainPackValidatorAgentRef
     applies_to: DomainPackValidatorAppliesTo
-    input_fields: dict[str, Any] = Field(default_factory=dict)
+    input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
     required: bool = False
@@ -192,7 +262,7 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     state_explanation: str = Field(min_length=1)
     validator_agent: Optional[DomainPackValidatorAgentRef] = None
     applies_to: Optional[DomainPackValidatorAppliesTo] = None
-    input_fields: dict[str, Any] = Field(default_factory=dict)
+    input_fields: dict[str, DomainPackInputSelector] = Field(default_factory=dict)
     expected_result_fields: dict[str, Any] = Field(default_factory=dict)
     max_tool_calls: Optional[int] = Field(default=None, ge=0)
     definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
@@ -206,7 +276,9 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     @classmethod
     def _validate_state_explanation(cls, value: str) -> str:
         if value != value.strip():
-            raise ValueError("state_explanation must not include surrounding whitespace")
+            raise ValueError(
+                "state_explanation must not include surrounding whitespace"
+            )
         return value
 
 
@@ -271,7 +343,9 @@ class DomainPackEnumValue(DomainPackMetadataBaseModel):
         if not value.strip():
             raise ValueError(f"{info.field_name} must not be empty")
         if value != value.strip():
-            raise ValueError(f"{info.field_name} must not include surrounding whitespace")
+            raise ValueError(
+                f"{info.field_name} must not include surrounding whitespace"
+            )
         return value
 
 
@@ -292,7 +366,9 @@ class DomainPackEnumDefinition(DomainPackMetadataBaseModel):
 
     @model_validator(mode="after")
     def _validate_values(self) -> "DomainPackEnumDefinition":
-        _require_unique([item.value for item in self.values], f"enum {self.enum_id} values")
+        _require_unique(
+            [item.value for item in self.values], f"enum {self.enum_id} values"
+        )
         return self
 
 
@@ -363,10 +439,14 @@ class DomainPackFieldDefinition(DomainPackMetadataBaseModel):
     def _validate_ref_shape(self) -> "DomainPackFieldDefinition":
         if self.field_type is DomainPackFieldType.ENUM and self.enum_ref is None:
             raise ValueError("enum fields must provide enum_ref")
-        if self.field_type is not DomainPackFieldType.ENUM and self.enum_ref is not None:
+        if (
+            self.field_type is not DomainPackFieldType.ENUM
+            and self.enum_ref is not None
+        ):
             raise ValueError("enum_ref is only valid for enum fields")
         if (
-            self.field_type not in {DomainPackFieldType.OBJECT, DomainPackFieldType.ARRAY}
+            self.field_type
+            not in {DomainPackFieldType.OBJECT, DomainPackFieldType.ARRAY}
             and self.model_ref is not None
         ):
             raise ValueError("model_ref is only valid for object or array fields")
@@ -375,7 +455,9 @@ class DomainPackFieldDefinition(DomainPackMetadataBaseModel):
             not in {DomainPackFieldType.OBJECT_REF, DomainPackFieldType.FIELD_REF}
             and self.object_type_ref is not None
         ):
-            raise ValueError("object_type_ref is only valid for object_ref or field_ref fields")
+            raise ValueError(
+                "object_type_ref is only valid for object_ref or field_ref fields"
+            )
         return self
 
 
@@ -418,7 +500,9 @@ class DomainPackFixturePackRef(DomainPackMetadataBaseModel):
 
     fixture_pack_id: str
     display_name: str = Field(min_length=1)
-    path: str = Field(description="Path to fixture-pack YAML relative to domain pack root")
+    path: str = Field(
+        description="Path to fixture-pack YAML relative to domain pack root"
+    )
     description: str = ""
     object_types: list[str] = Field(default_factory=list)
     definition_state: DefinitionState = DefinitionState.STABLE
@@ -437,7 +521,10 @@ class DomainPackFixturePackRef(DomainPackMetadataBaseModel):
     @field_validator("object_types")
     @classmethod
     def _validate_object_types(cls, value: list[str]) -> list[str]:
-        validated = [_validate_symbolic_name(item, "fixture_packs.object_types") for item in value]
+        validated = [
+            _validate_symbolic_name(item, "fixture_packs.object_types")
+            for item in value
+        ]
         _require_unique(validated, "fixture_packs.object_types")
         return validated
 
@@ -618,4 +705,5 @@ __all__ = [
     "DomainPackValidatorAppliesTo",
     "DomainPackValidatorBindings",
     "DomainPackValidatorCuratorOverride",
+    "DomainPackInputSelector",
 ]
