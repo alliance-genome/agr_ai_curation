@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 import logging
 from types import SimpleNamespace
@@ -3224,6 +3225,19 @@ def test_waive_validation_finding_records_audit_action(
     assert review_action["comment"] is None
     assert review_action["input_fingerprint"].startswith("sha256:")
     assert stored_action.reason is None
+    history_seed = {
+        "envelope_id": seeded["envelope_id"],
+        "envelope_revision": 1,
+        "finding_id": "finding-title",
+        "event_type": "curator_validation_override",
+        "new_status": "waived",
+    }
+    history_digest = sha256(
+        json.dumps(history_seed, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    assert stored_envelope.history[-1].event_id == (
+        f"curator-validation-override:{history_digest}"
+    )
 
 
 def test_waive_validation_finding_rejects_alias_policy(

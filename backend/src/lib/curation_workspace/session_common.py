@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -89,6 +89,11 @@ def _stable_serialize(value: Any) -> str:
 
 def _draft_values_equal(left: Any, right: Any) -> bool:
     return _stable_serialize(left) == _stable_serialize(right)
+
+
+def _metadata_allows_curator_override(metadata: Mapping[str, Any]) -> bool:
+    raw_policy = metadata.get("curator_override")
+    return isinstance(raw_policy, Mapping) and raw_policy.get("allowed") is True
 
 
 def _latest_snapshot_record(

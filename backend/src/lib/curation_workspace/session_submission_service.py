@@ -27,6 +27,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.curation_workspace.session_common import (
     _actor_claims_payload,
+    _metadata_allows_curator_override,
     _normalize_uuid,
     _normalized_optional_string,
 )
@@ -420,11 +421,6 @@ def _export_behavior_for(
         if isinstance(raw_behavior, Mapping):
             behavior.update(dict(raw_behavior))
     return behavior
-
-
-def _metadata_allows_curator_override(metadata: Mapping[str, Any]) -> bool:
-    raw_policy = metadata.get("curator_override")
-    return isinstance(raw_policy, Mapping) and raw_policy.get("allowed") is True
 
 
 def _field_allows_curator_override(

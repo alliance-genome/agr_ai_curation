@@ -33,6 +33,7 @@ from src.lib.curation_workspace.models import (
 from src.lib.curation_workspace.session_common import (
     _actor_claims_payload,
     _draft_values_equal,
+    _metadata_allows_curator_override,
     _normalize_uuid,
     _normalized_optional_string,
     _normalized_required_string,
@@ -984,19 +985,14 @@ def _validation_finding_by_id(
     )
 
 
-def _metadata_curator_override_allowed(metadata: Mapping[str, Any]) -> bool:
-    raw_policy = metadata.get("curator_override")
-    return isinstance(raw_policy, Mapping) and raw_policy.get("allowed") is True
-
-
 def _finding_curator_override_allowed(finding: ValidationFinding) -> bool:
     details = finding.details or {}
-    if _metadata_curator_override_allowed(details):
+    if _metadata_allows_curator_override(details):
         return True
     raw_validation_metadata = details.get("validation_metadata")
     return (
         isinstance(raw_validation_metadata, Mapping)
-        and _metadata_curator_override_allowed(raw_validation_metadata)
+        and _metadata_allows_curator_override(raw_validation_metadata)
     )
 
 
@@ -1086,6 +1082,8 @@ def _curator_validation_override_payload(
 ) -> dict[str, Any]:
     metadata = _validator_metadata(finding)
     request = _validation_request(finding)
+    # Finding metadata is the canonical materialized validator identity; request
+    # fields are kept only as audit backfill when a validator omitted metadata.
     return {
         "action": "waive_validation_finding",
         "finding_id": finding.finding_id,
@@ -1122,6 +1120,7 @@ def _curator_validation_override_history_event(
 ) -> HistoryEvent:
     seed_payload = {
         "envelope_id": envelope.envelope_id,
+        "envelope_revision": review_action.get("envelope_revision"),
         "finding_id": finding.finding_id,
         "event_type": "curator_validation_override",
         "new_status": ValidationFindingStatus.WAIVED.value,
