@@ -164,6 +164,45 @@ def dispatch_active_validator_bindings(
     )
 
 
+def validator_result_from_agent_output(
+    raw_output: Any,
+    *,
+    request: DomainValidationRequest,
+) -> DomainValidatorResultBase:
+    """Validate and normalize one validator agent output for materialization."""
+
+    validator_result = _validated_result_from_agent_output(
+        raw_output,
+        request=request,
+    )
+    validator_result = _enforce_expected_result_fields(
+        validator_result,
+        request=request,
+    )
+    return _ensure_classifiable_validator_result(
+        validator_result,
+        request=request,
+    )
+
+
+def unresolved_validator_result_for_dispatch_problem(
+    request: DomainValidationRequest,
+    *,
+    reason: str,
+    explanation: str,
+) -> DomainValidatorResultBase:
+    """Build a controlled unresolved validator result for dispatch failures."""
+
+    return _ensure_classifiable_validator_result(
+        _unresolved_result_for_dispatch_problem(
+            request,
+            reason=reason,
+            explanation=explanation,
+        ),
+        request=request,
+    )
+
+
 def _run_package_scoped_validator_agent(
     request: DomainValidationRequest,
     *,
@@ -345,4 +384,6 @@ __all__ = [
     "ActiveValidatorDispatchResult",
     "DomainValidatorAgentRunner",
     "dispatch_active_validator_bindings",
+    "unresolved_validator_result_for_dispatch_problem",
+    "validator_result_from_agent_output",
 ]

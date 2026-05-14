@@ -162,31 +162,63 @@ def validation_schedule_from_node_data(
     """Build the supervisor-facing validation schedule for one extraction node."""
 
     attachments = node_data.get("validation_attachments") or []
+    groups = node_data.get("validation_groups") or []
+    groups_by_attachment_id: dict[str, dict[str, Any]] = {}
+    supplemental_groups: list[dict[str, Any]] = []
+    for raw_group in groups:
+        group = _plain_group(raw_group)
+        attachment_id = group.get("attachment_id")
+        if attachment_id:
+            groups_by_attachment_id[str(attachment_id)] = group
+        elif group.get("state") == "supplemental":
+            supplemental_groups.append(group)
+
     scheduled: list[dict[str, Any]] = []
     opt_outs: list[dict[str, Any]] = []
     inactive_metadata: list[dict[str, Any]] = []
+    replacement_validators: list[dict[str, Any]] = []
+    supplemental_validators: list[dict[str, Any]] = []
 
     for raw_attachment in attachments:
         attachment = _plain_attachment(raw_attachment)
+        group = groups_by_attachment_id.get(str(attachment.get("attachment_id") or ""))
         state = attachment.get("state")
         enabled = bool(attachment.get("enabled"))
         has_binding = bool(attachment.get("validator_binding_id"))
+
+        if group is not None and group.get("state") == "replaced":
+            replacement_validators.append(
+                {
+                    **_schedule_entry(attachment),
+                    **_group_schedule_entry(group),
+                }
+            )
+            continue
 
         if state == "active" and enabled and has_binding:
             scheduled.append(_schedule_entry(attachment))
             continue
 
         if state == "active" and has_binding:
-            if attachment.get("required") or attachment.get("blocking"):
-                opt_outs.append(_schedule_entry(attachment))
+            opt_outs.append(
+                {
+                    **_schedule_entry(attachment),
+                    "skipped_by_flow_configuration": True,
+                }
+            )
             continue
 
         inactive_metadata.append(_schedule_entry(attachment))
+
+    for group in supplemental_groups:
+        supplemental_validators.append(_group_schedule_entry(group))
 
     return {
         "scheduled_validators": scheduled,
         "opt_outs": opt_outs,
         "inactive_metadata": inactive_metadata,
+        "replacement_validators": replacement_validators,
+        "supplemental_validators": supplemental_validators,
     }
 
 
@@ -238,6 +270,16 @@ def _plain_attachment(raw_attachment: Any) -> dict[str, Any]:
         return dict(raw_attachment)
     raise FlowValidationAttachmentError(
         f"Unexpected validation attachment type: {type(raw_attachment).__name__}"
+    )
+
+
+def _plain_group(raw_group: Any) -> dict[str, Any]:
+    if hasattr(raw_group, "model_dump"):
+        return raw_group.model_dump()
+    if isinstance(raw_group, Mapping):
+        return dict(raw_group)
+    raise FlowValidationAttachmentError(
+        f"Unexpected validation group type: {type(raw_group).__name__}"
     )
 
 
@@ -463,6 +505,29 @@ def _schedule_entry(attachment: Mapping[str, Any]) -> dict[str, Any]:
         for key in keys
         if key in attachment and attachment[key] not in (None, "")
     }
+
+
+def _group_schedule_entry(group: Mapping[str, Any]) -> dict[str, Any]:
+    keys = (
+        "group_id",
+        "state",
+        "binding_id",
+        "attachment_id",
+        "edge_id",
+        "validator_node_id",
+        "replaces_attachment_id",
+        "required",
+        "blocking",
+        "allow_opt_out",
+    )
+    entry = {
+        key: group[key]
+        for key in keys
+        if key in group and group[key] not in (None, "")
+    }
+    if "binding_id" in entry:
+        entry["validator_binding_id"] = entry["binding_id"]
+    return entry
 
 
 __all__ = [

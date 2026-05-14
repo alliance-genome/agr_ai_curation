@@ -1136,12 +1136,20 @@ def _get_current_flow_handler():
                 inactive_count = len(
                     envelope_node.get("validation_schedule", {}).get("inactive_metadata", [])
                 )
+                replacement_count = len(
+                    envelope_node.get("validation_schedule", {}).get("replacement_validators", [])
+                )
+                supplemental_count = len(
+                    envelope_node.get("validation_schedule", {}).get("supplemental_validators", [])
+                )
                 markdown_lines.append(
                     "- "
                     f"{envelope_node.get('agent_display_name') or envelope_node.get('agent_id')} "
                     f"produces `{envelope_node.get('domain_pack_id')}` envelope objects "
                     f"({scheduled_count} scheduled validators"
                     + (f", {opt_out_count} policy opt-outs" if opt_out_count else "")
+                    + (f", {replacement_count} replacement validators" if replacement_count else "")
+                    + (f", {supplemental_count} supplemental validators" if supplemental_count else "")
                     + (f", {inactive_count} planned/blocked metadata" if inactive_count else "")
                     + ")"
                 )

@@ -99,6 +99,7 @@ def _agent_node(
     output_key=None,
     output_filename_template=None,
     validation_attachments=None,
+    validation_groups=None,
 ):
     """Build a minimal agent node dict."""
     data = {
@@ -119,6 +120,8 @@ def _agent_node(
         data["output_filename_template"] = output_filename_template
     if validation_attachments is not None:
         data["validation_attachments"] = validation_attachments
+    if validation_groups is not None:
+        data["validation_groups"] = validation_groups
     return {
         "id": node_id,
         "type": "agent",
@@ -1079,6 +1082,91 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert [item["attachment_id"] for item in schedule["inactive_metadata"]] == [
             "planned-lookup"
         ]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_validation_groups_join_before_next_flow_step(
+        self, mock_get_agent, mock_streaming
+    ):
+        """Validator group execution should finish before the next control-flow tool unlocks."""
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        events = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str):
+                events.append(f"tool:{tool_name}")
+                if tool_name == "ask_gene_specialist":
+                    return _structured_step_output("gene-a")
+                return "formatted"
+
+            return _tool
+
+        async def _fake_validation_groups(**kwargs):
+            if not kwargs["node_data"].get("validation_groups"):
+                return {}
+            events.append("validators:start")
+            assert kwargs["candidate"].metadata["step"] == 1
+            assert kwargs["node_data"]["validation_groups"][0]["binding_id"] == "binding-1"
+            events.append("validators:done")
+            return {
+                "validation_group_results": {
+                    "source_envelope_id": "env-1",
+                    "source_envelope_revision": 3,
+                    "materialized_envelope_revision": 4,
+                    "groups": [
+                        {
+                            "group_id": "active-lookup",
+                            "state": "automatic",
+                            "validator_binding_id": "binding-1",
+                            "status": "resolved",
+                        }
+                    ],
+                }
+            }
+
+        mock_streaming.side_effect = _make_streaming_tool
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node(
+                "n1",
+                "gene",
+                validation_attachments=[_validation_attachment("active-lookup")],
+                validation_groups=[
+                    {
+                        "group_id": "active-lookup",
+                        "state": "automatic",
+                        "binding_id": "binding-1",
+                        "attachment_id": "active-lookup",
+                        "required": True,
+                        "blocking": True,
+                    }
+                ],
+            ),
+            _agent_node("n2", "disease"),
+        ])
+
+        with patch(
+            "src.lib.flows.executor._execute_validation_groups_for_step",
+            side_effect=_fake_validation_groups,
+        ):
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            asyncio.run(tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"})))
+            asyncio.run(tools[1].on_invoke_tool(tool_ctx, json.dumps({"query": "format"})))
+
+        assert events == [
+            "tool:ask_gene_specialist",
+            "validators:start",
+            "validators:done",
+            "tool:ask_disease_specialist",
+        ]
+        assert execution_state["completed_steps"][0]["validation_group_results"][
+            "source_envelope_revision"
+        ] == 3
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
