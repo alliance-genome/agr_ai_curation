@@ -66,7 +66,7 @@ def test_curatable_object_can_produce_canonical_object_ref():
     pending = _pending_gene_object()
     stable = CuratableObjectEnvelope(
         object_type="GeneAssertion",
-        object_id="WB:WBGene00000001",
+        object_id="fixture-object-1",
         pending_ref_id="pending-gene-1",
         payload={},
     )
@@ -76,7 +76,7 @@ def test_curatable_object_can_produce_canonical_object_ref():
         object_type="GeneAssertion",
     )
     assert stable.to_object_ref() == ObjectRef(
-        object_id="WB:WBGene00000001",
+        object_id="fixture-object-1",
         object_type="GeneAssertion",
     )
 
