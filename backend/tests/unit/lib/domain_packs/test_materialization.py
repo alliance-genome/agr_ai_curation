@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.materialization import (
     REVIEW_ROW_PROJECTION_TYPE,
+    DomainEnvelopeMaterializationError,
     DomainPackMetadataReviewRowMaterializer,
+    ValidatorResultMaterializationInput,
+    materialize_validator_results_into_envelope,
+)
+from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -17,7 +28,9 @@ from src.schemas.domain_envelope import (
     ObjectRef,
     ValidationFinding,
     ValidationFindingSeverity,
+    ValidationFindingStatus,
 )
+from src.schemas.domain_validator import DomainValidatorResultBase
 from src.schemas.domain_pack_metadata import (
     DomainPackFieldDefinition,
     DomainPackFieldType,
@@ -97,6 +110,180 @@ def _metadata() -> DomainPackMetadata:
     )
 
 
+def _validator_metadata() -> DomainPackMetadata:
+    return DomainPackMetadata(
+        pack_id="fixture.validator",
+        display_name="Fixture Validator Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        metadata={
+            "validator_bindings": {
+                "active": [
+                    {
+                        "binding_id": "fixture.allele_lookup",
+                        "display_name": "Allele lookup",
+                        "validator_agent": {
+                            "package_id": "fixture.validators",
+                            "agent_id": "allele_validator",
+                        },
+                        "applies_to": {
+                            "domain_pack_id": "fixture.validator",
+                            "object_types": ["AlleleMention"],
+                            "field_paths": ["mention.text"],
+                        },
+                        "input_fields": {
+                            "mention": {
+                                "source": "payload",
+                                "path": "mention.text",
+                            }
+                        },
+                        "expected_result_fields": {
+                            "curie": "allele.primary_external_id",
+                            "symbol": "allele.allele_symbol",
+                            "taxon": "allele.taxon",
+                        },
+                    }
+                ],
+                "under_development": [],
+            }
+        },
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="AlleleMention",
+                display_name="Allele mention",
+                metadata={"object_role": "metadata_only"},
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="mention.text",
+                        field_type=DomainPackFieldType.STRING,
+                    )
+                ],
+            ),
+            DomainPackObjectDefinition(
+                object_type="Allele",
+                display_name="Allele",
+                metadata={"object_role": "validated_reference"},
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="primary_external_id",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="allele_symbol",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="taxon",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                ],
+            ),
+            DomainPackObjectDefinition(
+                object_type="AlleleCandidate",
+                display_name="Allele candidate",
+                metadata={"object_role": "metadata_only"},
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="primary_external_id",
+                        field_type=DomainPackFieldType.STRING,
+                    )
+                ],
+            ),
+        ],
+    )
+
+
+def _validator_envelope() -> DomainEnvelope:
+    return DomainEnvelope(
+        envelope_id="validator-env",
+        domain_pack_id="fixture.validator",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="AlleleMention",
+                object_id="allele-mention-1",
+                payload={"mention": {"text": "crb 11A22"}},
+            )
+        ],
+    )
+
+
+def _validator_item(
+    metadata: DomainPackMetadata,
+    envelope: DomainEnvelope,
+    *,
+    status: str = "resolved",
+    resolved_values: dict | None = None,
+    resolved_objects: list[dict] | None = None,
+    missing_expected_fields: list[str] | None = None,
+    candidates: list[dict] | None = None,
+    lookup_outcome: str = "success",
+) -> ValidatorResultMaterializationInput:
+    registry = DomainPackValidationRegistry.from_domain_pack(
+        LoadedDomainPack(
+            pack_id=metadata.pack_id,
+            display_name=metadata.display_name,
+            version=metadata.version,
+            pack_path=Path("."),
+            metadata_path=Path("."),
+            metadata=metadata,
+        )
+    )
+    match = registry.match_bindings(
+        envelope,
+        states=[ValidationBindingState.ACTIVE],
+    )[0]
+    selector_result = build_domain_validation_request(match)
+    assert selector_result.request is not None
+    request = selector_result.request
+    values = resolved_values if resolved_values is not None else {
+        "curie": "DEMO:Allele0001817",
+        "symbol": "crb<sup>11A22</sup>",
+        "taxon": "NCBITaxon:7227",
+    }
+    objects = resolved_objects if resolved_objects is not None else [
+        {
+            "object_type": "Allele",
+            "canonical_id": values.get("curie"),
+            "payload": {
+                "primary_external_id": values.get("curie"),
+                "allele_symbol": values.get("symbol"),
+                "taxon": values.get("taxon"),
+                "ignored_provider_extra": "not materialized",
+            },
+        }
+    ]
+    result = DomainValidatorResultBase(
+        status=status,
+        request_id=request.request_id,
+        validator_binding_id=request.validator_binding_id,
+        validator_agent=request.validator_agent,
+        target=request.target,
+        resolved_values=values if status == "resolved" else {},
+        resolved_objects=objects if status == "resolved" else [],
+        missing_expected_fields=missing_expected_fields or [],
+        candidates=candidates or [],
+        lookup_attempts=[
+            {
+                "provider": "fixture_lookup",
+                "method": "exact_symbol",
+                "query": {"mention": request.selected_inputs["mention"]},
+                "result_count": 1 if lookup_outcome == "success" else 2,
+                "outcome": lookup_outcome,
+            }
+        ],
+        curator_message=None,
+        explanation="Fixture validator decision.",
+    )
+    return ValidatorResultMaterializationInput(
+        match=match,
+        request=request,
+        result=result,
+    )
+
+
 def test_metadata_materializer_regenerates_review_rows_from_envelope_objects():
     envelope = DomainEnvelope(
         envelope_id="env-1",
@@ -171,3 +358,151 @@ def test_metadata_materializer_regenerates_review_rows_from_envelope_objects():
     assert row.metadata["unavailable_validator_capabilities"] == (
         row.summary_fields[0].metadata["unavailable_validator_capabilities"]
     )
+
+
+def test_validator_result_materialization_creates_reference_object_and_finding():
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    item = _validator_item(metadata, envelope)
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        metadata,
+        [item],
+        source_envelope_revision=7,
+    )
+
+    assert len(result.materialized_objects) == 1
+    reference = result.materialized_objects[0]
+    assert reference.object_type == "Allele"
+    assert reference.status is CuratableObjectStatus.VALIDATED
+    assert reference.payload == {
+        "primary_external_id": "DEMO:Allele0001817",
+        "allele_symbol": "crb<sup>11A22</sup>",
+        "taxon": "NCBITaxon:7227",
+    }
+    assert reference.metadata["object_role"] == "validated_reference"
+    assert reference.metadata["validator_materialization"] == {
+        "source": "domain_validator_result",
+        "request_id": item.request.request_id,
+        "validator_binding_id": "fixture.allele_lookup",
+        "validator_agent": {
+            "package_id": "fixture.validators",
+            "agent_id": "allele_validator",
+        },
+        "canonical_id": "DEMO:Allele0001817",
+        "source_envelope_revision": 7,
+    }
+    assert result.envelope.objects[0].object_refs == [reference.to_object_ref()]
+
+    finding = result.appended_findings[0]
+    assert finding.status is ValidationFindingStatus.RESOLVED
+    assert finding.code == "domain_pack.validator_resolved"
+    assert finding.field_ref.field_path == "mention.text"
+    assert finding.details["validation_request"]["input_selectors"]["mention"] == {
+        "source": "payload",
+        "path": "mention.text",
+        "required": True,
+    }
+    assert finding.details["validation_result"]["resolved_values"]["curie"] == (
+        "DEMO:Allele0001817"
+    )
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == "success"
+    DomainEnvelope.model_validate(result.envelope.model_dump(mode="json"))
+
+
+def test_unresolved_validator_result_materializes_missing_field_finding():
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    item = _validator_item(
+        metadata,
+        envelope,
+        status="unresolved",
+        missing_expected_fields=["curie", "symbol"],
+        lookup_outcome="not_found",
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    assert result.materialized_objects == ()
+    finding = result.appended_findings[0]
+    assert finding.status is ValidationFindingStatus.OPEN
+    assert finding.code == "domain_pack.validator_unresolved"
+    assert finding.details["failure_classification"] == "missing_expected_result_field"
+    assert finding.details["missing_expected_fields"] == ["curie", "symbol"]
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
+
+
+def test_ambiguous_validator_result_preserves_candidate_diagnostics():
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    item = _validator_item(
+        metadata,
+        envelope,
+        status="unresolved",
+        candidates=[
+            {
+                "value": "DEMO:Allele0001817",
+                "label": "crb<sup>11A22</sup>",
+                "object_type": "Allele",
+                "score": 0.71,
+            },
+            {
+                "value": "DEMO:Allele9999999",
+                "label": "crb-like",
+                "object_type": "Allele",
+                "score": 0.62,
+            },
+        ],
+        lookup_outcome="ambiguous",
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    finding = result.appended_findings[0]
+    assert finding.details["failure_classification"] == "ambiguous"
+    assert [candidate["value"] for candidate in finding.details["candidate_matches"]] == [
+        "DEMO:Allele0001817",
+        "DEMO:Allele9999999",
+    ]
+    assert finding.details["lookup_attempts"][0]["candidate_count"] == 2
+
+
+def test_invalid_resolved_object_materializes_open_finding_without_reference():
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    item = _validator_item(
+        metadata,
+        envelope,
+        resolved_objects=[
+            {
+                "object_type": "AlleleCandidate",
+                "canonical_id": "DEMO:Allele0001817",
+                "payload": {"primary_external_id": "DEMO:Allele0001817"},
+            }
+        ],
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    assert result.materialized_objects == ()
+    assert len(result.envelope.objects) == 1
+    finding = result.appended_findings[0]
+    assert finding.status is ValidationFindingStatus.OPEN
+    assert finding.code == "domain_pack.validator_materialization_invalid"
+    assert finding.details["failure_classification"] == "invalid_materialization_input"
+    assert "not a validated_reference" in finding.details["materialization_error"]
+
+
+def test_validator_materialization_rejects_invalid_source_revision():
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    item = _validator_item(metadata, envelope)
+
+    with pytest.raises(DomainEnvelopeMaterializationError):
+        materialize_validator_results_into_envelope(
+            envelope,
+            metadata,
+            [item],
+            source_envelope_revision=0,
+        )

@@ -26,7 +26,9 @@ from src.schemas.curation_workspace import (
 )
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
+    CuratableObjectStatus,
     DomainEnvelope,
+    FieldRef,
     ObjectRef,
     ValidationFinding,
     ValidationFindingSeverity,
@@ -38,11 +40,19 @@ from src.schemas.domain_pack_metadata import (
     DomainPackMetadata,
     DomainPackObjectDefinition,
 )
+from src.schemas.domain_validator import (
+    DomainValidationRequest,
+    DomainValidatorResultBase,
+)
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
     ValidatorBindingMatch,
+)
+from src.lib.domain_packs.validator_result_classification import (
+    lookup_status_for_validator_outcome,
+    validator_failure_classification,
 )
 
 
@@ -72,6 +82,24 @@ class DomainEnvelopeMaterializationError(RuntimeError):
 
 class DomainEnvelopeRevisionUnavailableError(DomainEnvelopeMaterializationError):
     """Raised when the requested envelope revision is not the persisted revision."""
+
+
+@dataclass(frozen=True)
+class ValidatorResultMaterializationInput:
+    """One validator request/result pair ready for envelope materialization."""
+
+    match: ValidatorBindingMatch
+    request: DomainValidationRequest
+    result: DomainValidatorResultBase
+
+
+@dataclass(frozen=True)
+class ValidatorResultMaterializationResult:
+    """Envelope changes produced from package-scoped validator results."""
+
+    envelope: DomainEnvelope
+    appended_findings: tuple[ValidationFinding, ...]
+    materialized_objects: tuple[CuratableObjectEnvelope, ...]
 
 
 class DomainEnvelopeReviewRowMaterializer(Protocol):
@@ -234,6 +262,546 @@ def materialize_persisted_envelope_review_rows(
         row_count=len(rows),
         rows=rows,
     )
+
+
+def materialize_validator_results_into_envelope(
+    envelope: DomainEnvelope,
+    metadata: DomainPackMetadata,
+    items: Iterable[ValidatorResultMaterializationInput],
+    *,
+    actor_id: str = "domain_validator_materialization",
+    source_envelope_revision: int | None = None,
+) -> ValidatorResultMaterializationResult:
+    """Apply active validator results as envelope findings and validated refs."""
+
+    if source_envelope_revision is not None and source_envelope_revision < 1:
+        raise DomainEnvelopeMaterializationError(
+            "source_envelope_revision must be greater than zero"
+        )
+    if envelope.domain_pack_id != metadata.pack_id:
+        raise DomainEnvelopeMaterializationError(
+            "Envelope domain_pack_id does not match materializer metadata: "
+            f"{envelope.domain_pack_id!r} != {metadata.pack_id!r}"
+        )
+
+    object_definitions = {
+        definition.object_type: definition
+        for definition in metadata.object_definitions
+    }
+    object_role_key = _object_role_key(metadata)
+    working_envelope = envelope
+    findings: list[ValidationFinding] = []
+    materialized_objects: list[CuratableObjectEnvelope] = []
+
+    for item in items:
+        new_objects, materialization_problem = _materialized_objects_for_result(
+            working_envelope,
+            item,
+            object_definitions=object_definitions,
+            object_role_key=object_role_key,
+            source_envelope_revision=source_envelope_revision,
+        )
+        if materialization_problem is None:
+            working_envelope, linked_objects = _append_materialized_objects(
+                working_envelope,
+                item,
+                new_objects,
+            )
+            materialized_objects.extend(linked_objects)
+            findings.append(
+                _finding_for_validator_result(
+                    item,
+                    source_envelope_revision=source_envelope_revision,
+                )
+            )
+            continue
+
+        findings.append(
+            _finding_for_materialization_problem(
+                item,
+                materialization_problem,
+                source_envelope_revision=source_envelope_revision,
+            )
+        )
+
+    from .validation_supervisor import append_validation_findings_to_envelope
+
+    working_envelope, appended_findings = append_validation_findings_to_envelope(
+        working_envelope,
+        findings,
+        actor_id=actor_id,
+    )
+    return ValidatorResultMaterializationResult(
+        envelope=working_envelope,
+        appended_findings=appended_findings,
+        materialized_objects=tuple(materialized_objects),
+    )
+
+
+def _materialized_objects_for_result(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    object_role_key: str,
+    source_envelope_revision: int | None,
+) -> tuple[list[CuratableObjectEnvelope], str | None]:
+    result = item.result
+    if result.status != "resolved":
+        return [], None
+    if not result.resolved_objects:
+        return [], None
+
+    materialized_objects: list[CuratableObjectEnvelope] = []
+    for object_index, raw_object in enumerate(result.resolved_objects):
+        if not isinstance(raw_object, Mapping):
+            return [], f"resolved_objects[{object_index}] must be an object"
+
+        object_type = _optional_string(raw_object.get("object_type"))
+        canonical_id = _optional_string(raw_object.get("canonical_id"))
+        raw_payload = raw_object.get("payload")
+        if object_type is None:
+            return [], f"resolved_objects[{object_index}].object_type is required"
+        if canonical_id is None:
+            return [], f"resolved_objects[{object_index}].canonical_id is required"
+        if not isinstance(raw_payload, Mapping):
+            return [], f"resolved_objects[{object_index}].payload must be an object"
+
+        object_definition = object_definitions.get(object_type)
+        if object_definition is None:
+            return [], f"resolved object type {object_type!r} is not declared"
+        object_role = _definition_object_role(
+            object_definition,
+            object_role_key=object_role_key,
+        )
+        if object_role != "validated_reference":
+            return (
+                [],
+                f"resolved object type {object_type!r} is not a validated_reference",
+            )
+
+        payload, problem = _validated_reference_payload(
+            item,
+            raw_payload,
+            object_definition=object_definition,
+        )
+        if problem is not None:
+            return [], problem
+
+        object_id = _validated_reference_object_id(object_type, canonical_id)
+        existing = _find_existing_object(envelope, object_id=object_id)
+        if existing is not None:
+            if (
+                existing.object_type != object_type
+                or dict(existing.payload) != payload
+            ):
+                return (
+                    [],
+                    "resolved object conflicts with an existing materialized "
+                    f"object_id {object_id!r}",
+                )
+            materialized_objects.append(existing)
+            continue
+
+        materialized_objects.append(
+            CuratableObjectEnvelope(
+                object_type=object_type,
+                object_id=object_id,
+                status=CuratableObjectStatus.VALIDATED,
+                schema_ref=object_definition.schema_ref,
+                model_ref=object_definition.model_ref,
+                payload=payload,
+                definition_state=object_definition.definition_state,
+                definition_notes=list(object_definition.definition_notes),
+                metadata={
+                    object_role_key: "validated_reference",
+                    "validation_state": "validated",
+                    "validator_materialization": {
+                        "source": "domain_validator_result",
+                        "request_id": result.request_id,
+                        "validator_binding_id": result.validator_binding_id,
+                        "validator_agent": result.validator_agent.model_dump(
+                            mode="json"
+                        ),
+                        "canonical_id": canonical_id,
+                        **(
+                            {"source_envelope_revision": source_envelope_revision}
+                            if source_envelope_revision is not None
+                            else {}
+                        ),
+                    },
+                },
+            )
+        )
+
+    return materialized_objects, None
+
+
+def _validated_reference_payload(
+    item: ValidatorResultMaterializationInput,
+    raw_payload: Mapping[str, Any],
+    *,
+    object_definition: DomainPackObjectDefinition,
+) -> tuple[dict[str, Any], str | None]:
+    declared_fields = {field.field_path: field for field in object_definition.fields}
+    payload: dict[str, Any] = {}
+
+    for field_path in declared_fields:
+        value = _payload_value(raw_payload, field_path)
+        if value is not _MISSING:
+            _set_payload_value(payload, field_path, value)
+
+    for result_field, raw_field_path in item.request.expected_result_fields.items():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            return {}, (
+                "expected_result_fields values must be non-empty field path strings"
+            )
+        resolved_value = item.result.resolved_values.get(result_field)
+        if _missing_resolved_value(resolved_value):
+            continue
+        materialized_field_path = _materialized_field_path(
+            raw_field_path,
+            declared_fields=declared_fields,
+        )
+        if materialized_field_path is None:
+            continue
+        _set_payload_value(payload, materialized_field_path, resolved_value)
+
+    missing_required_fields = [
+        field.field_path
+        for field in object_definition.fields
+        if field.required and _payload_value(payload, field.field_path) is _MISSING
+    ]
+    if missing_required_fields:
+        return {}, (
+            "resolved object payload is missing required field(s): "
+            + ", ".join(missing_required_fields)
+        )
+
+    if not payload:
+        return {}, (
+            f"resolved object type {object_definition.object_type!r} did not include "
+            "any fields permitted by the binding schema"
+        )
+    return payload, None
+
+
+def _materialized_field_path(
+    raw_field_path: str,
+    *,
+    declared_fields: Mapping[str, DomainPackFieldDefinition],
+) -> str | None:
+    field_path = raw_field_path.strip()
+    if field_path in declared_fields:
+        return field_path
+    if "." not in field_path:
+        return None
+    _, suffix = field_path.split(".", 1)
+    if suffix in declared_fields:
+        return suffix
+    return None
+
+
+def _append_materialized_objects(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    new_objects: Sequence[CuratableObjectEnvelope],
+) -> tuple[DomainEnvelope, tuple[CuratableObjectEnvelope, ...]]:
+    if not new_objects:
+        return envelope, ()
+
+    existing_object_ids = {
+        domain_object.object_id
+        for domain_object in envelope.objects
+        if domain_object.object_id is not None
+    }
+    objects = list(envelope.objects)
+    appended: list[CuratableObjectEnvelope] = []
+    for new_object in new_objects:
+        if new_object.object_id not in existing_object_ids:
+            objects.append(new_object)
+            existing_object_ids.add(new_object.object_id)
+            appended.append(new_object)
+
+    if item.match.object_envelope is not None:
+        objects = _objects_with_target_refs(
+            objects,
+            target=item.match.object_envelope,
+            referenced_objects=new_objects,
+        )
+
+    return envelope.model_copy(update={"objects": objects}), tuple(appended)
+
+
+def _objects_with_target_refs(
+    objects: Sequence[CuratableObjectEnvelope],
+    *,
+    target: CuratableObjectEnvelope,
+    referenced_objects: Sequence[CuratableObjectEnvelope],
+) -> list[CuratableObjectEnvelope]:
+    target_keys = set(target.ref_keys())
+    referenced_refs = [
+        referenced_object.to_object_ref()
+        for referenced_object in referenced_objects
+        if referenced_object.object_type != target.object_type
+    ]
+    if not referenced_refs:
+        return list(objects)
+
+    updated_objects: list[CuratableObjectEnvelope] = []
+    for domain_object in objects:
+        if not target_keys.intersection(domain_object.ref_keys()):
+            updated_objects.append(domain_object)
+            continue
+        existing_ref_keys = {ref.ref_key() for ref in domain_object.object_refs}
+        next_refs = list(domain_object.object_refs)
+        for object_ref in referenced_refs:
+            if object_ref.ref_key() not in existing_ref_keys:
+                next_refs.append(object_ref)
+                existing_ref_keys.add(object_ref.ref_key())
+        updated_objects.append(domain_object.model_copy(update={"object_refs": next_refs}))
+    return updated_objects
+
+
+def _finding_for_materialization_problem(
+    item: ValidatorResultMaterializationInput,
+    problem: str,
+    *,
+    source_envelope_revision: int | None,
+) -> ValidationFinding:
+    result = item.result
+    details = _validator_result_finding_details(
+        item,
+        source_envelope_revision=source_envelope_revision,
+    )
+    details["failure_classification"] = "invalid_materialization_input"
+    details["materialization_error"] = problem
+    return ValidationFinding(
+        severity=(
+            ValidationFindingSeverity.BLOCKER
+            if item.match.binding.blocking
+            else ValidationFindingSeverity.WARNING
+        ),
+        status=ValidationFindingStatus.OPEN,
+        code="domain_pack.validator_materialization_invalid",
+        message=(
+            result.curator_message
+            or f"Validator result could not be materialized: {problem}"
+        ),
+        object_ref=_match_object_ref(item.match),
+        field_ref=_match_field_ref(item.match),
+        details={key: value for key, value in details.items() if value not in ([], {})},
+    )
+
+
+def _finding_for_validator_result(
+    item: ValidatorResultMaterializationInput,
+    *,
+    source_envelope_revision: int | None,
+) -> ValidationFinding:
+    result = item.result
+    resolved = result.status == "resolved"
+    details = _validator_result_finding_details(
+        item,
+        source_envelope_revision=source_envelope_revision,
+    )
+    if not resolved:
+        details["failure_classification"] = validator_failure_classification(
+            result,
+            error_type=DomainEnvelopeMaterializationError,
+        )
+
+    return ValidationFinding(
+        severity=(
+            ValidationFindingSeverity.INFO
+            if resolved
+            else (
+                ValidationFindingSeverity.BLOCKER
+                if item.match.binding.blocking
+                else ValidationFindingSeverity.WARNING
+            )
+        ),
+        status=(
+            ValidationFindingStatus.RESOLVED
+            if resolved
+            else ValidationFindingStatus.OPEN
+        ),
+        code=(
+            "domain_pack.validator_resolved"
+            if resolved
+            else "domain_pack.validator_unresolved"
+        ),
+        message=(
+            result.curator_message
+            or result.explanation
+            or (
+                f"Validator binding '{item.request.validator_binding_id}' "
+                f"{'resolved' if resolved else 'did not resolve'} the target."
+            )
+        ),
+        object_ref=_match_object_ref(item.match),
+        field_ref=_match_field_ref(item.match),
+        details={key: value for key, value in details.items() if value not in ([], {})},
+    )
+
+
+def _validator_result_finding_details(
+    item: ValidatorResultMaterializationInput,
+    *,
+    source_envelope_revision: int | None,
+) -> dict[str, Any]:
+    details = {
+        "validation_metadata": {
+            **item.match.binding.identity_details(),
+            "target": item.match.target_details(),
+            **(
+                {"source_envelope_revision": source_envelope_revision}
+                if source_envelope_revision is not None
+                else {}
+            ),
+        },
+        "validation_request": item.request.model_dump(mode="json", exclude_none=True),
+        "validation_result": item.result.model_dump(mode="json", exclude_none=True),
+        "lookup_attempts": _lookup_attempt_details(item),
+        "candidate_matches": _candidate_matches(item.result),
+    }
+    if item.result.missing_expected_fields:
+        details["missing_expected_fields"] = list(item.result.missing_expected_fields)
+    if item.result.curator_message is not None:
+        details["curator_message"] = item.result.curator_message
+    return details
+
+
+def _lookup_attempt_details(
+    item: ValidatorResultMaterializationInput,
+) -> list[dict[str, Any]]:
+    attempts = []
+    for attempt in item.result.lookup_attempts:
+        payload = attempt.model_dump(mode="json", exclude_none=True)
+        lookup_status = lookup_status_for_validator_outcome(
+            payload.get("outcome"),
+            error_type=DomainEnvelopeMaterializationError,
+        )
+        attempts.append(
+            {
+                "source": {
+                    "validator_binding_id": item.request.validator_binding_id,
+                    "validator_agent": item.request.validator_agent.model_dump(
+                        mode="json"
+                    ),
+                },
+                "attempted_query": {
+                    "request_id": item.request.request_id,
+                    "input_fields": dict(item.request.selected_inputs),
+                    "provider_query": payload["query"],
+                },
+                "lookup_status": lookup_status,
+                "candidate_count": payload["result_count"],
+                "resolved_id": _resolved_id(item.result),
+                "resolved_label": _resolved_label(item.result),
+                "explanation": payload.get("message") or item.result.explanation,
+                "provider": payload.get("provider"),
+                "method": payload.get("method"),
+            }
+        )
+    return attempts
+
+
+def _candidate_matches(result: DomainValidatorResultBase) -> list[dict[str, Any]]:
+    return [
+        candidate.model_dump(mode="json", exclude_none=True)
+        for candidate in result.candidates
+    ]
+
+
+def _resolved_id(result: DomainValidatorResultBase) -> str | None:
+    for value in result.resolved_values.values():
+        if isinstance(value, str) and value.strip():
+            return value
+    for resolved_object in result.resolved_objects:
+        value = resolved_object.get("canonical_id")
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _resolved_label(result: DomainValidatorResultBase) -> str | None:
+    for key in ("label", "symbol", "name"):
+        value = result.resolved_values.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _match_object_ref(match: ValidatorBindingMatch) -> ObjectRef | None:
+    if match.object_envelope is None or match.field_definition is not None:
+        return None
+    return match.object_envelope.to_object_ref()
+
+
+def _match_field_ref(match: ValidatorBindingMatch) -> FieldRef | None:
+    if match.object_envelope is None or match.field_definition is None:
+        return None
+    return FieldRef(
+        object_ref=match.object_envelope.to_object_ref(),
+        field_path=match.field_definition.field_path,
+    )
+
+
+def _validated_reference_object_id(object_type: str, canonical_id: str) -> str:
+    digest = sha256(
+        json.dumps(
+            {"object_type": object_type, "canonical_id": canonical_id},
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"validated-reference:{object_type}:{digest[:24]}"
+
+
+def _definition_object_role(
+    object_definition: DomainPackObjectDefinition,
+    *,
+    object_role_key: str,
+) -> str | None:
+    role = object_definition.metadata.get(object_role_key)
+    return role.strip() if isinstance(role, str) and role.strip() else None
+
+
+def _find_existing_object(
+    envelope: DomainEnvelope,
+    *,
+    object_id: str,
+) -> CuratableObjectEnvelope | None:
+    for domain_object in envelope.objects:
+        if domain_object.object_id == object_id:
+            return domain_object
+    return None
+
+
+def _set_payload_value(payload: dict[str, Any], field_path: str, value: Any) -> None:
+    parts = parse_field_path(field_path)
+    current: dict[str, Any] = payload
+    for part in parts[:-1]:
+        if not isinstance(part, str):
+            raise DomainEnvelopeMaterializationError(
+                "Materialized validator payload paths cannot create list indexes"
+            )
+        next_value = current.setdefault(part, {})
+        if not isinstance(next_value, dict):
+            raise DomainEnvelopeMaterializationError(
+                f"Cannot materialize nested value into non-object path {field_path!r}"
+            )
+        current = next_value
+    leaf = parts[-1]
+    if not isinstance(leaf, str):
+        raise DomainEnvelopeMaterializationError(
+            "Materialized validator payload paths cannot end with a list index"
+        )
+    current[leaf] = value
+
+
+def _missing_resolved_value(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
 
 
 def project_evidence_anchor_projections(
@@ -1279,7 +1847,10 @@ __all__ = [
     "DomainEnvelopeReviewRowMaterializer",
     "DomainPackMetadataReviewRowMaterializer",
     "REVIEW_ROW_PROJECTION_TYPE",
+    "ValidatorResultMaterializationInput",
+    "ValidatorResultMaterializationResult",
     "materialize_persisted_envelope_review_rows",
+    "materialize_validator_results_into_envelope",
     "project_evidence_anchor_projections",
     "project_validation_summary_projections",
     "stable_object_id",
