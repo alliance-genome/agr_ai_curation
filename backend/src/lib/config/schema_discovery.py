@@ -6,7 +6,7 @@ configuration sources. Each agent bundle may contain a schema.py file with
 envelope classes.
 
 Envelope classes are identified by:
-- Class name ending in "Envelope" (e.g., GeneValidationEnvelope)
+- Class name ending in "Envelope" (e.g., GeneResultEnvelope)
 - Or having __envelope_class__ = True attribute
 
 Usage:
@@ -16,7 +16,7 @@ Usage:
     schemas = discover_agent_schemas()
 
     # Get a specific schema
-    GeneEnvelope = get_agent_schema("GeneValidationEnvelope")
+    GeneEnvelope = get_agent_schema("GeneResultEnvelope")
 """
 
 import importlib.util
@@ -276,7 +276,7 @@ def get_agent_schema(class_name: str) -> Optional[Type[BaseModel]]:
     Get a schema class by its class name.
 
     Args:
-        class_name: The class name (e.g., "GeneValidationEnvelope")
+        class_name: The class name (e.g., "GeneResultEnvelope")
 
     Returns:
         Pydantic model class or None if not found
@@ -288,24 +288,12 @@ def get_agent_schema(class_name: str) -> Optional[Type[BaseModel]]:
 
 
 def resolve_output_schema(schema_key: str) -> Optional[Type[BaseModel]]:
-    """Resolve a runtime output schema by canonical package registration first."""
+    """Resolve a runtime output schema from canonical schema registration."""
 
     if not _initialized:
         discover_agent_schemas()
 
-    schema = _schema_registry.get(schema_key)
-    if schema is not None:
-        return schema
-
-    try:
-        from src.lib.openai_agents import models as agent_models
-    except Exception:
-        return None
-
-    candidate = getattr(agent_models, schema_key, None)
-    if isinstance(candidate, type) and issubclass(candidate, BaseModel):
-        return candidate
-    return None
+    return _schema_registry.get(schema_key)
 
 
 def build_package_scoped_output_schema_resolver(
@@ -322,19 +310,7 @@ def build_package_scoped_output_schema_resolver(
             with resolver_lock:
                 if local_registry is None:
                     local_registry, _schema_by_folder = _discover_schema_indexes(agents_path)
-        schema = local_registry.get(schema_key)
-        if schema is not None:
-            return schema
-
-        try:
-            from src.lib.openai_agents import models as agent_models
-        except Exception:
-            return None
-
-        candidate = getattr(agent_models, schema_key, None)
-        if isinstance(candidate, type) and issubclass(candidate, BaseModel):
-            return candidate
-        return None
+        return local_registry.get(schema_key)
 
     return resolve
 
@@ -379,7 +355,7 @@ def get_schema_json(class_name: str) -> Optional[Dict[str, Any]]:
     Get the JSON schema for a registered envelope class.
 
     Args:
-        class_name: The class name (e.g., "GeneValidationEnvelope")
+        class_name: The class name (e.g., "GeneResultEnvelope")
 
     Returns:
         JSON schema dictionary or None if not found

@@ -369,6 +369,18 @@ def test_discover_agent_schemas_logs_resolved_default_path(monkeypatch, caplog, 
     assert f"Discovering agent schemas from: {packages_dir}" in caplog.text
 
 
+def test_resolve_output_schema_uses_only_canonical_registry(tmp_path):
+    schema_discovery.discover_agent_schemas(tmp_path, force_reload=True)
+
+    assert schema_discovery.resolve_output_schema("GeneExtractionResultEnvelope") is None
+
+
+def test_package_scoped_output_schema_resolver_uses_only_canonical_registry(tmp_path):
+    resolver = schema_discovery.build_package_scoped_output_schema_resolver(tmp_path)
+
+    assert resolver("GeneExtractionResultEnvelope") is None
+
+
 def test_default_runtime_packages_dir_must_contain_package_manifests(tmp_path, monkeypatch):
     packages_dir = tmp_path / "runtime-packages"
     packages_dir.mkdir()
