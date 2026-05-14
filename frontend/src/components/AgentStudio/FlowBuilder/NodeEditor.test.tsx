@@ -209,6 +209,7 @@ describe('NodeEditor', () => {
   })
 
   it('shows custom replacement status for validation groups', () => {
+    const onSave = vi.fn()
     const replaced = buildValidationAttachmentSelection({
       attachment_id: 'gene:lookup',
       validator_binding_id: 'gene_lookup',
@@ -237,7 +238,7 @@ describe('NodeEditor', () => {
             },
           ],
         })}
-        onSave={vi.fn()}
+        onSave={onSave}
         onClose={vi.fn()}
         availableVariables={[]}
       />
@@ -246,6 +247,16 @@ describe('NodeEditor', () => {
     expect(screen.getByText('custom replacement')).toBeInTheDocument()
     expect(screen.getByText('blocking')).toBeInTheDocument()
     expect(screen.getByText('gene v0.1.0 / agr.alliance:gene_validation')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox')).toBeDisabled()
+
+    fireEvent.click(screen.getByRole('checkbox'))
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+
+    expect(onSave).toHaveBeenCalledWith('node_1', expect.any(Object))
+    expect(onSave.mock.calls[0][1].validation_attachments[0]).toEqual(expect.objectContaining({
+      attachment_id: 'gene:lookup',
+      enabled: true,
+    }))
   })
 
   it('shows supplemental status for validation groups', () => {

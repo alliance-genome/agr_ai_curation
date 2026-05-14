@@ -293,6 +293,13 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
   }
 
   const handleValidationToggle = (attachmentId: string, enabled: boolean) => {
+    if (!node) return
+
+    const group = node.data.validation_groups?.find(
+      (candidate) => candidate.attachment_id === attachmentId
+    )
+    if (group?.state === 'replaced') return
+
     setValidationAttachments((current) => current.map((attachment) => (
       attachment.attachment_id === attachmentId
         ? { ...attachment, enabled }
@@ -485,6 +492,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                   const canToggle = attachment.state === 'active'
                     && hasBinding
                     && attachment.allow_opt_out
+                    && group?.state !== 'replaced'
                   const stateColor: 'success' | 'warning' | 'error' = attachment.state === 'active'
                     ? 'success'
                     : attachment.state === 'planned' || attachment.state === 'under_development'

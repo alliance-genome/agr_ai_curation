@@ -134,7 +134,9 @@ const activeValidationBindingOptions = (
   node?: AgentNode
 ): ValidationAttachmentSelection[] => (
   node?.data.validation_attachments?.filter((attachment) => (
-    attachment.state === 'active' && Boolean(attachment.validator_binding_id)
+    attachment.state === 'active'
+    && Boolean(attachment.validator_binding_id)
+    && attachment.enabled === true
   )) ?? []
 )
 
