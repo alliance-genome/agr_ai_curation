@@ -171,11 +171,10 @@ def _field_result_from_validation_summaries(
 def _field_status_for_finding(
     finding: DomainEnvelopeValidationFindingProjection,
 ) -> FieldValidationStatus:
-    if finding.summary_status in {
-        DomainEnvelopeValidationStatus.RESOLVED,
-        DomainEnvelopeValidationStatus.WAIVED,
-    }:
+    if finding.summary_status is DomainEnvelopeValidationStatus.RESOLVED:
         return FieldValidationStatus.VALIDATED
+    if finding.summary_status is DomainEnvelopeValidationStatus.WAIVED:
+        return FieldValidationStatus.OVERRIDDEN
 
     code = (finding.code or "").lower()
     details = dict(finding.details)

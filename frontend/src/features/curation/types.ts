@@ -110,6 +110,7 @@ export const CURATION_ACTION_TYPES = [
   'candidate_deleted',
   'candidate_updated',
   'envelope_field_patched',
+  'curator_validation_override',
   'candidate_accepted',
   'candidate_rejected',
   'candidate_reset',
@@ -278,7 +279,9 @@ export interface CurationCandidateSubmissionReadiness {
 
 export interface CurationSubmissionReadinessBlockerDetails {
   [key: string]: unknown
-  allow_opt_out?: boolean
+  curator_override?: {
+    allowed?: boolean
+  }
   required?: boolean
   export_blocking?: boolean
   finding_id?: string
@@ -747,6 +750,25 @@ export interface CurationEnvelopeFieldPatchResponse {
   action_log_entry?: CurationActionLogEntry | null
   history_event_ids: string[]
   projection_candidate_ids: string[]
+}
+
+export interface CurationValidationFindingWaiveRequest {
+  session_id: string
+  envelope_id: string
+  expected_revision: number
+  finding_id: string
+  comment?: string | null
+}
+
+export interface CurationValidationFindingWaiveResponse {
+  envelope_id: string
+  previous_revision: number
+  envelope_revision: number
+  finding_id: string
+  previous_status: string
+  new_status: string
+  action_log_entry: CurationActionLogEntry
+  session: CurationReviewSession
 }
 
 export interface CurationCandidateDecisionRequest {

@@ -335,6 +335,7 @@ class CurationActionType(str, Enum):
     CANDIDATE_DELETED = "candidate_deleted"
     CANDIDATE_UPDATED = "candidate_updated"
     ENVELOPE_FIELD_PATCHED = "envelope_field_patched"
+    CURATOR_VALIDATION_OVERRIDE = "curator_validation_override"
     CANDIDATE_ACCEPTED = "candidate_accepted"
     CANDIDATE_REJECTED = "candidate_rejected"
     CANDIDATE_RESET = "candidate_reset"
@@ -2014,6 +2015,54 @@ class CurationEnvelopeFieldPatchResponse(CurationWorkspaceBaseModel):
     )
 
 
+class CurationValidationFindingWaiveRequest(CurationWorkspaceBaseModel):
+    """Request contract for waiving one concrete envelope validation finding."""
+
+    session_id: str = Field(description="Owning curation session identifier")
+    envelope_id: str = Field(description="Domain envelope identifier")
+    expected_revision: int = Field(
+        ge=1,
+        description="Envelope revision reviewed before applying the waiver",
+    )
+    finding_id: str = Field(description="Stable validation finding identifier to waive")
+    comment: Optional[str] = Field(
+        default=None,
+        description="Optional curator audit comment for the waiver action",
+    )
+
+    @field_validator("envelope_id", "finding_id")
+    @classmethod
+    def _validate_non_empty_strings(cls, value: str, info) -> str:
+        if not value.strip():
+            raise ValueError(f"{info.field_name} must not be empty")
+        if value != value.strip():
+            raise ValueError(f"{info.field_name} must not include surrounding whitespace")
+        return value
+
+    @field_validator("comment")
+    @classmethod
+    def _normalize_comment(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+
+class CurationValidationFindingWaiveResponse(CurationWorkspaceBaseModel):
+    """Response contract for a curator validation-finding waiver action."""
+
+    envelope_id: str = Field(description="Domain envelope identifier")
+    previous_revision: int = Field(ge=1, description="Envelope revision before the waiver")
+    envelope_revision: int = Field(ge=1, description="Envelope revision after the waiver")
+    finding_id: str = Field(description="Validation finding that was waived")
+    previous_status: str = Field(description="Finding status before the waiver")
+    new_status: str = Field(description="Finding status after the waiver")
+    action_log_entry: CurationActionLogEntry = Field(
+        description="Action-log entry emitted by the waiver mutation",
+    )
+    session: CurationReviewSession = Field(description="Updated session payload")
+
+
 class CurationCandidateDecisionRequest(CurationWorkspaceBaseModel):
     """Request contract for candidate accept, reject, or reset actions."""
 
@@ -2453,6 +2502,8 @@ __all__ = [
     "CurationSubmissionStatus",
     "CurationValidationCounts",
     "CurationValidationScope",
+    "CurationValidationFindingWaiveRequest",
+    "CurationValidationFindingWaiveResponse",
     "CurationValidationSnapshot",
     "CurationValidationSnapshotState",
     "CurationValidationSummary",

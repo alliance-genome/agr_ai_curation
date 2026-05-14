@@ -104,7 +104,7 @@ const STATUS_PRESENTATION: Record<DomainEnvelopeValidationStatus, StatusPresenta
     severity: 'success',
   },
   waived: {
-    label: 'Opt out',
+    label: 'Waived',
     color: 'default',
     severity: 'info',
   },

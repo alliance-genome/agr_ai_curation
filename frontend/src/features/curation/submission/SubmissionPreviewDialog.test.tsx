@@ -371,7 +371,7 @@ describe('SubmissionPreviewDialog', () => {
       details: {
         required: true,
         export_blocking: true,
-        allow_opt_out: true,
+        curator_override: { allowed: true },
       },
     }
     const revisionBlocker: CurationSubmissionReadinessBlocker = {
@@ -406,7 +406,7 @@ describe('SubmissionPreviewDialog', () => {
     expect(screen.getByText('Field artifact.title')).toBeInTheDocument()
     expect(screen.getByText('Required')).toBeInTheDocument()
     expect(screen.getByText('Export-blocking')).toBeInTheDocument()
-    expect(screen.getByText('Curator override allowed')).toBeInTheDocument()
+    expect(screen.getByText('Waiver allowed')).toBeInTheDocument()
     expect(screen.getByText('Revision mismatch')).toBeInTheDocument()
     expect(screen.getByText('Required export field is missing: artifact.title.')).toBeInTheDocument()
     expect(screen.getByText(
@@ -444,7 +444,7 @@ describe('SubmissionPreviewDialog', () => {
     expect(
       await screen.findByText('Required export field is missing: artifact.title.'),
     ).toBeInTheDocument()
-    expect(screen.queryByText('Curator override allowed')).not.toBeInTheDocument()
+    expect(screen.queryByText('Waiver allowed')).not.toBeInTheDocument()
   })
 
   it('prevents direct submit when any readiness item is blocked', async () => {

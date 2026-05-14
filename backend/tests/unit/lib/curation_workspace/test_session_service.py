@@ -41,6 +41,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.validation_supervisor import append_validation_findings_to_envelope
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (
@@ -66,6 +67,7 @@ from src.schemas.curation_workspace import (
     CurationSubmissionReadinessBlocker,
     CurationSubmissionRetryRequest,
     CurationSubmissionStatus,
+    CurationValidationFindingWaiveRequest,
     CurationValidationScope,
     CurationValidationSnapshotState,
     FieldValidationResult,
@@ -565,7 +567,8 @@ def _museum_pack_text(
 ) -> str:
     title_metadata = (
         """
-          allow_curator_override: true"""
+          curator_override:
+            allowed: true"""
         if allow_title_override
         else " {}"
     )
@@ -587,7 +590,8 @@ metadata:
           field_types:
             - string
         blocking: true
-        allow_opt_out: true"""
+        curator_override:
+          allowed: true"""
         if title_binding_allows_opt_out
         else ""
     )
@@ -2930,10 +2934,10 @@ def test_submission_export_blocks_open_export_blocking_validation_findings(
     assert blocker.provider_refs == {
         "catalog_schema": {"class": "Artifact", "field": "title"}
     }
-    assert blocker.details["allow_opt_out"] is True
+    assert "curator_override" not in blocker.details
 
 
-def test_submission_export_allows_waived_finding_with_field_override_policy(
+def test_submission_export_blocks_waived_finding_with_only_field_override_policy(
     db_session,
     tmp_path,
     monkeypatch,
@@ -2985,11 +2989,12 @@ def test_submission_export_allows_waived_finding_with_field_override_policy(
     )
 
     readiness = response.submission.readiness[0]
-    assert readiness.ready is True
-    assert readiness.blockers == []
+    assert readiness.ready is False
+    assert readiness.blockers[0].code == "museum.catalog.title_unverified"
+    assert readiness.blockers[0].status == "waived"
 
 
-def test_submission_export_allows_waived_finding_with_binding_validation_metadata(
+def test_submission_export_blocks_waived_finding_with_alias_validation_metadata(
     db_session,
     tmp_path,
     monkeypatch,
@@ -3039,8 +3044,314 @@ def test_submission_export_allows_waived_finding_with_binding_validation_metadat
     )
 
     readiness = response.submission.readiness[0]
+    assert readiness.ready is False
+    assert readiness.blockers[0].code == "museum.catalog.title_unverified"
+    assert readiness.blockers[0].status == "waived"
+
+
+def test_submission_export_allows_waived_finding_with_curator_override_policy(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        validation_findings=[
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                status=ValidationFindingStatus.WAIVED,
+                message="Title requires external catalog verification.",
+                code="museum.catalog.title_unverified",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "curator_override": {"allowed": True},
+                    }
+                },
+            )
+        ],
+    )
+
+    response = module.submission_preview(
+        db_session,
+        seeded["session_id"],
+        CurationSubmissionPreviewRequest(
+            session_id=seeded["session_id"],
+            mode=SubmissionMode.EXPORT,
+            target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+        ),
+    )
+
+    readiness = response.submission.readiness[0]
     assert readiness.ready is True
     assert readiness.blockers == []
+
+
+def test_waive_validation_finding_records_audit_action(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        validation_findings=[
+            ValidationFinding(
+                finding_id="finding-title",
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Title requires external catalog verification.",
+                code="museum.catalog.title_unverified",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "binding_state": "active",
+                        "validator_agent": {
+                            "package_id": "museum.catalog",
+                            "agent_id": "title_catalog_validator",
+                        },
+                        "curator_override": {"allowed": True},
+                    },
+                    "validation_request": {
+                        "request_id": "validation-run-1",
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "selected_inputs": {"title": "Bronze astrolabe"},
+                    },
+                },
+            ),
+            ValidationFinding(
+                finding_id="finding-other",
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Accession requires review.",
+                code="museum.catalog.accession_unverified",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.accession_id",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.accession_check",
+                        "curator_override": {"allowed": True},
+                    }
+                },
+            ),
+        ],
+    )
+
+    response = module.waive_validation_finding(
+        db_session,
+        seeded["session_id"],
+        CurationValidationFindingWaiveRequest(
+            session_id=seeded["session_id"],
+            envelope_id=seeded["envelope_id"],
+            expected_revision=1,
+            finding_id="finding-title",
+        ),
+        {"sub": "curator-42", "email": "curator@example.org"},
+    )
+
+    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
+    stored_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    stored_action = db_session.scalars(
+        select(SessionActionLogModel).where(
+            SessionActionLogModel.action_type
+            == CurationActionType.CURATOR_VALIDATION_OVERRIDE
+        )
+    ).one()
+    review_action = stored_action.action_metadata["curator_validation_override"]
+
+    assert response.previous_revision == 1
+    assert response.envelope_revision == 2
+    assert response.previous_status == "open"
+    assert response.new_status == "waived"
+    assert stored_envelope.objects[0].payload == {
+        "artifact": {
+            "accession_id": "A-1",
+            "title": "Bronze astrolabe",
+        }
+    }
+    assert [finding.status for finding in stored_envelope.validation_findings] == [
+        ValidationFindingStatus.WAIVED,
+        ValidationFindingStatus.OPEN,
+    ]
+    assert review_action["action"] == "waive_validation_finding"
+    assert review_action["finding_id"] == "finding-title"
+    assert review_action["validator_binding_id"] == "museum.title_catalog_check"
+    assert review_action["validator_run_id"] == "validation-run-1"
+    assert review_action["envelope_revision"] == 1
+    assert review_action["checkpoint_envelope_revision"] == 2
+    assert review_action["target"] == {
+        "object_id": "artifact-1",
+        "object_type": "MuseumArtifact",
+        "field_path": "artifact.title",
+    }
+    assert review_action["actor"] == {
+        "actor_type": "human",
+        "actor_id": "curator-42",
+    }
+    assert review_action["comment"] is None
+    assert review_action["input_fingerprint"].startswith("sha256:")
+    assert stored_action.reason is None
+
+
+def test_waive_validation_finding_rejects_alias_policy(
+    db_session,
+    tmp_path,
+    monkeypatch,
+):
+    seeded = _create_domain_envelope_submission_session(
+        db_session,
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        payload={
+            "artifact": {
+                "accession_id": "A-1",
+                "title": "Bronze astrolabe",
+            }
+        },
+        validation_findings=[
+            ValidationFinding(
+                finding_id="finding-title",
+                severity=ValidationFindingSeverity.BLOCKER,
+                message="Title requires external catalog verification.",
+                code="museum.catalog.title_unverified",
+                field_ref=FieldRef(
+                    object_ref=ObjectRef(
+                        object_id="artifact-1",
+                        object_type="MuseumArtifact",
+                    ),
+                    field_path="artifact.title",
+                ),
+                details={
+                    "validation_metadata": {
+                        "validator_binding_id": "museum.title_catalog_check",
+                        "allow_override": True,
+                        "allow_curator_override": True,
+                        "allow_opt_out": True,
+                        "reason_required": True,
+                    },
+                    "opt_out_reason": "legacy alias",
+                },
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        module.waive_validation_finding(
+            db_session,
+            seeded["session_id"],
+            CurationValidationFindingWaiveRequest(
+                session_id=seeded["session_id"],
+                envelope_id=seeded["envelope_id"],
+                expected_revision=1,
+                finding_id="finding-title",
+            ),
+            {"sub": "curator-42"},
+        )
+
+    envelope_row = db_session.get(DomainEnvelopeModel, seeded["envelope_id"])
+    stored_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    assert exc.value.status_code == 403
+    assert stored_envelope.validation_findings[0].status is ValidationFindingStatus.OPEN
+
+
+def test_validation_rerun_keeps_waiver_only_for_identical_finding_identity():
+    object_ref = ObjectRef(object_id="artifact-1", object_type="MuseumArtifact")
+    envelope = DomainEnvelope(
+        envelope_id="museum-envelope-1",
+        domain_pack_id="museum.catalog",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="MuseumArtifact",
+                object_id="artifact-1",
+                payload={"artifact": {"title": "Bronze astrolabe"}},
+            )
+        ],
+    )
+    original_finding = ValidationFinding(
+        severity=ValidationFindingSeverity.BLOCKER,
+        message="Title requires external catalog verification.",
+        code="museum.catalog.title_unverified",
+        field_ref=FieldRef(object_ref=object_ref, field_path="artifact.title"),
+        details={
+            "validation_request": {
+                "request_id": "validation-run-1",
+                "selected_inputs": {"title": "Bronze astrolabe"},
+            },
+            "validation_metadata": {
+                "validator_binding_id": "museum.title_catalog_check",
+                "curator_override": {"allowed": True},
+            },
+        },
+    )
+    envelope, appended = append_validation_findings_to_envelope(
+        envelope,
+        [original_finding],
+    )
+    waived_finding = appended[0].model_copy(
+        update={"status": ValidationFindingStatus.WAIVED}
+    )
+    envelope = envelope.model_copy(update={"validation_findings": [waived_finding]})
+
+    same_input_envelope, same_input_appended = append_validation_findings_to_envelope(
+        envelope,
+        [original_finding],
+    )
+    changed_input_envelope, changed_input_appended = append_validation_findings_to_envelope(
+        same_input_envelope,
+        [
+            original_finding.model_copy(
+                update={
+                    "details": {
+                        **original_finding.details,
+                        "validation_request": {
+                            "request_id": "validation-run-2",
+                            "selected_inputs": {"title": "Silver astrolabe"},
+                        },
+                    }
+                }
+            )
+        ],
+    )
+
+    assert same_input_appended == ()
+    assert same_input_envelope.validation_findings == [waived_finding]
+    assert len(changed_input_appended) == 1
+    assert len(changed_input_envelope.validation_findings) == 2
+    assert changed_input_envelope.validation_findings[0].status is ValidationFindingStatus.WAIVED
+    assert changed_input_envelope.validation_findings[1].status is ValidationFindingStatus.OPEN
 
 
 def test_submission_preview_rejects_unknown_candidate_ids(db_session):

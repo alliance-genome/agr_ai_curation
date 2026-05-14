@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import json
+from hashlib import sha256
 from datetime import datetime, timezone
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -87,9 +89,22 @@ from src.schemas.curation_workspace import (
     CurationSessionStatus,
     CurationSessionUpdateRequest,
     CurationSessionUpdateResponse,
+    CurationValidationFindingWaiveRequest,
+    CurationValidationFindingWaiveResponse,
     CurationValidationSnapshot as CurationValidationSnapshotSchema,
 )
-from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope, parse_field_path
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    DomainEnvelope,
+    FieldRef,
+    HistoryActorType,
+    HistoryEvent,
+    HistoryEventKind,
+    ObjectRef,
+    ValidationFinding,
+    ValidationFindingStatus,
+    parse_field_path,
+)
 
 
 _MISSING = object()
@@ -790,6 +805,349 @@ def patch_envelope_field(
         action_log_entry=action_log_row,
         document_map=document_map,
         user_map=user_map,
+    )
+
+
+def waive_validation_finding(
+    db: Session,
+    session_id: str | UUID,
+    request: CurationValidationFindingWaiveRequest,
+    actor_claims: dict[str, Any],
+) -> CurationValidationFindingWaiveResponse:
+    """Apply a curator waiver to one envelope validation finding."""
+
+    normalized_session_id = _normalize_uuid(session_id, field_name="session_id")
+    request_session_id = _normalize_uuid(request.session_id, field_name="session_id")
+    if normalized_session_id != request_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path session_id does not match request body session_id",
+        )
+
+    sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    if not sessions:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Curation review session {normalized_session_id} not found",
+        )
+    session_row = sessions[0]
+
+    envelope_row = load_domain_envelope_row_for_patch(db, request.envelope_id)
+    if envelope_row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Domain envelope {request.envelope_id} not found",
+        )
+    if envelope_row.session_id is not None and envelope_row.session_id != normalized_session_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Domain envelope does not belong to the requested session",
+        )
+    if envelope_row.revision != request.expected_revision:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Domain envelope {request.envelope_id} is at revision "
+                f"{envelope_row.revision}, not expected revision {request.expected_revision}."
+            ),
+        )
+
+    envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
+    finding_index, finding = _validation_finding_by_id(envelope, request.finding_id)
+    if finding.status is not ValidationFindingStatus.OPEN:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Validation finding {request.finding_id} cannot be waived from "
+                f"status {finding.status.value}"
+            ),
+        )
+    if not _finding_curator_override_allowed(finding):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "Validation finding waiver requires "
+                "validation_metadata.curator_override.allowed=true"
+            ),
+        )
+
+    previous_revision = envelope_row.revision
+    actor = _actor_claims_payload(actor_claims)
+    target = _finding_review_target(envelope, finding)
+    review_action = _curator_validation_override_payload(
+        envelope=envelope,
+        envelope_revision=previous_revision,
+        finding=finding,
+        target=target,
+        actor=actor,
+        comment=request.comment,
+    )
+    waived_finding = finding.model_copy(
+        update={"status": ValidationFindingStatus.WAIVED}
+    )
+    findings = list(envelope.validation_findings)
+    findings[finding_index] = waived_finding
+    history_event = _curator_validation_override_history_event(
+        envelope=envelope,
+        finding=waived_finding,
+        target=target,
+        actor=actor,
+        review_action=review_action,
+    )
+    patched_envelope = envelope.model_copy(
+        update={
+            "validation_findings": findings,
+            "history": [*envelope.history, history_event],
+        }
+    )
+
+    checkpoint_revision = _checkpoint_patch_result(
+        db,
+        envelope_row=envelope_row,
+        patched_envelope=patched_envelope,
+        expected_revision=previous_revision,
+    )
+
+    now = datetime.now(timezone.utc)
+    projection_candidate_ids: list[str] = []
+    if target["object_id"] is not None:
+        projection_candidates = load_projection_candidates_for_patch(
+            db,
+            session_id=normalized_session_id,
+            envelope_id=request.envelope_id,
+            object_id=target["object_id"],
+        )
+        for candidate in projection_candidates:
+            projection_candidate_ids.append(str(candidate.id))
+            candidate.envelope_revision = checkpoint_revision
+            candidate.updated_at = now
+            db.add(candidate)
+
+    session_row.session_version += 1
+    session_row.updated_at = now
+    session_row.last_worked_at = now
+    review_action["history_event_id"] = history_event.event_id
+    review_action["checkpoint_envelope_revision"] = checkpoint_revision
+    review_action["projection_candidate_ids"] = projection_candidate_ids
+    action_log_row = SessionActionLogModel(
+        session_id=session_row.id,
+        candidate_id=(
+            UUID(projection_candidate_ids[0])
+            if projection_candidate_ids
+            else None
+        ),
+        draft_id=None,
+        action_type=CurationActionType.CURATOR_VALIDATION_OVERRIDE,
+        actor_type=CurationActorType.USER,
+        actor=actor,
+        occurred_at=now,
+        changed_field_keys=[target["field_path"]] if target["field_path"] else [],
+        message="Curator waived validation finding",
+        action_metadata={"curator_validation_override": review_action},
+        reason=request.comment,
+    )
+    db.add(session_row)
+    db.add(action_log_row)
+    db.commit()
+
+    refreshed_sessions = _load_sessions_by_ids(db, [normalized_session_id], detailed=True)
+    refreshed_session = refreshed_sessions[0]
+    document_map, user_map = _session_context_maps(db, [refreshed_session])
+    action_log_entry = _action_log_entry(action_log_row)
+    if action_log_entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Validation waiver action log could not be serialized",
+        )
+    return CurationValidationFindingWaiveResponse(
+        envelope_id=request.envelope_id,
+        previous_revision=previous_revision,
+        envelope_revision=checkpoint_revision,
+        finding_id=request.finding_id,
+        previous_status=finding.status.value,
+        new_status=ValidationFindingStatus.WAIVED.value,
+        action_log_entry=action_log_entry,
+        session=_session_detail(db, refreshed_session, document_map, user_map),
+    )
+
+
+def _validation_finding_by_id(
+    envelope: DomainEnvelope,
+    finding_id: str,
+) -> tuple[int, ValidationFinding]:
+    for index, finding in enumerate(envelope.validation_findings):
+        if finding.finding_id == finding_id:
+            return index, finding
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Validation finding {finding_id} not found in envelope {envelope.envelope_id}",
+    )
+
+
+def _metadata_curator_override_allowed(metadata: Mapping[str, Any]) -> bool:
+    raw_policy = metadata.get("curator_override")
+    return isinstance(raw_policy, Mapping) and raw_policy.get("allowed") is True
+
+
+def _finding_curator_override_allowed(finding: ValidationFinding) -> bool:
+    details = finding.details or {}
+    if _metadata_curator_override_allowed(details):
+        return True
+    raw_validation_metadata = details.get("validation_metadata")
+    return (
+        isinstance(raw_validation_metadata, Mapping)
+        and _metadata_curator_override_allowed(raw_validation_metadata)
+    )
+
+
+def _object_id_by_ref(envelope: DomainEnvelope) -> dict[tuple[str, str], str]:
+    object_ids: dict[tuple[str, str], str] = {}
+    for domain_object in envelope.objects:
+        stable_object_id = _stable_envelope_object_id(domain_object)
+        if domain_object.object_id is not None:
+            object_ids[("object_id", domain_object.object_id)] = stable_object_id
+        if domain_object.pending_ref_id is not None:
+            object_ids[("pending_ref_id", domain_object.pending_ref_id)] = stable_object_id
+    return object_ids
+
+
+def _stable_envelope_object_id(domain_object: CuratableObjectEnvelope) -> str:
+    if domain_object.object_id is not None:
+        return domain_object.object_id
+    if domain_object.pending_ref_id is not None:
+        return domain_object.pending_ref_id
+    raise HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail="Domain envelope object is missing object_id and pending_ref_id",
+    )
+
+
+def _object_ref_payload(object_ref: ObjectRef | None) -> dict[str, str | None]:
+    if object_ref is None:
+        return {}
+    return object_ref.model_dump(mode="json", exclude_none=True)
+
+
+def _field_ref_payload(field_ref: FieldRef | None) -> dict[str, Any]:
+    if field_ref is None:
+        return {}
+    return field_ref.model_dump(mode="json", exclude_none=True)
+
+
+def _finding_review_target(
+    envelope: DomainEnvelope,
+    finding: ValidationFinding,
+) -> dict[str, str | None]:
+    object_ids = _object_id_by_ref(envelope)
+    object_ref = None
+    field_path = None
+    if finding.field_ref is not None:
+        object_ref = finding.field_ref.object_ref
+        field_path = finding.field_ref.field_path
+    elif finding.object_ref is not None:
+        object_ref = finding.object_ref
+    object_id = object_ids.get(object_ref.ref_key()) if object_ref is not None else None
+    return {
+        "object_id": object_id,
+        "object_type": object_ref.object_type if object_ref is not None else None,
+        "field_path": field_path,
+    }
+
+
+def _validator_metadata(finding: ValidationFinding) -> Mapping[str, Any]:
+    raw_metadata = (finding.details or {}).get("validation_metadata")
+    return raw_metadata if isinstance(raw_metadata, Mapping) else {}
+
+
+def _validation_request(finding: ValidationFinding) -> Mapping[str, Any]:
+    raw_request = (finding.details or {}).get("validation_request")
+    return raw_request if isinstance(raw_request, Mapping) else {}
+
+
+def _input_fingerprint(finding: ValidationFinding) -> str | None:
+    request = _validation_request(finding)
+    selected_inputs = request.get("selected_inputs")
+    if selected_inputs is None:
+        return None
+    digest = sha256(
+        json.dumps(selected_inputs, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    return f"sha256:{digest}"
+
+
+def _curator_validation_override_payload(
+    *,
+    envelope: DomainEnvelope,
+    envelope_revision: int,
+    finding: ValidationFinding,
+    target: Mapping[str, str | None],
+    actor: Mapping[str, str],
+    comment: str | None,
+) -> dict[str, Any]:
+    metadata = _validator_metadata(finding)
+    request = _validation_request(finding)
+    return {
+        "action": "waive_validation_finding",
+        "finding_id": finding.finding_id,
+        "validator_binding_id": metadata.get("validator_binding_id")
+        or request.get("validator_binding_id"),
+        "validator_agent": metadata.get("validator_agent")
+        or request.get("validator_agent"),
+        "validator_run_id": request.get("request_id"),
+        "envelope_id": envelope.envelope_id,
+        "envelope_revision": envelope_revision,
+        "input_fingerprint": _input_fingerprint(finding),
+        "target": {
+            "object_id": target.get("object_id"),
+            "object_type": target.get("object_type"),
+            "field_path": target.get("field_path"),
+        },
+        "previous_status": finding.status.value,
+        "new_status": ValidationFindingStatus.WAIVED.value,
+        "actor": {
+            "actor_type": "human",
+            "actor_id": actor.get("actor_id"),
+        },
+        "comment": comment,
+    }
+
+
+def _curator_validation_override_history_event(
+    *,
+    envelope: DomainEnvelope,
+    finding: ValidationFinding,
+    target: Mapping[str, str | None],
+    actor: Mapping[str, str],
+    review_action: Mapping[str, Any],
+) -> HistoryEvent:
+    seed_payload = {
+        "envelope_id": envelope.envelope_id,
+        "finding_id": finding.finding_id,
+        "event_type": "curator_validation_override",
+        "new_status": ValidationFindingStatus.WAIVED.value,
+    }
+    digest = sha256(
+        json.dumps(seed_payload, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+    object_ref = finding.object_ref
+    field_ref = finding.field_ref
+    return HistoryEvent(
+        event_type=HistoryEventKind.STATUS_CHANGED,
+        event_id=f"curator-validation-override:{digest}",
+        actor_type=HistoryActorType.HUMAN,
+        actor_id=actor.get("actor_id"),
+        message="Curator waived validation finding",
+        object_ref=None if field_ref is not None else object_ref,
+        field_ref=field_ref,
+        details={
+            "curator_validation_override": dict(review_action),
+            "finding_id": finding.finding_id,
+            "target": dict(target),
+            "previous_status": review_action.get("previous_status"),
+            "new_status": review_action.get("new_status"),
+            "object_ref": _object_ref_payload(object_ref),
+            "field_ref": _field_ref_payload(field_ref),
+        },
     )
 
 

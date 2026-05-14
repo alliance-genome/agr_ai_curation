@@ -320,7 +320,7 @@ def _readiness_blocker_details(
     normalized = dict(details or {})
     metadata_sources = _readiness_blocker_policy_metadata_sources(normalized)
     if any(_metadata_allows_curator_override(metadata) for metadata in metadata_sources):
-        normalized["allow_opt_out"] = True
+        normalized["curator_override"] = {"allowed": True}
     return normalized
 
 
@@ -423,22 +423,8 @@ def _export_behavior_for(
 
 
 def _metadata_allows_curator_override(metadata: Mapping[str, Any]) -> bool:
-    if metadata.get("allow_curator_override") is True:
-        return True
-    if metadata.get("allow_override") is True:
-        return True
-    if metadata.get("allow_opt_out") is True:
-        return True
-    for key in ("curator_override", "override", "validation"):
-        raw_policy = metadata.get(key)
-        if isinstance(raw_policy, Mapping) and (
-            raw_policy.get("allowed") is True
-            or raw_policy.get("allow") is True
-            or raw_policy.get("allow_curator_override") is True
-            or raw_policy.get("allow_opt_out") is True
-        ):
-            return True
-    return False
+    raw_policy = metadata.get("curator_override")
+    return isinstance(raw_policy, Mapping) and raw_policy.get("allowed") is True
 
 
 def _field_allows_curator_override(
@@ -450,7 +436,7 @@ def _field_allows_curator_override(
         and _metadata_allows_curator_override(field_definition.metadata)
     ):
         return True
-    return field_policy is not None and field_policy.allow_opt_out
+    return field_policy is not None and field_policy.curator_override_allowed
 
 
 def _curator_override_for_field(
@@ -826,17 +812,11 @@ def _finding_waiver_allowed(
     field_policy: FieldValidationPolicy | None,
     field_path: str | None,
 ) -> bool:
+    del domain_object, field_definition, field_policy, field_path
     details = finding.details or {}
     for metadata in _finding_policy_metadata_sources(details):
         if _metadata_allows_curator_override(metadata):
             return True
-    if field_path is not None and _curator_override_satisfies_policy(
-        domain_object=domain_object,
-        field_definition=field_definition,
-        field_policy=field_policy,
-        field_path=field_path,
-    ):
-        return True
     return False
 
 

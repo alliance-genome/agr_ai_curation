@@ -12,6 +12,8 @@ import type {
   DomainEnvelopeReviewRowsResponse,
   CurationEnvelopeFieldPatchRequest,
   CurationEnvelopeFieldPatchResponse,
+  CurationValidationFindingWaiveRequest,
+  CurationValidationFindingWaiveResponse,
   CurationSessionValidationRequest,
   CurationSessionValidationResponse,
   CurationSubmissionExecuteRequest,
@@ -171,6 +173,22 @@ export async function patchCurationEnvelopeField(
     }/field`,
     {
       method: 'PATCH',
+      body: JSON.stringify(request),
+      keepalive: options.keepalive,
+    },
+  )
+}
+
+export async function waiveCurationValidationFinding(
+  request: CurationValidationFindingWaiveRequest,
+  options: CurationWorkspaceRequestOptions = {},
+): Promise<CurationValidationFindingWaiveResponse> {
+  return fetchCurationWorkspaceJson<CurationValidationFindingWaiveResponse>(
+    `/api/curation-workspace/sessions/${encodeURIComponent(request.session_id)}/envelopes/${
+      encodeURIComponent(request.envelope_id)
+    }/validation-findings/${encodeURIComponent(request.finding_id)}/waive`,
+    {
+      method: 'POST',
       body: JSON.stringify(request),
       keepalive: options.keepalive,
     },
