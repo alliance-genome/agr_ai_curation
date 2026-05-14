@@ -191,6 +191,21 @@ def test_active_payload_selector_rejects_provider_slot_final_segment_guessing(
         DomainPackValidationRegistry.from_domain_pack(pack)
 
 
+def test_active_object_ref_selector_path_uses_field_object_type_ref(tmp_path: Path):
+    pack = _loaded_pack(
+        tmp_path,
+        """
+          selected:
+            source: object_ref
+            field_path: ref
+            path: missing_curie
+""",
+    )
+
+    with pytest.raises(ValidationRegistryError, match="missing_curie"):
+        DomainPackValidationRegistry.from_domain_pack(pack)
+
+
 def test_validation_request_carries_selected_inputs_evidence_and_expected_fields(
     tmp_path: Path,
 ):

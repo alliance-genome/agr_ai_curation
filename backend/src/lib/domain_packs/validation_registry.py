@@ -1276,6 +1276,7 @@ def _validate_active_selector_against_targets(
         return
 
     if selector.source == "object_ref":
+        referenced_object_types: set[str] = set()
         if selector.field_path is not None:
             for object_definition in target_definitions:
                 field_definition = _field_definition_for_path(
@@ -1296,24 +1297,60 @@ def _validate_active_selector_against_targets(
                         f"{location} object_ref field_path '{selector.field_path}' "
                         f"must target an object_ref or field_ref field"
                     )
+                    continue
+                if field_definition.object_type_ref is None:
+                    continue
+                referenced_object_types.add(field_definition.object_type_ref)
+                if (
+                    selector.object_type is not None
+                    and selector.object_type != field_definition.object_type_ref
+                ):
+                    errors.append(
+                        f"{location} object_ref object_type '{selector.object_type}' "
+                        f"does not match field_path '{selector.field_path}' "
+                        f"object_type_ref '{field_definition.object_type_ref}'"
+                    )
+                _validate_active_object_ref_payload_path(
+                    errors=errors,
+                    location=location,
+                    object_definitions=object_definitions,
+                    object_type=field_definition.object_type_ref,
+                    path=selector.path,
+                )
         if selector.object_type is not None:
-            ref_definition = object_definitions.get(selector.object_type)
-            if ref_definition is None:
-                errors.append(
-                    f"{location} object_ref object_type '{selector.object_type}' "
-                    "is not declared by the domain pack"
+            if selector.object_type not in referenced_object_types:
+                _validate_active_object_ref_payload_path(
+                    errors=errors,
+                    location=location,
+                    object_definitions=object_definitions,
+                    object_type=selector.object_type,
+                    path=selector.path,
                 )
-            elif (
-                selector.path is not None
-                and not _object_definition_declares_payload_path(
-                    ref_definition,
-                    selector.path,
-                )
-            ):
-                errors.append(
-                    f"{location} object_ref payload path '{selector.path}' is not "
-                    f"declared for referenced object_type '{selector.object_type}'"
-                )
+
+
+def _validate_active_object_ref_payload_path(
+    *,
+    errors: list[str],
+    location: str,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    object_type: str,
+    path: str | None,
+) -> None:
+    ref_definition = object_definitions.get(object_type)
+    if ref_definition is None:
+        errors.append(
+            f"{location} object_ref object_type '{object_type}' "
+            "is not declared by the domain pack"
+        )
+        return
+    if path is not None and not _object_definition_declares_payload_path(
+        ref_definition,
+        path,
+    ):
+        errors.append(
+            f"{location} object_ref payload path '{path}' is not "
+            f"declared for referenced object_type '{object_type}'"
+        )
 
 
 def _field_definition_for_path(
