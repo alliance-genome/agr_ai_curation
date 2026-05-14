@@ -23,6 +23,11 @@ import {
   buildEvidenceLocationLabel,
   dispatchEvidenceNavigationCommand,
 } from '@/features/curation/evidence'
+import {
+  unavailableCapabilityMessage,
+  unavailableValidatorCapabilities,
+  type UnavailableValidatorCapability,
+} from '@/features/curation/unavailableValidatorCapabilities'
 import type {
   CurationActionLogEntry,
   CurationCandidate,
@@ -54,14 +59,6 @@ interface StatusPresentation {
   label: string
   color: ChipProps['color']
   severity: 'error' | 'warning' | 'info' | 'success'
-}
-
-interface UnavailableValidatorCapability {
-  validator_binding_id?: string
-  label?: string
-  state?: string
-  state_explanation?: string
-  affected_fields?: string[]
 }
 
 interface CandidateFieldEditorProps {
@@ -227,22 +224,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function unavailableValidatorCapabilities(value: unknown): UnavailableValidatorCapability[] {
-  if (!Array.isArray(value)) {
-    return []
-  }
-
-  return value.filter(isRecord).map((entry) => ({
-    validator_binding_id: typeof entry.validator_binding_id === 'string' ? entry.validator_binding_id : undefined,
-    label: typeof entry.label === 'string' ? entry.label : undefined,
-    state: typeof entry.state === 'string' ? entry.state : undefined,
-    state_explanation: typeof entry.state_explanation === 'string' ? entry.state_explanation : undefined,
-    affected_fields: Array.isArray(entry.affected_fields)
-      ? entry.affected_fields.filter((field): field is string => typeof field === 'string')
-      : undefined,
-  }))
-}
-
 function unavailableCapabilitiesForField(field: CurationDraftField): UnavailableValidatorCapability[] {
   const fieldMetadata = field.metadata.field_metadata
   if (!isRecord(fieldMetadata)) {
@@ -264,9 +245,7 @@ function unavailableCapabilityMessages(
   const messages: string[] = []
 
   for (const capability of capabilities) {
-    const label = capability.label || capability.validator_binding_id || 'Validator capability'
-    const explanation = capability.state_explanation?.trim()
-    const message = explanation ? `${label}: ${explanation}` : `${label} is under development.`
+    const message = unavailableCapabilityMessage(capability)
     if (!messages.includes(message)) {
       messages.push(message)
     }

@@ -279,7 +279,7 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     """Informational validator capability that must not affect runtime policy."""
 
     binding_id: str
-    display_name: Optional[str] = None
+    display_name: str = Field(min_length=1)
     description: str = ""
     state_explanation: str = Field(min_length=1)
     validator_agent: Optional[DomainPackValidatorAgentRef] = None
@@ -293,6 +293,13 @@ class DomainPackUnderDevelopmentValidatorBinding(DomainPackMetadataBaseModel):
     @classmethod
     def _validate_binding_id(cls, value: str) -> str:
         return _validate_symbolic_name(value, "validator_bindings.binding_id")
+
+    @field_validator("display_name")
+    @classmethod
+    def _validate_display_name(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("display_name must not include surrounding whitespace")
+        return value
 
     @field_validator("state_explanation")
     @classmethod

@@ -64,7 +64,7 @@ export interface ValidationAttachmentOption {
   object_role?: string
   field_path?: string
   field_type?: string
-  label?: string
+  label: string
   target_label?: string
   description?: string
   definition_state?: string

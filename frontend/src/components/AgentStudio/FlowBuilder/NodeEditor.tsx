@@ -142,7 +142,9 @@ const validationStateHelpText = (attachment: ValidationAttachmentSelection) => {
   }
   if (attachment.state === 'planned') return 'Planned for a later implementation step'
   if (attachment.state === 'under_development') {
-    return attachment.state_explanation || 'Under development and not available to run yet'
+    return attachment.state_explanation?.trim()
+      ? attachment.state_explanation
+      : 'Missing under-development state explanation'
   }
   return ''
 }
@@ -491,7 +493,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                                 wordBreak: 'break-word',
                               }}
                             >
-                              {attachment.label || attachment.validator_id}
+                              {attachment.label}
                             </Typography>
                             <Chip
                               size="small"
@@ -528,11 +530,6 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                             </Typography>
                           )}
                           {attachment.state === 'planned' && (
-                            <Typography variant="caption" color="warning.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
-                              {validationStateHelpText(attachment)}
-                            </Typography>
-                          )}
-                          {attachment.state === 'under_development' && (
                             <Typography variant="caption" color="warning.main" sx={{ display: 'block', fontSize: '0.65rem' }}>
                               {validationStateHelpText(attachment)}
                             </Typography>
@@ -600,7 +597,7 @@ function NodeEditor({ node, onSave, onClose, onDelete, availableVariables, onVie
                                   wordBreak: 'break-word',
                                 }}
                               >
-                                {attachment.label || attachment.validator_id}
+                                {attachment.label}
                               </Typography>
                               <Typography
                                 variant="caption"

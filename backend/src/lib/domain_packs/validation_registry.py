@@ -841,6 +841,21 @@ def _collect_validator_bindings(
             "curator_override",
         )
 
+        if state is ValidationBindingState.UNDER_DEVELOPMENT:
+            display_name = _required_string(
+                raw_item,
+                "display_name",
+                "validator_bindings.under_development",
+            )
+            reason = _required_string(
+                raw_item,
+                "state_explanation",
+                "validator_bindings.under_development",
+            )
+        else:
+            display_name = _optional_string(raw_item.get("display_name"))
+            reason = _optional_string(raw_item.get("description"))
+
         bindings.append(
             ValidatorBinding(
                 binding_id=_required_string(
@@ -850,14 +865,10 @@ def _collect_validator_bindings(
                 source_scope=source_scope,
                 source_object_type=source_object_type,
                 source_field_path=source_field_path,
-                display_name=_optional_string(raw_item.get("display_name")),
+                display_name=display_name,
                 validator_agent=_validator_agent_ref(raw_item),
                 definition_state=_definition_state(raw_item),
-                reason=_optional_string(
-                    raw_item.get("state_explanation")
-                    if state is ValidationBindingState.UNDER_DEVELOPMENT
-                    else raw_item.get("description")
-                ),
+                reason=reason,
                 blocking=blocking,
                 required=required,
                 allow_opt_out=allow_opt_out,
@@ -1548,7 +1559,11 @@ def _binding_attachment_option(
             field_path=field_path,
         ),
         target_label=target_label,
-        description=binding.reason or "",
+        description=(
+            ""
+            if binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+            else (binding.reason if binding.reason is not None else "")
+        ),
         definition_state=binding.definition_state,
         reason=binding.reason,
         state_explanation=(

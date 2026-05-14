@@ -472,6 +472,13 @@ def _prepared_candidate_input_from_review_row(
     unavailable_capabilities = review_row.metadata.get(
         "unavailable_validator_capabilities",
     )
+    if unavailable_capabilities is not None and not isinstance(
+        unavailable_capabilities,
+        list,
+    ):
+        raise ValueError(
+            "review_row.metadata.unavailable_validator_capabilities must be a list"
+        )
     metadata = {
         "semantic_source": "domain_envelope.objects",
         "projection_type": review_row.projection_type,
@@ -485,7 +492,7 @@ def _prepared_candidate_input_from_review_row(
         "review_row_metadata": dict(review_row.metadata),
         "unavailable_validator_capabilities": (
             list(unavailable_capabilities)
-            if isinstance(unavailable_capabilities, list)
+            if unavailable_capabilities is not None
             else []
         ),
         "summary_fields": [

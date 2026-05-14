@@ -312,6 +312,12 @@ function validationAttachmentStateLabel(attachment: ValidationAttachmentView): s
   return attachment.state
 }
 
+function underDevelopmentStateExplanation(attachment: ValidationAttachmentView): string {
+  return attachment.state_explanation?.trim()
+    ? attachment.state_explanation
+    : 'Missing under-development state explanation'
+}
+
 function validationAttachmentTargetLabel(attachment: ValidationAttachmentView): string {
   if (attachment.target_label) return attachment.target_label
   if (attachment.scope === 'pack') return 'All extracted data'
@@ -356,7 +362,7 @@ function ValidationAttachmentRows({ attachments }: { attachments: ValidationAtta
           </Box>
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="body2" sx={{ fontSize: '0.74rem', fontWeight: 700, lineHeight: 1.3 }}>
-              {attachment.label || attachment.validator_id}
+              {attachment.label}
             </Typography>
             <Typography
               variant="caption"
@@ -365,13 +371,22 @@ function ValidationAttachmentRows({ attachments }: { attachments: ValidationAtta
             >
               {validationAttachmentTargetLabel(attachment)}
             </Typography>
-            {(attachment.state_explanation || attachment.description) && (
+            {attachment.description && (
               <Typography
                 variant="caption"
                 color="text.secondary"
                 sx={{ display: 'block', mt: 0.25, fontSize: '0.64rem', lineHeight: 1.35, textWrap: 'pretty' }}
               >
-                {attachment.state_explanation || attachment.description}
+                {attachment.description}
+              </Typography>
+            )}
+            {attachment.state === 'under_development' && (
+              <Typography
+                variant="caption"
+                color="warning.main"
+                sx={{ display: 'block', mt: 0.25, fontSize: '0.64rem', lineHeight: 1.35, textWrap: 'pretty' }}
+              >
+                {underDevelopmentStateExplanation(attachment)}
               </Typography>
             )}
           </Box>

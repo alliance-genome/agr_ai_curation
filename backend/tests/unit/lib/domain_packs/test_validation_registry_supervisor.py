@@ -830,6 +830,22 @@ def test_under_development_binding_rejects_runtime_policy(tmp_path: Path):
         load_domain_pack_metadata(metadata_path)
 
 
+def test_under_development_binding_requires_display_name(tmp_path: Path):
+    metadata_text = _validation_pack_text().replace(
+        "        display_name: Gene symbol lookup\n"
+        "        state_explanation: Gene symbol lookup waits for package-scoped dispatch.",
+        "        state_explanation: Gene symbol lookup waits for package-scoped dispatch.",
+        1,
+    )
+    pack_path = tmp_path / "fixture.validation"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(metadata_text, encoding="utf-8")
+
+    with pytest.raises(DomainPackMetadataError, match="display_name"):
+        load_domain_pack_metadata(metadata_path)
+
+
 def test_supervisor_treats_under_development_bindings_as_metadata_only(
     tmp_path: Path,
 ):

@@ -498,12 +498,22 @@ def _unavailable_validator_capability(
     match: ValidatorBindingMatch,
 ) -> dict[str, Any]:
     binding = match.binding
+    if not binding.display_name:
+        raise DomainEnvelopeMaterializationError(
+            "Under-development validator binding "
+            f"{binding.binding_id!r} must declare display_name"
+        )
+    if not binding.reason:
+        raise DomainEnvelopeMaterializationError(
+            "Under-development validator binding "
+            f"{binding.binding_id!r} must declare state_explanation"
+        )
     affected_fields = _match_affected_fields(match)
     payload: dict[str, Any] = {
         "validator_binding_id": binding.binding_id,
         "state": binding.state.value,
-        "label": binding.display_name or binding.binding_id,
-        "state_explanation": binding.reason or "",
+        "label": binding.display_name,
+        "state_explanation": binding.reason,
         "scope": "field" if match.field_path is not None else (
             "object" if match.object_envelope is not None else "pack"
         ),
