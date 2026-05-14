@@ -747,10 +747,7 @@ def _validation_finding_blockers(
     *,
     envelope: DomainEnvelope,
     object_id: str,
-    domain_object: CuratableObjectEnvelope,
     object_id_by_ref: Mapping[tuple[str, str], str],
-    field_definitions: Mapping[str, DomainPackFieldDefinition],
-    field_policies: Mapping[str, FieldValidationPolicy],
     projection_ref: Mapping[str, Any],
 ) -> list[CurationSubmissionReadinessBlocker]:
     blockers: list[CurationSubmissionReadinessBlocker] = []
@@ -763,19 +760,7 @@ def _validation_finding_blockers(
         if finding.status is ValidationFindingStatus.RESOLVED:
             continue
         if finding.status is ValidationFindingStatus.WAIVED and _finding_waiver_allowed(
-            finding=finding,
-            domain_object=domain_object,
-            field_definition=(
-                field_definitions.get(field_path)
-                if field_path is not None
-                else None
-            ),
-            field_policy=(
-                field_policies.get(field_path)
-                if field_path is not None
-                else None
-            ),
-            field_path=field_path,
+            finding
         ):
             continue
         code = finding.code or (
@@ -804,15 +789,7 @@ def _validation_finding_blockers(
     return blockers
 
 
-def _finding_waiver_allowed(
-    *,
-    finding: ValidationFinding,
-    domain_object: CuratableObjectEnvelope,
-    field_definition: DomainPackFieldDefinition | None,
-    field_policy: FieldValidationPolicy | None,
-    field_path: str | None,
-) -> bool:
-    del domain_object, field_definition, field_policy, field_path
+def _finding_waiver_allowed(finding: ValidationFinding) -> bool:
     details = finding.details or {}
     for metadata in _finding_policy_metadata_sources(details):
         if _metadata_allows_curator_override(metadata):
@@ -973,10 +950,7 @@ def _build_domain_envelope_object_context(
         _validation_finding_blockers(
             envelope=envelope,
             object_id=object_id,
-            domain_object=domain_object,
             object_id_by_ref=_object_id_by_ref(envelope),
-            field_definitions=field_definitions,
-            field_policies=field_policies,
             projection_ref=projection_ref,
         )
     )
