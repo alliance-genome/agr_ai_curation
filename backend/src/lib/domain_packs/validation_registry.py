@@ -122,7 +122,6 @@ class ValidatorBinding:
     display_name: str | None = None
     validator_agent: ValidatorAgentRef | None = None
     definition_state: DefinitionState = DefinitionState.STABLE
-    blocked_by: str | None = None
     reason: str | None = None
     blocking: bool = False
     required: bool = False
@@ -158,7 +157,6 @@ class ValidatorBinding:
                 if self.validator_agent is not None
                 else None
             ),
-            "blocked_by": self.blocked_by,
             "reason": self.reason,
             "source_object_type": self.source_object_type,
             "source_field_path": self.source_field_path,
@@ -197,9 +195,7 @@ class ValidationAttachmentOption:
     state: ValidationBindingState
     scope: str
     validator_binding_id: str | None = None
-    validation_kind: str | None = None
     tool_name: str | None = None
-    tool_method: str | None = None
     validator_package_id: str | None = None
     validator_agent_id: str | None = None
     object_type: str | None = None
@@ -226,9 +222,7 @@ class ValidationAttachmentOption:
             "domain_pack_version": self.domain_pack_version,
             "validator_id": self.validator_id,
             "validator_binding_id": self.validator_binding_id,
-            "validation_kind": self.validation_kind,
             "tool_name": self.tool_name,
-            "tool_method": self.tool_method,
             "validator_package_id": self.validator_package_id,
             "validator_agent_id": self.validator_agent_id,
             "state": self.state.value,
@@ -1308,7 +1302,6 @@ def _binding_attachment_option(
         target_label=target_label,
         description=binding.reason or "",
         definition_state=binding.definition_state,
-        blocked_by=binding.blocked_by,
         reason=binding.reason,
         required=required,
         export_blocking=blocks_export,

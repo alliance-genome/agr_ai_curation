@@ -273,7 +273,7 @@ def _under_development_binding_findings(
             state=binding.state,
             identifier=binding.binding_id,
             reason=binding.reason,
-            blocked_by=binding.blocked_by,
+            blocked_by=None,
         )
         _attach_lookup_attempt_details(
             details,
