@@ -51,6 +51,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/test_phenotype_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_allele_extractor_mgi_prompt_policy.py"),
     Path("backend/tests/unit/lib/config/test_bundled_alliance_package_aware_loaders.py"),
+    Path("backend/tests/unit/lib/config/test_disease_chemical_validator_result_contract.py"),
     Path("backend/tests/unit/lib/config/test_groups_loader_identity_provider.py"),
     Path("backend/tests/unit/lib/config/test_prompt_loader_runtime.py"),
     Path("backend/tests/unit/lib/config/test_runtime_config_defaults.py"),
