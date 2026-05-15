@@ -528,17 +528,23 @@ def _required_tool_failure_message(
             f"Required: {required_text}. Called: {called_text}."
         )
 
+    metadata_by_name = _tool_metadata_by_name()
     message = None
     for tool_name in sorted(required_tools):
-        required_call = _tool_metadata_by_name().get(tool_name, {}).get("required_tool_call")
-        if isinstance(required_call, dict):
-            candidate = str(required_call.get("failure_message") or "").strip()
-            if candidate:
-                message = candidate
-                break
-
-    if message is None:
-        message = "did not call required package tools before answering"
+        required_call = metadata_by_name.get(tool_name, {}).get("required_tool_call")
+        if not isinstance(required_call, dict):
+            raise ValueError(
+                "Package required_tool_call metadata must be declared "
+                f"for tool '{tool_name}'."
+            )
+        candidate = str(required_call.get("failure_message") or "").strip()
+        if not candidate:
+            raise ValueError(
+                "Package required_tool_call metadata must declare failure_message "
+                f"for tool '{tool_name}'."
+            )
+        if message is None:
+            message = candidate
 
     return f"{specialist_name} {message}. Required: {required_text}. Called: {called_text}."
 

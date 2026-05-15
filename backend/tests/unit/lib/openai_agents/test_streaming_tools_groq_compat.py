@@ -144,6 +144,29 @@ def test_required_tool_failure_message_for_missing_package_required_call(monkeyp
     assert "artifact_lookup" in message
 
 
+def test_required_tool_failure_message_requires_package_declared_failure_message(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        lambda: {
+            "artifact_lookup": {
+                "required_tool_call": {
+                    "enforce": True,
+                }
+            }
+        },
+    )
+    agent = SimpleNamespace(tools=[SimpleNamespace(name="artifact_lookup")])
+
+    with pytest.raises(ValueError, match="must declare failure_message"):
+        _required_tool_failure_message(
+            agent=agent,
+            specialist_name="Catalog Specialist",
+            tool_calls=[],
+        )
+
+
 def test_required_tool_failure_message_is_none_when_required_tool_called(monkeypatch):
     monkeypatch.setattr(
         "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
