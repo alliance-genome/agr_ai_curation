@@ -1,5 +1,6 @@
 """Opus tool definitions and tab-scoping helpers for Agent Studio."""
 
+from functools import lru_cache
 from typing import Any, Callable, Dict, List, Optional
 
 from .logs import (
@@ -615,17 +616,11 @@ AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
 }
 
 
+@lru_cache(maxsize=1)
 def _package_agent_only_diagnostic_tools() -> set[str]:
-    try:
-        from src.lib.agent_studio.catalog_service import get_tool_registry
-    except Exception:
-        return set()
+    from src.lib.agent_studio.catalog_service import get_tool_registry
 
-    try:
-        registry = get_tool_registry()
-    except Exception:
-        return set()
-
+    registry = get_tool_registry()
     tool_names: set[str] = set()
     for tool_id, tool_info in registry.items():
         agent_studio_metadata = tool_info.get("agent_studio")

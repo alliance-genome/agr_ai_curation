@@ -118,7 +118,10 @@ def resolve_default_packages_dir() -> Path:
         return runtime_packages_dir
     if _REPO_PACKAGES_DIR.exists():
         return _REPO_PACKAGES_DIR.expanduser().resolve(strict=False)
-    return runtime_packages_dir
+    raise FileNotFoundError(
+        "No package directory is available. Checked runtime packages directory "
+        f"{runtime_packages_dir} and repository packages directory {_REPO_PACKAGES_DIR}."
+    )
 
 
 def build_tool_registry(

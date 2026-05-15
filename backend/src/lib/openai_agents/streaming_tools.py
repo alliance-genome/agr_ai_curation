@@ -308,14 +308,9 @@ def _import_callable(import_path: str) -> Any:
 @lru_cache(maxsize=16)
 def _tool_metadata_by_name() -> Dict[str, Dict[str, Any]]:
     """Return package-declared tool metadata keyed by tool ID."""
-    try:
-        from src.lib.packages.tool_registry import load_tool_registry
+    from src.lib.packages.tool_registry import load_tool_registry
 
-        registry = load_tool_registry(fail_on_validation_error=False)
-    except Exception as exc:
-        logger.debug("Package tool metadata unavailable: %s", exc)
-        return {}
-
+    registry = load_tool_registry()
     return {
         binding.tool_id: dict(binding.metadata)
         for binding in registry.bindings
@@ -326,32 +321,19 @@ def _tool_metadata_by_name() -> Dict[str, Dict[str, Any]]:
 @lru_cache(maxsize=16)
 def _tool_provider_adapter_factories(adapter_key: str) -> Dict[str, Any]:
     """Return package-declared provider adapter factories keyed by tool ID."""
-    try:
-        from src.lib.packages.import_paths import extend_sys_path_for_package
-        from src.lib.packages.tool_registry import load_tool_registry
+    from src.lib.packages.import_paths import extend_sys_path_for_package
+    from src.lib.packages.tool_registry import load_tool_registry
 
-        registry = load_tool_registry(fail_on_validation_error=False)
-    except Exception as exc:
-        logger.debug("Package tool provider adapters unavailable: %s", exc)
-        return {}
-
+    registry = load_tool_registry()
     factories: Dict[str, Any] = {}
     for binding in registry.bindings:
         import_path = binding.provider_adapters.get(adapter_key)
         if not import_path:
             continue
-        try:
-            package = registry.package_registry.get_package(binding.source.package_id)
-            if package is not None:
-                extend_sys_path_for_package(package)
-            factories[binding.tool_id] = _import_callable(import_path)
-        except Exception as exc:
-            logger.warning(
-                "Failed to import provider adapter '%s' for tool '%s': %s",
-                adapter_key,
-                binding.tool_id,
-                exc,
-            )
+        package = registry.package_registry.get_package(binding.source.package_id)
+        if package is not None:
+            extend_sys_path_for_package(package)
+        factories[binding.tool_id] = _import_callable(import_path)
     return factories
 
 
@@ -485,7 +467,11 @@ def _build_tool_efficiency_instruction(agent: Agent, input_text: str) -> str:
     ]
     if instructions:
         return "\n\n".join(instructions) + "\n"
-    return "TOOL EFFICIENCY REQUIREMENT:\nThe request includes a large entity list. Minimize tool rounds.\n"
+    tools_text = ", ".join(sorted(tool_names))
+    raise ValueError(
+        "Package tool bulk_list_optimization is enabled but no instruction is declared "
+        f"for active tool(s): {tools_text}"
+    )
 
 
 def _adapt_tools_with_provider_adapter(tools: List[Any], adapter_key: str) -> List[Any]:

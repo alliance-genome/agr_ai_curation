@@ -2,11 +2,13 @@
 
 from types import SimpleNamespace
 
+import pytest
 from pydantic import BaseModel
 
 from src.lib.openai_agents.streaming_tools import (
     _adapt_tools_with_provider_adapter,
     _adapt_tools_for_groq_schema_constraints,
+    _build_tool_efficiency_instruction,
     _compute_adaptive_specialist_max_turns,
     _estimate_bulk_entity_count,
     _tool_provider_adapter_factories,
@@ -264,3 +266,24 @@ def test_compute_adaptive_specialist_max_turns_keeps_default_for_non_bulk_agents
     )
 
     assert adaptive == 20
+
+
+def test_tool_efficiency_instruction_requires_package_declared_text(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        lambda: {
+            "artifact_lookup": {
+                "bulk_list_optimization": {
+                    "enabled": True,
+                    "minimum_entities": 8,
+                    "min_turns": 40,
+                    "max_turns": 120,
+                }
+            }
+        },
+    )
+    agent = SimpleNamespace(tools=[SimpleNamespace(name="artifact_lookup")])
+    query = "List: " + ", ".join(f"gene_{idx}" for idx in range(12))
+
+    with pytest.raises(ValueError, match="no instruction is declared"):
+        _build_tool_efficiency_instruction(agent, query)

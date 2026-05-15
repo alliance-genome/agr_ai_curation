@@ -1019,67 +1019,36 @@ def _build_tool_registry() -> Dict[str, Dict[str, Any]]:
 
     registry: Dict[str, Dict[str, Any]] = {}
     for binding in _load_package_tool_registry().bindings:
-        try:
-            tool = _instantiate_package_tool(binding)
-            metadata = introspect_tool(tool)
-            parameters = [
-                {"name": name, **param_info}
-                for name, param_info in metadata.parameters.items()
-            ]
-            registry[binding.tool_id] = {
-                "name": metadata.name or binding.tool_id,
-                "description": binding.description or metadata.description,
-                "category": _tool_category_for_binding(binding),
-                "source_file": binding.source.source_file or metadata.source_file,
-                "documentation": {
-                    "summary": binding.description or metadata.description,
-                    "parameters": parameters,
-                },
-                "methods": None,
-                "agent_methods": None,
-                "binding_kind": binding.binding_kind.value,
-                "required_context": list(binding.required_context),
-                "package_backed": True,
-                "package_id": binding.source.package_id,
-                "package_version": binding.source.package_version,
-                "package_display_name": binding.source.package_display_name,
-                "package_export_name": binding.source.export_name,
-            }
-            if binding.metadata:
-                registry[binding.tool_id] = _merge_tool_metadata(
-                    registry[binding.tool_id],
-                    dict(binding.metadata),
-                )
-        except Exception as exc:
-            logger.warning(
-                "Failed to build package-backed tool catalog entry for %s: %s",
-                binding.tool_id,
-                exc,
+        tool = _instantiate_package_tool(binding)
+        metadata = introspect_tool(tool)
+        parameters = [
+            {"name": name, **param_info}
+            for name, param_info in metadata.parameters.items()
+        ]
+        registry[binding.tool_id] = {
+            "name": metadata.name or binding.tool_id,
+            "description": binding.description or metadata.description,
+            "category": _tool_category_for_binding(binding),
+            "source_file": binding.source.source_file or metadata.source_file,
+            "documentation": {
+                "summary": binding.description or metadata.description,
+                "parameters": parameters,
+            },
+            "methods": None,
+            "agent_methods": None,
+            "binding_kind": binding.binding_kind.value,
+            "required_context": list(binding.required_context),
+            "package_backed": True,
+            "package_id": binding.source.package_id,
+            "package_version": binding.source.package_version,
+            "package_display_name": binding.source.package_display_name,
+            "package_export_name": binding.source.export_name,
+        }
+        if binding.metadata:
+            registry[binding.tool_id] = _merge_tool_metadata(
+                registry[binding.tool_id],
+                dict(binding.metadata),
             )
-            registry[binding.tool_id] = {
-                "name": binding.tool_id,
-                "description": binding.description,
-                "category": _tool_category_for_binding(binding),
-                "source_file": binding.source.source_file,
-                "documentation": {
-                    "summary": binding.description,
-                    "parameters": [],
-                },
-                "methods": None,
-                "agent_methods": None,
-                "binding_kind": binding.binding_kind.value,
-                "required_context": list(binding.required_context),
-                "package_backed": True,
-                "package_id": binding.source.package_id,
-                "package_version": binding.source.package_version,
-                "package_display_name": binding.source.package_display_name,
-                "package_export_name": binding.source.export_name,
-            }
-            if binding.metadata:
-                registry[binding.tool_id] = _merge_tool_metadata(
-                    registry[binding.tool_id],
-                    dict(binding.metadata),
-                )
 
     for tool_id, metadata in CURATED_TOOL_REGISTRY.items():
         if tool_id in registry:
@@ -2004,10 +1973,12 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             )
         elif required_package_specs:
             required_spec = required_package_specs[0]
-            guardrail_message = str(
-                required_spec.get("guardrail_message")
-                or f"Use {required_spec['tool_id']} first."
-            ).strip()
+            guardrail_message = str(required_spec.get("guardrail_message") or "").strip()
+            if not guardrail_message:
+                raise ValueError(
+                    "Package required_tool_call metadata must declare guardrail_message "
+                    f"for tool '{required_spec['tool_id']}'."
+                )
             output_guardrails.append(
                 create_tool_required_output_guardrail(
                     tracker=tool_tracker,

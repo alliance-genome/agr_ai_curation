@@ -96,13 +96,9 @@ def load_agent_studio_system_prompt_template(
 
 def build_package_diagnostic_tools_prompt() -> str:
     """Build Agent Studio tool guidance from package-owned tool metadata."""
-    try:
-        from src.lib.agent_studio.catalog_service import get_tool_registry
+    from src.lib.agent_studio.catalog_service import get_tool_registry
 
-        tool_registry = get_tool_registry()
-    except Exception:
-        return "- Package diagnostic tool metadata unavailable."
-
+    tool_registry = get_tool_registry()
     lines: List[str] = []
     for tool_id, tool_info in sorted(tool_registry.items()):
         agent_studio_metadata = tool_info.get("agent_studio")
@@ -112,13 +108,12 @@ def build_package_diagnostic_tools_prompt() -> str:
         if not isinstance(diagnostic_metadata, dict) or not bool(diagnostic_metadata.get("enabled", False)):
             continue
 
-        description = str(
-            agent_studio_metadata.get("prompt_description")
-            or tool_info.get("description")
-            or ""
-        ).strip()
+        description = str(agent_studio_metadata.get("prompt_description") or "").strip()
         if not description:
-            continue
+            raise ValueError(
+                f"Package diagnostic tool '{tool_id}' must declare "
+                "agent_studio.prompt_description for Agent Studio prompt guidance."
+            )
 
         line = f"- **`{tool_id}`** - {description}"
         methods = tool_info.get("methods")

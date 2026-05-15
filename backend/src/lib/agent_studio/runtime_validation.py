@@ -44,11 +44,18 @@ def _load_runtime_policy() -> Dict[str, Any]:
     """Load catalog-backed runtime policy primitives lazily."""
     from src.lib.agent_studio import catalog_service
 
+    package_required_tool_ids = {
+        tool_id
+        for tool_id, tool in catalog_service.get_tool_registry().items()
+        if isinstance(tool.get("required_tool_call"), dict)
+        and bool(tool["required_tool_call"].get("enforce"))
+    }
+
     return {
         "tool_bindings": catalog_service.TOOL_BINDINGS,
         "canonicalize_tool_id": catalog_service._canonicalize_tool_id,  # intentional internal reuse
         "document_tool_ids": set(catalog_service._DOCUMENT_TOOL_IDS),
-        "agr_db_query_tool_ids": set(catalog_service._AGR_DB_QUERY_TOOL_IDS),
+        "package_required_tool_ids": package_required_tool_ids,
     }
 
 
@@ -213,8 +220,8 @@ def build_agent_runtime_report(
     tool_bindings = dict(policy["tool_bindings"])
     canonicalize_tool_id = policy["canonicalize_tool_id"]
     document_tool_ids = set(policy["document_tool_ids"])
-    agr_db_query_tool_ids = set(policy["agr_db_query_tool_ids"])
-    critical_tool_ids = document_tool_ids | agr_db_query_tool_ids
+    package_required_tool_ids = set(policy["package_required_tool_ids"])
+    critical_tool_ids = document_tool_ids | package_required_tool_ids
 
     agents = _fetch_active_agents()
     system_rows_by_key: Dict[str, Dict[str, Any]] = {}

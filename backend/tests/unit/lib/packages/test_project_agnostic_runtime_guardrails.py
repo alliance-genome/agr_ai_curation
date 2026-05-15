@@ -328,7 +328,7 @@ def test_runtime_validation_accepts_synthetic_system_agent_without_alliance(monk
             "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": set(),
-            "agr_db_query_tool_ids": {"demo_search_tool"},
+            "package_required_tool_ids": {"demo_search_tool"},
         },
     )
 

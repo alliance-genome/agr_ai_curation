@@ -42,11 +42,12 @@ def test_prompt_key_and_documentation_conversion_branches(monkeypatch):
     assert doc.limitations == ["limit-1"]
 
 
-def test_get_tool_registry_handles_introspection_errors(monkeypatch):
+def test_get_tool_registry_propagates_package_tool_instantiation_errors(monkeypatch):
     fake_good = SimpleNamespace(params_json_schema={}, description="desc")
     binding_good = SimpleNamespace(
         tool_id="search_document",
         description="Search docs",
+        metadata={},
         required_context=("document_id", "user_id"),
         binding_kind=SimpleNamespace(value="context_factory"),
         source=SimpleNamespace(
@@ -60,6 +61,7 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
     binding_bad = SimpleNamespace(
         tool_id="broken_tool",
         description="Broken tool",
+        metadata={},
         required_context=(),
         binding_kind=SimpleNamespace(value="static"),
         source=SimpleNamespace(
@@ -99,11 +101,9 @@ def test_get_tool_registry_handles_introspection_errors(monkeypatch):
     monkeypatch.setattr(catalog_service, "TOOL_OVERRIDES", {"search_document": {"category": "Document"}})
 
     catalog_service.clear_package_tool_runtime_caches()
-    registry = catalog_service.get_tool_registry()
-    assert "search_document" in registry
-    assert registry["search_document"]["category"] == "Document"
-    assert registry["search_document"]["package_backed"] is True
-    assert registry["broken_tool"]["package_backed"] is True
+    with pytest.raises(RuntimeError, match="boom"):
+        catalog_service.get_tool_registry()
+    catalog_service.clear_package_tool_runtime_caches()
 
 
 def test_tool_registry_is_lazy_and_cache_resettable(monkeypatch):
@@ -111,6 +111,7 @@ def test_tool_registry_is_lazy_and_cache_resettable(monkeypatch):
     fake_binding = SimpleNamespace(
         tool_id="search_document",
         description="Search docs",
+        metadata={},
         required_context=("document_id", "user_id"),
         binding_kind=SimpleNamespace(value="context_factory"),
         source=SimpleNamespace(
@@ -156,6 +157,7 @@ def test_tool_registry_is_lazy_and_cache_resettable(monkeypatch):
     catalog_service.clear_package_tool_runtime_caches()
     assert "search_document" in catalog_service.TOOL_REGISTRY
     assert call_counter["count"] == 2
+    catalog_service.clear_package_tool_runtime_caches()
 
 
 def test_resolve_tools_error_paths(monkeypatch):

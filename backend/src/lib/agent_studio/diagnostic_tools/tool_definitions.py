@@ -122,30 +122,24 @@ def _callable_handler_from_tool(tool: Any) -> Callable[..., Dict[str, Any]]:
             return result.dict()
         if isinstance(result, dict):
             return result
-        return {"result": result}
+        raise TypeError(
+            f"Package diagnostic tool '{getattr(tool, 'name', tool)}' returned "
+            f"unsupported result type {type(result).__name__}; expected dict or Pydantic model."
+        )
 
     return handler
 
 
 def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None:
     """Register package-owned tools that opt into Agent Studio diagnostics."""
-    try:
-        from src.lib.agent_studio.catalog_service import (
-            _instantiate_package_tool,
-            _load_package_tool_registry,
-            get_tool_registry,
-        )
-    except Exception:
-        logger.exception("Package diagnostic tool support is unavailable")
-        return
+    from src.lib.agent_studio.catalog_service import (
+        _instantiate_package_tool,
+        _load_package_tool_registry,
+        get_tool_registry,
+    )
 
-    try:
-        tool_catalog = get_tool_registry()
-        package_registry = _load_package_tool_registry()
-    except Exception:
-        logger.exception("Failed to load package diagnostic tool metadata")
-        return
-
+    tool_catalog = get_tool_registry()
+    package_registry = _load_package_tool_registry()
     for binding in package_registry.bindings:
         tool_info = tool_catalog.get(binding.tool_id, {})
         agent_studio_metadata = tool_info.get("agent_studio")
@@ -158,29 +152,45 @@ def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None
             logger.debug("Skipping context-bound package diagnostic tool %s", binding.tool_id)
             continue
 
-        try:
-            tool = _instantiate_package_tool(binding)
-            input_schema = (
-                diagnostic.get("input_schema")
-                or getattr(tool, "params_json_schema", None)
-                or {"type": "object", "properties": {}}
+        tool = _instantiate_package_tool(binding)
+        input_schema = diagnostic.get("input_schema")
+        if not isinstance(input_schema, dict):
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' must declare "
+                "agent_studio.diagnostic.input_schema."
             )
-            registry.register(
-                name=binding.tool_id,
-                description=str(
-                    diagnostic.get("description")
-                    or agent_studio_metadata.get("prompt_description")
-                    or tool_info.get("description")
-                    or binding.description
-                ),
-                input_schema=input_schema,
-                handler=_callable_handler_from_tool(tool),
-                category=str(diagnostic.get("category") or "package"),
-                tags=list(diagnostic.get("tags") or []),
+        description = str(
+            diagnostic.get("description")
+            or agent_studio_metadata.get("prompt_description")
+            or ""
+        ).strip()
+        if not description:
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' must declare "
+                "agent_studio.prompt_description or agent_studio.diagnostic.description."
             )
-            logger.debug("Registered package diagnostic tool: %s", binding.tool_id)
-        except Exception:
-            logger.exception("Failed to register package diagnostic tool: %s", binding.tool_id)
+        category = str(diagnostic.get("category") or "").strip()
+        if not category:
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' must declare "
+                "agent_studio.diagnostic.category."
+            )
+        raw_tags = diagnostic.get("tags")
+        if not isinstance(raw_tags, list):
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' must declare "
+                "agent_studio.diagnostic.tags as a list."
+            )
+
+        registry.register(
+            name=binding.tool_id,
+            description=description,
+            input_schema=input_schema,
+            handler=_callable_handler_from_tool(tool),
+            category=category,
+            tags=list(raw_tags),
+        )
+        logger.debug("Registered package diagnostic tool: %s", binding.tool_id)
 
 
 def _create_sql_query_handler(database_url: str, tool_name: str):

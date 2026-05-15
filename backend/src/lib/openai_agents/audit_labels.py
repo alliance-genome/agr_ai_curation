@@ -50,14 +50,9 @@ INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
 @lru_cache(maxsize=1)
 def _package_tool_display_names() -> Dict[str, str]:
     """Return package-owned audit/display labels keyed by tool ID."""
-    try:
-        from src.lib.packages.tool_registry import load_tool_registry
+    from src.lib.packages.tool_registry import load_tool_registry
 
-        registry = load_tool_registry(fail_on_validation_error=False)
-    except Exception as exc:
-        logger.debug("Package tool labels unavailable: %s", exc)
-        return {}
-
+    registry = load_tool_registry()
     labels: Dict[str, str] = {}
     for binding in registry.bindings:
         metadata: dict[str, Any] = dict(binding.metadata)

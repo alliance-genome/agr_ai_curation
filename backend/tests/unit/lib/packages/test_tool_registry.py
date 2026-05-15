@@ -11,6 +11,7 @@ import pytest
 from . import SHIPPED_TOOLS_PACKAGE_EXPORTS, find_repo_root
 from src.lib.packages.models import ExportKind, RuntimeOverrideSelection, RuntimeOverrides
 from src.lib.packages.registry import load_package_registry
+from src.lib.packages import tool_registry as tool_registry_module
 from src.lib.packages.tool_registry import (
     ToolRegistryValidationError,
     build_tool_registry,
@@ -490,6 +491,21 @@ def test_default_tool_registry_uses_repo_packages_when_runtime_dir_is_absent(
         alliance_binding.provider_adapters["groq_schema_constraints"]
         == "agr_ai_curation_alliance.tools.agr_curation:create_groq_agr_curation_query_tool"
     )
+
+
+def test_resolve_default_packages_dir_raises_when_no_package_dir_exists(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(tmp_path / "missing-runtime-packages"))
+    monkeypatch.setattr(
+        tool_registry_module,
+        "_REPO_PACKAGES_DIR",
+        tmp_path / "missing-repo-packages",
+    )
+
+    with pytest.raises(FileNotFoundError, match="No package directory is available"):
+        resolve_default_packages_dir()
 
 
 def test_repo_alliance_package_copies_tool_implementations_locally():

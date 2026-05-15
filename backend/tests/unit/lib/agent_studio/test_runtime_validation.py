@@ -49,7 +49,7 @@ def test_build_agent_runtime_report_detects_unknown_model_and_tool(monkeypatch):
             "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"demo_search_tool"},
+            "package_required_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -77,7 +77,7 @@ def test_build_agent_runtime_report_unknown_tool_only_warns_and_disables(monkeyp
             "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"demo_search_tool"},
+            "package_required_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -106,7 +106,7 @@ def test_build_agent_runtime_report_detects_missing_system_agents(monkeypatch):
             "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"demo_search_tool"},
+            "package_required_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -139,7 +139,7 @@ def test_build_agent_runtime_report_warns_when_expected_system_keys_unavailable(
             "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"demo_search_tool"},
+            "package_required_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -164,7 +164,7 @@ def test_build_agent_runtime_report_allows_unseeded_core_only_runtime(monkeypatc
             "tool_bindings": {},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": set(),
+            "package_required_tool_ids": set(),
         },
     )
 
@@ -217,7 +217,7 @@ def test_build_agent_runtime_report_warns_missing_template_tools_non_strict(monk
             "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"demo_search_tool"},
+            "package_required_tool_ids": {"demo_search_tool"},
         },
     )
 
@@ -256,7 +256,7 @@ def test_build_agent_runtime_report_escalates_template_drift_in_strict_mode(monk
             "tool_bindings": {"demo_search_tool": {"required_context": []}},
             "canonicalize_tool_id": lambda tool_id: tool_id,
             "document_tool_ids": {"search_document"},
-            "agr_db_query_tool_ids": {"demo_search_tool"},
+            "package_required_tool_ids": {"demo_search_tool"},
         },
     )
 
