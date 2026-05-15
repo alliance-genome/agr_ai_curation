@@ -7,13 +7,15 @@ from pathlib import Path
 
 from .manifest_loader import load_runtime_overrides
 from .models import ExportKind, RuntimeOverrides, ToolBinding, ToolBindingKind
-from .paths import get_runtime_overrides_path
+from .paths import get_runtime_overrides_path, get_runtime_packages_dir
 from .registry import PackageRegistry, load_package_registry
 from .tool_bindings_loader import (
     LoadedToolBindingExport,
     ToolBindingLoadError,
     load_package_tool_binding_exports,
 )
+
+_REPO_PACKAGES_DIR = Path(__file__).resolve().parents[4] / "packages"
 
 
 @dataclass(frozen=True)
@@ -95,7 +97,7 @@ def load_tool_registry(
 ) -> ToolRegistry:
     """Build the merged runtime tool registry from loaded packages."""
     package_registry = load_package_registry(
-        packages_dir,
+        packages_dir or resolve_default_packages_dir(),
         runtime_version=runtime_version,
         supported_package_api_version=supported_package_api_version,
         fail_on_validation_error=fail_on_validation_error,
@@ -107,6 +109,16 @@ def load_tool_registry(
         fail_on_validation_error=fail_on_validation_error,
     )
     return registry
+
+
+def resolve_default_packages_dir() -> Path:
+    """Resolve the package directory used by default package-registry consumers."""
+    runtime_packages_dir = get_runtime_packages_dir()
+    if runtime_packages_dir.exists():
+        return runtime_packages_dir
+    if _REPO_PACKAGES_DIR.exists():
+        return _REPO_PACKAGES_DIR.expanduser().resolve(strict=False)
+    return runtime_packages_dir
 
 
 def build_tool_registry(

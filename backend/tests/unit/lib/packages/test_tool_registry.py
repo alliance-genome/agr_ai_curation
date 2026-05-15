@@ -15,6 +15,7 @@ from src.lib.packages.tool_registry import (
     ToolRegistryValidationError,
     build_tool_registry,
     load_tool_registry,
+    resolve_default_packages_dir,
 )
 
 REPO_ROOT = find_repo_root(Path(__file__))
@@ -471,6 +472,24 @@ def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
             binding.source.bindings_path.relative_to(REPO_ROOT).as_posix()
             == "packages/alliance/tools/bindings.yaml"
         )
+
+
+def test_default_tool_registry_uses_repo_packages_when_runtime_dir_is_absent(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(tmp_path / "missing-packages"))
+
+    registry = load_tool_registry(fail_on_validation_error=False)
+
+    assert resolve_default_packages_dir() == (REPO_ROOT / "packages").resolve()
+    assert registry.package_registry.packages_dir == (REPO_ROOT / "packages").resolve()
+    alliance_binding = registry.get("agr_curation_query")
+    assert alliance_binding is not None
+    assert (
+        alliance_binding.provider_adapters["groq_schema_constraints"]
+        == "agr_ai_curation_alliance.tools.agr_curation:create_groq_agr_curation_query_tool"
+    )
 
 
 def test_repo_alliance_package_copies_tool_implementations_locally():

@@ -17,6 +17,7 @@ from .env_manager import (
     PackageEnvironmentManager,
 )
 from .health import build_package_health_report
+from .import_paths import extend_sys_path_for_package
 from .manifest_loader import (
     AgentBundleRegistrationError,
     PackageContractError,
@@ -98,6 +99,7 @@ from .tool_registry import (
     ToolRegistryValidationError,
     build_tool_registry,
     load_tool_registry,
+    resolve_default_packages_dir,
 )
 
 __all__ = [
@@ -151,6 +153,7 @@ __all__ = [
     "encode_request",
     "encode_success_response",
     "execute_package_tool",
+    "extend_sys_path_for_package",
     "get_file_output_dir",
     "get_identifier_prefix_file_path",
     "get_identifier_prefix_state_dir",
@@ -177,5 +180,6 @@ __all__ = [
     "load_runtime_overrides",
     "load_tool_bindings",
     "load_tool_registry",
+    "resolve_default_packages_dir",
     "validate_agent_bundle_directory_registration",
 ]

@@ -9,6 +9,7 @@ from src.lib.openai_agents.streaming_tools import (
     _adapt_tools_for_groq_schema_constraints,
     _compute_adaptive_specialist_max_turns,
     _estimate_bulk_entity_count,
+    _tool_provider_adapter_factories,
     _try_parse_markdown_field_table,
     _required_tool_failure_message,
     _required_tool_names_for_agent,
@@ -195,6 +196,26 @@ def test_adapt_tools_with_provider_adapter_is_tool_name_agnostic(monkeypatch):
     )
 
     assert adapted == [replacement]
+
+
+def test_provider_adapter_factories_load_shipped_package_registry_by_default(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(tmp_path / "missing-packages"))
+    _tool_provider_adapter_factories.cache_clear()
+
+    try:
+        factories = _tool_provider_adapter_factories("groq_schema_constraints")
+        tools = [SimpleNamespace(name="agr_curation_query")]
+
+        adapted = _adapt_tools_for_groq_schema_constraints(tools)
+
+        assert "agr_curation_query" in factories
+        assert adapted[0] is not tools[0]
+        assert getattr(adapted[0], "name", None) == "agr_curation_query"
+    finally:
+        _tool_provider_adapter_factories.cache_clear()
 
 
 def test_estimate_bulk_entity_count_detects_list_payload():

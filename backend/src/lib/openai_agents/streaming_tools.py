@@ -327,6 +327,7 @@ def _tool_metadata_by_name() -> Dict[str, Dict[str, Any]]:
 def _tool_provider_adapter_factories(adapter_key: str) -> Dict[str, Any]:
     """Return package-declared provider adapter factories keyed by tool ID."""
     try:
+        from src.lib.packages.import_paths import extend_sys_path_for_package
         from src.lib.packages.tool_registry import load_tool_registry
 
         registry = load_tool_registry(fail_on_validation_error=False)
@@ -340,6 +341,9 @@ def _tool_provider_adapter_factories(adapter_key: str) -> Dict[str, Any]:
         if not import_path:
             continue
         try:
+            package = registry.package_registry.get_package(binding.source.package_id)
+            if package is not None:
+                extend_sys_path_for_package(package)
             factories[binding.tool_id] = _import_callable(import_path)
         except Exception as exc:
             logger.warning(

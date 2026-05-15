@@ -653,7 +653,6 @@ TOOL_OVERRIDES: Dict[str, Dict[str, Any]] = {
 }
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_CATALOG_CONTEXT = {
     "document_id": "tool-catalog-document-id",
     "user_id": "tool-catalog-user-id",
@@ -663,12 +662,9 @@ _DEFAULT_CATALOG_CONTEXT = {
 
 def _resolve_packages_dir() -> Path:
     """Use the runtime packages mount when present, otherwise the repo packages dir."""
-    from src.lib.packages.paths import get_runtime_packages_dir
+    from src.lib.packages.tool_registry import resolve_default_packages_dir
 
-    runtime_packages_dir = get_runtime_packages_dir()
-    if runtime_packages_dir.exists():
-        return runtime_packages_dir
-    return _REPO_ROOT / "packages"
+    return resolve_default_packages_dir()
 
 
 class _LazyDictProxy(dict):
