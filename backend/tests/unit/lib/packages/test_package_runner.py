@@ -720,6 +720,157 @@ def test_package_runner_alliance_agr_bulk_contract_reports_no_matches(
     ]
 
 
+def test_package_runner_alliance_agr_data_provider_helper_in_isolation(
+    monkeypatch,
+    tmp_path,
+):
+    runtime_root = _write_fake_agr_runtime(tmp_path)
+    fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
+
+    runner, env_manager = _build_alliance_runner(tmp_path)
+
+    result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={"method": "get_data_providers"},
+    )
+
+    assert result.ok is True
+    assert result.error is None
+    _assert_isolated_python(env_manager)
+    assert result.result["status"] == "ok"
+    assert result.result["count"] == 1
+    assert result.result["data"] == [
+        {"abbreviation": "FB", "taxon_id": "NCBITaxon:7227"}
+    ]
+
+
+def test_package_runner_alliance_agr_ontology_helpers_in_isolation(
+    monkeypatch,
+    tmp_path,
+):
+    runtime_root = _write_fake_agr_runtime(tmp_path)
+    fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
+
+    runner, env_manager = _build_alliance_runner(tmp_path)
+
+    get_result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "get_ontology_term",
+            "term": "GO:0003674",
+            "ontology_term_type": "GOTerm",
+        },
+    )
+    bulk_result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "get_ontology_terms",
+            "terms": ["GO:0003674", "GO:missing"],
+        },
+    )
+    search_result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "search_ontology_terms",
+            "term": "molecular",
+            "ontology_term_type": "GOTerm",
+            "exact_match": True,
+            "include_synonyms": False,
+            "limit": 3,
+        },
+    )
+
+    assert get_result.ok is True
+    assert bulk_result.ok is True
+    assert search_result.ok is True
+    _assert_isolated_python(env_manager)
+    assert get_result.result["data"] == {
+        "curie": "GO:0003674",
+        "curie_validated": True,
+        "definition": "Elemental activities of a gene product.",
+        "name": "molecular_function",
+        "namespace": "molecular_function",
+        "ontology_type": "GOTerm",
+        "synonyms": ["activity"],
+    }
+    assert bulk_result.result["count"] == 1
+    assert bulk_result.result["data"][0]["curie"] == "GO:0003674"
+    assert search_result.result["count"] == 1
+    assert search_result.result["data"][0]["name"] == "molecular_function"
+
+
+def test_package_runner_alliance_agr_entity_helpers_in_isolation(
+    monkeypatch,
+    tmp_path,
+):
+    runtime_root = _write_fake_agr_runtime(tmp_path)
+    fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
+    monkeypatch.setenv("AGR_RUNTIME_ROOT", str(runtime_root))
+    monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
+
+    runner, env_manager = _build_alliance_runner(tmp_path)
+
+    names_result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "map_entity_names_to_curies",
+            "entity_type": "gene",
+            "entity_names": ["norpA"],
+            "data_provider": "FB",
+        },
+    )
+    curies_result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "map_entity_curies_to_info",
+            "entity_type": "gene",
+            "entity_curies": ["FB:FBgn0262738"],
+        },
+    )
+    names_by_curie_result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "map_curies_to_names",
+            "category": "gene",
+            "curies": ["FB:FBgn0262738"],
+        },
+    )
+
+    assert names_result.ok is True
+    assert curies_result.ok is True
+    assert names_by_curie_result.ok is True
+    _assert_isolated_python(env_manager)
+    assert names_result.result["data"] == [
+        {
+            "curie": "FB:FBgn0262738",
+            "curie_validated": True,
+            "entity": "norpA",
+            "entity_curie": "FB:FBgn0262738",
+            "match_type": "exact",
+            "name": "norpA",
+            "symbol": "norpA",
+        }
+    ]
+    assert curies_result.result["data"] == [
+        {
+            "curie": "FB:FBgn0262738",
+            "curie_validated": True,
+            "entity": "norpA",
+            "entity_curie": "FB:FBgn0262738",
+            "name": "norpA",
+            "symbol": "norpA",
+            "taxon_id": "NCBITaxon:7227",
+        }
+    ]
+    assert names_by_curie_result.result["data"] == [
+        {"curie": "FB:FBgn0262738", "curie_validated": True, "name": "norpA"}
+    ]
+
+
 def test_package_runner_entrypoint_resolves_public_runtime_outside_backend_cwd(tmp_path):
     runtime_root = _write_fake_agr_runtime(tmp_path)
     fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
@@ -1083,7 +1234,7 @@ groups:
         encoding="utf-8",
     )
     (prefix_dir / "identifier_prefixes.json").write_text(
-        json.dumps({"prefixes": ["FB"]}),
+        json.dumps({"prefixes": ["FB", "GO"]}),
         encoding="utf-8",
     )
     return runtime_root
@@ -1118,6 +1269,16 @@ class _Gene:
         self.geneType = None
 
 
+class _OntologyTerm:
+    def __init__(self, curie, name, namespace, definition, ontology_type, synonyms):
+        self.curie = curie
+        self.name = name
+        self.namespace = namespace
+        self.definition = definition
+        self.ontology_type = ontology_type
+        self.synonyms = synonyms
+
+
 class DatabaseMethods:
     def __init__(self, config):
         self.config = config
@@ -1149,6 +1310,63 @@ class DatabaseMethods:
 
     def get_data_providers(self):
         return [("FB", "NCBITaxon:7227")]
+
+    def get_ontology_term(self, curie):
+        if curie == "GO:0003674":
+            return _OntologyTerm(
+                "GO:0003674",
+                "molecular_function",
+                "molecular_function",
+                "Elemental activities of a gene product.",
+                "GOTerm",
+                ["activity"],
+            )
+        return None
+
+    def get_ontology_terms(self, curies):
+        return {curie: self.get_ontology_term(curie) for curie in curies}
+
+    def search_ontology_terms(self, term, ontology_type, exact_match, include_synonyms, limit):
+        if (
+            term == "molecular"
+            and ontology_type == "GOTerm"
+            and exact_match is True
+            and include_synonyms is False
+            and limit == 3
+        ):
+            return [self.get_ontology_term("GO:0003674")]
+        return []
+
+    def map_entity_names_to_curies(self, entity_type, entity_names, taxon_curie):
+        if (
+            entity_type == "gene"
+            and entity_names == ["norpA"]
+            and taxon_curie == "NCBITaxon:7227"
+        ):
+            return [
+                {
+                    "entity_curie": "FB:FBgn0262738",
+                    "entity": "norpA",
+                    "match_type": "exact",
+                }
+            ]
+        return []
+
+    def map_entity_curies_to_info(self, entity_type, entity_curies):
+        if entity_type == "gene" and entity_curies == ["FB:FBgn0262738"]:
+            return [
+                {
+                    "entity_curie": "FB:FBgn0262738",
+                    "entity": "norpA",
+                    "taxon_id": "NCBITaxon:7227",
+                }
+            ]
+        return []
+
+    def map_curies_to_names(self, category, curies):
+        if category == "gene" and curies == ["FB:FBgn0262738"]:
+            return {"FB:FBgn0262738": "norpA"}
+        return {}
 """,
         encoding="utf-8",
     )
