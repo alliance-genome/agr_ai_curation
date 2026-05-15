@@ -23,16 +23,18 @@ from agr_ai_curation_runtime.agr_lookup import (
     LOOKUP_STATUS_SUCCESS,
     LOOKUP_STATUS_TRANSIENT,
     attempt_query as _attempt_query,
-    bulk_item_status_from_lookup_status as _bulk_item_status_from_lookup_status,
     bulk_resolution_summary as _bulk_resolution_summary,
+    lookup_explanation as _lookup_explanation,
+    lookup_status_from_count as _lookup_status_from_count,
+)
+from .agr_lookup import (
+    bulk_item_status_from_lookup_status as _bulk_item_status_from_lookup_status,
     candidate_from_result as _candidate_from_result,
     entity_detail_lookup_attempts as _entity_detail_lookup_attempts,
     fetch_allele_details_bulk as _fetch_allele_details_bulk,
     fetch_gene_details_bulk as _fetch_gene_details_bulk,
     lookup_attempt as _lookup_attempt,
-    lookup_explanation as _lookup_explanation,
     lookup_response_payload as _lookup_response_payload,
-    lookup_status_from_count as _lookup_status_from_count,
     projection_from_entity_match as _projection_from_entity_match,
     projection_from_result as _projection_from_result,
 )
