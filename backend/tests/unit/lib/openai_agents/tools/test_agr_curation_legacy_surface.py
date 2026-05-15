@@ -39,6 +39,8 @@ def test_backend_agr_curation_module_is_marked_legacy_compatibility_only():
     module_doc = agr_curation.__doc__ or ""
 
     assert "Legacy compatibility-only" in module_doc
+    assert "Do not extend this module" in module_doc
+    assert "ALL-482 removes the legacy backend path" in module_doc
     assert (
         agr_curation.LEGACY_AGR_CURATION_QUERY_PACKAGE_TOOL
         == "packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py"

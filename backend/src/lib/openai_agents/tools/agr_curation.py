@@ -6,6 +6,10 @@ LEGACY_AGR_CURATION_QUERY_SUPPORTED_METHODS. New Alliance-specific helper
 behavior belongs in the package-owned tool implementation:
 packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py
 and packages/alliance/tools/bindings.yaml.
+
+Do not extend this module with new methods, arguments, tool grants, aliases, or
+validator-facing helper behavior. Keep only the current compatibility surface
+until ALL-482 removes the legacy backend path.
 """
 
 import logging
@@ -61,6 +65,9 @@ LEGACY_AGR_CURATION_QUERY_PACKAGE_TOOL = (
 LEGACY_AGR_CURATION_QUERY_PACKAGE_BINDINGS = "packages/alliance/tools/bindings.yaml"
 
 # ALL-478: this is an explicit compatibility allowlist, not an extension point.
+# Do not add methods here to satisfy new validator/tool needs. Route new
+# Alliance-specific behavior to the package-owned tool above; ALL-482 should
+# remove this backend surface once its remaining consumers are gone.
 LEGACY_AGR_CURATION_QUERY_SUPPORTED_METHODS = frozenset(
     {
         "get_allele_by_exact_symbol",
