@@ -238,6 +238,24 @@ def test_legacy_ontology_mapping_schema_matches_package_validator_shape(
 ):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 
+    package_schema_path = (
+        REPO_PACKAGES_DIR / "alliance" / "agents" / "ontology_mapping" / "schema.py"
+    )
+    legacy_schema_path = REPO_LEGACY_AGENTS_DIR / "ontology_mapping" / "schema.py"
+    package_source = package_schema_path.read_text(encoding="utf-8")
+    legacy_source = legacy_schema_path.read_text(encoding="utf-8")
+
+    assert legacy_source == package_source
+    for obsolete_fragment in (
+        "StructuredMessageEnvelope",
+        "ConfigDict",
+        "from typing import List",
+        "actor:",
+        "findings:",
+        "unmapped_terms",
+    ):
+        assert obsolete_fragment not in legacy_source
+
     schema_discovery.discover_agent_schemas(REPO_PACKAGES_DIR, force_reload=True)
     package_schema = schema_discovery.get_schema_for_agent("ontology_mapping")
     assert package_schema is not None
@@ -245,7 +263,7 @@ def test_legacy_ontology_mapping_schema_matches_package_validator_shape(
 
     schema_discovery.reset_cache()
     legacy_schemas = schema_discovery._load_schema_module(
-        REPO_LEGACY_AGENTS_DIR / "ontology_mapping" / "schema.py",
+        legacy_schema_path,
         "ontology_mapping",
         configured_schema="OntologyMappingEnvelope",
     )
