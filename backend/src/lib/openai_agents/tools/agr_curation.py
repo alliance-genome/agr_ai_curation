@@ -1,8 +1,15 @@
 """
-AGR Curation Database tool for OpenAI Agents SDK.
+Legacy compatibility-only AGR Curation Database tool for OpenAI Agents SDK.
 
-Provides structured access to the Alliance Genome Resources Curation Database
-using the official agr-curation-api-client package.
+This backend copy is frozen to the runtime surface listed in
+LEGACY_AGR_CURATION_QUERY_SUPPORTED_METHODS. New Alliance-specific helper
+behavior belongs in the package-owned tool implementation:
+packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py
+and packages/alliance/tools/bindings.yaml.
+
+Do not extend this module with new methods, arguments, tool grants, aliases, or
+validator-facing helper behavior. Keep only the current compatibility surface
+until ALL-482 removes the legacy backend path.
 """
 
 import logging
@@ -51,6 +58,57 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_LIMIT = int(os.getenv("AGR_DEFAULT_LIMIT", "100"))
 HARD_MAX = int(os.getenv("AGR_HARD_MAX", "500"))
+
+LEGACY_AGR_CURATION_QUERY_PACKAGE_TOOL = (
+    "packages/alliance/python/src/agr_ai_curation_alliance/tools/agr_curation.py"
+)
+LEGACY_AGR_CURATION_QUERY_PACKAGE_BINDINGS = "packages/alliance/tools/bindings.yaml"
+
+# ALL-478: this is an explicit compatibility allowlist, not an extension point.
+# Do not add methods here to satisfy new validator/tool needs. Route new
+# Alliance-specific behavior to the package-owned tool above; ALL-482 should
+# remove this backend surface once its remaining consumers are gone.
+LEGACY_AGR_CURATION_QUERY_SUPPORTED_METHODS = frozenset(
+    {
+        "get_allele_by_exact_symbol",
+        "get_allele_by_id",
+        "get_data_providers",
+        "get_gene_by_exact_symbol",
+        "get_gene_by_id",
+        "get_ontology_term_by_curie",
+        "get_species",
+        "search_alleles",
+        "search_alleles_bulk",
+        "search_anatomy_terms",
+        "search_genes",
+        "search_genes_bulk",
+        "search_go_terms",
+        "search_life_stage_terms",
+    }
+)
+
+# ALL-458 helper families are package-owned. Do not mirror them into this
+# compatibility module.
+PACKAGE_OWNED_AGR_CURATION_HELPER_METHODS = frozenset(
+    {
+        "get_ontology_term",
+        "get_ontology_terms",
+        "map_curies_to_names",
+        "map_entity_curies_to_info",
+        "map_entity_names_to_curies",
+        "search_ontology_terms",
+    }
+)
+PACKAGE_OWNED_AGR_CURATION_HELPER_ARGS = frozenset(
+    {
+        "category",
+        "curies",
+        "entity_curies",
+        "entity_names",
+        "entity_type",
+        "terms",
+    }
+)
 
 
 class AgrQueryResult(BaseModel):
@@ -2158,14 +2216,22 @@ def agr_curation_query(
                 ),
             )
 
-        else:
+        elif method in PACKAGE_OWNED_AGR_CURATION_HELPER_METHODS:
             return _err(
-                "Unknown method: {method}. Valid: "
-                "search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id, "
-                "search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id, "
-                "get_species, get_data_providers, "
-                "get_ontology_term_by_curie, search_anatomy_terms, "
-                "search_life_stage_terms, search_go_terms".format(method=method),
+                (
+                    f"{method} is package-owned and is not implemented by the legacy "
+                    f"backend AGR curation tool. Add or use Alliance-specific helper "
+                    f"behavior in {LEGACY_AGR_CURATION_QUERY_PACKAGE_TOOL} and "
+                    f"{LEGACY_AGR_CURATION_QUERY_PACKAGE_BINDINGS}."
+                ),
+                method=method,
+                attempted_query=_attempt_query(method),
+            )
+
+        else:
+            valid_methods = ", ".join(sorted(LEGACY_AGR_CURATION_QUERY_SUPPORTED_METHODS))
+            return _err(
+                f"Unknown method: {method}. Valid: {valid_methods}",
                 method=method,
                 attempted_query=_attempt_query(method),
             )

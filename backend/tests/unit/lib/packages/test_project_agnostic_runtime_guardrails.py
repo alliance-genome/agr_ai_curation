@@ -62,6 +62,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/packages/test_registry.py"),
     Path("backend/tests/unit/lib/packages/test_tool_registry.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_helpers.py"),
+    Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_legacy_surface.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_provider_config.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_agr_curation_query_paths.py"),
     Path("backend/tests/unit/lib/openai_agents/tools/test_search_helpers.py"),
