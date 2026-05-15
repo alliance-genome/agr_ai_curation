@@ -164,6 +164,56 @@ tools:
     assert document_binding.source.package_id == "org.custom"
 
 
+def test_load_tool_registry_keeps_neutral_package_metadata_and_provider_adapters(tmp_path):
+    packages_dir = tmp_path / "packages"
+    _write_package(
+        packages_dir,
+        directory_name="museum-catalog",
+        package_id="museum.catalog",
+        export_description="Museum lookup tools",
+        bindings_text="""package_id: museum.catalog
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: artifact_lookup
+    binding_kind: static
+    callable: museum_catalog.tools:artifact_lookup
+    required_context: []
+    description: Lookup catalog artifacts
+    source_file: src/museum_catalog/tools.py
+    provider_adapters:
+      demo_provider_schema:
+        callable_factory: museum_catalog.tools:create_demo_provider_artifact_lookup
+        description: Demo provider wrapper
+    metadata:
+      name: Artifact Lookup
+      category: Catalog
+      agent_studio:
+        prompt_description: Lookup artifacts in the museum catalog.
+        diagnostic:
+          enabled: true
+          category: catalog
+      required_tool_call:
+        enforce: true
+        failure_message: did not call artifact lookup before answering
+""",
+    )
+
+    registry = load_tool_registry(
+        packages_dir,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+
+    binding = registry.get("artifact_lookup")
+
+    assert binding is not None
+    assert binding.metadata["name"] == "Artifact Lookup"
+    assert binding.metadata["agent_studio"]["diagnostic"]["enabled"] is True
+    assert binding.provider_adapters == {
+        "demo_provider_schema": "museum_catalog.tools:create_demo_provider_artifact_lookup"
+    }
+
+
 def test_load_tool_registry_keeps_declared_tool_exports_when_package_has_undeclared_agent_bundle(
     tmp_path,
 ):

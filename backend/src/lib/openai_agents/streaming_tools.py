@@ -14,6 +14,7 @@ immediately, allowing real-time visibility into specialist agent activity.
 """
 
 import copy
+import importlib
 import json
 import logging
 import re
@@ -22,6 +23,7 @@ from collections import deque
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import List, Dict, Any, Optional
 
 from agents import Agent, Runner, RunConfig
@@ -44,7 +46,7 @@ from src.lib.prompts.context import commit_pending_prompts
 logger = logging.getLogger(__name__)
 
 _DOCUMENT_REQUIRED_TOOL_NAMES = {"search_document", "read_section", "read_subsection"}
-_AGR_DB_REQUIRED_TOOL_NAMES = {"agr_curation_query"}
+_GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
 
 
 def _extract_stream_tool_call_tracking_id(item: Any) -> Optional[str]:
@@ -297,6 +299,67 @@ def _extract_tool_name(tool: Any) -> str:
     ).strip()
 
 
+def _import_callable(import_path: str) -> Any:
+    module_name, attr_name = import_path.split(":", 1)
+    module = importlib.import_module(module_name)
+    return getattr(module, attr_name)
+
+
+@lru_cache(maxsize=16)
+def _tool_metadata_by_name() -> Dict[str, Dict[str, Any]]:
+    """Return package-declared tool metadata keyed by tool ID."""
+    try:
+        from src.lib.packages.tool_registry import load_tool_registry
+
+        registry = load_tool_registry(fail_on_validation_error=False)
+    except Exception as exc:
+        logger.debug("Package tool metadata unavailable: %s", exc)
+        return {}
+
+    return {
+        binding.tool_id: dict(binding.metadata)
+        for binding in registry.bindings
+        if isinstance(binding.metadata, dict)
+    }
+
+
+@lru_cache(maxsize=16)
+def _tool_provider_adapter_factories(adapter_key: str) -> Dict[str, Any]:
+    """Return package-declared provider adapter factories keyed by tool ID."""
+    try:
+        from src.lib.packages.tool_registry import load_tool_registry
+
+        registry = load_tool_registry(fail_on_validation_error=False)
+    except Exception as exc:
+        logger.debug("Package tool provider adapters unavailable: %s", exc)
+        return {}
+
+    factories: Dict[str, Any] = {}
+    for binding in registry.bindings:
+        import_path = binding.provider_adapters.get(adapter_key)
+        if not import_path:
+            continue
+        try:
+            factories[binding.tool_id] = _import_callable(import_path)
+        except Exception as exc:
+            logger.warning(
+                "Failed to import provider adapter '%s' for tool '%s': %s",
+                adapter_key,
+                binding.tool_id,
+                exc,
+            )
+    return factories
+
+
+def _required_package_tool_names(available_tool_names: set[str]) -> set[str]:
+    required: set[str] = set()
+    for tool_name in available_tool_names:
+        required_call = _tool_metadata_by_name().get(tool_name, {}).get("required_tool_call")
+        if isinstance(required_call, dict) and bool(required_call.get("enforce")):
+            required.add(tool_name)
+    return required
+
+
 def _required_tool_names_for_agent(agent: Agent) -> Optional[set[str]]:
     """Return required tool set for runtime enforcement, if applicable."""
     tools = getattr(agent, "tools", []) or []
@@ -308,11 +371,12 @@ def _required_tool_names_for_agent(agent: Agent) -> Optional[set[str]]:
 
     # Match unified catalog semantics:
     # - Document tools take precedence when present.
-    # - AGR DB tools are required when document tools are absent.
+    # - Package-owned required-call metadata applies when document tools are absent.
     if available_tool_names & _DOCUMENT_REQUIRED_TOOL_NAMES:
         return set(_DOCUMENT_REQUIRED_TOOL_NAMES)
-    if available_tool_names & _AGR_DB_REQUIRED_TOOL_NAMES:
-        return set(_AGR_DB_REQUIRED_TOOL_NAMES)
+    package_required_tools = _required_package_tool_names(available_tool_names)
+    if package_required_tools:
+        return package_required_tools
     return None
 
 
@@ -371,58 +435,79 @@ def _compute_adaptive_specialist_max_turns(
     input_text: str,
     base_max_turns: int,
 ) -> int:
-    """Increase turn budget for large AGR query workloads to prevent premature failure."""
+    """Increase turn budget for package-declared bulk lookup workloads."""
     tool_names = _agent_tool_names(agent)
-    if "agr_curation_query" not in tool_names:
+    bulk_specs = [
+        _tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
+        for tool_name in tool_names
+    ]
+    bulk_specs = [spec for spec in bulk_specs if isinstance(spec, dict) and spec.get("enabled")]
+    if not bulk_specs:
         return base_max_turns
 
     entity_count = _estimate_bulk_entity_count(input_text)
-    if entity_count < 8:
+    minimum_entities = min(int(spec.get("minimum_entities", 8) or 8) for spec in bulk_specs)
+    if entity_count < minimum_entities:
         return base_max_turns
 
-    # Typical gene normalization requests can include dozens of symbols.
-    # Budget scales with list size but remains capped to prevent runaway loops.
+    max_turn_cap = max(int(spec.get("max_turns", 120) or 120) for spec in bulk_specs)
+    min_turn_floor = max(int(spec.get("min_turns", 40) or 40) for spec in bulk_specs)
     adaptive = max(base_max_turns, 10 + (entity_count * 2))
-    adaptive = max(adaptive, 40)
-    adaptive = min(adaptive, 120)
+    adaptive = max(adaptive, min_turn_floor)
+    adaptive = min(adaptive, max_turn_cap)
     return adaptive
 
 
 def _build_tool_efficiency_instruction(agent: Agent, input_text: str) -> str:
     """Return guidance that nudges large list processing toward fewer tool turns."""
     tool_names = _agent_tool_names(agent)
-    if "agr_curation_query" not in tool_names:
+    bulk_specs = [
+        _tool_metadata_by_name().get(tool_name, {}).get("bulk_list_optimization")
+        for tool_name in tool_names
+    ]
+    bulk_specs = [spec for spec in bulk_specs if isinstance(spec, dict) and spec.get("enabled")]
+    if not bulk_specs:
         return ""
 
     entity_count = _estimate_bulk_entity_count(input_text)
-    if entity_count < 8:
+    minimum_entities = min(int(spec.get("minimum_entities", 8) or 8) for spec in bulk_specs)
+    if entity_count < minimum_entities:
         return ""
 
-    return (
-        "TOOL EFFICIENCY REQUIREMENT:\n"
-        "The request includes a large entity list. Minimize tool rounds.\n"
-        "Prefer bulk AGR methods when available (search_genes_bulk/search_alleles_bulk)\n"
-        "using list inputs instead of one-call-per-entity loops.\n"
-        "If provider/model supports it, issue parallel tool calls in the same turn.\n"
-        "Avoid one-call-per-entity loops when enough evidence already exists to synthesize output.\n"
-    )
+    instructions = [
+        str(spec.get("instruction") or "").strip()
+        for spec in bulk_specs
+        if str(spec.get("instruction") or "").strip()
+    ]
+    if instructions:
+        return "\n\n".join(instructions) + "\n"
+    return "TOOL EFFICIENCY REQUIREMENT:\nThe request includes a large entity list. Minimize tool rounds.\n"
 
 
-def _adapt_tools_for_groq_schema_constraints(tools: List[Any]) -> List[Any]:
-    """Replace tools that violate Groq's strict schema constraints."""
+def _adapt_tools_with_provider_adapter(tools: List[Any], adapter_key: str) -> List[Any]:
+    """Replace package-declared tools with provider-specific adapter factories."""
+    adapter_factories = _tool_provider_adapter_factories(adapter_key)
+    if not adapter_factories:
+        return list(tools)
+
     adapted: List[Any] = []
     for tool in tools:
         tool_name = _extract_tool_name(tool)
-        if tool_name != "agr_curation_query":
+        adapter_factory = adapter_factories.get(tool_name)
+        if adapter_factory is None:
             adapted.append(tool)
             continue
 
-        from src.lib.openai_agents.tools.agr_curation import (
-            create_groq_agr_curation_query_tool,
-        )
-
-        adapted.append(create_groq_agr_curation_query_tool())
+        adapted.append(adapter_factory())
     return adapted
+
+
+def _adapt_tools_for_groq_schema_constraints(tools: List[Any]) -> List[Any]:
+    """Replace package-declared tools that violate Groq's strict schema constraints."""
+    return _adapt_tools_with_provider_adapter(
+        tools,
+        _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY,
+    )
 
 
 def _required_tool_failure_message(
@@ -453,10 +538,19 @@ def _required_tool_failure_message(
             f"Required: {required_text}. Called: {called_text}."
         )
 
-    return (
-        f"{specialist_name} did not call required AGR DB tools before answering. "
-        f"Required: {required_text}. Called: {called_text}."
-    )
+    message = None
+    for tool_name in sorted(required_tools):
+        required_call = _tool_metadata_by_name().get(tool_name, {}).get("required_tool_call")
+        if isinstance(required_call, dict):
+            candidate = str(required_call.get("failure_message") or "").strip()
+            if candidate:
+                message = candidate
+                break
+
+    if message is None:
+        message = "did not call required package tools before answering"
+
+    return f"{specialist_name} {message}. Required: {required_text}. Called: {called_text}."
 
 
 def _emit_specialist_evidence_summary_or_raise(

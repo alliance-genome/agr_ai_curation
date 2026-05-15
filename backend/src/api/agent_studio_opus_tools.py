@@ -606,7 +606,6 @@ FLOW_TOOLS = {
     "get_available_agents",
 }
 AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
-    "agr_curation_query",
     "curation_db_sql",
     "chebi_api_call",
     "quickgo_api_call",
@@ -614,6 +613,28 @@ AGENTS_ONLY_DIAGNOSTIC_TOOLS = {
     "search_codebase",
     "read_source_file",
 }
+
+
+def _package_agent_only_diagnostic_tools() -> set[str]:
+    try:
+        from src.lib.agent_studio.catalog_service import get_tool_registry
+    except Exception:
+        return set()
+
+    try:
+        registry = get_tool_registry()
+    except Exception:
+        return set()
+
+    tool_names: set[str] = set()
+    for tool_id, tool_info in registry.items():
+        agent_studio_metadata = tool_info.get("agent_studio")
+        if not isinstance(agent_studio_metadata, dict):
+            continue
+        diagnostic = agent_studio_metadata.get("diagnostic")
+        if isinstance(diagnostic, dict) and bool(diagnostic.get("enabled")):
+            tool_names.add(str(tool_id))
+    return tool_names
 
 
 def get_active_tab(context: Optional[ChatContext]) -> str:
@@ -653,7 +674,7 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
     if tool_name in FLOW_TOOLS:
         return active_tab == "flows"
 
-    if tool_name in AGENTS_ONLY_DIAGNOSTIC_TOOLS:
+    if tool_name in AGENTS_ONLY_DIAGNOSTIC_TOOLS or tool_name in _package_agent_only_diagnostic_tools():
         return active_tab == "agents"
 
     if tool_name == "get_prompt":

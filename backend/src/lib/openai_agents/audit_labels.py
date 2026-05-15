@@ -1,6 +1,10 @@
 """Shared helpers for audit-friendly tool labels."""
 
-from typing import Dict, Optional
+import logging
+from functools import lru_cache
+from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 
 BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
@@ -30,7 +34,6 @@ INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "read_section": "Read Section",
     "read_subsection": "Read Subsection",
     "record_evidence": "Record Evidence",
-    "agr_curation_query": "AGR Curation Query",
     "sql_query": "SQL Query",
     "alliance_api_call": "Alliance API",
     "rest_api_call": "REST API",
@@ -42,6 +45,32 @@ INTERNAL_TOOL_DISPLAY_NAMES: Dict[str, str] = {
     "export_to_file": "Export to File",
     "prepare_for_curation": "Curation Prep",
 }
+
+
+@lru_cache(maxsize=1)
+def _package_tool_display_names() -> Dict[str, str]:
+    """Return package-owned audit/display labels keyed by tool ID."""
+    try:
+        from src.lib.packages.tool_registry import load_tool_registry
+
+        registry = load_tool_registry(fail_on_validation_error=False)
+    except Exception as exc:
+        logger.debug("Package tool labels unavailable: %s", exc)
+        return {}
+
+    labels: Dict[str, str] = {}
+    for binding in registry.bindings:
+        metadata: dict[str, Any] = dict(binding.metadata)
+        audit_metadata = metadata.get("audit")
+        if isinstance(audit_metadata, dict):
+            label = str(audit_metadata.get("display_name") or "").strip()
+            if label:
+                labels[binding.tool_id] = label
+                continue
+        label = str(metadata.get("name") or metadata.get("display_name") or "").strip()
+        if label:
+            labels[binding.tool_id] = label
+    return labels
 
 
 def _ensure_non_empty_label(tool_name: str, label: Optional[str]) -> str:
@@ -58,6 +87,7 @@ def resolve_tool_display_name(tool_name: str, custom_display_names: Optional[Dic
     label = (
         custom.get(tool_name)
         or BUILTIN_SPECIALIST_DISPLAY_NAMES.get(tool_name)
+        or _package_tool_display_names().get(tool_name)
         or INTERNAL_TOOL_DISPLAY_NAMES.get(tool_name)
         or tool_name
     )

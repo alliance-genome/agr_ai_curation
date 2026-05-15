@@ -311,7 +311,7 @@ def test_get_agent_metadata_does_not_inherit_curation_when_custom_agent_no_longe
     assert metadata["curation"] is None
 
 
-def test_create_db_agent_requires_agr_query_tool_call(monkeypatch):
+def test_create_db_agent_requires_package_declared_lookup_tool_call(monkeypatch):
     fake_row = SimpleNamespace(
         id="agent-id",
         agent_key="ca_custom_gene_validation",
@@ -363,7 +363,7 @@ def test_create_db_agent_requires_agr_query_tool_call(monkeypatch):
 
     assert isinstance(captured["tracker"], _DummyTracker)
     assert captured["minimum_calls"] == 1
-    assert "AGR Curation Database" in captured["error_message"]
+    assert "package-declared curation lookup tool" in captured["error_message"]
     assert built.kwargs["output_guardrails"] == [{"kind": "tool_required", "minimum_calls": 1}]
 
 

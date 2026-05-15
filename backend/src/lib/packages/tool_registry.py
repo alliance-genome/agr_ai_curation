@@ -40,6 +40,8 @@ class RegisteredToolBinding:
     import_attribute_kind: str
     required_context: tuple[str, ...]
     description: str
+    metadata: dict[str, object]
+    provider_adapters: dict[str, str]
     source: ToolBindingSource
 
 
@@ -213,6 +215,11 @@ def _build_registered_binding(
         import_attribute_kind=import_attribute_kind,
         required_context=tuple(binding.required_context),
         description=binding.description or binding_export.export_description,
+        metadata=dict(binding.metadata),
+        provider_adapters={
+            adapter_key: adapter.callable_factory
+            for adapter_key, adapter in binding.provider_adapters.items()
+        },
         source=ToolBindingSource(
             package_id=binding_export.package_id,
             package_version=binding_export.package_version,
