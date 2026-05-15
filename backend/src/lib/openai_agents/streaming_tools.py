@@ -432,16 +432,54 @@ def _compute_adaptive_specialist_max_turns(
         return base_max_turns
 
     entity_count = _estimate_bulk_entity_count(input_text)
-    minimum_entities = min(int(spec.get("minimum_entities", 8) or 8) for spec in bulk_specs)
+    minimum_entities = min(
+        _bulk_list_optimization_int(spec, "minimum_entities") for spec in bulk_specs
+    )
     if entity_count < minimum_entities:
         return base_max_turns
 
-    max_turn_cap = max(int(spec.get("max_turns", 120) or 120) for spec in bulk_specs)
-    min_turn_floor = max(int(spec.get("min_turns", 40) or 40) for spec in bulk_specs)
+    max_turn_cap = max(
+        _bulk_list_optimization_int(spec, "max_turns", minimum=1) for spec in bulk_specs
+    )
+    min_turn_floor = max(
+        _bulk_list_optimization_int(spec, "min_turns", minimum=1) for spec in bulk_specs
+    )
     adaptive = max(base_max_turns, 10 + (entity_count * 2))
     adaptive = max(adaptive, min_turn_floor)
     adaptive = min(adaptive, max_turn_cap)
     return adaptive
+
+
+def _bulk_list_optimization_int(
+    spec: dict[str, Any],
+    field_name: str,
+    *,
+    minimum: int = 0,
+) -> int:
+    value = spec.get(field_name)
+    if value is None:
+        raise ValueError(
+            "Package tool bulk_list_optimization is enabled but "
+            f"{field_name} is not declared."
+        )
+    if isinstance(value, bool):
+        raise ValueError(
+            "Package tool bulk_list_optimization field "
+            f"{field_name} must be an integer."
+        )
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Package tool bulk_list_optimization field "
+            f"{field_name} must be an integer."
+        ) from exc
+    if parsed < minimum:
+        raise ValueError(
+            "Package tool bulk_list_optimization field "
+            f"{field_name} must be at least {minimum}."
+        )
+    return parsed
 
 
 def _build_tool_efficiency_instruction(agent: Agent, input_text: str) -> str:
@@ -456,7 +494,9 @@ def _build_tool_efficiency_instruction(agent: Agent, input_text: str) -> str:
         return ""
 
     entity_count = _estimate_bulk_entity_count(input_text)
-    minimum_entities = min(int(spec.get("minimum_entities", 8) or 8) for spec in bulk_specs)
+    minimum_entities = min(
+        _bulk_list_optimization_int(spec, "minimum_entities") for spec in bulk_specs
+    )
     if entity_count < minimum_entities:
         return ""
 

@@ -279,6 +279,55 @@ def test_compute_adaptive_specialist_max_turns_scales_for_large_package_bulk_lis
     assert adaptive <= 120
 
 
+def test_compute_adaptive_specialist_max_turns_honors_zero_minimum_entities(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        lambda: {
+            "artifact_lookup": {
+                "bulk_list_optimization": {
+                    "enabled": True,
+                    "minimum_entities": 0,
+                    "min_turns": 40,
+                    "max_turns": 120,
+                }
+            }
+        },
+    )
+    agent = SimpleNamespace(tools=[SimpleNamespace(name="artifact_lookup")])
+
+    adaptive = _compute_adaptive_specialist_max_turns(
+        agent=agent,
+        input_text="Lookup gene_1",
+        base_max_turns=20,
+    )
+
+    assert adaptive == 40
+
+
+def test_compute_adaptive_specialist_max_turns_requires_numeric_package_metadata(monkeypatch):
+    monkeypatch.setattr(
+        "src.lib.openai_agents.streaming_tools._tool_metadata_by_name",
+        lambda: {
+            "artifact_lookup": {
+                "bulk_list_optimization": {
+                    "enabled": True,
+                    "minimum_entities": 8,
+                    "max_turns": 120,
+                }
+            }
+        },
+    )
+    agent = SimpleNamespace(tools=[SimpleNamespace(name="artifact_lookup")])
+    query = "List: " + ", ".join(f"gene_{idx}" for idx in range(30))
+
+    with pytest.raises(ValueError, match="min_turns is not declared"):
+        _compute_adaptive_specialist_max_turns(
+            agent=agent,
+            input_text=query,
+            base_max_turns=20,
+        )
+
+
 def test_compute_adaptive_specialist_max_turns_keeps_default_for_non_bulk_agents():
     agent = SimpleNamespace(tools=[SimpleNamespace(name="search_document")])
 
