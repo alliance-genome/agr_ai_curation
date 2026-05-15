@@ -20,6 +20,16 @@ REPO_ROOT = find_repo_root(Path(__file__))
 REPO_PACKAGES_DIR = REPO_ROOT / "packages"
 
 
+def _iter_dict_nodes(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _iter_dict_nodes(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_dict_nodes(child)
+
+
 @pytest.fixture(autouse=True)
 def _reset_loader_caches():
     agent_loader.reset_cache()
@@ -188,6 +198,71 @@ def test_bundled_alliance_validation_agent_schemas_are_binding_ready(monkeypatch
         assert issubclass(schema, DomainValidatorResultBase)
         status_schema = schema.model_json_schema()["properties"]["status"]
         assert "under_development" not in status_schema.get("enum", [])
+
+
+def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agent_loader.load_agent_definitions(force_reload=True)
+    schema_discovery.discover_agent_schemas(force_reload=True)
+
+    expected_schemas = {
+        "gene_ontology": "GOTermResultEnvelope",
+        "go_annotations": "GOAnnotationsResult",
+        "ontology_mapping": "OntologyMappingEnvelope",
+        "orthologs": "OrthologsResult",
+    }
+    shared_fields = set(DomainValidatorResultBase.model_fields)
+
+    for agent_name, schema_name in expected_schemas.items():
+        schema = schema_discovery.get_schema_for_agent(agent_name)
+
+        assert schema is not None
+        assert schema.__name__ == schema_name
+        assert issubclass(schema, DomainValidatorResultBase)
+        assert shared_fields.issubset(schema.model_fields)
+        assert "result" not in schema.model_fields
+        assert "validation_result" not in schema.model_fields
+
+    ontology_schema = schema_discovery.get_schema_for_agent("ontology_mapping")
+    assert ontology_schema is not None
+    assert "unmapped_labels" in ontology_schema.model_fields
+    assert "unmapped_terms" not in ontology_schema.model_fields
+
+
+def test_bundled_alliance_ontology_context_agents_are_not_active_readiness_gates():
+    context_agent_ids = {
+        "gene_ontology_lookup",
+        "go_annotations_lookup",
+        "ontology_mapping_lookup",
+        "orthologs_lookup",
+    }
+    active_agent_ids = set()
+
+    for domain_pack_path in (REPO_ROOT / "packages/alliance/domain_packs").glob(
+        "*/domain_pack.yaml"
+    ):
+        payload = yaml.safe_load(domain_pack_path.read_text(encoding="utf-8"))
+        for node in _iter_dict_nodes(payload):
+            bindings = node.get("validator_bindings")
+            if not isinstance(bindings, dict):
+                continue
+            active_bindings = bindings.get("active", [])
+            if not isinstance(active_bindings, list):
+                continue
+            for binding in active_bindings:
+                if not isinstance(binding, dict):
+                    continue
+                validator_agent = binding.get("validator_agent")
+                if isinstance(validator_agent, dict):
+                    agent_id = validator_agent.get("agent_id")
+                    if isinstance(agent_id, str):
+                        active_agent_ids.add(agent_id)
+
+    assert active_agent_ids
+    assert context_agent_ids.isdisjoint(active_agent_ids)
 
 
 def test_bundled_alliance_output_resolution_prefers_package_schema(monkeypatch):

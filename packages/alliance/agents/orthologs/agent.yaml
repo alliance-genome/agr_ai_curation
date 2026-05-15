@@ -31,7 +31,7 @@ supervisor_routing:
   batchable: true
   batching_instructions: >
     When finding orthologs for multiple genes, combine them into a single request.
-    Example: "Find orthologs for: daf-16, unc-54, lin-3"
+    Example: "Find orthologs for: WB:WBGene00000912, MGI:97490, HGNC:11998, etc."
 
 # -----------------------------------------------------------------------------
 # TOOLS

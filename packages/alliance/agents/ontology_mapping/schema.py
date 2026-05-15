@@ -16,7 +16,7 @@ class OntologyMappingEnvelope(DomainValidatorResultBase):
         default_factory=list,
         description="Term-to-ontology mappings returned by the lookup",
     )
-    unmapped_terms: Optional[list[str]] = Field(
+    unmapped_labels: Optional[list[str]] = Field(
         default=None,
         description="Terms that could not be mapped",
     )

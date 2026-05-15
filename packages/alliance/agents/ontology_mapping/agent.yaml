@@ -31,7 +31,7 @@ supervisor_routing:
   batchable: true
   batching_instructions: >
     When mapping multiple terms, combine them into a single request.
-    Example: "Map these labels: pharynx, L3 larval stage, nucleus"
+    Example: "Map these labels: pharynx, L3 larval stage, nucleus, etc."
 
 # -----------------------------------------------------------------------------
 # TOOLS

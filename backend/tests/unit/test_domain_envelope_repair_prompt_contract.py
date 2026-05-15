@@ -35,6 +35,9 @@ EXTRACTOR_OUTPUT_SCHEMAS = {
 REPAIR_AWARE_VALIDATOR_PROMPTS = [
     "packages/alliance/agents/chemical/prompt.yaml",
     "packages/alliance/agents/disease/prompt.yaml",
+]
+
+ONTOLOGY_CONTEXT_VALIDATOR_PROMPTS = [
     "packages/alliance/agents/gene_ontology/prompt.yaml",
     "packages/alliance/agents/go_annotations/prompt.yaml",
     "packages/alliance/agents/ontology_mapping/prompt.yaml",
@@ -124,6 +127,50 @@ def test_validator_prompts_keep_validation_separate_from_patching():
             'Only an extractor may return `repair_action: "extractor_patch"`',
         ]:
             assert fragment in content, f"{relative_path} missing {fragment}"
+
+
+def test_ontology_context_validator_prompts_use_shared_result_semantics():
+    required_shared_fields = [
+        "status",
+        "request_id",
+        "validator_binding_id",
+        "validator_agent",
+        "target",
+        "resolved_values",
+        "resolved_objects",
+        "missing_expected_fields",
+        "candidates",
+        "lookup_attempts",
+        "curator_message",
+        "explanation",
+    ]
+    forbidden_runtime_fragments = [
+        "under_development",
+        "under-development validator",
+        "blocked_validator",
+        "mark_under_development",
+        "repair_action",
+        "repair-focused",
+    ]
+
+    for relative_path in ONTOLOGY_CONTEXT_VALIDATOR_PROMPTS:
+        content = _content(relative_path)
+        normalized_content = re.sub(r"\s+", " ", content)
+
+        assert "bounded context enrichment" in normalized_content, relative_path
+        assert (
+            "not claim that the surrounding domain envelope is ready"
+            in normalized_content
+        )
+        assert 'status: "resolved"' in content, relative_path
+        assert 'status: "unresolved"' in content, relative_path
+        assert "result`, `validation_result`" in content, relative_path
+        assert "Do not continue beyond the bounded investigation" in normalized_content
+
+        for field_name in required_shared_fields:
+            assert field_name in content, f"{relative_path} missing {field_name}"
+        for fragment in forbidden_runtime_fragments:
+            assert fragment not in content, f"{relative_path} contains {fragment}"
 
 
 def test_extractor_agents_use_repair_capable_output_schemas():
