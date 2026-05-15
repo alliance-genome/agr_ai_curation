@@ -22,10 +22,12 @@ from agr_ai_curation_runtime.agr_lookup import (
     LOOKUP_STATUS_NOT_FOUND,
     LOOKUP_STATUS_SUCCESS,
     LOOKUP_STATUS_TRANSIENT,
+    LOOKUP_STATUS_UNDER_DEVELOPMENT,
     attempt_query as _attempt_query,
     bulk_item_status_from_lookup_status as _bulk_item_status_from_lookup_status,
     bulk_resolution_summary as _bulk_resolution_summary,
     candidate_from_result as _candidate_from_result,
+    create_db_session as _create_db_session,
     entity_detail_lookup_attempts as _entity_detail_lookup_attempts,
     fetch_allele_details_bulk as _fetch_allele_details_bulk,
     fetch_gene_details_bulk as _fetch_gene_details_bulk,
@@ -111,77 +113,6 @@ def _validate_curie_list(results: List[Dict[str, Any]], curie_field: str = "curi
         if not result.get("curie_validated", False):
             invalid_count += 1
     return results, invalid_count
-
-
-def _plain_result(result: Any) -> Dict[str, Any]:
-    """Return a plain dict for API-client result models or simple test doubles."""
-    if result is None:
-        raise ValueError("_plain_result received None")
-    if isinstance(result, dict):
-        return dict(result)
-    model_dump = getattr(result, "model_dump", None)
-    if callable(model_dump):
-        return model_dump(exclude_none=True)
-    dict_method = getattr(result, "dict", None)
-    if callable(dict_method):
-        raise TypeError(
-            "Cannot serialize result with dict() but no model_dump(); "
-            f"unsupported result type {type(result).__name__}"
-        )
-    if hasattr(result, "__dict__"):
-        return {
-            key: value
-            for key, value in vars(result).items()
-            if not key.startswith("_") and value is not None
-        }
-    raise TypeError(f"Cannot serialize result of type {type(result).__name__}")
-
-
-def _ontology_term_result(result: Any) -> Dict[str, Any]:
-    raw = _plain_result(result)
-    term = {
-        key: raw.get(key)
-        for key in (
-            "curie",
-            "name",
-            "namespace",
-            "definition",
-            "ontology_type",
-            "synonyms",
-        )
-        if raw.get(key) is not None
-    }
-    return _validate_curie_in_result(term) if term else term
-
-
-def _vocabulary_term_result(result: Any) -> Dict[str, Any]:
-    raw = _plain_result(result)
-    return {
-        key: raw.get(key)
-        for key in (
-            "id",
-            "vocabulary",
-            "vocabulary_label",
-            "name",
-            "abbreviation",
-            "definition",
-            "obsolete",
-            "synonyms",
-        )
-        if raw.get(key) is not None
-    }
-
-
-def _entity_mapping_result(result: Dict[str, Any]) -> Dict[str, Any]:
-    row = dict(result)
-    if row.get("entity_curie") is not None:
-        row.setdefault("curie", row["entity_curie"])
-    if row.get("entity") is not None:
-        row.setdefault("symbol", row["entity"])
-        row.setdefault("name", row["entity"])
-    if row.get("curie") is not None:
-        _validate_curie_in_result(row)
-    return row
 
 
 def _lookup_response(
@@ -463,18 +394,10 @@ def agr_curation_query(
     data_provider: Optional[str] = None,
     taxon_id: Optional[str] = None,
     term: Optional[str] = None,
-    terms: Optional[List[str]] = None,
-    vocabulary: Optional[str] = None,
-    entity_type: Optional[str] = None,
-    entity_names: Optional[List[str]] = None,
-    entity_curies: Optional[List[str]] = None,
-    category: Optional[str] = None,
-    curies: Optional[List[str]] = None,
     ontology_term_type: Optional[str] = None,
     go_aspect: Optional[str] = None,
     exact_match: bool = False,
     include_synonyms: bool = True,
-    include_obsolete: bool = False,
     limit: Optional[int] = None,
     force: bool = False,
     force_reason: Optional[str] = None,
@@ -505,18 +428,10 @@ def agr_curation_query(
         data_provider: Filter by species (MGI, FB, WB, ZFIN, RGD, SGD, HGNC)
         taxon_id: Alternative to data_provider (NCBITaxon:XXXXX format)
         term: Search term for ontology searches
-        terms: CURIE list for bulk ontology term helper paths
-        vocabulary: Controlled vocabulary name or label for vocabulary term helpers
-        entity_type: Entity helper type (gene, allele, agm, construct, targeting reagent)
-        entity_names: Entity names/symbols to map to CURIEs
-        entity_curies: Entity CURIEs to map to basic info
-        category: CURIE-to-name helper category
-        curies: CURIE list for generic CURIE-to-name helper paths
         ontology_term_type: Optional curation DB ontologytermtype filter for get_ontology_term_by_curie
         go_aspect: GO aspect filter (molecular_function, biological_process, cellular_component)
         exact_match: Require exact match for ontology searches
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
-        include_obsolete: Include obsolete controlled vocabulary terms (default: False)
         limit: Maximum results to return
         force: Skip symbol validation (default: False). Requires force_reason.
         force_reason: Explanation for why validation is being skipped (required if force=True)
@@ -533,49 +448,12 @@ def agr_curation_query(
             return _attempt_query(method, gene_id=gene_id)
         if method == "get_allele_by_id":
             return _attempt_query(method, allele_id=allele_id)
-        if method in {"get_ontology_term", "get_ontology_term_by_curie"}:
+        if method == "get_ontology_term_by_curie":
             return _attempt_query(
                 method,
                 term=term,
                 ontology_term_type=ontology_term_type,
             )
-        if method == "get_ontology_terms":
-            return _attempt_query(method, terms=terms or curies)
-        if method == "search_ontology_terms":
-            return _attempt_query(
-                method,
-                term=term,
-                ontology_term_type=ontology_term_type,
-                exact_match=exact_match,
-                include_synonyms=include_synonyms,
-                limit=limit_value,
-            )
-        if method in {"get_vocabulary_term", "search_vocabulary_terms"}:
-            return _attempt_query(
-                method,
-                term=term,
-                vocabulary=vocabulary,
-                exact_match=exact_match if method == "search_vocabulary_terms" else None,
-                include_synonyms=include_synonyms if method == "search_vocabulary_terms" else None,
-                include_obsolete=include_obsolete,
-                limit=limit_value if method == "search_vocabulary_terms" else None,
-            )
-        if method == "map_entity_names_to_curies":
-            return _attempt_query(
-                method,
-                entity_type=entity_type,
-                entity_names=entity_names,
-                taxon_id=taxon_id,
-                data_provider=data_provider,
-            )
-        if method == "map_entity_curies_to_info":
-            return _attempt_query(
-                method,
-                entity_type=entity_type,
-                entity_curies=entity_curies or curies,
-            )
-        if method == "map_curies_to_names":
-            return _attempt_query(method, category=category, curies=curies)
         if method in {"search_anatomy_terms", "search_life_stage_terms"}:
             return _attempt_query(
                 method,
@@ -2095,10 +1973,10 @@ def agr_curation_query(
             )
 
         # GET ONTOLOGY TERM BY CURIE
-        elif method in {"get_ontology_term", "get_ontology_term_by_curie"}:
+        elif method == "get_ontology_term_by_curie":
             if not term:
                 return _err(
-                    f"{method} requires term",
+                    "get_ontology_term_by_curie requires term",
                     method=method,
                     attempted_query=_attempt_query(
                         method,
@@ -2106,290 +1984,65 @@ def agr_curation_query(
                         ontology_term_type=ontology_term_type,
                     ),
                 )
-
-            result = db.get_ontology_term(term)
-            result_data = _ontology_term_result(result) if result else None
-            if result_data and ontology_term_type and result_data.get("ontology_type") != ontology_term_type:
-                result_data = None
-            validation_warnings = []
-            if result_data and not result_data.get("curie_validated", False):
-                validation_warnings.append("invalid_curie_prefixes:1")
-            return _lookup_response(
-                method=method,
-                data=result_data,
-                count=1 if result_data else 0,
-                warnings=validation_warnings,
-                message=None if result_data else f"Ontology term not found: {term}",
-                attempted_query=_attempt_query(
-                    method,
-                    term=term,
-                    ontology_term_type=ontology_term_type,
-                ),
-                exact_lookup=True,
-            )
-
-        # GET ONTOLOGY TERMS
-        elif method == "get_ontology_terms":
-            requested_terms = terms or curies or []
-            if not requested_terms:
+            session = _create_db_session(db)
+            if session is None:
                 return _err(
-                    "get_ontology_terms requires terms",
-                    method=method,
-                    attempted_query=_attempt_query(method, terms=requested_terms),
-                )
-
-            result_map = db.get_ontology_terms(requested_terms)
-            results_data = [
-                _ontology_term_result(result)
-                for requested in requested_terms
-                if (result := result_map.get(requested)) is not None
-            ]
-            results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
-            return _lookup_response(
-                method=method,
-                data=results_data,
-                count=len(results_data),
-                warnings=validation_warnings,
-                attempted_query=_attempt_query(method, terms=requested_terms),
-            )
-
-        # SEARCH ONTOLOGY TERMS
-        elif method == "search_ontology_terms":
-            if not term or not ontology_term_type:
-                return _err(
-                    "search_ontology_terms requires term and ontology_term_type",
+                    "get_ontology_term_by_curie requires a curation DB client with SQL session support.",
                     method=method,
                     attempted_query=_attempt_query(
                         method,
                         term=term,
                         ontology_term_type=ontology_term_type,
                     ),
+                    failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
                 )
 
-            results = db.search_ontology_terms(
-                term=term,
-                ontology_type=ontology_term_type,
-                exact_match=exact_match,
-                include_synonyms=include_synonyms,
-                limit=limit_value,
-            )
+            from sqlalchemy import text
+
+            try:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT curie, name, ontologytermtype
+                        FROM ontologyterm
+                        WHERE curie = :curie
+                          AND (:ontologytermtype IS NULL OR ontologytermtype = :ontologytermtype)
+                        ORDER BY curie
+                        """
+                    ),
+                    {
+                        "curie": term,
+                        "ontologytermtype": ontology_term_type,
+                    },
+                ).fetchall()
+            finally:
+                session.close()
+
             results_data = [
-                _ontology_term_result(result)
-                for result in results
+                {
+                    "curie": row[0],
+                    "name": row[1],
+                    "ontology_type": row[2],
+                }
+                for row in rows
             ]
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            if invalid_curie_count > 0:
-                warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
+            validation_warnings = (
+                [f"invalid_curie_prefixes:{invalid_curie_count}"]
+                if invalid_curie_count > 0
+                else []
+            )
             return _lookup_response(
                 method=method,
                 data=results_data,
                 count=len(results_data),
-                warnings=warnings,
+                warnings=validation_warnings,
                 attempted_query=_attempt_query(
                     method,
                     term=term,
                     ontology_term_type=ontology_term_type,
-                    exact_match=exact_match,
-                    include_synonyms=include_synonyms,
-                    limit=limit_value,
-                ),
-            )
-
-        # GET VOCABULARY TERM
-        elif method == "get_vocabulary_term":
-            if not term or not vocabulary:
-                return _err(
-                    "get_vocabulary_term requires term and vocabulary",
-                    method=method,
-                    attempted_query=_attempt_query(
-                        method,
-                        term=term,
-                        vocabulary=vocabulary,
-                        include_obsolete=include_obsolete,
-                    ),
-                )
-
-            result = db.get_vocabulary_term(
-                vocabulary=vocabulary,
-                term=term,
-                include_obsolete=include_obsolete,
-            )
-            result_data = _vocabulary_term_result(result) if result else None
-            return _lookup_response(
-                method=method,
-                data=result_data,
-                count=1 if result_data else 0,
-                message=None if result_data else f"Vocabulary term not found: {vocabulary}/{term}",
-                attempted_query=_attempt_query(
-                    method,
-                    term=term,
-                    vocabulary=vocabulary,
-                    include_obsolete=include_obsolete,
                 ),
                 exact_lookup=True,
-            )
-
-        # SEARCH VOCABULARY TERMS
-        elif method == "search_vocabulary_terms":
-            if not term and not vocabulary:
-                return _err(
-                    "search_vocabulary_terms requires term or vocabulary",
-                    method=method,
-                    attempted_query=_attempt_query(
-                        method,
-                        term=term,
-                        vocabulary=vocabulary,
-                    ),
-                )
-
-            results = db.search_vocabulary_terms(
-                term=term,
-                vocabulary=vocabulary,
-                exact_match=exact_match,
-                include_synonyms=include_synonyms,
-                include_obsolete=include_obsolete,
-                limit=limit_value,
-            )
-            results_data = [_vocabulary_term_result(result) for result in results]
-            return _lookup_response(
-                method=method,
-                data=results_data,
-                count=len(results_data),
-                warnings=warnings,
-                attempted_query=_attempt_query(
-                    method,
-                    term=term,
-                    vocabulary=vocabulary,
-                    exact_match=exact_match,
-                    include_synonyms=include_synonyms,
-                    include_obsolete=include_obsolete,
-                    limit=limit_value,
-                ),
-            )
-
-        # MAP ENTITY NAMES TO CURIES
-        elif method == "map_entity_names_to_curies":
-            if not entity_type or not entity_names:
-                return _err(
-                    "map_entity_names_to_curies requires entity_type and entity_names",
-                    method=method,
-                    attempted_query=_attempt_query(
-                        method,
-                        entity_type=entity_type,
-                        entity_names=entity_names,
-                        taxon_id=taxon_id,
-                        data_provider=data_provider,
-                    ),
-                )
-            resolved_taxon = taxon_id
-            if not resolved_taxon and data_provider:
-                resolved_taxon = PROVIDER_TO_TAXON.get(data_provider)
-                if not resolved_taxon:
-                    return _err(
-                        f"Unknown data_provider: {data_provider}",
-                        method=method,
-                        attempted_query=_attempt_query(
-                            method,
-                            entity_type=entity_type,
-                            entity_names=entity_names,
-                            data_provider=data_provider,
-                        ),
-                    )
-            if not resolved_taxon:
-                return _err(
-                    "map_entity_names_to_curies requires taxon_id or data_provider",
-                    method=method,
-                    attempted_query=_attempt_query(
-                        method,
-                        entity_type=entity_type,
-                        entity_names=entity_names,
-                        taxon_id=taxon_id,
-                        data_provider=data_provider,
-                    ),
-                )
-
-            results = db.map_entity_names_to_curies(
-                entity_type,
-                entity_names,
-                resolved_taxon,
-            )
-            results_data = [_entity_mapping_result(result) for result in results]
-            results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
-            return _lookup_response(
-                method=method,
-                data=results_data,
-                count=len(results_data),
-                warnings=validation_warnings,
-                attempted_query=_attempt_query(
-                    method,
-                    entity_type=entity_type,
-                    entity_names=entity_names,
-                    taxon_id=resolved_taxon,
-                    data_provider=data_provider,
-                ),
-            )
-
-        # MAP ENTITY CURIES TO INFO
-        elif method == "map_entity_curies_to_info":
-            requested_curies = entity_curies or curies or []
-            if not entity_type or not requested_curies:
-                return _err(
-                    "map_entity_curies_to_info requires entity_type and entity_curies",
-                    method=method,
-                    attempted_query=_attempt_query(
-                        method,
-                        entity_type=entity_type,
-                        entity_curies=requested_curies,
-                    ),
-                )
-
-            results = db.map_entity_curies_to_info(
-                entity_type=entity_type,
-                entity_curies=requested_curies,
-            )
-            results_data = [_entity_mapping_result(result) for result in results]
-            results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
-            return _lookup_response(
-                method=method,
-                data=results_data,
-                count=len(results_data),
-                warnings=validation_warnings,
-                attempted_query=_attempt_query(
-                    method,
-                    entity_type=entity_type,
-                    entity_curies=requested_curies,
-                ),
-            )
-
-        # MAP CURIES TO NAMES
-        elif method == "map_curies_to_names":
-            if not category or not curies:
-                return _err(
-                    "map_curies_to_names requires category and curies",
-                    method=method,
-                    attempted_query=_attempt_query(method, category=category, curies=curies),
-                )
-
-            result_map = db.map_curies_to_names(category=category, curies=curies)
-            results_data = [
-                {"curie": curie, "name": name}
-                for curie, name in result_map.items()
-            ]
-            results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
-            return _lookup_response(
-                method=method,
-                data=results_data,
-                count=len(results_data),
-                warnings=validation_warnings,
-                attempted_query=_attempt_query(
-                    method,
-                    category=category,
-                    curies=curies,
-                ),
             )
 
         # ANATOMY TERMS SEARCH
@@ -2511,12 +2164,8 @@ def agr_curation_query(
                 "search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id, "
                 "search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id, "
                 "get_species, get_data_providers, "
-                "get_ontology_term, get_ontology_terms, search_ontology_terms, "
                 "get_ontology_term_by_curie, search_anatomy_terms, "
-                "search_life_stage_terms, search_go_terms, "
-                "get_vocabulary_term, search_vocabulary_terms, "
-                "map_entity_names_to_curies, map_entity_curies_to_info, "
-                "map_curies_to_names".format(method=method),
+                "search_life_stage_terms, search_go_terms".format(method=method),
                 method=method,
                 attempted_query=_attempt_query(method),
             )

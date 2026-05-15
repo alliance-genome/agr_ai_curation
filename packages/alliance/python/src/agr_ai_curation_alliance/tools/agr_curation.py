@@ -152,24 +152,6 @@ def _ontology_term_result(result: Any) -> Dict[str, Any]:
     return _validate_curie_in_result(term) if term else term
 
 
-def _vocabulary_term_result(result: Any) -> Dict[str, Any]:
-    raw = _plain_result(result)
-    return {
-        key: raw.get(key)
-        for key in (
-            "id",
-            "vocabulary",
-            "vocabulary_label",
-            "name",
-            "abbreviation",
-            "definition",
-            "obsolete",
-            "synonyms",
-        )
-        if raw.get(key) is not None
-    }
-
-
 def _entity_mapping_result(result: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(result)
     if row.get("entity_curie") is not None:
@@ -462,7 +444,6 @@ def agr_curation_query(
     taxon_id: Optional[str] = None,
     term: Optional[str] = None,
     terms: Optional[List[str]] = None,
-    vocabulary: Optional[str] = None,
     entity_type: Optional[str] = None,
     entity_names: Optional[List[str]] = None,
     entity_curies: Optional[List[str]] = None,
@@ -472,7 +453,6 @@ def agr_curation_query(
     go_aspect: Optional[str] = None,
     exact_match: bool = False,
     include_synonyms: bool = True,
-    include_obsolete: bool = False,
     limit: Optional[int] = None,
     force: bool = False,
     force_reason: Optional[str] = None,
@@ -504,7 +484,6 @@ def agr_curation_query(
         taxon_id: Alternative to data_provider (NCBITaxon:XXXXX format)
         term: Search term for ontology searches
         terms: CURIE list for bulk ontology term helper paths
-        vocabulary: Controlled vocabulary name or label for vocabulary term helpers
         entity_type: Entity helper type (gene, allele, agm, construct, targeting reagent)
         entity_names: Entity names/symbols to map to CURIEs
         entity_curies: Entity CURIEs to map to basic info
@@ -514,7 +493,6 @@ def agr_curation_query(
         go_aspect: GO aspect filter (molecular_function, biological_process, cellular_component)
         exact_match: Require exact match for ontology searches
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
-        include_obsolete: Include obsolete controlled vocabulary terms (default: False)
         limit: Maximum results to return
         force: Skip symbol validation (default: False). Requires force_reason.
         force_reason: Explanation for why validation is being skipped (required if force=True)
@@ -547,16 +525,6 @@ def agr_curation_query(
                 exact_match=exact_match,
                 include_synonyms=include_synonyms,
                 limit=limit_value,
-            )
-        if method in {"get_vocabulary_term", "search_vocabulary_terms"}:
-            return _attempt_query(
-                method,
-                term=term,
-                vocabulary=vocabulary,
-                exact_match=exact_match if method == "search_vocabulary_terms" else None,
-                include_synonyms=include_synonyms if method == "search_vocabulary_terms" else None,
-                include_obsolete=include_obsolete,
-                limit=limit_value if method == "search_vocabulary_terms" else None,
             )
         if method == "map_entity_names_to_curies":
             return _attempt_query(
@@ -2194,78 +2162,6 @@ def agr_curation_query(
                 ),
             )
 
-        # GET VOCABULARY TERM
-        elif method == "get_vocabulary_term":
-            if not term or not vocabulary:
-                return _err(
-                    "get_vocabulary_term requires term and vocabulary",
-                    method=method,
-                    attempted_query=_attempt_query(
-                        method,
-                        term=term,
-                        vocabulary=vocabulary,
-                        include_obsolete=include_obsolete,
-                    ),
-                )
-
-            result = db.get_vocabulary_term(
-                vocabulary=vocabulary,
-                term=term,
-                include_obsolete=include_obsolete,
-            )
-            result_data = _vocabulary_term_result(result) if result else None
-            return _lookup_response(
-                method=method,
-                data=result_data,
-                count=1 if result_data else 0,
-                message=None if result_data else f"Vocabulary term not found: {vocabulary}/{term}",
-                attempted_query=_attempt_query(
-                    method,
-                    term=term,
-                    vocabulary=vocabulary,
-                    include_obsolete=include_obsolete,
-                ),
-                exact_lookup=True,
-            )
-
-        # SEARCH VOCABULARY TERMS
-        elif method == "search_vocabulary_terms":
-            if not term and not vocabulary:
-                return _err(
-                    "search_vocabulary_terms requires term or vocabulary",
-                    method=method,
-                    attempted_query=_attempt_query(
-                        method,
-                        term=term,
-                        vocabulary=vocabulary,
-                    ),
-                )
-
-            results = db.search_vocabulary_terms(
-                term=term,
-                vocabulary=vocabulary,
-                exact_match=exact_match,
-                include_synonyms=include_synonyms,
-                include_obsolete=include_obsolete,
-                limit=limit_value,
-            )
-            results_data = [_vocabulary_term_result(result) for result in results]
-            return _lookup_response(
-                method=method,
-                data=results_data,
-                count=len(results_data),
-                warnings=warnings,
-                attempted_query=_attempt_query(
-                    method,
-                    term=term,
-                    vocabulary=vocabulary,
-                    exact_match=exact_match,
-                    include_synonyms=include_synonyms,
-                    include_obsolete=include_obsolete,
-                    limit=limit_value,
-                ),
-            )
-
         # MAP ENTITY NAMES TO CURIES
         elif method == "map_entity_names_to_curies":
             if not entity_type or not entity_names:
@@ -2512,7 +2408,6 @@ def agr_curation_query(
                 "get_ontology_term, get_ontology_terms, search_ontology_terms, "
                 "get_ontology_term_by_curie, search_anatomy_terms, "
                 "search_life_stage_terms, search_go_terms, "
-                "get_vocabulary_term, search_vocabulary_terms, "
                 "map_entity_names_to_curies, map_entity_curies_to_info, "
                 "map_curies_to_names".format(method=method),
                 method=method,

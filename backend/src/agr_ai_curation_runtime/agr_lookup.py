@@ -64,14 +64,6 @@ def method_projection_type(method: str) -> str:
         "search_go_terms",
     }:
         return "ontology_term_reference"
-    if "vocabulary" in method:
-        return "vocabulary_term_reference"
-    if method in {
-        "map_entity_names_to_curies",
-        "map_entity_curies_to_info",
-        "map_curies_to_names",
-    }:
-        return "entity_reference"
     if "species" in method:
         return "species_reference"
     if "data_provider" in method:
@@ -90,14 +82,6 @@ def method_entity_type(method: str) -> str | None:
         "search_go_terms",
     }:
         return "OntologyTerm"
-    if "vocabulary" in method:
-        return "VocabularyTerm"
-    if method in {
-        "map_entity_names_to_curies",
-        "map_entity_curies_to_info",
-        "map_curies_to_names",
-    }:
-        return "AllianceEntity"
     if "species" in method:
         return "Species"
     if "data_provider" in method:
@@ -120,15 +104,12 @@ def projection_from_result(
     # and provider rows use abbreviation/display_name.
     resolved_id = (
         result.get("curie")
-        or result.get("entity_curie")
         or result.get("primary_external_id")
         or result.get("abbreviation")
-        or result.get("id")
     )
     resolved_label = (
         result.get("symbol")
         or result.get("name")
-        or result.get("entity")
         or result.get("display_name")
         or result.get("abbreviation")
     )
@@ -149,16 +130,6 @@ def projection_from_result(
             "namespace",
             "abbreviation",
             "display_name",
-            "taxon_id",
-            "entity_curie",
-            "entity",
-            "is_obsolete",
-            "relevance",
-            "vocabulary",
-            "vocabulary_label",
-            "definition",
-            "obsolete",
-            "synonyms",
         )
         if result.get(key) is not None
     }
