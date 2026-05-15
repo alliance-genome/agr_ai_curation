@@ -16,9 +16,9 @@ Usage:
     # Get tools in Anthropic format for Claude API
     anthropic_tools = registry.get_anthropic_tools()
 
-    # Execute a tool by name
-    tool = registry.get_tool("agr_curation_query")
-    result = tool.handler(method="search_genes", gene_symbol="daf-16")
+    # Execute a package-registered diagnostic tool by name
+    tool = registry.get_tool("package_lookup_tool")
+    result = tool.handler(method="lookup", query="example")
 """
 
 from .registry import (

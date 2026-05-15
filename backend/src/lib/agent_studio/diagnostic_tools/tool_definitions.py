@@ -7,7 +7,7 @@ giving Opus the same capabilities for trace troubleshooting.
 
 Tool Categories:
 - database: SQL query tools (curation_db_sql)
-- api: REST API tools (agr_curation_query, chebi_api_call, quickgo_api_call, go_api_call)
+- api: REST API and package-registered lookup tools
 - prompt: Prompt inspection tools (get_prompt)
 - codebase: Read-only runtime repository inspection tools
 """
@@ -110,53 +110,87 @@ def _unwrap_function_tool(tool: FunctionTool) -> Callable:
     )
 
 
-def _create_agr_curation_handler():
-    """
-    Create handler for AGR Curation Database queries.
+def _callable_handler_from_tool(tool: Any) -> Callable[..., Dict[str, Any]]:
+    """Create a diagnostic handler from a package-bound callable tool."""
+    base_callable = _unwrap_function_tool(tool) if isinstance(tool, FunctionTool) else tool
 
-    This wraps the existing agr_curation_query tool from OpenAI Agents.
-    """
-    from src.lib.openai_agents.tools.agr_curation import agr_curation_query as agr_tool
-
-    # Extract the underlying function from the FunctionTool wrapper
-    agr_curation_query = _unwrap_function_tool(agr_tool)
-
-    def handler(
-        method: str,
-        gene_symbol: Optional[str] = None,
-        gene_id: Optional[str] = None,
-        allele_symbol: Optional[str] = None,
-        allele_id: Optional[str] = None,
-        data_provider: Optional[str] = None,
-        taxon_id: Optional[str] = None,
-        term: Optional[str] = None,
-        go_aspect: Optional[str] = None,
-        exact_match: bool = False,
-        include_synonyms: bool = True,
-        limit: Optional[int] = None,
-        force: bool = False,
-        force_reason: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """Execute AGR curation query and return result as dict."""
-        result = agr_curation_query(
-            method=method,
-            gene_symbol=gene_symbol,
-            gene_id=gene_id,
-            allele_symbol=allele_symbol,
-            allele_id=allele_id,
-            data_provider=data_provider,
-            taxon_id=taxon_id,
-            term=term,
-            go_aspect=go_aspect,
-            exact_match=exact_match,
-            include_synonyms=include_synonyms,
-            limit=limit,
-            force=force,
-            force_reason=force_reason
+    def handler(**kwargs: Any) -> Dict[str, Any]:
+        result = base_callable(**kwargs)
+        if hasattr(result, "model_dump"):
+            return result.model_dump()
+        if hasattr(result, "dict"):
+            return result.dict()
+        if isinstance(result, dict):
+            return result
+        raise TypeError(
+            f"Package diagnostic tool '{getattr(tool, 'name', tool)}' returned "
+            f"unsupported result type {type(result).__name__}; expected dict or Pydantic model."
         )
-        return result.model_dump()
 
     return handler
+
+
+def _register_package_diagnostic_tools(registry: DiagnosticToolRegistry) -> None:
+    """Register package-owned tools that opt into Agent Studio diagnostics."""
+    from src.lib.agent_studio.catalog_service import (
+        _instantiate_package_tool,
+        _load_package_tool_registry,
+        get_tool_registry,
+    )
+
+    tool_catalog = get_tool_registry()
+    package_registry = _load_package_tool_registry()
+    for binding in package_registry.bindings:
+        tool_info = tool_catalog.get(binding.tool_id, {})
+        agent_studio_metadata = tool_info.get("agent_studio")
+        if not isinstance(agent_studio_metadata, dict):
+            continue
+        diagnostic = agent_studio_metadata.get("diagnostic")
+        if not isinstance(diagnostic, dict) or not bool(diagnostic.get("enabled")):
+            continue
+        if binding.required_context:
+            logger.debug("Skipping context-bound package diagnostic tool %s", binding.tool_id)
+            continue
+
+        tool = _instantiate_package_tool(binding)
+        input_schema = diagnostic.get("input_schema")
+        if not isinstance(input_schema, dict):
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' must declare "
+                "agent_studio.diagnostic.input_schema."
+            )
+        description = str(
+            diagnostic.get("description")
+            or agent_studio_metadata.get("prompt_description")
+            or ""
+        ).strip()
+        if not description:
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' must declare "
+                "agent_studio.prompt_description or agent_studio.diagnostic.description."
+            )
+        category = str(diagnostic.get("category") or "").strip()
+        if not category:
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' must declare "
+                "agent_studio.diagnostic.category."
+            )
+        raw_tags = diagnostic.get("tags")
+        if not isinstance(raw_tags, list):
+            raise ValueError(
+                f"Package diagnostic tool '{binding.tool_id}' must declare "
+                "agent_studio.diagnostic.tags as a list."
+            )
+
+        registry.register(
+            name=binding.tool_id,
+            description=description,
+            input_schema=input_schema,
+            handler=_callable_handler_from_tool(tool),
+            category=category,
+            tags=list(raw_tags),
+        )
+        logger.debug("Registered package diagnostic tool: %s", binding.tool_id)
 
 
 def _create_sql_query_handler(database_url: str, tool_name: str):
@@ -323,75 +357,10 @@ def register_all_tools(registry: DiagnosticToolRegistry) -> None:
     """
     logger.info("Registering diagnostic tools...")
 
-    # -------------------------------------------------------------------------
-    # 1. AGR Curation Query Tool
-    # -------------------------------------------------------------------------
-    registry.register(
-        name="agr_curation_query",
-        description="""Query the Alliance Genome Resources Curation Database.
-
-Available methods:
-- search_genes: Search genes by symbol (LIKE search, partial matches)
-- search_genes_bulk: Bulk search genes by symbol list (single call)
-- get_gene_by_exact_symbol: Get gene by exact symbol match
-- get_gene_by_id: Get gene by CURIE (e.g., WB:WBGene00006963)
-- search_alleles: Search alleles by symbol (LIKE search)
-- search_alleles_bulk: Bulk search alleles by symbol list (single call)
-- get_allele_by_exact_symbol: Get allele by exact symbol
-- get_allele_by_id: Get allele by CURIE
-- get_data_providers: List data providers (MGI, FB, WB, etc.)
-- search_anatomy_terms: Search anatomy ontology terms
-- search_life_stage_terms: Search life stage ontology terms
-- search_go_terms: Search GO terms
-
-Use data_provider to filter by species: MGI (mouse), FB (fly), WB (worm), ZFIN (zebrafish), RGD (rat), SGD (yeast), HGNC (human).""",
-        input_schema={
-            "type": "object",
-            "properties": {
-                "method": {
-                    "type": "string",
-                    "description": "Query method to execute",
-                    "enum": [
-                        "search_genes", "search_genes_bulk", "get_gene_by_exact_symbol", "get_gene_by_id",
-                        "search_alleles", "search_alleles_bulk", "get_allele_by_exact_symbol", "get_allele_by_id",
-                        "get_data_providers",
-                        "search_anatomy_terms", "search_life_stage_terms", "search_go_terms"
-                    ]
-                },
-                "gene_symbol": {"type": "string", "description": "Gene symbol to search"},
-                "gene_symbols": {"type": "array", "items": {"type": "string"}, "description": "Gene symbols for bulk search"},
-                "gene_id": {"type": "string", "description": "Gene CURIE for direct lookup"},
-                "allele_symbol": {"type": "string", "description": "Allele symbol to search"},
-                "allele_symbols": {"type": "array", "items": {"type": "string"}, "description": "Allele symbols for bulk search"},
-                "allele_id": {"type": "string", "description": "Allele CURIE for direct lookup"},
-                "data_provider": {
-                    "type": "string",
-                    "description": "Filter by species (MGI, FB, WB, ZFIN, RGD, SGD, HGNC)",
-                    "enum": ["MGI", "FB", "WB", "ZFIN", "RGD", "SGD", "HGNC"]
-                },
-                "taxon_id": {"type": "string", "description": "NCBITaxon ID (alternative to data_provider)"},
-                "term": {"type": "string", "description": "Search term for ontology searches"},
-                "go_aspect": {
-                    "type": "string",
-                    "description": "GO aspect filter",
-                    "enum": ["molecular_function", "biological_process", "cellular_component"]
-                },
-                "exact_match": {"type": "boolean", "description": "Require exact match (default: false)"},
-                "include_synonyms": {"type": "boolean", "description": "Search synonyms (default: true)"},
-                "limit": {"type": "integer", "description": "Max results (default: 100, max: 500)"},
-                "force": {"type": "boolean", "description": "Skip symbol validation (default: false)"},
-                "force_reason": {"type": "string", "description": "Reason for skipping validation (required if force=true)"}
-            },
-            "required": ["method"]
-        },
-        handler=_create_agr_curation_handler(),
-        category="api",
-        tags=["gene", "allele", "ontology", "alliance"]
-    )
-    logger.debug("Registered: agr_curation_query")
+    _register_package_diagnostic_tools(registry)
 
     # -------------------------------------------------------------------------
-    # 2. Curation Database SQL Tool
+    # 1. Curation Database SQL Tool
     # -------------------------------------------------------------------------
     from src.lib.database.curation_resolver import get_curation_resolver
     curation_db_url = get_curation_resolver().get_connection_url()

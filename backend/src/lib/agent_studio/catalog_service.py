@@ -157,244 +157,6 @@ AGENT_REGISTRY = build_agent_registry()
 # Tool metadata registry - provides detailed documentation about each tool
 # available to agents, including parameters, methods, and usage examples.
 CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
-    # AGR Curation Database Query Tool (multi-method tool)
-    "agr_curation_query": {
-        "name": "AGR Curation Query",
-        "description": "Query the Alliance Genome Resources Curation Database for genes, alleles, and ontology terms.",
-        "category": "Database",
-        "source_file": "backend/src/lib/openai_agents/tools/agr_curation.py",
-        "documentation": {
-            "summary": "A unified tool for querying the Alliance Curation Database. Different agents use different methods of this tool based on their specialization.",
-            "parameters": [
-                {
-                    "name": "method",
-                    "type": "string",
-                    "required": True,
-                    "description": "The query method to execute. Determines what type of data to retrieve.",
-                },
-                {
-                    "name": "gene_symbol",
-                    "type": "string",
-                    "required": False,
-                    "description": "Gene symbol to search for (e.g., 'daf-2', 'Brca1').",
-                },
-                {
-                    "name": "gene_symbols",
-                    "type": "array[string]",
-                    "required": False,
-                    "description": "List of gene symbols for bulk lookup (e.g., ['crb', 'ninaE', 'Rh1']).",
-                },
-                {
-                    "name": "gene_id",
-                    "type": "string",
-                    "required": False,
-                    "description": "Gene CURIE for direct lookup (e.g., 'WB:WBGene00000898').",
-                },
-                {
-                    "name": "allele_symbol",
-                    "type": "string",
-                    "required": False,
-                    "description": "Allele symbol to search for (e.g., 'e1370', 'tm1Gldn').",
-                },
-                {
-                    "name": "allele_symbols",
-                    "type": "array[string]",
-                    "required": False,
-                    "description": "List of allele symbols for bulk lookup.",
-                },
-                {
-                    "name": "allele_id",
-                    "type": "string",
-                    "required": False,
-                    "description": "Allele CURIE for direct lookup (e.g., 'WB:WBVar00143949').",
-                },
-                {
-                    "name": "data_provider",
-                    "type": "string",
-                    "required": False,
-                    "description": "Filter by group/provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC.",
-                },
-                {
-                    "name": "limit",
-                    "type": "integer",
-                    "required": False,
-                    "description": "Maximum results to return (default: 100, max: 500).",
-                },
-            ],
-        },
-        "methods": {
-            "search_genes": {
-                "name": "Search Genes",
-                "description": "Search for genes by symbol using LIKE matching (supports partial matches).",
-                "required_params": ["gene_symbol"],
-                "optional_params": ["data_provider", "limit", "include_synonyms"],
-                "example": {
-                    "method": "search_genes",
-                    "gene_symbol": "daf",
-                    "data_provider": "WB",
-                    "limit": 10,
-                },
-            },
-            "search_genes_bulk": {
-                "name": "Search Genes (Bulk)",
-                "description": "Bulk gene symbol search in one tool call (list-in/list-out).",
-                "required_params": ["gene_symbols"],
-                "optional_params": ["data_provider", "limit", "include_synonyms"],
-                "example": {
-                    "method": "search_genes_bulk",
-                    "gene_symbols": ["crb", "ninaE", "Rh1"],
-                    "data_provider": "FB",
-                    "limit": 10,
-                },
-            },
-            "get_gene_by_exact_symbol": {
-                "name": "Get Gene by Exact Symbol",
-                "description": "Find a gene by its exact official symbol (SQL IN clause - requires exact match).",
-                "required_params": ["gene_symbol"],
-                "optional_params": ["data_provider"],
-                "example": {
-                    "method": "get_gene_by_exact_symbol",
-                    "gene_symbol": "daf-2",
-                    "data_provider": "WB",
-                },
-            },
-            "get_gene_by_id": {
-                "name": "Get Gene by ID",
-                "description": "Retrieve detailed gene information by CURIE.",
-                "required_params": ["gene_id"],
-                "optional_params": [],
-                "example": {
-                    "method": "get_gene_by_id",
-                    "gene_id": "WB:WBGene00000898",
-                },
-            },
-            "search_alleles": {
-                "name": "Search Alleles",
-                "description": "Search for alleles by symbol using LIKE matching (supports partial matches).",
-                "required_params": ["allele_symbol"],
-                "optional_params": ["data_provider", "limit", "include_synonyms"],
-                "example": {
-                    "method": "search_alleles",
-                    "allele_symbol": "tm1",
-                    "data_provider": "WB",
-                    "limit": 10,
-                },
-            },
-            "search_alleles_bulk": {
-                "name": "Search Alleles (Bulk)",
-                "description": "Bulk allele symbol search in one tool call (list-in/list-out).",
-                "required_params": ["allele_symbols"],
-                "optional_params": ["data_provider", "limit", "include_synonyms"],
-                "example": {
-                    "method": "search_alleles_bulk",
-                    "allele_symbols": ["tm1", "e1370", "n765"],
-                    "data_provider": "WB",
-                    "limit": 10,
-                },
-            },
-            "get_allele_by_exact_symbol": {
-                "name": "Get Allele by Exact Symbol",
-                "description": "Find an allele by its exact official symbol. Handles paper notation (Gene<allele>) to database format (Gene<sup>allele</sup>) conversion.",
-                "required_params": ["allele_symbol"],
-                "optional_params": ["data_provider"],
-                "example": {
-                    "method": "get_allele_by_exact_symbol",
-                    "allele_symbol": "e1370",
-                    "data_provider": "WB",
-                },
-            },
-            "get_allele_by_id": {
-                "name": "Get Allele by ID",
-                "description": "Retrieve detailed allele information by CURIE.",
-                "required_params": ["allele_id"],
-                "optional_params": [],
-                "example": {
-                    "method": "get_allele_by_id",
-                    "allele_id": "WB:WBVar00143949",
-                },
-            },
-            "search_anatomy_terms": {
-                "name": "Search Anatomy Terms",
-                "description": "Search species-specific anatomy ontology terms.",
-                "required_params": ["term", "data_provider"],
-                "optional_params": ["exact_match", "include_synonyms", "limit"],
-                "example": {
-                    "method": "search_anatomy_terms",
-                    "term": "body wall muscle",
-                    "data_provider": "WB",
-                },
-            },
-            "search_life_stage_terms": {
-                "name": "Search Life Stage Terms",
-                "description": "Search species-specific developmental stage ontology terms.",
-                "required_params": ["term", "data_provider"],
-                "optional_params": ["exact_match", "include_synonyms", "limit"],
-                "example": {
-                    "method": "search_life_stage_terms",
-                    "term": "adult",
-                    "data_provider": "WB",
-                },
-            },
-            "search_go_terms": {
-                "name": "Search GO Terms",
-                "description": "Search Gene Ontology terms by name or keyword.",
-                "required_params": ["term"],
-                "optional_params": ["go_aspect", "exact_match", "include_synonyms", "limit"],
-                "example": {
-                    "method": "search_go_terms",
-                    "term": "kinase activity",
-                    "go_aspect": "molecular_function",
-                },
-            },
-            "get_species": {
-                "name": "Get Species",
-                "description": "List all supported species/organisms.",
-                "required_params": [],
-                "optional_params": [],
-                "example": {
-                    "method": "get_species",
-                },
-            },
-            "get_data_providers": {
-                "name": "Get Data Providers",
-                "description": "List all Alliance group data providers with their taxon mappings.",
-                "required_params": [],
-                "optional_params": [],
-                "example": {
-                    "method": "get_data_providers",
-                },
-            },
-        },
-        # Map agents to the methods they use
-        "agent_methods": {
-            "gene": {
-                "agent_name": "Gene Validation Agent",
-                "methods": ["search_genes", "search_genes_bulk", "get_gene_by_exact_symbol", "get_gene_by_id"],
-                "description": "The Gene Agent uses these methods to validate gene identifiers and retrieve gene information.",
-            },
-            "allele": {
-                "agent_name": "Allele Validation Agent",
-                "methods": ["search_alleles", "search_alleles_bulk", "get_allele_by_exact_symbol", "get_allele_by_id"],
-                "description": "The Allele Agent uses these methods to validate allele/variant identifiers.",
-            },
-            "gene_expression": {
-                "agent_name": "Gene Expression Extractor",
-                "methods": ["search_genes", "search_genes_bulk", "get_gene_by_exact_symbol"],
-                "description": "The Gene Expression agent validates gene names found during PDF extraction.",
-            },
-            "gene_ontology": {
-                "agent_name": "Gene Ontology Agent",
-                "methods": ["search_go_terms"],
-                "description": "The GO Agent searches for Gene Ontology terms.",
-            },
-            "ontology_mapping": {
-                "agent_name": "Ontology Mapping Agent",
-                "methods": ["search_anatomy_terms", "search_life_stage_terms", "search_go_terms"],
-                "description": "The Ontology Mapping agent maps free-text labels to ontology term IDs.",
-            },
-        },
-    },
-
     # Alliance Genome Orthology API Tool
     "alliance_api_call": {
         "name": "Alliance Orthology API",
@@ -885,22 +647,12 @@ CURATED_TOOL_REGISTRY: Dict[str, Dict[str, Any]] = {
 # This is merged with auto-introspected tool metadata in get_tool_registry().
 
 TOOL_OVERRIDES: Dict[str, Dict[str, Any]] = {
-    "agr_curation_query": {
-        "category": "Database",
-        "documentation": {
-            "example_queries": [
-                "Find gene daf-2 in WormBase",
-                "Get allele information for e1370",
-            ],
-        },
-    },
     "search_document": {
         "category": "Document",
     },
 }
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[4]
 _DEFAULT_CATALOG_CONTEXT = {
     "document_id": "tool-catalog-document-id",
     "user_id": "tool-catalog-user-id",
@@ -910,12 +662,9 @@ _DEFAULT_CATALOG_CONTEXT = {
 
 def _resolve_packages_dir() -> Path:
     """Use the runtime packages mount when present, otherwise the repo packages dir."""
-    from src.lib.packages.paths import get_runtime_packages_dir
+    from src.lib.packages.tool_registry import resolve_default_packages_dir
 
-    runtime_packages_dir = get_runtime_packages_dir()
-    if runtime_packages_dir.exists():
-        return runtime_packages_dir
-    return _REPO_ROOT / "packages"
+    return resolve_default_packages_dir()
 
 
 class _LazyDictProxy(dict):
@@ -1210,13 +959,20 @@ def _resolve_package_tool(tool_id: str, execution_context: "ToolExecutionContext
 
 def _tool_category_for_binding(binding: Any) -> str:
     """Infer a coarse tool category when curated metadata does not provide one."""
-    if binding.tool_id in {"agr_curation_query", "curation_db_sql"}:
+    metadata = getattr(binding, "metadata", {}) or {}
+    if isinstance(metadata, dict):
+        category = str(metadata.get("category") or "").strip()
+        if category:
+            return category
+    required_context = set(getattr(binding, "required_context", ()) or ())
+    tool_id = str(getattr(binding, "tool_id", "") or "")
+    if "database_url" in required_context or tool_id.endswith("_sql"):
         return "Database"
-    if binding.tool_id in {"search_document", "read_section", "read_subsection", "record_evidence"}:
+    if {"document_id", "user_id"} <= required_context:
         return "Document"
-    if binding.tool_id.startswith("save_"):
+    if tool_id.startswith("save_"):
         return "Output"
-    if binding.tool_id.endswith("_api_call"):
+    if tool_id.endswith("_api_call"):
         return "API"
     return "Tool"
 
@@ -1263,57 +1019,36 @@ def _build_tool_registry() -> Dict[str, Dict[str, Any]]:
 
     registry: Dict[str, Dict[str, Any]] = {}
     for binding in _load_package_tool_registry().bindings:
-        try:
-            tool = _instantiate_package_tool(binding)
-            metadata = introspect_tool(tool)
-            parameters = [
-                {"name": name, **param_info}
-                for name, param_info in metadata.parameters.items()
-            ]
-            registry[binding.tool_id] = {
-                "name": metadata.name or binding.tool_id,
-                "description": binding.description or metadata.description,
-                "category": _tool_category_for_binding(binding),
-                "source_file": binding.source.source_file or metadata.source_file,
-                "documentation": {
-                    "summary": binding.description or metadata.description,
-                    "parameters": parameters,
-                },
-                "methods": None,
-                "agent_methods": None,
-                "binding_kind": binding.binding_kind.value,
-                "required_context": list(binding.required_context),
-                "package_backed": True,
-                "package_id": binding.source.package_id,
-                "package_version": binding.source.package_version,
-                "package_display_name": binding.source.package_display_name,
-                "package_export_name": binding.source.export_name,
-            }
-        except Exception as exc:
-            logger.warning(
-                "Failed to build package-backed tool catalog entry for %s: %s",
-                binding.tool_id,
-                exc,
+        tool = _instantiate_package_tool(binding)
+        metadata = introspect_tool(tool)
+        parameters = [
+            {"name": name, **param_info}
+            for name, param_info in metadata.parameters.items()
+        ]
+        registry[binding.tool_id] = {
+            "name": metadata.name or binding.tool_id,
+            "description": binding.description or metadata.description,
+            "category": _tool_category_for_binding(binding),
+            "source_file": binding.source.source_file or metadata.source_file,
+            "documentation": {
+                "summary": binding.description or metadata.description,
+                "parameters": parameters,
+            },
+            "methods": None,
+            "agent_methods": None,
+            "binding_kind": binding.binding_kind.value,
+            "required_context": list(binding.required_context),
+            "package_backed": True,
+            "package_id": binding.source.package_id,
+            "package_version": binding.source.package_version,
+            "package_display_name": binding.source.package_display_name,
+            "package_export_name": binding.source.export_name,
+        }
+        if binding.metadata:
+            registry[binding.tool_id] = _merge_tool_metadata(
+                registry[binding.tool_id],
+                dict(binding.metadata),
             )
-            registry[binding.tool_id] = {
-                "name": binding.tool_id,
-                "description": binding.description,
-                "category": _tool_category_for_binding(binding),
-                "source_file": binding.source.source_file,
-                "documentation": {
-                    "summary": binding.description,
-                    "parameters": [],
-                },
-                "methods": None,
-                "agent_methods": None,
-                "binding_kind": binding.binding_kind.value,
-                "required_context": list(binding.required_context),
-                "package_backed": True,
-                "package_id": binding.source.package_id,
-                "package_version": binding.source.package_version,
-                "package_display_name": binding.source.package_display_name,
-                "package_export_name": binding.source.export_name,
-            }
 
     for tool_id, metadata in CURATED_TOOL_REGISTRY.items():
         if tool_id in registry:
@@ -1335,7 +1070,7 @@ def _build_method_tool_entries() -> Dict[str, Dict[str, Any]]:
     Generate first-class tool entries for methods of multi-method tools.
 
     This creates entries like 'search_genes', 'get_allele_by_id' that reference
-    their parent tool (agr_curation_query) but present method-specific metadata.
+    their parent package tool but present method-specific metadata.
     Uses rich parameter descriptions from the parent tool where available.
     """
     entries = {}
@@ -1430,7 +1165,7 @@ def get_tool_registry() -> Dict[str, Dict[str, Any]]:
 # Method-Level Tool Entries
 # =============================================================================
 # These entries provide first-class access to individual methods of multi-method
-# tools like agr_curation_query. When displayed in the UI, users see these
+# package multi-method tools. When displayed in the UI, users see these
 # descriptive method names instead of the underlying tool mechanism.
 
 @dataclass(frozen=True)
@@ -1491,9 +1226,6 @@ def resolve_tools(tool_ids: List[str], execution_context: ToolExecutionContext) 
 
 _DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
 _FORMATTER_TOOL_IDS = {"save_csv_file", "save_tsv_file", "save_json_file"}
-# AGR validation agents should not answer without at least one DB query attempt.
-# We enforce this similarly to document-tool agents.
-_AGR_DB_QUERY_TOOL_IDS = {"agr_curation_query"}
 
 
 def _canonical_tool_ids(tool_ids: List[str]) -> List[str]:
@@ -1524,16 +1256,29 @@ def _uses_document_tools(tool_ids: List[str]) -> bool:
     return bool(set(_canonical_tool_ids(tool_ids)) & _DOCUMENT_TOOL_IDS)
 
 
+def _required_package_tool_call_specs(tool_ids: List[str]) -> List[Dict[str, Any]]:
+    """Return package-declared required-call specs for canonical tool IDs."""
+    specs: List[Dict[str, Any]] = []
+    for tool_id in _canonical_tool_ids(tool_ids):
+        tool = TOOL_REGISTRY.get(tool_id)
+        if not tool:
+            continue
+        spec = tool.get("required_tool_call")
+        if isinstance(spec, dict) and bool(spec.get("enforce")):
+            specs.append({"tool_id": tool_id, **spec})
+    return specs
+
+
 def expand_tools_for_agent(agent_id: str, tools: List[str]) -> List[str]:
     """
     Expand multi-method tools into their individual method names for an agent.
 
-    For agents that use multi-method tools like agr_curation_query, this replaces
-    the tool name with the specific method names that agent uses. This makes the
-    tool list more intuitive for users.
+    For agents that use package-declared multi-method tools, this replaces the
+    tool name with the specific method names that agent uses. This makes the tool
+    list more intuitive for users.
 
     Example:
-        expand_tools_for_agent("gene", ["agr_curation_query"])
+        expand_tools_for_agent("gene", ["package_lookup_tool"])
         -> ["search_genes", "get_gene_by_exact_symbol", "get_gene_by_id"]
 
     Args:
@@ -1569,7 +1314,7 @@ def get_tool_details(tool_id: str) -> Optional[Dict[str, Any]]:
     Get detailed information about a specific tool or method.
 
     Args:
-        tool_id: Tool identifier (e.g., 'agr_curation_query', 'search_document')
+        tool_id: Tool identifier (e.g., 'package_lookup_tool', 'search_document')
                  or method identifier (e.g., 'search_genes', 'get_allele_by_id')
 
     Returns:
@@ -1603,7 +1348,7 @@ def get_tool_for_agent(tool_id: str, agent_id: str) -> Optional[Dict[str, Any]]:
     """
     Get tool details with agent-specific method information highlighted.
 
-    For multi-method tools like agr_curation_query, this returns the tool
+    For package-declared multi-method tools, this returns the tool
     with agent-specific method usage highlighted.
 
     For method-level tools (like search_genes), returns the method details directly.
@@ -2210,9 +1955,9 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     if requested_tool_ids:
         tool_tracker: Optional[ToolCallTracker] = None
         has_document_tools = bool(set(canonical_tool_ids) & _DOCUMENT_TOOL_IDS)
-        has_agr_db_query_tools = bool(set(canonical_tool_ids) & _AGR_DB_QUERY_TOOL_IDS)
+        required_package_specs = _required_package_tool_call_specs(canonical_tool_ids)
 
-        if has_document_tools or has_agr_db_query_tools:
+        if has_document_tools or required_package_specs:
             tool_tracker = ToolCallTracker()
 
         if has_document_tools:
@@ -2226,15 +1971,19 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
                     ),
                 )
             )
-        elif has_agr_db_query_tools:
+        elif required_package_specs:
+            required_spec = required_package_specs[0]
+            guardrail_message = str(required_spec.get("guardrail_message") or "").strip()
+            if not guardrail_message:
+                raise ValueError(
+                    "Package required_tool_call metadata must declare guardrail_message "
+                    f"for tool '{required_spec['tool_id']}'."
+                )
             output_guardrails.append(
                 create_tool_required_output_guardrail(
                     tracker=tool_tracker,
                     minimum_calls=1,
-                    error_message=(
-                        "You must query the AGR Curation Database before answering. "
-                        "Use agr_curation_query first."
-                    ),
+                    error_message=guardrail_message,
                 )
             )
         execution_context = _build_tool_execution_context(

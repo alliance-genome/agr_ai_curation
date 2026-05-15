@@ -94,6 +94,37 @@ def load_agent_studio_system_prompt_template(
     )
 
 
+def build_package_diagnostic_tools_prompt() -> str:
+    """Build Agent Studio tool guidance from package-owned tool metadata."""
+    from src.lib.agent_studio.catalog_service import get_tool_registry
+
+    tool_registry = get_tool_registry()
+    lines: List[str] = []
+    for tool_id, tool_info in sorted(tool_registry.items()):
+        agent_studio_metadata = tool_info.get("agent_studio")
+        if not isinstance(agent_studio_metadata, dict):
+            continue
+        diagnostic_metadata = agent_studio_metadata.get("diagnostic")
+        if not isinstance(diagnostic_metadata, dict) or not bool(diagnostic_metadata.get("enabled", False)):
+            continue
+
+        description = str(agent_studio_metadata.get("prompt_description") or "").strip()
+        if not description:
+            raise ValueError(
+                f"Package diagnostic tool '{tool_id}' must declare "
+                "agent_studio.prompt_description for Agent Studio prompt guidance."
+            )
+
+        line = f"- **`{tool_id}`** - {description}"
+        methods = tool_info.get("methods")
+        if isinstance(methods, dict) and methods:
+            method_names = ", ".join(str(name) for name in sorted(methods))
+            line += f" Methods: {method_names}."
+        lines.append(line)
+
+    return "\n".join(lines) if lines else "- No package diagnostic tools are currently installed."
+
+
 def format_conversation_context(messages: Optional[List[dict]]) -> Optional[str]:
     """
     Format the entire conversation history as a readable string.
@@ -447,6 +478,9 @@ def build_opus_system_prompt(
     base_prompt = load_template().replace(
         "{{USER_GREETING}}",
         user_greeting,
+    ).replace(
+        "{{PACKAGE_DIAGNOSTIC_TOOLS}}",
+        build_package_diagnostic_tools_prompt(),
     )
 
     if context:

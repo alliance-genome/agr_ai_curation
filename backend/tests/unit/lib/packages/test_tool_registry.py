@@ -11,10 +11,12 @@ import pytest
 from . import SHIPPED_TOOLS_PACKAGE_EXPORTS, find_repo_root
 from src.lib.packages.models import ExportKind, RuntimeOverrideSelection, RuntimeOverrides
 from src.lib.packages.registry import load_package_registry
+from src.lib.packages import tool_registry as tool_registry_module
 from src.lib.packages.tool_registry import (
     ToolRegistryValidationError,
     build_tool_registry,
     load_tool_registry,
+    resolve_default_packages_dir,
 )
 
 REPO_ROOT = find_repo_root(Path(__file__))
@@ -162,6 +164,56 @@ tools:
     assert document_binding.required_context == ("document_id", "user_id")
     assert document_binding.description == "Document-scoped custom tools"
     assert document_binding.source.package_id == "org.custom"
+
+
+def test_load_tool_registry_keeps_neutral_package_metadata_and_provider_adapters(tmp_path):
+    packages_dir = tmp_path / "packages"
+    _write_package(
+        packages_dir,
+        directory_name="museum-catalog",
+        package_id="museum.catalog",
+        export_description="Museum lookup tools",
+        bindings_text="""package_id: museum.catalog
+bindings_api_version: 1.0.0
+tools:
+  - tool_id: artifact_lookup
+    binding_kind: static
+    callable: museum_catalog.tools:artifact_lookup
+    required_context: []
+    description: Lookup catalog artifacts
+    source_file: src/museum_catalog/tools.py
+    provider_adapters:
+      demo_provider_schema:
+        callable_factory: museum_catalog.tools:create_demo_provider_artifact_lookup
+        description: Demo provider wrapper
+    metadata:
+      name: Artifact Lookup
+      category: Catalog
+      agent_studio:
+        prompt_description: Lookup artifacts in the museum catalog.
+        diagnostic:
+          enabled: true
+          category: catalog
+      required_tool_call:
+        enforce: true
+        failure_message: did not call artifact lookup before answering
+""",
+    )
+
+    registry = load_tool_registry(
+        packages_dir,
+        runtime_version="1.5.0",
+        supported_package_api_version="1.0.0",
+    )
+
+    binding = registry.get("artifact_lookup")
+
+    assert binding is not None
+    assert binding.metadata["name"] == "Artifact Lookup"
+    assert binding.metadata["agent_studio"]["diagnostic"]["enabled"] is True
+    assert binding.provider_adapters == {
+        "demo_provider_schema": "museum_catalog.tools:create_demo_provider_artifact_lookup"
+    }
 
 
 def test_load_tool_registry_keeps_declared_tool_exports_when_package_has_undeclared_agent_bundle(
@@ -421,6 +473,39 @@ def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
             binding.source.bindings_path.relative_to(REPO_ROOT).as_posix()
             == "packages/alliance/tools/bindings.yaml"
         )
+
+
+def test_default_tool_registry_uses_repo_packages_when_runtime_dir_is_absent(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(tmp_path / "missing-packages"))
+
+    registry = load_tool_registry(fail_on_validation_error=False)
+
+    assert resolve_default_packages_dir() == (REPO_ROOT / "packages").resolve()
+    assert registry.package_registry.packages_dir == (REPO_ROOT / "packages").resolve()
+    alliance_binding = registry.get("agr_curation_query")
+    assert alliance_binding is not None
+    assert (
+        alliance_binding.provider_adapters["groq_schema_constraints"]
+        == "agr_ai_curation_alliance.tools.agr_curation:create_groq_agr_curation_query_tool"
+    )
+
+
+def test_resolve_default_packages_dir_raises_when_no_package_dir_exists(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(tmp_path / "missing-runtime-packages"))
+    monkeypatch.setattr(
+        tool_registry_module,
+        "_REPO_PACKAGES_DIR",
+        tmp_path / "missing-repo-packages",
+    )
+
+    with pytest.raises(FileNotFoundError, match="No package directory is available"):
+        resolve_default_packages_dir()
 
 
 def test_repo_alliance_package_copies_tool_implementations_locally():

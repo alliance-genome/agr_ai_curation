@@ -7,6 +7,286 @@ tools:
     required_context: []
     description: Structured AGR curation database queries with lookup attempts, candidate matches, classifications, provider projections, and flow validation attachment reference lookups
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    provider_adapters:
+      groq_schema_constraints:
+        callable_factory: agr_ai_curation_alliance.tools.agr_curation:create_groq_agr_curation_query_tool
+        description: Compact method and payload_json wrapper for Groq tool schema constraints
+    metadata:
+      name: AGR Curation Query
+      category: Database
+      audit:
+        display_name: AGR Curation Query
+      documentation:
+        summary: A unified package-owned tool for querying the Alliance Curation Database. Different agents use different methods of this tool based on their specialization.
+        example_queries:
+          - Find gene daf-2 in WormBase
+          - Get allele information for e1370
+        parameters:
+          - name: method
+            type: string
+            required: true
+            description: The query method to execute. Determines what type of data to retrieve.
+          - name: gene_symbol
+            type: string
+            required: false
+            description: Gene symbol to search for.
+          - name: gene_symbols
+            type: array[string]
+            required: false
+            description: List of gene symbols for bulk lookup.
+          - name: gene_id
+            type: string
+            required: false
+            description: Gene CURIE for direct lookup.
+          - name: allele_symbol
+            type: string
+            required: false
+            description: Allele symbol to search for.
+          - name: allele_symbols
+            type: array[string]
+            required: false
+            description: List of allele symbols for bulk lookup.
+          - name: allele_id
+            type: string
+            required: false
+            description: Allele CURIE for direct lookup.
+          - name: data_provider
+            type: string
+            required: false
+            description: "Filter by group/provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
+          - name: limit
+            type: integer
+            required: false
+            description: Maximum results to return.
+      methods:
+        search_genes:
+          name: Search Genes
+          description: Search for genes by symbol using LIKE matching.
+          required_params: [gene_symbol]
+          optional_params: [data_provider, limit, include_synonyms]
+          example:
+            method: search_genes
+            gene_symbol: daf
+            data_provider: WB
+            limit: 10
+        search_genes_bulk:
+          name: Search Genes (Bulk)
+          description: Bulk gene symbol search in one tool call.
+          required_params: [gene_symbols]
+          optional_params: [data_provider, limit, include_synonyms]
+          example:
+            method: search_genes_bulk
+            gene_symbols: [crb, ninaE, Rh1]
+            data_provider: FB
+            limit: 10
+        get_gene_by_exact_symbol:
+          name: Get Gene by Exact Symbol
+          description: Find a gene by its exact official symbol.
+          required_params: [gene_symbol]
+          optional_params: [data_provider]
+          example:
+            method: get_gene_by_exact_symbol
+            gene_symbol: daf-2
+            data_provider: WB
+        get_gene_by_id:
+          name: Get Gene by ID
+          description: Retrieve detailed gene information by CURIE.
+          required_params: [gene_id]
+          optional_params: []
+          example:
+            method: get_gene_by_id
+            gene_id: WB:WBGene00000898
+        search_alleles:
+          name: Search Alleles
+          description: Search for alleles by symbol using LIKE matching.
+          required_params: [allele_symbol]
+          optional_params: [data_provider, limit, include_synonyms]
+          example:
+            method: search_alleles
+            allele_symbol: tm1
+            data_provider: WB
+            limit: 10
+        search_alleles_bulk:
+          name: Search Alleles (Bulk)
+          description: Bulk allele symbol search in one tool call.
+          required_params: [allele_symbols]
+          optional_params: [data_provider, limit, include_synonyms]
+          example:
+            method: search_alleles_bulk
+            allele_symbols: [tm1, e1370, n765]
+            data_provider: WB
+            limit: 10
+        get_allele_by_exact_symbol:
+          name: Get Allele by Exact Symbol
+          description: Find an allele by its exact official symbol.
+          required_params: [allele_symbol]
+          optional_params: [data_provider]
+          example:
+            method: get_allele_by_exact_symbol
+            allele_symbol: e1370
+            data_provider: WB
+        get_allele_by_id:
+          name: Get Allele by ID
+          description: Retrieve detailed allele information by CURIE.
+          required_params: [allele_id]
+          optional_params: []
+          example:
+            method: get_allele_by_id
+            allele_id: WB:WBVar00143949
+        search_anatomy_terms:
+          name: Search Anatomy Terms
+          description: Search species-specific anatomy ontology terms.
+          required_params: [term, data_provider]
+          optional_params: [exact_match, include_synonyms, limit]
+          example:
+            method: search_anatomy_terms
+            term: body wall muscle
+            data_provider: WB
+        search_life_stage_terms:
+          name: Search Life Stage Terms
+          description: Search species-specific developmental stage ontology terms.
+          required_params: [term, data_provider]
+          optional_params: [exact_match, include_synonyms, limit]
+          example:
+            method: search_life_stage_terms
+            term: adult
+            data_provider: WB
+        search_go_terms:
+          name: Search GO Terms
+          description: Search Gene Ontology terms by name or keyword.
+          required_params: [term]
+          optional_params: [go_aspect, exact_match, include_synonyms, limit]
+          example:
+            method: search_go_terms
+            term: kinase activity
+            go_aspect: molecular_function
+        get_species:
+          name: Get Species
+          description: List all supported species/organisms.
+          required_params: []
+          optional_params: []
+          example:
+            method: get_species
+        get_data_providers:
+          name: Get Data Providers
+          description: List all Alliance group data providers with their taxon mappings.
+          required_params: []
+          optional_params: []
+          example:
+            method: get_data_providers
+      agent_methods:
+        gene:
+          agent_name: Gene Validation Agent
+          methods: [search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id]
+          description: The Gene Agent uses these methods to validate gene identifiers and retrieve gene information.
+        allele:
+          agent_name: Allele Validation Agent
+          methods: [search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id]
+          description: The Allele Agent uses these methods to validate allele/variant identifiers.
+        gene_expression:
+          agent_name: Gene Expression Extractor
+          methods: [search_genes, search_genes_bulk, get_gene_by_exact_symbol]
+          description: The Gene Expression agent validates gene names found during PDF extraction.
+        gene_ontology:
+          agent_name: Gene Ontology Agent
+          methods: [search_go_terms]
+          description: The GO Agent searches for Gene Ontology terms.
+        ontology_mapping:
+          agent_name: Ontology Mapping Agent
+          methods: [search_anatomy_terms, search_life_stage_terms, search_go_terms]
+          description: The Ontology Mapping agent maps free-text labels to ontology term IDs.
+      agent_studio:
+        prompt_description: "Structured API for Alliance curation database lookups. Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
+        diagnostic:
+          enabled: true
+          category: api
+          tags: [gene, allele, ontology, alliance]
+          input_schema:
+            type: object
+            properties:
+              method:
+                type: string
+                description: Query method to execute
+                enum:
+                  - search_genes
+                  - search_genes_bulk
+                  - get_gene_by_exact_symbol
+                  - get_gene_by_id
+                  - search_alleles
+                  - search_alleles_bulk
+                  - get_allele_by_exact_symbol
+                  - get_allele_by_id
+                  - get_data_providers
+                  - search_anatomy_terms
+                  - search_life_stage_terms
+                  - search_go_terms
+              gene_symbol:
+                type: string
+                description: Gene symbol to search
+              gene_symbols:
+                type: array
+                items:
+                  type: string
+                description: Gene symbols for bulk search
+              gene_id:
+                type: string
+                description: Gene CURIE for direct lookup
+              allele_symbol:
+                type: string
+                description: Allele symbol to search
+              allele_symbols:
+                type: array
+                items:
+                  type: string
+                description: Allele symbols for bulk search
+              allele_id:
+                type: string
+                description: Allele CURIE for direct lookup
+              data_provider:
+                type: string
+                description: Filter by species/group
+                enum: [MGI, FB, WB, ZFIN, RGD, SGD, HGNC]
+              taxon_id:
+                type: string
+                description: NCBITaxon ID alternative to data_provider
+              term:
+                type: string
+                description: Search term for ontology searches
+              go_aspect:
+                type: string
+                description: GO aspect filter
+                enum: [molecular_function, biological_process, cellular_component]
+              exact_match:
+                type: boolean
+                description: Require exact match
+              include_synonyms:
+                type: boolean
+                description: Search synonyms
+              limit:
+                type: integer
+                description: Max results
+              force:
+                type: boolean
+                description: Skip symbol validation
+              force_reason:
+                type: string
+                description: Reason for skipping validation
+            required: [method]
+      required_tool_call:
+        enforce: true
+        failure_message: did not call required database lookup tools before answering
+        guardrail_message: You must query the package-declared curation lookup tool before answering. Use agr_curation_query first.
+      bulk_list_optimization:
+        enabled: true
+        minimum_entities: 8
+        min_turns: 40
+        max_turns: 120
+        instruction: |
+          TOOL EFFICIENCY REQUIREMENT:
+          The request includes a large entity list. Minimize tool rounds.
+          Prefer bulk lookup methods when available (for example search_genes_bulk/search_alleles_bulk) using list inputs instead of one-call-per-entity loops.
+          If provider/model supports it, issue parallel tool calls in the same turn.
+          Avoid one-call-per-entity loops when enough evidence already exists to synthesize output.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

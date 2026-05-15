@@ -7,13 +7,15 @@ from pathlib import Path
 
 from .manifest_loader import load_runtime_overrides
 from .models import ExportKind, RuntimeOverrides, ToolBinding, ToolBindingKind
-from .paths import get_runtime_overrides_path
+from .paths import get_runtime_overrides_path, get_runtime_packages_dir
 from .registry import PackageRegistry, load_package_registry
 from .tool_bindings_loader import (
     LoadedToolBindingExport,
     ToolBindingLoadError,
     load_package_tool_binding_exports,
 )
+
+_REPO_PACKAGES_DIR = Path(__file__).resolve().parents[4] / "packages"
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,8 @@ class RegisteredToolBinding:
     import_attribute_kind: str
     required_context: tuple[str, ...]
     description: str
+    metadata: dict[str, object]
+    provider_adapters: dict[str, str]
     source: ToolBindingSource
 
 
@@ -93,7 +97,7 @@ def load_tool_registry(
 ) -> ToolRegistry:
     """Build the merged runtime tool registry from loaded packages."""
     package_registry = load_package_registry(
-        packages_dir,
+        packages_dir or resolve_default_packages_dir(),
         runtime_version=runtime_version,
         supported_package_api_version=supported_package_api_version,
         fail_on_validation_error=fail_on_validation_error,
@@ -105,6 +109,19 @@ def load_tool_registry(
         fail_on_validation_error=fail_on_validation_error,
     )
     return registry
+
+
+def resolve_default_packages_dir() -> Path:
+    """Resolve the package directory used by default package-registry consumers."""
+    runtime_packages_dir = get_runtime_packages_dir()
+    if runtime_packages_dir.exists():
+        return runtime_packages_dir
+    if _REPO_PACKAGES_DIR.exists():
+        return _REPO_PACKAGES_DIR.expanduser().resolve(strict=False)
+    raise FileNotFoundError(
+        "No package directory is available. Checked runtime packages directory "
+        f"{runtime_packages_dir} and repository packages directory {_REPO_PACKAGES_DIR}."
+    )
 
 
 def build_tool_registry(
@@ -213,6 +230,11 @@ def _build_registered_binding(
         import_attribute_kind=import_attribute_kind,
         required_context=tuple(binding.required_context),
         description=binding.description or binding_export.export_description,
+        metadata=dict(binding.metadata),
+        provider_adapters={
+            adapter_key: adapter.callable_factory
+            for adapter_key, adapter in binding.provider_adapters.items()
+        },
         source=ToolBindingSource(
             package_id=binding_export.package_id,
             package_version=binding_export.package_version,

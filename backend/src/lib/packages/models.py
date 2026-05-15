@@ -137,6 +137,24 @@ class ToolBindingKind(str, Enum):
     CONTEXT_FACTORY = "context_factory"
 
 
+class ToolProviderAdapter(BaseModel):
+    """Package-owned provider/runtime adapter for a bound tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    callable_factory: str
+    description: str = ""
+
+    @field_validator("callable_factory")
+    @classmethod
+    def _validate_callable_factory(cls, value: str) -> str:
+        if not PYTHON_CALLABLE_PATTERN.match(value):
+            raise ValueError(
+                "must use python callable syntax like package.module:function"
+            )
+        return value
+
+
 class PackageExport(BaseModel):
     """One exported runtime artifact declared by a package manifest."""
 
@@ -324,6 +342,8 @@ class ToolBinding(BaseModel):
     required_context: list[str] = Field(default_factory=list)
     description: str = ""
     source_file: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    provider_adapters: dict[str, ToolProviderAdapter] = Field(default_factory=dict)
 
     @field_validator("tool_id")
     @classmethod
@@ -356,6 +376,16 @@ class ToolBinding(BaseModel):
         if value is None:
             return None
         return _validate_relative_package_path(value, "source_file")
+
+    @field_validator("provider_adapters")
+    @classmethod
+    def _validate_provider_adapter_keys(
+        cls,
+        value: dict[str, ToolProviderAdapter],
+    ) -> dict[str, ToolProviderAdapter]:
+        for key in value:
+            _validate_symbolic_name(key, "provider_adapters key")
+        return value
 
     @model_validator(mode="after")
     def _validate_import_target(self) -> "ToolBinding":

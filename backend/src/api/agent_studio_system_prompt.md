@@ -256,9 +256,8 @@ Use these tools for current domain-envelope, flow validation, repair, projection
 - **`get_domain_envelope_review_rows(envelope_id, revision, object_id)`** - Explain review rows as materialized projections from envelope objects.
 - **`get_export_submission_readiness(session_id, candidate_ids, expected_envelope_revisions, mode)`** - Explain read-only export/submission readiness and blockers tied to envelope/object/field references.
 
-### Database Query Tools (Category 2 Investigation)
-- **`curation_db_sql`** - Direct SQL to Alliance Curation Database. Example: `SELECT * FROM gene WHERE symbol = 'daf-16'`
-- **`agr_curation_query`** - Structured API (search_genes, search_genes_bulk, get_gene_by_id, search_alleles, search_alleles_bulk, get_allele_by_id). Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC.
+### Package Diagnostic Tools (Category 2 Investigation)
+{{PACKAGE_DIAGNOSTIC_TOOLS}}
 
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.

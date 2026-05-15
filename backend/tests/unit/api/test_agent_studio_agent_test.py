@@ -549,6 +549,26 @@ class TestAgentWorkshopSystemPrompt:
 
         assert api_module._load_agent_studio_system_prompt_template() == "fallback prompt"
 
+    def test_build_opus_system_prompt_injects_package_diagnostic_tool_metadata(self, monkeypatch):
+        from src.lib.agent_studio import prompt_builder
+
+        monkeypatch.setattr(
+            prompt_builder,
+            "build_package_diagnostic_tools_prompt",
+            lambda: "- **`artifact_lookup`** - Lookup artifacts in the museum catalog.",
+        )
+
+        system_prompt = prompt_builder.build_opus_system_prompt(
+            context=None,
+            load_template=lambda: "Tools:\n{{PACKAGE_DIAGNOSTIC_TOOLS}}\n{{USER_GREETING}}",
+            list_model_definitions=lambda: [],
+            get_prompt_catalog=lambda: None,
+            prepare_trace_context=lambda _trace_id: None,
+        )
+
+        assert "artifact_lookup" in system_prompt
+        assert "{{PACKAGE_DIAGNOSTIC_TOOLS}}" not in system_prompt
+
     def test_get_all_opus_tools_includes_workshop_prompt_update_tool(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
