@@ -1,40 +1,22 @@
-"""Ontology mapping lookup agent schema.
+"""Ontology mapping lookup agent schema."""
 
-This module defines the envelope schema for the ontology mapping lookup agent.
-The envelope class is discovered at startup and registered in the schema registry.
+from typing import Any, Optional
 
-Naming convention: {AgentFunction}Envelope -> OntologyMappingEnvelope
-"""
+from pydantic import Field
 
-from typing import List, Optional
-from pydantic import Field, ConfigDict
-
-# Import base class from shared schemas location
-from src.schemas.models.base import StructuredMessageEnvelope
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 
-class OntologyMappingEnvelope(StructuredMessageEnvelope):
-    """Envelope for ontology mapping lookup agent responses.
+class OntologyMappingEnvelope(DomainValidatorResultBase):
+    """Canonical result schema for Alliance ontology-mapping validator agents."""
 
-    Contains mappings from free-text labels to ontology term IDs.
-    """
-    model_config = ConfigDict(extra='forbid')
-
-    # Required: Marker for schema discovery
     __envelope_class__ = True
 
-    actor: str = Field(
-        default="ontology_mapping_specialist",
-        description="The ontology mapping lookup agent"
-    )
-    findings: str = Field(
-        description="Ontology mapping results"
-    )
-    mappings: List[dict] = Field(
+    mappings: list[dict[str, Any]] = Field(
         default_factory=list,
-        description="List of term-to-ontology mappings"
+        description="Term-to-ontology mappings returned by the lookup",
     )
-    unmapped_terms: Optional[List[str]] = Field(
+    unmapped_labels: Optional[list[str]] = Field(
         default=None,
-        description="Terms that could not be mapped"
+        description="Terms that could not be mapped",
     )

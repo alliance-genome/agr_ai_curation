@@ -18,6 +18,7 @@ from ..packages import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
 REPO_PACKAGES_DIR = REPO_ROOT / "packages"
+REPO_LEGACY_AGENTS_DIR = REPO_ROOT / "alliance_agents"
 
 
 def _iter_dict_nodes(value):
@@ -230,6 +231,39 @@ def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
     assert ontology_schema is not None
     assert "unmapped_labels" in ontology_schema.model_fields
     assert "unmapped_terms" not in ontology_schema.model_fields
+
+
+def test_legacy_ontology_mapping_schema_matches_package_validator_shape(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    schema_discovery.discover_agent_schemas(REPO_PACKAGES_DIR, force_reload=True)
+    package_schema = schema_discovery.get_schema_for_agent("ontology_mapping")
+    assert package_schema is not None
+    package_contract = package_schema.model_json_schema()
+
+    schema_discovery.reset_cache()
+    legacy_schemas = schema_discovery._load_schema_module(
+        REPO_LEGACY_AGENTS_DIR / "ontology_mapping" / "schema.py",
+        "ontology_mapping",
+        configured_schema="OntologyMappingEnvelope",
+    )
+    legacy_schema = legacy_schemas.get("OntologyMappingEnvelope")
+
+    assert legacy_schema is not None
+    assert legacy_schema.__name__ == package_schema.__name__
+    assert issubclass(legacy_schema, DomainValidatorResultBase)
+    assert legacy_schema.model_json_schema() == package_contract
+    for obsolete_field in (
+        "actor",
+        "findings",
+        "unmapped_terms",
+        "result",
+        "validation_result",
+    ):
+        assert obsolete_field not in legacy_schema.model_fields
+    assert "unmapped_labels" in legacy_schema.model_fields
 
 
 def test_bundled_alliance_ontology_context_agents_are_not_active_readiness_gates():
