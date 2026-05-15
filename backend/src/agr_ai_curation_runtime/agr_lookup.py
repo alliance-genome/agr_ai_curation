@@ -29,19 +29,7 @@ _BULK_ITEM_STATUS_BY_LOOKUP_STATUS = {
     LOOKUP_STATUS_UNDER_DEVELOPMENT: LOOKUP_STATUS_UNDER_DEVELOPMENT,
 }
 DEFAULT_PROJECTION_TYPE = "lookup_result"
-DEFAULT_PROVIDER_DATA_KEYS = (
-    "curie",
-    "symbol",
-    "name",
-    "taxon",
-    "gene_type",
-    "match_type",
-    "matched_variant",
-    "ontology_type",
-    "namespace",
-    "abbreviation",
-    "display_name",
-)
+DEFAULT_PROVIDER_DATA_KEYS: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

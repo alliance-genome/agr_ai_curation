@@ -91,7 +91,12 @@ def test_bulk_item_status_uses_caller_supplied_detail_stages():
 def test_projection_from_result_uses_neutral_defaults_without_method_inference():
     projection = projection_from_result(
         "get_gene_by_id",
-        {"curie": "FIX:1", "symbol": "fixture-1"},
+        {
+            "curie": "FIX:1",
+            "symbol": "fixture-1",
+            "taxon": "NCBITaxon:9606",
+            "gene_type": "protein_coding_gene",
+        },
     )
 
     assert projection["projection_type"] == "lookup_result"
@@ -99,6 +104,7 @@ def test_projection_from_result_uses_neutral_defaults_without_method_inference()
     assert projection["source"] == {"method": "get_gene_by_id"}
     assert "provider" not in projection
     assert "object_type" not in projection
+    assert "provider_data" not in projection
 
 
 def test_lookup_response_payload_accepts_provider_agnostic_projection_metadata():
