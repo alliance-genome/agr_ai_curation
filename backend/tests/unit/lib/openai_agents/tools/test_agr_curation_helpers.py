@@ -107,6 +107,32 @@ def test_result_factories():
     assert warning.message == "bad symbol"
 
 
+def test_plain_result_serializes_supported_shapes_and_rejects_fallbacks():
+    class ModelDumpOnly:
+        def model_dump(self, exclude_none):
+            assert exclude_none is True
+            return {"curie": "WB:WBGene00000001"}
+
+    class DictOnly:
+        def dict(self):
+            return {"curie": "WB:WBGene00000001"}
+
+    assert agr_curation._plain_result({"curie": "WB:WBGene00000001"}) == {
+        "curie": "WB:WBGene00000001"
+    }
+    assert agr_curation._plain_result(ModelDumpOnly()) == {"curie": "WB:WBGene00000001"}
+    assert agr_curation._plain_result(
+        SimpleNamespace(curie="WB:WBGene00000001", name=None, _private="hidden")
+    ) == {"curie": "WB:WBGene00000001"}
+
+    with pytest.raises(ValueError, match="_plain_result received None"):
+        agr_curation._plain_result(None)
+    with pytest.raises(TypeError, match="dict\\(\\) but no model_dump"):
+        agr_curation._plain_result(DictOnly())
+    with pytest.raises(TypeError, match="Cannot serialize result of type str"):
+        agr_curation._plain_result("WB:WBGene00000001")
+
+
 def test_lookup_response_serializes_attempts_candidates_and_projections():
     result = agr_curation._lookup_response(
         method="get_gene_by_id",

@@ -116,7 +116,7 @@ def _validate_curie_list(results: List[Dict[str, Any]], curie_field: str = "curi
 def _plain_result(result: Any) -> Dict[str, Any]:
     """Return a plain dict for API-client result models or simple test doubles."""
     if result is None:
-        return {}
+        raise ValueError("_plain_result received None")
     if isinstance(result, dict):
         return dict(result)
     model_dump = getattr(result, "model_dump", None)
@@ -124,14 +124,17 @@ def _plain_result(result: Any) -> Dict[str, Any]:
         return model_dump(exclude_none=True)
     dict_method = getattr(result, "dict", None)
     if callable(dict_method):
-        return dict_method(exclude_none=True)
+        raise TypeError(
+            "Cannot serialize result with dict() but no model_dump(); "
+            f"unsupported result type {type(result).__name__}"
+        )
     if hasattr(result, "__dict__"):
         return {
             key: value
             for key, value in vars(result).items()
             if not key.startswith("_") and value is not None
         }
-    return {}
+    raise TypeError(f"Cannot serialize result of type {type(result).__name__}")
 
 
 def _ontology_term_result(result: Any) -> Dict[str, Any]:
