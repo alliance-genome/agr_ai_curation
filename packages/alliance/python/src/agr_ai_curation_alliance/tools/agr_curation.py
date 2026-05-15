@@ -116,7 +116,7 @@ def _plain_result(result: Any) -> Dict[str, Any]:
     if result is None:
         raise ValueError("_plain_result received None")
     if isinstance(result, dict):
-        return dict(result)
+        return {key: value for key, value in result.items() if value is not None}
     model_dump = getattr(result, "model_dump", None)
     if callable(model_dump):
         return model_dump(exclude_none=True)
@@ -155,10 +155,10 @@ def _ontology_term_result(result: Any) -> Dict[str, Any]:
 def _entity_mapping_result(result: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(result)
     if row.get("entity_curie") is not None:
-        row.setdefault("curie", row["entity_curie"])
+        row["curie"] = row["entity_curie"]
     if row.get("entity") is not None:
-        row.setdefault("symbol", row["entity"])
-        row.setdefault("name", row["entity"])
+        row["symbol"] = row["entity"]
+        row["name"] = row["entity"]
     if row.get("curie") is not None:
         _validate_curie_in_result(row)
     return row
@@ -489,7 +489,7 @@ def agr_curation_query(
         entity_curies: Entity CURIEs to map to basic info
         category: CURIE-to-name helper category
         curies: CURIE list for generic CURIE-to-name helper paths
-        ontology_term_type: Optional curation DB ontologytermtype filter for get_ontology_term_by_curie
+        ontology_term_type: Optional curation DB ontologytermtype filter for get_ontology_term
         go_aspect: GO aspect filter (molecular_function, biological_process, cellular_component)
         exact_match: Require exact match for ontology searches
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
@@ -509,7 +509,7 @@ def agr_curation_query(
             return _attempt_query(method, gene_id=gene_id)
         if method == "get_allele_by_id":
             return _attempt_query(method, allele_id=allele_id)
-        if method in {"get_ontology_term", "get_ontology_term_by_curie"}:
+        if method == "get_ontology_term":
             return _attempt_query(
                 method,
                 term=term,
@@ -2060,8 +2060,8 @@ def agr_curation_query(
                 attempted_query=_attempt_query(method),
             )
 
-        # GET ONTOLOGY TERM BY CURIE
-        elif method in {"get_ontology_term", "get_ontology_term_by_curie"}:
+        # GET ONTOLOGY TERM
+        elif method == "get_ontology_term":
             if not term:
                 return _err(
                     f"{method} requires term",
@@ -2406,7 +2406,7 @@ def agr_curation_query(
                 "search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id, "
                 "get_species, get_data_providers, "
                 "get_ontology_term, get_ontology_terms, search_ontology_terms, "
-                "get_ontology_term_by_curie, search_anatomy_terms, "
+                "search_anatomy_terms, "
                 "search_life_stage_terms, search_go_terms, "
                 "map_entity_names_to_curies, map_entity_curies_to_info, "
                 "map_curies_to_names".format(method=method),
