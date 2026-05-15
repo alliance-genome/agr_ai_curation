@@ -2177,12 +2177,13 @@ def agr_curation_query(
                 for result in results
             ]
             results_data, invalid_curie_count = _validate_curie_list(results_data)
-            validation_warnings = [f"invalid_curie_prefixes:{invalid_curie_count}"] if invalid_curie_count > 0 else []
+            if invalid_curie_count > 0:
+                warnings.append(f"invalid_curie_prefixes:{invalid_curie_count}")
             return _lookup_response(
                 method=method,
                 data=results_data,
                 count=len(results_data),
-                warnings=validation_warnings,
+                warnings=warnings,
                 attempted_query=_attempt_query(
                     method,
                     term=term,

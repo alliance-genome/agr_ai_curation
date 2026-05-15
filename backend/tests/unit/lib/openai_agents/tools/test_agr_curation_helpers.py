@@ -534,11 +534,11 @@ def test_query_ontology_term_helpers_use_api_client_methods(monkeypatch):
                 "GOTerm",
                 True,
                 False,
-                5,
+                500,
             )
             return [
                 SimpleNamespace(
-                    curie="GO:0003674",
+                    curie="BAD:0003674",
                     name="molecular_function",
                     namespace="molecular_function",
                     definition=None,
@@ -553,7 +553,7 @@ def test_query_ontology_term_helpers_use_api_client_methods(monkeypatch):
             return FakeDb()
 
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
-    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda curie: curie.startswith("GO:"))
 
     bulk = query_fn(method="get_ontology_terms", terms=["GO:0003674", "GO:missing"])
     assert bulk.status == "ok"
@@ -566,11 +566,13 @@ def test_query_ontology_term_helpers_use_api_client_methods(monkeypatch):
         ontology_term_type="GOTerm",
         exact_match=True,
         include_synonyms=False,
-        limit=5,
+        limit=999,
     )
     assert search.status == "ok"
     assert search.count == 1
     assert search.data[0]["ontology_type"] == "GOTerm"
+    assert "limit_capped_at:500" in (search.warnings or [])
+    assert "invalid_curie_prefixes:1" in (search.warnings or [])
 
 
 def test_query_vocabulary_helpers_use_api_client_methods(monkeypatch):
