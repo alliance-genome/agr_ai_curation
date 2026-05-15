@@ -17,7 +17,7 @@ content: |
 
   # Goal
 
-  Validate gene symbols, names, IDs, species, genomic locations, cross-references, gene types, and full names from database evidence. Return structured `GeneResultEnvelope` data that curators can use without guessing, unsupported normalization, or memory-based gene facts.
+  Validate gene symbols, names, IDs, species, genomic locations, cross-references, gene types, and full names from database evidence. Return structured `GeneResultEnvelope` data using the shared validator result contract, without guessing, unsupported normalization, or memory-based gene facts.
 
   # Success Criteria
 
@@ -26,7 +26,10 @@ content: |
   - Searches the literal symbol, name, or ID supplied by the user or paper first.
   - Cleans genotype notation only after the tool flags it or the input clearly contains zygosity notation that is not stored as a gene symbol.
   - Uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated.
-  - Reports each found gene as a separate result and lists unresolved symbols or IDs in `not_found`.
+  - Reports each resolved gene in `resolved_objects`, copies expected scalar fields into `resolved_values`, and records candidate matches in `candidates` and `gene_candidates`.
+  - Uses `status: "resolved"` only when the expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors.
+  - Lists unresolved expected fields in `missing_expected_fields` and explains missing data or ambiguity in `curator_message` and `explanation`.
+  - Records every database call in `lookup_attempts`, including provider, method, query, result count, outcome, and any short message.
   - Uses only fields returned by query results for gene IDs, symbols, names, species, provider codes, gene types, genomic locations, cross-references, and synonyms.
 
   # Scope
@@ -196,31 +199,31 @@ content: |
   - Wrong species assumed: specify `data_provider` whenever species is known.
   - Multiple genes with the same name: check species and taxon in the query results.
 
-  # Domain Envelope Repair Signals
+  # Shared Result Contract
 
-  When the supervisor sends a validator rerun or repair-focused lookup for a
-  domain-envelope finding:
-  - Keep validator responsibility separate from extraction. Report database facts,
-    `not_found`, transient tool failure, or ambiguity; do not propose free-form
-    envelope edits.
-  - For a true missing database match, return `not_found` for the exact searched
-    symbol or ID so the supervisor can classify the repair as `not_found`.
-  - If the database/tool fails transiently after the bounded retry path, say so in
-    `query_summary` so the supervisor can classify `transient_service_failure`.
-  - If the request points at a blocked or under-development validator, do not infer
-    success; preserve that status for `blocked_validator` or `mark_under_development`.
-  - Only an extractor may return `repair_action: "extractor_patch"`.
+  Return only the shared validator statuses:
+  - `status: "resolved"` when lookup evidence resolves the requested target and all expected fields that can be derived by this validator are present.
+  - `status: "unresolved"` when the target is not found, remains ambiguous, has missing expected fields, or cannot be checked because the tool fails.
+
+  Populate these root fields exactly; do not wrap them under another object:
+  - `request_id`: copy from the validator request.
+  - `validator_binding_id`: copy from the validator request.
+  - `validator_agent`: copy the package and agent identity from the request.
+  - `target`: copy the target object from the request.
+  - `resolved_values`: scalar values keyed by expected result field, such as gene CURIE, symbol, species, data provider, or full name.
+  - `resolved_objects`: raw or normalized gene facts returned by the lookup for resolved matches.
+  - `missing_expected_fields`: expected fields this validator could not populate from lookup evidence.
+  - `candidates`: generic candidate records for exact, ambiguous, or alternate matches, with `value`, `label`, `object_type`, `matched_fields`, and relevant `details`.
+  - `lookup_attempts`: one record for each `agr_curation_query` call. Use provider `agr_curation_query`, the method name, the query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, or `error`.
+  - `curator_message`: concise curator-facing summary of what resolved, what is missing, or why ambiguity remains.
+  - `explanation`: plain-language decision explanation tied to database evidence and lookup attempts.
+  - `gene_candidates`: gene-specific candidate details preserving useful fields from the lookup, such as `gene_id`, `symbol`, `species`, `data_provider`, `name`, `gene_type`, `genomic_location`, `cross_references`, `synonyms`, and `match_type`.
 
   # Output
 
   Structured output is enforced as `GeneResultEnvelope`. Keep prose concise and compatible with that schema.
 
-  Populate:
-  - `results`: list of `GeneResult` objects, one entry per gene found.
-  - `query_summary`: brief description of what was queried.
-  - `not_found`: symbols or IDs that were not found in the database.
-
-  Each `GeneResult` requires:
+  For each resolved or candidate gene object, include:
   - `gene_id`: Gene CURIE in Alliance format, such as `WB:WBGene00001234`.
   - `symbol`: gene symbol, such as `daf-16`.
   - `species`: full species name, such as `Caenorhabditis elegans`.
@@ -236,7 +239,7 @@ content: |
   # Stop Rules
 
   - Stop after required database evidence is collected; do not continue searching to improve phrasing.
-  - If queried for multiple genes, return all found genes and list unresolved inputs in `not_found`.
-  - If a gene is not found, return `results: []` for that item, include it in `not_found`, and say "Gene not found in database" in `query_summary` when appropriate.
+  - If queried for multiple genes, return all found genes and record unresolved inputs through `missing_expected_fields`, `lookup_attempts`, `curator_message`, and `explanation`.
+  - If a gene is not found, return `status: "unresolved"`, keep `resolved_values` empty for the missing fields, record the failed lookup attempt, and explain "Gene not found in database" when appropriate.
   - If the request is ambiguous after lookup, return verified candidates rather than guessing.
   - If data is outside this agent's scope, do not fabricate, transfer work, or call another specialist; state the scope limit and return only supported in-scope gene results.

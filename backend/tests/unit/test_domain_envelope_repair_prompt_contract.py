@@ -32,11 +32,9 @@ EXTRACTOR_OUTPUT_SCHEMAS = {
     "packages/alliance/agents/phenotype_extractor/agent.yaml": "PhenotypeExtractorRepairResponse",
 }
 
-VALIDATOR_PROMPTS = [
-    "packages/alliance/agents/allele/prompt.yaml",
+REPAIR_AWARE_VALIDATOR_PROMPTS = [
     "packages/alliance/agents/chemical/prompt.yaml",
     "packages/alliance/agents/disease/prompt.yaml",
-    "packages/alliance/agents/gene/prompt.yaml",
     "packages/alliance/agents/gene_ontology/prompt.yaml",
     "packages/alliance/agents/go_annotations/prompt.yaml",
     "packages/alliance/agents/ontology_mapping/prompt.yaml",
@@ -115,7 +113,7 @@ def test_extractor_repair_prompt_examples_use_payload_relative_patch_paths():
 
 
 def test_validator_prompts_keep_validation_separate_from_patching():
-    for relative_path in VALIDATOR_PROMPTS:
+    for relative_path in REPAIR_AWARE_VALIDATOR_PROMPTS:
         content = _content(relative_path)
         for fragment in [
             "Keep validator responsibility separate from extraction",
