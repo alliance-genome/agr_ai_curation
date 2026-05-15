@@ -434,29 +434,19 @@ def test_query_ontology_search_methods(monkeypatch):
 def test_query_ontology_term_by_curie_uses_structured_lookup(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
 
-    class FakeRows:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def fetchall(self):
-            return self._rows
-
-    class FakeSession:
-        def execute(self, _query, params):
-            if params == {"curie": "DOID:0050434", "ontologytermtype": "DOTerm"}:
-                return FakeRows(
-                    [("DOID:0050434", "Andersen-Tawil syndrome", "DOTerm")]
-                )
-            return FakeRows([])
-
-        @staticmethod
-        def close():
-            return None
-
     class FakeDb:
         @staticmethod
-        def create_session():
-            return FakeSession()
+        def get_ontology_term(curie):
+            if curie == "DOID:0050434":
+                return SimpleNamespace(
+                    curie="DOID:0050434",
+                    name="Andersen-Tawil syndrome",
+                    namespace="disease_ontology",
+                    definition="A syndrome.",
+                    ontology_type="DOTerm",
+                    synonyms=["long QT syndrome 7"],
+                )
+            return None
 
     class Resolver:
         @staticmethod
@@ -474,14 +464,11 @@ def test_query_ontology_term_by_curie_uses_structured_lookup(monkeypatch):
     )
     assert result.status == "ok"
     assert result.lookup_status == "success"
-    assert result.data == [
-        {
-            "curie": "DOID:0050434",
-            "curie_validated": True,
-            "name": "Andersen-Tawil syndrome",
-            "ontology_type": "DOTerm",
-        }
-    ]
+    assert result.data["curie"] == "DOID:0050434"
+    assert result.data["curie_validated"] is True
+    assert result.data["name"] == "Andersen-Tawil syndrome"
+    assert result.data["ontology_type"] == "DOTerm"
+    assert result.data["synonyms"] == ["long QT syndrome 7"]
     assert result.result_projections[0]["projection_type"] == "ontology_term_reference"
     assert result.lookup_attempts[0]["resolved_id"] == "DOID:0050434"
 
@@ -493,3 +480,231 @@ def test_query_ontology_term_by_curie_uses_structured_lookup(monkeypatch):
     assert missing.status == "ok"
     assert missing.lookup_status == "not_found"
     assert missing.failure_classification == "not_found"
+
+
+def test_query_ontology_term_helpers_use_api_client_methods(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def get_ontology_terms(curies):
+            assert curies == ["GO:0003674", "GO:missing"]
+            return {
+                "GO:0003674": SimpleNamespace(
+                    curie="GO:0003674",
+                    name="molecular_function",
+                    namespace="molecular_function",
+                    definition=None,
+                    ontology_type="GOTerm",
+                    synonyms=[],
+                ),
+                "GO:missing": None,
+            }
+
+        @staticmethod
+        def search_ontology_terms(term, ontology_type, exact_match, include_synonyms, limit):
+            assert (term, ontology_type, exact_match, include_synonyms, limit) == (
+                "molecular",
+                "GOTerm",
+                True,
+                False,
+                5,
+            )
+            return [
+                SimpleNamespace(
+                    curie="GO:0003674",
+                    name="molecular_function",
+                    namespace="molecular_function",
+                    definition=None,
+                    ontology_type="GOTerm",
+                    synonyms=[],
+                )
+            ]
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    bulk = query_fn(method="get_ontology_terms", terms=["GO:0003674", "GO:missing"])
+    assert bulk.status == "ok"
+    assert bulk.count == 1
+    assert bulk.data[0]["curie"] == "GO:0003674"
+
+    search = query_fn(
+        method="search_ontology_terms",
+        term="molecular",
+        ontology_term_type="GOTerm",
+        exact_match=True,
+        include_synonyms=False,
+        limit=5,
+    )
+    assert search.status == "ok"
+    assert search.count == 1
+    assert search.data[0]["ontology_type"] == "GOTerm"
+
+
+def test_query_vocabulary_helpers_use_api_client_methods(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def get_vocabulary_term(vocabulary, term, include_obsolete):
+            assert (vocabulary, term, include_obsolete) == (
+                "ConditionRelation",
+                "part_of",
+                True,
+            )
+            return SimpleNamespace(
+                id=7,
+                vocabulary="ConditionRelation",
+                vocabulary_label="condition relation",
+                name="part_of",
+                abbreviation="part_of",
+                definition="Part of relation.",
+                obsolete=False,
+                synonyms=["part of"],
+            )
+
+        @staticmethod
+        def search_vocabulary_terms(
+            term,
+            vocabulary,
+            exact_match,
+            include_synonyms,
+            include_obsolete,
+            limit,
+        ):
+            assert (term, vocabulary, exact_match, include_synonyms, include_obsolete, limit) == (
+                "part",
+                "ConditionRelation",
+                False,
+                True,
+                False,
+                10,
+            )
+            return [
+                {
+                    "id": 7,
+                    "vocabulary": "ConditionRelation",
+                    "vocabulary_label": "condition relation",
+                    "name": "part_of",
+                    "abbreviation": "part_of",
+                    "definition": "Part of relation.",
+                    "obsolete": False,
+                    "synonyms": ["part of"],
+                }
+            ]
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+
+    direct = query_fn(
+        method="get_vocabulary_term",
+        vocabulary="ConditionRelation",
+        term="part_of",
+        include_obsolete=True,
+    )
+    assert direct.status == "ok"
+    assert direct.lookup_status == "success"
+    assert direct.data["vocabulary"] == "ConditionRelation"
+    assert direct.data["synonyms"] == ["part of"]
+
+    search = query_fn(
+        method="search_vocabulary_terms",
+        vocabulary="ConditionRelation",
+        term="part",
+        limit=10,
+    )
+    assert search.status == "ok"
+    assert search.count == 1
+    assert search.data[0]["abbreviation"] == "part_of"
+
+
+def test_query_data_provider_and_entity_helpers_use_api_client_methods(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class FakeDb:
+        @staticmethod
+        def get_data_providers():
+            return [("WB", "NCBITaxon:6239")]
+
+        @staticmethod
+        def map_entity_names_to_curies(entity_type, entity_names, taxon):
+            assert (entity_type, entity_names, taxon) == (
+                "gene",
+                ["unc-54"],
+                "NCBITaxon:6239",
+            )
+            return [
+                {
+                    "entity_curie": "WB:WBGene00006763",
+                    "entity": "unc-54",
+                    "is_obsolete": False,
+                    "match_type": "exact",
+                    "relevance": 100,
+                }
+            ]
+
+        @staticmethod
+        def map_entity_curies_to_info(entity_type, entity_curies):
+            assert (entity_type, entity_curies) == ("gene", ["WB:WBGene00006763"])
+            return [
+                {
+                    "entity_curie": "WB:WBGene00006763",
+                    "is_obsolete": False,
+                    "entity": "WB:WBGene00006763",
+                }
+            ]
+
+        @staticmethod
+        def map_curies_to_names(category, curies):
+            assert (category, curies) == ("gene", ["WB:WBGene00006763"])
+            return {"WB:WBGene00006763": "unc-54"}
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    providers = query_fn(method="get_data_providers")
+    assert providers.status == "ok"
+    assert providers.data == [{"abbreviation": "WB", "taxon_id": "NCBITaxon:6239"}]
+
+    mapped_names = query_fn(
+        method="map_entity_names_to_curies",
+        entity_type="gene",
+        entity_names=["unc-54"],
+        data_provider="WB",
+    )
+    assert mapped_names.status == "ok"
+    assert mapped_names.data[0]["curie"] == "WB:WBGene00006763"
+    assert mapped_names.data[0]["symbol"] == "unc-54"
+    assert mapped_names.result_projections[0]["resolved_id"] == "WB:WBGene00006763"
+
+    mapped_curies = query_fn(
+        method="map_entity_curies_to_info",
+        entity_type="gene",
+        entity_curies=["WB:WBGene00006763"],
+    )
+    assert mapped_curies.status == "ok"
+    assert mapped_curies.data[0]["curie"] == "WB:WBGene00006763"
+
+    names = query_fn(
+        method="map_curies_to_names",
+        category="gene",
+        curies=["WB:WBGene00006763"],
+    )
+    assert names.status == "ok"
+    assert names.data == [{"curie": "WB:WBGene00006763", "name": "unc-54", "curie_validated": True}]
