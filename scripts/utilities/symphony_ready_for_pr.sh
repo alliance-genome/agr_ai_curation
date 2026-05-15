@@ -307,7 +307,7 @@ auto_bounce_to_in_progress_for_claude() {
 - Head SHA: ${PR_HEAD_SHA:-}
 - Claude review round: ${loop_round}/${loop_max}
 - Claude report: ${report_file}
-- Implementation focus: triage the latest Claude feedback first. If it is actionable, fix it, push, and move to Needs Review. If it is an approval, confirmation, or otherwise has no actionable work, write that disposition and move directly to Human Review Prep without editing code.
+- Implementation focus: triage the latest Claude feedback first. Treat substantive suggestions, non-blocking notes, "worth noting" cleanup, pre-existing divergence, and follow-up implementation as actionable during active development. Fix them, push, and move to Needs Review unless the finding is already resolved, factually wrong, explicitly out of scope, or would cause a regression. Do not skip solely because the touched file was not listed in the ticket; ticket file lists are suggested starting locations, not exhaustive boundaries.
 EOF
 
   set +e
@@ -800,8 +800,12 @@ READY_FOR_PR_INSTRUCTIONS=Claude Code left a review on PR #${pr_num} (round ${lo
 3. If the review contains ANY findings — critical, warning, suggestion, or improvement idea:
    a. Default posture: FIX THEM. Claude suggestions improve code quality and polish.
       Treat suggestions the same as warnings — they are work items, not optional notes.
-      Only skip a suggestion if it is factually incorrect, contradicts the ticket scope,
-      or would introduce a regression. "Non-blocking" does not mean "optional."
+      "Non-blocking", "optional", "worth noting", "future cleanup", and pre-existing
+      divergence notes are still actionable during active development.
+      Only skip a suggestion if it is already resolved, factually incorrect, explicitly
+      out of scope, or would introduce a regression. Do not skip solely because the
+      touched file was not named in the ticket; file lists are suggested starting
+      locations, not exhaustive edit boundaries.
    b. Write your plan into the workpad as a 'Claude Feedback Disposition' section:
       - For each finding: one line with 'will fix' or 'not taken: <concrete reason>'.
       - Do not use 'deferred' — either fix it now or explain why it is wrong/out of scope.

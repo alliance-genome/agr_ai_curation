@@ -452,11 +452,13 @@ build_brief() {
         echo "   Then push and move to Needs Review."
       else
         echo "6. **Triage the latest Ready for PR feedback before editing.**"
-        echo "   If the latest Claude feedback is actionable, fix it, push, check"
-        echo "   GitHub only to confirm older fixed feedback did not regress, and"
-        echo "   move to Needs Review. If the latest Claude feedback is an approval,"
-        echo "   confirmation, or otherwise has no actionable work, write that"
-        echo "   disposition in the workpad and move directly to Human Review Prep."
+        echo "   Treat substantive Claude suggestions, non-blocking notes, 'worth noting'"
+        echo "   cleanup, pre-existing divergence, and follow-up implementation as"
+        echo "   actionable during active development. Fix them, push, check GitHub"
+        echo "   only to confirm older fixed feedback did not regress, and move to"
+        echo "   Needs Review. Skip only findings that are already resolved, factually"
+        echo "   wrong, explicitly out of scope, or regression-causing; do not skip"
+        echo "   solely because a touched file was not listed in the ticket."
       fi
       ;;
     "Human Review")

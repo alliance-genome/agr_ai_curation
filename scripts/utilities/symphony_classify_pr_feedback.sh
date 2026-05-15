@@ -192,10 +192,12 @@ Return JSON only with this exact shape:
 }
 
 Rules:
-- Use "clean" only when the review clearly approves or confirms that no blocking, non-blocking, follow-up, or actionable implementation work remains.
-- Use "actionable" when the review asks for code, tests, docs, config, behavior changes, verification, cleanup, or follow-up implementation before the issue advances.
+- Use "clean" only when the review clearly approves or confirms that no blocking, non-blocking, suggestion, follow-up, cleanup, verification, or actionable implementation work remains.
+- During active development, classify almost any substantive Claude comment as "actionable" even when Claude labels it non-blocking, optional, a suggestion, "worth noting", polish, cleanup, future follow-up, or pre-existing divergence.
+- Use "actionable" when the review asks for or implies code, tests, docs, config, behavior changes, verification, cleanup, legacy/shadow-copy alignment, or follow-up implementation before the issue advances.
 - Use "uncertain" when the review is mixed, ambiguous, truncated, mostly metadata, or does not contain enough information to decide safely.
 - Do not classify as clean just because the review says LGTM, approve, or previous approval stands if it also includes suggestions, warnings, concerns, non-blocking issues, follow-ups, or requests.
+- Only classify as clean when the report is a pure approval/confirmation or when every concrete finding is explicitly documented as already addressed.
 - If unsure, choose "uncertain".
 
 Claude review report:

@@ -375,7 +375,8 @@ EOF
   assert_contains "--state In Progress --from-state Ready for PR" "$(cat "${state_log}")"
   assert_contains "Claude report: ${report_file}" "$(cat "${section_log}")"
   assert_contains "triage the latest Claude feedback first" "$(cat "${section_log}")"
-  assert_contains "move directly to Human Review Prep without editing code" "$(cat "${section_log}")"
+  assert_contains "Treat substantive suggestions" "$(cat "${section_log}")"
+  assert_contains "ticket file lists are suggested starting locations" "$(cat "${section_log}")"
 }
 
 test_claude_wait_zero_still_scans_existing_feedback() {
