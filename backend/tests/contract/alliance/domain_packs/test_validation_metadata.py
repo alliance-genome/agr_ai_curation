@@ -142,6 +142,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
             alliance_registry.get_pack(pack_id)
         )
         for pack_id in (
+            "agr.alliance.gene_expression",
             "gene",
             "agr.alliance.disease",
             "agr.alliance.chemical_condition",
@@ -238,6 +239,51 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         binding.binding_id: binding
         for binding in registries["agr.alliance.chemical_condition"].bindings
     }
+    gene_expression_bindings = {
+        binding.binding_id: binding
+        for binding in registries["agr.alliance.gene_expression"].bindings
+    }
+    relation_binding = gene_expression_bindings["relation_vocabulary_validation"]
+    assert relation_binding.validator_agent is not None
+    assert relation_binding.validator_agent.agent_id == "controlled_vocabulary_validation"
+    assert relation_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert relation_binding.object_types == ("GeneExpressionAnnotation",)
+    assert relation_binding.field_paths == ("relation.name",)
+    assert relation_binding.input_fields["vocabulary"].value == "relation"
+    assert "relation_vocabulary_validation" in registries[
+        "agr.alliance.gene_expression"
+    ].policy_for(
+        "GeneExpressionAnnotation",
+        "relation.name",
+    ).validator_binding_ids
+
+    disease_relation_binding = disease_bindings["disease_relation_cv_lookup"]
+    assert disease_relation_binding.validator_agent is not None
+    assert (
+        disease_relation_binding.validator_agent.agent_id
+        == "controlled_vocabulary_validation"
+    )
+    assert disease_relation_binding.input_fields["vocabulary"].value == (
+        "Disease Relation"
+    )
+    assert disease_relation_binding.input_fields["term_name"].path == (
+        "disease_relation_name"
+    )
+    assert (
+        disease_relation_binding.expected_result_fields["internal_id"]
+        == "disease_relation_id"
+    )
+
+    disease_condition_binding = disease_bindings["disease_condition_relation_lookup"]
+    assert disease_condition_binding.validator_agent is not None
+    assert (
+        disease_condition_binding.validator_agent.agent_id
+        == "controlled_vocabulary_validation"
+    )
+    assert disease_condition_binding.input_fields["vocabulary"].value == (
+        "Condition Relation Type"
+    )
+
     assert chemical_condition_bindings[
         "chemical_condition.chebi_api_lookup"
     ].object_types == ("ChemicalCondition",)
@@ -267,6 +313,25 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     ].policy_for(
         "ChemicalCondition",
         "condition_class.curie",
+    ).validator_binding_ids
+    chemical_relation_binding = chemical_condition_bindings[
+        "chemical_condition.condition_relation_type_lookup"
+    ]
+    assert chemical_relation_binding.validator_agent is not None
+    assert (
+        chemical_relation_binding.validator_agent.agent_id
+        == "controlled_vocabulary_validation"
+    )
+    assert chemical_relation_binding.object_types == ("ChemicalCondition",)
+    assert chemical_relation_binding.field_paths == ("condition_relation_type.name",)
+    assert chemical_relation_binding.input_fields["vocabulary"].value == (
+        "Condition Relation Type"
+    )
+    assert "chemical_condition.condition_relation_type_lookup" in registries[
+        "agr.alliance.chemical_condition"
+    ].policy_for(
+        "ChemicalCondition",
+        "condition_relation_type.name",
     ).validator_binding_ids
 
 

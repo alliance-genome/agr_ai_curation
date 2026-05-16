@@ -22,6 +22,7 @@ from agr_ai_curation_runtime.agr_lookup import (
     LOOKUP_STATUS_NOT_FOUND,
     LOOKUP_STATUS_SUCCESS,
     LOOKUP_STATUS_TRANSIENT,
+    LOOKUP_STATUS_UNDER_DEVELOPMENT,
     attempt_query as _attempt_query,
     bulk_resolution_summary as _bulk_resolution_summary,
     lookup_explanation as _lookup_explanation,
@@ -137,6 +138,13 @@ def _plain_result(result: Any) -> Dict[str, Any]:
     raise TypeError(f"Cannot serialize result of type {type(result).__name__}")
 
 
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _ontology_term_result(result: Any) -> Dict[str, Any]:
     raw = _plain_result(result)
     term = {
@@ -152,6 +160,45 @@ def _ontology_term_result(result: Any) -> Dict[str, Any]:
         if raw.get(key) is not None
     }
     return _validate_curie_in_result(term) if term else term
+
+
+def _vocabulary_term_result(result: Any) -> Dict[str, Any]:
+    raw = _plain_result(result)
+    internal_id = _first_present(raw.get("id"), raw.get("internal_id"))
+    term = {
+        "id": internal_id,
+        "internal_id": internal_id,
+        "vocabulary": raw.get("vocabulary"),
+        "vocabulary_label": raw.get("vocabulary_label"),
+        "name": _first_present(raw.get("name"), raw.get("term_name")),
+        "term_name": _first_present(raw.get("term_name"), raw.get("name")),
+        "abbreviation": raw.get("abbreviation"),
+        "definition": raw.get("definition"),
+        "obsolete": raw.get("obsolete"),
+        "synonyms": raw.get("synonyms") or [],
+    }
+    return {key: value for key, value in term.items() if value is not None}
+
+
+def _vocabulary_term_query(
+    *,
+    term: Optional[str],
+    term_name: Optional[str],
+    abbreviation: Optional[str],
+    synonym: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    for query_field, value in (
+        ("term", term),
+        ("term_name", term_name),
+        ("abbreviation", abbreviation),
+        ("synonym", synonym),
+    ):
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized, query_field
+    return None, None
 
 
 def _entity_mapping_result(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -446,6 +493,10 @@ def agr_curation_query(
     taxon_id: Optional[str] = None,
     term: Optional[str] = None,
     terms: Optional[List[str]] = None,
+    vocabulary: Optional[str] = None,
+    term_name: Optional[str] = None,
+    abbreviation: Optional[str] = None,
+    synonym: Optional[str] = None,
     entity_type: Optional[str] = None,
     entity_names: Optional[List[str]] = None,
     entity_curies: Optional[List[str]] = None,
@@ -455,6 +506,7 @@ def agr_curation_query(
     go_aspect: Optional[str] = None,
     exact_match: bool = False,
     include_synonyms: bool = True,
+    include_obsolete: bool = False,
     limit: Optional[int] = None,
     force: bool = False,
     force_reason: Optional[str] = None,
@@ -486,6 +538,10 @@ def agr_curation_query(
         taxon_id: Alternative to data_provider (NCBITaxon:XXXXX format)
         term: Search term for ontology searches
         terms: CURIE list for bulk ontology term helper paths
+        vocabulary: Controlled vocabulary name or label filter
+        term_name: Controlled vocabulary term name to search or resolve
+        abbreviation: Controlled vocabulary term abbreviation to search or resolve
+        synonym: Controlled vocabulary synonym to search or resolve
         entity_type: Entity helper type (gene, allele, agm, construct, targeting reagent)
         entity_names: Entity names/symbols to map to CURIEs
         entity_curies: Entity CURIEs to map to basic info
@@ -495,6 +551,7 @@ def agr_curation_query(
         go_aspect: GO aspect filter (molecular_function, biological_process, cellular_component)
         exact_match: Require exact match for ontology searches
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
+        include_obsolete: Include obsolete controlled vocabulary terms
         limit: Maximum results to return
         force: Skip symbol validation (default: False). Requires force_reason.
         force_reason: Explanation for why validation is being skipped (required if force=True)
@@ -519,6 +576,23 @@ def agr_curation_query(
             )
         if method == "get_ontology_terms":
             return _attempt_query(method, terms=terms or curies)
+        if method in {"get_vocabulary_term", "search_vocabulary_terms"}:
+            vocabulary_query, query_field = _vocabulary_term_query(
+                term=term,
+                term_name=term_name,
+                abbreviation=abbreviation,
+                synonym=synonym,
+            )
+            return _attempt_query(
+                method,
+                vocabulary=vocabulary,
+                term=vocabulary_query,
+                query_field=query_field,
+                exact_match=True if method == "get_vocabulary_term" else exact_match,
+                include_synonyms=include_synonyms,
+                include_obsolete=include_obsolete,
+                limit=limit_value,
+            )
         if method == "search_ontology_terms":
             return _attempt_query(
                 method,
@@ -2164,6 +2238,121 @@ def agr_curation_query(
                 ),
             )
 
+        # CONTROLLED VOCABULARY TERM LOOKUP
+        elif method == "get_vocabulary_term":
+            vocabulary_query, query_field = _vocabulary_term_query(
+                term=term,
+                term_name=term_name,
+                abbreviation=abbreviation,
+                synonym=synonym,
+            )
+            attempted_query = _attempt_query(
+                method,
+                vocabulary=vocabulary,
+                term=vocabulary_query,
+                query_field=query_field,
+                exact_match=True,
+                include_synonyms=include_synonyms,
+                include_obsolete=include_obsolete,
+                limit=limit_value,
+            )
+            if not vocabulary or not vocabulary_query:
+                return _err(
+                    "get_vocabulary_term requires vocabulary and a term, term_name, abbreviation, or synonym query",
+                    method=method,
+                    attempted_query=attempted_query,
+                )
+            search_method = getattr(db, "search_vocabulary_terms", None)
+            if not callable(search_method):
+                return _err(
+                    "AGR Curation API client does not expose search_vocabulary_terms in this runtime.",
+                    method=method,
+                    attempted_query=attempted_query,
+                    failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
+                )
+
+            results = search_method(
+                term=vocabulary_query,
+                vocabulary=vocabulary,
+                exact_match=True,
+                include_synonyms=include_synonyms,
+                include_obsolete=include_obsolete,
+                limit=limit_value,
+            )
+            results_data = [_vocabulary_term_result(result) for result in results]
+            obsolete_count = sum(1 for result in results_data if result.get("obsolete"))
+            if obsolete_count:
+                warnings.append(f"obsolete_vocabulary_terms:{obsolete_count}")
+            return _lookup_response(
+                method=method,
+                data=results_data,
+                count=len(results_data),
+                warnings=warnings,
+                message=(
+                    None
+                    if results_data
+                    else (
+                        f"Vocabulary term not found in {vocabulary!r}: "
+                        f"{vocabulary_query}"
+                    )
+                ),
+                attempted_query=attempted_query,
+                exact_lookup=True,
+            )
+
+        # CONTROLLED VOCABULARY TERM SEARCH
+        elif method == "search_vocabulary_terms":
+            vocabulary_query, query_field = _vocabulary_term_query(
+                term=term,
+                term_name=term_name,
+                abbreviation=abbreviation,
+                synonym=synonym,
+            )
+            attempted_query = _attempt_query(
+                method,
+                vocabulary=vocabulary,
+                term=vocabulary_query,
+                query_field=query_field,
+                exact_match=exact_match,
+                include_synonyms=include_synonyms,
+                include_obsolete=include_obsolete,
+                limit=limit_value,
+            )
+            if not vocabulary and not vocabulary_query:
+                return _err(
+                    "search_vocabulary_terms requires vocabulary and/or a term, term_name, abbreviation, or synonym query",
+                    method=method,
+                    attempted_query=attempted_query,
+                )
+            search_method = getattr(db, "search_vocabulary_terms", None)
+            if not callable(search_method):
+                return _err(
+                    "AGR Curation API client does not expose search_vocabulary_terms in this runtime.",
+                    method=method,
+                    attempted_query=attempted_query,
+                    failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
+                )
+
+            results = search_method(
+                term=vocabulary_query,
+                vocabulary=vocabulary,
+                exact_match=exact_match,
+                include_synonyms=include_synonyms,
+                include_obsolete=include_obsolete,
+                limit=limit_value,
+            )
+            results_data = [_vocabulary_term_result(result) for result in results]
+            obsolete_count = sum(1 for result in results_data if result.get("obsolete"))
+            if obsolete_count:
+                warnings.append(f"obsolete_vocabulary_terms:{obsolete_count}")
+            return _lookup_response(
+                method=method,
+                data=results_data,
+                count=len(results_data),
+                warnings=warnings,
+                attempted_query=attempted_query,
+            )
+
         # MAP ENTITY NAMES TO CURIES
         elif method == "map_entity_names_to_curies":
             if not entity_type or not entity_names:
@@ -2408,6 +2597,7 @@ def agr_curation_query(
                 "search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id, "
                 "get_species, get_data_providers, "
                 "get_ontology_term, get_ontology_terms, search_ontology_terms, "
+                "get_vocabulary_term, search_vocabulary_terms, "
                 "search_anatomy_terms, "
                 "search_life_stage_terms, search_go_terms, "
                 "map_entity_names_to_curies, map_entity_curies_to_info, "

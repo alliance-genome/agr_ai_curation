@@ -604,6 +604,9 @@ metadata:
       - validator_id: chemical_condition.condition_ontology_lookup
         display_name: Condition ontology lookup
         description: Validate ZECO/XCO condition class and condition ID terms against configured ontology sources once condition validators are wired.
+      - validator_id: chemical_condition.condition_relation_type_lookup
+        display_name: Condition relation type lookup
+        description: Validate condition relation type names against controlled vocabulary rows without treating them as ontology terms.
     blocked:
       - validator_id: chemical_condition.export_submission_projection
         display_name: Chemical condition ready for export
@@ -709,6 +712,34 @@ metadata:
         expected_result_fields:
           condition_class_curie: condition_class.curie
           condition_id_curie: condition_id.curie
+        definition_state: in_development
+      - binding_id: chemical_condition.condition_relation_type_lookup
+        display_name: Condition relation type lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: controlled_vocabulary_validation
+        state_explanation: Condition relation type lookup remains under development until controlled vocabulary package tool dispatch is reviewed end to end.
+        applies_to:
+          domain_pack_id: agr.alliance.chemical_condition
+          object_types:
+            - ChemicalCondition
+          field_paths:
+            - condition_relation_type.name
+        input_fields:
+          vocabulary:
+            source: literal
+            value: Condition Relation Type
+          term_name:
+            source: payload
+            path: condition_relation_type.name
+          abbreviation:
+            source: payload
+            path: condition_relation_type.abbreviation
+            required: false
+        expected_result_fields:
+          term_name: condition_relation_type.name
+          vocabulary: condition_relation_type.vocabulary
+          internal_id: condition_relation_type.id
         definition_state: in_development
       - binding_id: chemical_condition.export_projection_validator
         display_name: Chemical condition ready for export

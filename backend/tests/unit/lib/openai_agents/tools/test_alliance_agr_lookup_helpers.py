@@ -89,6 +89,47 @@ def test_alliance_vocabulary_projection_metadata():
     assert projection["resolved_id"] == "AGR:0000001"
 
 
+def test_alliance_controlled_vocabulary_projection_metadata():
+    projection = projection_from_result(
+        "get_vocabulary_term",
+        {
+            "id": 101,
+            "internal_id": 101,
+            "vocabulary": "Disease Relation",
+            "term_name": "is_implicated_in",
+            "name": "is_implicated_in",
+            "abbreviation": "implicated",
+            "obsolete": False,
+        },
+    )
+
+    assert alliance_projection_type("get_vocabulary_term") == "vocabulary_term_reference"
+    assert alliance_projection_type("search_vocabulary_terms") == "vocabulary_term_reference"
+    assert projection["projection_type"] == "vocabulary_term_reference"
+    assert projection["object_type"] == "VocabularyTerm"
+    assert projection["resolved_id"] == 101
+    assert projection["resolved_label"] == "is_implicated_in"
+    assert projection["provider_data"]["vocabulary"] == "Disease Relation"
+    assert projection["provider_data"]["abbreviation"] == "implicated"
+
+
+def test_alliance_controlled_vocabulary_projection_preserves_zero_id():
+    projection = projection_from_result(
+        "get_vocabulary_term",
+        {
+            "id": 0,
+            "internal_id": 0,
+            "vocabulary": "Disease Relation",
+            "term_name": "is_implicated_in",
+            "name": "is_implicated_in",
+            "obsolete": False,
+        },
+    )
+
+    assert projection["resolved_id"] == 0
+    assert projection["projection_key"] == "0"
+
+
 def test_alliance_entity_projection_and_candidate_metadata():
     projection = projection_from_entity_match(
         "map_entity_names_to_curies",

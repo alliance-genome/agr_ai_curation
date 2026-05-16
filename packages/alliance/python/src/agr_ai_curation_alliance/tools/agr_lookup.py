@@ -38,8 +38,13 @@ ALLIANCE_DETAIL_LOOKUP_STAGES = frozenset(
 )
 ALLIANCE_LOOKUP_PROVIDER_DATA_KEYS = (
     "curie",
+    "id",
+    "internal_id",
     "symbol",
     "name",
+    "term_name",
+    "vocabulary",
+    "vocabulary_label",
     "taxon",
     "gene_type",
     "match_type",
@@ -48,6 +53,9 @@ ALLIANCE_LOOKUP_PROVIDER_DATA_KEYS = (
     "namespace",
     "abbreviation",
     "display_name",
+    "definition",
+    "obsolete",
+    "synonyms",
 )
 
 _ONTOLOGY_METHODS = frozenset(
@@ -63,7 +71,9 @@ _ONTOLOGY_METHODS = frozenset(
 )
 _VOCABULARY_METHODS = frozenset(
     {
+        "get_vocabulary_term",
         "map_curies_to_names",
+        "search_vocabulary_terms",
     }
 )
 _ENTITY_METHODS = frozenset(

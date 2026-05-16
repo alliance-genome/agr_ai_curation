@@ -842,11 +842,43 @@ metadata:
       - validator_id: gene_expression.ontology_term_resolution
         display_name: Expression ontology term resolution
         description: Validate embedded MMO, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
+      - validator_id: gene_expression.relation_vocabulary_lookup
+        display_name: Relation vocabulary lookup
+        description: Validate GeneExpressionAnnotation relation names against controlled vocabulary rows without treating them as ontology terms.
     blocked:
       - validator_id: gene_expression.live_write_transport
         display_name: Live database write path
         blocked_by: read_only_curation_db
         description: Direct live DB writes remain blocked until an approved Alliance write transport replaces the read-only submission handoff adapter.
+  validator_bindings:
+    under_development:
+      - binding_id: relation_vocabulary_validation
+        display_name: Relation vocabulary lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: controlled_vocabulary_validation
+        state_explanation: Relation vocabulary validation remains under development until controlled vocabulary package tool dispatch is reviewed end to end.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - relation.name
+        input_fields:
+          vocabulary:
+            source: literal
+            value: relation
+          term_name:
+            source: payload
+            path: relation.name
+          abbreviation:
+            source: payload
+            path: relation.abbreviation
+            required: false
+        expected_result_fields:
+          term_name: relation.name
+          vocabulary: relation.vocabulary
+          internal_id: relation.id
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

@@ -82,6 +82,13 @@ def _source_metadata(tool_name: str | None, method: str) -> dict[str, Any]:
     )
 
 
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def projection_from_result(
     method: str,
     result: Mapping[str, Any],
@@ -93,18 +100,23 @@ def projection_from_result(
     # Lookup families return different identifier/label shapes:
     # ontology rows use curie/name, entity rows may use primary_external_id/symbol,
     # and provider rows use abbreviation/display_name.
-    resolved_id = (
-        result.get("curie")
-        or result.get("primary_external_id")
-        or result.get("abbreviation")
+    resolved_id = _first_present(
+        result.get("curie"),
+        result.get("primary_external_id"),
+        result.get("id"),
+        result.get("internal_id"),
+        result.get("abbreviation"),
     )
-    resolved_label = (
-        result.get("symbol")
-        or result.get("name")
-        or result.get("display_name")
-        or result.get("abbreviation")
+    resolved_label = _first_present(
+        result.get("symbol"),
+        result.get("name"),
+        result.get("display_name"),
+        result.get("abbreviation"),
     )
-    projection_key = str(resolved_id or resolved_label or metadata.projection_type)
+    projection_key_value = _first_present(
+        resolved_id, resolved_label, metadata.projection_type
+    )
+    projection_key = str(projection_key_value)
     provider_data = {
         key: result.get(key)
         for key in metadata.provider_data_keys
