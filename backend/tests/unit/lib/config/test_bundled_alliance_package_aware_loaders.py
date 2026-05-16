@@ -250,6 +250,8 @@ def test_legacy_ontology_mapping_schema_matches_package_validator_shape(
         "StructuredMessageEnvelope",
         "ConfigDict",
         "from typing import List",
+        "typing.List",
+        "model_config",
         "actor:",
         "findings:",
         "unmapped_terms",
