@@ -449,6 +449,7 @@ def _refresh_domain_envelope_validation_for_ref(
         policy_result.envelope,
         domain_pack,
         registry=policy_result.registry,
+        source_envelope_revision=envelope_row.revision,
     )
     appended_findings = (
         *policy_result.appended_findings,

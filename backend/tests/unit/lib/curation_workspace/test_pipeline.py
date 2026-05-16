@@ -498,20 +498,6 @@ object_definitions:
         summary_fields:
           - gene.identifier
           - gene.symbol
-      validator_bindings:
-        active:
-          - binding_id: fixture.identifier_prefix
-            validator_agent:
-              package_id: fixture.pack
-              agent_id: identifier_prefix_validator
-            applies_to:
-              domain_pack_id: fixture.pack
-              object_types:
-                - GeneAssertion
-              field_paths:
-                - gene.identifier
-            required: true
-            blocking: true
     fields:
       - field_path: gene.identifier
         field_type: string
@@ -519,6 +505,27 @@ object_definitions:
       - field_path: gene.symbol
         field_type: string
         required: true
+metadata:
+  validator_bindings:
+    active:
+      - binding_id: fixture.identifier_prefix
+        validator_agent:
+          package_id: fixture.pack
+          agent_id: identifier_prefix_validator
+        applies_to:
+          domain_pack_id: fixture.pack
+          object_types:
+            - GeneAssertion
+          field_paths:
+            - gene.identifier
+        input_fields:
+          identifier:
+            source: payload
+            path: gene.identifier
+        expected_result_fields:
+          identifier: gene.identifier
+        required: true
+        blocking: true
 """.strip(),
         encoding="utf-8",
     )
@@ -549,7 +556,15 @@ object_definitions:
     real_dispatch = module.dispatch_active_validator_bindings
     dispatch_calls = []
 
-    def _fake_validator_dispatch(envelope, domain_pack, *, registry=None):
+    def _fake_validator_dispatch(
+        envelope,
+        domain_pack,
+        *,
+        registry=None,
+        source_envelope_revision=None,
+    ):
+        assert source_envelope_revision == 1
+
         def _runner(request, *, binding):
             dispatch_calls.append(
                 {
@@ -585,6 +600,7 @@ object_definitions:
             domain_pack,
             registry=registry,
             runner=_runner,
+            source_envelope_revision=source_envelope_revision,
         )
 
     monkeypatch.setattr(
@@ -700,13 +716,23 @@ object_definitions:
     envelope_row = db_session.get(DomainEnvelopeModel, "env-validation-1")
     assert envelope_row.revision == 2
     assert len(dispatch_calls) == 1
-    assert dispatch_calls[0]["request"].selected_inputs == {}
+    assert dispatch_calls[0]["request"].selected_inputs == {
+        "identifier": "BAD:0001",
+    }
+    assert dispatch_calls[0]["request"].target.input_values == (
+        dispatch_calls[0]["request"].selected_inputs
+    )
     assert envelope_row.envelope_json["validation_findings"][0]["code"] == (
         "domain_pack.validator_unresolved"
     )
     assert envelope_row.envelope_json["validation_findings"][0]["details"][
         "validation_request"
-    ]["target"]["input_values"] == {}
+    ]["target"]["input_values"] == {
+        "identifier": "BAD:0001",
+    }
+    assert envelope_row.envelope_json["validation_findings"][0]["details"][
+        "validation_metadata"
+    ]["source_envelope_revision"] == 1
     indexed_findings = db_session.scalars(select(DomainValidationFinding)).all()
     assert len(indexed_findings) == 1
     assert indexed_findings[0].field_path == "gene.identifier"

@@ -196,6 +196,7 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
         _envelope(),
         pack,
         runner=_runner,
+        source_envelope_revision=7,
     )
 
     request = captured["request"]
@@ -210,6 +211,7 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
     assert finding.status.value == "resolved"
     assert finding.code == "domain_pack.validator_resolved"
     assert finding.field_ref.field_path == "gene.identifier"
+    assert finding.details["validation_metadata"]["source_envelope_revision"] == 7
     assert finding.details["validation_result"]["resolved_objects"][0]["object_type"] == "Gene"
     materialized_gene = next(
         domain_object

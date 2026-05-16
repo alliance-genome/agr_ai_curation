@@ -119,6 +119,36 @@ def test_extractor_repair_prompt_examples_use_payload_relative_patch_paths():
             assert fragment not in content, f"{relative_path} has {fragment}"
 
 
+def test_extractor_prompts_delegate_active_bound_fields_to_validators():
+    lookup_tool_id = "_".join(("agr", "curation", "query"))
+    required_fragments = [
+        "active validator bindings",
+        "authority",
+        "evidence-backed unresolved objects",
+        "selector inputs",
+        "unresolved validator outcomes remain envelope validation findings",
+        "bounded repair request",
+    ]
+    forbidden_fragments = [
+        "normalizes retained",
+        "normalize retained",
+        "normalize the retained",
+        f"normalized with `{lookup_tool_id}`",
+        "normalize to a single canonical form and ontology id",
+        "normalize to one entry",
+        "returned by agr lookup",
+    ]
+
+    for relative_path in EXTRACTOR_PROMPTS:
+        content = _content(relative_path)
+        normalized_content = re.sub(r"\s+", " ", content).lower()
+
+        for fragment in required_fragments:
+            assert fragment in normalized_content, f"{relative_path} missing {fragment}"
+        for fragment in forbidden_fragments:
+            assert fragment not in normalized_content, f"{relative_path} contains {fragment}"
+
+
 def test_validator_prompts_keep_validation_separate_from_patching():
     for relative_path in REPAIR_AWARE_VALIDATOR_PROMPTS:
         content = _content(relative_path)

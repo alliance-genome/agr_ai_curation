@@ -74,6 +74,7 @@ def dispatch_active_validator_bindings(
     actor_id: str = "domain_validator_dispatch",
     registry: DomainPackValidationRegistry | None = None,
     runner: DomainValidatorAgentRunner | None = None,
+    source_envelope_revision: int | None = None,
 ) -> ActiveValidatorDispatchResult:
     """Dispatch active validator bindings and append result findings."""
 
@@ -151,6 +152,7 @@ def dispatch_active_validator_bindings(
             domain_pack.metadata,
             materialization_items,
             actor_id=actor_id,
+            source_envelope_revision=source_envelope_revision,
         )
         updated_envelope = materialization_result.envelope
         appended_findings.extend(materialization_result.appended_findings)

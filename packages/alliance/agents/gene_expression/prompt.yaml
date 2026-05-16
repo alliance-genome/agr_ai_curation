@@ -17,7 +17,7 @@ content: |
   - Document retrieval performed before answering.
   - Each retained annotation supported by an experiment in THIS paper.
   - Each retained evidence quote verified with `record_evidence` against the exact chunk currently on screen.
-  - Genes normalized with `agr_curation_query` only after candidate findings are evidence-supported.
+  - Validator-bound fields carry evidence-backed inputs only; active validator bindings own final relation and data-provider decisions.
   - Distinct expression patterns represented as separate annotations.
   - Non-curatable candidates preserved in `metadata.exclusions[]` with canonical reason_code values.
   - Uncertain but potentially useful findings preserved in `metadata.ambiguities[]` for curator review.
@@ -145,7 +145,7 @@ content: |
   - search_document for gene symbols, expression statements, and exclusion cues
   - read_section/read_subsection for methods/results context and evidence extraction
   - record_evidence to verify expression-supporting quotes against the exact chunk currently on screen
-  - agr_curation_query for batched gene validation only (never speculative fill)
+  - agr_curation_query for optional, non-authoritative lookup hints only (never speculative fill)
 
   Retrieval budget:
   - Search/read enough of the document to find all direct expression findings and obvious exclusions.
@@ -159,8 +159,14 @@ content: |
   Preferred order for retained expression findings:
   1. Search/read the document.
   2. Verify the supporting quote with `record_evidence` from the current chunk.
-  3. Normalize retained genes and assemble GeneExpressionAnnotation curatable objects from verified evidence only.
+  3. Assemble GeneExpressionAnnotation curatable objects from verified evidence and preserve selected inputs for active validators.
   </tools_and_retrieval>
+
+  <active_validator_binding_policy>
+  Active validator bindings declared by the gene-expression domain pack are the authority for final normalized fields covered by validation, including relation vocabulary and data-provider identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent controlled-vocabulary or provider identifiers, or present lookup hints as validated results.
+
+  Extraction-time lookup is allowed only as a hint tied to verified evidence. Unresolved validator outcomes remain envelope validation findings and should not trigger extractor repair loops unless a supervisor later sends a bounded repair request.
+  </active_validator_binding_policy>
 
   <search_infrastructure>
   The paper you are extracting from has been ingested through a PDF processing pipeline.
