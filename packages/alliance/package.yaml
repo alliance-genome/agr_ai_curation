@@ -47,6 +47,8 @@ agent_bundles:
   - name: disease_extractor
     has_schema: true
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: experimental_condition
+    has_schema: true
   - name: gene
     has_schema: true
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]

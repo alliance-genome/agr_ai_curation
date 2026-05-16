@@ -673,7 +673,7 @@ object_definitions:
         definition_state: in_development
         metadata:
           validatable: true
-          validator_binding_id: disease_experimental_condition_lookup
+          validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
           repair:
@@ -694,7 +694,7 @@ object_definitions:
         definition_state: in_development
         metadata:
           validatable: true
-          validator_binding_id: disease_experimental_condition_lookup
+          validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
           repair:
@@ -716,7 +716,7 @@ object_definitions:
         definition_state: in_development
         metadata:
           validatable: true
-          validator_binding_id: disease_experimental_condition_lookup
+          validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
           repair:
@@ -738,7 +738,7 @@ object_definitions:
         definition_state: in_development
         metadata:
           validatable: true
-          validator_binding_id: disease_experimental_condition_lookup
+          validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
           repair:
@@ -760,7 +760,7 @@ object_definitions:
         definition_state: in_development
         metadata:
           validatable: true
-          validator_binding_id: disease_experimental_condition_lookup
+          validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
           repair:
@@ -846,6 +846,9 @@ metadata:
       - validator_id: disease.condition_relation_lookup
         display_name: Condition relation lookup
         description: Validate condition relation names and condition ontology curies against public.conditionrelation and public.experimentalcondition projections.
+      - validator_id: experimental_condition_validation
+        display_name: Experimental condition validation
+        description: Compose disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable condition decision.
     blocked:
       - validator_id: disease.subject_materialization
         display_name: Disease subject lookup
@@ -931,13 +934,69 @@ metadata:
           term_name: disease_relation_name
           vocabulary: disease_relation_vocabulary
           internal_id: disease_relation_id
-      - binding_id: disease_experimental_condition_lookup
-        display_name: Experimental condition lookup
-        state_explanation: Experimental condition lookup remains informational until condition relation validator dispatch is wired.
+      - binding_id: experimental_condition_validation
+        display_name: Experimental condition validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: experimental_condition_validation
+        state_explanation: Composite experimental-condition validation remains under development until condition relation, condition ontology, chemical, taxon, provider, and quantity/unit component prerequisites are all active.
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
             - DiseaseAnnotation
+          field_paths:
+            - condition_relations[0].conditions
+            - condition_relations[0].condition_relation_type.name
+            - condition_relations[0].conditions[0].condition_class.curie
+            - condition_relations[0].conditions[0].condition_id.curie
+            - condition_relations[0].conditions[0].condition_chemical.curie
+            - condition_relations[0].conditions[0].condition_taxon.curie
+            - condition_relations[0].conditions[0].condition_free_text
+            - condition_relations[0].conditions[0].condition_summary
+        input_fields:
+          condition_statement:
+            source: payload
+            path: condition_relations[0].conditions[0].condition_summary
+            required: false
+          condition_relation_type:
+            source: payload
+            path: condition_relations[0].condition_relation_type.name
+            required: false
+          condition_components:
+            source: payload
+            path: condition_relations[0].conditions
+            required: false
+          condition_class_curie:
+            source: payload
+            path: condition_relations[0].conditions[0].condition_class.curie
+            required: false
+          condition_id_curie:
+            source: payload
+            path: condition_relations[0].conditions[0].condition_id.curie
+            required: false
+          condition_chemical_curie:
+            source: payload
+            path: condition_relations[0].conditions[0].condition_chemical.curie
+            required: false
+          condition_taxon_curie:
+            source: payload
+            path: condition_relations[0].conditions[0].condition_taxon.curie
+            required: false
+          condition_free_text:
+            source: payload
+            path: condition_relations[0].conditions[0].condition_free_text
+            required: false
+          data_provider_abbreviation:
+            source: payload
+            path: data_provider.abbreviation
+            required: false
+          evidence_quote:
+            source: evidence_record
+            path: quote
+            required: false
+        expected_result_fields:
+          condition_id: ExperimentalCondition.condition_id
+          normalized_components: ExperimentalCondition.components
       - binding_id: disease_condition_relation_lookup
         display_name: Condition relation type lookup
         validator_agent:

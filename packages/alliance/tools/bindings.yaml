@@ -371,6 +371,18 @@ tools:
             - get_data_provider
             - get_data_providers
           description: The Data Provider Validation agent validates provider abbreviations and provider-to-taxon consistency.
+        experimental_condition_validation:
+          agent_name: Experimental Condition Validation Agent
+          methods:
+            - get_ontology_term
+            - get_ontology_terms
+            - search_ontology_terms
+            - map_curies_to_names
+            - get_vocabulary_term
+            - search_vocabulary_terms
+            - get_data_provider
+            - get_data_providers
+          description: The Experimental Condition Validation agent composes ontology, controlled vocabulary, data-provider, taxon, and chemical component validation evidence into one condition-level decision.
       agent_studio:
         prompt_description: "Structured API for Alliance curation database lookups. Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
         diagnostic:

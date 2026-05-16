@@ -1,0 +1,52 @@
+# =============================================================================
+# AGENT DEFINITION: experimental_condition
+# =============================================================================
+# Validates composite Alliance ExperimentalCondition payloads.
+# Tool name generated at runtime: ask_experimental_condition_specialist
+# =============================================================================
+
+agent_id: experimental_condition_validation
+
+name: "Experimental Condition Validation Agent"
+
+description: >
+  Validates composite Alliance experimental-condition payloads by composing
+  condition ontology, chemical, taxon, controlled vocabulary, and data-provider
+  component checks into one auditable condition-level decision.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for validating ExperimentalCondition payloads that combine condition
+    class/id ontology terms, condition chemicals, condition taxa, relation
+    vocabulary, data-provider context, free text, and quantity/unit evidence.
+  batchable: true
+  batching_instructions: >
+    When validating multiple experimental conditions, combine them into one
+    request with one target per condition and preserve each component's field
+    path, expected result field, and lower-level validator/tool evidence.
+
+tools:
+  - agr_curation_query
+  - chebi_api_call
+
+output_schema: ExperimentalConditionValidationResult
+
+model_config:
+  model: "${AGENT_EXPERIMENTAL_CONDITION_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+frontend:
+  icon: "EC"
+  show_in_palette: true
+
+group_rules_enabled: false
