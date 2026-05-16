@@ -1060,19 +1060,47 @@ metadata:
           taxon: disease_annotation_subject.taxon
       - binding_id: disease_reference_materialization
         display_name: Reference lookup
-        state_explanation: Durable reference ID materialization is blocked by ALL-425.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: reference_validation
+        state_explanation: Reference validation is prepared around the API-backed package tool but remains metadata-only until dependent disease materialization and export flows are activated.
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
             - DiseaseAnnotation
           field_paths:
+            - single_reference.reference_id
             - single_reference.curie
+            - single_reference.title
         input_fields:
+          reference_id:
+            source: payload
+            path: single_reference.reference_id
+            required: false
           curie:
             source: payload
             path: single_reference.curie
+            required: false
+          pmid:
+            source: payload
+            path: single_reference.pmid
+            required: false
+          doi:
+            source: payload
+            path: single_reference.doi
+            required: false
+          title:
+            source: payload
+            path: single_reference.title
+            required: false
+          source_document_id:
+            source: envelope_metadata
+            path: document_id
+            required: false
         expected_result_fields:
+          reference_id: single_reference.reference_id
           curie: single_reference.curie
+          title: single_reference.title
       - binding_id: disease_evidence_code_lookup
         display_name: Evidence code lookup
         state_explanation: ECO evidence-code mapping is blocked by ALL-425.

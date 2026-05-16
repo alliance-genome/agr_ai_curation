@@ -74,6 +74,8 @@ agent_bundles:
   - name: phenotype_extractor
     has_schema: true
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: reference
+    has_schema: true
   - name: subject_entity
     has_schema: true
   - name: tsv_formatter

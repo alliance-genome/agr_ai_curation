@@ -1,0 +1,48 @@
+# =============================================================================
+# AGENT DEFINITION: reference
+# =============================================================================
+# Resolves Alliance literature references through the package-owned API client tool.
+# Tool name generated at runtime: ask_reference_specialist
+# =============================================================================
+
+agent_id: reference_validation
+
+name: "Reference Validation Agent"
+
+description: >
+  Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference ID,
+  title, or citation text through the Alliance literature reference API client.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for validating and materializing source references, including exact
+    PMID/DOI/AGRKB/MOD reference lookup and fuzzy title or citation search.
+  batchable: true
+  batching_instructions: >
+    When validating multiple references, keep each reference's identifier,
+    title, citation, and source document context distinct in the request.
+
+tools:
+  - agr_literature_reference_lookup
+
+output_schema: ReferenceValidationResult
+
+model_config:
+  model: "${AGENT_REFERENCE_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+frontend:
+  icon: "book"
+  show_in_palette: true
+
+group_rules_enabled: false

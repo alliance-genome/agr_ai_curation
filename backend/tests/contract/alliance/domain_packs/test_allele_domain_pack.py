@@ -128,7 +128,21 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
     }
 
     validator_bindings = metadata.metadata["validator_bindings"]
-    assert validator_bindings["under_development"] == []
+    under_development_bindings = {
+        binding["binding_id"]: binding
+        for binding in validator_bindings["under_development"]
+    }
+    assert set(under_development_bindings) == {"source_reference_validation"}
+    reference_binding = under_development_bindings["source_reference_validation"]
+    assert reference_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "reference_validation",
+    }
+    assert reference_binding["expected_result_fields"] == {
+        "reference_id": "Reference.reference_id",
+        "curie": "Reference.curie",
+        "title": "Reference.title",
+    }
     active_binding = validator_bindings["active"][0]
     assert active_binding["binding_id"] == "allele_pending_envelope_validator"
     assert active_binding["display_name"] == "Data check"

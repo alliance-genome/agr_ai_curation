@@ -403,6 +403,50 @@ metadata:
         input_fields: {}
         expected_result_fields: {}
         definition_state: in_development
+    under_development:
+      - binding_id: source_reference_validation
+        display_name: Source reference validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: reference_validation
+        state_explanation: Reference validation is prepared around the API-backed package tool but remains metadata-only until dependent reference materialization and export flows are activated.
+        applies_to:
+          domain_pack_id: agr.alliance.allele
+          object_types:
+            - Reference
+          field_paths:
+            - reference_id
+            - curie
+            - title
+        input_fields:
+          reference_id:
+            source: payload
+            path: reference_id
+            required: false
+          curie:
+            source: payload
+            path: curie
+            required: false
+          pmid:
+            source: payload
+            path: pmid
+            required: false
+          doi:
+            source: payload
+            path: doi
+            required: false
+          title:
+            source: payload
+            path: title
+            required: false
+          source_document_id:
+            source: envelope_metadata
+            path: document_id
+            required: false
+        expected_result_fields:
+          reference_id: Reference.reference_id
+          curie: Reference.curie
+          title: Reference.title
   association_metadata:
     association_type: allele_paper_evidence
     linkml_grounding:
