@@ -7,8 +7,6 @@ Tests the helper functions that build registry entries from YAML configurations.
 import shutil
 from pathlib import Path
 
-import pytest
-
 from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
 from src.lib.config import agent_loader
 from src.lib.agent_studio.registry_builder import (
