@@ -226,6 +226,44 @@ def test_allele_extractor_schema_rejects_extractor_owned_allele_identity(allele_
     assert "active allele validator" in str(exc_info.value)
 
 
+def test_allele_extractor_schema_rejects_pre_validation_allele_objects(allele_schema):
+    payload = _valid_allele_envelope_payload()
+    payload["curatable_objects"].insert(
+        2,
+        {
+            "object_type": "Allele",
+            "object_role": "validated_reference",
+            "pending_ref_id": "allele-reference-1",
+            "model_ref": "AllelePayload",
+            "definition_state": "in_development",
+            "payload": {},
+        },
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        allele_schema.model_validate(payload)
+
+    assert "validator-materialized object types" in str(exc_info.value)
+    assert "Allele" in str(exc_info.value)
+    assert "Active allele validation" in str(exc_info.value)
+
+
+def test_allele_extractor_schema_rejects_pre_validation_allele_object_refs(
+    allele_schema,
+):
+    payload = _valid_allele_envelope_payload()
+    payload["curatable_objects"][-1]["object_refs"].append(
+        {"pending_ref_id": "allele-reference-1", "object_type": "Allele"}
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        allele_schema.model_validate(payload)
+
+    assert "object_refs[]" in str(exc_info.value)
+    assert "validator-materialized object types" in str(exc_info.value)
+    assert "Allele" in str(exc_info.value)
+
+
 def test_allele_extractor_schema_accepts_bounded_repair_mode_output(allele_schema):
     payload = deepcopy(_valid_allele_envelope_payload())
     payload["repair_mode"] = True
