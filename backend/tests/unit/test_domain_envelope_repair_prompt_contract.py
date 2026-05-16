@@ -23,6 +23,15 @@ EXTRACTOR_PROMPTS = [
     "packages/alliance/agents/phenotype_extractor/prompt.yaml",
 ]
 
+ACTIVE_BINDING_EXTRACTOR_PROMPTS = [
+    "packages/alliance/agents/allele_extractor/prompt.yaml",
+    "packages/alliance/agents/chemical_extractor/prompt.yaml",
+    "packages/alliance/agents/disease_extractor/prompt.yaml",
+    "packages/alliance/agents/gene_expression/prompt.yaml",
+    "packages/alliance/agents/gene_extractor/prompt.yaml",
+    "packages/alliance/agents/phenotype_extractor/prompt.yaml",
+]
+
 EXTRACTOR_OUTPUT_SCHEMAS = {
     "packages/alliance/agents/allele_extractor/agent.yaml": "AlleleExtractorRepairResponse",
     "packages/alliance/agents/chemical_extractor/agent.yaml": "ChemicalExtractorRepairResponse",
@@ -117,6 +126,34 @@ def test_extractor_repair_prompt_examples_use_payload_relative_patch_paths():
             assert re.search(pattern, content) is None, f"{relative_path} has {pattern}"
         for fragment in forbidden_fragments:
             assert fragment not in content, f"{relative_path} has {fragment}"
+
+
+def test_extractor_prompts_delegate_active_bound_fields_to_validators():
+    required_fragments = [
+        "active validator bindings",
+        "authority",
+        "evidence-backed unresolved objects",
+        "selector inputs",
+        "unresolved validator outcomes remain envelope validation findings",
+        "bounded repair request",
+    ]
+    forbidden_fragments = [
+        "Normalizes retained",
+        "Normalize retained",
+        "Normalize the retained",
+        "normalized with `agr_curation_query`",
+        "normalize retained",
+        "returned by AGR lookup",
+    ]
+
+    for relative_path in ACTIVE_BINDING_EXTRACTOR_PROMPTS:
+        content = _content(relative_path)
+        normalized_content = re.sub(r"\s+", " ", content).lower()
+
+        for fragment in required_fragments:
+            assert fragment in normalized_content, f"{relative_path} missing {fragment}"
+        for fragment in forbidden_fragments:
+            assert fragment not in content, f"{relative_path} contains {fragment}"
 
 
 def test_validator_prompts_keep_validation_separate_from_patching():

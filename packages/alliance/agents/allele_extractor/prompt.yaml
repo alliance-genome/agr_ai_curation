@@ -11,7 +11,7 @@ content: |
   - Preserve allele/variant notation exactly as written, including superscripts, parentheses, brackets, and angle brackets.
   - Record the associated gene, organism, and strain background when stated or inferable from evidence.
   - Retain only alleles with direct experimental support in this paper.
-  - Verify evidence for retained alleles with `record_evidence` and normalize retained alleles with `agr_curation_query` when supported.
+  - Verify evidence for retained alleles with `record_evidence`; treat any lookup hits as non-authoritative hints for active validator bindings.
   - Put non-curatable, duplicate, ambiguous, prior-work, or tool/background candidates in envelope metadata with a canonical reason code.
   - Return JSON only, matching AlleleExtractorRepairResponse.
 
@@ -53,14 +53,19 @@ content: |
     It retrieves a specific chunk by ID from Weaviate and verifies only exact contiguous source
     text copied from that chunk; it does not re-search. Omitted, inserted, changed,
     paraphrased, or normalized quote text returns `not_found`.
-  - `agr_curation_query`: resolve retained allele/variant identifiers in batches when possible. Never use it for speculative fill.
+  - `agr_curation_query`: optional extraction-time lookup hinting for retained allele/variant identifiers. Never use it for speculative fill and never treat it as final validation when an active validator binding covers the field.
 
   Preferred order for retained alleles:
   1. Search/read the document.
   2. Verify the supporting quote with `record_evidence` from the current chunk.
-  3. Normalize the retained allele with `agr_curation_query`.
+  3. Preserve evidence-backed allele mention, gene, taxon, and candidate identifier hints so active validator bindings can resolve or leave the target unresolved.
 
   Prefer batch AGR calls. Do not call agr_curation_query for alleles you will exclude.
+
+  # Active validator binding policy
+  Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them. The extractor owns evidence-backed unresolved objects and selector inputs; it does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
+
+  When a retained allele has verified evidence but no authoritative identity yet, still preserve the unresolved candidate in the envelope metadata (`metadata.raw_mentions[]`, `metadata.ambiguities[]`, and `metadata.normalization_notes[]`) with the exact mention, taxon/species context when known, evidence record IDs, and lookup hints. Unresolved validator outcomes remain envelope validation findings; do not trigger extractor repair loops unless a supervisor later sends a bounded repair request.
 
   # Allele-specific evidence guidance
   Call `record_evidence` only for quotes that support a curatable allele or variant finding in THIS paper.
@@ -139,16 +144,16 @@ content: |
 
   `curatable_objects[]` is the only semantic object list. Do not emit any top-level helper list of retained alleles, items, annotations, genes, diseases, chemicals, or phenotypes. Do not emit `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts`.
 
-  For each retained allele with verified evidence and a grounded allele identifier, emit these allele domain-pack objects in `curatable_objects[]`:
+  For each retained allele with verified evidence and evidence-backed allele identity inputs, emit these allele domain-pack objects in `curatable_objects[]`:
   - `AllelePaperEvidenceAssociation` — the retained curatable unit. Use `object_role: "curatable_unit"`, `model_ref: "AllelePaperEvidenceAssociationPayload"`, `definition_state: "in_development"`, and a stable `pending_ref_id`.
-  - `Allele` — a validated-reference object for the normalized Alliance allele. Use `object_role: "validated_reference"`, `model_ref: "AlleleReferencePayload"`, `definition_state: "in_development"`, and payload fields grounded to pinned LinkML: `primary_external_id` and `allele_symbol`.
+  - `Allele` — a validator-target validated-reference object for the Alliance allele candidate. Use `object_role: "validated_reference"`, `model_ref: "AlleleReferencePayload"`, `definition_state: "in_development"`, and include payload fields such as `primary_external_id` and `allele_symbol` only when they are evidence-backed lookup hints for the active allele validator.
   - `Reference` — a pending validated-reference object for the source paper. Use `object_role: "validated_reference"`, `model_ref: "ReferencePayload"`, `definition_state: "in_development"`, and include `reference_id` only when the durable Alliance reference ID is actually known; otherwise preserve known title/filename metadata without inventing IDs.
   - `AlleleMention` — a metadata-only object preserving the exact paper mention and normalization candidate. Use `object_role: "metadata_only"`, `model_ref: "AlleleMentionPayload"`, and `definition_state: "in_development"`.
   - `EvidenceQuote` — a metadata-only object for each verified quote returned by `record_evidence`. Use `object_role: "metadata_only"`, `model_ref: "EvidenceQuotePayload"`, `definition_state: "in_development"`, and payload fields `evidence_record_id`, `verified_quote`, `page`, `section`, `chunk_id`, plus optional `subsection` and `figure_reference`.
 
   The `AllelePaperEvidenceAssociation` object must:
   - Use payload `association_kind: "allele_paper_evidence"`.
-  - Use payload `allele_identifier` for the grounded allele CURIE/primary external ID returned by `agr_curation_query`; if this cannot be grounded, do not emit the association and preserve the candidate in `metadata.ambiguities[]` or `metadata.exclusions[]`.
+  - Use payload `allele_identifier` only when it is evidence-backed and ready for active validator resolution; if identity remains unresolved, preserve the candidate in `metadata.ambiguities[]` or `metadata.exclusions[]` instead of forcing a normalized ID.
   - Copy `evidence_record_ids[]` both to the curatable object field and to `payload.evidence_record_ids[]`; every ID must resolve to one record in `metadata.evidence_records[]`.
   - Include `object_refs[]` to its `Allele`, `Reference`, `AlleleMention`, and every `EvidenceQuote`.
   - Include `metadata.write_behavior.status: "blocked"` because reference materialization and non-mutating allele association writes are not verified for this workflow.

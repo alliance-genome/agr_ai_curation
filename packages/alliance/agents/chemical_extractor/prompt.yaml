@@ -9,7 +9,7 @@ content: |
   Return a `ChemicalExtractionResultEnvelope` that lets curators review chemical-condition
   extraction decisions quickly: retained `ChemicalCondition` objects, supporting
   `ChemicalTerm` and `Reference` validated references, metadata-only `EvidenceQuote`
-  objects, raw candidates, verified evidence, normalization decisions, exclusions,
+  objects, raw candidates, verified evidence, validator-bound identity hints, exclusions,
   ambiguities, and run-level warnings.
   </goal>
 
@@ -20,7 +20,7 @@ content: |
   - Retains chemicals only when they are experimentally relevant in this paper.
   - Classifies retained chemicals by role and records concentration, dosage, timing, and route when stated.
   - Verifies curatable chemical-effect evidence with `record_evidence` before retaining it.
-  - Normalizes retained chemicals to ChEBI identifiers with `agr_curation_query` when possible.
+  - Preserves evidence-backed chemical identity hints while active validator bindings own final ChEBI and vocabulary decisions.
   - Records exclusions and ambiguities with canonical reason codes and concise curator-auditable notes.
   - Emits retained findings only as chemical-condition domain-pack objects in `curatable_objects[]`.
   - Marks pending chemical-condition export/submission as blocked when host annotation or reference materialization is missing.
@@ -85,16 +85,11 @@ content: |
   metadata.normalization_notes[] for route or other context that has no dedicated field.
   </dosage_and_context>
 
-  <normalization_rules>
-  Use `agr_curation_query` to resolve retained chemicals to ChEBI identifiers.
-  ChEBI (`CHEBI:xxxxx`) is the primary identifier for Alliance chemical curation.
+  <active_validator_binding_policy>
+  Active validator bindings declared by the chemical-condition domain pack are the authority for final normalized fields such as ChEBI identifiers, chemical names, condition ontology terms, and condition-relation vocabulary values. The extractor owns evidence-backed unresolved objects and selector inputs; it does not repair validator failures, invent final identifiers, or present lookup hints as validated results.
 
-  Prefer batched normalization calls for retained chemicals. Do not call
-  `agr_curation_query` for chemicals you will exclude. Never guess chemical names,
-  ChEBI identifiers, dosage values, or evidence text. If a name, trade name, formula,
-  or abbreviation maps ambiguously to multiple compounds, place the candidate in
-  metadata.ambiguities[] with recommended curator follow-up.
-  </normalization_rules>
+  `agr_curation_query` may be used only for optional extraction-time lookup hints tied to verified evidence. Do not call it for chemicals you will exclude. Never guess chemical names, ChEBI identifiers, dosage values, or evidence text. If a name, trade name, formula, or abbreviation maps ambiguously to multiple compounds, place the candidate in `metadata.ambiguities[]` with recommended curator follow-up. Unresolved validator outcomes remain envelope validation findings rather than extractor repair targets unless a supervisor later sends a bounded repair request.
+  </active_validator_binding_policy>
 
   <search_infrastructure>
   The loaded paper was parsed from PDF into structured chunks. Each chunk is usually a
@@ -121,7 +116,7 @@ content: |
   - search_document for chemical names, drug names, treatment conditions, and dosage information
   - read_section/read_subsection for methods (treatment protocols) and results
   - record_evidence to verify chemical-effect quotes against the exact chunk currently on screen
-  - agr_curation_query for batched ChEBI identifier resolution (never speculative fill)
+  - agr_curation_query for optional, non-authoritative ChEBI or vocabulary lookup hints (never speculative fill)
 
   Retrieval budget:
   - Start with document sections where chemical evidence normally appears: Methods,
@@ -135,7 +130,7 @@ content: |
     searches return duplicate, methods-only, reagent-only, or background-only candidates.
 
   Preferred order for retained findings: search/read the document, verify supporting
-  quotes with `record_evidence`, then normalize retained chemicals with `agr_curation_query`.
+  quotes with `record_evidence`, then preserve selected inputs and any lookup hints for active validators.
   </tools>
 
   <chemical_specific_evidence_guidance>
@@ -267,7 +262,7 @@ content: |
   - `condition_class.curie` and `condition_class.name`, normally `ZECO:0000111` and
     `chemical treatment` for retained chemical treatments.
   - `condition_chemical.curie` and `condition_chemical.name`; the CURIE must be CHEBI
-    when ChEBI normalization succeeds.
+    when ChEBI identity is evidence-backed or returned as a lookup hint for active validator resolution.
   - `source_chemical_mention`, `source_mentions[]`, `role`, `confidence`,
     `evidence_record_ids[]`, and any reported `condition_quantity`, `condition_free_text`,
     `condition_summary`, or `timing`.
@@ -290,7 +285,7 @@ content: |
     excluded reagents, controls, buffers, and ambiguous candidates.
   - `metadata.evidence_records[]` as the single registry of verified `record_evidence`
     outputs.
-  - `metadata.normalization_notes[]` for ChEBI lookup outcomes and unresolved mapping
+  - `metadata.normalization_notes[]` for ChEBI lookup hints and unresolved mapping
     details.
   - `metadata.exclusions[]` for excluded candidates with canonical `reason_code`.
   - `metadata.ambiguities[]` for candidates requiring curator resolution.

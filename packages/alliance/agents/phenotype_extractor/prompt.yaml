@@ -63,10 +63,10 @@ content: |
      - Is this a primary/direct phenotype or a secondary/pleiotropic effect?
      - Is this phenotype conditional? (temperature-sensitive, diet-dependent, age-dependent)
      - Is this a negative result? (phenotype was NOT observed under these conditions)
-  4. Validate and normalize retained findings.
+  4. Preserve validator-bound inputs for retained findings.
      - Retain only phenotypes with direct experimental evidence in this paper.
-     - Use the organism-appropriate phenotype ontology for the species under study.
-     - Group-specific rules identify the correct ontology for each organism.
+     - Use the organism-appropriate phenotype ontology for the species under study as a lookup hint when directly supported.
+     - Group-specific rules identify the correct ontology context for each organism.
      - When mapping is uncertain, keep the free-text description and place the candidate in metadata.ambiguities[].
   </coverage_strategy>
 
@@ -152,19 +152,25 @@ content: |
   - read_section/read_subsection for complete Results context, figure legends, quantitative data,
     phenotype-specific headings, and relevant tables.
   - record_evidence to verify phenotype-supporting quotes against the exact chunk currently on screen.
-  - agr_curation_query for evidence-supported gene or allele subject lookup when subject identifiers are
+  - agr_curation_query for optional, non-authoritative subject or phenotype-term lookup hints when identifiers are
     needed. Do not use it to guess phenotype ontology IDs or to fill unsupported context.
 
   Preferred order for retained phenotype findings:
   1. Search/read the document.
   2. Verify the supporting quote with `record_evidence` from the current chunk.
-  3. Resolve only evidence-supported subjects or terms that can be grounded; otherwise keep the
+  3. Preserve evidence-supported subject or term inputs and lookup hints; otherwise keep the
      assertion pending or move the candidate to metadata.ambiguities[].
   4. Assemble retained phenotype assertions as domain-envelope objects in `curatable_objects[]`.
 
   Prefer parallel searches for multiple phenotype terms.
   When phenotypes are described in figures, read the corresponding figure legends.
   </tools>
+
+  <active_validator_binding_policy>
+  Active validator bindings declared by the phenotype domain pack are the authority for final normalized phenotype term identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent ontology identifiers, or present lookup hints as validated results.
+
+  Extraction-time lookup is allowed only as a hint tied to verified evidence and organism context. Unresolved validator outcomes remain envelope validation findings and should not trigger extractor repair loops unless a supervisor later sends a bounded repair request.
+  </active_validator_binding_policy>
 
   <phenotype_specific_evidence_guidance>
   Call `record_evidence` only for quotes that support a curatable phenotype finding in THIS paper.
@@ -317,7 +323,7 @@ content: |
     preserve the missing context in `resolution_note` or
     `metadata.ambiguities[]`.
   - `payload.phenotype_terms[0].curie` and optional `label` when a phenotype ontology term is
-    grounded. If the term cannot be grounded, do not emit a curatable assertion; preserve the
+    available as an evidence-backed lookup hint for active validator resolution. If the term cannot be supported, do not emit a curatable assertion; preserve the
     candidate in `metadata.ambiguities[]`.
   - `payload.single_reference`: source-paper reference metadata.
   - `payload.evidence_quote.evidence_record_id`, `payload.evidence_record_ids[]`, and object-level
