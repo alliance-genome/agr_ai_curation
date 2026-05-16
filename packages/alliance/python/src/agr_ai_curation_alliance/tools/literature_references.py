@@ -115,7 +115,7 @@ def _as_reference_candidate(reference: Any, query: str) -> Dict[str, Any]:
         "title": title,
         "short_citation": citation,
         "cross_references": cross_references,
-        "source": raw.get("source") or SOURCE,
+        "source": raw.get("source"),
         "obsolete": raw.get("obsolete"),
         "matched_identifier": matched_identifier,
         "matched_title": matched_title,
@@ -127,7 +127,7 @@ def _normalize_limit(limit: Optional[int]) -> int:
     if limit is None:
         return DEFAULT_LIMIT
     if limit < 1:
-        return DEFAULT_LIMIT
+        raise ValueError("limit must be greater than or equal to 1")
     return min(limit, HARD_MAX)
 
 
@@ -418,7 +418,13 @@ def agr_literature_reference_lookup(
             limit=limit_value,
             candidates=candidates,
         )
-    except Exception as exc:
+    except (
+        ConnectionError,
+        ValueError,
+        RuntimeError,
+        ImportError,
+        ModuleNotFoundError,
+    ) as exc:
         return _error_result(
             method=method_value,
             query=query_value,

@@ -83,6 +83,7 @@ def _reference(
     title: str = "Suppressed Helicobocter pylori study",
     citation: str = "Hahm KB et al., 1997",
     cross_references: list[str] | None = None,
+    source: str | None = "literature_es",
 ):
     return SimpleNamespace(
         reference_id=None,
@@ -90,7 +91,7 @@ def _reference(
         title=title,
         short_citation=citation,
         cross_references=cross_references or ["PMID:27528223"],
-        source="literature_es",
+        source=source,
         obsolete=False,
     )
 
@@ -252,6 +253,26 @@ def test_no_match_returns_curator_safe_no_match_details(monkeypatch):
     assert "No literature reference matched" in result.message
 
 
+def test_missing_upstream_source_is_preserved_as_none(monkeypatch):
+    class FakeClient:
+        def get_literature_reference(self, _identifier):
+            return _reference(source=None)
+
+    monkeypatch.setattr(
+        literature_references,
+        "_client_factory",
+        lambda: FakeClient(),
+    )
+
+    result = _tool_fn()(
+        method="get_literature_reference",
+        identifier="PMID:27528223",
+    )
+
+    assert result.status == "ok"
+    assert result.resolved_reference["source"] is None
+
+
 @pytest.mark.parametrize(
     ("error", "classification", "message_fragment"),
     [
@@ -293,6 +314,33 @@ def test_upstream_configuration_or_connection_failure_returns_structured_error(
     assert result.failure_classification == classification
     assert message_fragment in result.message
     assert result.lookup_attempts[0]["error_type"] == type(error).__name__
+
+
+def test_invalid_explicit_limit_raises_validation_error():
+    with pytest.raises(ValueError, match="limit must be greater than or equal to 1"):
+        _tool_fn()(
+            method="search_literature_references",
+            query="Reference title",
+            limit=0,
+        )
+
+
+def test_unexpected_tool_bug_is_not_reported_as_upstream_failure(monkeypatch):
+    class FakeClient:
+        def search_literature_references(self, **_kwargs):
+            return [object()]
+
+    monkeypatch.setattr(
+        literature_references,
+        "_client_factory",
+        lambda: FakeClient(),
+    )
+
+    with pytest.raises(TypeError, match="Cannot serialize literature reference"):
+        _tool_fn()(
+            method="search_literature_references",
+            query="Reference title",
+        )
 
 
 def test_alliance_binding_exposes_literature_reference_tool_id():
