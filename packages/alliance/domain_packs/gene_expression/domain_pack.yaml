@@ -914,6 +914,49 @@ metadata:
         expected_result_fields:
           abbreviation: data_provider.abbreviation
           taxon: data_provider.taxon
+      - binding_id: source_reference_validation
+        display_name: Source reference validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: reference_validation
+        state_explanation: Reference validation is prepared around the API-backed package tool but remains metadata-only until dependent gene-expression materialization and export flows are activated.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - single_reference.reference_id
+            - single_reference.curie
+            - single_reference.title
+        input_fields:
+          reference_id:
+            source: payload
+            path: single_reference.reference_id
+            required: false
+          curie:
+            source: payload
+            path: single_reference.curie
+            required: false
+          pmid:
+            source: payload
+            path: single_reference.pmid
+            required: false
+          doi:
+            source: payload
+            path: single_reference.doi
+            required: false
+          title:
+            source: payload
+            path: single_reference.title
+            required: false
+          source_document_id:
+            source: envelope_metadata
+            path: document_id
+            required: false
+        expected_result_fields:
+          reference_id: single_reference.reference_id
+          curie: single_reference.curie
+          title: single_reference.title
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

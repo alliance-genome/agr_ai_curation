@@ -74,7 +74,10 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
     assert {
         binding.binding_id
         for binding in validation_registries["agr.alliance.allele"].bindings
-    } == {"allele_pending_envelope_validator"}
+    } == {
+        "allele_pending_envelope_validator",
+        "source_reference_validation",
+    }
     assert {
         entry.state
         for entry in validation_registries[
@@ -187,7 +190,9 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         is ValidationBindingState.UNDER_DEVELOPMENT
     )
     assert disease_bindings["disease_reference_materialization"].field_paths == (
+        "single_reference.reference_id",
         "single_reference.curie",
+        "single_reference.title",
     )
     assert "disease_ontology_term_lookup" in registries[
         "agr.alliance.disease"

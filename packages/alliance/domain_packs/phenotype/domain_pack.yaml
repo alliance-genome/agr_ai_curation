@@ -639,17 +639,47 @@ metadata:
         definition_state: in_development
       - binding_id: phenotype_reference_validator
         display_name: Reference lookup
-        state_explanation: Reference lookup remains informational until package-scoped validator dispatch owns curation DB lookups.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: reference_validation
+        state_explanation: Reference validation is prepared around the API-backed package tool but remains metadata-only until dependent phenotype materialization and export flows are activated.
         applies_to:
           domain_pack_id: agr.alliance.phenotype
           object_types:
             - Reference
           field_paths:
             - reference_id
+            - curie
+            - title
         input_fields:
           reference_id:
             source: payload
             path: reference_id
+            required: false
+          curie:
+            source: payload
+            path: curie
+            required: false
+          pmid:
+            source: payload
+            path: pmid
+            required: false
+          doi:
+            source: payload
+            path: doi
+            required: false
+          title:
+            source: payload
+            path: title
+            required: false
+          source_document_id:
+            source: envelope_metadata
+            path: document_id
+            required: false
+        expected_result_fields:
+          reference_id: Reference.reference_id
+          curie: Reference.curie
+          title: Reference.title
         definition_state: in_development
   validators:
     active:
