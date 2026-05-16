@@ -1,6 +1,64 @@
 package_id: agr.alliance
 bindings_api_version: 1.0.0
 tools:
+  - tool_id: agr_literature_reference_lookup
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.literature_references:agr_literature_reference_lookup
+    required_context: []
+    description: ES-backed Alliance literature reference lookup and fuzzy title/citation search through agr-curation-api-client
+    source_file: python/src/agr_ai_curation_alliance/tools/literature_references.py
+    metadata:
+      name: AGR Literature Reference Lookup
+      category: Literature
+      audit:
+        display_name: AGR Literature Reference Lookup
+      documentation:
+        summary: Resolve literature references from the Alliance literature Elasticsearch index through the official agr-curation-api-client package. Returns lookup attempts, candidate references, ambiguity/no-match details, and safe curator-facing status messages.
+        example_queries:
+          - Resolve PMID:27528223 to an Alliance reference
+          - Search Hahm KB Suppressed Helicobocter pylori by title text
+        parameters:
+          - name: method
+            type: string
+            required: true
+            description: Use get_literature_reference for exact identifier/title lookup or search_literature_references for fuzzy title/citation search.
+          - name: identifier
+            type: string
+            required: false
+            description: PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title for exact lookup.
+          - name: query
+            type: string
+            required: false
+            description: Title, citation, AGRKB ID, PMID, DOI, or MOD reference ID for search.
+          - name: exact_match
+            type: boolean
+            required: false
+            description: Require exact search semantics for search_literature_references.
+          - name: limit
+            type: integer
+            required: false
+            description: Maximum candidate references to return for search_literature_references.
+      methods:
+        get_literature_reference:
+          name: Get Literature Reference
+          description: Exact lookup by PMID, DOI, AGRKB reference CURIE, MOD reference ID, or title using AGRCurationAPIClient(data_source="db").get_literature_reference().
+          required_params: [identifier]
+          optional_params: []
+          source: literature_es
+          example:
+            method: get_literature_reference
+            identifier: PMID:27528223
+        search_literature_references:
+          name: Search Literature References
+          description: Fuzzy reference search by title, citation, AGRKB ID, PMID, DOI, or MOD reference ID using AGRCurationAPIClient(data_source="db").search_literature_references().
+          required_params: [query]
+          optional_params: [exact_match, limit]
+          source: literature_es
+          example:
+            method: search_literature_references
+            query: Hahm KB Suppressed Helicobocter pylori
+            exact_match: false
+            limit: 20
   - tool_id: agr_curation_query
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
