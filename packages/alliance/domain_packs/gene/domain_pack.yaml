@@ -114,11 +114,25 @@ object_definitions:
               gene_id:
                 source: payload
                 path: primary_external_id
+              gene_symbol:
+                source: payload
+                path: gene_symbol
+              taxon:
+                source: payload
+                path: taxon
+              evidence_quote:
+                source: payload
+                path: verified_quote
+                required: false
             expected_result_fields:
               curie: primary_external_id
               symbol: gene_symbol
               taxon: taxon
+            required: true
             blocking: false
+            allow_opt_out: true
+            curator_override:
+              allowed: false
       export_behavior:
         status: ready
         mode: validated_reference_evidence

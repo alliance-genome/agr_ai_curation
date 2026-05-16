@@ -158,7 +158,44 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
         "AlleleMention",
         "EvidenceQuote",
     ]
+    assert active_binding["required"] is True
+    assert active_binding["blocking"] is False
+    assert active_binding["allow_opt_out"] is True
+    assert active_binding["curator_override"] == {"allowed": False}
     assert active_binding["definition_state"] == "in_development"
+
+    allele_lookup = {
+        binding["binding_id"]: binding for binding in validator_bindings["active"]
+    }["alliance_allele_reference_lookup"]
+    assert allele_lookup["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "allele_validation",
+    }
+    assert allele_lookup["applies_to"]["object_types"] == ["Allele"]
+    assert allele_lookup["applies_to"]["field_paths"] == [
+        "primary_external_id",
+        "allele_symbol",
+    ]
+    assert allele_lookup["input_fields"] == {
+        "allele_id": {
+            "source": "payload",
+            "path": "primary_external_id",
+            "required": False,
+        },
+        "allele_symbol": {
+            "source": "payload",
+            "path": "allele_symbol",
+            "required": False,
+        },
+    }
+    assert allele_lookup["expected_result_fields"] == {
+        "allele_id": "primary_external_id",
+        "symbol": "allele_symbol",
+    }
+    assert allele_lookup["required"] is True
+    assert allele_lookup["blocking"] is False
+    assert allele_lookup["allow_opt_out"] is True
+    assert allele_lookup["curator_override"] == {"allowed": False}
 
 
 def test_allele_pack_records_grounded_metadata_and_blocks_writes():

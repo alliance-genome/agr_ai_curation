@@ -557,6 +557,44 @@ metadata:
       root_schema: model/schema/allianceModel.yaml
       cache_script: scripts/testing/cache_agr_curation_schema.sh
   validator_bindings:
+    active:
+      - binding_id: phenotype_term_ontology_validator
+        display_name: Phenotype ontology term lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.phenotype
+          object_types:
+            - PhenotypeTerm
+          field_paths:
+            - curie
+            - label
+        input_fields:
+          curie:
+            source: payload
+            path: curie
+          label:
+            source: payload
+            path: label
+            required: false
+          ontology_family:
+            source: literal
+            value: phenotype
+          accepted_prefixes:
+            source: literal
+            value:
+              - MP
+              - WBPhenotype
+              - ZP
+        expected_result_fields:
+          curie: curie
+          label: label
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
     under_development:
       - binding_id: phenotype_pending_envelope_validator
         display_name: Data check
@@ -603,39 +641,6 @@ metadata:
           subject_type: subject_type
           subject_label: subject_label
           taxon: taxon
-        definition_state: in_development
-      - binding_id: phenotype_term_ontology_validator
-        display_name: Phenotype ontology term lookup
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: ontology_term_validation
-        state_explanation: Phenotype ontology lookup remains under development until generic ontology term validator dispatch is reviewed end to end.
-        applies_to:
-          domain_pack_id: agr.alliance.phenotype
-          object_types:
-            - PhenotypeTerm
-          field_paths:
-            - curie
-            - label
-        input_fields:
-          curie:
-            source: payload
-            path: curie
-          label:
-            source: payload
-            path: label
-          ontology_family:
-            source: literal
-            value: phenotype
-          accepted_prefixes:
-            source: literal
-            value:
-              - MP
-              - WBPhenotype
-              - ZP
-        expected_result_fields:
-          curie: curie
-          label: label
         definition_state: in_development
       - binding_id: phenotype_reference_validator
         display_name: Reference lookup

@@ -312,7 +312,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
-          validator_state: planned
+          validator_state: active
           definition_state_category: complete
           repair:
             repairable: true
@@ -335,7 +335,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
-          validator_state: planned
+          validator_state: active
           validation_result_field: curie
           definition_state_category: complete
           repair:
@@ -359,7 +359,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_ontology_term_lookup
-          validator_state: planned
+          validator_state: active
           validation_result_field: name
           definition_state_category: complete
           repair:
@@ -398,7 +398,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_relation_cv_lookup
-          validator_state: planned
+          validator_state: active
           definition_state_category: under_development
           repair:
             protected: true
@@ -540,7 +540,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
-          validator_state: planned
+          validator_state: active
           definition_state_category: under_development
           repair:
             protected: true
@@ -562,7 +562,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
-          validator_state: planned
+          validator_state: active
           definition_state_category: under_development
           repair:
             protected: true
@@ -629,7 +629,7 @@ object_definitions:
         definition_state: in_development
         metadata:
           validatable: true
-          validator_binding_id: disease_condition_relation_lookup
+          validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
           repair:
@@ -651,7 +651,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_condition_relation_lookup
-          validator_state: planned
+          validator_state: active
           definition_state_category: under_development
           repair:
             protected: true
@@ -875,14 +875,17 @@ metadata:
             - DiseaseAnnotation
         input_fields: {}
         expected_result_fields: {}
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
         definition_state: in_development
-    under_development:
       - binding_id: disease_ontology_term_lookup
         display_name: Disease ontology lookup
         validator_agent:
           package_id: agr.alliance
           agent_id: ontology_term_validation
-        state_explanation: Disease ontology lookup remains under development until generic ontology term validator dispatch is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
@@ -911,12 +914,16 @@ metadata:
           curie: disease_annotation_object.curie
           label: disease_annotation_object.name
           ontology_term_type: DOTerm
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
       - binding_id: disease_relation_cv_lookup
         display_name: Disease relation vocabulary lookup
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
-        state_explanation: Disease relation vocabulary lookup remains under development until controlled vocabulary package tool dispatch is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
@@ -934,12 +941,67 @@ metadata:
           term_name: disease_relation_name
           vocabulary: disease_relation_vocabulary
           internal_id: disease_relation_id
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: disease_condition_relation_lookup
+        display_name: Condition relation type lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: controlled_vocabulary_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+          field_paths:
+            - condition_relations[0].condition_relation_type.name
+        input_fields:
+          vocabulary:
+            source: literal
+            value: Condition Relation Type
+          term_name:
+            source: payload
+            path: condition_relations[0].condition_relation_type.name
+        expected_result_fields:
+          term_name: condition_relations[0].condition_relation_type.name
+          vocabulary: condition_relations[0].condition_relation_type.vocabulary
+          internal_id: condition_relations[0].condition_relation_type.id
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: disease_data_provider_lookup
+        display_name: Data provider lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: data_provider_validation
+        applies_to:
+          domain_pack_id: agr.alliance.disease
+          object_types:
+            - DiseaseAnnotation
+          field_paths:
+            - data_provider.abbreviation
+        input_fields:
+          abbreviation:
+            source: payload
+            path: data_provider.abbreviation
+        expected_result_fields:
+          abbreviation: data_provider.abbreviation
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+    under_development:
       - binding_id: experimental_condition_validation
         display_name: Experimental condition validation
         validator_agent:
           package_id: agr.alliance
           agent_id: experimental_condition_validation
-        state_explanation: Composite experimental-condition validation remains under development until condition relation, condition ontology, chemical, taxon, provider, and quantity/unit component prerequisites are all active.
+        state_explanation: Composite experimental-condition validation remains metadata-only until condition relation, condition ontology, chemical, taxon, provider, and quantity/unit component readiness is proven end to end.
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
@@ -998,33 +1060,6 @@ metadata:
           condition_id: ExperimentalCondition.condition_id
           normalized_components: ExperimentalCondition.components
         definition_state: in_development
-      - binding_id: disease_condition_relation_lookup
-        display_name: Condition relation type lookup
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: controlled_vocabulary_validation
-        state_explanation: Condition relation type lookup remains under development until controlled vocabulary package tool dispatch is reviewed end to end.
-        applies_to:
-          domain_pack_id: agr.alliance.disease
-          object_types:
-            - DiseaseAnnotation
-          field_paths:
-            - condition_relations[0].condition_relation_type.name
-        input_fields:
-          vocabulary:
-            source: literal
-            value: Condition Relation Type
-          term_name:
-            source: payload
-            path: condition_relations[0].condition_relation_type.name
-          abbreviation:
-            source: payload
-            path: condition_relations[0].condition_relation_type.abbreviation
-            required: false
-        expected_result_fields:
-          term_name: condition_relations[0].condition_relation_type.name
-          vocabulary: condition_relations[0].condition_relation_type.vocabulary
-          internal_id: condition_relations[0].condition_relation_type.id
       - binding_id: disease_subject_materialization
         display_name: Disease subject lookup
         validator_agent:
@@ -1130,33 +1165,6 @@ metadata:
         expected_result_fields:
           curie: evidence_code_curies[0]
           ontology_term_type: ECOTerm
-      - binding_id: disease_data_provider_lookup
-        display_name: Data provider lookup
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: data_provider_validation
-        state_explanation: Data provider validation remains under development until provider-backed validator dispatch is reviewed end to end.
-        applies_to:
-          domain_pack_id: agr.alliance.disease
-          object_types:
-            - DiseaseAnnotation
-          field_paths:
-            - data_provider.abbreviation
-        input_fields:
-          abbreviation:
-            source: payload
-            path: data_provider.abbreviation
-          provider_name:
-            source: payload
-            path: data_provider.name
-            required: false
-          taxon:
-            source: payload
-            path: taxon
-            required: false
-        expected_result_fields:
-          abbreviation: data_provider.abbreviation
-          taxon: data_provider.taxon
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

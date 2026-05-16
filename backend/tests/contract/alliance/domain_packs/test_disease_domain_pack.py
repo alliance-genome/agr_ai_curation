@@ -154,8 +154,8 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         *validator_bindings["active"],
         *validator_bindings["under_development"],
     ]
-    binding_ids = [binding["binding_id"] for binding in binding_items]
-    assert len(binding_ids) == len(set(binding_ids))
+    binding_ids = {binding["binding_id"] for binding in binding_items}
+    assert len(binding_items) == len(binding_ids)
     assert {
         "disease_pending_envelope_validator",
         "disease_ontology_term_lookup",
@@ -166,7 +166,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_reference_materialization",
         "disease_evidence_code_lookup",
         "disease_data_provider_lookup",
-    }.issubset(binding_ids)
+    } == binding_ids
 
     pending_validator = validator_bindings["active"][0]
     assert (
@@ -179,7 +179,25 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
     }
     assert pending_validator["applies_to"]["domain_pack_id"] == DISEASE_DOMAIN_PACK_ID
     assert pending_validator["applies_to"]["object_types"] == [DISEASE_OBJECT_TYPE]
+    assert pending_validator["required"] is True
+    assert pending_validator["blocking"] is False
+    assert pending_validator["allow_opt_out"] is True
+    assert pending_validator["curator_override"] == {"allowed": False}
     assert pending_validator["definition_state"] == "in_development"
+
+    active_binding_ids = {binding["binding_id"] for binding in validator_bindings["active"]}
+    assert {
+        "disease_ontology_term_lookup",
+        "disease_relation_cv_lookup",
+        "disease_condition_relation_lookup",
+        "disease_data_provider_lookup",
+    }.issubset(active_binding_ids)
+    assert {
+        "experimental_condition_validation",
+        "disease_subject_materialization",
+        "disease_reference_materialization",
+        "disease_evidence_code_lookup",
+    } == {binding["binding_id"] for binding in validator_bindings["under_development"]}
 
 
 def test_disease_pack_records_db_projection_and_representative_rows():
@@ -281,11 +299,10 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     assert (
         disease_curie.metadata["validator_binding_id"] == "disease_ontology_term_lookup"
     )
-    assert disease_curie.metadata["validator_state"] == "planned"
+    assert disease_curie.metadata["validator_state"] == "active"
 
     condition_fields = {
         "condition_relations",
-        "condition_relations[0].condition_relation_type.name",
         "condition_relations[0].conditions[0].condition_class.curie",
         "condition_relations[0].conditions[0].condition_chemical.curie",
         "condition_relations[0].conditions[0].condition_taxon.curie",
@@ -298,6 +315,14 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.metadata["validator_state"] == "planned"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
         assert binding["state_explanation"]
+    condition_relation_type = fields_by_path[
+        "condition_relations[0].condition_relation_type.name"
+    ]
+    assert condition_relation_type.metadata["validator_state"] == "active"
+    assert (
+        condition_relation_type.metadata["validator_binding_id"]
+        == "disease_condition_relation_lookup"
+    )
     composite_binding = validator_bindings["experimental_condition_validation"]
     assert composite_binding["validator_agent"] == {
         "package_id": "agr.alliance",
@@ -329,7 +354,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     for field_path in ("data_provider", "data_provider.abbreviation"):
         field = fields_by_path[field_path]
         assert field.definition_state.value == "in_development"
-        assert field.metadata["validator_state"] == "planned"
+        assert field.metadata["validator_state"] == "active"
         assert field.metadata["definition_state_category"] == "under_development"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
         assert binding["validator_agent"]["agent_id"] == "data_provider_validation"

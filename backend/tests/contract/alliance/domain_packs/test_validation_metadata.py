@@ -76,6 +76,7 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         for binding in validation_registries["agr.alliance.allele"].bindings
     } == {
         "allele_pending_envelope_validator",
+        "alliance_allele_reference_lookup",
         "source_reference_validation",
     }
     assert {
@@ -137,6 +138,41 @@ def test_alliance_validator_metadata_has_curator_facing_display_names():
     assert missing_display_names == []
     assert technical_labels == []
     assert duplicate_labels == []
+
+
+def test_alliance_validator_binding_capability_groups_have_explicit_policies():
+    alliance_registry = load_alliance_domain_pack_registry()
+    top_level_pack_ids = {
+        "agr.alliance.gene_expression",
+        "agr.alliance.allele",
+        "agr.alliance.disease",
+        "agr.alliance.chemical_condition",
+        "agr.alliance.phenotype",
+    }
+
+    for pack_id in sorted(top_level_pack_ids):
+        raw_bindings = alliance_registry.get_pack(pack_id).metadata.metadata[
+            "validator_bindings"
+        ]
+        assert isinstance(raw_bindings["active"], list)
+        assert isinstance(raw_bindings["under_development"], list)
+
+        for binding in raw_bindings["active"]:
+            assert binding["validator_agent"]["package_id"] == "agr.alliance"
+            assert "applies_to" in binding
+            assert "input_fields" in binding
+            assert "expected_result_fields" in binding
+            assert binding["required"] is True
+            assert binding["blocking"] is False
+            assert binding["allow_opt_out"] is True
+            assert binding["curator_override"] == {"allowed": False}
+
+        for binding in raw_bindings["under_development"]:
+            assert binding["state_explanation"]
+            assert "required" not in binding
+            assert "blocking" not in binding
+            assert "allow_opt_out" not in binding
+            assert "curator_override" not in binding
 
 
 def test_alliance_relative_validator_metadata_targets_fields_and_policies():
@@ -232,11 +268,6 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         for match in disease_matches
     }
     assert (
-        "disease_ontology_term_lookup",
-        "DiseaseAnnotation",
-        "disease_annotation_object.curie",
-    ) in disease_match_targets
-    assert (
         "disease_reference_materialization",
         "DiseaseAnnotation",
         "single_reference.curie",
@@ -253,7 +284,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     relation_binding = gene_expression_bindings["relation_vocabulary_validation"]
     assert relation_binding.validator_agent is not None
     assert relation_binding.validator_agent.agent_id == "controlled_vocabulary_validation"
-    assert relation_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert relation_binding.state is ValidationBindingState.ACTIVE
     assert relation_binding.object_types == ("GeneExpressionAnnotation",)
     assert relation_binding.field_paths == ("relation.name",)
     assert relation_binding.input_fields["vocabulary"].value == "relation"
@@ -270,11 +301,10 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         expression_provider_binding.validator_agent.agent_id
         == "data_provider_validation"
     )
-    assert expression_provider_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert expression_provider_binding.state is ValidationBindingState.ACTIVE
     assert expression_provider_binding.object_types == ("GeneExpressionAnnotation",)
     assert expression_provider_binding.field_paths == ("data_provider.abbreviation",)
-    assert expression_provider_binding.input_fields["provider_name"].required is False
-    assert expression_provider_binding.input_fields["taxon"].required is False
+    assert set(expression_provider_binding.input_fields) == {"abbreviation"}
     assert "data_provider_validation" in registries[
         "agr.alliance.gene_expression"
     ].policy_for(
@@ -288,6 +318,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         disease_relation_binding.validator_agent.agent_id
         == "controlled_vocabulary_validation"
     )
+    assert disease_relation_binding.state is ValidationBindingState.ACTIVE
     assert disease_relation_binding.input_fields["vocabulary"].value == (
         "Disease Relation"
     )
@@ -305,6 +336,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         disease_condition_binding.validator_agent.agent_id
         == "controlled_vocabulary_validation"
     )
+    assert disease_condition_binding.state is ValidationBindingState.ACTIVE
     assert disease_condition_binding.input_fields["vocabulary"].value == (
         "Condition Relation Type"
     )
@@ -315,12 +347,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         disease_provider_binding.validator_agent.agent_id
         == "data_provider_validation"
     )
+    assert disease_provider_binding.state is ValidationBindingState.ACTIVE
     assert disease_provider_binding.field_paths == ("data_provider.abbreviation",)
-    assert disease_provider_binding.input_fields["provider_name"].required is False
-    assert disease_provider_binding.input_fields["taxon"].required is False
+    assert set(disease_provider_binding.input_fields) == {"abbreviation"}
     assert disease_provider_binding.expected_result_fields == {
         "abbreviation": "data_provider.abbreviation",
-        "taxon": "data_provider.taxon",
     }
 
     disease_subject_binding = disease_bindings["disease_subject_materialization"]
@@ -373,6 +404,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "taxon": "taxon",
     }
 
+    phenotype_term_binding = phenotype_bindings["phenotype_term_ontology_validator"]
+    assert phenotype_term_binding.validator_agent is not None
+    assert phenotype_term_binding.validator_agent.agent_id == "ontology_term_validation"
+    assert phenotype_term_binding.state is ValidationBindingState.ACTIVE
+
     assert chemical_condition_bindings[
         "chemical_condition.chebi_api_lookup"
     ].object_types == ("ChemicalCondition",)
@@ -385,11 +421,14 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert chemical_condition_bindings[
         "chemical_condition.condition_ontology_lookup"
     ].object_types == ("ChemicalCondition",)
+    assert (
+        chemical_condition_bindings["chemical_condition.condition_ontology_lookup"].state
+        is ValidationBindingState.ACTIVE
+    )
     assert chemical_condition_bindings[
         "chemical_condition.condition_ontology_lookup"
     ].field_paths == (
         "condition_class.curie",
-        "condition_id.curie",
     )
     assert "chemical_condition.chebi_api_lookup" in registries[
         "agr.alliance.chemical_condition"
@@ -411,6 +450,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         chemical_relation_binding.validator_agent.agent_id
         == "controlled_vocabulary_validation"
     )
+    assert chemical_relation_binding.state is ValidationBindingState.ACTIVE
     assert chemical_relation_binding.object_types == ("ChemicalCondition",)
     assert chemical_relation_binding.field_paths == ("condition_relation_type.name",)
     assert chemical_relation_binding.input_fields["vocabulary"].value == (
@@ -544,7 +584,7 @@ def test_under_development_validator_bindings_remain_metadata_only():
     binding = {
         item.binding_id: item
         for item in registry.bindings
-    }["disease_ontology_term_lookup"]
+    }["disease_reference_materialization"]
     assert binding.state is ValidationBindingState.UNDER_DEVELOPMENT
     assert binding.required is False
     assert binding.blocking is False
@@ -590,7 +630,7 @@ def test_under_development_validator_bindings_remain_metadata_only():
         event.details.get("code") != "domain_pack.validator_binding_under_development"
         for event in result.envelope.history
     )
-    assert "disease_ontology_term_lookup" in {
+    assert "disease_reference_materialization" in {
         match.binding.binding_id
         for match in result.matched_bindings
         if match.binding.state is ValidationBindingState.UNDER_DEVELOPMENT
@@ -602,6 +642,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
     cases = {
         "agr.alliance.disease": {
             "disease_ontology_term_lookup": {
+                "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "disease",
                 "accepted_prefixes": ["DOID"],
                 "expected_result_fields": {
@@ -611,6 +652,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 },
             },
             "disease_evidence_code_lookup": {
+                "state": ValidationBindingState.UNDER_DEVELOPMENT,
                 "ontology_family": "evidence",
                 "accepted_prefixes": ["ECO"],
                 "expected_result_fields": {
@@ -621,6 +663,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
         },
         "agr.alliance.phenotype": {
             "phenotype_term_ontology_validator": {
+                "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "phenotype",
                 "accepted_prefixes": ["MP", "WBPhenotype", "ZP"],
                 "expected_result_fields": {
@@ -631,10 +674,10 @@ def test_representative_ontology_term_bindings_target_generic_validator():
         },
         "agr.alliance.chemical_condition": {
             "chemical_condition.condition_ontology_lookup": {
+                "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "condition",
                 "expected_result_fields": {
                     "condition_class_curie": "condition_class.curie",
-                    "condition_id_curie": "condition_id.curie",
                 },
             }
         },
@@ -649,7 +692,7 @@ def test_representative_ontology_term_bindings_target_generic_validator():
         for binding_id, expected in expected_bindings.items():
             binding = bindings[binding_id]
 
-            assert binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+            assert binding.state is expected["state"]
             assert binding.validator_agent is not None
             assert binding.validator_agent.package_id == "agr.alliance"
             assert binding.validator_agent.agent_id == "ontology_term_validation"
