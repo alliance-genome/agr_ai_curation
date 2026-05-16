@@ -742,7 +742,29 @@ def test_package_runner_alliance_agr_data_provider_helper_in_isolation(
     assert result.result["status"] == "ok"
     assert result.result["count"] == 1
     assert result.result["data"] == [
-        {"abbreviation": "FB", "taxon_id": "NCBITaxon:7227"}
+        {
+            "abbreviation": "FB",
+            "taxon_id": "NCBITaxon:7227",
+            "display_name": "FlyBase",
+        }
+    ]
+
+    lookup_result = runner.execute_tool(
+        "agr_curation_query",
+        kwargs={
+            "method": "get_data_provider",
+            "abbreviation": "FB",
+            "taxon_id": "NCBITaxon:7227",
+        },
+    )
+    assert lookup_result.ok is True
+    assert lookup_result.result["lookup_status"] == "success"
+    assert lookup_result.result["data"]["matches"] == [
+        {
+            "abbreviation": "FB",
+            "taxon_id": "NCBITaxon:7227",
+            "display_name": "FlyBase",
+        }
     ]
 
 

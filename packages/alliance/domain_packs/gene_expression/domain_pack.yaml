@@ -299,6 +299,10 @@ object_definitions:
         required: true
         model_ref: OrganizationSnapshotPayload
         metadata:
+          validatable: true
+          validator_binding_id: data_provider_validation
+          validator_state: planned
+          definition_state_category: under_development
           repair:
             protected: true
             reason: Data provider is workflow context, not an extractor-repair target.
@@ -317,6 +321,10 @@ object_definitions:
         display_name: Data provider abbreviation
         required: true
         metadata:
+          validatable: true
+          validator_binding_id: data_provider_validation
+          validator_state: planned
+          definition_state_category: under_development
           repair:
             protected: true
             reason: Data provider is workflow context, not an extractor-repair target.
@@ -879,6 +887,33 @@ metadata:
           term_name: relation.name
           vocabulary: relation.vocabulary
           internal_id: relation.id
+      - binding_id: data_provider_validation
+        display_name: Data provider validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: data_provider_validation
+        state_explanation: Data provider validation remains under development until provider-backed validator dispatch is reviewed end to end.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - data_provider.abbreviation
+        input_fields:
+          abbreviation:
+            source: payload
+            path: data_provider.abbreviation
+          provider_name:
+            source: payload
+            path: data_provider.name
+            required: false
+          taxon:
+            source: payload
+            path: taxon
+            required: false
+        expected_result_fields:
+          abbreviation: data_provider.abbreviation
+          taxon: data_provider.taxon
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

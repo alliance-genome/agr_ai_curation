@@ -1,0 +1,51 @@
+# =============================================================================
+# AGENT DEFINITION: data_provider
+# =============================================================================
+# Validates Alliance data provider abbreviations and taxon consistency.
+# Tool name generated at runtime: ask_data_provider_specialist
+# =============================================================================
+
+agent_id: data_provider_validation
+
+name: "Data Provider Validation Agent"
+
+description: >
+  Validates Alliance data provider abbreviations, display names, and
+  provider-to-taxon consistency using package-owned Alliance provider lookup
+  helpers.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for validating Organization/data_provider payload snapshots and
+    checking whether a supplied provider abbreviation matches the supplied
+    NCBITaxon context.
+  batchable: true
+  batching_instructions: >
+    When validating multiple data providers, combine them into one request with
+    one target per provider and preserve each target's abbreviation, provider
+    name, and taxon context.
+
+tools:
+  - agr_curation_query
+
+output_schema: DataProviderValidationResult
+
+model_config:
+  model: "${AGENT_DATA_PROVIDER_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+frontend:
+  icon: "DP"
+  show_in_palette: true
+
+group_rules_enabled: false

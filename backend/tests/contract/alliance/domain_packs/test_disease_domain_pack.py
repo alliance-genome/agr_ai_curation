@@ -303,7 +303,6 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         "disease_annotation_subject",
         "single_reference",
         "evidence_code_curies[0]",
-        "data_provider",
     }
     for field_path in blocked_fields:
         field = fields_by_path[field_path]
@@ -312,6 +311,14 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.metadata["definition_state_category"] == "blocked"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
         assert binding["state_explanation"]
+
+    for field_path in ("data_provider", "data_provider.abbreviation"):
+        field = fields_by_path[field_path]
+        assert field.definition_state.value == "in_development"
+        assert field.metadata["validator_state"] == "planned"
+        assert field.metadata["definition_state_category"] == "under_development"
+        binding = validator_bindings[field.metadata["validator_binding_id"]]
+        assert binding["validator_agent"]["agent_id"] == "data_provider_validation"
 
 
 def test_disease_pack_linkml_class_slot_attribute_and_range_refs_exist(tmp_path: Path):

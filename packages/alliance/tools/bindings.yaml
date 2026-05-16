@@ -54,6 +54,10 @@ tools:
             type: string
             required: false
             description: "Filter by group/provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
+          - name: provider_name
+            type: string
+            required: false
+            description: Data provider display name for provider lookup.
           - name: limit
             type: integer
             required: false
@@ -260,11 +264,20 @@ tools:
             method: get_species
         get_data_providers:
           name: Get Data Providers
-          description: List all Alliance group data providers with their taxon mappings.
+          description: List all Alliance group data providers with abbreviation, taxon, and display name when available.
           required_params: []
           optional_params: []
           example:
             method: get_data_providers
+        get_data_provider:
+          name: Get Data Provider
+          description: Resolve one Alliance data provider by abbreviation, provider display name, or taxon ID and preserve provider/taxon mismatch candidates.
+          required_params: []
+          optional_params: [abbreviation, provider_name, taxon_id, limit]
+          example:
+            method: get_data_provider
+            abbreviation: WB
+            taxon_id: NCBITaxon:6239
       agent_methods:
         gene:
           agent_name: Gene Validation Agent
@@ -303,6 +316,12 @@ tools:
             - get_vocabulary_term
             - search_vocabulary_terms
           description: The Controlled Vocabulary Validation agent validates vocabulary rows by vocabulary name, term name, abbreviation, and synonym.
+        data_provider_validation:
+          agent_name: Data Provider Validation Agent
+          methods:
+            - get_data_provider
+            - get_data_providers
+          description: The Data Provider Validation agent validates provider abbreviations and provider-to-taxon consistency.
       agent_studio:
         prompt_description: "Structured API for Alliance curation database lookups. Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
         diagnostic:
@@ -325,6 +344,7 @@ tools:
                   - get_allele_by_exact_symbol
                   - get_allele_by_id
                   - get_data_providers
+                  - get_data_provider
                   - get_ontology_term
                   - get_ontology_terms
                   - search_ontology_terms
@@ -360,6 +380,9 @@ tools:
                 type: string
                 description: Filter by species/group
                 enum: [MGI, FB, WB, ZFIN, RGD, SGD, HGNC]
+              provider_name:
+                type: string
+                description: Data provider display name for provider lookup
               taxon_id:
                 type: string
                 description: NCBITaxon ID alternative to data_provider

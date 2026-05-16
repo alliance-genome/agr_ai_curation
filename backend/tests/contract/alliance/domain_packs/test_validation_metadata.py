@@ -257,6 +257,24 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "relation.name",
     ).validator_binding_ids
 
+    expression_provider_binding = gene_expression_bindings["data_provider_validation"]
+    assert expression_provider_binding.validator_agent is not None
+    assert (
+        expression_provider_binding.validator_agent.agent_id
+        == "data_provider_validation"
+    )
+    assert expression_provider_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert expression_provider_binding.object_types == ("GeneExpressionAnnotation",)
+    assert expression_provider_binding.field_paths == ("data_provider.abbreviation",)
+    assert expression_provider_binding.input_fields["provider_name"].required is False
+    assert expression_provider_binding.input_fields["taxon"].required is False
+    assert "data_provider_validation" in registries[
+        "agr.alliance.gene_expression"
+    ].policy_for(
+        "GeneExpressionAnnotation",
+        "data_provider.abbreviation",
+    ).validator_binding_ids
+
     disease_relation_binding = disease_bindings["disease_relation_cv_lookup"]
     assert disease_relation_binding.validator_agent is not None
     assert (
@@ -283,6 +301,20 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert disease_condition_binding.input_fields["vocabulary"].value == (
         "Condition Relation Type"
     )
+
+    disease_provider_binding = disease_bindings["disease_data_provider_lookup"]
+    assert disease_provider_binding.validator_agent is not None
+    assert (
+        disease_provider_binding.validator_agent.agent_id
+        == "data_provider_validation"
+    )
+    assert disease_provider_binding.field_paths == ("data_provider.abbreviation",)
+    assert disease_provider_binding.input_fields["provider_name"].required is False
+    assert disease_provider_binding.input_fields["taxon"].required is False
+    assert disease_provider_binding.expected_result_fields == {
+        "abbreviation": "data_provider.abbreviation",
+        "taxon": "data_provider.taxon",
+    }
 
     assert chemical_condition_bindings[
         "chemical_condition.chebi_api_lookup"
