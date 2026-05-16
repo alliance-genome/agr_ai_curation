@@ -26,7 +26,7 @@ Start here for new developers:
 1. **[CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md)** -- Repository architecture and package-aware runtime loading
 2. **[ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md)** -- How to add an agent bundle, with separate notes for runtime packages vs source checkouts
 3. **[ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md)** -- How to add a tool, with separate notes for package-owned exports vs runtime internals
-4. **[DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md)** -- 0.7.0 domain-envelope/domain-pack source-of-truth, validation, repair, review, export, and submission contracts
+4. **[DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md)** -- 0.7.0 domain-envelope/domain-pack source-of-truth, validation, curator review, export, and submission contracts
 5. **[TEST_STRATEGY.md](TEST_STRATEGY.md)** -- Docker-first validation strategy and domain-envelope release gates
 6. **[DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md)** -- Forward-only development rules for fallbacks, compatibility, and migrations
 7. **[AGENTS_DEVELOPMENT_GUIDE.md](guides/AGENTS_DEVELOPMENT_GUIDE.md)** -- Comprehensive agent/runtime architecture reference
@@ -38,7 +38,7 @@ Start here for new developers:
 |-------|-------------|
 | [DEVELOPMENT_DOCTRINE.md](guides/DEVELOPMENT_DOCTRINE.md) | Forward-only development policy: remove fallbacks, avoid compatibility shims, prefer explicit migrations |
 | [CONFIG_DRIVEN_ARCHITECTURE.md](guides/CONFIG_DRIVEN_ARCHITECTURE.md) | Full architecture guide for repo contributors -- package loading, database runtime, loaders, deployment |
-| [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) | Domain-envelope architecture: source of truth, field paths, validation supervisor, lookup attempts, repair, materialization, export/submission, and Agent Studio metadata |
+| [DOMAIN_ENVELOPES.md](guides/DOMAIN_ENVELOPES.md) | Domain-envelope architecture: source of truth, field paths, validation supervisor, lookup attempts, curator review, materialization, export/submission, and Agent Studio metadata |
 | [TEST_STRATEGY.md](TEST_STRATEGY.md) | Docker-first test commands plus domain-envelope contract, LinkML, live DB, fixture, and release-gate expectations |
 | [ADDING_NEW_AGENT.md](guides/ADDING_NEW_AGENT.md) | Add agent bundles for runtime packages or source-checkout shipped-package maintenance |
 | [ADDING_NEW_TOOL.md](guides/ADDING_NEW_TOOL.md) | Add package-owned tools or maintain Alliance Defaults tool catalogs/runtime tool plumbing |

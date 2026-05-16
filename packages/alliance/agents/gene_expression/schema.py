@@ -27,4 +27,3 @@ class GeneExpressionEnvelope(RuntimeGeneExpressionEnvelope):
         if errors:
             raise ValueError("; ".join(errors))
         return self
-

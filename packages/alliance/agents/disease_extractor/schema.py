@@ -27,4 +27,3 @@ class DiseaseExtractionResultEnvelope(RuntimeDiseaseExtractionResultEnvelope):
         if errors:
             raise ValueError("; ".join(errors))
         return self
-
