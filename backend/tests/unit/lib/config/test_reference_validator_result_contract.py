@@ -90,13 +90,13 @@ def _base_payload(*, status: str = "resolved") -> dict:
         "resolved_values": {
             "reference_id": 101000000924191,
             "curie": "AGRKB:101000000924191",
-            "title": "Suppressed Helicobocter pylori study",
+            "title": "Suppressed Helicobacter pylori study",
         },
         "resolved_objects": [
             {
                 "reference_id": 101000000924191,
                 "curie": "AGRKB:101000000924191",
-                "title": "Suppressed Helicobocter pylori study",
+                "title": "Suppressed Helicobacter pylori study",
                 "short_citation": "Hahm KB et al., 1997",
                 "cross_references": ["PMID:27528223"],
                 "source": "literature_es",
@@ -122,7 +122,7 @@ def _base_payload(*, status: str = "resolved") -> dict:
         "explanation": "The PMID lookup returned one API-backed literature_es match.",
         "reference_id": 101000000924191,
         "curie": "AGRKB:101000000924191",
-        "title": "Suppressed Helicobocter pylori study",
+        "title": "Suppressed Helicobacter pylori study",
         "short_citation": "Hahm KB et al., 1997",
         "cross_references": ["PMID:27528223"],
         "source": "literature_es",
@@ -132,7 +132,7 @@ def _base_payload(*, status: str = "resolved") -> dict:
             {
                 "reference_id": 101000000924191,
                 "curie": "AGRKB:101000000924191",
-                "title": "Suppressed Helicobocter pylori study",
+                "title": "Suppressed Helicobacter pylori study",
                 "short_citation": "Hahm KB et al., 1997",
                 "cross_references": ["PMID:27528223"],
                 "source": "literature_es",
@@ -357,7 +357,7 @@ def test_reference_schema_accepts_fuzzy_resolved_shape(monkeypatch):
     payload["confidence"] = 0.86
     payload["lookup_attempts"][0]["method"] = "search_literature_references"
     payload["lookup_attempts"][0]["query"] = {
-        "value": "Hahm KB Suppressed Helicobocter pylori",
+        "value": "Hahm KB Suppressed Helicobacter pylori",
         "exact_match": False,
         "limit": 20,
     }
