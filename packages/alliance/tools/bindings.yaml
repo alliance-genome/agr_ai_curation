@@ -50,6 +50,18 @@ tools:
             type: string
             required: false
             description: Allele CURIE for direct lookup.
+          - name: entity_type
+            type: string
+            required: false
+            description: Generic entity helper type, such as gene, allele, or agm.
+          - name: entity_names
+            type: array[string]
+            required: false
+            description: Entity labels or symbols for generic entity-to-CURIE lookup.
+          - name: entity_curies
+            type: array[string]
+            required: false
+            description: Entity CURIEs for generic entity information lookup.
           - name: data_provider
             type: string
             required: false
@@ -278,7 +290,44 @@ tools:
             method: get_data_provider
             abbreviation: WB
             taxon_id: NCBITaxon:6239
+        map_entity_names_to_curies:
+          name: Map Entity Names to CURIEs
+          description: Resolve generic Alliance biological entity names or labels to CURIEs within explicit taxon context.
+          required_params: [entity_type, entity_names]
+          optional_params: [taxon_id, data_provider]
+          example:
+            method: map_entity_names_to_curies
+            entity_type: agm
+            entity_names: ["Pax6<tm1>"]
+            taxon_id: NCBITaxon:10090
+        map_entity_curies_to_info:
+          name: Map Entity CURIEs to Info
+          description: Retrieve generic Alliance biological entity facts by CURIE.
+          required_params: [entity_type, entity_curies]
+          optional_params: []
+          example:
+            method: map_entity_curies_to_info
+            entity_type: agm
+            entity_curies: [MGI:8308849]
       agent_methods:
+        agm_validation:
+          agent_name: AGM Validation Agent
+          methods:
+            - map_entity_curies_to_info
+            - map_entity_names_to_curies
+          description: The AGM Validation agent validates affected genomic model subjects with explicit identifier, label, and taxon context.
+        subject_entity_validation:
+          agent_name: Subject Entity Validation Agent
+          methods:
+            - get_gene_by_id
+            - search_genes
+            - get_gene_by_exact_symbol
+            - get_allele_by_id
+            - search_alleles
+            - get_allele_by_exact_symbol
+            - map_entity_curies_to_info
+            - map_entity_names_to_curies
+          description: The Subject Entity agent routes explicit subject_type values to gene, allele, or AGM validation paths.
         gene:
           agent_name: Gene Validation Agent
           methods: [search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id]
@@ -345,6 +394,8 @@ tools:
                   - get_allele_by_id
                   - get_data_providers
                   - get_data_provider
+                  - map_entity_names_to_curies
+                  - map_entity_curies_to_info
                   - get_ontology_term
                   - get_ontology_terms
                   - search_ontology_terms
@@ -376,6 +427,20 @@ tools:
               allele_id:
                 type: string
                 description: Allele CURIE for direct lookup
+              entity_type:
+                type: string
+                description: Entity helper type
+                enum: [gene, allele, agm, construct, targeting_reagent]
+              entity_names:
+                type: array
+                items:
+                  type: string
+                description: Entity names or labels for generic entity lookup
+              entity_curies:
+                type: array
+                items:
+                  type: string
+                description: Entity CURIEs for generic entity lookup
               data_provider:
                 type: string
                 description: Filter by species/group

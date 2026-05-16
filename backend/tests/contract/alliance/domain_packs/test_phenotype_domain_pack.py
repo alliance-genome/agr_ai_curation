@@ -166,22 +166,37 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     assert pending_binding["state_explanation"]
 
     subject_binding = under_development_bindings[1]
+    assert subject_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "subject_entity_validation",
+    }
     assert subject_binding["input_fields"] == {
-        "subject_identifier": {
-            "source": "payload",
-            "path": "subject_identifier",
-            "required": True,
-        },
         "subject_type": {
             "source": "payload",
             "path": "subject_type",
             "required": True,
         },
+        "subject_identifier": {
+            "source": "payload",
+            "path": "subject_identifier",
+            "required": True,
+        },
+        "subject_label": {
+            "source": "payload",
+            "path": "subject_label",
+            "required": False,
+        },
         "taxon": {
             "source": "payload",
             "path": "taxon",
-            "required": True,
+            "required": False,
         },
+    }
+    assert subject_binding["expected_result_fields"] == {
+        "subject_identifier": "subject_identifier",
+        "subject_type": "subject_type",
+        "subject_label": "subject_label",
+        "taxon": "taxon",
     }
 
     term_binding = under_development_bindings[2]

@@ -572,7 +572,10 @@ metadata:
         definition_state: in_development
       - binding_id: phenotype_subject_entity_validator
         display_name: Phenotype subject lookup
-        state_explanation: Subject entity lookup remains informational until package-scoped validator dispatch owns curation DB lookups.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: subject_entity_validation
+        state_explanation: Subject entity lookup routes explicit subject_type values to gene, allele, or AGM validation paths; binding remains under development until validator dispatch is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.phenotype
           object_types:
@@ -580,17 +583,26 @@ metadata:
           field_paths:
             - subject_identifier
             - subject_type
-            - taxon
         input_fields:
-          subject_identifier:
-            source: payload
-            path: subject_identifier
           subject_type:
             source: payload
             path: subject_type
+          subject_identifier:
+            source: payload
+            path: subject_identifier
+          subject_label:
+            source: payload
+            path: subject_label
+            required: false
           taxon:
             source: payload
             path: taxon
+            required: false
+        expected_result_fields:
+          subject_identifier: subject_identifier
+          subject_type: subject_type
+          subject_label: subject_label
+          taxon: taxon
         definition_state: in_development
       - binding_id: phenotype_term_ontology_validator
         display_name: Phenotype ontology term lookup

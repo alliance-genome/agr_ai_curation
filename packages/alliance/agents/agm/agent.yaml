@@ -1,0 +1,47 @@
+# =============================================================================
+# AGENT DEFINITION: agm
+# =============================================================================
+# Validates affected genomic model subjects against Alliance entity helpers.
+# =============================================================================
+
+agent_id: agm_validation
+
+name: "AGM Validation Agent"
+
+description: >
+  Validates affected genomic model identifiers and labels using package-owned
+  Alliance entity lookup helpers.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for validating affected genomic model subjects, AGM identifiers, and
+    AGM labels in phenotype or disease annotation subject context.
+  batchable: true
+  batching_instructions: >
+    When validating multiple AGM subjects, combine them into one request while
+    preserving each subject's identifier, label, and taxon context.
+
+tools:
+  - agr_curation_query
+
+output_schema: AgmValidationResult
+
+model_config:
+  model: "${AGENT_AGM_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+frontend:
+  icon: "AGM"
+  show_in_palette: true
+
+group_rules_enabled: false

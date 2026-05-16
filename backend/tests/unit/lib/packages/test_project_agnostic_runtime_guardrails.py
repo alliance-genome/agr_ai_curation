@@ -48,6 +48,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     # Bundled Alliance package contracts and prompt/tool policy coverage.
     Path("backend/tests/unit/test_config_loaders.py"),
     Path("backend/tests/unit/test_gene_allele_validator_result_contract.py"),
+    Path("backend/tests/unit/test_subject_entity_validator_result_contract.py"),
     Path("backend/tests/unit/test_gene_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_phenotype_extractor_domain_envelope_contract.py"),
     Path("backend/tests/unit/test_allele_extractor_mgi_prompt_policy.py"),
