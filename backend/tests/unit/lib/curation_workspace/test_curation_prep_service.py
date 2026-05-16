@@ -171,7 +171,6 @@ def _make_allele_domain_payload(
         evidence_record_ids if evidence_record_ids is not None else [f"evidence-{index}"]
     )
     mention_ref_id = f"allele-mention-{index}"
-    allele_ref_id = f"allele-reference-{index}"
     reference_ref_id = f"paper-reference-{index}"
     evidence_ref_ids = [
         f"evidence-quote-{index}-{evidence_index}"
@@ -189,17 +188,10 @@ def _make_allele_domain_payload(
                 "object_type": "AlleleMention",
                 "pending_ref_id": mention_ref_id,
                 "payload": {
-                    "mention_text": label,
-                    "normalized_id": normalized_id,
-                    "source_mentions": [label],
-                },
-            },
-            {
-                "object_type": "Allele",
-                "pending_ref_id": allele_ref_id,
-                "payload": {
-                    "primary_external_id": normalized_id,
-                    "allele_symbol": label,
+                    "mention": {
+                        "text": label,
+                        "normalized_hint": normalized_id,
+                    },
                     "source_mentions": [label],
                 },
             },
@@ -226,14 +218,12 @@ def _make_allele_domain_payload(
             "pending_ref_id": f"allele-paper-evidence-association-{index}",
             "payload": {
                 "association_kind": "allele_paper_evidence",
-                "allele_identifier": normalized_id,
                 "allele_label": label,
                 "associated_gene": associated_gene,
                 "confidence": "high",
                 "evidence_record_ids": evidence_record_ids,
             },
             "object_refs": [
-                {"pending_ref_id": allele_ref_id, "object_type": "Allele"},
                 {"pending_ref_id": reference_ref_id, "object_type": "Reference"},
                 {"pending_ref_id": mention_ref_id, "object_type": "AlleleMention"},
                 *[

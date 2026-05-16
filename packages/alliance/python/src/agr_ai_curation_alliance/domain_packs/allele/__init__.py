@@ -49,16 +49,6 @@ _FORBIDDEN_LEGACY_COLLECTIONS = frozenset(
     }
 )
 
-_ALLELE_SCHEMA_REF = SchemaRef(
-    schema_id="alliance.linkml.Allele",
-    provider="alliance_linkml",
-    name="Allele",
-    version=ALLIANCE_LINKML_COMMIT,
-    uri=(
-        "https://github.com/alliance-genome/agr_curation_schema/blob/"
-        f"{ALLIANCE_LINKML_COMMIT}/model/schema/allele.yaml"
-    ),
-)
 _REFERENCE_SCHEMA_REF = SchemaRef(
     schema_id="alliance.linkml.Reference",
     provider="alliance_linkml",
@@ -130,7 +120,7 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
 
         retained_count += 1
         label = _required_string(item.get("label") or item.get("mention"), "allele label")
-        normalized_id = _optional_string(
+        normalized_hint = _optional_string(
             item.get("normalized_id"),
             "extraction.alleles[].normalized_id",
         )
@@ -147,40 +137,28 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
         ] or [label]
 
         mention_ref_id = f"allele-mention-{retained_count}"
-        allele_ref_id = f"allele-reference-{retained_count}"
         association_ref_id = f"allele-paper-evidence-association-{retained_count}"
         evidence_refs: list[ObjectRef] = []
         evidence_record_ids: list[str] = []
+
+        mention_payload: dict[str, Any] = {
+            "mention": {
+                "text": label,
+            },
+            "source_mentions": source_mentions,
+        }
+        if normalized_hint is not None:
+            mention_payload["mention"]["normalized_hint"] = normalized_hint
 
         mention_object = CuratableObjectEnvelope(
             object_type="AlleleMention",
             pending_ref_id=mention_ref_id,
             status=CuratableObjectStatus.PENDING,
             definition_state=DefinitionState.IN_DEVELOPMENT,
-            payload={
-                "mention_text": label,
-                "normalized_id": normalized_id,
-                "source_mentions": source_mentions,
-            },
+            payload=mention_payload,
             metadata={"object_role": "metadata_only"},
         )
-        allele_object = CuratableObjectEnvelope(
-            object_type="Allele",
-            pending_ref_id=allele_ref_id,
-            schema_ref=_ALLELE_SCHEMA_REF,
-            status=CuratableObjectStatus.PENDING,
-            definition_state=DefinitionState.IN_DEVELOPMENT,
-            payload={
-                "primary_external_id": normalized_id,
-                "allele_symbol": label,
-                "source_mentions": source_mentions,
-            },
-            metadata={
-                "object_role": "validated_reference",
-                "validation_state": "pending_materialization",
-            },
-        )
-        objects.extend([mention_object, allele_object])
+        objects.append(mention_object)
 
         for evidence_index, evidence_record in enumerate(evidence_records, start=1):
             record = _required_mapping(evidence_record, "evidence_records[]")
@@ -208,7 +186,6 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             )
 
         association_refs = [
-            ObjectRef(pending_ref_id=allele_ref_id, object_type="Allele"),
             ObjectRef(pending_ref_id=reference_ref_id, object_type="Reference"),
             ObjectRef(pending_ref_id=mention_ref_id, object_type="AlleleMention"),
             *evidence_refs,
@@ -224,7 +201,6 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             ],
             payload={
                 "association_kind": "allele_paper_evidence",
-                "allele_identifier": normalized_id,
                 "allele_label": label,
                 "reference_title": _optional_string(paper.get("title"), "paper.title"),
                 "evidence_record_ids": evidence_record_ids,
@@ -391,7 +367,6 @@ def validate_pending_allele_envelope(
     for association in associations:
         ref_types = {ref.object_type for ref in association.object_refs}
         missing_ref_types = {
-            "Allele",
             "Reference",
             "AlleleMention",
             "EvidenceQuote",
@@ -404,6 +379,24 @@ def validate_pending_allele_envelope(
                     message=(
                         "AllelePaperEvidenceAssociation is missing object refs: "
                         + ", ".join(sorted(missing_ref_types))
+                    ),
+                    object_ref=ObjectRef(
+                        pending_ref_id=association.pending_ref_id,
+                        object_type=association.object_type,
+                    )
+                    if association.pending_ref_id
+                    else None,
+                )
+            )
+
+        if association.payload.get("allele_identifier"):
+            findings.append(
+                ValidationFinding(
+                    severity=ValidationFindingSeverity.ERROR,
+                    code="alliance.allele.extractor_owned_identity_present",
+                    message=(
+                        "Pending allele associations must leave allele_identifier "
+                        "for the active allele validator to resolve."
                     ),
                     object_ref=ObjectRef(
                         pending_ref_id=association.pending_ref_id,

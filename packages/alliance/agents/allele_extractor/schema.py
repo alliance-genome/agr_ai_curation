@@ -25,17 +25,14 @@ _EXPECTED_OBJECT_ROLES = {
     "EvidenceQuote": "metadata_only",
 }
 _REQUIRED_ASSOCIATION_REF_TYPES = {
-    "Allele",
     "Reference",
     "AlleleMention",
     "EvidenceQuote",
 }
 _REQUIRED_ASSOCIATION_PAYLOAD_FIELDS = (
     "association_kind",
-    "allele_identifier",
     "evidence_record_ids",
 )
-_REQUIRED_ALLELE_PAYLOAD_FIELDS = ("primary_external_id", "allele_symbol")
 _REQUIRED_EVIDENCE_QUOTE_PAYLOAD_FIELDS = (
     "evidence_record_id",
     "verified_quote",
@@ -72,10 +69,7 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
             if obj.object_type == "AllelePaperEvidenceAssociation":
                 self._validate_association_object(obj, evidence_record_ids)
             elif obj.object_type == "Allele":
-                self._validate_required_payload_fields(
-                    obj,
-                    _REQUIRED_ALLELE_PAYLOAD_FIELDS,
-                )
+                self._validate_extractor_does_not_claim_allele_identity(obj)
             elif obj.object_type == "EvidenceQuote":
                 self._validate_required_payload_fields(
                     obj,
@@ -110,6 +104,11 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
             raise ValueError(
                 "AllelePaperEvidenceAssociation payload.association_kind must be "
                 "'allele_paper_evidence'"
+            )
+        if not _is_missing_payload_value(obj.payload.get("allele_identifier")):
+            raise ValueError(
+                "AllelePaperEvidenceAssociation payload.allele_identifier must be "
+                "resolved by the active allele validator, not emitted by the extractor"
             )
 
         object_ref_types = {ref.object_type for ref in obj.object_refs if ref.object_type}
@@ -153,6 +152,23 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
             raise ValueError(
                 "AllelePaperEvidenceAssociation metadata.write_behavior.status "
                 "must be 'blocked'"
+            )
+
+    @classmethod
+    def _validate_extractor_does_not_claim_allele_identity(
+        cls,
+        obj: CuratableObjectEnvelope,
+    ) -> None:
+        claimed_fields = [
+            field_name
+            for field_name in ("primary_external_id", "allele_symbol", "taxon")
+            if not _is_missing_payload_value(obj.payload.get(field_name))
+        ]
+        if claimed_fields:
+            raise ValueError(
+                "Allele validated-reference payload fields must be resolved by "
+                "the active allele validator, not emitted by the extractor: "
+                + ", ".join(claimed_fields)
             )
 
     @classmethod

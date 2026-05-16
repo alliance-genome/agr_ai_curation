@@ -56,20 +56,12 @@ def _valid_allele_envelope_payload() -> dict:
                 "model_ref": "AlleleMentionPayload",
                 "definition_state": "in_development",
                 "payload": {
-                    "mention_text": "daf-2(m41)",
-                    "normalized_id": "WB:WBVar00000001",
-                    "source_mentions": ["daf-2(m41)"],
-                },
-            },
-            {
-                "object_type": "Allele",
-                "object_role": "validated_reference",
-                "pending_ref_id": "allele-reference-1",
-                "model_ref": "AlleleReferencePayload",
-                "definition_state": "in_development",
-                "payload": {
-                    "primary_external_id": "WB:WBVar00000001",
-                    "allele_symbol": "daf-2(m41)",
+                    "mention": {
+                        "text": "daf-2(m41)",
+                        "normalized_hint": "WB:WBVar00000001",
+                    },
+                    "associated_gene": {"symbol": "daf-2"},
+                    "taxon": {"curie": "NCBITaxon:6239"},
                     "source_mentions": ["daf-2(m41)"],
                 },
             },
@@ -101,14 +93,12 @@ def _valid_allele_envelope_payload() -> dict:
                 ],
                 "payload": {
                     "association_kind": "allele_paper_evidence",
-                    "allele_identifier": "WB:WBVar00000001",
                     "allele_label": "daf-2(m41)",
                     "associated_gene": "daf-2",
                     "confidence": "high",
                     "evidence_record_ids": ["daf-2-m41-evidence-1"],
                 },
                 "object_refs": [
-                    {"pending_ref_id": "allele-reference-1", "object_type": "Allele"},
                     {"pending_ref_id": "paper-reference-1", "object_type": "Reference"},
                     {"pending_ref_id": "allele-mention-1", "object_type": "AlleleMention"},
                     {"pending_ref_id": "evidence-quote-1", "object_type": "EvidenceQuote"},
@@ -223,14 +213,27 @@ def test_allele_extractor_schema_rejects_evidence_ids_missing_from_metadata(alle
     assert "daf-2-m41-evidence-1" in str(exc_info.value)
 
 
+def test_allele_extractor_schema_rejects_extractor_owned_allele_identity(allele_schema):
+    payload = _valid_allele_envelope_payload()
+    payload["curatable_objects"][-1]["payload"]["allele_identifier"] = (
+        "WB:WBVar00000001"
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        allele_schema.model_validate(payload)
+
+    assert "payload.allele_identifier" in str(exc_info.value)
+    assert "active allele validator" in str(exc_info.value)
+
+
 def test_allele_extractor_schema_accepts_bounded_repair_mode_output(allele_schema):
     payload = deepcopy(_valid_allele_envelope_payload())
     payload["repair_mode"] = True
     payload["curatable_objects"][-1]["repair_hints"] = [
-        "Repaired curatable_objects[4].payload.allele_identifier only."
+        "Repaired curatable_objects[3].payload.associated_gene only."
     ]
     payload["metadata"]["repair_notes"] = [
-        "Supervisor requested repair of curatable_objects[4].payload.allele_identifier."
+        "Supervisor requested repair of curatable_objects[3].payload.associated_gene."
     ]
 
     envelope = _validate_allele_envelope(allele_schema, payload)
@@ -240,5 +243,5 @@ def test_allele_extractor_schema_accepts_bounded_repair_mode_output(allele_schem
         "allele-paper-evidence-association-1"
     )
     assert envelope.metadata.repair_notes == [
-        "Supervisor requested repair of curatable_objects[4].payload.allele_identifier."
+        "Supervisor requested repair of curatable_objects[3].payload.associated_gene."
     ]

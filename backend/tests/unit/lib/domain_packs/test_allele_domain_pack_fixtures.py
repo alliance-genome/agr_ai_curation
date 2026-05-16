@@ -53,7 +53,7 @@ def test_allele_domain_pack_loads_tool_verified_pending_fixture():
         obj for obj in envelope.objects if obj.object_type == "AllelePaperEvidenceAssociation"
     )
     assert association.object_role == "curatable_unit"
-    assert association.payload["allele_identifier"] == "WB:WBVar00000001"
+    assert "allele_identifier" not in association.payload
     assert association.evidence_record_ids == ["daf-2-m41-evidence-1"]
     assert association.metadata["write_behavior"]["status"] == "blocked"
 
