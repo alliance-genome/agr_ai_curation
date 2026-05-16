@@ -298,7 +298,7 @@ tools:
           example:
             method: map_entity_names_to_curies
             entity_type: agm
-            entity_names: [MGI:8308849]
+            entity_names: ["Pax6<tm1>"]
             taxon_id: NCBITaxon:10090
         map_entity_curies_to_info:
           name: Map Entity CURIEs to Info
