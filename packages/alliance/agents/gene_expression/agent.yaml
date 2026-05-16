@@ -46,7 +46,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: GeneExpressionExtractorRepairResponse
+output_schema: GeneExpressionEnvelope
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

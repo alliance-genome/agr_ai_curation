@@ -501,8 +501,7 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
     assert captured["settings"]["parallel_tool_calls"] is False
 
 
-def test_create_db_agent_wraps_domain_repair_schema_for_runtime(monkeypatch):
-    from agents.agent_output import AgentOutputSchema
+def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
     from src.lib.config import schema_discovery
 
     fake_row = SimpleNamespace(
@@ -515,7 +514,7 @@ def test_create_db_agent_wraps_domain_repair_schema_for_runtime(monkeypatch):
         model_id="gpt-4o",
         model_temperature=0.1,
         model_reasoning="medium",
-        output_schema_key="GeneExtractorRepairResponse",
+        output_schema_key="GeneExtractionResultEnvelope",
         tool_ids=[],
         name="Gene Extractor",
     )
@@ -528,15 +527,10 @@ def test_create_db_agent_wraps_domain_repair_schema_for_runtime(monkeypatch):
     monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row)
-    canonical_schema = schema_discovery.get_agent_schema("GeneExtractorRepairResponse")
+    canonical_schema = schema_discovery.get_agent_schema("GeneExtractionResultEnvelope")
 
-    assert "GeneExtractorRepairResponse" in built.instructions
-    assert isinstance(built.output_type, AgentOutputSchema)
-    assert built.output_type.output_type is canonical_schema
-    assert built.output_type.is_strict_json_schema() is False
-    assert built.output_type.__name__ == "GeneExtractorRepairResponse"
-    assert built.output_type.json_schema().get("type") == "object"
-    assert set(built.output_type.json_schema().get("properties", {})) == {"response"}
+    assert "GeneExtractionResultEnvelope" in built.instructions
+    assert built.output_type is canonical_schema
 
 
 def test_create_db_agent_applies_model_overrides(monkeypatch):

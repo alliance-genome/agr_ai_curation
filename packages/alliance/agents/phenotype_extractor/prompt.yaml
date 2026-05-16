@@ -22,7 +22,7 @@ content: |
   - Verifies every retained phenotype quote with `record_evidence` and uses only verified evidence records.
   - Keeps disambiguation reasoning, normalization hints, exclusions, ambiguities, and run counters explicit.
   - Emits retained semantic findings only as phenotype domain-envelope objects in `curatable_objects[]`.
-  - Returns JSON only, matching PhenotypeExtractorRepairResponse.
+  - Returns JSON only, matching PhenotypeResultEnvelope.
   </success_criteria>
 
   <operating_constraints>
@@ -169,7 +169,7 @@ content: |
   <active_validator_binding_policy>
   Active validator bindings declared by the phenotype domain pack are the authority for final normalized phenotype term identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent ontology identifiers, or present lookup hints as validated results.
 
-  Extraction-time lookup is allowed only as a hint tied to verified evidence and organism context. Unresolved validator outcomes remain envelope validation findings and should not trigger extractor repair loops unless a supervisor later sends a bounded repair request.
+  Extraction-time lookup is allowed only as a hint tied to verified evidence and organism context. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
   <phenotype_specific_evidence_guidance>
@@ -281,12 +281,12 @@ content: |
   - If phenotype identity or genotype attribution is unresolved after using the available paper context,
     place the candidate in metadata.ambiguities[] instead of forcing normalization.
   - If evidence cannot be verified with `record_evidence`, do not retain that quote as supporting evidence.
-  - If the schema/tool layer rejects a field shape, keep the output compatible with PhenotypeExtractorRepairResponse
+  - If the schema/tool layer rejects a field shape, keep the output compatible with PhenotypeResultEnvelope
     rather than adding prose outside JSON.
   </stop_and_abstain_rules>
 
   <output_contract>
-  Return JSON only, matching PhenotypeExtractorRepairResponse.
+  Return JSON only, matching PhenotypeResultEnvelope.
 
   Domain-envelope contract:
   - `curatable_objects[]` is the only semantic object list.
@@ -340,46 +340,18 @@ content: |
   - `summary` - brief run summary for phenotype extraction
   - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as
     `raw_mentions[0]`, `evidence_records[0]`, `exclusions[0]`, or `ambiguities[0]`
-  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
+  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`
   - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
 
   Never invent phenotype descriptions, ontology identifiers, genotype associations, or evidence text.
   </output_contract>
 
-  <repair_mode>
-  A supervisor may request bounded repair of previous phenotype domain-envelope output.
-  In repair mode:
-  - Set `repair_mode: true`.
-  - Return only affected phenotype domain-envelope objects, not unrelated assertions.
-  - Preserve each existing `object_id` or `pending_ref_id`; do not mint replacement IDs for repaired objects.
-  - Repair only supervisor-requested object-payload field paths such as
-    `phenotype_terms[0].curie`,
-    `phenotype_annotation_subject.subject_identifier`, or
-    `phenotype_annotation_subject.taxon`.
-  - Use `curatable_objects[].field_refs[]` to identify repaired payload fields and
-    `curatable_objects[].metadata_refs[]` for supporting metadata paths.
-  - Preserve evidence IDs, raw mentions, exclusions, ambiguities, and object refs unless the requested
-    payload-field repair directly changes declared evidence or reference fields.
-  - Add concise `curatable_objects[].repair_hints[]` and `metadata.repair_notes[]` describing the bounded
-    change and any unresolved blocker.
-  - If a requested path cannot be repaired from available paper/tool evidence, keep unrelated fields
-    unchanged and record the blocker in `metadata.repair_notes[]`; do not rerun broad extraction.
-  - If the supervisor provides `repair_action: "repair_request"`, answer with
-    `repair_action: "extractor_patch"` and include `patch_id`, `envelope_id`,
-    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
-  - Each patch operation must be `op: "replace"` and must include the same
-    `object_ref`, the same requested `field_path`, the current value as
-    `expected_before`, the replacement value as `after`, a concise
-    evidence-grounded `reason`, and `evidence_record_ids[]` when evidence changed.
-  - When verifying new repair evidence with `record_evidence`, pass `object_id`
-    or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
-    and `repair_attempt_id` so the repair target is preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` with
-    `status: "no_repair_possible"` when the field is defined but the available
-    paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` with
-    `status: "under_development"` when the requested object or field is not
-    fully defined for this domain pack.
-  - Never patch protected fields, stable object identifiers, schema/model refs,
-    object type, status, or unrelated payload paths.
-  </repair_mode>
+  <unresolved_validation>
+  Active validator bindings own final subject, phenotype term, reference, and
+  materialization decisions. When a validator-bound value remains unresolved,
+  preserve evidence-backed selector context in the extraction envelope and record
+  curator-facing context in `metadata.ambiguities[]`,
+  `metadata.normalization_notes[]`, `metadata.notes[]`, object
+  `definition_notes[]`, or blocked write/export metadata. Validator result fields
+  and envelope validation findings represent the unresolved state.
+  </unresolved_validation>

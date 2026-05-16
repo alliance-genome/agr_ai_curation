@@ -396,18 +396,18 @@ def test_bundled_alliance_output_resolution_prefers_package_schema(monkeypatch):
     assert resolved.__module__.startswith("agent_schemas.agr_alliance.gene")
 
 
-def test_bundled_alliance_extractors_use_repair_response_schema(monkeypatch):
+def test_bundled_alliance_extractors_use_extraction_result_schema(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 
     schemas = schema_discovery.discover_agent_schemas(force_reload=True)
 
     expected = {
-        "gene_expression": "GeneExpressionExtractorRepairResponse",
-        "gene_extractor": "GeneExtractorRepairResponse",
-        "allele_extractor": "AlleleExtractorRepairResponse",
-        "disease_extractor": "DiseaseExtractorRepairResponse",
-        "chemical_extractor": "ChemicalExtractorRepairResponse",
-        "phenotype_extractor": "PhenotypeExtractorRepairResponse",
+        "gene_expression": "GeneExpressionEnvelope",
+        "gene_extractor": "GeneExtractionResultEnvelope",
+        "allele_extractor": "AlleleExtractionResultEnvelope",
+        "disease_extractor": "DiseaseExtractionResultEnvelope",
+        "chemical_extractor": "ChemicalExtractionResultEnvelope",
+        "phenotype_extractor": "PhenotypeResultEnvelope",
     }
     for agent_name, schema_name in expected.items():
         discovered_schema = schema_discovery.get_schema_for_agent(agent_name)
@@ -415,9 +415,11 @@ def test_bundled_alliance_extractors_use_repair_response_schema(monkeypatch):
         assert schema_name in schemas
         assert discovered_schema is not None
         assert discovered_schema.__name__ == schema_name
-        assert getattr(
+        assert issubclass(discovered_schema, DomainEnvelopeExtractionResult)
+        assert not getattr(
             discovered_schema,
             "__domain_envelope_extractor_repair_response__",
+            False,
         )
 
 

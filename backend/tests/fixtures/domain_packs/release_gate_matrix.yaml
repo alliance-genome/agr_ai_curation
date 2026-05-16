@@ -7,7 +7,7 @@ required_surfaces:
   - live_db_projection
   - one_off_migration
   - materialization
-  - repair_loop
+  - validation_findings
   - export_submission
   - opus_tool
   - trace_review
@@ -25,7 +25,7 @@ suites:
       - provider_agnostic_fixture_pack
       - one_off_migration
       - materialization
-      - repair_loop
+      - validation_findings
       - export_submission
       - opus_tool
       - trace_review
@@ -42,7 +42,7 @@ suites:
       - alliance_domain_pack_metadata
       - alliance_linkml_grounding
       - materialization
-      - repair_loop
+      - validation_findings
       - export_submission
   alliance_live_db_contract:
     runner: backend-contract-tests
@@ -66,6 +66,6 @@ suites:
     surfaces:
       - end_to_end_integration
       - materialization
-      - repair_loop
+      - validation_findings
       - export_submission
       - one_off_migration

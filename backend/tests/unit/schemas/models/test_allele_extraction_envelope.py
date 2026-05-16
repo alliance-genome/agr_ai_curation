@@ -31,7 +31,7 @@ def allele_schema(monkeypatch):
 
 
 def _validate_allele_envelope(allele_schema, payload: dict):
-    return allele_schema.model_validate(payload).root
+    return allele_schema.model_validate(payload)
 
 
 def _valid_allele_envelope_payload() -> dict:
@@ -155,7 +155,6 @@ def _valid_allele_envelope_payload() -> dict:
                 }
             ],
             "notes": ["Association write behavior remains blocked."],
-            "repair_notes": [],
             "provenance": {"semantic_source": "curatable_objects"},
         },
         "run_summary": {
@@ -264,22 +263,27 @@ def test_allele_extractor_schema_rejects_pre_validation_allele_object_refs(
     assert "Allele" in str(exc_info.value)
 
 
-def test_allele_extractor_schema_accepts_bounded_repair_mode_output(allele_schema):
+@pytest.mark.parametrize(
+    ("location", "field_name", "value"),
+    (
+        ("object", "repair_hints", ["legacy repair hint"]),
+        ("metadata", "repair_notes", ["legacy repair note"]),
+        ("top_level", "repair_mode", True),
+    ),
+)
+def test_allele_extractor_schema_rejects_repair_surfaces(
+    allele_schema,
+    location: str,
+    field_name: str,
+    value: object,
+):
     payload = deepcopy(_valid_allele_envelope_payload())
-    payload["repair_mode"] = True
-    payload["curatable_objects"][-1]["repair_hints"] = [
-        "Repaired curatable_objects[3].payload.associated_gene only."
-    ]
-    payload["metadata"]["repair_notes"] = [
-        "Supervisor requested repair of curatable_objects[3].payload.associated_gene."
-    ]
+    if location == "object":
+        payload["curatable_objects"][-1][field_name] = value
+    elif location == "metadata":
+        payload["metadata"][field_name] = value
+    else:
+        payload[field_name] = value
 
-    envelope = _validate_allele_envelope(allele_schema, payload)
-
-    assert envelope.repair_mode is True
-    assert envelope.curatable_objects[-1].pending_ref_id == (
-        "allele-paper-evidence-association-1"
-    )
-    assert envelope.metadata.repair_notes == [
-        "Supervisor requested repair of curatable_objects[3].payload.associated_gene."
-    ]
+    with pytest.raises(ValidationError):
+        allele_schema.model_validate(payload)

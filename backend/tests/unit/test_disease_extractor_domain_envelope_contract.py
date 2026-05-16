@@ -70,7 +70,7 @@ def _disease_extractor_schema():
 
 
 def _validate_disease_extractor_payload(payload: dict[str, object]):
-    return _disease_extractor_schema().model_validate(payload).root
+    return _disease_extractor_schema().model_validate(payload)
 
 
 def _valid_disease_extractor_payload() -> dict[str, object]:
@@ -211,86 +211,29 @@ def test_disease_extractor_schema_requires_metadata_evidence_alignment():
     assert "must match metadata.evidence_records[]" in str(exc_info.value)
 
 
-def test_disease_extractor_schema_requires_bounded_repair_field_refs():
+@pytest.mark.parametrize(
+    ("location", "field_name", "value"),
+    (
+        ("object", "repair_hints", ["legacy repair hint"]),
+        ("metadata", "repair_notes", ["legacy repair note"]),
+        ("top_level", "repair_mode", True),
+    ),
+)
+def test_disease_extractor_schema_rejects_repair_surfaces(
+    location: str,
+    field_name: str,
+    value: object,
+):
     payload = _valid_disease_extractor_payload()
-    payload["repair_mode"] = True
-    payload["metadata"]["repair_notes"] = [
-        "Repaired only the requested disease ontology curie field."
-    ]
+    if location == "object":
+        payload["curatable_objects"][0][field_name] = value
+    elif location == "metadata":
+        payload["metadata"][field_name] = value
+    else:
+        payload[field_name] = value
 
-    with pytest.raises(ValidationError) as exc_info:
+    with pytest.raises(ValidationError):
         _disease_extractor_schema().model_validate(payload)
-
-    assert "field_refs must identify repaired field paths" in str(exc_info.value)
-
-    payload["curatable_objects"][0]["field_refs"] = [
-        {
-            "object_ref": {
-                "pending_ref_id": "disease-assertion-1",
-                "object_type": DISEASE_OBJECT_TYPE,
-            },
-            "field_path": "disease_annotation_object.curie",
-        }
-    ]
-    repaired = _validate_disease_extractor_payload(payload)
-
-    assert repaired.repair_mode is True
-    assert repaired.curatable_objects[0].field_refs[0].field_path.endswith("curie")
-
-
-def test_disease_extractor_schema_rejects_nonexistent_repair_field_ref_path():
-    payload = _valid_disease_extractor_payload()
-    payload["repair_mode"] = True
-    payload["metadata"]["repair_notes"] = [
-        "Repaired only the requested disease ontology curie field."
-    ]
-    payload["curatable_objects"][0]["field_refs"] = [
-        {
-            "object_ref": {
-                "pending_ref_id": "disease-assertion-1",
-                "object_type": DISEASE_OBJECT_TYPE,
-            },
-            "field_path": "disease_annotation_object.missing_curie",
-        }
-    ]
-
-    with pytest.raises(ValidationError) as exc_info:
-        _disease_extractor_schema().model_validate(payload)
-
-    message = str(exc_info.value)
-    assert (
-        "curatable_objects[0].field_refs[0].field_path "
-        "'disease_annotation_object.missing_curie'"
-    ) in message
-    assert "does not exist on repaired object payload" in message
-
-
-def test_disease_extractor_schema_allows_untouched_objects_in_repair_mode():
-    payload = _valid_disease_extractor_payload()
-    preserved_object = copy.deepcopy(payload["curatable_objects"][0])
-    preserved_object["pending_ref_id"] = "disease-assertion-2"
-    payload["curatable_objects"].append(preserved_object)
-    payload["repair_mode"] = True
-    payload["metadata"]["repair_notes"] = [
-        "Repaired only the requested disease ontology curie field."
-    ]
-    payload["curatable_objects"][0]["field_refs"] = [
-        {
-            "object_ref": {
-                "pending_ref_id": "disease-assertion-1",
-                "object_type": DISEASE_OBJECT_TYPE,
-            },
-            "field_path": "disease_annotation_object.curie",
-        }
-    ]
-
-    repaired = _validate_disease_extractor_payload(payload)
-
-    assert repaired.repair_mode is True
-    assert len(repaired.curatable_objects) == 2
-    assert repaired.curatable_objects[0].field_refs
-    assert repaired.curatable_objects[1].pending_ref_id == "disease-assertion-2"
-    assert repaired.curatable_objects[1].field_refs == []
 
 
 def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
@@ -309,8 +252,10 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
     assert "`model_ref`: `PendingDiseaseAssertionPayload`" in prompt_content
     assert "`disease_annotation_object.curie`" in prompt_content
     assert "Do not use legacy flat payload fields" in prompt_content
-    assert "In repair mode" in prompt_content
-    assert "metadata.repair_notes[]" in prompt_content
+    assert "Active validator bindings own final disease identity" in prompt_content
+    assert "repair_mode" not in prompt_content
+    assert "repair_notes" not in prompt_content
+    assert "repair_hints" not in prompt_content
 
     for group_rule_file in source.group_rule_files:
         content = str(

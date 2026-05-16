@@ -11,14 +11,9 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    RootModel,
     StrictStr,
     field_validator,
     model_validator,
-)
-from src.lib.domain_packs.repair_patches import (
-    DomainEnvelopeExtractorFinalClassification,
-    DomainEnvelopeRepairPatch,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState, SchemaRef
 
@@ -213,35 +208,11 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
             if evidence_record.chunk_id != obj.payload.chunk_id:
                 raise ValueError("gene_mention_evidence payload.chunk_id must match metadata evidence")
 
-        if self.repair_mode:
-            has_repair_context = bool(self.metadata.repair_notes) or any(
-                obj.repair_hints for obj in self.curatable_objects
-            )
-            if not has_repair_context:
-                raise ValueError(
-                    "repair-mode gene extractor output must include metadata.repair_notes[] "
-                    "or curatable_objects[].repair_hints[]"
-                )
-
         return self
-
-
-class GeneExtractorRepairResponse(
-    RootModel[
-        GeneExtractionResultEnvelope
-        | DomainEnvelopeRepairPatch
-        | DomainEnvelopeExtractorFinalClassification
-    ]
-):
-    """Gene first-pass extraction or repair_action response schema."""
-
-    __envelope_class__ = True
-    __domain_envelope_extractor_repair_response__ = True
 
 
 __all__ = [
     "GeneExtractionResultEnvelope",
-    "GeneExtractorRepairResponse",
     "GeneMentionEvidenceObjectEnvelope",
     "GeneMentionEvidencePayload",
 ]

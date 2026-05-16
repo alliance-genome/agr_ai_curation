@@ -17,7 +17,6 @@ def test_runtime_gene_expression_envelope_has_contract_defaults():
     assert envelope.metadata.exclusions == []
     assert envelope.metadata.ambiguities == []
     assert envelope.metadata.notes == []
-    assert envelope.metadata.repair_notes == []
     assert envelope.run_summary.candidate_count == 0
 
 
@@ -51,7 +50,6 @@ def test_core_schema_envelopes_include_shared_extractor_contract_fields():
         "metadata",
         "run_summary",
         "schema_ref",
-        "repair_mode",
     }
 
     assert expected_fields.issubset(set(DomainEnvelopeExtractionResult.model_fields.keys()))
@@ -65,7 +63,6 @@ def test_extraction_envelope_metadata_includes_non_semantic_side_channels():
         "exclusions",
         "ambiguities",
         "notes",
-        "repair_notes",
         "provenance",
     }
 

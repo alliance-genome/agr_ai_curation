@@ -731,7 +731,7 @@ This tool returns:
 1. **Initial Instructions**: "Extract alleles from this paper. For each allele, capture: parent gene symbol, allele identifier, and phenotype. Verify identifiers against the database."
 2. **PDF Extraction**: Extract relevant sections
 3. **Allele Extraction**: Produce domain-envelope allele objects with field paths and schema/provider refs
-4. **Automatic Validation**: Scheduled validators write findings, repair attempts, and lookup attempts back into the envelope
+4. **Automatic Validation**: Scheduled validators write findings and lookup attempts back into the envelope
 5. **CSV Formatter**: "Export with columns: parent_gene, allele_id, phenotype"
 </flow_design_guidance>
 

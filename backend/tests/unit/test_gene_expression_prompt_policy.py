@@ -52,7 +52,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     data = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
     content = str(data.get("content") or "")
 
-    assert "Return JSON only, matching GeneExpressionExtractorRepairResponse." in content
+    assert "Return JSON only, matching GeneExpressionEnvelope." in content
     assert "previously_reported" in content
     assert "non_experimental_claim" in content
     assert "marker_only_visualization" in content
@@ -71,8 +71,8 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "go_cc_label" not in content
     assert "is_negative" not in content
     assert "negated: true" in content
-    assert "repair_mode: true" in content
-    assert "metadata.repair_notes[]" in content
+    assert "repair_mode" not in content
+    assert "metadata.repair_notes" not in content
     assert "Do not emit top-level `items[]`" in content
 
 
@@ -120,8 +120,7 @@ def test_gene_expression_zfin_overlay_includes_zebrafish_curation_rules():
 def test_gene_expression_schema_accepts_tmem67_domain_envelope_output():
     schema = _load_gene_expression_schema()
 
-    response = schema.model_validate(_load_tmem67_output())
-    envelope = response.root
+    envelope = schema.model_validate(_load_tmem67_output())
 
     assert envelope.curatable_objects[0].object_type == "GeneExpressionAnnotation"
     assert envelope.curatable_objects[0].model_ref == "GeneExpressionAnnotationPayload"
@@ -152,30 +151,27 @@ def test_gene_expression_schema_rejects_non_annotation_curatable_objects():
     assert "GeneExpressionAnnotation" in str(exc_info.value)
 
 
-def test_gene_expression_schema_requires_bounded_repair_field_refs():
+@pytest.mark.parametrize(
+    ("location", "field_name", "value"),
+    (
+        ("object", "repair_hints", ["legacy repair hint"]),
+        ("metadata", "repair_notes", ["legacy repair note"]),
+        ("top_level", "repair_mode", True),
+    ),
+)
+def test_gene_expression_schema_rejects_repair_surfaces(
+    location: str,
+    field_name: str,
+    value: object,
+):
     schema = _load_gene_expression_schema()
     payload = deepcopy(_load_tmem67_output())
-    payload["repair_mode"] = True
-    payload["metadata"]["repair_notes"] = [
-        "Repair anatomical structure name from curator-requested field path."
-    ]
+    if location == "object":
+        payload["curatable_objects"][0][field_name] = value
+    elif location == "metadata":
+        payload["metadata"][field_name] = value
+    else:
+        payload[field_name] = value
 
-    with pytest.raises(ValidationError) as exc_info:
+    with pytest.raises(ValidationError):
         schema.model_validate(payload)
-
-    assert "field_refs must identify repaired field paths" in str(exc_info.value)
-
-    payload["curatable_objects"][0]["field_refs"] = [
-        {
-            "object_ref": {
-                "pending_ref_id": "gene-expression-annotation-206552169",
-                "object_type": "GeneExpressionAnnotation",
-            },
-            "field_path": "expression_pattern.where_expressed.anatomical_structure.name",
-        }
-    ]
-    response = schema.model_validate(payload)
-    repaired = response.root
-
-    assert repaired.repair_mode is True
-    assert repaired.curatable_objects[0].field_refs[0].field_path.endswith("name")

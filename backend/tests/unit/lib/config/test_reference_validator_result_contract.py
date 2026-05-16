@@ -396,7 +396,6 @@ def test_reference_prompt_contract_uses_tool_before_deciding():
         "Do not wrap",
         "Never call Elasticsearch",
         "Do not return `repair_action`",
-        'Only an extractor may return `repair_action: "extractor_patch"`',
     ]:
         assert fragment in content, f"reference prompt missing {fragment}"
 

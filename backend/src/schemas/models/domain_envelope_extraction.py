@@ -59,10 +59,6 @@ class ExtractionEnvelopeMetadata(BaseModel):
         default_factory=list,
         description="Curator-facing run notes that are not semantic objects",
     )
-    repair_notes: list[str] = Field(
-        default_factory=list,
-        description="Instructions or observations useful for repair-mode reruns",
-    )
     provenance: dict[str, Any] = Field(
         default_factory=dict,
         description=(
@@ -86,7 +82,7 @@ class DomainEnvelopeExtractionResult(BaseModel):
         description=(
             "The only semantic object list for domain-envelope extraction outputs. "
             "Each object carries identity, role/type, schema/model refs, payload JSON, "
-            "evidence refs, metadata refs, definition state, and repair hints."
+            "evidence refs, metadata refs, and definition state."
         ),
     )
     metadata: ExtractionEnvelopeMetadata = Field(
@@ -101,11 +97,6 @@ class DomainEnvelopeExtractionResult(BaseModel):
         default=None,
         description="Optional top-level schema ref for the shared extraction output contract",
     )
-    repair_mode: bool = Field(
-        default=False,
-        description="True when the result repairs or amends a previous domain-envelope extraction",
-    )
-
     @model_validator(mode="before")
     @classmethod
     def _reject_legacy_semantic_lists(cls, value: Any) -> Any:

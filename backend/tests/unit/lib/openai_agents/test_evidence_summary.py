@@ -11,7 +11,6 @@ from src.lib.openai_agents.evidence_summary import (
 from src.lib.openai_agents.models import (
     AlleleExtractionResultEnvelope,
     GeneExtractionResultEnvelope,
-    GeneExtractorRepairResponse,
 )
 
 
@@ -289,7 +288,7 @@ def test_evidence_reference_report_names_retained_items_missing_refs():
     ]
 
 
-def test_repair_response_output_type_still_detects_curatable_object_evidence():
+def test_domain_extraction_output_type_detects_curatable_object_evidence():
     payload = {
         "curatable_objects": [
             {
@@ -308,11 +307,11 @@ def test_repair_response_output_type_still_detects_curatable_object_evidence():
 
     assert structured_result_requires_evidence(
         payload,
-        expected_output_type=GeneExtractorRepairResponse,
+        expected_output_type=GeneExtractionResultEnvelope,
     ) is True
     assert structured_result_missing_evidence_record_refs(
         payload,
-        expected_output_type=GeneExtractorRepairResponse,
+        expected_output_type=GeneExtractionResultEnvelope,
     ) is False
 
 

@@ -5,17 +5,11 @@ from pydantic import ValidationError
 
 from src.lib.openai_agents.models import (
     AlleleExtractionResultEnvelope,
-    AlleleExtractorRepairResponse,
     ChemicalExtractionResultEnvelope,
-    ChemicalExtractorRepairResponse,
     DiseaseExtractionResultEnvelope,
-    DiseaseExtractorRepairResponse,
     GeneExpressionEnvelope,
-    GeneExpressionExtractorRepairResponse,
     GeneExtractionResultEnvelope,
-    GeneExtractorRepairResponse,
     PhenotypeResultEnvelope,
-    PhenotypeExtractorRepairResponse,
 )
 from src.schemas.domain_envelope import DefinitionState, EnvelopeMetadataRef
 from src.schemas.models import LEGACY_SEMANTIC_LIST_FIELDS
@@ -29,16 +23,6 @@ EXTRACTOR_ENVELOPE_CLASSES = (
     ChemicalExtractionResultEnvelope,
     PhenotypeResultEnvelope,
 )
-
-EXTRACTOR_REPAIR_RESPONSE_CLASSES = (
-    GeneExpressionExtractorRepairResponse,
-    GeneExtractorRepairResponse,
-    AlleleExtractorRepairResponse,
-    DiseaseExtractorRepairResponse,
-    ChemicalExtractorRepairResponse,
-    PhenotypeExtractorRepairResponse,
-)
-
 
 def _valid_domain_envelope_payload() -> dict[str, object]:
     return {
@@ -82,7 +66,6 @@ def _valid_domain_envelope_payload() -> dict[str, object]:
                         "role": "verified_evidence",
                     },
                 ],
-                "repair_hints": ["Preserve pending_ref_id when repairing normalization."],
                 "metadata": {
                     "provider_refs": {
                         "agent": "gene_extractor",
@@ -126,7 +109,6 @@ def _valid_domain_envelope_payload() -> dict[str, object]:
                 }
             ],
             "notes": ["Curator-facing note."],
-            "repair_notes": ["Repair should not invent new object IDs."],
             "provenance": {"legacy_mentions": ["alpha"]},
         },
         "run_summary": {
@@ -140,7 +122,6 @@ def _valid_domain_envelope_payload() -> dict[str, object]:
             "schema_id": "domain-envelope-extraction",
             "provider": "agr_ai_curation",
         },
-        "repair_mode": True,
     }
 
 
@@ -156,12 +137,8 @@ def test_first_pass_extractor_envelopes_accept_shared_curatable_objects_contract
     assert envelope.curatable_objects[0].field_refs[0].field_path == "normalized_id"
     assert envelope.curatable_objects[0].evidence_record_ids == ["evidence-alpha"]
     assert envelope.curatable_objects[0].metadata_refs[0].metadata_path == "raw_mentions[0]"
-    assert envelope.curatable_objects[0].repair_hints == [
-        "Preserve pending_ref_id when repairing normalization."
-    ]
     assert envelope.metadata.evidence_records[0].evidence_record_id == "evidence-alpha"
     assert envelope.metadata.exclusions[0].reason_code == "unsupported_entity_type"
-    assert envelope.repair_mode is True
 
 
 @pytest.mark.parametrize("envelope_cls", EXTRACTOR_ENVELOPE_CLASSES)
@@ -203,61 +180,33 @@ def test_domain_envelope_extraction_schema_has_no_top_level_legacy_lists():
     assert not LEGACY_SEMANTIC_LIST_FIELDS.intersection(schema_properties)
 
 
-@pytest.mark.parametrize("response_cls", EXTRACTOR_REPAIR_RESPONSE_CLASSES)
-def test_repair_response_schemas_accept_first_pass_envelope_branch(response_cls):
-    response = response_cls.model_validate(_valid_domain_envelope_payload())
+@pytest.mark.parametrize("envelope_cls", EXTRACTOR_ENVELOPE_CLASSES)
+@pytest.mark.parametrize(
+    ("location", "field_name", "value"),
+    (
+        ("object", "repair_hints", ["legacy repair hint"]),
+        ("metadata", "repair_notes", ["legacy repair note"]),
+        ("top_level", "repair_mode", True),
+    ),
+)
+def test_first_pass_extractor_envelopes_reject_repair_surfaces(
+    envelope_cls,
+    location: str,
+    field_name: str,
+    value: object,
+):
+    payload = _valid_domain_envelope_payload()
+    if location == "object":
+        payload["curatable_objects"][0][field_name] = value
+    elif location == "metadata":
+        payload["metadata"][field_name] = value
+    else:
+        payload[field_name] = value
 
-    assert response.root.curatable_objects[0].pending_ref_id == "object-alpha-1"
+    with pytest.raises(ValidationError) as exc_info:
+        envelope_cls.model_validate(payload)
 
-
-@pytest.mark.parametrize("response_cls", EXTRACTOR_REPAIR_RESPONSE_CLASSES)
-def test_repair_response_schemas_accept_extractor_patch_branch(response_cls):
-    response = response_cls.model_validate(
-        {
-            "repair_action": "extractor_patch",
-            "patch_id": "repair-patch:test",
-            "envelope_id": "env-1",
-            "expected_revision": 2,
-            "source_finding_ids": ["validation:1"],
-            "operations": [
-                {
-                    "op": "replace",
-                    "object_ref": {
-                        "pending_ref_id": "object-alpha-1",
-                        "object_type": "example_object",
-                    },
-                    "field_path": "normalized_id",
-                    "expected_before": "example-object-0001",
-                    "after": "example-object-0002",
-                    "reason": "Validator supplied a grounded replacement.",
-                }
-            ],
-            "rationale": "Bounded field-path repair.",
-        }
-    )
-
-    assert response.model_dump()["repair_action"] == "extractor_patch"
-
-
-@pytest.mark.parametrize("response_cls", EXTRACTOR_REPAIR_RESPONSE_CLASSES)
-def test_repair_response_schemas_accept_no_repair_possible_branch(response_cls):
-    response = response_cls.model_validate(
-        {
-            "repair_action": "no_repair_possible",
-            "envelope_id": "env-1",
-            "expected_revision": 2,
-            "status": "no_repair_possible",
-            "reason": "Available evidence cannot repair the requested field.",
-            "finding_ids": ["validation:1"],
-            "object_ref": {
-                "pending_ref_id": "object-alpha-1",
-                "object_type": "example_object",
-            },
-            "field_path": "normalized_id",
-        }
-    )
-
-    assert response.model_dump()["repair_action"] == "no_repair_possible"
+    assert any(error["loc"][-1] == field_name for error in exc_info.value.errors())
 
 
 def test_metadata_refs_reject_absolute_or_empty_paths():

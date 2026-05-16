@@ -45,7 +45,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: PhenotypeExtractorRepairResponse
+output_schema: PhenotypeResultEnvelope
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

@@ -154,7 +154,6 @@ def test_disease_and_chemical_prompt_contracts_use_shared_fields():
             "ambiguous",
             "Do not wrap",
             "Do not return `repair_action`",
-            'Only an extractor may return `repair_action: "extractor_patch"`',
         ]:
             assert fragment in content, f"{folder} prompt missing {fragment}"
 

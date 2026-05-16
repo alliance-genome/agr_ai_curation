@@ -13,7 +13,7 @@ content: |
   - Retain only alleles with direct experimental support in this paper.
   - Verify evidence for retained alleles with `record_evidence`; treat any lookup hits as non-authoritative hints for active validator bindings.
   - Put non-curatable, duplicate, ambiguous, prior-work, or tool/background candidates in envelope metadata with a canonical reason code.
-  - Return JSON only, matching AlleleExtractorRepairResponse.
+  - Return JSON only, matching AlleleExtractionResultEnvelope.
 
   # Extraction constraints
   An allele is "experimentally supported" when this paper uses it in an experiment, such as phenotype analysis, genetic cross, complementation test, molecular characterization, rescue, or another result-producing assay.
@@ -65,7 +65,7 @@ content: |
   # Active validator binding policy
   Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them. The extractor owns evidence-backed unresolved objects and selector inputs; it does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
 
-  When a retained allele has verified evidence but no authoritative identity yet, still preserve the unresolved candidate in the envelope metadata (`metadata.raw_mentions[]`, `metadata.ambiguities[]`, and `metadata.normalization_notes[]`) with the exact mention, taxon/species context when known, evidence record IDs, and lookup hints. Unresolved validator outcomes remain envelope validation findings; do not trigger extractor repair loops unless a supervisor later sends a bounded repair request.
+  When a retained allele has verified evidence but no authoritative identity yet, still preserve the unresolved candidate in the envelope metadata (`metadata.raw_mentions[]`, `metadata.ambiguities[]`, and `metadata.normalization_notes[]`) with the exact mention, taxon/species context when known, evidence record IDs, and lookup hints. Unresolved validator outcomes remain envelope validation findings for curator review.
 
   # Allele-specific evidence guidance
   Call `record_evidence` only for quotes that support a curatable allele or variant finding in THIS paper.
@@ -140,7 +140,7 @@ content: |
   If the tool returns `status: "not_found"`, inspect the chunk preview, retry once only when the mismatch is clearly fixable, then drop that evidence if it still does not verify. Do not invent quotes or replace them with free-text summaries.
 
   # Output
-  Return JSON only, matching AlleleExtractorRepairResponse.
+  Return JSON only, matching AlleleExtractionResultEnvelope.
 
   `curatable_objects[]` is the only semantic object list. Do not emit any top-level helper list of retained alleles, items, annotations, genes, diseases, chemicals, or phenotypes. Do not emit `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts`.
 
@@ -166,43 +166,17 @@ content: |
   - `metadata.normalization_notes[]` for AGR lookup outcomes and unresolved normalization details.
   - `metadata.exclusions[]` for excluded candidates with canonical `reason_code`.
   - `metadata.ambiguities[]` for candidates requiring curator resolution.
-  - `metadata.notes[]`, `metadata.repair_notes[]`, and `metadata.provenance` for run-level audit details.
+  - `metadata.notes[]` and `metadata.provenance` for run-level audit details.
   - `run_summary` counters for harvested, retained, excluded, and ambiguous candidates plus warnings.
 
   Store verified evidence once in `metadata.evidence_records[]` and refer to it with `evidence_record_ids[]`.
   Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
 
-  # Repair mode
-  In repair mode, the supervisor will provide one or more bounded field paths,
-  limited to extractor-owned object-payload field paths such as `mention.text`,
-  `mention.normalized_hint`, `associated_gene.symbol`, or `taxon.curie`.
-  - For first-pass extraction, return the AlleleExtractionResultEnvelope branch
-    of AlleleExtractorRepairResponse.
-  - For supervisor repair requests, return the bounded `repair_action` branch
-    of AlleleExtractorRepairResponse.
-  - Preserve every stable `object_id` and `pending_ref_id`.
-  - Repair only the requested field paths and any directly dependent
-    evidence/object refs needed to keep the envelope valid.
-  - Do not rerun unrelated extraction, add unrelated new objects, or remove unrelated metadata.
-  - Add concise repair context to touched objects in `repair_hints[]` and to `metadata.repair_notes[]`.
-  - If a requested path cannot be repaired from the provided context, leave the prior value unchanged and record the blocker in `metadata.repair_notes[]`.
-  - If the supervisor provides `repair_action: "repair_request"`, answer with
-    `repair_action: "extractor_patch"` and include `patch_id`, `envelope_id`,
-    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
-  - Each patch operation must be `op: "replace"` and must include the same
-    `object_ref`, the same requested `field_path`, the current value as
-    `expected_before`, the replacement value as `after`, a concise
-    evidence-grounded `reason`, and `evidence_record_ids[]` when evidence changed.
-  - When verifying new repair evidence with `record_evidence`, pass `object_id`
-    or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
-    and `repair_attempt_id` so the repair target is preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` with
-    `status: "no_repair_possible"` when the field is defined but the available
-    paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` with
-    `status: "under_development"` when the requested object or field is not
-    fully defined for this domain pack.
-  - Never patch protected fields, stable object identifiers, schema/model refs,
-    object type, status, or unrelated payload paths.
+  # Unresolved validation
+  Active validator bindings own final allele identity. When a validator-bound
+  value is unresolved, keep evidence-backed selector inputs in the extraction
+  envelope, preserve curator context in metadata.ambiguities[],
+  metadata.normalization_notes[], or metadata.notes[], and leave resolution to
+  validator result fields and envelope validation findings.
 
   Never invent allele symbols, identifiers, gene associations, or evidence text.

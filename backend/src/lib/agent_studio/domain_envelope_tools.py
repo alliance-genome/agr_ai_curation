@@ -51,8 +51,6 @@ _DEFAULT_LIMIT = 10
 _MAX_JSON_CHARS = 20_000
 _MAX_LOOKUP_ATTEMPTS = 25
 _MAX_FIELD_PATHS = 150
-_REPAIR_HISTORY_EVENT_PREFIX = "repair_"
-_REPAIR_CONTEXT_METADATA_KEY = "repair_context"
 
 
 def list_domain_envelopes(
@@ -111,7 +109,7 @@ def list_domain_envelopes(
             "envelopes": [_envelope_row_summary(row) for row in rows],
             "instruction": (
                 "Use these envelope_id values with get_domain_envelope_state for live "
-                "object, finding, history, projection, lookup, and repair details."
+                "object, finding, history, projection, and lookup details."
             ),
         }
     except ValueError as exc:
@@ -217,7 +215,6 @@ def get_domain_envelope_state(
                 for finding_row in finding_rows
             ],
             "history": [_history_row_payload(history_row) for history_row in history_rows],
-            "repair_attempts": _repair_attempt_summary(envelope),
             "lookup_attempts": lookup_attempts,
             "projections": [
                 _projection_row_payload(projection_row)
@@ -477,7 +474,7 @@ def get_export_submission_readiness(
             "instruction": (
                 "This is a read-only readiness explanation. It does not export or submit. "
                 "Use blockers[].envelope_id, object_id, field_path, code, and message when "
-                "explaining what must be repaired or reviewed."
+                "explaining what needs curator review."
             ),
         }
     except (HTTPException, ValueError) as exc:
@@ -786,35 +783,6 @@ def _history_event_payload(event: HistoryEvent) -> dict[str, Any]:
         "object_ref": _object_ref_payload(event.object_ref),
         "field_ref": _field_ref_payload(event.field_ref),
         "details": _bounded_json(event.details),
-    }
-
-
-def _repair_attempt_summary(envelope: DomainEnvelope) -> dict[str, Any]:
-    raw_context = envelope.metadata.get(_REPAIR_CONTEXT_METADATA_KEY)
-    context = dict(raw_context) if isinstance(raw_context, Mapping) else {}
-    attempts = [
-        _bounded_json(dict(attempt))
-        for attempt in context.get("attempts", [])
-        if isinstance(attempt, Mapping)
-    ]
-    classifications = [
-        _bounded_json(dict(classification))
-        for classification in context.get("classifications", [])
-        if isinstance(classification, Mapping)
-    ]
-    repair_events = [
-        _history_event_payload(event)
-        for event in envelope.history
-        if event.event_type.value.startswith(_REPAIR_HISTORY_EVENT_PREFIX)
-    ]
-    return {
-        "latest_status": context.get("latest_status"),
-        "latest_chat_summary": context.get("latest_chat_summary"),
-        "attempt_count": len(attempts),
-        "classification_count": len(classifications),
-        "attempts": attempts[-_MAX_LOOKUP_ATTEMPTS:],
-        "classifications": classifications[-_MAX_LOOKUP_ATTEMPTS:],
-        "history_events": repair_events[-_MAX_LOOKUP_ATTEMPTS:],
     }
 
 

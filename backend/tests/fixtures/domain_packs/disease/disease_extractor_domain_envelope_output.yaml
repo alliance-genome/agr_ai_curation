@@ -62,8 +62,6 @@ output:
           role: supporting_evidence
         - metadata_path: normalization_notes[0]
           role: normalization
-      repair_hints:
-        - Preserve pending_ref_id; repair only requested disease assertion fields.
       metadata:
         assertion_kind: pending_disease_assertion
         write_behavior:
@@ -131,7 +129,6 @@ output:
         evidence_record_ids: []
     notes:
       - Single retained disease assertion emitted as a pending DiseaseAnnotation object.
-    repair_notes: []
     provenance:
       source_agent: disease_extractor
       linkml_commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
@@ -142,4 +139,3 @@ output:
     ambiguous_count: 1
     warnings:
       - Concrete disease annotation write fields remain blocked pending materialization.
-  repair_mode: false

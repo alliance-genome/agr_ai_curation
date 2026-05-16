@@ -37,10 +37,10 @@ DOMAIN_ENVELOPE_EXTRACTION_INSTRUCTION_TEMPLATE = """
 ## DOMAIN ENVELOPE EXTRACTION CONTRACT
 For {output_type_name}, `curatable_objects[]` is the only semantic object list.
 - Do not emit top-level legacy semantic lists: `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`
-- Put raw mentions, exclusions, ambiguities, verified evidence records, normalization notes, provenance, and repair notes under `metadata`
+- Put raw mentions, exclusions, ambiguities, verified evidence records, normalization notes, curator-facing notes, and provenance under `metadata`
 - Each `curatable_objects[]` entry must include `object_type`, `payload`, and either `object_id` or `pending_ref_id`
-- Add `object_role`, `model_ref` and/or `schema_ref`, `definition_state`/`definition_notes`, `evidence_record_ids`, `metadata_refs`, field/object refs, and `repair_hints` whenever that information is available
-- In repair mode, keep object IDs stable, update only the affected payload fields, and preserve metadata references needed to explain the repair
+- Add `object_role`, `model_ref` and/or `schema_ref`, `definition_state`/`definition_notes`, `evidence_record_ids`, `metadata_refs`, and field/object refs whenever that information is available
+- Represent unresolved validation through validation findings, metadata notes, and validator result fields; do not emit patch DSLs or compatibility-mode fields
 """
 
 
@@ -49,9 +49,7 @@ def _is_domain_envelope_extraction_output_type(output_type: Optional[Type]) -> b
         return False
 
     try:
-        return issubclass(output_type, DomainEnvelopeExtractionResult) or bool(
-            getattr(output_type, "__domain_envelope_extractor_repair_response__", False)
-        )
+        return issubclass(output_type, DomainEnvelopeExtractionResult)
     except TypeError:
         return False
 

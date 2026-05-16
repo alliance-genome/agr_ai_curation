@@ -35,9 +35,6 @@ from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
     DomainEnvelopeStatus,
-    HistoryActorType,
-    HistoryEvent,
-    HistoryEventKind,
 )
 
 
@@ -588,59 +585,6 @@ def test_group_by_string_key_rejects_missing_grouping_key():
             [{"attachment_id": "active-binding", "validator_id": "validator-1"}],
             "state",
         )
-
-
-def test_repair_attempt_summary_exposes_attempts_classifications_and_history_events():
-    envelope = DomainEnvelope(
-        envelope_id="env-repair",
-        domain_pack_id="alliance_gene",
-        objects=[
-            CuratableObjectEnvelope(
-                object_type="gene",
-                object_id="obj-1",
-                payload={"primary_external_id": "GENE:00000001"},
-            )
-        ],
-        metadata={
-            "repair_context": {
-                "latest_status": "no_repair_possible",
-                "latest_chat_summary": "Supervisor classified the field as non-repairable.",
-                "attempts": [
-                    {
-                        "repair_attempt_id": "repair-1",
-                        "object_id": "obj-1",
-                        "field_path": "primary_external_id",
-                    }
-                ],
-                "classifications": [
-                    {
-                        "repair_attempt_id": "repair-1",
-                        "status": "no_repair_possible",
-                    }
-                ],
-            }
-        },
-        history=[
-            HistoryEvent(
-                event_id="event-repair-1",
-                event_type=HistoryEventKind.REPAIR_FINAL_CLASSIFIED,
-                timestamp=datetime(2026, 5, 11, tzinfo=timezone.utc),
-                actor_type=HistoryActorType.AGENT,
-                actor_id="validation_supervisor",
-                message="Repair classified as not possible.",
-                details={"repair_attempt_id": "repair-1"},
-            )
-        ],
-    )
-
-    summary = domain_tools._repair_attempt_summary(envelope)
-
-    assert summary["latest_status"] == "no_repair_possible"
-    assert summary["attempt_count"] == 1
-    assert summary["classification_count"] == 1
-    assert summary["attempts"][0]["field_path"] == "primary_external_id"
-    assert summary["classifications"][0]["status"] == "no_repair_possible"
-    assert summary["history_events"][0]["event_id"] == "event-repair-1"
 
 
 def test_export_submission_readiness_returns_read_only_blockers(monkeypatch):

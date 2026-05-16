@@ -58,7 +58,7 @@ def _gene_extractor_schema():
 
 
 def _validate_gene_extractor_payload(payload: dict[str, object]):
-    return _gene_extractor_schema().model_validate(payload).root
+    return _gene_extractor_schema().model_validate(payload)
 
 
 def _valid_gene_extractor_payload() -> dict[str, object]:
@@ -104,9 +104,6 @@ def _valid_gene_extractor_payload() -> dict[str, object]:
                     {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
                     {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"},
                 ],
-                "repair_hints": [
-                    "Keep pending_ref_id stable; repair only requested payload fields."
-                ],
             }
         ],
         "metadata": {
@@ -149,7 +146,6 @@ def _valid_gene_extractor_payload() -> dict[str, object]:
                 }
             ],
             "notes": ["One retained validated-reference evidence object."],
-            "repair_notes": [],
             "provenance": {"source_agent": "gene_extractor"},
         },
         "run_summary": {
@@ -221,21 +217,29 @@ def test_gene_extractor_schema_requires_payload_metadata_evidence_alignment():
         _gene_extractor_schema().model_validate(payload)
 
 
-def test_gene_extractor_schema_requires_repair_handoff_context_in_repair_mode():
+@pytest.mark.parametrize(
+    ("location", "field_name", "value"),
+    (
+        ("object", "repair_hints", ["legacy repair hint"]),
+        ("metadata", "repair_notes", ["legacy repair note"]),
+        ("top_level", "repair_mode", True),
+    ),
+)
+def test_gene_extractor_schema_rejects_repair_surfaces(
+    location: str,
+    field_name: str,
+    value: object,
+):
     payload = _valid_gene_extractor_payload()
-    payload["repair_mode"] = True
-    payload["curatable_objects"][0]["repair_hints"] = []
+    if location == "object":
+        payload["curatable_objects"][0][field_name] = value
+    elif location == "metadata":
+        payload["metadata"][field_name] = value
+    else:
+        payload[field_name] = value
 
-    with pytest.raises(ValidationError, match="repair-mode"):
+    with pytest.raises(ValidationError):
         _gene_extractor_schema().model_validate(payload)
-
-    payload["metadata"]["repair_notes"] = [
-        "Repaired payload.primary_external_id only; evidence and metadata refs preserved."
-    ]
-    envelope = _validate_gene_extractor_payload(payload)
-
-    assert envelope.repair_mode is True
-    assert envelope.metadata.repair_notes[0].startswith("Repaired payload.primary_external_id")
 
 
 def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contract():
@@ -251,7 +255,10 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert "`object_role`: `validated_reference`" in prompt_content
     assert "`model_ref`: `GeneMentionEvidencePayload`" in prompt_content
     assert "`payload.primary_external_id`" in prompt_content
-    assert "In repair mode, do not rerun unrelated extraction." in prompt_content
+    assert "Active validator bindings own final Alliance Gene identity decisions." in prompt_content
+    assert "repair_mode" not in prompt_content
+    assert "repair_hints" not in prompt_content
+    assert "repair_notes" not in prompt_content
     assert '"object_type": "GeneAssertion"' not in prompt_content
     assert '"normalized_symbol"' not in prompt_content
     assert '"normalized_id"' not in prompt_content

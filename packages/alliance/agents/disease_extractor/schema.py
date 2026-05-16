@@ -2,14 +2,7 @@
 
 import sys
 from pathlib import Path
-from typing import Union
-
-from pydantic import RootModel, model_validator
-
-from src.lib.domain_packs.repair_patches import (
-    DomainEnvelopeExtractorFinalClassification,
-    DomainEnvelopeRepairPatch,
-)
+from pydantic import model_validator
 from src.lib.openai_agents.models import (
     DiseaseExtractionResultEnvelope as RuntimeDiseaseExtractionResultEnvelope,
 )
@@ -35,17 +28,3 @@ class DiseaseExtractionResultEnvelope(RuntimeDiseaseExtractionResultEnvelope):
             raise ValueError("; ".join(errors))
         return self
 
-
-class DiseaseExtractorRepairResponse(
-    RootModel[
-        Union[
-            DiseaseExtractionResultEnvelope,
-            DomainEnvelopeRepairPatch,
-            DomainEnvelopeExtractorFinalClassification,
-        ]
-    ]
-):
-    """Disease first-pass extraction or repair_action response schema."""
-
-    __envelope_class__ = True
-    __domain_envelope_extractor_repair_response__ = True

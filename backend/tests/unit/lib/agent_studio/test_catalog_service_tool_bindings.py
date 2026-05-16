@@ -409,47 +409,13 @@ def test_validate_active_agent_output_schemas_raises_for_unknown(monkeypatch):
         catalog_service.validate_active_agent_output_schemas(db)
 
 
-def test_runtime_output_type_wraps_domain_repair_responses_non_strict():
-    from agents.agent_output import AgentOutputSchema
-    from src.lib.domain_packs.repair_patches import DomainEnvelopeRepairPatch
-    from src.lib.openai_agents.models import GeneExtractorRepairResponse, GeneResultEnvelope
+def test_runtime_output_type_uses_schema_directly():
+    from src.lib.openai_agents.models import GeneExtractionResultEnvelope, GeneResultEnvelope
 
-    wrapped = catalog_service._runtime_output_type_for_schema(GeneExtractorRepairResponse)
-
-    assert isinstance(wrapped, AgentOutputSchema)
-    assert wrapped.output_type is GeneExtractorRepairResponse
-    assert wrapped.is_strict_json_schema() is False
-    assert wrapped.__name__ == "GeneExtractorRepairResponse"
-    assert wrapped.json_schema().get("type") == "object"
-    assert set(wrapped.json_schema().get("properties", {})) == {"response"}
-    parsed = wrapped.validate_json(
-        """
-        {
-          "response": {
-            "repair_action": "extractor_patch",
-            "patch_id": "repair-patch:test",
-            "envelope_id": "env-1",
-            "expected_revision": 1,
-            "operations": [
-              {
-                "op": "replace",
-                "object_ref": {
-                  "pending_ref_id": "object-1",
-                  "object_type": "gene_mention_evidence"
-                },
-                "field_path": "primary_external_id",
-                "expected_before": "WB:OLD",
-                "after": "WB:NEW",
-                "reason": "Validator supplied the grounded identifier."
-              }
-            ],
-            "source_finding_ids": ["validation:1"],
-            "rationale": "Bounded repair against the requested field path."
-          }
-        }
-        """
+    assert (
+        catalog_service._runtime_output_type_for_schema(GeneExtractionResultEnvelope)
+        is GeneExtractionResultEnvelope
     )
-    assert isinstance(parsed.root, DomainEnvelopeRepairPatch)
 
     assert catalog_service._runtime_output_type_for_schema(GeneResultEnvelope) is GeneResultEnvelope
 

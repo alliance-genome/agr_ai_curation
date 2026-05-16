@@ -8,5 +8,4 @@ content: |
   - Use `model_ref: ChemicalConditionPayload`, `ChemicalTermPayload`, `ReferencePayload`, and `EvidenceQuotePayload`; all objects must declare `definition_state: in_development`.
   - `ChemicalCondition.payload.condition_chemical.curie` and `ChemicalTerm.payload.curie` must be grounded CHEBI CURIEs; unresolved or ambiguous chemicals belong in `metadata.ambiguities[]` or `metadata.exclusions[]`, not in a retained condition.
   - ChemicalCondition export/submission must remain blocked with `metadata.export_behavior.status: blocked`, `exportable: false`, and `submit: false` until host annotation and source reference materialization are supplied.
-  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and repair notes under `metadata.*` as non-semantic envelope metadata.
-  - In repair mode, keep `object_id`/`pending_ref_id` stable and repair only supervisor-requested field paths while preserving evidence, object refs, and metadata refs.
+  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.

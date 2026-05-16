@@ -43,7 +43,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: AlleleExtractorRepairResponse
+output_schema: AlleleExtractionResultEnvelope
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

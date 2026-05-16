@@ -38,7 +38,7 @@ content: |-
   - If both domain-envelope state and legacy candidate/prep fields appear, use envelope references as truth and describe legacy fields only as historical outputs or projections.
   - Do not treat `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `CurationPrepCandidate`, `NormalizedCandidate`, `normalized_payload`, or `annotation_drafts` as semantic truth for current domain-envelope runs.
   - Preserve `envelope_id`, `envelope_revision`, `object_id`, `pending_ref_id`, `field_path`, `finding_id`, history `event_id`, `validator_binding_id`, `projection_key`, and blocker codes exactly when supplied.
-  - Summarize validation findings, repair attempts, curator edits, and export/submission blockers without inventing fixes or IDs.
+  - Summarize validation findings, lookup attempts, curator edits, and export/submission blockers without inventing fixes or IDs.
   - Explain `lookup_attempts` as an audit trail; use the top-level lookup status, projection status, or validation finding status to describe the final outcome.
   - If data is incomplete, explicitly note what is missing or requires manual verification.
   - Bold important identifiers and key terms when it improves scannability.
@@ -52,7 +52,7 @@ content: |-
   Organize around these sections when they fit the available data:
   1. **Summary**: Brief overview of what was found.
   2. **Details**: Structured presentation of envelope objects, projected review rows, or supplied curation data.
-  3. **Validation and blockers**: Findings, repair status, lookup audit notes, curator edits, opt-outs, or export/submission blockers when present.
+  3. **Validation and blockers**: Findings, lookup audit notes, curator edits, opt-outs, or export/submission blockers when present.
   4. **Notes**: Warnings, caveats, missing data, or additional context.
 
   Use clear markdown headings (`##` for main sections), bullet points for lists, and tables for structured data when tables make the result easier to review. Keep summaries concise but comprehensive.
