@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[6]
 ALLIANCE_PACKAGE_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 sys.path.insert(0, str(ALLIANCE_PACKAGE_SRC))
@@ -101,6 +103,25 @@ def test_get_data_provider_resolves_exact_abbreviation_and_taxon(monkeypatch):
     assert result.result_projections[0]["resolved_id"] == "WB"
 
 
+def test_get_data_provider_matches_normalized_provider_name(monkeypatch):
+    monkeypatch.setattr(
+        agr_curation,
+        "PROVIDER_METADATA",
+        {"WB": {"display_name": "WormBase", "taxon_id": "NCBITaxon:6239"}},
+    )
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(_ProviderDb()),
+    )
+
+    result = _query_fn()(method="get_data_provider", provider_name=" wormbase ")
+
+    assert result.status == "ok"
+    assert result.lookup_status == "success"
+    assert result.data["matches"][0]["abbreviation"] == "WB"
+
+
 def test_get_data_provider_preserves_unknown_provider_candidates(monkeypatch):
     monkeypatch.setattr(
         agr_curation,
@@ -154,6 +175,11 @@ def test_get_data_provider_reports_provider_taxon_mismatch(monkeypatch):
         "mismatch_explanation"
     ]
     assert result.candidate_matches[0]["projection"]["object_type"] == "DataProvider"
+
+
+def test_data_provider_tuple_requires_abbreviation_and_taxon():
+    with pytest.raises(ValueError, match="abbreviation and taxon_id"):
+        agr_curation._data_provider_result(("WB",))
 
 
 def test_get_data_provider_reports_missing_api_helper(monkeypatch):

@@ -91,15 +91,16 @@ def _provider_taxon_mapping(provider_metadata: Dict[str, Dict[str, Any]]) -> dic
     return mapping
 
 
-_GROUP_MAPPING_LOAD_ERROR: Optional[str] = None
-try:
-    PROVIDER_METADATA = _load_group_provider_metadata()
-    PROVIDER_TO_TAXON = _provider_taxon_mapping(PROVIDER_METADATA)
-except Exception as exc:
-    _GROUP_MAPPING_LOAD_ERROR = str(exc)
-    PROVIDER_METADATA = {}
-    PROVIDER_TO_TAXON = {}
-    logger.error("Failed to load group-to-taxon mappings: %s", exc)
+def _load_provider_mapping_state() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str], Optional[str]]:
+    try:
+        provider_metadata = _load_group_provider_metadata()
+    except Exception as exc:
+        logger.error("Failed to load group-to-taxon mappings: %s", exc)
+        return {}, {}, str(exc)
+    return provider_metadata, _provider_taxon_mapping(provider_metadata), None
+
+
+PROVIDER_METADATA, PROVIDER_TO_TAXON, _GROUP_MAPPING_LOAD_ERROR = _load_provider_mapping_state()
 
 # Reverse mapping: taxon to group abbreviation
 TAXON_TO_PROVIDER = {v: k for k, v in PROVIDER_TO_TAXON.items()}
@@ -205,6 +206,13 @@ def _provider_abbreviation(value: Any) -> Optional[str]:
     return normalized.upper()
 
 
+def _normalize_provider_name(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
 def _provider_metadata_warnings() -> List[str]:
     if not _GROUP_MAPPING_LOAD_ERROR:
         return []
@@ -212,31 +220,36 @@ def _provider_metadata_warnings() -> List[str]:
 
 
 def _provider_name_values(provider: Dict[str, Any]) -> set[str]:
-    return {
-        str(value).strip().lower()
-        for value in (
-            provider.get("display_name"),
-            provider.get("name"),
-            provider.get("abbreviation"),
-        )
-        if value is not None and str(value).strip()
-    }
+    values = set()
+    for value in (
+        provider.get("display_name"),
+        provider.get("name"),
+        provider.get("abbreviation"),
+    ):
+        normalized = _normalize_provider_name(value)
+        if normalized:
+            values.add(normalized)
+    return values
 
 
 def _provider_name_matches(provider: Dict[str, Any], provider_name: str) -> bool:
-    normalized = provider_name.strip().lower()
+    normalized = _normalize_provider_name(provider_name)
     return bool(normalized and normalized in _provider_name_values(provider))
 
 
 def _data_provider_result(result: Any) -> Dict[str, Any]:
     """Return normalized data-provider facts from API rows and group metadata."""
     if isinstance(result, (tuple, list)):
+        if len(result) < 2:
+            raise ValueError(
+                "Data provider tuple rows must contain abbreviation and taxon_id."
+            )
         # The API client currently returns lightweight provider rows as
         # (abbreviation, taxon_id, display_name); tests keep this tuple contract
         # visible alongside object-shaped rows.
         raw = {
-            "abbreviation": result[0] if len(result) > 0 else None,
-            "taxon_id": result[1] if len(result) > 1 else None,
+            "abbreviation": result[0],
+            "taxon_id": result[1],
             "display_name": result[2] if len(result) > 2 else None,
         }
     else:
