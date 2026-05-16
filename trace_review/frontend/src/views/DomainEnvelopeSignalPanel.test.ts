@@ -12,7 +12,6 @@ const summary: DomainEnvelopeTraceSummary = {
     envelope_count: 1,
     object_count: 2,
     finding_count: 1,
-    repair_attempt_count: 1,
     blocker_count: 1,
   },
   envelope_ids: ['env-1'],
@@ -28,17 +27,15 @@ describe('domain-envelope TraceReview presentation helpers', () => {
     expect(hasDomainEnvelopeSignals(undefined)).toBe(false);
   });
 
-  it('builds count chips with blocker and repair emphasis', () => {
+  it('builds count chips with blocker emphasis', () => {
     const chips = domainEnvelopeCountChips(summary);
 
     expect(chips.map((chip) => chip.label)).toEqual([
       '1 envelopes',
       '2 objects',
       '1 findings',
-      '1 repairs',
       '1 blockers',
     ]);
     expect(chips.find((chip) => chip.label === '1 blockers')?.color).toBe('error');
-    expect(chips.find((chip) => chip.label === '1 repairs')?.color).toBe('info');
   });
 });

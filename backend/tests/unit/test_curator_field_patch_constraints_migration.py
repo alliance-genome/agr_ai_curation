@@ -75,6 +75,10 @@ def test_upgrade_refreshes_history_and_action_log_check_constraints(monkeypatch)
     ]
     assert "curator_field_patch_accepted" in module.CURRENT_HISTORY_EVENT_KINDS
     assert "curator_field_patch_rejected" in module.CURRENT_HISTORY_EVENT_KINDS
+    assert "repair_requested" not in module.CURRENT_HISTORY_EVENT_KINDS
+    assert "repair_patch_accepted" not in module.CURRENT_HISTORY_EVENT_KINDS
+    assert "repair_patch_rejected" not in module.CURRENT_HISTORY_EVENT_KINDS
+    assert "repair_final_classified" not in module.CURRENT_HISTORY_EVENT_KINDS
     assert "envelope_field_patched" in module.CURRENT_ACTION_TYPES
 
 

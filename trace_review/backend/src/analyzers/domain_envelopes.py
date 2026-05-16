@@ -2,8 +2,8 @@
 
 This analyzer is intentionally provider-agnostic. It does not validate or
 interpret provider-specific schema payloads; it only pulls trace-visible envelope
-identifiers, object/finding references, field paths, repair-loop metadata, and
-readiness blockers into compact diagnostic summaries.
+identifiers, object/finding references, field paths, curator edits, and readiness
+blockers into compact diagnostic summaries.
 """
 
 from __future__ import annotations
@@ -19,13 +19,6 @@ _MAX_LIST_ITEMS = 500
 _MAX_STRING_PARSE_CHARS = 1_000_000
 _NON_STABLE_DEFINITION_STATES = {"draft", "in_development", "deprecated"}
 _DOMAIN_BLOCKER_SEVERITIES = {"error", "blocker"}
-_REPAIR_EVENT_TYPES = {
-    "repair_requested",
-    "repair_patch_accepted",
-    "repair_patch_rejected",
-    "validation_rerun_requested",
-    "repair_final_classified",
-}
 _CURATOR_EVENT_TYPES = {
     "curator_field_patch_accepted",
     "curator_field_patch_rejected",
@@ -146,7 +139,6 @@ class DomainEnvelopeTraceAnalyzer:
             "field_paths": list(summary.get("field_paths") or []),
             "validation_state_counts": dict(summary.get("validation_state_counts") or {}),
             "definition_state_counts": dict(summary.get("definition_state_counts") or {}),
-            "has_repair_loop": bool(summary.get("repair_attempts")),
             "has_blockers": bool(summary.get("blockers")),
             "has_definition_state_flags": bool(summary.get("definition_state_flags")),
         }
@@ -178,7 +170,6 @@ class DomainEnvelopeTraceAnalyzer:
             "envelopes": [],
             "objects": [],
             "validation_findings": [],
-            "repair_attempts": [],
             "definition_state_flags": [],
             "blockers": [],
             "curator_edits": [],
@@ -283,9 +274,6 @@ class DomainEnvelopeTraceAnalyzer:
                 envelope_id=envelope_id,
             )
 
-        if cls._looks_like_repair(payload) and not nested_envelope_history:
-            cls._record_repair_attempt(accumulator, payload, source_path)
-
         if cls._looks_like_curator_edit(payload) and not nested_envelope_history:
             cls._record_curator_edit(accumulator, payload, source_path)
 
@@ -341,7 +329,6 @@ class DomainEnvelopeTraceAnalyzer:
             or "metadata_refs" in payload
             or "evidence_record_ids" in payload
             or "field_refs" in payload
-            or "repair_hints" in payload
             or "validation_state" in payload
         )
         if has_identity and cls._is_collection_item_path(source_path, "objects", "curatable_objects"):
@@ -358,18 +345,6 @@ class DomainEnvelopeTraceAnalyzer:
             and ("field_ref" in payload or "object_ref" in payload or "field_path" in payload)
         )
         return has_finding_fields
-
-    @staticmethod
-    def _looks_like_repair(payload: Mapping[str, Any]) -> bool:
-        action = _as_string(payload.get("repair_action"))
-        event_type = _state_value(payload.get("event_type"))
-        return bool(
-            action
-            or payload.get("retry_budget")
-            or payload.get("source_finding_ids")
-            or ("patch_id" in payload and "operations" in payload)
-            or event_type in _REPAIR_EVENT_TYPES
-        )
 
     @staticmethod
     def _looks_like_curator_edit(payload: Mapping[str, Any]) -> bool:
@@ -497,8 +472,6 @@ class DomainEnvelopeTraceAnalyzer:
         for index, event in enumerate(history):
             event_path = f"{source_path}.history[{index}]"
             accumulator["_nested_envelope_history_paths"].add(event_path)
-            if cls._looks_like_repair(event):
-                cls._record_repair_attempt(accumulator, event, event_path, envelope_id=envelope_id)
             if cls._looks_like_curator_edit(event):
                 cls._record_curator_edit(accumulator, event, event_path, envelope_id=envelope_id)
 
@@ -621,124 +594,6 @@ class DomainEnvelopeTraceAnalyzer:
 
         if severity in _DOMAIN_BLOCKER_SEVERITIES and status != "resolved":
             cls._record_blocker(accumulator, finding, source_path, envelope_id=detail["envelope_id"])
-
-    @classmethod
-    def _record_repair_attempt(
-        cls,
-        accumulator: dict[str, Any],
-        payload: Mapping[str, Any],
-        source_path: str,
-        envelope_id: Optional[str] = None,
-    ) -> None:
-        action = _as_string(payload.get("repair_action")) or _state_value(payload.get("event_type")) or "repair"
-        details = payload.get("details") if isinstance(payload.get("details"), Mapping) else {}
-        patch = details.get("patch") if isinstance(details.get("patch"), Mapping) else {}
-        target_items = [
-            *list(_iter_mappings(payload.get("targets"))),
-            *list(_iter_mappings(details.get("targets"))),
-        ]
-        operation_items = [
-            *list(_iter_mappings(payload.get("operations"))),
-            *list(_iter_mappings(details.get("operations"))),
-            *list(_iter_mappings(patch.get("operations"))),
-        ]
-        field_update_items = [
-            *list(_iter_mappings(payload.get("field_updates"))),
-            *list(_iter_mappings(details.get("field_updates"))),
-        ]
-
-        field_paths = cls._extract_field_paths(payload)
-        finding_ids = cls._extract_finding_ids(payload)
-        object_refs = cls._extract_object_refs(payload)
-
-        if isinstance(details, Mapping):
-            field_paths.extend(cls._extract_field_paths(details))
-            finding_ids.extend(cls._extract_finding_ids(details))
-            object_refs.extend(cls._extract_object_refs(details))
-
-        if isinstance(patch, Mapping):
-            field_paths.extend(cls._extract_field_paths(patch))
-            finding_ids.extend(cls._extract_finding_ids(patch))
-            object_refs.extend(cls._extract_object_refs(patch))
-
-        for target in target_items:
-            field_paths.extend(cls._extract_field_paths(target))
-            finding_ids.extend(cls._extract_finding_ids(target))
-            object_refs.extend(cls._extract_object_refs(target))
-
-        for operation in operation_items:
-            field_paths.extend(cls._extract_field_paths(operation))
-            finding_ids.extend(cls._extract_finding_ids(operation))
-            object_refs.extend(cls._extract_object_refs(operation))
-
-        for field_update in field_update_items:
-            field_paths.extend(cls._extract_field_paths(field_update))
-            finding_ids.extend(cls._extract_finding_ids(field_update))
-            object_refs.extend(cls._extract_object_refs(field_update))
-
-        field_paths = cls._dedupe(field_paths)
-        finding_ids = cls._dedupe(finding_ids)
-        for path_value in field_paths:
-            cls._add_unique(accumulator, "field_paths", path_value)
-        for finding_id in finding_ids:
-            cls._add_unique(accumulator, "finding_ids", finding_id)
-
-        object_ids = cls._dedupe(ref[0] for ref in object_refs if ref[0])
-        pending_ref_ids = cls._dedupe(ref[1] for ref in object_refs if ref[1])
-        for object_id in object_ids:
-            cls._add_unique(accumulator, "object_ids", object_id)
-        for pending_ref_id in pending_ref_ids:
-            cls._add_unique(accumulator, "pending_ref_ids", pending_ref_id)
-
-        retry_budget = payload.get("retry_budget")
-        if not isinstance(retry_budget, Mapping):
-            retry_budget = details.get("retry_budget")
-        if not isinstance(retry_budget, Mapping):
-            retry_budget = patch.get("retry_budget")
-        if not isinstance(retry_budget, Mapping):
-            retry_budget = None
-            for target in target_items:
-                if isinstance(target.get("retry_budget"), Mapping):
-                    retry_budget = target.get("retry_budget")
-                    break
-
-        detail = {
-            "repair_action": action,
-            "envelope_id": envelope_id
-            or _as_string(payload.get("envelope_id"))
-            or _as_string(details.get("envelope_id"))
-            or _as_string(patch.get("envelope_id")),
-            "expected_revision": _as_string(payload.get("expected_revision"))
-            or _as_string(details.get("expected_revision"))
-            or _as_string(patch.get("expected_revision")),
-            "patch_id": _as_string(payload.get("patch_id")) or _as_string(patch.get("patch_id")),
-            "event_id": _as_string(payload.get("event_id")),
-            "status": _state_value(payload.get("status")) or _state_value(details.get("status")),
-            "classification": _state_value(payload.get("classification"))
-            or _state_value(details.get("classification") if isinstance(details, Mapping) else None),
-            "finding_ids": finding_ids,
-            "object_ids": object_ids,
-            "pending_ref_ids": pending_ref_ids,
-            "field_paths": field_paths,
-            "operation_count": len(operation_items),
-            "target_count": len(target_items),
-            "retry_budget": _short_value(retry_budget) if retry_budget else None,
-            "message": _as_string(payload.get("message")),
-            "source_path": source_path,
-        }
-        cls._add_detail(
-            accumulator,
-            "repair_attempts",
-            (
-                detail["repair_action"],
-                detail["envelope_id"],
-                detail["patch_id"],
-                tuple(detail["finding_ids"]),
-                tuple(detail["field_paths"]),
-                source_path,
-            ),
-            detail,
-        )
 
     @classmethod
     def _record_definition_state(
@@ -966,39 +821,6 @@ class DomainEnvelopeTraceAnalyzer:
             return _as_string(field_ref.get("field_path"))
         return None
 
-    @classmethod
-    def _extract_field_paths(cls, payload: Mapping[str, Any]) -> list[str]:
-        paths: list[str] = []
-        field_path = cls._field_path(payload)
-        if field_path:
-            paths.append(field_path)
-        for field in ("field_paths", "target_field_paths"):
-            values = payload.get(field)
-            if isinstance(values, list):
-                paths.extend(value for value in (_as_string(item) for item in values) if value)
-        return paths
-
-    @classmethod
-    def _extract_finding_ids(cls, payload: Mapping[str, Any]) -> list[str]:
-        finding_ids: list[str] = []
-        for key in ("finding_id",):
-            value = _as_string(payload.get(key))
-            if value:
-                finding_ids.append(value)
-        for key in ("finding_ids", "source_finding_ids"):
-            values = payload.get(key)
-            if isinstance(values, list):
-                finding_ids.extend(value for value in (_as_string(item) for item in values) if value)
-        return finding_ids
-
-    @classmethod
-    def _extract_object_refs(cls, payload: Mapping[str, Any]) -> list[tuple[Optional[str], Optional[str], Optional[str]]]:
-        refs = [cls._object_reference(payload)]
-        object_ref = payload.get("object_ref")
-        if isinstance(object_ref, Mapping):
-            refs.append(cls._object_reference({"object_ref": object_ref}))
-        return [ref for ref in refs if ref[0] or ref[1]]
-
     @staticmethod
     def _add_unique(accumulator: dict[str, Any], key: str, value: Optional[str]) -> None:
         if value is None:
@@ -1024,17 +846,6 @@ class DomainEnvelopeTraceAnalyzer:
         accumulator[key].append(detail)
 
     @staticmethod
-    def _dedupe(values: Iterable[Optional[str]]) -> list[str]:
-        result: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            if value is None or value in seen:
-                continue
-            seen.add(value)
-            result.append(value)
-        return result
-
-    @staticmethod
     def _finalize(accumulator: dict[str, Any]) -> dict[str, Any]:
         accumulator["definition_state_counts"] = dict(accumulator["_definition_state_counter"])
         accumulator["validation_state_counts"] = dict(accumulator["_validation_state_counter"])
@@ -1043,7 +854,6 @@ class DomainEnvelopeTraceAnalyzer:
             "object_count": len(accumulator["objects"]),
             "finding_count": len(accumulator["validation_findings"]),
             "field_path_count": len(accumulator["field_paths"]),
-            "repair_attempt_count": len(accumulator["repair_attempts"]),
             "definition_state_flag_count": len(accumulator["definition_state_flags"]),
             "blocker_count": len(accumulator["blockers"]),
             "curator_edit_count": len(accumulator["curator_edits"]),
@@ -1056,7 +866,6 @@ class DomainEnvelopeTraceAnalyzer:
                 "envelope_ids",
                 "objects",
                 "validation_findings",
-                "repair_attempts",
                 "blockers",
                 "projections",
                 "submission_states",

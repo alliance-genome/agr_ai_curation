@@ -297,7 +297,6 @@ export interface DomainEnvelopeTraceSummaryCounts {
   object_count: number;
   finding_count: number;
   field_path_count: number;
-  repair_attempt_count: number;
   definition_state_flag_count: number;
   blocker_count: number;
   curator_edit_count: number;
@@ -329,25 +328,6 @@ export interface DomainEnvelopeFindingSignal {
   pending_ref_id?: string;
   object_type?: string;
   field_path?: string;
-  source_path?: string;
-}
-
-export interface DomainEnvelopeRepairAttempt {
-  repair_action: string;
-  envelope_id?: string;
-  expected_revision?: string;
-  patch_id?: string;
-  event_id?: string;
-  status?: string;
-  classification?: string;
-  finding_ids: string[];
-  object_ids: string[];
-  pending_ref_ids: string[];
-  field_paths: string[];
-  operation_count: number;
-  target_count: number;
-  retry_budget?: Record<string, unknown> | null;
-  message?: string;
   source_path?: string;
 }
 
@@ -406,13 +386,11 @@ export interface DomainEnvelopeTraceSummary {
   envelopes?: Array<Record<string, unknown>>;
   objects?: DomainEnvelopeObjectSignal[];
   validation_findings?: DomainEnvelopeFindingSignal[];
-  repair_attempts?: DomainEnvelopeRepairAttempt[];
   definition_state_flags?: DomainEnvelopeDefinitionStateFlag[];
   blockers?: DomainEnvelopeBlockerSignal[];
   curator_edits?: Array<Record<string, unknown>>;
   projections?: DomainEnvelopeProjectionSignal[];
   submission_states?: Array<Record<string, unknown>>;
-  has_repair_loop?: boolean;
   has_blockers?: boolean;
   has_definition_state_flags?: boolean;
 }
