@@ -997,6 +997,7 @@ metadata:
         expected_result_fields:
           condition_id: ExperimentalCondition.condition_id
           normalized_components: ExperimentalCondition.components
+        definition_state: in_development
       - binding_id: disease_condition_relation_lookup
         display_name: Condition relation type lookup
         validator_agent:
