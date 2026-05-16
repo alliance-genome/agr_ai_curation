@@ -23,6 +23,8 @@ exports:
 # to activate a specialist. Every bundle with agents/<name>/agent.yaml must also be
 # listed in agent_bundles below or startup will warn and skip that on-disk bundle.
 agent_bundles:
+  - name: agm
+    has_schema: true
   - name: allele
     has_schema: true
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
@@ -70,4 +72,6 @@ agent_bundles:
   - name: phenotype_extractor
     has_schema: true
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
+  - name: subject_entity
+    has_schema: true
   - name: tsv_formatter

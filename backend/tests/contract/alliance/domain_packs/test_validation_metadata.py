@@ -9,6 +9,7 @@ from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
 )
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
@@ -146,6 +147,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
             "gene",
             "agr.alliance.disease",
             "agr.alliance.chemical_condition",
+            "agr.alliance.phenotype",
         )
     }
 
@@ -316,6 +318,56 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "taxon": "data_provider.taxon",
     }
 
+    disease_subject_binding = disease_bindings["disease_subject_materialization"]
+    assert disease_subject_binding.validator_agent is not None
+    assert (
+        disease_subject_binding.validator_agent.agent_id
+        == "subject_entity_validation"
+    )
+    assert disease_subject_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert disease_subject_binding.field_paths == (
+        "disease_annotation_subject.subject_identifier",
+        "disease_annotation_subject.subject_type",
+    )
+    assert (
+        disease_subject_binding.input_fields["subject_label"].required is False
+    )
+    assert disease_subject_binding.input_fields["taxon"].required is False
+    assert disease_subject_binding.expected_result_fields == {
+        "subject_identifier": "disease_annotation_subject.subject_identifier",
+        "subject_type": "disease_annotation_subject.subject_type",
+        "subject_label": "disease_annotation_subject.subject_label",
+        "taxon": "disease_annotation_subject.taxon",
+    }
+
+    phenotype_bindings = {
+        binding.binding_id: binding
+        for binding in registries["agr.alliance.phenotype"].bindings
+    }
+    phenotype_subject_binding = phenotype_bindings[
+        "phenotype_subject_entity_validator"
+    ]
+    assert phenotype_subject_binding.validator_agent is not None
+    assert (
+        phenotype_subject_binding.validator_agent.agent_id
+        == "subject_entity_validation"
+    )
+    assert phenotype_subject_binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    assert phenotype_subject_binding.field_paths == (
+        "subject_identifier",
+        "subject_type",
+    )
+    assert (
+        phenotype_subject_binding.input_fields["subject_label"].required is False
+    )
+    assert phenotype_subject_binding.input_fields["taxon"].required is False
+    assert phenotype_subject_binding.expected_result_fields == {
+        "subject_identifier": "subject_identifier",
+        "subject_type": "subject_type",
+        "subject_label": "subject_label",
+        "taxon": "taxon",
+    }
+
     assert chemical_condition_bindings[
         "chemical_condition.chebi_api_lookup"
     ].object_types == ("ChemicalCondition",)
@@ -365,6 +417,118 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "ChemicalCondition",
         "condition_relation_type.name",
     ).validator_binding_ids
+
+
+def test_subject_entity_selectors_require_type_and_omit_absent_optional_context():
+    alliance_registry = load_alliance_domain_pack_registry()
+    phenotype_pack = alliance_registry.get_pack("agr.alliance.phenotype")
+    registry = DomainPackValidationRegistry.from_domain_pack(phenotype_pack)
+    subject_binding = {
+        binding.binding_id: binding for binding in registry.bindings
+    }["phenotype_subject_entity_validator"]
+
+    envelope = DomainEnvelope(
+        envelope_id="phenotype-env",
+        domain_pack_id="agr.alliance.phenotype",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="PhenotypeSubject",
+                pending_ref_id="subject-1",
+                payload={
+                    "subject_identifier": "WB:WBGene00000001",
+                    "subject_type": "gene",
+                },
+            )
+        ],
+    )
+    match = next(
+        match
+        for match in registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.UNDER_DEVELOPMENT],
+        )
+        if match.binding.binding_id == subject_binding.binding_id
+        and match.field_path == "subject_identifier"
+    )
+
+    result = build_domain_validation_request(match)
+
+    assert result.request is not None
+    assert result.findings == ()
+    assert result.selected_inputs == {
+        "subject_type": "gene",
+        "subject_identifier": "WB:WBGene00000001",
+    }
+    assert result.request.target.input_values == result.selected_inputs
+
+    missing_type_envelope = DomainEnvelope(
+        envelope_id="phenotype-env-missing-type",
+        domain_pack_id="agr.alliance.phenotype",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="PhenotypeSubject",
+                pending_ref_id="subject-1",
+                payload={"subject_identifier": "WB:WBGene00000001"},
+            )
+        ],
+    )
+    missing_type_match = next(
+        match
+        for match in registry.match_bindings(
+            missing_type_envelope,
+            states=[ValidationBindingState.UNDER_DEVELOPMENT],
+        )
+        if match.binding.binding_id == subject_binding.binding_id
+        and match.field_path == "subject_identifier"
+    )
+
+    missing_type_result = build_domain_validation_request(missing_type_match)
+
+    assert missing_type_result.request is None
+    assert [finding.code for finding in missing_type_result.findings] == [
+        "selector_missing_field"
+    ]
+    assert (
+        missing_type_result.findings[0].details["selector_problem"]["input_name"]
+        == "subject_type"
+    )
+
+
+def test_subject_entity_selectors_reject_ambiguous_optional_taxon_context():
+    alliance_registry = load_alliance_domain_pack_registry()
+    phenotype_pack = alliance_registry.get_pack("agr.alliance.phenotype")
+    registry = DomainPackValidationRegistry.from_domain_pack(phenotype_pack)
+
+    envelope = DomainEnvelope(
+        envelope_id="phenotype-env-ambiguous-taxon",
+        domain_pack_id="agr.alliance.phenotype",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="PhenotypeSubject",
+                pending_ref_id="subject-1",
+                payload={
+                    "subject_identifier": "WB:WBGene00000001",
+                    "subject_type": "gene",
+                    "taxon": ["NCBITaxon:6239", "NCBITaxon:10090"],
+                },
+            )
+        ],
+    )
+    match = next(
+        match
+        for match in registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.UNDER_DEVELOPMENT],
+        )
+        if match.binding.binding_id == "phenotype_subject_entity_validator"
+        and match.field_path == "subject_identifier"
+    )
+
+    result = build_domain_validation_request(match)
+
+    assert result.request is None
+    assert [finding.code for finding in result.findings] == ["selector_ambiguous"]
+    assert result.findings[0].details["selector_problem"]["input_name"] == "taxon"
 
 
 def test_under_development_validator_bindings_remain_metadata_only():

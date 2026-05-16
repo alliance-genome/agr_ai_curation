@@ -967,11 +967,37 @@ metadata:
           internal_id: condition_relations[0].condition_relation_type.id
       - binding_id: disease_subject_materialization
         display_name: Disease subject lookup
-        state_explanation: Disease subject materialization is blocked by ALL-410.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: subject_entity_validation
+        state_explanation: Disease subject lookup routes explicit disease_annotation_subject.subject_type values to gene, allele, or AGM validation paths; materialization remains under development until extractor and export targets are reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
             - DiseaseAnnotation
+          field_paths:
+            - disease_annotation_subject.subject_identifier
+            - disease_annotation_subject.subject_type
+        input_fields:
+          subject_type:
+            source: payload
+            path: disease_annotation_subject.subject_type
+          subject_identifier:
+            source: payload
+            path: disease_annotation_subject.subject_identifier
+          subject_label:
+            source: payload
+            path: disease_annotation_subject.subject_label
+            required: false
+          taxon:
+            source: payload
+            path: data_provider.taxon
+            required: false
+        expected_result_fields:
+          subject_identifier: disease_annotation_subject.subject_identifier
+          subject_type: disease_annotation_subject.subject_type
+          subject_label: disease_annotation_subject.subject_label
+          taxon: disease_annotation_subject.taxon
       - binding_id: disease_reference_materialization
         display_name: Reference lookup
         state_explanation: Durable reference ID materialization is blocked by ALL-425.

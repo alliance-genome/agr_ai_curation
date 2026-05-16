@@ -1,0 +1,47 @@
+# =============================================================================
+# AGENT DEFINITION: subject_entity
+# =============================================================================
+# Routes biological annotation subjects to gene, allele, or AGM validation paths.
+# =============================================================================
+
+agent_id: subject_entity_validation
+
+name: "Subject Entity Validation Agent"
+
+description: >
+  Routes phenotype and disease annotation subjects by explicit subject type to
+  gene, allele, or affected genomic model validation paths.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for validating annotation subject payloads that include subject_type,
+    subject_identifier, optional subject_label, and optional taxon context.
+  batchable: true
+  batching_instructions: >
+    When validating multiple subjects, keep one result per subject target and
+    do not merge subjects with different subject_type values.
+
+tools:
+  - agr_curation_query
+
+output_schema: SubjectEntityValidationResult
+
+model_config:
+  model: "${AGENT_SUBJECT_ENTITY_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+frontend:
+  icon: "SUB"
+  show_in_palette: true
+
+group_rules_enabled: false
