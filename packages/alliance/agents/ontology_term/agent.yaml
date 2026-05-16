@@ -1,0 +1,52 @@
+# =============================================================================
+# AGENT DEFINITION: ontology_term
+# =============================================================================
+# Validates generic ontology term CURIE and label fields against package tools.
+# Tool name generated at runtime: ask_ontology_term_specialist
+# =============================================================================
+
+agent_id: ontology_term_validation
+
+name: "Ontology Term Validation Agent"
+
+description: >
+  Validates ontology term CURIEs and labels against package-owned Alliance
+  ontology lookup helpers. Supports disease, evidence, phenotype, anatomy,
+  life stage, Gene Ontology, taxon, MMO, ZECO/XCO, and related term families
+  when those helpers are available.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for validating ontology term CURIEs and labels, mapping labels to
+    ontology CURIEs, checking accepted prefixes, or explaining ambiguous and
+    missing ontology term matches.
+  batchable: true
+  batching_instructions: >
+    When validating multiple ontology terms, combine them into one request with
+    one target per term and preserve each binding's ontology_family, accepted
+    prefixes, and exact-match policy.
+
+tools:
+  - agr_curation_query
+
+output_schema: OntologyTermValidationResult
+
+model_config:
+  model: "${AGENT_ONTOLOGY_TERM_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+frontend:
+  icon: "OT"
+  show_in_palette: true
+
+group_rules_enabled: false

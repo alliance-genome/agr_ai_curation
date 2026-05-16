@@ -331,6 +331,77 @@ def test_under_development_validator_bindings_remain_metadata_only():
     }
 
 
+def test_representative_ontology_term_bindings_target_generic_validator():
+    alliance_registry = load_alliance_domain_pack_registry()
+    cases = {
+        "agr.alliance.disease": {
+            "disease_ontology_term_lookup": {
+                "ontology_family": "disease",
+                "accepted_prefixes": ["DOID"],
+                "expected_result_fields": {
+                    "curie": "disease_annotation_object.curie",
+                    "label": "disease_annotation_object.name",
+                    "ontology_term_type": "DOTerm",
+                },
+            },
+            "disease_evidence_code_lookup": {
+                "ontology_family": "evidence",
+                "accepted_prefixes": ["ECO"],
+                "expected_result_fields": {
+                    "curie": "evidence_code_curies[0]",
+                    "ontology_term_type": "ECOTerm",
+                },
+            },
+        },
+        "agr.alliance.phenotype": {
+            "phenotype_term_ontology_validator": {
+                "ontology_family": "phenotype",
+                "accepted_prefixes": ["MP", "WBPhenotype", "ZP"],
+                "expected_result_fields": {
+                    "curie": "curie",
+                    "label": "label",
+                },
+            }
+        },
+        "agr.alliance.chemical_condition": {
+            "chemical_condition.condition_ontology_lookup": {
+                "ontology_family": "condition",
+                "expected_result_fields": {
+                    "condition_class_curie": "condition_class.curie",
+                    "condition_id_curie": "condition_id.curie",
+                },
+            }
+        },
+    }
+
+    for pack_id, expected_bindings in cases.items():
+        registry = DomainPackValidationRegistry.from_domain_pack(
+            alliance_registry.get_pack(pack_id)
+        )
+        bindings = {binding.binding_id: binding for binding in registry.bindings}
+
+        for binding_id, expected in expected_bindings.items():
+            binding = bindings[binding_id]
+
+            assert binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+            assert binding.validator_agent is not None
+            assert binding.validator_agent.package_id == "agr.alliance"
+            assert binding.validator_agent.agent_id == "ontology_term_validation"
+            assert binding.expected_result_fields == expected["expected_result_fields"]
+            assert (
+                binding.input_fields["ontology_family"].source == "literal"
+            )
+            assert (
+                binding.input_fields["ontology_family"].value
+                == expected["ontology_family"]
+            )
+            if "accepted_prefixes" in expected:
+                assert (
+                    binding.input_fields["accepted_prefixes"].value
+                    == expected["accepted_prefixes"]
+                )
+
+
 def test_first_pass_alliance_domain_packs_have_explicit_supervisor_behavior():
     alliance_registry = load_alliance_domain_pack_registry()
 

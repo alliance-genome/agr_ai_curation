@@ -185,12 +185,35 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     }
 
     term_binding = under_development_bindings[2]
+    assert term_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "ontology_term_validation",
+    }
     assert term_binding["input_fields"] == {
-        "term_curie": {
+        "curie": {
             "source": "payload",
             "path": "curie",
             "required": True,
-        }
+        },
+        "label": {
+            "source": "payload",
+            "path": "label",
+            "required": True,
+        },
+        "ontology_family": {
+            "source": "literal",
+            "value": "phenotype",
+            "required": True,
+        },
+        "accepted_prefixes": {
+            "source": "literal",
+            "value": ["MP", "WBPhenotype", "ZP"],
+            "required": True,
+        },
+    }
+    assert term_binding["expected_result_fields"] == {
+        "curie": "curie",
+        "label": "label",
     }
 
 
