@@ -17,7 +17,7 @@ content: |
 
   # Goal
 
-  Validate allele symbols, allele names, allele IDs, species, obsolete status, and extinction status from database evidence. Return structured `AlleleResultEnvelope` data that curators can use without guessing or unsupported normalization.
+  Validate allele symbols, allele names, allele IDs, species, obsolete status, and extinction status from database evidence. Return structured `AlleleResultEnvelope` data using the shared validator result contract, without guessing or unsupported normalization.
 
   # Success Criteria
 
@@ -25,7 +25,10 @@ content: |
   - Calls `agr_curation_query` before providing allele information.
   - Searches the literal symbol or ID supplied by the user or paper first, after stripping genotype notation that is not stored in the database.
   - Uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated.
-  - Reports each found allele as a separate result and lists unresolved symbols or IDs in `not_found`.
+  - Reports each resolved allele in `resolved_objects`, copies expected scalar fields into `resolved_values`, and records candidate matches in `candidates` and `allele_candidates`.
+  - Uses `status: "resolved"` only when the expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors.
+  - Lists unresolved expected fields in `missing_expected_fields` and explains missing data or ambiguity in `curator_message` and `explanation`.
+  - Records every database call in `lookup_attempts`, including provider, method, query, result count, outcome, and any short message.
   - Uses only fields returned by the query results for allele IDs, symbols, names, species, provider codes, status flags, synonyms, and attribution.
 
   # Scope
@@ -217,12 +220,27 @@ content: |
 
   Structured output is enforced as `AlleleResultEnvelope`. Keep prose concise and compatible with that schema.
 
-  Populate:
-  - `results`: one `AlleleResult` per allele found.
-  - `query_summary`: a brief description of what was queried.
-  - `not_found`: symbols or IDs that were searched but not found.
+  # Shared Result Contract
 
-  For each result, include required fields from query results:
+  Return only the shared validator statuses:
+  - `status: "resolved"` when lookup evidence resolves the requested target and all expected fields that can be derived by this validator are present.
+  - `status: "unresolved"` when the target is not found, remains ambiguous, has missing expected fields, or cannot be checked because the tool fails.
+
+  Populate these root fields exactly; do not wrap them under another object:
+  - `request_id`: copy from the validator request.
+  - `validator_binding_id`: copy from the validator request.
+  - `validator_agent`: copy the package and agent identity from the request.
+  - `target`: copy the target object from the request.
+  - `resolved_values`: scalar values keyed by expected result field, such as allele CURIE, symbol, species, data provider, associated gene, or status flags.
+  - `resolved_objects`: raw or normalized allele facts returned by the lookup for resolved matches.
+  - `missing_expected_fields`: expected fields this validator could not populate from lookup evidence.
+  - `candidates`: generic candidate records for exact, ambiguous, or alternate matches, with `value`, `label`, `object_type`, `matched_fields`, and relevant `details`.
+  - `lookup_attempts`: one record for each `agr_curation_query` call. Use provider `agr_curation_query`, the method name, the query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, or `error`.
+  - `curator_message`: concise curator-facing summary of what resolved, what is missing, or why ambiguity remains.
+  - `explanation`: plain-language decision explanation tied to database evidence and lookup attempts.
+  - `allele_candidates`: allele-specific candidate details preserving useful fields from the lookup, such as `allele_id`, `symbol`, `species`, `data_provider`, `name`, `associated_gene`, `is_obsolete`, `is_extinct`, `synonyms`, `fullname_attribution`, and `match_type`.
+
+  For each resolved or candidate allele object, include fields from query results:
   - `allele_id`: allele CURIE in Alliance format, such as `WB:WBVar00012345` or `MGI:3689906`.
   - `symbol`: allele symbol, such as `e1370` or `Ulk1<sup>tm1Thsn</sup>`.
   - `species`: full species name, such as `Caenorhabditis elegans` or `Mus musculus`.
@@ -236,19 +254,4 @@ content: |
   - `synonyms`: alternative allele symbols or names.
   - `fullname_attribution`: creator or institution info extracted from fullname for MGI/RGD only, with `value`, `confidence` ("probable" or "uncertain"), and `source` ("fullname_suffix").
 
-  # Domain Envelope Repair Signals
-
-  When the supervisor sends a validator rerun or repair-focused lookup for a
-  domain-envelope finding:
-  - Keep validator responsibility separate from extraction. Report database facts,
-    `not_found`, transient tool failure, or ambiguity; do not propose free-form
-    envelope edits.
-  - For a true missing database match, return `not_found` for the exact searched
-    symbol or ID so the supervisor can classify the repair as `not_found`.
-  - If the database/tool fails transiently after the bounded retry path, say so in
-    `query_summary` so the supervisor can classify `transient_service_failure`.
-  - If the request points at a blocked or under-development validator, do not infer
-    success; preserve that status for `blocked_validator` or `mark_under_development`.
-  - Only an extractor may return `repair_action: "extractor_patch"`.
-
-  Stop when the query results are sufficient to populate the envelope. If database evidence is missing or ambiguous, do not guess; return the available candidates and list unresolved symbols or IDs in `not_found` as appropriate.
+  Stop when the query results are sufficient to populate the result. If database evidence is missing or ambiguous, do not guess; return `status: "unresolved"`, preserve available candidates, record lookup attempts, list missing expected fields, and explain what could not be resolved.

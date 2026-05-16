@@ -205,17 +205,29 @@ class TestSchemaDiscovery:
         """Test that GeneResultEnvelope is discovered and valid."""
         from src.lib.config.schema_discovery import discover_agent_schemas, get_agent_schema
         from pydantic import BaseModel
+        from src.schemas.domain_validator import DomainValidatorResultBase
 
         discover_agent_schemas(ALLIANCE_AGENTS_PATH)
         GeneEnvelope = get_agent_schema("GeneResultEnvelope")
 
         assert GeneEnvelope is not None, "GeneResultEnvelope not found"
         assert issubclass(GeneEnvelope, BaseModel)
+        assert issubclass(GeneEnvelope, DomainValidatorResultBase)
 
         # Check it has expected fields
-        field_names = list(GeneEnvelope.model_fields.keys())
-        assert "validator_binding_id" in field_names, f"Expected shared validator fields, got: {field_names}"
-        assert "results" in field_names, f"Expected domain result fields, got: {field_names}"
+        field_names = set(GeneEnvelope.model_fields.keys())
+        assert "validator_binding_id" in field_names, (
+            f"Expected shared validator fields, got: {field_names}"
+        )
+        assert "resolved_values" in field_names, (
+            f"Expected shared validator fields, got: {field_names}"
+        )
+        assert "gene_candidates" in field_names, (
+            f"Expected domain candidate fields, got: {field_names}"
+        )
+        assert "results" not in field_names, (
+            f"Unexpected chat-era result fields, got: {field_names}"
+        )
 
     def test_get_schema_json(self):
         """Test generating JSON schema."""
