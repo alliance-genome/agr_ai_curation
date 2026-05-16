@@ -138,7 +138,7 @@ object_definitions:
       semantic_source: domain_envelope.objects
       validator_binding_ids:
         - chemical_condition.pending_envelope_validator
-        - chemical_condition.chebi_curie_format
+        - chemical_condition.chebi_api_lookup
         - source_reference_validation
         - experimental_condition_validation
       export_behavior:
@@ -298,7 +298,8 @@ object_definitions:
         required: true
         metadata:
           validatable: true
-          validator_binding_id: chemical_condition.chebi_curie_format
+          validator_binding_id: chemical_condition.chebi_api_lookup
+          validation_result_field: chebi_id
           repair:
             repairable: true
             source_of_truth: alliance_linkml
@@ -318,6 +319,8 @@ object_definitions:
         required: true
         metadata:
           validatable: true
+          validator_binding_id: chemical_condition.chebi_api_lookup
+          validation_result_field: name
           repair:
             repairable: true
             source_of_truth: alliance_linkml
@@ -451,7 +454,7 @@ object_definitions:
     metadata:
       object_role: validated_reference
       validation_state: pending_chebi_lookup
-      validator_binding_id: chemical_condition.chebi_curie_format
+      validator_binding_id: chemical_condition.term_chebi_api_lookup
       provider_refs:
         alliance_linkml:
           schema_ref: alliance.linkml
@@ -465,7 +468,8 @@ object_definitions:
         required: true
         metadata:
           validatable: true
-          validator_binding_id: chemical_condition.chebi_curie_format
+          validator_binding_id: chemical_condition.term_chebi_api_lookup
+          validation_result_field: chebi_id
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -479,6 +483,9 @@ object_definitions:
         display_name: Chemical name
         required: true
         metadata:
+          validatable: true
+          validator_binding_id: chemical_condition.term_chebi_api_lookup
+          validation_result_field: name
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -633,9 +640,14 @@ metadata:
             - EvidenceQuote
         input_fields: {}
         expected_result_fields: {}
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
         definition_state: in_development
-      - binding_id: chemical_condition.chebi_curie_format
-        display_name: Chemical condition ChEBI CURIE check
+      - binding_id: chemical_condition.chebi_api_lookup
+        display_name: ChEBI lookup
         validator_agent:
           package_id: agr.alliance
           agent_id: chemical_validation
@@ -645,17 +657,25 @@ metadata:
             - ChemicalCondition
           field_paths:
             - condition_chemical.curie
+            - condition_chemical.name
         input_fields:
           curie:
             source: payload
             path: condition_chemical.curie
+          name:
+            source: payload
+            path: condition_chemical.name
+            required: false
         expected_result_fields:
           chebi_id: condition_chemical.curie
+          name: condition_chemical.name
         required: true
-        blocking: true
+        blocking: false
         allow_opt_out: true
-      - binding_id: chemical_condition.term_chebi_curie_format
-        display_name: Chemical term ChEBI CURIE check
+        curator_override:
+          allowed: false
+      - binding_id: chemical_condition.term_chebi_api_lookup
+        display_name: Chemical term ChEBI lookup
         validator_agent:
           package_id: agr.alliance
           agent_id: chemical_validation
@@ -665,15 +685,76 @@ metadata:
             - ChemicalTerm
           field_paths:
             - curie
+            - name
         input_fields:
           curie:
             source: payload
             path: curie
+          name:
+            source: payload
+            path: name
+            required: false
         expected_result_fields:
           chebi_id: curie
+          name: name
         required: true
-        blocking: true
+        blocking: false
         allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: chemical_condition.condition_ontology_lookup
+        display_name: Condition ontology lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        applies_to:
+          domain_pack_id: agr.alliance.chemical_condition
+          object_types:
+            - ChemicalCondition
+          field_paths:
+            - condition_class.curie
+        input_fields:
+          condition_class_curie:
+            source: payload
+            path: condition_class.curie
+            required: false
+          ontology_family:
+            source: literal
+            value: condition
+        expected_result_fields:
+          condition_class_curie: condition_class.curie
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+      - binding_id: chemical_condition.condition_relation_type_lookup
+        display_name: Condition relation type lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: controlled_vocabulary_validation
+        applies_to:
+          domain_pack_id: agr.alliance.chemical_condition
+          object_types:
+            - ChemicalCondition
+          field_paths:
+            - condition_relation_type.name
+        input_fields:
+          vocabulary:
+            source: literal
+            value: Condition Relation Type
+          term_name:
+            source: payload
+            path: condition_relation_type.name
+        expected_result_fields:
+          term_name: condition_relation_type.name
+          vocabulary: condition_relation_type.vocabulary
+          internal_id: condition_relation_type.id
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
     under_development:
       - binding_id: source_reference_validation
         display_name: Source reference validation
@@ -723,7 +804,7 @@ metadata:
         validator_agent:
           package_id: agr.alliance
           agent_id: experimental_condition_validation
-        state_explanation: Composite experimental-condition validation remains under development until condition relation, condition ontology, chemical, taxon, provider, and quantity/unit component prerequisites are all active.
+        state_explanation: Composite experimental-condition validation remains metadata-only until condition relation, condition ontology, chemical, taxon, provider, and quantity/unit component readiness is proven end to end.
         applies_to:
           domain_pack_id: agr.alliance.chemical_condition
           object_types:
@@ -783,76 +864,43 @@ metadata:
           condition_id: ExperimentalCondition.condition_id
           normalized_components: ExperimentalCondition.components
         definition_state: in_development
-      - binding_id: chemical_condition.chebi_api_lookup
-        display_name: ChEBI lookup
-        state_explanation: ChEBI lookup remains informational until package-scoped validator dispatch owns external ontology calls.
-        expected_result_fields:
-          chebi_id: condition_chemical.curie
-          name: condition_chemical.name
+      - binding_id: chemical_condition.chebi_curie_format
+        display_name: Chemical condition ChEBI CURIE format check
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: chemical_validation
+        state_explanation: Direct ChEBI CURIE format checks remain informational; package-scoped ChEBI API lookup owns active chemical validation.
         applies_to:
           domain_pack_id: agr.alliance.chemical_condition
           object_types:
             - ChemicalCondition
           field_paths:
             - condition_chemical.curie
-            - condition_chemical.name
+        input_fields:
+          curie:
+            source: payload
+            path: condition_chemical.curie
+        expected_result_fields:
+          chebi_id: condition_chemical.curie
         definition_state: in_development
-      - binding_id: chemical_condition.condition_ontology_lookup
-        display_name: Condition ontology lookup
+      - binding_id: chemical_condition.term_chebi_curie_format
+        display_name: Chemical term ChEBI CURIE format check
         validator_agent:
           package_id: agr.alliance
-          agent_id: ontology_term_validation
-        state_explanation: Condition ontology lookup remains under development until generic ontology term validator dispatch is reviewed end to end.
+          agent_id: chemical_validation
+        state_explanation: Direct ChEBI CURIE format checks remain informational; package-scoped ChEBI API lookup owns active chemical validation.
         applies_to:
           domain_pack_id: agr.alliance.chemical_condition
           object_types:
-            - ChemicalCondition
+            - ChemicalTerm
           field_paths:
-            - condition_class.curie
-            - condition_id.curie
+            - curie
         input_fields:
-          condition_class_curie:
+          curie:
             source: payload
-            path: condition_class.curie
-            required: false
-          condition_id_curie:
-            source: payload
-            path: condition_id.curie
-            required: false
-          ontology_family:
-            source: literal
-            value: condition
+            path: curie
         expected_result_fields:
-          condition_class_curie: condition_class.curie
-          condition_id_curie: condition_id.curie
-        definition_state: in_development
-      - binding_id: chemical_condition.condition_relation_type_lookup
-        display_name: Condition relation type lookup
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: controlled_vocabulary_validation
-        state_explanation: Condition relation type lookup remains under development until controlled vocabulary package tool dispatch is reviewed end to end.
-        applies_to:
-          domain_pack_id: agr.alliance.chemical_condition
-          object_types:
-            - ChemicalCondition
-          field_paths:
-            - condition_relation_type.name
-        input_fields:
-          vocabulary:
-            source: literal
-            value: Condition Relation Type
-          term_name:
-            source: payload
-            path: condition_relation_type.name
-          abbreviation:
-            source: payload
-            path: condition_relation_type.abbreviation
-            required: false
-        expected_result_fields:
-          term_name: condition_relation_type.name
-          vocabulary: condition_relation_type.vocabulary
-          internal_id: condition_relation_type.id
+          chebi_id: curie
         definition_state: in_development
       - binding_id: chemical_condition.export_projection_validator
         display_name: Chemical condition ready for export

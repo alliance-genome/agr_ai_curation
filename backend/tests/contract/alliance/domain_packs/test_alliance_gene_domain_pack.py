@@ -198,6 +198,21 @@ def test_gene_pack_declares_reference_validator_binding():
             "source": "payload",
             "path": "primary_external_id",
             "required": True,
+        },
+        "gene_symbol": {
+            "source": "payload",
+            "path": "gene_symbol",
+            "required": True,
+        },
+        "taxon": {
+            "source": "payload",
+            "path": "taxon",
+            "required": True,
+        },
+        "evidence_quote": {
+            "source": "payload",
+            "path": "verified_quote",
+            "required": False,
         }
     }
     assert binding["expected_result_fields"] == {
@@ -205,7 +220,10 @@ def test_gene_pack_declares_reference_validator_binding():
         "symbol": "gene_symbol",
         "taxon": "taxon",
     }
+    assert binding["required"] is True
     assert binding["blocking"] is False
+    assert binding["allow_opt_out"] is True
+    assert binding["curator_override"] == {"allowed": False}
 
 
 def test_tool_verified_gene_fixture_converts_to_pending_envelope():

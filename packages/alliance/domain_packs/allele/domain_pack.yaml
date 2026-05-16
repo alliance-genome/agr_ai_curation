@@ -236,6 +236,9 @@ object_definitions:
         display_name: Primary external ID
         required: true
         metadata:
+          validatable: true
+          validator_binding_id: alliance_allele_reference_lookup
+          validation_result_field: allele_id
           repair:
             repairable: true
             source_of_truth: alliance_linkml
@@ -252,6 +255,9 @@ object_definitions:
         display_name: Allele symbol
         required: true
         metadata:
+          validatable: true
+          validator_binding_id: alliance_allele_reference_lookup
+          validation_result_field: symbol
           repair:
             repairable: true
             source_of_truth: alliance_linkml
@@ -402,6 +408,41 @@ metadata:
             - EvidenceQuote
         input_fields: {}
         expected_result_fields: {}
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+        definition_state: in_development
+      - binding_id: alliance_allele_reference_lookup
+        display_name: Alliance allele lookup
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: allele_validation
+        applies_to:
+          domain_pack_id: agr.alliance.allele
+          object_types:
+            - Allele
+          field_paths:
+            - primary_external_id
+            - allele_symbol
+        input_fields:
+          allele_id:
+            source: payload
+            path: primary_external_id
+            required: false
+          allele_symbol:
+            source: payload
+            path: allele_symbol
+            required: false
+        expected_result_fields:
+          allele_id: primary_external_id
+          symbol: allele_symbol
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
         definition_state: in_development
     under_development:
       - binding_id: source_reference_validation

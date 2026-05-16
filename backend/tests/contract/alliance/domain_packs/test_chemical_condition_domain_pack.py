@@ -178,25 +178,44 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
     }
     assert active_binding_ids == {
         "chemical_condition.pending_envelope_validator",
-        "chemical_condition.chebi_curie_format",
-        "chemical_condition.term_chebi_curie_format",
+        "chemical_condition.chebi_api_lookup",
+        "chemical_condition.term_chebi_api_lookup",
+        "chemical_condition.condition_ontology_lookup",
+        "chemical_condition.condition_relation_type_lookup",
     }
     condition_curie_binding = next(
         binding
         for binding in validator_bindings["active"]
-        if binding["binding_id"] == "chemical_condition.chebi_curie_format"
+        if binding["binding_id"] == "chemical_condition.chebi_api_lookup"
     )
     assert condition_curie_binding["input_fields"] == {
         "curie": {
             "source": "payload",
             "path": "condition_chemical.curie",
             "required": True,
+        },
+        "name": {
+            "source": "payload",
+            "path": "condition_chemical.name",
+            "required": False,
         }
     }
+    assert condition_curie_binding["expected_result_fields"] == {
+        "chebi_id": "condition_chemical.curie",
+        "name": "condition_chemical.name",
+    }
+    assert condition_curie_binding["required"] is True
+    assert condition_curie_binding["blocking"] is False
+    assert condition_curie_binding["allow_opt_out"] is True
+    assert condition_curie_binding["curator_override"] == {"allowed": False}
     under_development_bindings = {
         binding["binding_id"]: binding
         for binding in validator_bindings["under_development"]
     }
+    assert {
+        "chemical_condition.chebi_curie_format",
+        "chemical_condition.term_chebi_curie_format",
+    }.issubset(under_development_bindings)
     composite_binding = under_development_bindings["experimental_condition_validation"]
     assert composite_binding["validator_agent"] == {
         "package_id": "agr.alliance",
@@ -212,6 +231,7 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
         "required": False,
     }
     assert "experimental_condition_validation" not in active_binding_ids
+    assert "chemical_condition.chebi_curie_format" not in active_binding_ids
 
 
 def test_chemical_condition_pack_records_grounding_and_blocks_exports():

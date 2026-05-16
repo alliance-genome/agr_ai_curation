@@ -152,13 +152,51 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     }
 
     validator_bindings = metadata.metadata["validator_bindings"]
-    assert validator_bindings["active"] == []
+    active_bindings = validator_bindings["active"]
+    assert [binding["binding_id"] for binding in active_bindings] == [
+        PHENOTYPE_TERM_VALIDATOR_BINDING_ID
+    ]
+    term_binding = active_bindings[0]
+    assert term_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "ontology_term_validation",
+    }
+    assert term_binding["input_fields"] == {
+        "curie": {
+            "source": "payload",
+            "path": "curie",
+            "required": True,
+        },
+        "label": {
+            "source": "payload",
+            "path": "label",
+            "required": False,
+        },
+        "ontology_family": {
+            "source": "literal",
+            "value": "phenotype",
+            "required": True,
+        },
+        "accepted_prefixes": {
+            "source": "literal",
+            "value": ["MP", "WBPhenotype", "ZP"],
+            "required": True,
+        },
+    }
+    assert term_binding["expected_result_fields"] == {
+        "curie": "curie",
+        "label": "label",
+    }
+    assert term_binding["required"] is True
+    assert term_binding["blocking"] is False
+    assert term_binding["allow_opt_out"] is True
+    assert term_binding["curator_override"] == {"allowed": False}
+
     under_development_bindings = validator_bindings["under_development"]
     binding_ids = [binding["binding_id"] for binding in under_development_bindings]
     assert binding_ids == [
         PHENOTYPE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID,
         PHENOTYPE_SUBJECT_VALIDATOR_BINDING_ID,
-        PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
         "phenotype_reference_validator",
     ]
 
@@ -199,37 +237,8 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
         "taxon": "taxon",
     }
 
-    term_binding = under_development_bindings[2]
-    assert term_binding["validator_agent"] == {
-        "package_id": "agr.alliance",
-        "agent_id": "ontology_term_validation",
-    }
-    assert term_binding["input_fields"] == {
-        "curie": {
-            "source": "payload",
-            "path": "curie",
-            "required": True,
-        },
-        "label": {
-            "source": "payload",
-            "path": "label",
-            "required": True,
-        },
-        "ontology_family": {
-            "source": "literal",
-            "value": "phenotype",
-            "required": True,
-        },
-        "accepted_prefixes": {
-            "source": "literal",
-            "value": ["MP", "WBPhenotype", "ZP"],
-            "required": True,
-        },
-    }
-    assert term_binding["expected_result_fields"] == {
-        "curie": "curie",
-        "label": "label",
-    }
+    reference_binding = under_development_bindings[2]
+    assert reference_binding["binding_id"] == "phenotype_reference_validator"
 
 
 def test_phenotype_pack_records_grounding_and_export_blocker_policy():

@@ -301,7 +301,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: data_provider_validation
-          validator_state: planned
+          validator_state: active
           definition_state_category: under_development
           repair:
             protected: true
@@ -323,7 +323,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: data_provider_validation
-          validator_state: planned
+          validator_state: active
           definition_state_category: under_development
           repair:
             protected: true
@@ -859,13 +859,12 @@ metadata:
         blocked_by: read_only_curation_db
         description: Direct live DB writes remain blocked until an approved Alliance write transport replaces the read-only submission handoff adapter.
   validator_bindings:
-    under_development:
+    active:
       - binding_id: relation_vocabulary_validation
         display_name: Relation vocabulary lookup
         validator_agent:
           package_id: agr.alliance
           agent_id: controlled_vocabulary_validation
-        state_explanation: Relation vocabulary validation remains under development until controlled vocabulary package tool dispatch is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
@@ -879,20 +878,20 @@ metadata:
           term_name:
             source: payload
             path: relation.name
-          abbreviation:
-            source: payload
-            path: relation.abbreviation
-            required: false
         expected_result_fields:
           term_name: relation.name
           vocabulary: relation.vocabulary
           internal_id: relation.id
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
       - binding_id: data_provider_validation
         display_name: Data provider validation
         validator_agent:
           package_id: agr.alliance
           agent_id: data_provider_validation
-        state_explanation: Data provider validation remains under development until provider-backed validator dispatch is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.gene_expression
           object_types:
@@ -903,17 +902,14 @@ metadata:
           abbreviation:
             source: payload
             path: data_provider.abbreviation
-          provider_name:
-            source: payload
-            path: data_provider.name
-            required: false
-          taxon:
-            source: payload
-            path: taxon
-            required: false
         expected_result_fields:
           abbreviation: data_provider.abbreviation
-          taxon: data_provider.taxon
+        required: true
+        blocking: false
+        allow_opt_out: true
+        curator_override:
+          allowed: false
+    under_development:
       - binding_id: source_reference_validation
         display_name: Source reference validation
         validator_agent:
