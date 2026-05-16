@@ -553,6 +553,9 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
     "controlled_vocabulary_validation": {
         "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.",
     },
+    "data_provider_validation": {
+        "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency.",
+    },
     "gene_extractor": {
         "summary": "Extracts experimentally supported gene mentions from uploaded PDFs with evidence-first filtering, disambiguation, and database-assisted normalization.",
         "capabilities": [

@@ -10,6 +10,21 @@ from src.schemas.domain_validator import (
 )
 
 
+class DataProviderCandidateContext(DomainValidatorBaseModel):
+    """Optional context explaining how a provider candidate was produced."""
+
+    provider: Optional[StrictStr] = Field(
+        default=None, description="Lookup provider or data source"
+    )
+    method: Optional[StrictStr] = Field(default=None, description="Lookup method")
+    query: dict[str, Any] = Field(
+        default_factory=dict, description="Lookup query payload for this candidate"
+    )
+    lookup_status: Optional[StrictStr] = Field(
+        default=None, description="Lookup status associated with this candidate"
+    )
+
+
 class DataProviderCandidateDetail(DomainValidatorBaseModel):
     """Data provider candidate facts preserved alongside generic candidates."""
 
@@ -36,9 +51,9 @@ class DataProviderCandidateDetail(DomainValidatorBaseModel):
         default=None,
         description="Curator-facing explanation for provider/taxon or name mismatch",
     )
-    context: dict[str, Any] = Field(
-        default_factory=dict,
-        description="Binding and lookup context used for the candidate",
+    context: DataProviderCandidateContext = Field(
+        default_factory=DataProviderCandidateContext,
+        description="Structured binding and lookup context used for the candidate",
     )
 
 

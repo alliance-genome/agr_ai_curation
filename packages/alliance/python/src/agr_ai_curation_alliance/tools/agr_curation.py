@@ -205,9 +205,35 @@ def _provider_abbreviation(value: Any) -> Optional[str]:
     return normalized.upper()
 
 
+def _provider_metadata_warnings() -> List[str]:
+    if not _GROUP_MAPPING_LOAD_ERROR:
+        return []
+    return [f"provider_metadata_unavailable:{_GROUP_MAPPING_LOAD_ERROR}"]
+
+
+def _provider_name_values(provider: Dict[str, Any]) -> set[str]:
+    return {
+        str(value).strip().lower()
+        for value in (
+            provider.get("display_name"),
+            provider.get("name"),
+            provider.get("abbreviation"),
+        )
+        if value is not None and str(value).strip()
+    }
+
+
+def _provider_name_matches(provider: Dict[str, Any], provider_name: str) -> bool:
+    normalized = provider_name.strip().lower()
+    return bool(normalized and normalized in _provider_name_values(provider))
+
+
 def _data_provider_result(result: Any) -> Dict[str, Any]:
     """Return normalized data-provider facts from API rows and group metadata."""
     if isinstance(result, (tuple, list)):
+        # The API client currently returns lightweight provider rows as
+        # (abbreviation, taxon_id, display_name); tests keep this tuple contract
+        # visible alongside object-shaped rows.
         raw = {
             "abbreviation": result[0] if len(result) > 0 else None,
             "taxon_id": result[1] if len(result) > 1 else None,
@@ -258,17 +284,7 @@ def _provider_matches_all(
     if taxon_id and provider.get("taxon_id") != taxon_id:
         return False
     if provider_name:
-        provider_name_normalized = provider_name.strip().lower()
-        provider_names = {
-            str(value).strip().lower()
-            for value in (
-                provider.get("display_name"),
-                provider.get("name"),
-                provider.get("abbreviation"),
-            )
-            if value is not None
-        }
-        if provider_name_normalized not in provider_names:
+        if not _provider_name_matches(provider, provider_name):
             return False
     return True
 
@@ -282,24 +298,16 @@ def _data_provider_candidates(
     limit: int,
 ) -> List[Dict[str, Any]]:
     if abbreviation:
-        matches = [provider for provider in providers if provider.get("abbreviation") == abbreviation]
+        matches = [
+            provider for provider in providers if provider.get("abbreviation") == abbreviation
+        ]
         if matches:
             return matches[:limit]
     if provider_name:
-        provider_name_normalized = provider_name.strip().lower()
         matches = [
             provider
             for provider in providers
-            if provider_name_normalized
-            in {
-                str(value).strip().lower()
-                for value in (
-                    provider.get("display_name"),
-                    provider.get("name"),
-                    provider.get("abbreviation"),
-                )
-                if value is not None
-            }
+            if _provider_name_matches(provider, provider_name)
         ]
         if matches:
             return matches[:limit]
@@ -328,17 +336,7 @@ def _annotate_provider_candidate(
             f"Taxon {taxon_id!r} does not match provider {provider.get('abbreviation')!r} taxon {provider.get('taxon_id')!r}."
         )
     if provider_name:
-        provider_name_normalized = provider_name.strip().lower()
-        provider_names = {
-            str(value).strip().lower()
-            for value in (
-                provider.get("display_name"),
-                provider.get("name"),
-                provider.get("abbreviation"),
-            )
-            if value is not None
-        }
-        if provider_name_normalized not in provider_names:
+        if not _provider_name_matches(provider, provider_name):
             mismatches.append(
                 f"Provider name {provider_name!r} does not match candidate display name {provider.get('display_name')!r}."
             )
@@ -397,6 +395,14 @@ def _provider_lookup_response(
     )
     if not matches and any(candidate.get("mismatch_explanation") for candidate in candidates):
         explanation = "No data provider matched all requested fields; candidate provider/taxon conflicts were preserved."
+    warnings = [
+        *(
+            ["provider_taxon_mismatch"]
+            if any(candidate.get("mismatch_explanation") for candidate in candidates)
+            else []
+        ),
+        *_provider_metadata_warnings(),
+    ]
     lookup_attempt = _lookup_attempt(
         method=method,
         attempted_query=attempted_query,
@@ -411,11 +417,7 @@ def _provider_lookup_response(
             "candidates": candidates,
         },
         count=len(matches),
-        warnings=(
-            ["provider_taxon_mismatch"]
-            if any(candidate.get("mismatch_explanation") for candidate in candidates)
-            else None
-        ),
+        warnings=warnings or None,
         message=None if matches else "Data provider not found for the supplied lookup fields.",
         lookup_status=lookup_status,
         failure_classification=None if lookup_status == LOOKUP_STATUS_SUCCESS else lookup_status,
@@ -2397,6 +2399,7 @@ def agr_curation_query(
                 method=method,
                 data=providers_data,
                 count=len(providers_data),
+                warnings=_provider_metadata_warnings() or None,
                 attempted_query=_attempt_query(method),
             )
 
