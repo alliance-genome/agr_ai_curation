@@ -184,10 +184,16 @@ class TestGetRegistryMetadata:
         assert all(option["required"] is False for option in under_development)
         assert all(option["export_blocking"] is False for option in under_development)
         assert all(option.get("state_explanation") for option in under_development)
-        assert any(
-            "disease_annotation_object.curie" in option.get("affected_fields", [])
+        affected_fields = {
+            field
             for option in under_development
-        )
+            for field in option.get("affected_fields", [])
+        }
+        assert {
+            "single_reference.curie",
+            "disease_annotation_subject.subject_identifier",
+            "condition_relations[0].conditions",
+        }.issubset(affected_fields)
 
     def test_get_registry_metadata_includes_domain_envelope_authoring_metadata(self):
         """Extraction agents should expose domain-pack envelope metadata."""
