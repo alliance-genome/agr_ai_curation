@@ -2225,23 +2225,6 @@ describe('PdfViewer evidence navigation', () => {
 
     fireEvent.load(iframe)
 
-    window.setTimeout(() => {
-      const iframeDocument = iframe.contentWindow?.document
-      const textLayer = iframeDocument?.querySelector<HTMLElement>(
-        '.page[data-page-number="3"] .textLayer',
-      )
-      if (!iframeDocument || !textLayer) {
-        return
-      }
-
-      const nativeHighlight = iframeDocument.createElement('span')
-      nativeHighlight.className = 'highlight selected'
-      nativeHighlight.textContent = query
-      nativeHighlight.getBoundingClientRect = () => createMockRect(48, (2 * 900) + 72, 190, 20)
-      textLayer.appendChild(nativeHighlight)
-      eventBus.dispatch('updatetextlayermatches', { pageIndex: 2 })
-    }, 150)
-
     await waitFor(() => {
       expect(onNavigationComplete).toHaveBeenCalledTimes(1)
     })
