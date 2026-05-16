@@ -1,0 +1,520 @@
+fixture_contract:
+  metadata_shape: object_selector_validator_bindings
+  request_shape: DomainValidationRequest
+  result_shape: DomainValidatorResultBase
+  finding_statuses:
+    - open
+    - resolved
+    - waived
+  selector_failure_codes:
+    - selector_missing
+    - selector_ambiguous
+    - selector_unresolved_ref
+    - selector_missing_field
+  forbidden_runtime_result_statuses:
+    - under_development
+
+domain_pack:
+  pack_id: fixture.validator_dispatch
+  display_name: Validator Dispatch Fixture Pack
+  version: 0.1.0
+  metadata_api_version: 1.0.0
+  status: active
+  model_definitions:
+    - model_id: GeneAssertionPayload
+      display_name: Gene assertion payload
+  object_definitions:
+    - object_type: GeneAssertion
+      display_name: Gene assertion
+      model_ref: GeneAssertionPayload
+      metadata:
+        object_role: curatable_unit
+        workspace_display:
+          primary_label_field: gene.symbol
+          summary_fields:
+            - gene.identifier
+            - gene.symbol
+      fields:
+        - field_path: gene.identifier
+          field_type: string
+          required: true
+        - field_path: gene.symbol
+          field_type: string
+          required: true
+        - field_path: gene.reference
+          field_type: object_ref
+    - object_type: Gene
+      display_name: Gene reference
+      metadata:
+        object_role: validated_reference
+      fields:
+        - field_path: identifier
+          field_type: string
+          required: true
+        - field_path: symbol
+          field_type: string
+          required: true
+  metadata:
+    validator_bindings:
+      active:
+        - binding_id: fixture.identifier_lookup
+          display_name: Identifier lookup
+          validator_agent:
+            package_id: fixture.validators
+            agent_id: gene_identifier_validator
+          applies_to:
+            domain_pack_id: fixture.validator_dispatch
+            object_types:
+              - GeneAssertion
+            field_paths:
+              - gene.identifier
+          input_fields:
+            identifier:
+              source: payload
+              path: gene.identifier
+          expected_result_fields:
+            identifier: Gene.identifier
+            symbol: Gene.symbol
+          required: true
+          blocking: true
+          allow_opt_out: false
+          curator_override:
+            allowed: false
+        - binding_id: fixture.evidence_quote_lookup
+          display_name: Evidence quote lookup
+          validator_agent:
+            package_id: fixture.validators
+            agent_id: gene_quote_validator
+          applies_to:
+            domain_pack_id: fixture.validator_dispatch
+            object_types:
+              - GeneAssertion
+            field_paths:
+              - gene.symbol
+          input_fields:
+            quote:
+              source: evidence_record
+              path: quote
+              required: true
+          expected_result_fields:
+            symbol: Gene.symbol
+          required: true
+          blocking: false
+          allow_opt_out: true
+          curator_override:
+            allowed: false
+        - binding_id: fixture.referenced_gene_lookup
+          display_name: Referenced gene lookup
+          validator_agent:
+            package_id: fixture.validators
+            agent_id: referenced_gene_validator
+          applies_to:
+            domain_pack_id: fixture.validator_dispatch
+            object_types:
+              - GeneAssertion
+            field_paths:
+              - gene.symbol
+          input_fields:
+            referenced_identifier:
+              source: object_ref
+              object_type: Gene
+              field_path: gene.reference
+              path: identifier
+              required: true
+          expected_result_fields:
+            identifier: Gene.identifier
+          required: true
+          blocking: true
+          allow_opt_out: false
+          curator_override:
+            allowed: false
+      under_development:
+        - binding_id: fixture.future_reference_lookup
+          display_name: Future reference lookup
+          state_explanation: Reference-backed validator dispatch is still being wired.
+          validator_agent:
+            package_id: fixture.validators
+            agent_id: reference_validator
+          applies_to:
+            domain_pack_id: fixture.validator_dispatch
+            object_types:
+              - GeneAssertion
+            field_paths:
+              - gene.identifier
+          input_fields:
+            reference_id:
+              source: envelope_metadata
+              path: source_document_id
+              required: false
+          expected_result_fields:
+            reference_id: Reference.reference_id
+
+cases:
+  - case_id: successful_dispatch
+    active_binding_ids:
+      - fixture.identifier_lookup
+    envelope:
+      envelope_id: fixture-success-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          payload:
+            gene:
+              identifier: BAD:0001
+              symbol: abc-1
+    validator_result:
+      status: resolved
+      resolved_values:
+        identifier: AGR:0001
+        symbol: ABC-1
+      resolved_objects:
+        - object_type: Gene
+          canonical_id: AGR:0001
+          payload:
+            identifier: AGR:0001
+            symbol: ABC-1
+      missing_expected_fields: []
+      candidates: []
+      lookup_attempts:
+        - provider: fixture_gene_lookup
+          method: exact_identifier
+          query:
+            identifier: BAD:0001
+          result_count: 1
+          outcome: success
+      curator_message:
+      explanation: Identifier resolved through fixture lookup.
+    expected_request:
+      validator_binding_id: fixture.identifier_lookup
+      selected_inputs:
+        identifier: BAD:0001
+      target:
+        object_type: GeneAssertion
+        object_id: assertion-1
+        field_path: gene.identifier
+        expected_fields:
+          - identifier
+          - symbol
+    expected_projection:
+      finding_code: domain_pack.validator_resolved
+      finding_status: resolved
+      materialized_object_type: Gene
+      materialized_object_status: validated
+      materialized_payload:
+        identifier: AGR:0001
+        symbol: ABC-1
+    readiness_outcome:
+      ready: true
+      blockers: []
+
+  - case_id: unresolved_validator_result
+    active_binding_ids:
+      - fixture.identifier_lookup
+    envelope:
+      envelope_id: fixture-unresolved-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          payload:
+            gene:
+              identifier: BAD:404
+              symbol: missing
+    validator_result:
+      status: unresolved
+      resolved_values: {}
+      resolved_objects: []
+      missing_expected_fields:
+        - identifier
+        - symbol
+      candidates: []
+      lookup_attempts:
+        - provider: fixture_gene_lookup
+          method: exact_identifier
+          query:
+            identifier: BAD:404
+          result_count: 0
+          outcome: not_found
+      curator_message: Identifier could not be resolved.
+      explanation: Fixture lookup found no gene.
+    expected_request:
+      validator_binding_id: fixture.identifier_lookup
+      selected_inputs:
+        identifier: BAD:404
+    expected_projection:
+      finding_code: domain_pack.validator_unresolved
+      finding_status: open
+      failure_classification: missing_expected_result_field
+    readiness_outcome:
+      ready: false
+      blockers:
+        - domain_pack.validator_unresolved
+
+  - case_id: missing_expected_fields
+    active_binding_ids:
+      - fixture.identifier_lookup
+    envelope:
+      envelope_id: fixture-missing-fields-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          payload:
+            gene:
+              identifier: BAD:0002
+              symbol: abc-2
+    validator_result:
+      status: resolved
+      resolved_values:
+        identifier: AGR:0002
+      resolved_objects: []
+      missing_expected_fields: []
+      candidates: []
+      lookup_attempts:
+        - provider: fixture_gene_lookup
+          method: exact_identifier
+          query:
+            identifier: BAD:0002
+          result_count: 1
+          outcome: success
+      curator_message:
+      explanation: Identifier resolved but symbol was omitted.
+    expected_request:
+      validator_binding_id: fixture.identifier_lookup
+      selected_inputs:
+        identifier: BAD:0002
+    expected_projection:
+      finding_code: domain_pack.validator_unresolved
+      finding_status: open
+      failure_classification: missing_expected_result_field
+      missing_expected_fields:
+        - symbol
+    readiness_outcome:
+      ready: false
+      blockers:
+        - domain_pack.validator_unresolved
+
+  - case_id: ambiguous_candidates
+    active_binding_ids:
+      - fixture.identifier_lookup
+    envelope:
+      envelope_id: fixture-ambiguous-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          payload:
+            gene:
+              identifier: ABC
+              symbol: abc
+    validator_result:
+      status: unresolved
+      resolved_values: {}
+      resolved_objects: []
+      missing_expected_fields: []
+      candidates:
+        - value: AGR:0003
+          label: ABC-1
+          object_type: Gene
+          score: 0.74
+        - value: AGR:0004
+          label: ABC-2
+          object_type: Gene
+          score: 0.68
+      lookup_attempts:
+        - provider: fixture_gene_lookup
+          method: symbol_search
+          query:
+            identifier: ABC
+          result_count: 2
+          outcome: ambiguous
+      curator_message: Multiple genes matched the supplied identifier.
+      explanation: Ambiguous fixture lookup.
+    expected_request:
+      validator_binding_id: fixture.identifier_lookup
+      selected_inputs:
+        identifier: ABC
+    expected_projection:
+      finding_code: domain_pack.validator_unresolved
+      finding_status: open
+      failure_classification: ambiguous
+      candidate_values:
+        - AGR:0003
+        - AGR:0004
+    readiness_outcome:
+      ready: false
+      blockers:
+        - domain_pack.validator_unresolved
+
+  - case_id: curator_override_alias_does_not_clear_blocker
+    active_binding_ids:
+      - fixture.identifier_lookup
+    envelope:
+      envelope_id: fixture-curator-override-alias-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          metadata:
+            curator_override:
+              field_path: gene.identifier
+              reason: Legacy singular override aliases must not waive validator blockers.
+            curator_overrides:
+              - field_path: gene.identifier
+                reason: Field override metadata cannot clear active validator blockers.
+            validation_waivers:
+              - code: domain_pack.validator_unresolved
+                reason: Legacy waiver aliases must not clear validator blockers.
+          payload:
+            gene:
+              identifier: BAD:ALIAS
+              symbol: alias
+    validator_result:
+      status: unresolved
+      resolved_values: {}
+      resolved_objects: []
+      missing_expected_fields:
+        - identifier
+        - symbol
+      candidates: []
+      lookup_attempts:
+        - provider: fixture_gene_lookup
+          method: exact_identifier
+          query:
+            identifier: BAD:ALIAS
+          result_count: 0
+          outcome: not_found
+      curator_message: Identifier could not be resolved despite override metadata.
+      explanation: Curator override aliases are object metadata, not validator waivers.
+    expected_request:
+      validator_binding_id: fixture.identifier_lookup
+      selected_inputs:
+        identifier: BAD:ALIAS
+    expected_projection:
+      finding_code: domain_pack.validator_unresolved
+      finding_status: open
+      failure_classification: missing_expected_result_field
+      missing_expected_fields:
+        - identifier
+        - symbol
+      forbidden_blocker_detail_keys:
+        - curator_override
+    readiness_outcome:
+      ready: false
+      blockers:
+        - domain_pack.validator_unresolved
+
+selector_failure_cases:
+  - case_id: selector_missing
+    active_binding_ids:
+      - fixture.evidence_quote_lookup
+    envelope:
+      envelope_id: fixture-selector-missing-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          payload:
+            gene:
+              identifier: BAD:0005
+              symbol: abc-5
+    expected_selector_code: selector_missing
+  - case_id: selector_missing_field
+    active_binding_ids:
+      - fixture.evidence_quote_lookup
+    envelope:
+      envelope_id: fixture-selector-missing-field-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          evidence_record_ids:
+            - evidence-1
+          payload:
+            gene:
+              identifier: BAD:0006
+              symbol: abc-6
+            evidence_records:
+              - evidence_record_id: evidence-1
+                note: quote omitted on purpose
+    expected_selector_code: selector_missing_field
+  - case_id: selector_ambiguous
+    active_binding_ids:
+      - fixture.evidence_quote_lookup
+    envelope:
+      envelope_id: fixture-selector-ambiguous-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          payload:
+            gene:
+              identifier: BAD:0007
+              symbol: abc-7
+            evidence_records:
+              - evidence_record_id: evidence-1
+                quote: First quote.
+              - evidence_record_id: evidence-2
+                quote: Second quote.
+    expected_selector_code: selector_ambiguous
+  - case_id: selector_unresolved_ref
+    active_binding_ids:
+      - fixture.referenced_gene_lookup
+    envelope:
+      envelope_id: fixture-selector-unresolved-ref-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          payload:
+            gene:
+              identifier: BAD:0008
+              symbol: abc-8
+              reference:
+                object_id: missing-gene
+                object_type: Gene
+    expected_selector_code: selector_unresolved_ref
+
+flow_validation_cases:
+  - case_id: skipped_validator
+    active_binding_ids:
+      - fixture.evidence_quote_lookup
+    attachment_selections:
+      - validator_binding_id: fixture.evidence_quote_lookup
+        enabled: false
+    validation_groups:
+      - binding_id: fixture.evidence_quote_lookup
+        state: skipped
+    expected_schedule:
+      scheduled_validators: []
+      opt_outs:
+        - fixture.evidence_quote_lookup
+      inactive_metadata: []
+      replacement_validators: []
+      supplemental_validators: []
+    readiness_outcome:
+      ready: true
+      blockers: []
+
+  - case_id: custom_replacement_validator
+    active_binding_ids:
+      - fixture.identifier_lookup
+    attachment_selections:
+      - validator_binding_id: fixture.identifier_lookup
+        enabled: true
+    validation_groups:
+      - binding_id: fixture.identifier_lookup
+        state: replaced
+        edge_id: edge-custom-identifier-validator
+        validator_node_id: custom_identifier_validator
+    expected_schedule:
+      scheduled_validators: []
+      opt_outs: []
+      inactive_metadata: []
+      replacement_validators:
+        - fixture.identifier_lookup
+      supplemental_validators: []
+    readiness_outcome:
+      ready: true
+      blockers: []

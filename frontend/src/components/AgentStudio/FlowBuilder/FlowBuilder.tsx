@@ -187,7 +187,11 @@ export const rebuildValidationGroupsFromEdges = (
         .filter((bindingId): bindingId is string => Boolean(bindingId))
     )
 
-    const validationGroups: ValidationAttachmentGroup[] = validationAttachments.map((attachment) => {
+    const actionableValidationAttachments = validationAttachments.filter((attachment) => (
+      attachment.state === 'active' && Boolean(attachment.validator_binding_id)
+    ))
+
+    const validationGroups: ValidationAttachmentGroup[] = actionableValidationAttachments.map((attachment) => {
       const existingGroup = existingGroups.find((group) => (
         group.attachment_id === attachment.attachment_id
         || (attachment.validator_binding_id && group.binding_id === attachment.validator_binding_id)
@@ -199,7 +203,7 @@ export const rebuildValidationGroupsFromEdges = (
         ? 'replaced'
         : existingGroup?.state === 'supplemental'
           ? 'supplemental'
-          : attachment.state === 'active' && attachment.enabled
+          : attachment.enabled
             ? 'automatic'
             : 'skipped'
       const preserveSupplementalLink = state === 'supplemental'

@@ -83,6 +83,7 @@ def _option(
     *,
     attachment_id: str | None = None,
     label: str | None = None,
+    state: ValidationBindingState = ValidationBindingState.ACTIVE,
     default_enabled: bool = True,
     allow_opt_out: bool = True,
     required: bool = False,
@@ -94,7 +95,7 @@ def _option(
         domain_pack_version="0.1.0",
         validator_id=f"validator:{binding_id}",
         validator_binding_id=binding_id,
-        state=ValidationBindingState.ACTIVE,
+        state=state,
         scope="field",
         object_type="GeneAssertion",
         field_path=binding_id,
@@ -258,6 +259,53 @@ def test_validation_attachment_edges_resolve_validator_group_states(monkeypatch)
     assert "export_blocking" not in groups_by_binding[
         "identifier"
     ].model_dump()
+
+
+def test_validation_groups_keep_under_development_metadata_out_of_runtime_states(
+    monkeypatch,
+):
+    options = (
+        _option("identifier", label="Identifier validator"),
+        _option(
+            "future-reference",
+            label="Future reference validator",
+            state=ValidationBindingState.UNDER_DEVELOPMENT,
+            default_enabled=False,
+            allow_opt_out=False,
+        ),
+    )
+    monkeypatch.setattr(
+        validation_attachments_module,
+        "validation_attachment_options_for_agent",
+        lambda agent_id, agent_registry=None: options if agent_id == "fixture_extractor" else (),
+    )
+
+    hydrated = apply_flow_validation_attachment_defaults(
+        _flow_definition("fixture_extractor")
+    )
+    node_data = hydrated.nodes[1].data
+
+    assert [
+        attachment.validator_binding_id
+        for attachment in node_data.validation_attachments
+    ] == ["identifier", "future-reference"]
+    assert [
+        group.binding_id
+        for group in node_data.validation_groups
+    ] == ["identifier"]
+    assert {
+        group.state
+        for group in node_data.validation_groups
+    } == {"automatic"}
+
+    schedule = validation_schedule_from_node_data(node_data.model_dump())
+    assert [item["validator_binding_id"] for item in schedule["scheduled_validators"]] == [
+        "identifier"
+    ]
+    assert schedule["opt_outs"] == []
+    assert [item["validator_binding_id"] for item in schedule["inactive_metadata"]] == [
+        "future-reference"
+    ]
 
 
 def test_validation_attachment_edges_require_direct_extraction_source(monkeypatch):
