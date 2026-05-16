@@ -380,6 +380,9 @@ def _resolved_validation_groups(
     groups: list[FlowValidationAttachmentGroup] = []
 
     for selection in selections:
+        if selection.state != "active":
+            continue
+
         sidecar_group = (
             sidecar_by_binding_id.get(selection.validator_binding_id)
             if selection.validator_binding_id
@@ -393,7 +396,7 @@ def _resolved_validation_groups(
 
         if sidecar_group is not None:
             state = "replaced"
-        elif selection.state == "active" and selection.enabled:
+        elif selection.enabled:
             state = "automatic"
         else:
             state = "skipped"

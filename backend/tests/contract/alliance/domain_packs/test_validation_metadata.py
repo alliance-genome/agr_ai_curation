@@ -179,6 +179,48 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
             assert "curator_override" not in binding
 
 
+def test_alliance_active_and_under_development_capabilities_have_distinct_visibility():
+    alliance_registry = load_alliance_domain_pack_registry()
+    top_level_pack_ids = {
+        "agr.alliance.gene_expression",
+        "agr.alliance.allele",
+        "agr.alliance.disease",
+        "agr.alliance.chemical_condition",
+        "agr.alliance.phenotype",
+    }
+
+    active_options = []
+    under_development_options = []
+    for pack_id in sorted(top_level_pack_ids):
+        registry = DomainPackValidationRegistry.from_domain_pack(
+            alliance_registry.get_pack(pack_id)
+        )
+        for option in registry.validation_attachment_options():
+            if option.validator_binding_id is None:
+                continue
+            if option.state is ValidationBindingState.ACTIVE:
+                active_options.append(option)
+            elif option.state is ValidationBindingState.UNDER_DEVELOPMENT:
+                under_development_options.append(option)
+
+    assert active_options
+    assert under_development_options
+    for option in active_options:
+        assert option.default_enabled is True
+        assert option.validator_package_id == "agr.alliance"
+        assert option.validator_agent_id
+
+    for option in under_development_options:
+        assert option.default_enabled is False
+        assert option.required is False
+        assert option.export_blocking is False
+        assert option.allow_opt_out is False
+        assert option.state_explanation
+        if option.validator_package_id is not None or option.validator_agent_id is not None:
+            assert option.validator_package_id == "agr.alliance"
+            assert option.validator_agent_id
+
+
 def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     alliance_registry = load_alliance_domain_pack_registry()
     registries = {

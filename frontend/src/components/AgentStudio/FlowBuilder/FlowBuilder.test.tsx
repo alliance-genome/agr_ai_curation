@@ -402,6 +402,88 @@ describe('FlowBuilder', () => {
     ])
   })
 
+  it('keeps under-development validator metadata out of runtime validation groups', () => {
+    const [extractorNode] = rebuildValidationGroupsFromEdges(
+      [
+        {
+          id: 'node_1',
+          type: 'agent',
+          position: { x: 0, y: 0 },
+          data: {
+            agent_id: 'allele_extractor',
+            agent_display_name: 'Allele Extractor',
+            input_source: 'previous_output',
+            output_key: 'alleles',
+            validation_attachments: [
+              {
+                attachment_id: 'allele:identifier',
+                domain_pack_id: 'allele',
+                validator_id: 'agr.alliance:allele_validation',
+                validator_binding_id: 'identifier',
+                label: 'Allele identifier lookup',
+                state: 'active',
+                scope: 'field',
+                field_path: 'identifier',
+                required: true,
+                blocking: true,
+                default_enabled: true,
+                allow_opt_out: true,
+                enabled: true,
+              },
+              {
+                attachment_id: 'allele:future-reference',
+                domain_pack_id: 'allele',
+                validator_id: 'agr.alliance:reference_validation',
+                validator_binding_id: 'future-reference',
+                label: 'Future reference lookup',
+                state: 'under_development',
+                scope: 'field',
+                field_path: 'reference.curie',
+                required: false,
+                blocking: false,
+                default_enabled: false,
+                allow_opt_out: false,
+                enabled: false,
+                state_explanation: 'Reference validator dispatch is still being wired.',
+              },
+            ],
+            validation_groups: [
+              {
+                group_id: 'allele:future-reference',
+                attachment_id: 'allele:future-reference',
+                binding_id: 'future-reference',
+                state: 'skipped',
+                label: 'Future reference lookup',
+                required: false,
+                blocking: false,
+                allow_opt_out: false,
+              },
+            ],
+          },
+        },
+      ],
+      []
+    )
+
+    expect(extractorNode.data.validation_attachments?.map((attachment) => attachment.validator_binding_id)).toEqual([
+      'identifier',
+      'future-reference',
+    ])
+    expect(extractorNode.data.validation_groups).toEqual([
+      expect.objectContaining({
+        attachment_id: 'allele:identifier',
+        binding_id: 'identifier',
+        state: 'automatic',
+      }),
+    ])
+    expect(extractorNode.data.validation_groups).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        binding_id: 'future-reference',
+        state: 'skipped',
+      }),
+    ]))
+  })
+
   it('preserves supplemental validation groups for unmatched validator attachment edges', () => {
     const [extractorNode] = rebuildValidationGroupsFromEdges(
       [
