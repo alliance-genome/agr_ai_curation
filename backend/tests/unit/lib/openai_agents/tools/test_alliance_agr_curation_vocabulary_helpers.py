@@ -98,6 +98,30 @@ def test_get_vocabulary_term_resolves_exact_term(monkeypatch):
     ]
 
 
+def test_get_vocabulary_term_preserves_zero_internal_id(monkeypatch):
+    class FakeDb:
+        @staticmethod
+        def search_vocabulary_terms(**_kwargs):
+            return [_term(internal_id=0)]
+
+    monkeypatch.setattr(
+        agr_curation,
+        "get_curation_resolver",
+        lambda: _Resolver(FakeDb()),
+    )
+
+    result = _query_fn()(
+        method="get_vocabulary_term",
+        vocabulary="Disease Relation",
+        term_name="is_implicated_in",
+    )
+
+    assert result.status == "ok"
+    assert result.data[0]["id"] == 0
+    assert result.data[0]["internal_id"] == 0
+    assert result.result_projections[0]["resolved_id"] == 0
+
+
 def test_get_vocabulary_term_reports_no_match(monkeypatch):
     class FakeDb:
         @staticmethod

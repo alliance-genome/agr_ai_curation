@@ -217,11 +217,13 @@ def test_controlled_vocabulary_prompt_declares_lookup_policy():
                         "internal_id": 301,
                         "vocabulary": "Relation",
                         "term_name": "expressed in",
+                        "obsolete": False,
                     },
                     {
                         "internal_id": 302,
                         "vocabulary": "Expression Relation",
                         "term_name": "expressed in",
+                        "obsolete": False,
                     },
                 ],
             ),
@@ -244,3 +246,22 @@ def test_controlled_vocabulary_schema_accepts_resolution_cases(
 
     assert result.status == expected_status
     assert len(result.controlled_vocabulary_candidates) == candidate_count
+
+
+def test_controlled_vocabulary_candidate_requires_obsolete_state(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    schema_discovery.discover_agent_schemas(force_reload=True)
+    schema = schema_discovery.get_schema_for_agent("controlled_vocabulary")
+
+    payload = _result_payload(
+        controlled_vocabulary_candidates=[
+            {
+                "internal_id": 101,
+                "vocabulary": "Disease Relation",
+                "term_name": "is_implicated_in",
+            }
+        ],
+    )
+
+    with pytest.raises(ValueError, match="obsolete"):
+        schema(**payload)

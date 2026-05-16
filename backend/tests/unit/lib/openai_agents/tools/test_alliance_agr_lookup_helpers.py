@@ -113,6 +113,23 @@ def test_alliance_controlled_vocabulary_projection_metadata():
     assert projection["provider_data"]["abbreviation"] == "implicated"
 
 
+def test_alliance_controlled_vocabulary_projection_preserves_zero_id():
+    projection = projection_from_result(
+        "get_vocabulary_term",
+        {
+            "id": 0,
+            "internal_id": 0,
+            "vocabulary": "Disease Relation",
+            "term_name": "is_implicated_in",
+            "name": "is_implicated_in",
+            "obsolete": False,
+        },
+    )
+
+    assert projection["resolved_id"] == 0
+    assert projection["projection_key"] == "0"
+
+
 def test_alliance_entity_projection_and_candidate_metadata():
     projection = projection_from_entity_match(
         "map_entity_names_to_curies",

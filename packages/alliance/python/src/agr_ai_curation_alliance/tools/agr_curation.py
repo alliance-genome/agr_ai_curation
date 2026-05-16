@@ -138,6 +138,13 @@ def _plain_result(result: Any) -> Dict[str, Any]:
     raise TypeError(f"Cannot serialize result of type {type(result).__name__}")
 
 
+def _first_present(*values: Any) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
 def _ontology_term_result(result: Any) -> Dict[str, Any]:
     raw = _plain_result(result)
     term = {
@@ -157,14 +164,14 @@ def _ontology_term_result(result: Any) -> Dict[str, Any]:
 
 def _vocabulary_term_result(result: Any) -> Dict[str, Any]:
     raw = _plain_result(result)
-    internal_id = raw.get("id") or raw.get("internal_id")
+    internal_id = _first_present(raw.get("id"), raw.get("internal_id"))
     term = {
         "id": internal_id,
         "internal_id": internal_id,
         "vocabulary": raw.get("vocabulary"),
         "vocabulary_label": raw.get("vocabulary_label"),
-        "name": raw.get("name") or raw.get("term_name"),
-        "term_name": raw.get("term_name") or raw.get("name"),
+        "name": _first_present(raw.get("name"), raw.get("term_name")),
+        "term_name": _first_present(raw.get("term_name"), raw.get("name")),
         "abbreviation": raw.get("abbreviation"),
         "definition": raw.get("definition"),
         "obsolete": raw.get("obsolete"),

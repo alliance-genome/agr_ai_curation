@@ -25,9 +25,7 @@ class ControlledVocabularyCandidateDetail(DomainValidatorBaseModel):
     definition: Optional[StrictStr] = Field(
         default=None, description="Vocabulary term definition"
     )
-    obsolete: StrictBool = Field(
-        default=False, description="Whether the vocabulary term is obsolete"
-    )
+    obsolete: StrictBool = Field(description="Whether the vocabulary term is obsolete")
     synonyms: list[StrictStr] = Field(
         default_factory=list,
         description="Controlled vocabulary synonyms returned by lookup",
