@@ -144,6 +144,9 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
     assert condition.metadata["export_behavior"][
         "required_export_context_fields"
     ] == list(CHEMICAL_CONDITION_EXPORT_CONTEXT_FIELDS)
+    assert "experimental_condition_validation" in condition.metadata[
+        "validator_binding_ids"
+    ]
 
     object_ref_fields = {
         field.field_path: field.object_type_ref
@@ -190,6 +193,25 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
             "required": True,
         }
     }
+    under_development_bindings = {
+        binding["binding_id"]: binding
+        for binding in validator_bindings["under_development"]
+    }
+    composite_binding = under_development_bindings["experimental_condition_validation"]
+    assert composite_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "experimental_condition_validation",
+    }
+    assert composite_binding["expected_result_fields"] == {
+        "condition_id": "ExperimentalCondition.condition_id",
+        "normalized_components": "ExperimentalCondition.components",
+    }
+    assert composite_binding["input_fields"]["evidence_quote"] == {
+        "source": "evidence_record",
+        "path": "quote",
+        "required": False,
+    }
+    assert "experimental_condition_validation" not in active_binding_ids
 
 
 def test_chemical_condition_pack_records_grounding_and_blocks_exports():

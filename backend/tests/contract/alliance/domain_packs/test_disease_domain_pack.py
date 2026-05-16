@@ -160,7 +160,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_pending_envelope_validator",
         "disease_ontology_term_lookup",
         "disease_relation_cv_lookup",
-        "disease_experimental_condition_lookup",
+        "experimental_condition_validation",
         "disease_condition_relation_lookup",
         "disease_subject_materialization",
         "disease_reference_materialization",
@@ -298,6 +298,20 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         assert field.metadata["validator_state"] == "planned"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
         assert binding["state_explanation"]
+    composite_binding = validator_bindings["experimental_condition_validation"]
+    assert composite_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "experimental_condition_validation",
+    }
+    assert composite_binding["input_fields"]["evidence_quote"] == {
+        "source": "evidence_record",
+        "path": "quote",
+        "required": False,
+    }
+    assert composite_binding["expected_result_fields"] == {
+        "condition_id": "ExperimentalCondition.condition_id",
+        "normalized_components": "ExperimentalCondition.components",
+    }
 
     blocked_fields = {
         "disease_annotation_subject",
