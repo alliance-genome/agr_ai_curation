@@ -409,17 +409,6 @@ def test_validate_active_agent_output_schemas_raises_for_unknown(monkeypatch):
         catalog_service.validate_active_agent_output_schemas(db)
 
 
-def test_runtime_output_type_uses_schema_directly():
-    from src.lib.openai_agents.models import GeneExtractionResultEnvelope, GeneResultEnvelope
-
-    assert (
-        catalog_service._runtime_output_type_for_schema(GeneExtractionResultEnvelope)
-        is GeneExtractionResultEnvelope
-    )
-
-    assert catalog_service._runtime_output_type_for_schema(GeneResultEnvelope) is GeneResultEnvelope
-
-
 def test_import_package_binding_target_adds_runtime_helper_paths(monkeypatch):
     repo_root = catalog_service._HOST_RUNTIME_ROOT_DIR.parent
     package_path = repo_root / "packages" / "alliance"

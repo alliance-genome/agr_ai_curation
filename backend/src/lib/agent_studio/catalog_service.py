@@ -1837,12 +1837,6 @@ def _resolve_output_schema(schema_key: str) -> Optional[Any]:
     return resolve_output_schema(schema_key)
 
 
-def _runtime_output_type_for_schema(output_schema: Optional[Any]) -> Optional[Any]:
-    """Convert a resolved schema class into the output_type Agents should run."""
-
-    return output_schema
-
-
 def validate_active_agent_output_schemas(db: Any) -> None:
     """Fail fast when active agents reference unknown output schema keys."""
     from src.models.sql.agent import Agent as DBAgent
@@ -1896,8 +1890,6 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
             raise ValueError(
                 f"Unknown output schema '{output_schema_key}' for agent '{db_agent.agent_key}'"
             )
-    runtime_output_type = _runtime_output_type_for_schema(output_schema)
-
     # Resolve tools from explicit binding metadata (no runtime fallbacks).
     output_guardrails: List[Any] = []
     if requested_tool_ids:
@@ -1987,7 +1979,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         model=get_model_for_agent(effective_model_id, provider_override=model_provider),
         model_settings=model_settings,
         tools=tools,
-        output_type=runtime_output_type,
+        output_type=output_schema,
         output_guardrails=output_guardrails,
     )
 
