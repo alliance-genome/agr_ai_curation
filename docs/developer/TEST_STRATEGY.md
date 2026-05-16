@@ -54,7 +54,7 @@ The 0.7.0 domain-envelope gates are recorded in
 - explicit opt-in live curation DB projections,
 - one-off legacy migration coverage,
 - materialization,
-- validation and repair loops,
+- validation findings and curator review flows,
 - export/submission readiness,
 - Agent Studio/Opus tool contracts,
 - TraceReview support.
@@ -140,8 +140,8 @@ Domain-envelope tests should cover the implemented contract, not design notes:
   and stable finding IDs.
 - `lookup_attempts` as an audit trail, including transient attempts that may
   exist even when the top-level lookup status succeeds after retry.
-- `DomainEnvelopeRepairRequest`, `DomainEnvelopeRepairPatch`, retry budgets,
-  protected fields, stale revision rejection, and final classifications.
+- unresolved validation findings, lookup attempts, curator messages, protected
+  fields, and stale revision rejection.
 - Materialized review rows as projections over persisted envelope objects.
 - Export/submission readiness blockers and expected envelope revision checks.
 
