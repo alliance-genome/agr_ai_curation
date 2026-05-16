@@ -325,6 +325,33 @@ def test_legacy_ontology_context_schemas_match_package_validator_shape(
     assert domain_fields.issubset(legacy_schema.model_fields)
 
 
+@pytest.mark.parametrize(
+    "agent_name",
+    [
+        "gene_ontology",
+        "go_annotations",
+        "ontology_mapping",
+        "orthologs",
+    ],
+)
+def test_legacy_ontology_context_agent_routing_matches_package_examples(agent_name):
+    package_agent_path = (
+        REPO_PACKAGES_DIR / "alliance" / "agents" / agent_name / "agent.yaml"
+    )
+    legacy_agent_path = REPO_LEGACY_AGENTS_DIR / agent_name / "agent.yaml"
+
+    package_payload = yaml.safe_load(package_agent_path.read_text(encoding="utf-8"))
+    legacy_payload = yaml.safe_load(legacy_agent_path.read_text(encoding="utf-8"))
+
+    package_routing = package_payload["supervisor_routing"]
+    legacy_routing = legacy_payload["supervisor_routing"]
+    package_batching = str(package_routing["batching_instructions"])
+
+    assert legacy_routing == package_routing
+    assert package_batching.rstrip().endswith('etc."')
+    assert str(legacy_routing["batching_instructions"]) == package_batching
+
+
 def test_bundled_alliance_ontology_context_agents_are_not_active_readiness_gates():
     context_agent_ids = {
         "gene_ontology_lookup",
