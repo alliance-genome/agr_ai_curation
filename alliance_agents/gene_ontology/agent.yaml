@@ -31,7 +31,7 @@ supervisor_routing:
   batchable: true
   batching_instructions: >
     When looking up multiple GO terms, combine them into a single request.
-    Example: "Look up these GO terms: apoptotic process, kinase activity, cell division"
+    Example: "Look up these GO terms: apoptotic process, kinase activity, cell division, etc."
 
 # -----------------------------------------------------------------------------
 # TOOLS

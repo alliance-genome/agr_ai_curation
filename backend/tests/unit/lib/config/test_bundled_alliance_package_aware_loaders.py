@@ -18,6 +18,17 @@ from ..packages import find_repo_root
 
 REPO_ROOT = find_repo_root(Path(__file__))
 REPO_PACKAGES_DIR = REPO_ROOT / "packages"
+REPO_LEGACY_AGENTS_DIR = REPO_ROOT / "alliance_agents"
+
+
+def _iter_dict_nodes(value):
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _iter_dict_nodes(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_dict_nodes(child)
 
 
 @pytest.fixture(autouse=True)
@@ -188,6 +199,190 @@ def test_bundled_alliance_validation_agent_schemas_are_binding_ready(monkeypatch
         assert issubclass(schema, DomainValidatorResultBase)
         status_schema = schema.model_json_schema()["properties"]["status"]
         assert "under_development" not in status_schema.get("enum", [])
+
+
+def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agent_loader.load_agent_definitions(force_reload=True)
+    schema_discovery.discover_agent_schemas(force_reload=True)
+
+    expected_schemas = {
+        "gene_ontology": "GOTermResultEnvelope",
+        "go_annotations": "GOAnnotationsResult",
+        "ontology_mapping": "OntologyMappingEnvelope",
+        "orthologs": "OrthologsResult",
+    }
+    shared_fields = set(DomainValidatorResultBase.model_fields)
+
+    for agent_name, schema_name in expected_schemas.items():
+        schema = schema_discovery.get_schema_for_agent(agent_name)
+
+        assert schema is not None
+        assert schema.__name__ == schema_name
+        assert issubclass(schema, DomainValidatorResultBase)
+        assert shared_fields.issubset(schema.model_fields)
+        assert "result" not in schema.model_fields
+        assert "validation_result" not in schema.model_fields
+
+    ontology_schema = schema_discovery.get_schema_for_agent("ontology_mapping")
+    assert ontology_schema is not None
+    assert "unmapped_labels" in ontology_schema.model_fields
+    assert "unmapped_terms" not in ontology_schema.model_fields
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "schema_name", "domain_fields"),
+    [
+        (
+            "gene_ontology",
+            "GOTermResultEnvelope",
+            {"results", "query_summary", "not_found"},
+        ),
+        (
+            "go_annotations",
+            "GOAnnotationsResult",
+            {
+                "gene_id",
+                "gene_symbol",
+                "annotations",
+                "manual_count",
+                "automatic_count",
+            },
+        ),
+        (
+            "ontology_mapping",
+            "OntologyMappingEnvelope",
+            {"mappings", "unmapped_labels"},
+        ),
+        (
+            "orthologs",
+            "OrthologsResult",
+            {
+                "query_gene",
+                "orthologs",
+                "high_confidence_count",
+                "species_represented",
+            },
+        ),
+    ],
+)
+def test_legacy_ontology_context_schemas_match_package_validator_shape(
+    monkeypatch,
+    agent_name,
+    schema_name,
+    domain_fields,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    package_schema_path = (
+        REPO_PACKAGES_DIR / "alliance" / "agents" / agent_name / "schema.py"
+    )
+    legacy_schema_path = REPO_LEGACY_AGENTS_DIR / agent_name / "schema.py"
+    package_source = package_schema_path.read_text(encoding="utf-8")
+    legacy_source = legacy_schema_path.read_text(encoding="utf-8")
+
+    assert legacy_source == package_source
+    for obsolete_fragment in (
+        "StructuredMessageEnvelope",
+        "ConfigDict",
+        "from typing import List",
+        "typing.List",
+        "model_config",
+        "actor:",
+        "findings:",
+        "unmapped_terms",
+    ):
+        assert obsolete_fragment not in legacy_source
+
+    schema_discovery.discover_agent_schemas(REPO_PACKAGES_DIR, force_reload=True)
+    package_schema = schema_discovery.get_schema_for_agent(agent_name)
+    assert package_schema is not None
+    package_contract = package_schema.model_json_schema()
+
+    schema_discovery.reset_cache()
+    legacy_schemas = schema_discovery._load_schema_module(
+        legacy_schema_path,
+        agent_name,
+        configured_schema=schema_name,
+    )
+    legacy_schema = legacy_schemas.get(schema_name)
+
+    assert legacy_schema is not None
+    assert legacy_schema.__name__ == package_schema.__name__
+    assert issubclass(legacy_schema, DomainValidatorResultBase)
+    assert legacy_schema.model_json_schema() == package_contract
+    for obsolete_field in (
+        "actor",
+        "findings",
+        "unmapped_terms",
+        "result",
+        "validation_result",
+    ):
+        assert obsolete_field not in legacy_schema.model_fields
+    assert domain_fields.issubset(legacy_schema.model_fields)
+
+
+@pytest.mark.parametrize(
+    "agent_name",
+    [
+        "gene_ontology",
+        "go_annotations",
+        "ontology_mapping",
+        "orthologs",
+    ],
+)
+def test_legacy_ontology_context_agent_routing_matches_package_examples(agent_name):
+    package_agent_path = (
+        REPO_PACKAGES_DIR / "alliance" / "agents" / agent_name / "agent.yaml"
+    )
+    legacy_agent_path = REPO_LEGACY_AGENTS_DIR / agent_name / "agent.yaml"
+
+    package_payload = yaml.safe_load(package_agent_path.read_text(encoding="utf-8"))
+    legacy_payload = yaml.safe_load(legacy_agent_path.read_text(encoding="utf-8"))
+
+    package_routing = package_payload["supervisor_routing"]
+    legacy_routing = legacy_payload["supervisor_routing"]
+    package_batching = str(package_routing["batching_instructions"])
+
+    assert legacy_routing == package_routing
+    assert package_batching.rstrip().endswith('etc."')
+    assert str(legacy_routing["batching_instructions"]) == package_batching
+
+
+def test_bundled_alliance_ontology_context_agents_are_not_active_readiness_gates():
+    context_agent_ids = {
+        "gene_ontology_lookup",
+        "go_annotations_lookup",
+        "ontology_mapping_lookup",
+        "orthologs_lookup",
+    }
+    active_agent_ids = set()
+
+    for domain_pack_path in (REPO_ROOT / "packages/alliance/domain_packs").glob(
+        "*/domain_pack.yaml"
+    ):
+        payload = yaml.safe_load(domain_pack_path.read_text(encoding="utf-8"))
+        for node in _iter_dict_nodes(payload):
+            bindings = node.get("validator_bindings")
+            if not isinstance(bindings, dict):
+                continue
+            active_bindings = bindings.get("active", [])
+            if not isinstance(active_bindings, list):
+                continue
+            for binding in active_bindings:
+                if not isinstance(binding, dict):
+                    continue
+                validator_agent = binding.get("validator_agent")
+                if isinstance(validator_agent, dict):
+                    agent_id = validator_agent.get("agent_id")
+                    if isinstance(agent_id, str):
+                        active_agent_ids.add(agent_id)
+
+    assert active_agent_ids
+    assert context_agent_ids.isdisjoint(active_agent_ids)
 
 
 def test_bundled_alliance_output_resolution_prefers_package_schema(monkeypatch):
