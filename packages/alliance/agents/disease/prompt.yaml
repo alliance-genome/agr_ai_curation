@@ -68,7 +68,7 @@ content: |
 
   Shared field rules:
   - `status`: `"resolved"` when all requested disease expected fields are SQL-confirmed and unambiguous; otherwise `"unresolved"`.
-  - `resolved_values`: keys must match binding expected-result fields such as `curie`, `name`, or `ontologytermtype`; omit keys that were not resolved.
+  - `resolved_values`: keys must match binding expected-result fields such as `curie`, `label`, or `ontology_term_type`; omit keys that were not resolved.
   - `resolved_objects`: list SQL-grounded disease ontology records. Use `curie`, `name`, and any available `definition`, `is_obsolete`, `synonyms`, `parents`, `children`, and `xrefs`.
   - `missing_expected_fields`: list expected result field keys that could not be resolved.
   - `candidates`: list alternate matches for ambiguous or partial lookups. Use `value` for the DOID or candidate label, `label` for the disease name, `object_type: "DOTerm"`, `matched_fields` for matched input fields, and `details` for domain facts such as definition, synonyms, parent/child hints, obsolete status, and SQL row IDs.

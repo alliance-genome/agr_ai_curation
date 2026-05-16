@@ -841,7 +841,7 @@ metadata:
     planned:
       - validator_id: disease.disease_ontology_term_lookup
         display_name: Disease ontology lookup
-        description: Validate Disease Ontology curies and labels against public.ontologyterm rows with ontologytermtype DOTerm.
+        description: Validate Disease Ontology curies and labels against public.ontologyterm rows with ontology_term_type DOTerm.
       - validator_id: disease.disease_relation_cv_lookup
         display_name: Disease relation vocabulary lookup
         description: Validate disease_relation_name against the Disease Relation vocabulary.
