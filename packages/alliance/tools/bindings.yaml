@@ -5,7 +5,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
     required_context: []
-    description: Structured AGR curation database queries with lookup attempts, candidate matches, classifications, provider projections, ontology term lookup/search helpers, and flow validation attachment reference lookups
+    description: Structured AGR curation database queries with lookup attempts, candidate matches, classifications, provider projections, ontology term and controlled vocabulary lookup/search helpers, and flow validation attachment reference lookups
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     provider_adapters:
       groq_schema_constraints:
@@ -61,11 +61,27 @@ tools:
           - name: term
             type: string
             required: false
-            description: Search term or CURIE for ontology helpers.
+            description: Search term, CURIE, or controlled vocabulary term query.
           - name: terms
             type: array[string]
             required: false
             description: CURIE list for bulk ontology term lookup.
+          - name: vocabulary
+            type: string
+            required: false
+            description: Controlled vocabulary name or label filter.
+          - name: term_name
+            type: string
+            required: false
+            description: Controlled vocabulary term name.
+          - name: abbreviation
+            type: string
+            required: false
+            description: Controlled vocabulary term abbreviation.
+          - name: synonym
+            type: string
+            required: false
+            description: Controlled vocabulary term synonym.
           - name: ontology_term_type
             type: string
             required: false
@@ -216,6 +232,25 @@ tools:
             method: map_curies_to_names
             category: ontology
             curies: [GO:0003674]
+        get_vocabulary_term:
+          name: Get Vocabulary Term
+          description: Exact controlled vocabulary term lookup by vocabulary and term name, abbreviation, or synonym.
+          required_params: [vocabulary]
+          optional_params: [term, term_name, abbreviation, synonym, include_synonyms, include_obsolete, limit]
+          example:
+            method: get_vocabulary_term
+            vocabulary: Disease Relation
+            term_name: is_implicated_in
+        search_vocabulary_terms:
+          name: Search Vocabulary Terms
+          description: Search controlled vocabulary terms by vocabulary name/label and term name, abbreviation, or synonym.
+          required_params: []
+          optional_params: [vocabulary, term, term_name, abbreviation, synonym, exact_match, include_synonyms, include_obsolete, limit]
+          example:
+            method: search_vocabulary_terms
+            vocabulary: relation
+            term: expressed in
+            exact_match: true
         get_species:
           name: Get Species
           description: List all supported species/organisms.
@@ -262,6 +297,12 @@ tools:
             - search_go_terms
             - map_curies_to_names
           description: The Ontology Term Validation agent validates generic ontology CURIE/name fields and preserves ambiguous or unresolved candidates.
+        controlled_vocabulary_validation:
+          agent_name: Controlled Vocabulary Validation Agent
+          methods:
+            - get_vocabulary_term
+            - search_vocabulary_terms
+          description: The Controlled Vocabulary Validation agent validates vocabulary rows by vocabulary name, term name, abbreviation, and synonym.
       agent_studio:
         prompt_description: "Structured API for Alliance curation database lookups. Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
         diagnostic:
@@ -288,6 +329,8 @@ tools:
                   - get_ontology_terms
                   - search_ontology_terms
                   - map_curies_to_names
+                  - get_vocabulary_term
+                  - search_vocabulary_terms
                   - search_anatomy_terms
                   - search_life_stage_terms
                   - search_go_terms
@@ -331,6 +374,18 @@ tools:
               ontology_term_type:
                 type: string
                 description: Curation DB ontologytermtype filter
+              vocabulary:
+                type: string
+                description: Controlled vocabulary name or display label
+              term_name:
+                type: string
+                description: Controlled vocabulary term name
+              abbreviation:
+                type: string
+                description: Controlled vocabulary term abbreviation
+              synonym:
+                type: string
+                description: Controlled vocabulary term synonym
               category:
                 type: string
                 description: Category for generic CURIE-to-name mapping
@@ -349,6 +404,9 @@ tools:
               include_synonyms:
                 type: boolean
                 description: Search synonyms
+              include_obsolete:
+                type: boolean
+                description: Include obsolete controlled vocabulary terms
               limit:
                 type: integer
                 description: Max results

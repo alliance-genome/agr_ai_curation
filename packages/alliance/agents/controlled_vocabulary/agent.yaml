@@ -1,0 +1,51 @@
+# =============================================================================
+# AGENT DEFINITION: controlled_vocabulary
+# =============================================================================
+# Validates Alliance controlled vocabulary term fields against package tools.
+# Tool name generated at runtime: ask_controlled_vocabulary_specialist
+# =============================================================================
+
+agent_id: controlled_vocabulary_validation
+
+name: "Controlled Vocabulary Validation Agent"
+
+description: >
+  Validates Alliance controlled vocabulary rows by vocabulary name, term name,
+  abbreviation, and synonym without treating vocabulary terms as ontology
+  identities.
+
+category: "Validation"
+subcategory: "Data Validation"
+
+supervisor_routing:
+  enabled: true
+  description: >
+    Use for validating controlled vocabulary backed fields such as disease
+    relations, condition relation types, expression relations, quantity units,
+    and other VocabularyTerm payload snapshots.
+  batchable: true
+  batching_instructions: >
+    When validating multiple vocabulary terms, combine them into one request
+    with one target per term and preserve each target's vocabulary, term name,
+    abbreviation, synonym, and obsolete-term policy.
+
+tools:
+  - agr_curation_query
+
+output_schema: ControlledVocabularyValidationResult
+
+model_config:
+  model: "${AGENT_CONTROLLED_VOCABULARY_MODEL:-gpt-4o}"
+  temperature: 0.1
+  reasoning: "low"
+
+requires_document: false
+required_params: []
+
+batch_capabilities: []
+
+frontend:
+  icon: "CV"
+  show_in_palette: true
+
+group_rules_enabled: false

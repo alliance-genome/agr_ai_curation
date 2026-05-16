@@ -96,6 +96,8 @@ def projection_from_result(
     resolved_id = (
         result.get("curie")
         or result.get("primary_external_id")
+        or result.get("id")
+        or result.get("internal_id")
         or result.get("abbreviation")
     )
     resolved_label = (
