@@ -275,8 +275,8 @@ def test_build_and_record_repair_request_tracks_budget_and_context(tmp_path: Pat
         ),
         (
             "packages/alliance/domain_packs/allele/domain_pack.yaml",
-            "AllelePaperEvidenceAssociation",
-            "allele_identifier",
+            "Allele",
+            "allele_symbol",
         ),
         (
             "packages/alliance/domain_packs/phenotype/domain_pack.yaml",
@@ -311,6 +311,27 @@ def test_alliance_repairable_fields_are_declared_in_domain_pack_metadata(
     )["repair"]
     assert repair_metadata["repairable"] is True
     assert repair_metadata["source_of_truth"] == "alliance_linkml"
+
+
+def test_alliance_allele_identifier_is_not_curator_repairable():
+    pack = _loaded_alliance_pack("packages/alliance/domain_packs/allele/domain_pack.yaml")
+    request = build_repair_request(
+        _alliance_envelope("AllelePaperEvidenceAssociation"),
+        pack,
+        findings=[
+            _alliance_finding(
+                "AllelePaperEvidenceAssociation",
+                "allele_identifier",
+            )
+        ],
+        expected_revision=1,
+    )
+
+    field_policy = request.targets[0].metadata["field_policy"]
+    assert request.targets[0].repairable is False
+    assert field_policy["repairable"] is False
+    assert field_policy["declared_repairable"] is False
+    assert "source_of_truth" not in field_policy
 
 
 def test_source_of_truth_repair_targets_require_provider_ref_grounding(

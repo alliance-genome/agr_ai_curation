@@ -5,7 +5,12 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.loader import load_domain_fixture_pack
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -53,9 +58,43 @@ def test_allele_domain_pack_loads_tool_verified_pending_fixture():
         obj for obj in envelope.objects if obj.object_type == "AllelePaperEvidenceAssociation"
     )
     assert association.object_role == "curatable_unit"
-    assert association.payload["allele_identifier"] == "WB:WBVar00000001"
+    assert "allele_identifier" not in association.payload
     assert association.evidence_record_ids == ["daf-2-m41-evidence-1"]
     assert association.metadata["write_behavior"]["status"] == "blocked"
+    mention = next(obj for obj in envelope.objects if obj.object_type == "AlleleMention")
+    assert mention.payload["taxon"] == {"curie": "NCBITaxon:6239"}
+
+
+def test_tool_verified_allele_fixture_builds_active_mention_validation_request():
+    registry = load_alliance_domain_pack_registry()
+    pack = registry.get_pack(ALLELE_DOMAIN_PACK_ID)
+    assert pack is not None
+    fixture_ref = registry.get_fixture_pack_ref(ALLELE_DOMAIN_PACK_ID, "tool_verified")
+    assert fixture_ref is not None
+    fixture_pack = load_domain_fixture_pack(pack.pack_path / fixture_ref.path)
+    envelope = fixture_pack.fixtures[0].envelope
+    validation_registry = DomainPackValidationRegistry.from_domain_pack(pack)
+
+    matches = [
+        match
+        for match in validation_registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == "allele_mention_reference_validation"
+    ]
+
+    assert len(matches) == 1
+    selector_result = build_domain_validation_request(matches[0])
+    assert selector_result.findings == ()
+    assert selector_result.request is not None
+    assert selector_result.selected_inputs == {
+        "mention": "daf-2(m41)",
+        "normalized_hint": "WB:WBVar00000001",
+        "associated_gene": "daf-2",
+        "taxon": "NCBITaxon:6239",
+        "evidence_quote": "daf-2(m41) animals formed dauer larvae at 25 C.",
+    }
 
 
 def test_allele_domain_pack_validator_rejects_legacy_semantic_keys():

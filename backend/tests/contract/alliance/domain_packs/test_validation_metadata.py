@@ -76,7 +76,7 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         for binding in validation_registries["agr.alliance.allele"].bindings
     } == {
         "allele_pending_envelope_validator",
-        "alliance_allele_reference_lookup",
+        "allele_mention_reference_validation",
         "source_reference_validation",
     }
     assert {
@@ -163,8 +163,12 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
             assert "input_fields" in binding
             assert "expected_result_fields" in binding
             assert binding["required"] is True
-            assert binding["blocking"] is False
-            assert binding["allow_opt_out"] is True
+            if binding["binding_id"] == "allele_mention_reference_validation":
+                assert binding["blocking"] is True
+                assert binding["allow_opt_out"] is False
+            else:
+                assert binding["blocking"] is False
+                assert binding["allow_opt_out"] is True
             assert binding["curator_override"] == {"allowed": False}
 
         for binding in raw_bindings["under_development"]:

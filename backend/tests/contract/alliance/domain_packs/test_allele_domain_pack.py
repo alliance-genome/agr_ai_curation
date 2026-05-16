@@ -12,8 +12,26 @@ import pytest
 import yaml
 
 from src.schemas.curation_workspace import SubmissionMode
-from src.schemas.domain_envelope import CuratableObjectStatus, DefinitionState
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
+from src.lib.domain_packs.materialization import (
+    ValidatorResultMaterializationInput,
+    materialize_validator_results_into_envelope,
+)
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
+)
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    CuratableObjectStatus,
+    DefinitionState,
+    DomainEnvelope,
+    ObjectRef,
+    ValidationFindingSeverity,
+    ValidationFindingStatus,
+)
 from src.schemas.domain_pack_metadata import DomainPackFieldType
+from src.schemas.domain_validator import DomainValidatorResultBase
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 ALLIANCE_PYTHON_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
@@ -58,18 +76,20 @@ def _resolved_allele_association_envelope():
     envelope = build_pending_allele_envelope_from_tool_verified_fixture(fixture)
 
     resolved_objects = []
+    allele_ref = ObjectRef(pending_ref_id="allele-reference-1", object_type="Allele")
     for obj in envelope.objects:
         payload = dict(obj.payload)
         metadata = dict(obj.metadata)
         definition_state = obj.definition_state
-        if obj.object_type == "Allele":
-            payload["allele_id"] = 4749192
-        elif obj.object_type == "Reference":
+        object_refs = list(obj.object_refs)
+        if obj.object_type == "Reference":
             payload["reference_id"] = 247320
         elif obj.object_type == "EvidenceQuote":
             payload["information_content_entity_id"] = 269867
         elif obj.object_type == "AllelePaperEvidenceAssociation":
             payload["association_id"] = 210252399
+            payload["allele_identifier"] = "WB:WBVar00000001"
+            object_refs = [allele_ref, *object_refs]
             metadata.pop("write_behavior", None)
             metadata.pop("export_behavior", None)
             definition_state = DefinitionState.STABLE
@@ -79,9 +99,28 @@ def _resolved_allele_association_envelope():
                     "payload": payload,
                     "metadata": metadata,
                     "definition_state": definition_state,
+                    "object_refs": object_refs,
                 }
             )
         )
+    resolved_objects.append(
+        CuratableObjectEnvelope(
+            object_type="Allele",
+            pending_ref_id="allele-reference-1",
+            status=CuratableObjectStatus.VALIDATED,
+            definition_state=DefinitionState.IN_DEVELOPMENT,
+            payload={
+                "primary_external_id": "WB:WBVar00000001",
+                "allele_symbol": "daf-2(m41)",
+                "allele_id": 4749192,
+                "taxon": "NCBITaxon:6239",
+            },
+            metadata={
+                "object_role": "validated_reference",
+                "validation_state": "validated",
+            },
+        )
+    )
     return envelope.model_copy(
         update={"objects": resolved_objects, "validation_findings": []}
     )
@@ -166,36 +205,271 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
 
     allele_lookup = {
         binding["binding_id"]: binding for binding in validator_bindings["active"]
-    }["alliance_allele_reference_lookup"]
+    }["allele_mention_reference_validation"]
     assert allele_lookup["validator_agent"] == {
         "package_id": "agr.alliance",
         "agent_id": "allele_validation",
     }
-    assert allele_lookup["applies_to"]["object_types"] == ["Allele"]
+    assert allele_lookup["applies_to"]["object_types"] == ["AlleleMention"]
     assert allele_lookup["applies_to"]["field_paths"] == [
-        "primary_external_id",
-        "allele_symbol",
+        "mention.text",
     ]
     assert allele_lookup["input_fields"] == {
-        "allele_id": {
+        "mention": {
             "source": "payload",
-            "path": "primary_external_id",
+            "path": "mention.text",
+            "required": True,
+        },
+        "normalized_hint": {
+            "source": "payload",
+            "path": "mention.normalized_hint",
             "required": False,
         },
-        "allele_symbol": {
+        "associated_gene": {
             "source": "payload",
-            "path": "allele_symbol",
+            "path": "associated_gene.symbol",
+            "required": False,
+        },
+        "taxon": {
+            "source": "payload",
+            "path": "taxon.curie",
+            "required": True,
+        },
+        "evidence_quote": {
+            "source": "evidence_record",
+            "path": "verified_quote",
             "required": False,
         },
     }
     assert allele_lookup["expected_result_fields"] == {
-        "allele_id": "primary_external_id",
-        "symbol": "allele_symbol",
+        "curie": "allele.primary_external_id",
+        "symbol": "allele.allele_symbol",
+        "taxon": "allele.taxon",
     }
     assert allele_lookup["required"] is True
-    assert allele_lookup["blocking"] is False
-    assert allele_lookup["allow_opt_out"] is True
+    assert allele_lookup["blocking"] is True
+    assert allele_lookup["allow_opt_out"] is False
     assert allele_lookup["curator_override"] == {"allowed": False}
+
+
+def test_allele_mention_binding_selects_crb_examples_for_validation():
+    registry = DomainPackValidationRegistry.from_domain_pack(_allele_pack())
+
+    for index, mention in enumerate(("crb 11A22", "crb 8F105", "crb p13A9"), start=1):
+        envelope = DomainEnvelope(
+            envelope_id=f"allele-crb-fixture-{index}",
+            domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="AlleleMention",
+                    pending_ref_id=f"allele-mention-{index}",
+                    object_role="metadata_only",
+                    payload={
+                        "mention": {"text": mention},
+                        "associated_gene": {"symbol": "crb"},
+                        "taxon": {"curie": "NCBITaxon:7227"},
+                    },
+                    evidence_record_ids=[f"evidence-{index}"],
+                    metadata={"object_role": "metadata_only"},
+                )
+            ],
+            metadata={
+                "evidence_records": [
+                    {
+                        "evidence_record_id": f"evidence-{index}",
+                        "verified_quote": f"{mention} embryos showed altered polarity.",
+                    }
+                ]
+            },
+        )
+        matches = [
+            match
+            for match in registry.match_bindings(
+                envelope,
+                states=[ValidationBindingState.ACTIVE],
+            )
+            if match.binding.binding_id == "allele_mention_reference_validation"
+        ]
+
+        assert len(matches) == 1
+        selector_result = build_domain_validation_request(matches[0])
+
+        assert selector_result.findings == ()
+        assert selector_result.request is not None
+        assert selector_result.selected_inputs == {
+            "mention": mention,
+            "associated_gene": "crb",
+            "taxon": "NCBITaxon:7227",
+            "evidence_quote": f"{mention} embryos showed altered polarity.",
+        }
+        assert selector_result.request.target.input_values == (
+            selector_result.selected_inputs
+        )
+        assert selector_result.request.expected_result_fields == {
+            "curie": "allele.primary_external_id",
+            "symbol": "allele.allele_symbol",
+            "taxon": "allele.taxon",
+        }
+
+
+def test_allele_mention_validation_materializes_resolved_and_unresolved_paths():
+    registry = DomainPackValidationRegistry.from_domain_pack(_allele_pack())
+    envelope = DomainEnvelope(
+        envelope_id="allele-crb-resolution-fixture",
+        domain_pack_id=ALLELE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="AlleleMention",
+                pending_ref_id="allele-mention-resolved",
+                object_role="metadata_only",
+                payload={
+                    "mention": {"text": "crb 11A22"},
+                    "associated_gene": {"symbol": "crb"},
+                    "taxon": {"curie": "NCBITaxon:7227"},
+                },
+                evidence_record_ids=["evidence-resolved"],
+                metadata={"object_role": "metadata_only"},
+            ),
+            CuratableObjectEnvelope(
+                object_type="AlleleMention",
+                pending_ref_id="allele-mention-unresolved",
+                object_role="metadata_only",
+                payload={
+                    "mention": {"text": "crb unknown"},
+                    "associated_gene": {"symbol": "crb"},
+                    "taxon": {"curie": "NCBITaxon:7227"},
+                },
+                evidence_record_ids=["evidence-unresolved"],
+                metadata={"object_role": "metadata_only"},
+            ),
+        ],
+        metadata={
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-resolved",
+                    "verified_quote": "crb 11A22 embryos showed altered polarity.",
+                },
+                {
+                    "evidence_record_id": "evidence-unresolved",
+                    "verified_quote": "crb unknown embryos were examined.",
+                },
+            ]
+        },
+    )
+    matches = [
+        match
+        for match in registry.match_bindings(
+            envelope,
+            states=[ValidationBindingState.ACTIVE],
+        )
+        if match.binding.binding_id == "allele_mention_reference_validation"
+    ]
+    requests = [build_domain_validation_request(match).request for match in matches]
+    assert all(request is not None for request in requests)
+    requests_by_mention = {
+        request.selected_inputs["mention"]: (match, request)
+        for match, request in zip(matches, requests, strict=True)
+        if request is not None
+    }
+
+    resolved_match, resolved_request = requests_by_mention["crb 11A22"]
+    unresolved_match, unresolved_request = requests_by_mention["crb unknown"]
+    resolved_values = {
+        "curie": "FB:FBal0018179",
+        "symbol": "crb<sup>11A22</sup>",
+        "taxon": "NCBITaxon:7227",
+    }
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        _allele_pack().metadata,
+        [
+            ValidatorResultMaterializationInput(
+                match=resolved_match,
+                request=resolved_request,
+                result=DomainValidatorResultBase(
+                    status="resolved",
+                    request_id=resolved_request.request_id,
+                    validator_binding_id=resolved_request.validator_binding_id,
+                    validator_agent=resolved_request.validator_agent,
+                    target=resolved_request.target,
+                    resolved_values=resolved_values,
+                    resolved_objects=[
+                        {
+                            "object_type": "Allele",
+                            "canonical_id": resolved_values["curie"],
+                            "payload": {
+                                "primary_external_id": resolved_values["curie"],
+                                "allele_symbol": resolved_values["symbol"],
+                                "taxon": resolved_values["taxon"],
+                            },
+                        }
+                    ],
+                    missing_expected_fields=[],
+                    candidates=[],
+                    lookup_attempts=[
+                        {
+                            "provider": "agr_curation_query",
+                            "method": "search_alleles",
+                            "query": {"allele_symbol": "crb 11A22"},
+                            "result_count": 1,
+                            "outcome": "success",
+                        }
+                    ],
+                    curator_message="Resolved crb 11A22.",
+                    explanation="Resolved by allele validation fixture.",
+                ),
+            ),
+            ValidatorResultMaterializationInput(
+                match=unresolved_match,
+                request=unresolved_request,
+                result=DomainValidatorResultBase(
+                    status="unresolved",
+                    request_id=unresolved_request.request_id,
+                    validator_binding_id=unresolved_request.validator_binding_id,
+                    validator_agent=unresolved_request.validator_agent,
+                    target=unresolved_request.target,
+                    resolved_values={},
+                    resolved_objects=[],
+                    missing_expected_fields=["curie", "symbol", "taxon"],
+                    candidates=[],
+                    lookup_attempts=[
+                        {
+                            "provider": "agr_curation_query",
+                            "method": "search_alleles",
+                            "query": {"allele_symbol": "crb unknown"},
+                            "result_count": 0,
+                            "outcome": "not_found",
+                        }
+                    ],
+                    curator_message="Could not resolve crb unknown.",
+                    explanation="No database allele matched the mention.",
+                ),
+            ),
+        ],
+    )
+
+    materialized_alleles = [
+        obj for obj in result.materialized_objects if obj.object_type == "Allele"
+    ]
+    assert [obj.payload for obj in materialized_alleles] == [
+        {
+            "primary_external_id": "FB:FBal0018179",
+            "allele_symbol": "crb<sup>11A22</sup>",
+            "taxon": "NCBITaxon:7227",
+        }
+    ]
+    unresolved_finding = next(
+        finding
+        for finding in result.appended_findings
+        if finding.code == "domain_pack.validator_unresolved"
+    )
+    assert unresolved_finding.severity is ValidationFindingSeverity.BLOCKER
+    assert unresolved_finding.status is ValidationFindingStatus.OPEN
+    assert unresolved_finding.details["missing_expected_fields"] == [
+        "curie",
+        "symbol",
+        "taxon",
+    ]
 
 
 def test_allele_pack_records_grounded_metadata_and_blocks_writes():
@@ -307,7 +581,6 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
     assert counts == {
         "Reference": 1,
         "AlleleMention": 1,
-        "Allele": 1,
         "EvidenceQuote": 2,
         "AllelePaperEvidenceAssociation": 1,
     }
@@ -317,7 +590,7 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         for obj in envelope.objects
         if obj.object_type == "AllelePaperEvidenceAssociation"
     )
-    assert association.payload["allele_identifier"] == "WB:WBVar00000001"
+    assert "allele_identifier" not in association.payload
     assert association.payload["evidence_record_ids"] == [
         "daf-2-m41-evidence-1",
         "daf-2-m41-evidence-2",
@@ -328,20 +601,14 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
     )
     assert association.metadata["write_behavior"]["status"] == "blocked"
 
-    allele_payloads = [
-        obj.payload for obj in envelope.objects if obj.object_type == "Allele"
-    ]
-    assert allele_payloads == [
-        {
-            "primary_external_id": "WB:WBVar00000001",
-            "allele_symbol": "daf-2(m41)",
-            "source_mentions": ["daf-2(m41)"],
-        }
-    ]
-    assert all(
-        obj.payload.get("primary_external_id") != "WB:WBVar00000002"
-        for obj in envelope.objects
-    )
+    mention = next(obj for obj in envelope.objects if obj.object_type == "AlleleMention")
+    assert mention.payload["mention"] == {
+        "text": "daf-2(m41)",
+        "normalized_hint": "WB:WBVar00000001",
+    }
+    assert mention.payload["associated_gene"] == {"symbol": "daf-2"}
+    assert mention.payload["taxon"] == {"curie": "NCBITaxon:6239"}
+    assert all(obj.object_type != "Allele" for obj in envelope.objects)
 
     finding_codes = [finding.code for finding in envelope.validation_findings]
     assert finding_codes == [
@@ -405,6 +672,11 @@ def test_tool_verified_allele_fixture_rejects_malformed_required_data():
             malformed_normalized_id
         )
 
+    missing_taxon = copy.deepcopy(fixture)
+    missing_taxon["extraction"]["alleles"][0].pop("taxon")
+    with pytest.raises(ValueError, match="taxon must be a non-empty string"):
+        build_pending_allele_envelope_from_tool_verified_fixture(missing_taxon)
+
 
 def test_allele_submission_plan_blocks_until_durable_targets_resolve():
     fixture = load_evidence_fixture("tool_verified_allele_paper")
@@ -428,7 +700,7 @@ def test_allele_submission_plan_blocks_until_durable_targets_resolve():
     assert {
         "alliance.allele.definition_state_blocked",
         "alliance.allele.write_behavior_blocked",
-        "alliance.allele.allele_db_id_unresolved",
+        "alliance.allele.association_refs_missing",
         "alliance.allele.reference_id_unresolved",
         "alliance.allele.evidence_target_unresolved",
     }.issubset(blocker_codes)

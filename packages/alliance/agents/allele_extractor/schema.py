@@ -19,23 +19,22 @@ from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState
 
 _EXPECTED_OBJECT_ROLES = {
     "AllelePaperEvidenceAssociation": "curatable_unit",
-    "Allele": "validated_reference",
     "Reference": "validated_reference",
     "AlleleMention": "metadata_only",
     "EvidenceQuote": "metadata_only",
 }
-_REQUIRED_ASSOCIATION_REF_TYPES = {
+_VALIDATOR_MATERIALIZED_OBJECT_TYPES = {
     "Allele",
+}
+_REQUIRED_ASSOCIATION_REF_TYPES = {
     "Reference",
     "AlleleMention",
     "EvidenceQuote",
 }
 _REQUIRED_ASSOCIATION_PAYLOAD_FIELDS = (
     "association_kind",
-    "allele_identifier",
     "evidence_record_ids",
 )
-_REQUIRED_ALLELE_PAYLOAD_FIELDS = ("primary_external_id", "allele_symbol")
 _REQUIRED_EVIDENCE_QUOTE_PAYLOAD_FIELDS = (
     "evidence_record_id",
     "verified_quote",
@@ -53,6 +52,17 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
     @model_validator(mode="after")
     def _validate_allele_domain_envelope(self) -> "AlleleExtractionResultEnvelope":
         object_types = {obj.object_type for obj in self.curatable_objects}
+        validator_materialized_types = sorted(
+            object_types & _VALIDATOR_MATERIALIZED_OBJECT_TYPES
+        )
+        if validator_materialized_types:
+            raise ValueError(
+                "Allele extractor curatable_objects[] must not contain "
+                "validator-materialized object types: "
+                + ", ".join(validator_materialized_types)
+                + ". Active allele validation materializes final allele identity."
+            )
+
         unsupported_types = sorted(set(object_types) - set(_EXPECTED_OBJECT_ROLES))
         if unsupported_types:
             raise ValueError(
@@ -71,11 +81,6 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
             self._validate_object_definition_state(obj)
             if obj.object_type == "AllelePaperEvidenceAssociation":
                 self._validate_association_object(obj, evidence_record_ids)
-            elif obj.object_type == "Allele":
-                self._validate_required_payload_fields(
-                    obj,
-                    _REQUIRED_ALLELE_PAYLOAD_FIELDS,
-                )
             elif obj.object_type == "EvidenceQuote":
                 self._validate_required_payload_fields(
                     obj,
@@ -111,8 +116,33 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
                 "AllelePaperEvidenceAssociation payload.association_kind must be "
                 "'allele_paper_evidence'"
             )
+        if not _is_missing_payload_value(obj.payload.get("allele_identifier")):
+            raise ValueError(
+                "AllelePaperEvidenceAssociation payload.allele_identifier must be "
+                "resolved by the active allele validator, not emitted by the extractor"
+            )
 
         object_ref_types = {ref.object_type for ref in obj.object_refs if ref.object_type}
+        unsupported_ref_types = sorted(
+            object_ref_types
+            - _REQUIRED_ASSOCIATION_REF_TYPES
+            - _VALIDATOR_MATERIALIZED_OBJECT_TYPES
+        )
+        validator_materialized_ref_types = sorted(
+            object_ref_types & _VALIDATOR_MATERIALIZED_OBJECT_TYPES
+        )
+        if validator_materialized_ref_types:
+            raise ValueError(
+                "AllelePaperEvidenceAssociation object_refs[] must not include "
+                "validator-materialized object types before active allele validation: "
+                + ", ".join(validator_materialized_ref_types)
+            )
+        if unsupported_ref_types:
+            raise ValueError(
+                "AllelePaperEvidenceAssociation object_refs[] may only include "
+                "supporting object types: "
+                + ", ".join(sorted(_REQUIRED_ASSOCIATION_REF_TYPES))
+            )
         missing_ref_types = sorted(_REQUIRED_ASSOCIATION_REF_TYPES - object_ref_types)
         if missing_ref_types:
             raise ValueError(

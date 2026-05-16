@@ -134,7 +134,6 @@ def _make_allele_domain_extraction_payload(candidate_count: int = 3) -> dict:
         evidence_record_id = f"evidence-{object_index}"
         mention = f"Allele mention {object_index}"
         mention_ref_id = f"allele-mention-{object_index}"
-        allele_ref_id = f"allele-reference-{object_index}"
         reference_ref_id = f"paper-reference-{object_index}"
         evidence_ref_id = f"evidence-quote-{object_index}"
 
@@ -149,16 +148,9 @@ def _make_allele_domain_extraction_payload(candidate_count: int = 3) -> dict:
                     "object_type": "AlleleMention",
                     "pending_ref_id": mention_ref_id,
                     "payload": {
-                        "mention_text": mention,
-                        "source_mentions": [mention],
-                    },
-                },
-                {
-                    "object_type": "Allele",
-                    "pending_ref_id": allele_ref_id,
-                    "payload": {
-                        "primary_external_id": f"ALL:{object_index:04d}",
-                        "allele_symbol": mention,
+                        "mention": {"text": mention},
+                        "associated_gene": {"symbol": "Crumbs"},
+                        "taxon": {"curie": "NCBITaxon:7227"},
                         "source_mentions": [mention],
                     },
                 },
@@ -178,14 +170,12 @@ def _make_allele_domain_extraction_payload(candidate_count: int = 3) -> dict:
                     "pending_ref_id": f"allele-paper-evidence-association-{object_index}",
                     "payload": {
                         "association_kind": "allele_paper_evidence",
-                        "allele_identifier": f"ALL:{object_index:04d}",
                         "allele_label": mention,
                         "associated_gene": "Crumbs",
                         "confidence": "high",
                         "evidence_record_ids": [evidence_record_id],
                     },
                     "object_refs": [
-                        {"pending_ref_id": allele_ref_id, "object_type": "Allele"},
                         {"pending_ref_id": reference_ref_id, "object_type": "Reference"},
                         {"pending_ref_id": mention_ref_id, "object_type": "AlleleMention"},
                         {"pending_ref_id": evidence_ref_id, "object_type": "EvidenceQuote"},
@@ -548,13 +538,13 @@ def test_build_chat_curation_prep_preview_counts_allele_domain_objects_as_prepar
 
     assert preview.ready is True
     assert preview.candidate_count == 5
-    assert preview.preparable_candidate_count == 11
+    assert preview.preparable_candidate_count == 8
     assert preview.adapter_keys == ["gene", "allele"]
     assert preview.discussed_adapter_keys == ["gene", "allele"]
     assert (
         preview.summary_text
         == "You discussed 5 candidate annotations across gene and allele adapters. "
-        "11 evidence-verified candidate annotations across gene and allele adapters "
+        "8 evidence-verified candidate annotations across gene and allele adapters "
         "are ready to prepare for curation review."
     )
 
