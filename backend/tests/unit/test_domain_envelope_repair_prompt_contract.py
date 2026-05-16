@@ -38,6 +38,10 @@ REPAIR_AWARE_VALIDATOR_PROMPTS = [
 ]
 
 ONTOLOGY_CONTEXT_VALIDATOR_PROMPTS = [
+    "alliance_agents/gene_ontology/prompt.yaml",
+    "alliance_agents/go_annotations/prompt.yaml",
+    "alliance_agents/ontology_mapping/prompt.yaml",
+    "alliance_agents/orthologs/prompt.yaml",
     "packages/alliance/agents/gene_ontology/prompt.yaml",
     "packages/alliance/agents/go_annotations/prompt.yaml",
     "packages/alliance/agents/ontology_mapping/prompt.yaml",

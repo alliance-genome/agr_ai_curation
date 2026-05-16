@@ -233,15 +233,54 @@ def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
     assert "unmapped_terms" not in ontology_schema.model_fields
 
 
-def test_legacy_ontology_mapping_schema_matches_package_validator_shape(
+@pytest.mark.parametrize(
+    ("agent_name", "schema_name", "domain_fields"),
+    [
+        (
+            "gene_ontology",
+            "GOTermResultEnvelope",
+            {"results", "query_summary", "not_found"},
+        ),
+        (
+            "go_annotations",
+            "GOAnnotationsResult",
+            {
+                "gene_id",
+                "gene_symbol",
+                "annotations",
+                "manual_count",
+                "automatic_count",
+            },
+        ),
+        (
+            "ontology_mapping",
+            "OntologyMappingEnvelope",
+            {"mappings", "unmapped_labels"},
+        ),
+        (
+            "orthologs",
+            "OrthologsResult",
+            {
+                "query_gene",
+                "orthologs",
+                "high_confidence_count",
+                "species_represented",
+            },
+        ),
+    ],
+)
+def test_legacy_ontology_context_schemas_match_package_validator_shape(
     monkeypatch,
+    agent_name,
+    schema_name,
+    domain_fields,
 ):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 
     package_schema_path = (
-        REPO_PACKAGES_DIR / "alliance" / "agents" / "ontology_mapping" / "schema.py"
+        REPO_PACKAGES_DIR / "alliance" / "agents" / agent_name / "schema.py"
     )
-    legacy_schema_path = REPO_LEGACY_AGENTS_DIR / "ontology_mapping" / "schema.py"
+    legacy_schema_path = REPO_LEGACY_AGENTS_DIR / agent_name / "schema.py"
     package_source = package_schema_path.read_text(encoding="utf-8")
     legacy_source = legacy_schema_path.read_text(encoding="utf-8")
 
@@ -259,17 +298,17 @@ def test_legacy_ontology_mapping_schema_matches_package_validator_shape(
         assert obsolete_fragment not in legacy_source
 
     schema_discovery.discover_agent_schemas(REPO_PACKAGES_DIR, force_reload=True)
-    package_schema = schema_discovery.get_schema_for_agent("ontology_mapping")
+    package_schema = schema_discovery.get_schema_for_agent(agent_name)
     assert package_schema is not None
     package_contract = package_schema.model_json_schema()
 
     schema_discovery.reset_cache()
     legacy_schemas = schema_discovery._load_schema_module(
         legacy_schema_path,
-        "ontology_mapping",
-        configured_schema="OntologyMappingEnvelope",
+        agent_name,
+        configured_schema=schema_name,
     )
-    legacy_schema = legacy_schemas.get("OntologyMappingEnvelope")
+    legacy_schema = legacy_schemas.get(schema_name)
 
     assert legacy_schema is not None
     assert legacy_schema.__name__ == package_schema.__name__
@@ -283,7 +322,7 @@ def test_legacy_ontology_mapping_schema_matches_package_validator_shape(
         "validation_result",
     ):
         assert obsolete_field not in legacy_schema.model_fields
-    assert "unmapped_labels" in legacy_schema.model_fields
+    assert domain_fields.issubset(legacy_schema.model_fields)
 
 
 def test_bundled_alliance_ontology_context_agents_are_not_active_readiness_gates():
