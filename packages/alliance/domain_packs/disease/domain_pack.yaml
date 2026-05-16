@@ -878,7 +878,10 @@ metadata:
     under_development:
       - binding_id: disease_ontology_term_lookup
         display_name: Disease ontology lookup
-        state_explanation: Disease ontology lookup remains informational until package-scoped validator dispatch owns curation DB lookups.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        state_explanation: Disease ontology lookup remains under development until generic ontology term validator dispatch is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
@@ -890,13 +893,23 @@ metadata:
           curie:
             source: payload
             path: disease_annotation_object.curie
-          name:
+          label:
             source: payload
             path: disease_annotation_object.name
+          ontology_family:
+            source: literal
+            value: disease
+          ontology_term_type:
+            source: literal
+            value: DOTerm
+          accepted_prefixes:
+            source: literal
+            value:
+              - DOID
         expected_result_fields:
           curie: disease_annotation_object.curie
-          name: disease_annotation_object.name
-          ontologytermtype: DOTerm
+          label: disease_annotation_object.name
+          ontology_term_type: DOTerm
       - binding_id: disease_relation_cv_lookup
         display_name: Disease relation vocabulary lookup
         state_explanation: Disease relation vocabulary lookup remains informational until package-scoped validator dispatch owns curation DB lookups.
@@ -959,6 +972,9 @@ metadata:
       - binding_id: disease_evidence_code_lookup
         display_name: Evidence code lookup
         state_explanation: ECO evidence-code mapping is blocked by ALL-425.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
@@ -969,9 +985,19 @@ metadata:
           curie:
             source: payload
             path: evidence_code_curies[0]
+          ontology_family:
+            source: literal
+            value: evidence
+          ontology_term_type:
+            source: literal
+            value: ECOTerm
+          accepted_prefixes:
+            source: literal
+            value:
+              - ECO
         expected_result_fields:
           curie: evidence_code_curies[0]
-          ontologytermtype: ECOTerm
+          ontology_term_type: ECOTerm
       - binding_id: disease_data_provider_lookup
         display_name: Data provider lookup
         state_explanation: Data-provider lookup is blocked by ALL-425.

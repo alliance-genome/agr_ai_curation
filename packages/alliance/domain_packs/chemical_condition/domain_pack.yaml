@@ -683,7 +683,10 @@ metadata:
         definition_state: in_development
       - binding_id: chemical_condition.condition_ontology_lookup
         display_name: Condition ontology lookup
-        state_explanation: Condition ontology lookup remains informational until ontology validator dispatch is wired.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        state_explanation: Condition ontology lookup remains under development until generic ontology term validator dispatch is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.chemical_condition
           object_types:
@@ -691,6 +694,21 @@ metadata:
           field_paths:
             - condition_class.curie
             - condition_id.curie
+        input_fields:
+          condition_class_curie:
+            source: payload
+            path: condition_class.curie
+            required: false
+          condition_id_curie:
+            source: payload
+            path: condition_id.curie
+            required: false
+          ontology_family:
+            source: literal
+            value: condition
+        expected_result_fields:
+          condition_class_curie: condition_class.curie
+          condition_id_curie: condition_id.curie
         definition_state: in_development
       - binding_id: chemical_condition.export_projection_validator
         display_name: Chemical condition ready for export

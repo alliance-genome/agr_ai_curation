@@ -5,7 +5,7 @@ tools:
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query
     required_context: []
-    description: Structured AGR curation database queries with lookup attempts, candidate matches, classifications, provider projections, and flow validation attachment reference lookups
+    description: Structured AGR curation database queries with lookup attempts, candidate matches, classifications, provider projections, ontology term lookup/search helpers, and flow validation attachment reference lookups
     source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
     provider_adapters:
       groq_schema_constraints:
@@ -58,6 +58,26 @@ tools:
             type: integer
             required: false
             description: Maximum results to return.
+          - name: term
+            type: string
+            required: false
+            description: Search term or CURIE for ontology helpers.
+          - name: terms
+            type: array[string]
+            required: false
+            description: CURIE list for bulk ontology term lookup.
+          - name: ontology_term_type
+            type: string
+            required: false
+            description: Curation DB ontologytermtype filter for ontology term lookup and generic ontology searches.
+          - name: category
+            type: string
+            required: false
+            description: Category for generic CURIE-to-name mapping.
+          - name: curies
+            type: array[string]
+            required: false
+            description: CURIE list for generic CURIE-to-name mapping.
       methods:
         search_genes:
           name: Search Genes
@@ -160,6 +180,42 @@ tools:
             method: search_go_terms
             term: kinase activity
             go_aspect: molecular_function
+        get_ontology_term:
+          name: Get Ontology Term
+          description: Exact ontology term lookup by CURIE with optional ontologytermtype filtering.
+          required_params: [term]
+          optional_params: [ontology_term_type]
+          example:
+            method: get_ontology_term
+            term: GO:0003674
+            ontology_term_type: GOTerm
+        get_ontology_terms:
+          name: Get Ontology Terms
+          description: Bulk exact ontology term lookup by CURIE.
+          required_params: [terms]
+          optional_params: []
+          example:
+            method: get_ontology_terms
+            terms: [GO:0003674, ECO:0000314]
+        search_ontology_terms:
+          name: Search Ontology Terms
+          description: Search ontology terms by label within a required curation DB ontologytermtype.
+          required_params: [term, ontology_term_type]
+          optional_params: [exact_match, include_synonyms, limit]
+          example:
+            method: search_ontology_terms
+            term: abnormal locomotor behavior
+            ontology_term_type: MPTerm
+            exact_match: true
+        map_curies_to_names:
+          name: Map CURIEs to Names
+          description: Bulk map CURIEs to display names for a supported helper category.
+          required_params: [category, curies]
+          optional_params: []
+          example:
+            method: map_curies_to_names
+            category: ontology
+            curies: [GO:0003674]
         get_species:
           name: Get Species
           description: List all supported species/organisms.
@@ -195,6 +251,17 @@ tools:
           agent_name: Ontology Mapping Agent
           methods: [search_anatomy_terms, search_life_stage_terms, search_go_terms]
           description: The Ontology Mapping agent maps free-text labels to ontology term IDs.
+        ontology_term_validation:
+          agent_name: Ontology Term Validation Agent
+          methods:
+            - get_ontology_term
+            - get_ontology_terms
+            - search_ontology_terms
+            - search_anatomy_terms
+            - search_life_stage_terms
+            - search_go_terms
+            - map_curies_to_names
+          description: The Ontology Term Validation agent validates generic ontology CURIE/name fields and preserves ambiguous or unresolved candidates.
       agent_studio:
         prompt_description: "Structured API for Alliance curation database lookups. Filter by data_provider: MGI, FB, WB, ZFIN, RGD, SGD, HGNC."
         diagnostic:
@@ -217,6 +284,10 @@ tools:
                   - get_allele_by_exact_symbol
                   - get_allele_by_id
                   - get_data_providers
+                  - get_ontology_term
+                  - get_ontology_terms
+                  - search_ontology_terms
+                  - map_curies_to_names
                   - search_anatomy_terms
                   - search_life_stage_terms
                   - search_go_terms
@@ -252,6 +323,22 @@ tools:
               term:
                 type: string
                 description: Search term for ontology searches
+              terms:
+                type: array
+                items:
+                  type: string
+                description: CURIE list for bulk ontology term lookup
+              ontology_term_type:
+                type: string
+                description: Curation DB ontologytermtype filter
+              category:
+                type: string
+                description: Category for generic CURIE-to-name mapping
+              curies:
+                type: array
+                items:
+                  type: string
+                description: CURIE list for generic mapping helpers
               go_aspect:
                 type: string
                 description: GO aspect filter
