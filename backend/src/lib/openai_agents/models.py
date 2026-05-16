@@ -933,27 +933,6 @@ class DiseaseResult(BaseModel):
     )
 
 
-class DiseaseResultEnvelope(BaseModel):
-    """
-    Envelope for returning multiple disease results.
-
-    Use this when a query may return multiple diseases (e.g., batch lookups,
-    partial matches, or queries for multiple terms).
-    """
-    results: List[DiseaseResult] = Field(
-        default_factory=list,
-        description="List of disease results"
-    )
-    query_summary: Optional[str] = Field(
-        None,
-        description="Brief summary of what was queried and found"
-    )
-    not_found: List[str] = Field(
-        default_factory=list,
-        description="List of terms/IDs that were not found in the database"
-    )
-
-
 # ============================================================================
 # Chemical Ontology (ChEBI) Structured Output Models
 # ============================================================================
@@ -1005,27 +984,6 @@ class ChemicalResult(BaseModel):
     synonyms: List[str] = Field(
         default_factory=list,
         description="Chemical synonyms"
-    )
-
-
-class ChemicalResultEnvelope(BaseModel):
-    """
-    Envelope for returning multiple chemical results.
-
-    Use this when a query may return multiple chemicals (e.g., batch lookups,
-    partial matches, or queries for multiple terms).
-    """
-    results: List[ChemicalResult] = Field(
-        default_factory=list,
-        description="List of chemical results"
-    )
-    query_summary: Optional[str] = Field(
-        None,
-        description="Brief summary of what was queried and found"
-    )
-    not_found: List[str] = Field(
-        default_factory=list,
-        description="List of terms/IDs that were not found in the database"
     )
 
 

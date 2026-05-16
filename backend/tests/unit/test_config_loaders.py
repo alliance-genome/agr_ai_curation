@@ -317,16 +317,20 @@ class TestSchemaDiscovery:
             discover_agent_schemas(tmp_path)
 
     def test_envelope_class_detection(self):
-        """Test that only envelope classes are registered."""
+        """Test that only supported output schema classes are registered."""
         from src.lib.config.schema_discovery import discover_agent_schemas
+        from src.schemas.domain_validator import DomainValidatorResultBase
 
         schemas = discover_agent_schemas(ALLIANCE_AGENTS_PATH)
 
-        # All registered schemas should end in "Envelope" or have __envelope_class__
+        # Registered schemas are legacy envelopes or shared validator results.
         for name, cls in schemas.items():
             has_marker = getattr(cls, "__envelope_class__", False)
             ends_with_envelope = name.endswith("Envelope")
-            assert has_marker or ends_with_envelope, f"Unexpected schema registered: {name}"
+            is_validator_result = issubclass(cls, DomainValidatorResultBase)
+            assert has_marker or ends_with_envelope or is_validator_result, (
+                f"Unexpected schema registered: {name}"
+            )
 
 
 class TestErrorHandling:
@@ -699,11 +703,13 @@ class TestCrossFileConsistency:
         assert not duplicates, f"Duplicate agent_ids found: {duplicates}"
 
     def test_output_schema_references_valid_schema(self):
-        """Every output_schema reference maps to a class in runtime models module."""
+        """Every output_schema reference maps to an available schema class."""
         import re
         from src.lib.config.agent_loader import load_agent_definitions
+        from src.lib.config.schema_discovery import discover_agent_schemas
 
         agents = load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        discovered_schemas = discover_agent_schemas(ALLIANCE_AGENTS_PATH)
         models_py = (
             Path(__file__).parent.parent.parent.parent
             / "backend"
@@ -715,11 +721,12 @@ class TestCrossFileConsistency:
         model_classes = set(
             re.findall(r"^class\s+([A-Za-z_][A-Za-z0-9_]*)\(", models_py.read_text(), flags=re.M)
         )
+        available_schemas = set(discovered_schemas) | model_classes
 
         missing_schemas = []
         for agent_id, agent in agents.items():
             if agent.output_schema:
-                if agent.output_schema not in model_classes:
+                if agent.output_schema not in available_schemas:
                     missing_schemas.append(
                         f"{agent_id} references '{agent.output_schema}' but schema not found"
                     )
