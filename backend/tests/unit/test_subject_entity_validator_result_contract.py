@@ -236,3 +236,10 @@ def test_subject_entity_and_agm_prompts_pin_routing_and_output_policy():
         )["content"]
         for fragment in fragments:
             assert fragment in prompt, f"{folder} prompt missing {fragment}"
+
+    subject_entity_prompt = yaml.safe_load(
+        (ALLIANCE_AGENTS_PATH / "subject_entity" / "prompt.yaml").read_text(
+            encoding="utf-8"
+        )
+    )["content"]
+    assert "repair_action" not in subject_entity_prompt
