@@ -68,22 +68,39 @@ class AgrQueryResult(BaseModel):
 
 
 # Group-to-taxon mapping — loaded from config/groups.yaml via groups_loader
-def _load_group_taxon_mappings() -> dict:
-    """Build group-to-taxon mapping from config/groups.yaml."""
+def _load_group_provider_metadata() -> dict:
+    """Build provider metadata from config/groups.yaml."""
     mapping = {}
     for group in list_groups():
-        if group.taxon:
-            mapping[group.group_id] = group.taxon
+        group_id = group.group_id
+        mapping[group_id] = {
+            "abbreviation": group_id,
+            "taxon_id": group.taxon,
+            "display_name": getattr(group, "name", None) or getattr(group, "display_name", None),
+            "species": getattr(group, "species", None),
+        }
     return mapping
 
 
-_GROUP_MAPPING_LOAD_ERROR: Optional[str] = None
-try:
-    PROVIDER_TO_TAXON = _load_group_taxon_mappings()
-except Exception as exc:
-    _GROUP_MAPPING_LOAD_ERROR = str(exc)
-    PROVIDER_TO_TAXON = {}
-    logger.error("Failed to load group-to-taxon mappings: %s", exc)
+def _provider_taxon_mapping(provider_metadata: Dict[str, Dict[str, Any]]) -> dict:
+    mapping = {}
+    for group_id, metadata in provider_metadata.items():
+        taxon = metadata.get("taxon_id")
+        if taxon:
+            mapping[group_id] = taxon
+    return mapping
+
+
+def _load_provider_mapping_state() -> Tuple[Dict[str, Dict[str, Any]], Dict[str, str], Optional[str]]:
+    try:
+        provider_metadata = _load_group_provider_metadata()
+    except Exception as exc:
+        logger.error("Failed to load group-to-taxon mappings: %s", exc)
+        return {}, {}, str(exc)
+    return provider_metadata, _provider_taxon_mapping(provider_metadata), None
+
+
+PROVIDER_METADATA, PROVIDER_TO_TAXON, _GROUP_MAPPING_LOAD_ERROR = _load_provider_mapping_state()
 
 # Reverse mapping: taxon to group abbreviation
 TAXON_TO_PROVIDER = {v: k for k, v in PROVIDER_TO_TAXON.items()}
@@ -178,6 +195,250 @@ def _vocabulary_term_result(result: Any) -> Dict[str, Any]:
         "synonyms": raw.get("synonyms") or [],
     }
     return {key: value for key, value in term.items() if value is not None}
+
+
+def _provider_abbreviation(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized.upper()
+
+
+def _normalize_provider_name(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = str(value).strip().lower()
+    return normalized or None
+
+
+def _provider_metadata_warnings() -> List[str]:
+    if not _GROUP_MAPPING_LOAD_ERROR:
+        return []
+    return [f"provider_metadata_unavailable:{_GROUP_MAPPING_LOAD_ERROR}"]
+
+
+def _provider_name_values(provider: Dict[str, Any]) -> set[str]:
+    values = set()
+    for value in (
+        provider.get("display_name"),
+        provider.get("name"),
+        provider.get("abbreviation"),
+    ):
+        normalized = _normalize_provider_name(value)
+        if normalized:
+            values.add(normalized)
+    return values
+
+
+def _provider_name_matches(provider: Dict[str, Any], provider_name: str) -> bool:
+    normalized = _normalize_provider_name(provider_name)
+    return bool(normalized and normalized in _provider_name_values(provider))
+
+
+def _data_provider_result(result: Any) -> Dict[str, Any]:
+    """Return normalized data-provider facts from API rows and group metadata."""
+    if isinstance(result, (tuple, list)):
+        if len(result) < 2:
+            raise ValueError(
+                "Data provider tuple rows must contain abbreviation and taxon_id."
+            )
+        # The API client currently returns lightweight provider rows as
+        # (abbreviation, taxon_id, display_name); tests keep this tuple contract
+        # visible alongside object-shaped rows.
+        raw = {
+            "abbreviation": result[0],
+            "taxon_id": result[1],
+            "display_name": result[2] if len(result) > 2 else None,
+        }
+    else:
+        raw = _plain_result(result)
+
+    abbreviation = _provider_abbreviation(
+        _first_present(
+            raw.get("abbreviation"),
+            raw.get("data_provider"),
+            raw.get("provider"),
+            raw.get("group_id"),
+        )
+    )
+    metadata = PROVIDER_METADATA.get(abbreviation or "", {})
+    display_name = _first_present(
+        raw.get("display_name"),
+        raw.get("name"),
+        raw.get("provider_name"),
+        metadata.get("display_name"),
+    )
+    taxon_id = _first_present(
+        raw.get("taxon_id"),
+        raw.get("taxon"),
+        raw.get("taxon_curie"),
+        metadata.get("taxon_id"),
+    )
+    provider = {
+        "abbreviation": abbreviation,
+        "taxon_id": taxon_id,
+        "display_name": display_name,
+        "species": _first_present(raw.get("species"), metadata.get("species")),
+    }
+    return {key: value for key, value in provider.items() if value is not None}
+
+
+def _provider_matches_all(
+    provider: Dict[str, Any],
+    *,
+    abbreviation: Optional[str],
+    provider_name: Optional[str],
+    taxon_id: Optional[str],
+) -> bool:
+    if abbreviation and provider.get("abbreviation") != abbreviation:
+        return False
+    if taxon_id and provider.get("taxon_id") != taxon_id:
+        return False
+    if provider_name:
+        if not _provider_name_matches(provider, provider_name):
+            return False
+    return True
+
+
+def _data_provider_candidates(
+    providers: List[Dict[str, Any]],
+    *,
+    abbreviation: Optional[str],
+    provider_name: Optional[str],
+    taxon_id: Optional[str],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    if abbreviation:
+        matches = [
+            provider for provider in providers if provider.get("abbreviation") == abbreviation
+        ]
+        if matches:
+            return matches[:limit]
+    if provider_name:
+        matches = [
+            provider
+            for provider in providers
+            if _provider_name_matches(provider, provider_name)
+        ]
+        if matches:
+            return matches[:limit]
+    if taxon_id:
+        matches = [provider for provider in providers if provider.get("taxon_id") == taxon_id]
+        if matches:
+            return matches[:limit]
+    return providers[:limit]
+
+
+def _annotate_provider_candidate(
+    provider: Dict[str, Any],
+    *,
+    abbreviation: Optional[str],
+    provider_name: Optional[str],
+    taxon_id: Optional[str],
+) -> Dict[str, Any]:
+    candidate = dict(provider)
+    mismatches = []
+    if abbreviation and provider.get("abbreviation") != abbreviation:
+        mismatches.append(
+            f"Provider abbreviation {abbreviation!r} does not match candidate abbreviation {provider.get('abbreviation')!r}."
+        )
+    if taxon_id and provider.get("taxon_id") != taxon_id:
+        mismatches.append(
+            f"Taxon {taxon_id!r} does not match provider {provider.get('abbreviation')!r} taxon {provider.get('taxon_id')!r}."
+        )
+    if provider_name:
+        if not _provider_name_matches(provider, provider_name):
+            mismatches.append(
+                f"Provider name {provider_name!r} does not match candidate display name {provider.get('display_name')!r}."
+            )
+    if mismatches:
+        candidate["mismatch_explanation"] = " ".join(mismatches)
+    return candidate
+
+
+def _provider_lookup_response(
+    *,
+    method: str,
+    providers: List[Dict[str, Any]],
+    abbreviation: Optional[str],
+    provider_name: Optional[str],
+    taxon_id: Optional[str],
+    limit: int,
+) -> AgrQueryResult:
+    attempted_query = _attempt_query(
+        method,
+        abbreviation=abbreviation,
+        provider_name=provider_name,
+        taxon_id=taxon_id,
+        limit=limit,
+    )
+    candidates = [
+        _annotate_provider_candidate(
+            provider,
+            abbreviation=abbreviation,
+            provider_name=provider_name,
+            taxon_id=taxon_id,
+        )
+        for provider in _data_provider_candidates(
+            providers,
+            abbreviation=abbreviation,
+            provider_name=provider_name,
+            taxon_id=taxon_id,
+            limit=limit,
+        )
+    ]
+    matches = [
+        provider
+        for provider in candidates
+        if _provider_matches_all(
+            provider,
+            abbreviation=abbreviation,
+            provider_name=provider_name,
+            taxon_id=taxon_id,
+        )
+    ]
+    lookup_status = _lookup_status_from_count(len(matches), exact_lookup=True)
+    explanation = _lookup_explanation(
+        method=method,
+        lookup_status=lookup_status,
+        count=len(matches),
+        attempted_query=attempted_query,
+    )
+    if not matches and any(candidate.get("mismatch_explanation") for candidate in candidates):
+        explanation = "No data provider matched all requested fields; candidate provider/taxon conflicts were preserved."
+    warnings = [
+        *(
+            ["provider_taxon_mismatch"]
+            if any(candidate.get("mismatch_explanation") for candidate in candidates)
+            else []
+        ),
+        *_provider_metadata_warnings(),
+    ]
+    lookup_attempt = _lookup_attempt(
+        method=method,
+        attempted_query=attempted_query,
+        lookup_status=lookup_status,
+        explanation=explanation,
+        candidate_count=len(candidates),
+        resolved=matches[0] if len(matches) == 1 else None,
+    )
+    return _ok(
+        data={
+            "matches": matches,
+            "candidates": candidates,
+        },
+        count=len(matches),
+        warnings=warnings or None,
+        message=None if matches else "Data provider not found for the supplied lookup fields.",
+        lookup_status=lookup_status,
+        failure_classification=None if lookup_status == LOOKUP_STATUS_SUCCESS else lookup_status,
+        explanation=explanation,
+        lookup_attempts=[lookup_attempt],
+        candidate_matches=[_candidate_from_result(method, candidate) for candidate in candidates],
+        result_projections=[_projection_from_result(method, match) for match in matches],
+    )
 
 
 def _vocabulary_term_query(
@@ -490,6 +751,7 @@ def agr_curation_query(
     allele_symbols: Optional[List[str]] = None,
     allele_id: Optional[str] = None,
     data_provider: Optional[str] = None,
+    provider_name: Optional[str] = None,
     taxon_id: Optional[str] = None,
     term: Optional[str] = None,
     terms: Optional[List[str]] = None,
@@ -535,6 +797,7 @@ def agr_curation_query(
         allele_symbols: List of allele symbols for bulk lookup methods
         allele_id: Allele ID/CURIE for direct lookup
         data_provider: Filter by species (MGI, FB, WB, ZFIN, RGD, SGD, HGNC)
+        provider_name: Data provider display name for provider lookup
         taxon_id: Alternative to data_provider (NCBITaxon:XXXXX format)
         term: Search term for ontology searches
         terms: CURIE list for bulk ontology term helper paths
@@ -591,6 +854,14 @@ def agr_curation_query(
                 exact_match=True if method == "get_vocabulary_term" else exact_match,
                 include_synonyms=include_synonyms,
                 include_obsolete=include_obsolete,
+                limit=limit_value,
+            )
+        if method == "get_data_provider":
+            return _attempt_query(
+                method,
+                abbreviation=_provider_abbreviation(abbreviation),
+                provider_name=provider_name,
+                taxon_id=taxon_id,
                 limit=limit_value,
             )
         if method == "search_ontology_terms":
@@ -2127,13 +2398,55 @@ def agr_curation_query(
 
         # GET DATA PROVIDERS
         elif method == "get_data_providers":
-            providers = db.get_data_providers()
-            providers_data = [{"abbreviation": abbr, "taxon_id": taxon} for abbr, taxon in providers]
+            provider_method = getattr(db, "get_data_providers", None)
+            if not callable(provider_method):
+                return _err(
+                    "AGR Curation API client does not expose get_data_providers in this runtime.",
+                    method=method,
+                    attempted_query=_attempt_query(method),
+                    failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
+                )
+            providers = provider_method()
+            providers_data = [_data_provider_result(provider) for provider in providers]
             return _lookup_response(
                 method=method,
                 data=providers_data,
                 count=len(providers_data),
+                warnings=_provider_metadata_warnings() or None,
                 attempted_query=_attempt_query(method),
+            )
+
+        # GET DATA PROVIDER
+        elif method == "get_data_provider":
+            provider_method = getattr(db, "get_data_providers", None)
+            attempted_query = _attempt_query(
+                method,
+                abbreviation=_provider_abbreviation(abbreviation),
+                provider_name=provider_name,
+                taxon_id=taxon_id,
+                limit=limit_value,
+            )
+            if not abbreviation and not provider_name and not taxon_id:
+                return _err(
+                    "get_data_provider requires abbreviation, provider_name, or taxon_id",
+                    method=method,
+                    attempted_query=attempted_query,
+                )
+            if not callable(provider_method):
+                return _err(
+                    "AGR Curation API client does not expose get_data_providers in this runtime.",
+                    method=method,
+                    attempted_query=attempted_query,
+                    failure_classification=LOOKUP_STATUS_UNDER_DEVELOPMENT,
+                )
+            providers = [_data_provider_result(provider) for provider in provider_method()]
+            return _provider_lookup_response(
+                method=method,
+                providers=providers,
+                abbreviation=_provider_abbreviation(abbreviation),
+                provider_name=provider_name,
+                taxon_id=taxon_id,
+                limit=limit_value,
             )
 
         # GET ONTOLOGY TERM
@@ -2595,7 +2908,7 @@ def agr_curation_query(
                 "Unknown method: {method}. Valid: "
                 "search_genes, search_genes_bulk, get_gene_by_exact_symbol, get_gene_by_id, "
                 "search_alleles, search_alleles_bulk, get_allele_by_exact_symbol, get_allele_by_id, "
-                "get_species, get_data_providers, "
+                "get_species, get_data_providers, get_data_provider, "
                 "get_ontology_term, get_ontology_terms, search_ontology_terms, "
                 "get_vocabulary_term, search_vocabulary_terms, "
                 "search_anatomy_terms, "

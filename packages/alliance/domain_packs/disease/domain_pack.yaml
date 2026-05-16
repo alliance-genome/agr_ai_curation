@@ -540,12 +540,11 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
-          validator_state: blocked
-          definition_state_category: blocked
-          blocked_by: ALL-425
+          validator_state: planned
+          definition_state_category: under_development
           repair:
             protected: true
-            reason: Use mark_under_development while data-provider lookup is blocked.
+            reason: Data provider is workflow context, not an extractor-repair target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -563,12 +562,11 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_data_provider_lookup
-          validator_state: blocked
-          definition_state_category: blocked
-          blocked_by: ALL-425
+          validator_state: planned
+          definition_state_category: under_development
           repair:
             protected: true
-            reason: Use mark_under_development while data-provider lookup is blocked.
+            reason: Data provider is workflow context, not an extractor-repair target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -1020,17 +1018,31 @@ metadata:
           ontology_term_type: ECOTerm
       - binding_id: disease_data_provider_lookup
         display_name: Data provider lookup
-        state_explanation: Data-provider lookup is blocked by ALL-425.
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: data_provider_validation
+        state_explanation: Data provider validation remains under development until provider-backed validator dispatch is reviewed end to end.
         applies_to:
           domain_pack_id: agr.alliance.disease
           object_types:
             - DiseaseAnnotation
+          field_paths:
+            - data_provider.abbreviation
         input_fields:
           abbreviation:
             source: payload
             path: data_provider.abbreviation
+          provider_name:
+            source: payload
+            path: data_provider.name
+            required: false
+          taxon:
+            source: payload
+            path: taxon
+            required: false
         expected_result_fields:
           abbreviation: data_provider.abbreviation
+          taxon: data_provider.taxon
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

@@ -37,6 +37,8 @@ agent_bundles:
     group_rules: [fb, hgnc, mgi, rgd, sgd, wb, zfin]
   - name: controlled_vocabulary
     has_schema: true
+  - name: data_provider
+    has_schema: true
   - name: csv_formatter
   - name: disease
     has_schema: true

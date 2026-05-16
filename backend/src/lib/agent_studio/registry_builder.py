@@ -899,8 +899,11 @@ def _agent_definition_to_registry_entry(
     Returns:
         Dictionary in AGENT_REGISTRY format
     """
-    # Get documentation if available
-    doc = AGENT_DOCUMENTATION.get(agent_def.agent_id, {})
+    # Static documentation can add rich UI help; otherwise the package-owned
+    # agent description provides the Agent Browser overview summary.
+    doc = AGENT_DOCUMENTATION.get(agent_def.agent_id)
+    if not doc and agent_def.description.strip():
+        doc = {"summary": agent_def.description.strip()}
 
     # Build batching config if agent is batchable
     batching = None

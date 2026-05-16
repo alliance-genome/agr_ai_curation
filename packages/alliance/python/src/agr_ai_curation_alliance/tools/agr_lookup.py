@@ -46,6 +46,7 @@ ALLIANCE_LOOKUP_PROVIDER_DATA_KEYS = (
     "vocabulary",
     "vocabulary_label",
     "taxon",
+    "taxon_id",
     "gene_type",
     "match_type",
     "matched_variant",
