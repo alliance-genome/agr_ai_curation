@@ -130,12 +130,13 @@ def test_extractor_prompts_delegate_active_bound_fields_to_validators():
         "bounded repair request",
     ]
     forbidden_fragments = [
-        "Normalizes retained",
-        "Normalize retained",
-        "Normalize the retained",
-        f"normalized with `{lookup_tool_id}`",
+        "normalizes retained",
         "normalize retained",
-        "returned by AGR lookup",
+        "normalize the retained",
+        f"normalized with `{lookup_tool_id}`",
+        "normalize to a single canonical form and ontology id",
+        "normalize to one entry",
+        "returned by agr lookup",
     ]
 
     for relative_path in EXTRACTOR_PROMPTS:
@@ -145,7 +146,7 @@ def test_extractor_prompts_delegate_active_bound_fields_to_validators():
         for fragment in required_fragments:
             assert fragment in normalized_content, f"{relative_path} missing {fragment}"
         for fragment in forbidden_fragments:
-            assert fragment not in content, f"{relative_path} contains {fragment}"
+            assert fragment not in normalized_content, f"{relative_path} contains {fragment}"
 
 
 def test_validator_prompts_keep_validation_separate_from_patching():

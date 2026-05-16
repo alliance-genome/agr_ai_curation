@@ -170,7 +170,7 @@ content: |
     "cAMP levels increased" → chemical; "CAMP mutations" → gene.
 
   Chemical naming variability:
-  - Same compound, many names: "ethanol", "EtOH", "ethyl alcohol" → normalize to one entry.
+  - Same compound, many names: "ethanol", "EtOH", "ethyl alcohol" → group mention evidence without choosing the final validated identifier.
   - IUPAC vs common names: "acetylsalicylic acid" = "aspirin".
   - Abbreviations: "Dex" (dexamethasone), "Rapa" (rapamycin), "HU" (hydroxyurea).
   - Formulas: "H₂O₂" (hydrogen peroxide), "CaCl₂" (calcium chloride).

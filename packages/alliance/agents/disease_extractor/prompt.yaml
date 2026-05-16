@@ -161,7 +161,7 @@ content: |
 
   Disease name variability:
   - Same disease, many names: "Parkinson's disease", "Parkinson disease", "PD", "parkinsonism"
-    → normalize to a single canonical form and ontology ID.
+    → record the evidence-backed mention text and alias context for validator resolution.
   - Composite mentions: "breast and ovarian cancer" → two diseases (breast cancer, ovarian cancer).
     Split into separate entries.
   - Abbreviations: define-then-use patterns (e.g., "amyotrophic lateral sclerosis (ALS)")
