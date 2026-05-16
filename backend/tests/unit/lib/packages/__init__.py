@@ -4,6 +4,7 @@ from pathlib import Path
 
 SHIPPED_TOOLS_PACKAGE_EXPORTS = (
     "agr_curation_query",
+    "agr_literature_reference_lookup",
     "alliance_api_call",
     "chebi_api_call",
     "create_curation_db_sql_tool",

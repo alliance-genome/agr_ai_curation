@@ -825,6 +825,32 @@ def test_package_runner_alliance_agr_ontology_helpers_in_isolation(
     assert search_result.result["data"][0]["name"] == "molecular_function"
 
 
+def test_package_runner_alliance_literature_reference_tool_in_isolation(
+    monkeypatch,
+    tmp_path,
+):
+    fake_dependency_root = _write_fake_agr_curation_api_dependency(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", str(fake_dependency_root))
+
+    runner, env_manager = _build_alliance_runner(tmp_path)
+
+    result = runner.execute_tool(
+        "agr_literature_reference_lookup",
+        kwargs={
+            "method": "get_literature_reference",
+            "identifier": "PMID:27528223",
+        },
+    )
+
+    assert result.ok is True
+    _assert_isolated_python(env_manager)
+    assert result.result["status"] == "ok"
+    assert result.result["lookup_status"] == "success"
+    assert result.result["source"] == "literature_es"
+    assert result.result["resolved_reference"]["curie"] == "AGRKB:101000000924191"
+    assert result.result["resolved_reference"]["matched_identifier"] == "PMID:27528223"
+
+
 def test_package_runner_alliance_agr_entity_helpers_in_isolation(
     monkeypatch,
     tmp_path,
@@ -1266,7 +1292,35 @@ def _write_fake_agr_curation_api_dependency(tmp_path: Path) -> Path:
     dependency_root = tmp_path / "fake_external"
     package_root = dependency_root / "agr_curation_api"
     package_root.mkdir(parents=True, exist_ok=True)
-    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    (package_root / "__init__.py").write_text(
+        """class AGRCurationAPIClient:
+    def __init__(self, data_source=None, **_kwargs):
+        self.data_source = data_source
+
+    def get_literature_reference(self, identifier):
+        if self.data_source != "db":
+            raise RuntimeError("literature reference helpers must use db mode")
+        if identifier == "PMID:27528223":
+            return {
+                "reference_id": None,
+                "curie": "AGRKB:101000000924191",
+                "title": "Suppressed Helicobocter pylori-induced gastritis",
+                "short_citation": "Hahm KB et al.",
+                "cross_references": ["PMID:27528223"],
+                "source": "literature_es",
+                "obsolete": False,
+            }
+        return None
+
+    def search_literature_references(self, query, exact_match=False, limit=20):
+        if self.data_source != "db":
+            raise RuntimeError("literature reference helpers must use db mode")
+        if query == "Hahm KB Suppressed Helicobocter pylori":
+            return [self.get_literature_reference("PMID:27528223")]
+        return []
+""",
+        encoding="utf-8",
+    )
     (package_root / "db_methods.py").write_text(
         """class DatabaseConfig:
     def __init__(self):

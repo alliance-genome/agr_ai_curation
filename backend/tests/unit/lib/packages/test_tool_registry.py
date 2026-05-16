@@ -446,6 +446,7 @@ def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
     assert not any(export.package_id == "agr.core" for export in registry.loaded_binding_exports)
 
     expected_bindings = {
+        "agr_literature_reference_lookup": ("static", (), "agr.alliance"),
         "agr_curation_query": ("static", (), "agr.alliance"),
         "search_document": ("context_factory", ("document_id", "user_id"), "agr.alliance"),
         "read_section": ("context_factory", ("document_id", "user_id"), "agr.alliance"),

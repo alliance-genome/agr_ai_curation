@@ -7,6 +7,10 @@ from typing import Any
 
 _LAZY_EXPORTS = {
     "agr_curation_query": (".agr_curation", "agr_curation_query"),
+    "agr_literature_reference_lookup": (
+        ".literature_references",
+        "agr_literature_reference_lookup",
+    ),
     "alliance_api_call": (".rest", "alliance_api_call"),
     "chebi_api_call": (".rest", "chebi_api_call"),
     "create_curation_db_sql_tool": (".sql", "create_curation_db_sql_tool"),
