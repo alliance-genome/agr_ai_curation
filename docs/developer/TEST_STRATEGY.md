@@ -124,7 +124,7 @@ These tests should prove lookup contract shape, projection metadata, and audit
 attempt behavior against read-only curation DB access. They must not become a
 hidden dependency of regular PR validation.
 
-## Validation and Repair Coverage
+## Validation and Curator-Edit Coverage
 
 Domain-envelope tests should cover the implemented contract, not design notes:
 

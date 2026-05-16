@@ -314,9 +314,8 @@ object_definitions:
           validator_binding_id: disease_ontology_term_lookup
           validator_state: active
           definition_state_category: complete
-          repair:
-            repairable: true
-            source_of_truth: alliance_linkml
+          editable: true
+          source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -338,9 +337,8 @@ object_definitions:
           validator_state: active
           validation_result_field: curie
           definition_state_category: complete
-          repair:
-            repairable: true
-            source_of_truth: alliance_linkml
+          editable: true
+          source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -362,9 +360,8 @@ object_definitions:
           validator_state: active
           validation_result_field: name
           definition_state_category: complete
-          repair:
-            repairable: true
-            source_of_truth: alliance_linkml
+          editable: true
+          source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -400,9 +397,8 @@ object_definitions:
           validator_binding_id: disease_relation_cv_lookup
           validator_state: active
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Use mark_under_development until the disease relation contract is complete.
+          protected: true
+          curator_action_note: Use mark_under_development until the disease relation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -426,9 +422,8 @@ object_definitions:
           validator_state: blocked
           definition_state_category: blocked
           blocked_by: ALL-410
-          repair:
-            protected: true
-            reason: Use mark_under_development while disease subject materialization is blocked.
+          protected: true
+          curator_action_note: Use mark_under_development while disease subject materialization is blocked.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -462,9 +457,8 @@ object_definitions:
           validator_state: blocked
           definition_state_category: blocked
           blocked_by: ALL-410
-          repair:
-            protected: true
-            reason: Use mark_under_development while disease subject materialization is blocked.
+          protected: true
+          curator_action_note: Use mark_under_development while disease subject materialization is blocked.
       - field_path: single_reference
         field_type: object
         display_name: Source reference
@@ -476,9 +470,8 @@ object_definitions:
           validator_state: blocked
           definition_state_category: blocked
           blocked_by: ALL-425
-          repair:
-            protected: true
-            reason: Use mark_under_development while reference materialization is blocked.
+          protected: true
+          curator_action_note: Use mark_under_development while reference materialization is blocked.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -499,9 +492,8 @@ object_definitions:
           validator_state: blocked
           definition_state_category: blocked
           blocked_by: ALL-425
-          repair:
-            protected: true
-            reason: Use mark_under_development while reference materialization is blocked.
+          protected: true
+          curator_action_note: Use mark_under_development while reference materialization is blocked.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -522,9 +514,8 @@ object_definitions:
           validator_state: blocked
           definition_state_category: blocked
           blocked_by: ALL-425
-          repair:
-            protected: true
-            reason: Use mark_under_development while evidence-code lookup is blocked.
+          protected: true
+          curator_action_note: Use mark_under_development while evidence-code lookup is blocked.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -542,9 +533,8 @@ object_definitions:
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Data provider is workflow context, not an extractor-repair target.
+          protected: true
+          curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -564,9 +554,8 @@ object_definitions:
           validator_binding_id: disease_data_provider_lookup
           validator_state: active
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Data provider is workflow context, not an extractor-repair target.
+          protected: true
+          curator_action_note: Data provider is workflow context, not an extractor edit target.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -632,9 +621,8 @@ object_definitions:
           validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Use mark_under_development until condition relation repair is fully defined.
+          protected: true
+          curator_action_note: Use mark_under_development until condition relation validation is fully defined.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -653,9 +641,8 @@ object_definitions:
           validator_binding_id: disease_condition_relation_lookup
           validator_state: active
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Use mark_under_development until condition relation repair is fully defined.
+          protected: true
+          curator_action_note: Use mark_under_development until condition relation validation is fully defined.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -676,9 +663,8 @@ object_definitions:
           validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Use mark_under_development until experimental condition repair is fully defined.
+          protected: true
+          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -697,9 +683,8 @@ object_definitions:
           validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Use mark_under_development until experimental condition repair is fully defined.
+          protected: true
+          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -719,9 +704,8 @@ object_definitions:
           validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Use mark_under_development until experimental condition repair is fully defined.
+          protected: true
+          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -741,9 +725,8 @@ object_definitions:
           validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Use mark_under_development until experimental condition repair is fully defined.
+          protected: true
+          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -763,9 +746,8 @@ object_definitions:
           validator_binding_id: experimental_condition_validation
           validator_state: planned
           definition_state_category: under_development
-          repair:
-            protected: true
-            reason: Use mark_under_development until experimental condition repair is fully defined.
+          protected: true
+          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml

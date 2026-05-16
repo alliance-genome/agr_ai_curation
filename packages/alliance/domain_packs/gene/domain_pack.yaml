@@ -161,9 +161,8 @@ object_definitions:
         required: true
         metadata:
           evidence_source_field: true
-          repair:
-            protected: true
-            reason: Paper mention text is the source evidence anchor, not a normalized repair target.
+          protected: true
+          curator_action_note: Paper mention text is the source evidence anchor, not a normalized edit target.
       - field_path: primary_external_id
         field_type: string
         display_name: Gene ID
@@ -173,9 +172,8 @@ object_definitions:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
           validation_result_field: curie
-          repair:
-            repairable: true
-            source_of_truth: alliance_linkml
+          editable: true
+          source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -193,9 +191,8 @@ object_definitions:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
           validation_result_field: symbol
-          repair:
-            repairable: true
-            source_of_truth: alliance_linkml
+          editable: true
+          source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -213,9 +210,8 @@ object_definitions:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
           validation_result_field: taxon
-          repair:
-            repairable: true
-            source_of_truth: alliance_linkml
+          editable: true
+          source_of_truth: alliance_linkml
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml

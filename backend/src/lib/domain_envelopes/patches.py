@@ -87,9 +87,8 @@ def apply_curator_field_patch(
     """Validate and apply one curator field edit to a domain envelope.
 
     The patch is accepted only when the expected revision matches, the object
-    exists, the field path is declared editable or repairable by the domain
-    pack, the target is not protected, and ``before`` matches the current
-    object payload value.
+    exists, the field path is declared editable by the domain pack, the target
+    is not protected, and ``before`` matches the current object payload value.
     """
 
     validation_registry = registry or DomainPackValidationRegistry.from_domain_pack(
@@ -151,7 +150,7 @@ def apply_curator_field_patch(
                 errors.append(f"field_path '{patch.field_path}' is protected")
             elif not editable:
                 errors.append(
-                    f"field_path '{patch.field_path}' is not declared editable or repairable"
+                    f"field_path '{patch.field_path}' is not declared editable"
                 )
 
         before_value = _payload_value(domain_object.payload, patch.field_path)
@@ -345,14 +344,10 @@ def _field_editability(
     metadata = field_definition.metadata
     protected = (
         _metadata_bool(metadata, "protected")
-        or _nested_metadata_bool(metadata, "repair", "protected")
         or _nested_metadata_bool(metadata, "edit", "protected")
     )
     declared_editable = (
         _metadata_bool(metadata, "editable")
-        or _metadata_bool(metadata, "repairable")
-        or _nested_metadata_bool(metadata, "repair", "editable")
-        or _nested_metadata_bool(metadata, "repair", "repairable")
         or _nested_metadata_bool(metadata, "edit", "editable")
     )
     return (

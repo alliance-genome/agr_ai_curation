@@ -36,7 +36,7 @@ object_definitions:
       - field_path: gene.identifier
         field_type: string
         metadata:
-          repairable: true
+          editable: true
       - field_path: protected_note
         field_type: string
         metadata:
@@ -114,7 +114,7 @@ def test_apply_curator_field_patch_accepts_editable_field_and_records_history(tm
     assert result.envelope.history[-1].actor_id == "curator-1"
 
 
-def test_apply_curator_field_patch_allows_repairable_field_fill(tmp_path: Path):
+def test_apply_curator_field_patch_allows_editable_field_fill(tmp_path: Path):
     result = apply_curator_field_patch(
         _envelope(),
         _loaded_pack(tmp_path),
@@ -190,4 +190,4 @@ def test_apply_curator_field_patch_rejects_protected_and_undeclared_paths(
     assert undeclared.status is EnvelopeFieldPatchStatus.REJECTED
     assert "not declared" in undeclared.errors[0]
     assert stable.status is EnvelopeFieldPatchStatus.REJECTED
-    assert "not declared editable or repairable" in stable.errors[0]
+    assert "not declared editable" in stable.errors[0]

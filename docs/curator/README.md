@@ -55,7 +55,7 @@ Behind the scenes, a **supervisor agent** analyzes your question and routes it t
 
 For curation workflows, extraction agents now produce **domain envelopes**. A
 domain envelope is the durable record of what the AI extracted: curatable
-objects, their field paths, evidence links, validation findings, repair history,
+objects, their field paths, evidence links, validation findings, curator edits,
 and export/submission state. The review table shows a projection of those
 objects so you can scan and edit them, but the envelope remains the source of
 truth.
