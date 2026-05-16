@@ -11,7 +11,11 @@ import pytest
 
 from src.lib.config.agent_loader import ModelConfig, load_agent_definitions
 from src.lib.config import agent_loader
-from src.lib.agent_studio.registry_builder import _build_config_defaults, build_agent_registry
+from src.lib.agent_studio.registry_builder import (
+    AGENT_DOCUMENTATION,
+    _build_config_defaults,
+    build_agent_registry,
+)
 
 from ..packages import find_repo_root
 
@@ -122,6 +126,17 @@ class TestAgentDocumentationCoverage:
             "Missing Agent Browser Overview summary for configured agents: "
             + ", ".join(missing_summaries)
         )
+
+    def test_agent_without_static_documentation_uses_package_description_summary(self):
+        """Package-owned agents should not need hardcoded core documentation."""
+        configured_agents = load_agent_definitions(force_reload=True)
+        registry = build_agent_registry()
+
+        agent_def = configured_agents["data_provider_validation"]
+        entry = registry["data_provider_validation"]
+
+        assert "data_provider_validation" not in AGENT_DOCUMENTATION
+        assert entry["documentation"] == {"summary": agent_def.description.strip()}
 
     def test_pdf_alias_is_not_exposed_in_registry(self):
         """Registry should expose only canonical `pdf_extraction` id."""

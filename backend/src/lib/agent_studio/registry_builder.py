@@ -553,9 +553,6 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
     "controlled_vocabulary_validation": {
         "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.",
     },
-    "data_provider_validation": {
-        "summary": "Validates Alliance data provider abbreviations, display names, and provider-to-taxon consistency.",
-    },
     "gene_extractor": {
         "summary": "Extracts experimentally supported gene mentions from uploaded PDFs with evidence-first filtering, disambiguation, and database-assisted normalization.",
         "capabilities": [
@@ -902,8 +899,11 @@ def _agent_definition_to_registry_entry(
     Returns:
         Dictionary in AGENT_REGISTRY format
     """
-    # Get documentation if available
-    doc = AGENT_DOCUMENTATION.get(agent_def.agent_id, {})
+    # Static documentation can add rich UI help; otherwise the package-owned
+    # agent description provides the Agent Browser overview summary.
+    doc = AGENT_DOCUMENTATION.get(agent_def.agent_id)
+    if not doc and agent_def.description.strip():
+        doc = {"summary": agent_def.description.strip()}
 
     # Build batching config if agent is batchable
     batching = None
