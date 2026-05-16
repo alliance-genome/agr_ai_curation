@@ -347,6 +347,64 @@ cases:
       blockers:
         - domain_pack.validator_unresolved
 
+  - case_id: curator_override_alias_does_not_clear_blocker
+    active_binding_ids:
+      - fixture.identifier_lookup
+    envelope:
+      envelope_id: fixture-curator-override-alias-env
+      domain_pack_id: fixture.validator_dispatch
+      objects:
+        - object_type: GeneAssertion
+          object_id: assertion-1
+          metadata:
+            curator_override:
+              field_path: gene.identifier
+              reason: Legacy singular override aliases must not waive validator blockers.
+            curator_overrides:
+              - field_path: gene.identifier
+                reason: Field override metadata cannot clear active validator blockers.
+            validation_waivers:
+              - code: domain_pack.validator_unresolved
+                reason: Legacy waiver aliases must not clear validator blockers.
+          payload:
+            gene:
+              identifier: BAD:ALIAS
+              symbol: alias
+    validator_result:
+      status: unresolved
+      resolved_values: {}
+      resolved_objects: []
+      missing_expected_fields:
+        - identifier
+        - symbol
+      candidates: []
+      lookup_attempts:
+        - provider: fixture_gene_lookup
+          method: exact_identifier
+          query:
+            identifier: BAD:ALIAS
+          result_count: 0
+          outcome: not_found
+      curator_message: Identifier could not be resolved despite override metadata.
+      explanation: Curator override aliases are object metadata, not validator waivers.
+    expected_request:
+      validator_binding_id: fixture.identifier_lookup
+      selected_inputs:
+        identifier: BAD:ALIAS
+    expected_projection:
+      finding_code: domain_pack.validator_unresolved
+      finding_status: open
+      failure_classification: missing_expected_result_field
+      missing_expected_fields:
+        - identifier
+        - symbol
+      forbidden_blocker_detail_keys:
+        - curator_override
+    readiness_outcome:
+      ready: false
+      blockers:
+        - domain_pack.validator_unresolved
+
 selector_failure_cases:
   - case_id: selector_missing
     active_binding_ids:
@@ -417,3 +475,46 @@ selector_failure_cases:
                 object_id: missing-gene
                 object_type: Gene
     expected_selector_code: selector_unresolved_ref
+
+flow_validation_cases:
+  - case_id: skipped_validator
+    active_binding_ids:
+      - fixture.evidence_quote_lookup
+    attachment_selections:
+      - validator_binding_id: fixture.evidence_quote_lookup
+        enabled: false
+    validation_groups:
+      - binding_id: fixture.evidence_quote_lookup
+        state: skipped
+    expected_schedule:
+      scheduled_validators: []
+      opt_outs:
+        - fixture.evidence_quote_lookup
+      inactive_metadata: []
+      replacement_validators: []
+      supplemental_validators: []
+    readiness_outcome:
+      ready: true
+      blockers: []
+
+  - case_id: custom_replacement_validator
+    active_binding_ids:
+      - fixture.identifier_lookup
+    attachment_selections:
+      - validator_binding_id: fixture.identifier_lookup
+        enabled: true
+    validation_groups:
+      - binding_id: fixture.identifier_lookup
+        state: replaced
+        edge_id: edge-custom-identifier-validator
+        validator_node_id: custom_identifier_validator
+    expected_schedule:
+      scheduled_validators: []
+      opt_outs: []
+      inactive_metadata: []
+      replacement_validators:
+        - fixture.identifier_lookup
+      supplemental_validators: []
+    readiness_outcome:
+      ready: true
+      blockers: []

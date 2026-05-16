@@ -10,9 +10,15 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
+from src.lib.curation_workspace.session_submission_service import (
+    _object_id_by_ref,
+    _validation_finding_blockers,
+)
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
+from src.lib.domain_packs.validation_registry import DomainPackValidationRegistry
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
+from src.lib.flows.validation_attachments import validation_schedule_from_node_data
 from src.schemas.domain_envelope import DomainEnvelope
 from src.schemas.domain_validator import DomainValidatorResultBase
 
@@ -70,6 +76,67 @@ def _result_payload(case: dict[str, Any], request) -> dict[str, Any]:
         }
     )
     return payload
+
+
+def _readiness_blockers_for_result(result):
+    envelope = result.envelope
+    target_object = envelope.objects[0]
+    projection_ref = {
+        "envelope_id": envelope.envelope_id,
+        "object_id": target_object.object_id,
+        "envelope_revision": 3,
+    }
+    return _validation_finding_blockers(
+        envelope=envelope,
+        object_id=target_object.object_id,
+        object_id_by_ref=_object_id_by_ref(envelope),
+        projection_ref=projection_ref,
+    )
+
+
+def _validation_attachment_by_binding(
+    pack: LoadedDomainPack,
+) -> dict[str, dict[str, Any]]:
+    registry = DomainPackValidationRegistry.from_domain_pack(pack)
+    return {
+        option.validator_binding_id: option.to_dict()
+        for option in registry.validation_attachment_options()
+        if option.validator_binding_id is not None
+    }
+
+
+def _node_data_for_flow_case(
+    pack: LoadedDomainPack,
+    case: dict[str, Any],
+) -> dict[str, Any]:
+    options_by_binding = _validation_attachment_by_binding(pack)
+    attachments: list[dict[str, Any]] = []
+    for selection in case["attachment_selections"]:
+        binding_id = selection["validator_binding_id"]
+        attachment = dict(options_by_binding[binding_id])
+        attachment["enabled"] = selection["enabled"]
+        attachments.append(attachment)
+
+    groups: list[dict[str, Any]] = []
+    for raw_group in case["validation_groups"]:
+        binding_id = raw_group["binding_id"]
+        attachment = options_by_binding[binding_id]
+        groups.append(
+            {
+                "group_id": f"fixture:{case['case_id']}:{binding_id}",
+                "attachment_id": attachment["attachment_id"],
+                "label": attachment["label"],
+                "required": attachment["required"],
+                "blocking": attachment["export_blocking"],
+                "allow_opt_out": attachment["allow_opt_out"],
+                **raw_group,
+            }
+        )
+
+    return {
+        "validation_attachments": attachments,
+        "validation_groups": groups,
+    }
 
 
 def test_dispatch_fixture_declares_forward_only_contract(dispatch_fixture):
@@ -181,6 +248,15 @@ def test_validator_dispatch_end_to_end_fixture_cases(tmp_path, dispatch_fixture,
         assert materialized.payload == expected_projection["materialized_payload"]
         assert result.envelope.objects[0].object_refs == [materialized.to_object_ref()]
 
+    readiness_blockers = _readiness_blockers_for_result(result)
+    expected_readiness = case["readiness_outcome"]
+    assert (not readiness_blockers) is expected_readiness["ready"]
+    assert [blocker.code for blocker in readiness_blockers] == (
+        expected_readiness["blockers"]
+    )
+    for key in expected_projection.get("forbidden_blocker_detail_keys", []):
+        assert all(key not in blocker.details for blocker in readiness_blockers)
+
 
 @pytest.mark.parametrize(
     "case",
@@ -215,3 +291,38 @@ def test_validator_dispatch_selector_failure_fixture_cases(
     assert finding.status.value == "open"
     assert finding.details["validation_metadata"]["binding_state"] == "active"
     assert finding.details["selector_problem"]["code"] == case["expected_selector_code"]
+
+
+@pytest.mark.parametrize(
+    "case",
+    yaml.safe_load(FIXTURE_PATH.read_text(encoding="utf-8"))["flow_validation_cases"],
+    ids=lambda case: case["case_id"],
+)
+def test_validator_dispatch_flow_fixture_cases(tmp_path, dispatch_fixture, case):
+    pack = _loaded_pack(
+        tmp_path,
+        dispatch_fixture,
+        active_binding_ids=case["active_binding_ids"],
+    )
+    schedule = validation_schedule_from_node_data(_node_data_for_flow_case(pack, case))
+
+    expected_schedule = case["expected_schedule"]
+    for schedule_key, expected_binding_ids in expected_schedule.items():
+        assert [
+            entry.get("validator_binding_id")
+            for entry in schedule[schedule_key]
+        ] == expected_binding_ids
+
+    if schedule["opt_outs"]:
+        assert all(
+            entry["skipped_by_flow_configuration"] is True
+            for entry in schedule["opt_outs"]
+        )
+    if schedule["replacement_validators"]:
+        replacement = schedule["replacement_validators"][0]
+        assert replacement["validator_node_id"] == (
+            case["validation_groups"][0]["validator_node_id"]
+        )
+        assert replacement["edge_id"] == case["validation_groups"][0]["edge_id"]
+
+    assert case["readiness_outcome"] == {"ready": True, "blockers": []}
