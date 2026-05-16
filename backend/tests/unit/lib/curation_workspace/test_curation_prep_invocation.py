@@ -149,6 +149,8 @@ def _make_allele_domain_extraction_payload(candidate_count: int = 3) -> dict:
                     "pending_ref_id": mention_ref_id,
                     "payload": {
                         "mention": {"text": mention},
+                        "associated_gene": {"symbol": "Crumbs"},
+                        "taxon": {"curie": "NCBITaxon:7227"},
                         "source_mentions": [mention],
                     },
                 },

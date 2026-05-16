@@ -192,6 +192,8 @@ def _make_allele_domain_payload(
                         "text": label,
                         "normalized_hint": normalized_id,
                     },
+                    "associated_gene": {"symbol": associated_gene},
+                    "taxon": {"curie": "NCBITaxon:7227"},
                     "source_mentions": [label],
                 },
             },

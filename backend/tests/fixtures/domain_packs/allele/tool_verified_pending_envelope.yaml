@@ -30,6 +30,10 @@ envelope:
         mention:
           text: daf-2(m41)
           normalized_hint: WB:WBVar00000001
+        associated_gene:
+          symbol: daf-2
+        taxon:
+          curie: NCBITaxon:6239
         source_mentions:
           - daf-2(m41)
       pending_ref_id: allele-mention-1

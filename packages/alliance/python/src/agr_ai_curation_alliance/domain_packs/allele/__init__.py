@@ -124,6 +124,14 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
             item.get("normalized_id"),
             "extraction.alleles[].normalized_id",
         )
+        associated_gene = _optional_string(
+            item.get("associated_gene"),
+            "extraction.alleles[].associated_gene",
+        )
+        taxon = _required_string(
+            item.get("taxon"),
+            "extraction.alleles[].taxon",
+        )
         source_mentions = [
             value
             for value in (
@@ -149,6 +157,9 @@ def build_pending_allele_envelope_from_tool_verified_fixture(
         }
         if normalized_hint is not None:
             mention_payload["mention"]["normalized_hint"] = normalized_hint
+        if associated_gene is not None:
+            mention_payload["associated_gene"] = {"symbol": associated_gene}
+        mention_payload["taxon"] = {"curie": taxon}
 
         mention_object = CuratableObjectEnvelope(
             object_type="AlleleMention",
@@ -462,6 +473,8 @@ def _iter_allele_items(extraction: Mapping[str, Any]) -> tuple[Mapping[str, Any]
                 "extraction.alleles[].normalized_symbol",
             ),
             "normalized_id": item.get("normalized_id"),
+            "associated_gene": item.get("associated_gene"),
+            "taxon": item.get("taxon"),
             "source_mentions": item.get("source_mentions")
             if item.get("source_mentions") is not None
             else [_optional_string(item.get("mention"), "extraction.alleles[].mention")],

@@ -121,6 +121,8 @@
         "label": "daf-2(m41)",
         "entity_type": "allele",
         "normalized_id": "WB:WBVar00000001",
+        "associated_gene": "daf-2",
+        "taxon": "NCBITaxon:6239",
         "source_mentions": [
           "daf-2(m41)"
         ],
@@ -133,6 +135,8 @@
         "label": "daf-2(e1368)",
         "entity_type": "allele",
         "normalized_id": "WB:WBVar00000002",
+        "associated_gene": "daf-2",
+        "taxon": "NCBITaxon:6239",
         "source_mentions": [
           "daf-2(e1368)"
         ],
@@ -144,6 +148,8 @@
         "label": "daf-2(m41)",
         "entity_type": "allele",
         "normalized_id": "WB:WBVar00000001",
+        "associated_gene": "daf-2",
+        "taxon": "NCBITaxon:6239",
         "source_mentions": [
           "daf-2(m41)"
         ],
@@ -156,6 +162,8 @@
         "label": "daf-2(e1368)",
         "entity_type": "allele",
         "normalized_id": "WB:WBVar00000002",
+        "associated_gene": "daf-2",
+        "taxon": "NCBITaxon:6239",
         "source_mentions": [
           "daf-2(e1368)"
         ],
@@ -178,6 +186,8 @@
         "label": "daf-2(m41)",
         "entity_type": "allele",
         "normalized_id": "WB:WBVar00000001",
+        "associated_gene": "daf-2",
+        "taxon": "NCBITaxon:6239",
         "source_mentions": [
           "daf-2(m41)"
         ]
@@ -186,6 +196,8 @@
         "label",
         "entity_type",
         "normalized_id",
+        "associated_gene",
+        "taxon",
         "source_mentions.0"
       ],
       "evidence_case_ids": [

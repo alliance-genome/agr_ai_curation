@@ -606,6 +606,8 @@ def test_tool_verified_allele_fixture_converts_to_pending_envelope():
         "text": "daf-2(m41)",
         "normalized_hint": "WB:WBVar00000001",
     }
+    assert mention.payload["associated_gene"] == {"symbol": "daf-2"}
+    assert mention.payload["taxon"] == {"curie": "NCBITaxon:6239"}
     assert all(obj.object_type != "Allele" for obj in envelope.objects)
 
     finding_codes = [finding.code for finding in envelope.validation_findings]
@@ -669,6 +671,11 @@ def test_tool_verified_allele_fixture_rejects_malformed_required_data():
         build_pending_allele_envelope_from_tool_verified_fixture(
             malformed_normalized_id
         )
+
+    missing_taxon = copy.deepcopy(fixture)
+    missing_taxon["extraction"]["alleles"][0].pop("taxon")
+    with pytest.raises(ValueError, match="taxon must be a non-empty string"):
+        build_pending_allele_envelope_from_tool_verified_fixture(missing_taxon)
 
 
 def test_allele_submission_plan_blocks_until_durable_targets_resolve():
