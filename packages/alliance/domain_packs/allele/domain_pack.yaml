@@ -443,7 +443,6 @@ metadata:
         allow_opt_out: true
         curator_override:
           allowed: false
-        definition_state: in_development
     under_development:
       - binding_id: source_reference_validation
         display_name: Source reference validation

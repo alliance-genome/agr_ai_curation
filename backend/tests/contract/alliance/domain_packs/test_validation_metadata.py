@@ -142,23 +142,22 @@ def test_alliance_validator_metadata_has_curator_facing_display_names():
 
 def test_alliance_validator_binding_capability_groups_have_explicit_policies():
     alliance_registry = load_alliance_domain_pack_registry()
-    pack_ids = {
+    top_level_pack_ids = {
         "agr.alliance.gene_expression",
-        "gene",
         "agr.alliance.allele",
         "agr.alliance.disease",
         "agr.alliance.chemical_condition",
         "agr.alliance.phenotype",
     }
 
-    for pack_id in sorted(pack_ids):
-        raw_bindings = (
-            alliance_registry.get_pack(pack_id).metadata.metadata.get(
-                "validator_bindings"
-            )
-            or {}
-        )
-        for binding in raw_bindings.get("active") or []:
+    for pack_id in sorted(top_level_pack_ids):
+        raw_bindings = alliance_registry.get_pack(pack_id).metadata.metadata[
+            "validator_bindings"
+        ]
+        assert isinstance(raw_bindings["active"], list)
+        assert isinstance(raw_bindings["under_development"], list)
+
+        for binding in raw_bindings["active"]:
             assert binding["validator_agent"]["package_id"] == "agr.alliance"
             assert "applies_to" in binding
             assert "input_fields" in binding
@@ -168,7 +167,7 @@ def test_alliance_validator_binding_capability_groups_have_explicit_policies():
             assert binding["allow_opt_out"] is True
             assert binding["curator_override"] == {"allowed": False}
 
-        for binding in raw_bindings.get("under_development") or []:
+        for binding in raw_bindings["under_development"]:
             assert binding["state_explanation"]
             assert "required" not in binding
             assert "blocking" not in binding

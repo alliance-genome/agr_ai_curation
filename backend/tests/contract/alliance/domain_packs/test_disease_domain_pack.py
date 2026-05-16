@@ -154,8 +154,8 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         *validator_bindings["active"],
         *validator_bindings["under_development"],
     ]
-    binding_ids = [binding["binding_id"] for binding in binding_items]
-    assert len(binding_ids) == len(set(binding_ids))
+    binding_ids = {binding["binding_id"] for binding in binding_items}
+    assert len(binding_items) == len(binding_ids)
     assert {
         "disease_pending_envelope_validator",
         "disease_ontology_term_lookup",
@@ -166,7 +166,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_reference_materialization",
         "disease_evidence_code_lookup",
         "disease_data_provider_lookup",
-    }.issubset(binding_ids)
+    } == binding_ids
 
     pending_validator = validator_bindings["active"][0]
     assert (
