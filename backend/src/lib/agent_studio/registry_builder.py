@@ -551,7 +551,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         "summary": "Validates ontology term CURIEs and labels with package lookup helpers while preserving ambiguous or unresolved candidates.",
     },
     "controlled_vocabulary_validation": {
-        "summary": "Validates Alliance controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.",
+        "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.",
     },
     "gene_extractor": {
         "summary": "Extracts experimentally supported gene mentions from uploaded PDFs with evidence-first filtering, disambiguation, and database-assisted normalization.",
