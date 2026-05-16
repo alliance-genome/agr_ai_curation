@@ -19,6 +19,7 @@ ALLIANCE_PACKAGE_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
 sys.path.insert(0, str(ALLIANCE_PACKAGE_SRC))
 
 import agr_ai_curation_alliance.tools.literature_references as literature_references  # noqa: E402
+from agr_curation_api.exceptions import AGRAPIError  # noqa: E402
 
 
 def _tool_fn():
@@ -282,7 +283,17 @@ def test_missing_upstream_source_is_preserved_as_none(monkeypatch):
             "configuration is missing",
         ),
         (
+            AGRAPIError("Literature Elasticsearch is not configured: set ELASTICSEARCH_HOST"),
+            "blocked",
+            "configuration is missing",
+        ),
+        (
             RuntimeError("Elasticsearch query failed for literature references: timeout"),
+            "transient",
+            "could not reach",
+        ),
+        (
+            AGRAPIError("Elasticsearch query failed for literature references: timeout"),
             "transient",
             "could not reach",
         ),

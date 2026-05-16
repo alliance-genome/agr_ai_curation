@@ -15,6 +15,20 @@ TOOL_PROVIDER = "agr_literature_reference_lookup"
 DEFAULT_LIMIT = 20
 HARD_MAX = 100
 
+_EXPECTED_UPSTREAM_ERROR_TYPES: tuple[type[BaseException], ...] = (
+    ConnectionError,
+    ValueError,
+    RuntimeError,
+    ImportError,
+    ModuleNotFoundError,
+)
+try:
+    from agr_curation_api.exceptions import AGRAPIError
+except (ImportError, ModuleNotFoundError):
+    pass
+else:
+    _EXPECTED_UPSTREAM_ERROR_TYPES = _EXPECTED_UPSTREAM_ERROR_TYPES + (AGRAPIError,)
+
 
 class LiteratureReferenceLookupResult(BaseModel):
     """Structured result returned by the literature reference lookup tool."""
@@ -418,13 +432,7 @@ def agr_literature_reference_lookup(
             limit=limit_value,
             candidates=candidates,
         )
-    except (
-        ConnectionError,
-        ValueError,
-        RuntimeError,
-        ImportError,
-        ModuleNotFoundError,
-    ) as exc:
+    except _EXPECTED_UPSTREAM_ERROR_TYPES as exc:
         return _error_result(
             method=method_value,
             query=query_value,
