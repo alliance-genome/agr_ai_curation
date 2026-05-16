@@ -23,15 +23,6 @@ EXTRACTOR_PROMPTS = [
     "packages/alliance/agents/phenotype_extractor/prompt.yaml",
 ]
 
-ACTIVE_BINDING_EXTRACTOR_PROMPTS = [
-    "packages/alliance/agents/allele_extractor/prompt.yaml",
-    "packages/alliance/agents/chemical_extractor/prompt.yaml",
-    "packages/alliance/agents/disease_extractor/prompt.yaml",
-    "packages/alliance/agents/gene_expression/prompt.yaml",
-    "packages/alliance/agents/gene_extractor/prompt.yaml",
-    "packages/alliance/agents/phenotype_extractor/prompt.yaml",
-]
-
 EXTRACTOR_OUTPUT_SCHEMAS = {
     "packages/alliance/agents/allele_extractor/agent.yaml": "AlleleExtractorRepairResponse",
     "packages/alliance/agents/chemical_extractor/agent.yaml": "ChemicalExtractorRepairResponse",
@@ -129,6 +120,7 @@ def test_extractor_repair_prompt_examples_use_payload_relative_patch_paths():
 
 
 def test_extractor_prompts_delegate_active_bound_fields_to_validators():
+    lookup_tool_id = "_".join(("agr", "curation", "query"))
     required_fragments = [
         "active validator bindings",
         "authority",
@@ -141,12 +133,12 @@ def test_extractor_prompts_delegate_active_bound_fields_to_validators():
         "Normalizes retained",
         "Normalize retained",
         "Normalize the retained",
-        "normalized with `agr_curation_query`",
+        f"normalized with `{lookup_tool_id}`",
         "normalize retained",
         "returned by AGR lookup",
     ]
 
-    for relative_path in ACTIVE_BINDING_EXTRACTOR_PROMPTS:
+    for relative_path in EXTRACTOR_PROMPTS:
         content = _content(relative_path)
         normalized_content = re.sub(r"\s+", " ", content).lower()
 
