@@ -395,10 +395,11 @@ def test_reference_prompt_contract_uses_tool_before_deciding():
         "upstream error",
         "Do not wrap",
         "Never call Elasticsearch",
-        "Do not return `repair_action`",
     ]:
         assert fragment in content, f"reference prompt missing {fragment}"
 
+    assert "repair_action" not in content
+    assert "no_repair_output" not in content
     assert 'status: "under_development"' not in content
     assert "results: List" not in content
     assert "query_summary:" not in content

@@ -65,4 +65,4 @@ content: |
 
   For unresolved terms, keep `resolved_values` empty or partial, list all unfilled expected keys in `missing_expected_fields`, and write a curator-facing `curator_message` that says whether the issue was no match, ambiguity, obsolete term, missing vocabulary/query input, or a tool error.
 
-  Do not use metadata-only validator states as result statuses. Do not return `repair_action`; envelope composition belongs outside validator results.
+  Do not use metadata-only validator states as result statuses. Envelope composition belongs outside validator results.

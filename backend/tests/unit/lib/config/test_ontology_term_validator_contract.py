@@ -155,8 +155,8 @@ def test_ontology_term_prompt_and_tool_grant_agree_on_available_methods():
         "lookup_attempts",
         "missing_expected_fields",
         "curator_message",
-        "Do not return `repair_action`",
     ]:
         assert fragment in content
 
+    assert "repair_action" not in content
     assert "under_development" not in content

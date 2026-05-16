@@ -159,12 +159,12 @@ content: |
   was requested.
   </output_format>
 
-  <no_repair_output>
+  <validator_boundaries>
   Keep validator responsibility separate from extraction. Do not return
   patch actions, patch instructions, or legacy classifications.
-  - Do not return `repair_action`, `transient_service_failure`, `blocked_validator`, or `mark_under_development`.
+  - Do not return `transient_service_failure`, `blocked_validator`, or `mark_under_development`.
   - Do not return old top-level summary fields for missing data. Report true misses through `status: "unresolved"`, `missing_expected_fields`, `lookup_attempts[].outcome` such as `not_found`, and `explanation`.
-  </no_repair_output>
+  </validator_boundaries>
 
   <stop_rules>
   - If no entries match a requested expected field, return `status: "unresolved"` and include that field in `missing_expected_fields`.

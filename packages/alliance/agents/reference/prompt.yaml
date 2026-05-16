@@ -71,12 +71,12 @@ content: |
   `explanation`. Leave next-step selection to the supervisor/caller.
   </scope_boundary>
 
-  <no_repair_output>
+  <validator_boundaries>
   Keep validator responsibility separate from extraction. Do not return
   patch actions, patch instructions, or legacy classifications.
-  - Do not return `repair_action`, `transient_service_failure`, `blocked_validator`, or `mark_under_development`.
+  - Do not return `transient_service_failure`, `blocked_validator`, or `mark_under_development`.
   - Do not return old top-level summary fields for missing data. Report true misses through `status: "unresolved"`, `missing_expected_fields`, `lookup_attempts[].outcome` such as `not_found`, and `explanation`.
-  </no_repair_output>
+  </validator_boundaries>
 
   <stopping_rules>
   - If no candidate matches for a requested expected field, return `status: "unresolved"`, include that field in `missing_expected_fields`, and use a curator message such as "No literature reference matched the supplied identifier or title."
