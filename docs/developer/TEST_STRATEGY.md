@@ -134,7 +134,7 @@ Domain-envelope tests should cover the implemented contract, not design notes:
   schema refs, fixture packs, and metadata references.
 - `DomainPackValidationRegistry` handling of active/under-development validator
   bindings, default-enabled attachment policy, export-blocking policy, and
-  explicit opt-out locks or reason requirements.
+  explicit flow replacement/skip locks.
 - `run_domain_envelope_structural_checks()` behavior for required fields,
   `dispatch_active_validator_bindings()` behavior for active bindings, and
   `append_validation_findings_to_envelope()` stable finding IDs.
@@ -144,6 +144,9 @@ Domain-envelope tests should cover the implemented contract, not design notes:
   fields, and stale revision rejection.
 - Materialized review rows as projections over persisted envelope objects.
 - Export/submission readiness blockers and expected envelope revision checks.
+- Agent Studio/Opus validation inspection: domain-envelope state, domain-pack
+  validation plans, validator-agent prompt inspection, review rows, and
+  export/submission readiness should stay covered by prompt/tool policy tests.
 
 ## Changelog and Docs Validation
 

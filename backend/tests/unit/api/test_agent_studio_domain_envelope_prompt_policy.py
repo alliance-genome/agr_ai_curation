@@ -71,3 +71,27 @@ def test_chat_output_prompts_match_and_preserve_domain_envelope_refs():
     assert "`lookup_attempts` as an audit trail" in config_prompt
     assert "`annotation_drafts`" in config_prompt
     assert "use envelope references as truth" in config_prompt
+    assert "flow validator replacements/skips" in config_prompt
+    assert "opt-outs" not in config_prompt
+
+
+def test_non_opus_runtime_prompts_reject_stale_validator_dispatch_wording():
+    surface_paths = [
+        "config/agents/supervisor/prompt.yaml",
+        "config/agents/chat_output/prompt.yaml",
+        "packages/alliance/agents/chat_output/prompt.yaml",
+    ]
+    stale_phrases = [
+        "planned " + "validators",
+        "blocked " + "validators",
+        "planned or blocked " + "validators",
+        "opt-out " + "reason",
+        "requires an opt-out " + "reason",
+        "blocked_validator",
+        "mark_under_development",
+    ]
+
+    for relative_path in surface_paths:
+        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8").lower()
+        for phrase in stale_phrases:
+            assert phrase not in text, f"{phrase!r} returned in {relative_path}"
