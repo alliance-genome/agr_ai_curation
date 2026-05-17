@@ -32,8 +32,6 @@ class ValidationBindingState(str, Enum):
 
     ACTIVE = "active"
     UNDER_DEVELOPMENT = "under_development"
-    PLANNED = "planned"
-    BLOCKED = "blocked"
 
 
 class ValidationRegistryError(ValueError):
@@ -920,6 +918,13 @@ def _iter_validator_binding_items(
         raise ValidationRegistryError(
             "validator_bindings must be a mapping with active and under_development buckets"
         )
+    legacy_state_keys = {"planned", "blocked"}.intersection(raw_items)
+    if legacy_state_keys:
+        legacy_keys = ", ".join(sorted(legacy_state_keys))
+        raise ValidationRegistryError(
+            "validator_bindings supports only active and under_development buckets; "
+            f"found legacy bucket(s): {legacy_keys}"
+        )
 
     normalized: list[tuple[ValidationBindingState, Mapping[str, Any]]] = []
     for state in (
@@ -955,6 +960,13 @@ def _iter_stateful_metadata_items(
             for raw_item in raw_items
         )
     if isinstance(raw_items, Mapping):
+        legacy_state_keys = {"planned", "blocked"}.intersection(raw_items)
+        if legacy_state_keys:
+            legacy_keys = ", ".join(sorted(legacy_state_keys))
+            raise ValidationRegistryError(
+                f"{field_name} supports only active and under_development buckets; "
+                f"found legacy bucket(s): {legacy_keys}"
+            )
         state_keys = {state.value for state in ValidationBindingState}
         present_state_keys = state_keys.intersection(raw_items)
         if present_state_keys:
@@ -1005,7 +1017,7 @@ def _state_from_item(
         item_state = ValidationBindingState(str(raw_state))
     except ValueError as exc:
         raise ValidationRegistryError(
-            f"{field_name} item state must be active, planned, or blocked"
+            f"{field_name} item state must be active or under_development"
         ) from exc
     if collection_state is not None and item_state is not collection_state:
         raise ValidationRegistryError(

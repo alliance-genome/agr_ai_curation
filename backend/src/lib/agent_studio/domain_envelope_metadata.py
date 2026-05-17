@@ -232,7 +232,7 @@ def _source_of_truth_notes(
 def _validation_summary(
     validation_attachments: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    by_state = {"active": 0, "planned": 0, "blocked": 0, "under_development": 0}
+    by_state = {"active": 0, "under_development": 0}
     by_scope = {"pack": 0, "object": 0, "field": 0}
     default_enabled = 0
     required = 0

@@ -374,11 +374,11 @@ def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(mo
                                 "export_blocking": True,
                             },
                             {
-                                "attachment_id": "planned-binding",
+                                "attachment_id": "under-development-binding",
                                 "domain_pack_id": "alliance_allele",
                                 "validator_id": "future_validator",
-                                "validator_binding_id": "planned-binding",
-                                "state": "planned",
+                                "validator_binding_id": "under-development-binding",
+                                "state": "under_development",
                                 "enabled": False,
                             },
                         ],
@@ -408,7 +408,7 @@ def test_current_flow_domain_envelope_analysis_summarizes_validation_schedule(mo
     )
     assert node["validation_schedule"]["inactive_metadata"][0][
         "validator_binding_id"
-    ] == "planned-binding"
+    ] == "under-development-binding"
 
 
 def test_resolved_object_id_accepts_pending_ref_id():

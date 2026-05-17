@@ -116,12 +116,11 @@ def test_catalog_exposes_multiple_validation_options_for_extraction_agent():
 
     assert len(options) >= 3
     assert "active" in states
-    assert "planned" in states
-    assert "blocked" in states
+    assert "under_development" in states
     assert any(option["default_enabled"] for option in options if option["state"] == "active")
 
 
-def test_apply_defaults_selects_active_and_keeps_planned_blocked_visible():
+def test_apply_defaults_selects_active_and_keeps_under_development_visible():
     flow = _flow_definition()
 
     hydrated = apply_flow_validation_attachment_defaults(flow)
@@ -132,11 +131,7 @@ def test_apply_defaults_selects_active_and_keeps_planned_blocked_visible():
         for attachment in attachments
     )
     assert any(
-        attachment.state == "planned" and not attachment.enabled
-        for attachment in attachments
-    )
-    assert any(
-        attachment.state == "blocked" and not attachment.enabled
+        attachment.state == "under_development" and not attachment.enabled
         for attachment in attachments
     )
 
@@ -461,10 +456,10 @@ def test_validation_schedule_splits_active_opt_out_and_inactive_metadata():
                     "required": True,
                 },
                 {
-                    "attachment_id": "planned",
+                    "attachment_id": "future",
                     "domain_pack_id": "fixture",
-                    "validator_id": "planned",
-                    "state": "planned",
+                    "validator_id": "future",
+                    "state": "under_development",
                     "scope": "pack",
                     "enabled": False,
                 },
@@ -506,7 +501,7 @@ def test_validation_schedule_splits_active_opt_out_and_inactive_metadata():
     assert [item["attachment_id"] for item in schedule["opt_outs"]] == ["opt-out"]
     assert schedule["opt_outs"][0]["skipped_by_flow_configuration"] is True
     assert [item["attachment_id"] for item in schedule["inactive_metadata"]] == [
-        "planned"
+        "future"
     ]
     assert [item["validator_binding_id"] for item in schedule["replacement_validators"]] == [
         "replaced-binding"

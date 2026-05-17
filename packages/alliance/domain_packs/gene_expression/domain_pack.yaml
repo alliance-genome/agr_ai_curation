@@ -822,7 +822,7 @@ metadata:
       - validator_id: gene_expression.export_submission_projection
         display_name: Gene expression ready for export
         description: Validate GeneExpressionAnnotation export/submission target projection payloads.
-    planned:
+    under_development:
       - validator_id: gene_expression.linkml_anatomical_site_postcondition
         display_name: Anatomical site postcondition
         description: Enforce the LinkML AnatomicalSite rule requiring anatomical_structure or cellular_component once validator runtime wiring lands.
@@ -832,7 +832,6 @@ metadata:
       - validator_id: gene_expression.relation_vocabulary_lookup
         display_name: Relation vocabulary lookup
         description: Validate GeneExpressionAnnotation relation names against controlled vocabulary rows without treating them as ontology terms.
-    blocked:
       - validator_id: gene_expression.live_write_transport
         display_name: Live database write path
         blocked_by: read_only_curation_db

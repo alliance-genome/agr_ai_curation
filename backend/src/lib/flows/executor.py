@@ -1845,15 +1845,10 @@ def build_supervisor_instructions(
         opt_out_count = len(validation_schedule["opt_outs"])
         replacement_count = len(validation_schedule["replacement_validators"])
         supplemental_count = len(validation_schedule["supplemental_validators"])
-        planned_count = sum(
+        under_development_count = sum(
             1
             for item in validation_schedule["inactive_metadata"]
-            if item.get("state") == "planned"
-        )
-        blocked_count = sum(
-            1
-            for item in validation_schedule["inactive_metadata"]
-            if item.get("state") == "blocked"
+            if item.get("state") == "under_development"
         )
         if scheduled_count:
             step_desc += f" [schedule {scheduled_count} validator(s)]"
@@ -1863,10 +1858,10 @@ def build_supervisor_instructions(
             step_desc += f" [replacement validators: {replacement_count}]"
         if supplemental_count:
             step_desc += f" [supplemental validators: {supplemental_count}]"
-        if planned_count:
-            step_desc += f" [planned validators visible: {planned_count}]"
-        if blocked_count:
-            step_desc += f" [blocked validators visible: {blocked_count}]"
+        if under_development_count:
+            step_desc += (
+                f" [under-development validators visible: {under_development_count}]"
+            )
         step_descriptions.append(step_desc)
 
     # Build document guidance if a document is loaded

@@ -1045,11 +1045,6 @@ def _get_current_flow_handler():
                         for attachment in validation_attachments
                         if attachment.get("state") == "under_development"
                     ]
-                    inactive_metadata = [
-                        attachment
-                        for attachment in validation_attachments
-                        if attachment.get("state") != "active"
-                    ]
                     markdown_lines.append(
                         "- **Validation Attachments:** "
                         f"{len(active_enabled)} active scheduled"
@@ -1057,12 +1052,6 @@ def _get_current_flow_handler():
                         + (
                             f", {len(under_development_metadata)} under-development metadata"
                             if under_development_metadata
-                            else ""
-                        )
-                        + (
-                            f", {len(inactive_metadata)} inactive metadata"
-                            if inactive_metadata
-                            and len(inactive_metadata) != len(under_development_metadata)
                             else ""
                         )
                     )
@@ -1159,7 +1148,7 @@ def _get_current_flow_handler():
                     + (f", {opt_out_count} policy opt-outs" if opt_out_count else "")
                     + (f", {replacement_count} replacement validators" if replacement_count else "")
                     + (f", {supplemental_count} supplemental validators" if supplemental_count else "")
-                    + (f", {inactive_count} inactive validator metadata" if inactive_count else "")
+                    + (f", {inactive_count} under-development metadata" if inactive_count else "")
                     + ")"
                 )
             markdown_lines.append("")
