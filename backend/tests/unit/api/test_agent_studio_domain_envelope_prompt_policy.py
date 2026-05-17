@@ -73,6 +73,9 @@ FORBIDDEN_VALIDATOR_DISPATCH_CLEANUP_PATTERNS = {
         r"\brequires an opt-out reason\b"
     ),
     "legacy reason-required wording": re.compile(r"\bwhether a reason is required\b"),
+    "legacy export-locking wording": re.compile(
+        r"\bexport-blocking or explicitly locked\b"
+    ),
     "validation supervisor remnants": re.compile(
         r"\b(?:run_validation_supervisor|validation_supervisor|validation supervisor)\b"
     ),
@@ -130,6 +133,21 @@ def _validator_dispatch_cleanup_surface_paths() -> tuple[str, ...]:
     return tuple(sorted(paths))
 
 
+def _package_agent_prompt_paths(agent_name: str | None = None) -> tuple[str, ...]:
+    prompt_glob = (
+        f"packages/*/agents/{agent_name}/prompt.yaml"
+        if agent_name
+        else "packages/*/agents/*/prompt.yaml"
+    )
+    return tuple(
+        sorted(
+            str(path.relative_to(REPO_ROOT))
+            for path in REPO_ROOT.glob(prompt_glob)
+            if path.is_file()
+        )
+    )
+
+
 def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
 
@@ -175,44 +193,13 @@ def test_validator_dispatch_cleanup_allowlist_documents_legitimate_contexts():
     assert missing_allowlist_entries == []
 
 
-def test_opus_validation_surfaces_reject_stale_validator_dispatch_wording():
-    surface_paths = [
-        "backend/src/api/agent_studio_system_prompt.md",
-        "backend/src/api/agent_studio_opus_tools.py",
-        "backend/src/lib/agent_studio/domain_envelope_tools.py",
-        "backend/src/lib/agent_studio/flow_tools.py",
-        "backend/src/lib/agent_studio/prompt_builder.py",
-        "backend/src/lib/agent_studio/diagnostic_tools/tool_definitions.py",
-    ]
-    stale_phrases = [
-        "planned " + "validators",
-        "blocked " + "validators",
-        "planned or blocked " + "validators",
-        "planned or blocked " + "metadata",
-        "planned/blocked " + "metadata",
-        "opt-out " + "reason",
-        "requires an opt-out " + "reason",
-        "opt_out_" + "reason",
-        "whether a " + "reason is required",
-        "export-blocking or explicitly " + "locked",
-        "run_validation_" + "supervisor",
-        "validation_" + "supervisor",
-        "repair_" + "action",
-        "repair_" + "mode",
-        "repair_" + "hints",
-    ]
-
-    for relative_path in surface_paths:
-        text = _read_repo_text(relative_path).lower()
-        for phrase in stale_phrases:
-            assert phrase not in text, f"{phrase!r} returned in {relative_path}"
-
-
 def test_chat_output_prompts_match_and_preserve_domain_envelope_refs():
     config_prompt = _read_repo_text("config/agents/chat_output/prompt.yaml")
-    package_prompt = _read_repo_text("packages/alliance/agents/chat_output/prompt.yaml")
+    package_prompt_paths = _package_agent_prompt_paths("chat_output")
 
-    assert config_prompt == package_prompt
+    assert package_prompt_paths
+    for package_prompt_path in package_prompt_paths:
+        assert config_prompt == _read_repo_text(package_prompt_path)
     assert "domain_envelope.objects" in config_prompt
     assert "review rows" in config_prompt
     assert "lookup attempts" in config_prompt
@@ -225,14 +212,11 @@ def test_chat_output_prompts_match_and_preserve_domain_envelope_refs():
 
 
 def test_non_opus_runtime_prompts_reject_stale_validator_dispatch_wording():
-    surface_paths = [
+    surface_paths = (
         "config/agents/supervisor/prompt.yaml",
         "config/agents/chat_output/prompt.yaml",
-        "packages/alliance/agents/chemical/prompt.yaml",
-        "packages/alliance/agents/chat_output/prompt.yaml",
-        "packages/alliance/agents/disease/prompt.yaml",
-        "packages/alliance/agents/reference/prompt.yaml",
-    ]
+        *_package_agent_prompt_paths(),
+    )
     stale_phrases = [
         "planned " + "validators",
         "blocked " + "validators",
