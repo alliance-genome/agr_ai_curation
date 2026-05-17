@@ -33,6 +33,7 @@ def test_opus_validation_surfaces_reject_stale_validator_dispatch_wording():
         "backend/src/api/agent_studio_system_prompt.md",
         "backend/src/api/agent_studio_opus_tools.py",
         "backend/src/lib/agent_studio/domain_envelope_tools.py",
+        "backend/src/lib/agent_studio/flow_tools.py",
         "backend/src/lib/agent_studio/prompt_builder.py",
         "backend/src/lib/agent_studio/diagnostic_tools/tool_definitions.py",
     ]

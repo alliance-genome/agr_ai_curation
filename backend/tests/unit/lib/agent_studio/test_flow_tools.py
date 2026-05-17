@@ -512,6 +512,23 @@ def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch)
                         "agent_id": "allele_extractor",
                         "agent_display_name": "Allele Extraction",
                         "output_key": "alleles",
+                        "validation_attachments": [
+                            {
+                                "attachment_id": "allele-symbol-binding",
+                                "state": "active",
+                                "enabled": True,
+                            },
+                            {
+                                "attachment_id": "optional-note-binding",
+                                "state": "active",
+                                "enabled": False,
+                            },
+                            {
+                                "attachment_id": "source-reference-binding",
+                                "state": "under_development",
+                                "enabled": False,
+                            },
+                        ],
                     },
                 },
             ],
@@ -531,6 +548,10 @@ def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch)
         == "allele-symbol-binding"
     )
     assert "Domain Envelope Metadata" in result["execution_order_markdown"]
+    assert (
+        "**Validation Attachments:** 1 active scheduled, 1 opted out, "
+        "1 under-development metadata"
+    ) in result["execution_order_markdown"]
     assert (
         "1 scheduled validators, 1 policy opt-outs, 1 replacement validators, "
         "1 supplemental validators, 1 inactive validator metadata"
