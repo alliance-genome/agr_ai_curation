@@ -135,9 +135,9 @@ Domain-envelope tests should cover the implemented contract, not design notes:
 - `DomainPackValidationRegistry` handling of active/under-development validator
   bindings, default-enabled attachment policy, export-blocking policy, and
   explicit opt-out locks or reason requirements.
-- `run_validation_supervisor()` behavior for required fields,
-  under-development findings, active bindings, dispatch-unavailable findings,
-  and stable finding IDs.
+- `run_domain_envelope_structural_checks()` behavior for required fields,
+  `dispatch_active_validator_bindings()` behavior for active bindings, and
+  `append_validation_findings_to_envelope()` stable finding IDs.
 - `lookup_attempts` as an audit trail, including transient attempts that may
   exist even when the top-level lookup status succeeds after retry.
 - unresolved validation findings, lookup attempts, curator messages, protected

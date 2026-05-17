@@ -21,8 +21,7 @@ from src.lib.domain_packs.validation_registry import (
     ValidationBindingState,
     validate_active_validator_agent_references,
 )
-from src.lib.domain_packs import validation_supervisor
-from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
+from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
 from src.schemas.domain_envelope import (
     CuratableObjectEnvelope,
     DomainEnvelope,
@@ -63,14 +62,6 @@ def _validator_schema_resolver(schema_key: str):
 
 
 def test_lookup_status_constants_are_shared_with_agr_lookup_contract():
-    assert (
-        validation_supervisor.LOOKUP_STATUS_BLOCKED
-        == lookup_status.LOOKUP_STATUS_BLOCKED
-    )
-    assert (
-        validation_supervisor.LOOKUP_STATUS_UNDER_DEVELOPMENT
-        == lookup_status.LOOKUP_STATUS_UNDER_DEVELOPMENT
-    )
     assert agr_lookup.LOOKUP_STATUS_BLOCKED == lookup_status.LOOKUP_STATUS_BLOCKED
     assert (
         agr_lookup.LOOKUP_STATUS_UNDER_DEVELOPMENT
@@ -865,13 +856,13 @@ def test_under_development_binding_requires_display_name(tmp_path: Path):
         load_domain_pack_metadata(metadata_path)
 
 
-def test_supervisor_treats_under_development_bindings_as_metadata_only(
+def test_structural_checks_keep_under_development_bindings_metadata_only(
     tmp_path: Path,
 ):
     pack = _loaded_pack(tmp_path)
     envelope = _envelope(payload={"gene": {"symbol": "abc-1"}, "confidence": "high"})
 
-    result = run_validation_supervisor(envelope, pack)
+    result = run_domain_envelope_structural_checks(envelope, pack)
     findings_by_code = {
         finding.code: finding for finding in result.envelope.validation_findings
     }
@@ -897,13 +888,6 @@ def test_supervisor_treats_under_development_bindings_as_metadata_only(
     assert {
         finding.code for finding in result.envelope.validation_findings
     }.isdisjoint({"domain_pack.validator_binding_under_development"})
-    blocked_metadata = [
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_blocked"
-    ][0]
-    assert blocked_metadata.details["validation_metadata"]["blocked_by"] == "ALL-999"
-
     assert len(result.envelope.history) == len(result.appended_findings)
     assert {event.event_type.value for event in result.envelope.history} == {
         "validation_finding_added"
@@ -914,7 +898,9 @@ def test_supervisor_treats_under_development_bindings_as_metadata_only(
     )
 
 
-def test_supervisor_marks_field_definition_source_when_policy_absent(tmp_path: Path):
+def test_structural_checks_mark_field_definition_source_when_policy_absent(
+    tmp_path: Path,
+):
     pack = _loaded_pack(tmp_path)
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
     envelope = _envelope(payload={"gene": {"symbol": "abc-1"}, "confidence": "high"})
@@ -931,7 +917,7 @@ def test_supervisor_marks_field_definition_source_when_policy_absent(tmp_path: P
         def policy_for(self, _object_type: str, _field_path: str) -> None:
             return None
 
-    result = run_validation_supervisor(
+    result = run_domain_envelope_structural_checks(
         envelope,
         pack,
         registry=RegistryWithoutFormalFieldPolicies(registry),
@@ -947,20 +933,3 @@ def test_supervisor_marks_field_definition_source_when_policy_absent(tmp_path: P
     assert metadata["metadata_source"] == "field_definition"
     assert metadata["field_policy"]["policy_source"] == "field_definition"
     assert metadata["field_policy"]["field_path"] == "gene.identifier"
-
-
-def test_supervisor_does_not_fake_success_for_unsupported_active_binding(
-    tmp_path: Path,
-):
-    pack = _loaded_pack(tmp_path)
-
-    result = run_validation_supervisor(envelope=_envelope(), domain_pack=pack)
-
-    dispatch_findings = [
-        finding
-        for finding in result.envelope.validation_findings
-        if finding.code == "domain_pack.validator_dispatch_unavailable"
-    ]
-    assert len(dispatch_findings) == 3
-    assert dispatch_findings[0].severity is ValidationFindingSeverity.WARNING
-    assert dispatch_findings[0].object_ref.pending_ref_id == "gene-assertion-1"

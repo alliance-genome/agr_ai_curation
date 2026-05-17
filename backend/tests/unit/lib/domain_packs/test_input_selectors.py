@@ -8,12 +8,13 @@ import pytest
 from pydantic import ValidationError
 
 from src.lib.domain_packs.loader import load_domain_pack_metadata
+from src.lib.domain_packs.input_selectors import build_domain_validation_request
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
+    ValidationBindingState,
     ValidationRegistryError,
 )
-from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from src.schemas.domain_pack_metadata import DomainPackInputSelector
 
@@ -95,7 +96,11 @@ def _run_selector(
 ):
     pack = _loaded_pack(tmp_path, input_selector_yaml)
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
-    return run_validation_supervisor(envelope, pack, registry=registry)
+    match = registry.match_bindings(
+        envelope,
+        states=[ValidationBindingState.ACTIVE],
+    )[0]
+    return build_domain_validation_request(match)
 
 
 def _assertion_envelope(
@@ -249,12 +254,9 @@ def test_validation_request_carries_selected_inputs_evidence_and_expected_fields
         ),
     )
 
-    finding = next(
-        item
-        for item in result.envelope.validation_findings
-        if item.code == "domain_pack.validator_dispatch_unavailable"
-    )
-    request = finding.details["validation_request"]
+    assert result.findings == ()
+    assert result.request is not None
+    request = result.request.model_dump(mode="json")
     assert request["validator_binding_id"] == "fixture.selector"
     assert request["validator_agent"] == {
         "package_id": "org.validators",
@@ -279,13 +281,8 @@ def test_runtime_selector_missing_field_becomes_structured_finding(tmp_path: Pat
         _assertion_envelope(payload={}),
     )
 
-    assert {finding.code for finding in result.envelope.validation_findings} >= {
-        "selector_missing_field"
-    }
-    assert not any(
-        finding.code == "domain_pack.validator_dispatch_unavailable"
-        for finding in result.envelope.validation_findings
-    )
+    assert {finding.code for finding in result.findings} == {"selector_missing_field"}
+    assert result.request is None
 
 
 def test_runtime_selector_ambiguity_becomes_structured_finding(tmp_path: Path):
@@ -301,7 +298,7 @@ def test_runtime_selector_ambiguity_becomes_structured_finding(tmp_path: Path):
 
     finding = next(
         item
-        for item in result.envelope.validation_findings
+        for item in result.findings
         if item.code == "selector_ambiguous"
     )
     assert finding.details["selector_problem"]["value_count"] == 2
@@ -329,7 +326,7 @@ def test_runtime_selector_unresolved_ref_becomes_structured_finding(tmp_path: Pa
 
     finding = next(
         item
-        for item in result.envelope.validation_findings
+        for item in result.findings
         if item.code == "selector_unresolved_ref"
     )
     assert finding.details["selector_problem"]["ref"]["pending_ref_id"] == "missing-ref"
@@ -346,10 +343,8 @@ def test_runtime_selector_missing_evidence_becomes_structured_finding(tmp_path: 
         _assertion_envelope(payload={"value": "AGR:1"}),
     )
 
-    assert any(
-        finding.code == "selector_missing"
-        for finding in result.envelope.validation_findings
-    )
+    assert {finding.code for finding in result.findings} == {"selector_missing"}
+    assert result.request is None
 
 
 def test_optional_missing_selector_is_omitted_without_suppressing_request(
@@ -369,12 +364,9 @@ def test_optional_missing_selector_is_omitted_without_suppressing_request(
         _assertion_envelope(payload={"value": "AGR:1"}),
     )
 
-    finding = next(
-        item
-        for item in result.envelope.validation_findings
-        if item.code == "domain_pack.validator_dispatch_unavailable"
-    )
-    request = finding.details["validation_request"]
+    assert result.findings == ()
+    assert result.request is not None
+    request = result.request.model_dump(mode="json")
     assert request["selected_inputs"] == {"selected": "AGR:1"}
     assert request["target"]["input_values"] == {"selected": "AGR:1"}
     assert "optional_quote" in request["input_selectors"]
@@ -397,14 +389,8 @@ def test_optional_ambiguous_selector_still_becomes_structured_finding(
         _assertion_envelope(payload={"value": "AGR:1", "aliases": ["A", "B"]}),
     )
 
-    assert any(
-        finding.code == "selector_ambiguous"
-        for finding in result.envelope.validation_findings
-    )
-    assert not any(
-        finding.code == "domain_pack.validator_dispatch_unavailable"
-        for finding in result.envelope.validation_findings
-    )
+    assert {finding.code for finding in result.findings} == {"selector_ambiguous"}
+    assert result.request is None
 
 
 def test_evidence_selector_uses_canonical_evidence_record_id(tmp_path: Path):
@@ -427,14 +413,11 @@ def test_evidence_selector_uses_canonical_evidence_record_id(tmp_path: Path):
 
     finding = next(
         item
-        for item in result.envelope.validation_findings
+        for item in result.findings
         if item.code == "selector_missing"
     )
     assert finding.details["selector_problem"]["record_id"] == "evidence-1"
-    assert not any(
-        item.code == "domain_pack.validator_dispatch_unavailable"
-        for item in result.envelope.validation_findings
-    )
+    assert result.request is None
 
 
 def test_object_ref_selector_uses_explicit_ref_not_sibling_guessing(tmp_path: Path):
@@ -459,7 +442,5 @@ def test_object_ref_selector_uses_explicit_ref_not_sibling_guessing(tmp_path: Pa
         ),
     )
 
-    assert any(
-        finding.code == "selector_missing"
-        for finding in result.envelope.validation_findings
-    )
+    assert {finding.code for finding in result.findings} == {"selector_missing"}
+    assert result.request is None

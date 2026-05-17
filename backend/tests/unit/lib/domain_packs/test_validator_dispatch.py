@@ -252,7 +252,9 @@ def test_dispatch_active_binding_returns_unresolved_validator_result(
     finding = _single_result_finding(result)
     assert finding.status.value == "open"
     assert finding.severity.value == "blocker"
+    assert finding.code == "domain_pack.validator_unresolved"
     assert finding.details["failure_classification"] == "missing_expected_result_field"
+    assert finding.details["failure_classification"] != "under_development"
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
     assert result.validator_results[0].status == "unresolved"
 

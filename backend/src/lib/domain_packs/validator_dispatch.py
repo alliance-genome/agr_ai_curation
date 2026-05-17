@@ -39,7 +39,7 @@ from .validator_result_classification import (
     lookup_status_for_validator_outcome,
     validator_failure_classification,
 )
-from .validation_supervisor import append_validation_findings_to_envelope
+from .validation_findings import append_validation_findings_to_envelope
 
 
 LOGGER = logging.getLogger(__name__)

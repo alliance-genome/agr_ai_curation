@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -91,6 +92,14 @@ _REAL_REFRESH_DOMAIN_ENVELOPE_VALIDATION_FOR_REF = (
     module._refresh_domain_envelope_validation_for_ref
 )
 _REAL_ENVELOPE_FIELD_RESULTS_FOR_CANDIDATE = module._envelope_field_results_for_candidate
+
+
+def test_envelope_refresh_uses_structural_checks_and_active_dispatch():
+    source = inspect.getsource(_REAL_REFRESH_DOMAIN_ENVELOPE_VALIDATION_FOR_REF)
+
+    assert "run_domain_envelope_structural_checks" in source
+    assert "dispatch_active_validator_bindings" in source
+    assert "run_validation_supervisor" not in source
 
 
 @pytest.fixture

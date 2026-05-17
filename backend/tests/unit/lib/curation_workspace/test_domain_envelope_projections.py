@@ -178,10 +178,10 @@ def _envelope() -> DomainEnvelope:
             ),
             ValidationFinding(
                 severity=ValidationFindingSeverity.WARNING,
-                code="domain_pack.validator_dispatch_unavailable",
-                message="Ontology lookup is under development.",
+                code="domain_pack.validator_unresolved",
+                message="Ontology lookup was unresolved.",
                 object_ref=_object_ref(),
-                details={"failure_classification": "under_development"},
+                details={"failure_classification": "not_found"},
             ),
             ValidationFinding(
                 severity=ValidationFindingSeverity.INFO,
@@ -384,7 +384,7 @@ def test_validation_summary_projection_groups_states_by_object_and_field():
     assert by_field_path["gene.symbol"].open_finding_count == 1
     assert by_field_path["gene.curie"].status is DomainEnvelopeValidationStatus.PLANNED
     assert by_field_path["evidence.score"].status is DomainEnvelopeValidationStatus.BLOCKED
-    assert by_field_path[None].status is DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT
+    assert by_field_path[None].status is DomainEnvelopeValidationStatus.UNRESOLVED
     assert by_field_path["gene.label"].status is DomainEnvelopeValidationStatus.RESOLVED
     assert all(summary.envelope_revision == 3 for summary in summaries)
     assert all(summary.object_id == "gene-1" for summary in summaries)
@@ -557,7 +557,6 @@ def test_workspace_response_includes_domain_envelope_projections():
             DomainEnvelopeValidationStatus.UNRESOLVED,
             DomainEnvelopeValidationStatus.PLANNED,
             DomainEnvelopeValidationStatus.BLOCKED,
-            DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT,
         }
         assert candidate_payload.projection_ref is not None
         assert candidate_payload.projection_ref.envelope_revision == 3

@@ -65,7 +65,7 @@ from src.lib.domain_packs.validation_registry import (
     ValidationBindingState,
     ValidatorBindingMatch,
 )
-from src.lib.domain_packs.validation_supervisor import append_validation_findings_to_envelope
+from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import (
     run_package_scoped_validator_agent,
     unresolved_validator_result_for_dispatch_problem,

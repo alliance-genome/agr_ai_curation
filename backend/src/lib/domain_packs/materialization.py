@@ -324,7 +324,7 @@ def materialize_validator_results_into_envelope(
             )
         )
 
-    from .validation_supervisor import append_validation_findings_to_envelope
+    from .validation_findings import append_validation_findings_to_envelope
 
     working_envelope, appended_findings = append_validation_findings_to_envelope(
         working_envelope,
@@ -1596,17 +1596,9 @@ def _validation_status(finding: ValidationFinding) -> DomainEnvelopeValidationSt
             return DomainEnvelopeValidationStatus.BLOCKED
         if binding_state == DomainEnvelopeValidationStatus.PLANNED.value:
             return DomainEnvelopeValidationStatus.PLANNED
-        if (
-            _optional_string(validation_metadata.get("definition_state"))
-            == "in_development"
-        ):
-            return DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT
 
     if _optional_string(details.get("failure_classification")) == "blocked":
         return DomainEnvelopeValidationStatus.BLOCKED
-    if _optional_string(details.get("failure_classification")) == "under_development":
-        return DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT
-
     lookup_attempts = details.get("lookup_attempts")
     if isinstance(lookup_attempts, list):
         lookup_statuses = {
@@ -1616,8 +1608,6 @@ def _validation_status(finding: ValidationFinding) -> DomainEnvelopeValidationSt
         }
         if "blocked" in lookup_statuses:
             return DomainEnvelopeValidationStatus.BLOCKED
-        if "under_development" in lookup_statuses:
-            return DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT
 
     return DomainEnvelopeValidationStatus.UNRESOLVED
 

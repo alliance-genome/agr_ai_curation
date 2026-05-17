@@ -99,13 +99,14 @@ object definitions, and field definitions, then normalizes them into:
 - required/export-blocking field policies,
 - field-level opt-out policy,
 - Agent Studio validation attachment options,
-- supervisor binding matches against envelope objects and fields.
+- binding matches against envelope objects and fields.
 
-`run_validation_supervisor()` handles built-in metadata validations such as
-required fields and writes new `ValidationFinding` records back into the
-envelope. Under-development bindings are visible informational findings; they
-are not reported as successful work. Unsupported active bindings produce
-dispatch-unavailable findings until package-scoped validator dispatch is wired.
+`run_domain_envelope_structural_checks()` handles deterministic structural
+checks such as required fields and writes new `ValidationFinding` records back
+into the envelope. Under-development bindings are metadata visibility only; they
+are not runtime validation findings. Active bindings are executed through
+package-scoped validator dispatch and materialized as resolved or unresolved
+validator results.
 
 Active validator `input_fields` must use explicit selector objects. Supported
 selector sources are `payload`, `envelope_metadata`, `object_metadata`,
