@@ -152,27 +152,23 @@ def _envelope() -> DomainEnvelope:
             ),
             ValidationFinding(
                 severity=ValidationFindingSeverity.INFO,
-                code="domain_pack.validator_binding_planned",
-                message="Symbol validator is planned.",
+                code="domain_pack.validator_binding_under_development",
+                message="Symbol validator is under development.",
                 field_ref=_field_ref("gene.curie"),
                 details={
                     "validation_metadata": {
-                        "binding_state": "planned",
-                        "validator_binding_id": "fixture.planned_symbol_lookup",
+                        "binding_state": "under_development",
+                        "validator_binding_id": "fixture.future_symbol_lookup",
                     },
                     "lookup_attempts": [{"lookup_status": "under_development"}],
                 },
             ),
             ValidationFinding(
                 severity=ValidationFindingSeverity.BLOCKER,
-                code="domain_pack.validator_binding_blocked",
-                message="Export validator is blocked.",
+                code="fixture.export_validator_blocked",
+                message="Export validator reported a blocking failure.",
                 field_ref=_field_ref("evidence.score"),
                 details={
-                    "validation_metadata": {
-                        "binding_state": "blocked",
-                        "blocked_by": "ALL-999",
-                    },
                     "failure_classification": "blocked",
                 },
             ),
@@ -382,7 +378,7 @@ def test_validation_summary_projection_groups_states_by_object_and_field():
     assert by_field_path["gene.symbol"].status is DomainEnvelopeValidationStatus.UNRESOLVED
     assert by_field_path["gene.symbol"].finding_count == 1
     assert by_field_path["gene.symbol"].open_finding_count == 1
-    assert by_field_path["gene.curie"].status is DomainEnvelopeValidationStatus.PLANNED
+    assert by_field_path["gene.curie"].status is DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT
     assert by_field_path["evidence.score"].status is DomainEnvelopeValidationStatus.BLOCKED
     assert by_field_path[None].status is DomainEnvelopeValidationStatus.UNRESOLVED
     assert by_field_path["gene.label"].status is DomainEnvelopeValidationStatus.RESOLVED
@@ -555,7 +551,7 @@ def test_workspace_response_includes_domain_envelope_projections():
             for summary in workspace.validation_summary_projections
         } >= {
             DomainEnvelopeValidationStatus.UNRESOLVED,
-            DomainEnvelopeValidationStatus.PLANNED,
+            DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT,
             DomainEnvelopeValidationStatus.BLOCKED,
         }
         assert candidate_payload.projection_ref is not None

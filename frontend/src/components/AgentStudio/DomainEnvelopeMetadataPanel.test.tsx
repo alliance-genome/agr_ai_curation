@@ -23,23 +23,24 @@ describe('DomainEnvelopeMetadataPanel', () => {
       default_enabled: true,
       blocking: false,
     })
-    const fieldPlanned = buildValidationAttachmentOption({
-      attachment_id: 'disease:term-name-planned',
+    const fieldFuture = buildValidationAttachmentOption({
+      attachment_id: 'disease:term-name-future',
       domain_pack_id: 'agr.alliance.disease',
       validator_id: 'disease_term_name_lookup',
-      state: 'planned',
+      state: 'under_development',
       scope: 'field',
       object_type: 'DiseaseAnnotation',
       field_path: 'disease_annotation_object.name',
       label: 'Disease term name lookup',
       target_label: 'Disease annotation Disease term name',
+      state_explanation: 'Disease term-name validation needs ontology dispatch wiring.',
       default_enabled: false,
       blocking: false,
     })
     const metadata = buildDomainEnvelopeMetadata({
       domain_pack_id: 'agr.alliance.disease',
       display_name: 'Alliance Disease Domain Pack',
-      validation_attachments: [objectLevelActive, fieldPlanned],
+      validation_attachments: [objectLevelActive, fieldFuture],
       object_definitions: [
         {
           object_type: 'DiseaseAnnotation',
@@ -64,14 +65,14 @@ describe('DomainEnvelopeMetadataPanel', () => {
               provider_refs: {},
               source_of_truth: 'alliance_linkml',
               validation_policy: null,
-              validation_attachments: [fieldPlanned],
+              validation_attachments: [fieldFuture],
             },
           ],
         },
       ],
       validation_summary: {
         total: 2,
-        by_state: { active: 1, planned: 1, blocked: 0, under_development: 0 },
+        by_state: { active: 1, under_development: 1 },
         by_scope: { pack: 0, object: 1, field: 1 },
         default_enabled: 1,
         required: 0,
@@ -123,7 +124,7 @@ describe('DomainEnvelopeMetadataPanel', () => {
       validation_attachments: [active, underDevelopment],
       validation_summary: {
         total: 2,
-        by_state: { active: 1, planned: 0, blocked: 0, under_development: 1 },
+        by_state: { active: 1, under_development: 1 },
         by_scope: { pack: 0, object: 0, field: 2 },
         default_enabled: 1,
         required: 1,

@@ -88,32 +88,6 @@ describe('FlowNode', () => {
               enabled: true,
             },
             {
-              attachment_id: 'planned',
-              domain_pack_id: 'fixture',
-              validator_id: 'planned',
-              label: 'Planned validator',
-              state: 'planned',
-              scope: 'pack',
-              required: false,
-              blocking: false,
-              default_enabled: false,
-              allow_opt_out: false,
-              enabled: false,
-            },
-            {
-              attachment_id: 'blocked',
-              domain_pack_id: 'fixture',
-              validator_id: 'blocked',
-              label: 'Blocked validator',
-              state: 'blocked',
-              scope: 'pack',
-              required: false,
-              blocking: false,
-              default_enabled: false,
-              allow_opt_out: false,
-              enabled: false,
-            },
-            {
               attachment_id: 'under-development',
               domain_pack_id: 'fixture',
               validator_id: 'under-development',
@@ -136,8 +110,6 @@ describe('FlowNode', () => {
     expect(screen.getByText('1 active validation')).toBeInTheDocument()
     expect(screen.getByText('1 envelope object')).toBeInTheDocument()
     expect(screen.getByText('1 blocking')).toBeInTheDocument()
-    expect(screen.getByText('1 planned')).toBeInTheDocument()
-    expect(screen.getByText('1 unavailable')).toBeInTheDocument()
     expect(screen.getByText('1 under development')).toBeInTheDocument()
   })
 })
