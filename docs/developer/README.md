@@ -139,10 +139,9 @@ normalized payloads, or materialized review rows as a parallel semantic store.
 
 Use domain-pack metadata for curatable object definitions, field paths, schema
 refs, validator bindings, field/export readiness policy, validator flow
-replacement/skip policy,
-workspace display, and export/submission behavior. Shared runtime code must stay
-provider-agnostic; Alliance LinkML, curation DB projections, and package-specific
-adapters belong in `packages/alliance/`.
+replacement/skip policy, workspace display, and export/submission behavior.
+Shared runtime code must stay provider-agnostic; Alliance LinkML, curation DB
+projections, and package-specific adapters belong in `packages/alliance/`.
 
 For Agent Studio validation questions, Opus should inspect the domain-envelope
 state, domain-pack validation plan, validator-agent prompt via `get_prompt` when
