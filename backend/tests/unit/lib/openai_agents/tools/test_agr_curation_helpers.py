@@ -1,13 +1,19 @@
-"""Additional helper/branch tests for AGR curation tool."""
+"""Additional helper/branch tests for the package-owned AGR curation tool."""
 
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from src.lib import identifier_validation
-from src.lib.openai_agents.tools import agr_curation
+
+REPO_ROOT = Path(__file__).resolve().parents[6]
+ALLIANCE_PACKAGE_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
+sys.path.insert(0, str(ALLIANCE_PACKAGE_SRC))
+
+from agr_ai_curation_alliance.tools import agr_curation  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -431,32 +437,19 @@ def test_query_ontology_search_methods(monkeypatch):
     assert go.count == 1
 
 
-def test_query_ontology_term_by_curie_uses_structured_lookup(monkeypatch):
+def test_query_get_ontology_term_uses_package_lookup(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
-
-    class FakeRows:
-        def __init__(self, rows):
-            self._rows = rows
-
-        def fetchall(self):
-            return self._rows
-
-    class FakeSession:
-        def execute(self, _query, params):
-            if params == {"curie": "DOID:0050434", "ontologytermtype": "DOTerm"}:
-                return FakeRows(
-                    [("DOID:0050434", "Andersen-Tawil syndrome", "DOTerm")]
-                )
-            return FakeRows([])
-
-        @staticmethod
-        def close():
-            return None
 
     class FakeDb:
         @staticmethod
-        def create_session():
-            return FakeSession()
+        def get_ontology_term(curie):
+            if curie == "DOID:0050434":
+                return SimpleNamespace(
+                    curie="DOID:0050434",
+                    name="Andersen-Tawil syndrome",
+                    ontology_type="DOTerm",
+                )
+            return None
 
     class Resolver:
         @staticmethod
@@ -468,25 +461,23 @@ def test_query_ontology_term_by_curie_uses_structured_lookup(monkeypatch):
     monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
 
     result = query_fn(
-        method="get_ontology_term_by_curie",
+        method="get_ontology_term",
         term="DOID:0050434",
         ontology_term_type="DOTerm",
     )
     assert result.status == "ok"
     assert result.lookup_status == "success"
-    assert result.data == [
-        {
-            "curie": "DOID:0050434",
-            "curie_validated": True,
-            "name": "Andersen-Tawil syndrome",
-            "ontology_type": "DOTerm",
-        }
-    ]
+    assert result.data == {
+        "curie": "DOID:0050434",
+        "curie_validated": True,
+        "name": "Andersen-Tawil syndrome",
+        "ontology_type": "DOTerm",
+    }
     assert result.result_projections[0]["projection_type"] == "ontology_term_reference"
     assert result.lookup_attempts[0]["resolved_id"] == "DOID:0050434"
 
     missing = query_fn(
-        method="get_ontology_term_by_curie",
+        method="get_ontology_term",
         term="DOID:0050434",
         ontology_term_type="CHEBITerm",
     )
