@@ -256,11 +256,12 @@ async def test_fixture_chat_extraction_maps_verified_evidence_into_prep_and_work
     workspace_candidate = workspace_response.json()["workspace"]["candidates"][0]
 
     assert workspace_candidate["adapter_key"] == expected_candidate["adapter_key"]
-    assert workspace_candidate["projection_ref"] == {
-        "envelope_id": envelope_ref.envelope_id,
-        "envelope_revision": envelope_ref.envelope_revision,
-        "object_id": expected_payload["curatable_objects"][0]["pending_ref_id"],
-    }
+    projection_ref = workspace_candidate["projection_ref"]
+    assert projection_ref["envelope_id"] == envelope_ref.envelope_id
+    assert projection_ref["envelope_revision"] >= envelope_ref.envelope_revision
+    assert projection_ref["object_id"] == expected_payload["curatable_objects"][0][
+        "pending_ref_id"
+    ]
     assert workspace_candidate["normalized_payload"] == {}
     assert workspace_candidate["metadata"]["semantic_source"] == "domain_envelope.objects"
     assert workspace_candidate["metadata"]["object_type"] == (

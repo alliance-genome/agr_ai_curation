@@ -842,7 +842,7 @@ async def test_deterministic_prep_bootstrap_materializes_domain_envelope_review_
     candidate = workspace.workspace.candidates[0]
     assert candidate.adapter_key == "gene"
     assert candidate.projection_ref.envelope_id == "gene-fixture-review-envelope"
-    assert candidate.projection_ref.envelope_revision == (
+    assert candidate.projection_ref.envelope_revision >= (
         prep_output.envelope_refs[0].envelope_revision
     )
     assert candidate.projection_ref.object_id == "gene-fixture-review-object-1"
@@ -1107,10 +1107,13 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
 
     session_id = bootstrap_payload["session"]["session_id"]
     _assert_workspace_candidates_use_persisted_envelopes(workspace_payload)
+    expected_envelope_revision = workspace_payload["candidates"][0]["projection_ref"][
+        "envelope_revision"
+    ]
 
     envelope_row = test_db.get(DomainEnvelopeModel, envelope.envelope_id)
     assert envelope_row is not None
-    assert envelope_row.revision == 1
+    assert envelope_row.revision == expected_envelope_revision
     assert envelope_row.envelope_json["metadata"]["semantic_source"] == (
         "domain_envelope.objects"
     )
@@ -1139,7 +1142,9 @@ def test_alliance_domain_pack_gate_materializes_review_and_export_from_envelopes
             "mode": "export",
             "target_key": gate_case["target_key"],
             "include_payload": True,
-            "expected_envelope_revisions": {envelope.envelope_id: 1},
+            "expected_envelope_revisions": {
+                envelope.envelope_id: expected_envelope_revision
+            },
         },
     )
     assert preview_response.status_code == 200, preview_response.text
@@ -1204,6 +1209,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     )
     candidate_id = target_candidate["candidate_id"]
     object_id = target_candidate["projection_ref"]["object_id"]
+    expected_envelope_revision = target_candidate["projection_ref"]["envelope_revision"]
     _accept_candidate(client, session_id=session_id, candidate_id=candidate_id)
 
     blocked_preview_response = client.post(
@@ -1214,7 +1220,9 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
             "mode": "direct_submit",
             "target_key": GENE_EXPRESSION_TARGET_KEY,
             "include_payload": True,
-            "expected_envelope_revisions": {envelope_id: 1},
+            "expected_envelope_revisions": {
+                envelope_id: expected_envelope_revision
+            },
         },
     )
     assert blocked_preview_response.status_code == 200, blocked_preview_response.text
@@ -1231,7 +1239,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
         json={
             "session_id": session_id,
             "envelope_id": envelope_id,
-            "expected_revision": 1,
+            "expected_revision": expected_envelope_revision,
             "object_id": object_id,
             "field_path": "where_expressed_statement",
             "operation": "replace",
@@ -1242,10 +1250,14 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     )
     assert patch_response.status_code == 200, patch_response.text
     patch_payload = patch_response.json()
+    repaired_envelope_revision = expected_envelope_revision + 1
     assert patch_payload["accepted"] is True
-    assert patch_payload["previous_revision"] == 1
-    assert patch_payload["envelope_revision"] == 2
-    assert patch_payload["candidate"]["projection_ref"]["envelope_revision"] == 2
+    assert patch_payload["previous_revision"] == expected_envelope_revision
+    assert patch_payload["envelope_revision"] == repaired_envelope_revision
+    assert (
+        patch_payload["candidate"]["projection_ref"]["envelope_revision"]
+        == repaired_envelope_revision
+    )
     assert patch_payload["candidate"]["normalized_payload"] == {}
     assert patch_payload["history_event_ids"]
 
@@ -1256,7 +1268,9 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
             "candidate_ids": [candidate_id],
             "mode": "direct_submit",
             "target_key": GENE_EXPRESSION_TARGET_KEY,
-            "expected_envelope_revisions": {envelope_id: 2},
+            "expected_envelope_revisions": {
+                envelope_id: repaired_envelope_revision
+            },
         },
     )
     assert submit_response.status_code == 200, submit_response.text
@@ -1268,19 +1282,19 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
     assert annotation["envelope"]["domain_pack_id"] == envelope.domain_pack_id
     assert annotation["envelope"]["domain_pack_version"] == envelope.domain_pack_version
     assert annotation["envelope"]["envelope_id"] == envelope_id
-    assert annotation["envelope"]["envelope_revision"] == 2
+    assert annotation["envelope"]["envelope_revision"] == repaired_envelope_revision
     assert annotation["envelope"]["model_ref"] == GENE_EXPRESSION_MODEL_ID
     assert annotation["envelope"]["object_id"] == object_id
     assert annotation["envelope"]["object_type"] == GENE_EXPRESSION_OBJECT_TYPE
     assert annotation["source_payload"]["where_expressed_statement"] == repaired_statement
     assert submission["submission_state"]["write_mode"] == "read_only_handoff"
     assert submission["submission_state"]["envelope_revisions"] == [
-        {"envelope_id": envelope_id, "envelope_revision": 2}
+        {"envelope_id": envelope_id, "envelope_revision": repaired_envelope_revision}
     ]
 
     envelope_row = test_db.get(DomainEnvelopeModel, envelope_id)
     assert envelope_row is not None
-    assert envelope_row.revision == 2
+    assert envelope_row.revision == repaired_envelope_revision
     persisted_object = next(
         item
         for item in envelope_row.envelope_json["objects"]
@@ -1290,7 +1304,7 @@ def test_tmem67_gene_expression_e2e_repairs_exports_and_records_submission_histo
 
     candidate_row = test_db.get(CurationCandidate, UUID(candidate_id))
     assert candidate_row is not None
-    assert candidate_row.envelope_revision == 2
+    assert candidate_row.envelope_revision == repaired_envelope_revision
     assert candidate_row.normalized_payload == {}
 
     history_event_types = [

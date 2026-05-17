@@ -373,12 +373,16 @@ def test_resolve_output_schema_uses_only_canonical_registry(tmp_path):
     schema_discovery.discover_agent_schemas(tmp_path, force_reload=True)
 
     assert schema_discovery.resolve_output_schema("GeneExtractionResultEnvelope") is None
+    assert schema_discovery.resolve_output_schema("CurationPrepAgentOutput") is not None
+    assert schema_discovery.resolve_output_schema("PdfExtractionResultEnvelope") is not None
 
 
 def test_package_scoped_output_schema_resolver_uses_only_canonical_registry(tmp_path):
     resolver = schema_discovery.build_package_scoped_output_schema_resolver(tmp_path)
 
     assert resolver("GeneExtractionResultEnvelope") is None
+    assert resolver("CurationPrepAgentOutput") is not None
+    assert resolver("PdfExtractionResultEnvelope") is not None
 
 
 def test_default_runtime_packages_dir_must_contain_package_manifests(tmp_path, monkeypatch):

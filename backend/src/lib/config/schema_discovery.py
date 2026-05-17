@@ -43,6 +43,18 @@ _registered_modules: List[str] = []  # Track modules for cleanup
 _initialized: bool = False
 
 
+def _builtin_output_schemas() -> Dict[str, Type[BaseModel]]:
+    """Return backend-owned schemas referenced by first-party agent definitions."""
+
+    from src.lib.openai_agents.models import PdfExtractionResultEnvelope
+    from src.schemas.curation_prep import CurationPrepAgentOutput
+
+    return {
+        "CurationPrepAgentOutput": CurationPrepAgentOutput,
+        "PdfExtractionResultEnvelope": PdfExtractionResultEnvelope,
+    }
+
+
 def _is_envelope_class(cls: Any) -> bool:
     """
     Check if a class is an envelope class that should be registered.
@@ -263,7 +275,11 @@ def discover_agent_schemas(
         )
         logger.info('Discovering agent schemas from: %s', resolved_agents_path)
 
-        _schema_registry, _schema_by_agent = _discover_schema_indexes(agents_path)
+        discovered_registry, _schema_by_agent = _discover_schema_indexes(agents_path)
+        _schema_registry = {
+            **_builtin_output_schemas(),
+            **discovered_registry,
+        }
 
         _initialized = True
         logger.info('Discovered %s schema envelope classes', len(_schema_registry))
@@ -309,7 +325,13 @@ def build_package_scoped_output_schema_resolver(
         if local_registry is None:
             with resolver_lock:
                 if local_registry is None:
-                    local_registry, _schema_by_folder = _discover_schema_indexes(agents_path)
+                    discovered_registry, _schema_by_folder = _discover_schema_indexes(
+                        agents_path
+                    )
+                    local_registry = {
+                        **_builtin_output_schemas(),
+                        **discovered_registry,
+                    }
         return local_registry.get(schema_key)
 
     return resolve
