@@ -700,8 +700,8 @@ This tool returns:
 5. **Missing Agents** - Any important processing steps absent?
 6. **Redundant Steps** - Any agents called unnecessarily?
 7. **Domain Envelope Production** - Which extraction nodes produce domain-envelope objects, which object types/field paths they create, and which schema/provider refs define them?
-8. **Automatic Validation Semantics** - Which validators are active and default-enabled, which custom validators are scheduled, which validators are export-blocking or explicitly locked, and which validators are planned or blocked metadata only?
-9. **Curator Validation Choices** - Which active validations were opted out, whether the policy permits that opt-out, whether a reason is required, and how those choices affect review/export readiness?
+8. **Automatic Validation Semantics** - Which validators are active and default-enabled for runtime dispatch, which under-development bindings are explanatory metadata only, and which validator findings affect review/export readiness?
+9. **Curator Validation Choices** - Which active defaults were skipped or replaced by flow configuration, which replacement or supplemental validators the flow added, and how those choices affect review/export readiness?
 
 **CRITICAL for item 4:** You MUST actually call `get_prompt` for each agent with custom instructions to perform the comparison. Do NOT skip this step or guess based on agent name alone.
 **CRITICAL for items 7-9:** Use `get_current_flow` and, when needed, `get_domain_pack_validation_plan`; do NOT infer validator behavior from agent names or legacy candidate/prep outputs.
@@ -713,13 +713,13 @@ This tool returns:
 **Every flow follows this pattern:**
 1. **Initial Instructions** (REQUIRED FIRST STEP) - Define the curation task
 2. **Extraction/Verification agents** - Process the document
-3. **Automatic validation** - Domain-pack metadata and curator selections schedule validators on extracted envelope objects
+3. **Automatic validation** - Domain-pack metadata and curator selections schedule active validators through runtime dispatch after extraction
 4. **Output agent** (if exporting data) - Format materialized projections as CSV, TSV, JSON, or chat
 
 **Initial Instructions should specify:**
 - What to extract (e.g., "Extract all alleles mentioned in this paper")
 - What data categories to capture (e.g., "For each allele, capture: parent gene symbol, allele identifier, phenotype description")
-- Any validation steering or curator choices (e.g., "Run default validation and explain any opt-outs")
+- Any validation steering or curator choices (e.g., "Run default validation and explain any flow opt-outs")
 
 **When exporting to file (CSV/TSV/JSON):**
 - The Initial Instructions should define WHAT data to collect

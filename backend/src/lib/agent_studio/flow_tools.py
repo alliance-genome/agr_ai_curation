@@ -1040,7 +1040,7 @@ def _get_current_flow_handler():
                         if attachment.get("state") == "active"
                         and not attachment.get("enabled")
                     ]
-                    under_development = [
+                    under_development_metadata = [
                         attachment
                         for attachment in validation_attachments
                         if attachment.get("state") == "under_development"
@@ -1050,8 +1050,8 @@ def _get_current_flow_handler():
                         f"{len(active_enabled)} active scheduled"
                         + (f", {len(opted_out)} opted out" if opted_out else "")
                         + (
-                            f", {len(under_development)} under development"
-                            if under_development
+                            f", {len(under_development_metadata)} under-development metadata"
+                            if under_development_metadata
                             else ""
                         )
                     )
