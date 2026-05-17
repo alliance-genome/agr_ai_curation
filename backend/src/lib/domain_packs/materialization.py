@@ -63,9 +63,8 @@ VALIDATION_STATUS_RANK: dict[DomainEnvelopeValidationStatus, int] = {
     DomainEnvelopeValidationStatus.RESOLVED: 0,
     DomainEnvelopeValidationStatus.WAIVED: 0,
     DomainEnvelopeValidationStatus.PLANNED: 1,
-    DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT: 2,
-    DomainEnvelopeValidationStatus.UNRESOLVED: 3,
-    DomainEnvelopeValidationStatus.BLOCKED: 4,
+    DomainEnvelopeValidationStatus.UNRESOLVED: 2,
+    DomainEnvelopeValidationStatus.BLOCKED: 3,
 }
 
 SEVERITY_RANK: dict[str, int] = {
