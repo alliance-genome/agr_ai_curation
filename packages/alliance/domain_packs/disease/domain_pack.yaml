@@ -419,7 +419,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_subject_materialization
-          validator_state: blocked
+          validator_state: under_development
           definition_state_category: blocked
           blocked_by: ALL-410
           protected: true
@@ -454,7 +454,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_subject_materialization
-          validator_state: blocked
+          validator_state: under_development
           definition_state_category: blocked
           blocked_by: ALL-410
           protected: true
@@ -467,7 +467,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_reference_materialization
-          validator_state: blocked
+          validator_state: under_development
           definition_state_category: blocked
           blocked_by: ALL-425
           protected: true
@@ -489,7 +489,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_reference_materialization
-          validator_state: blocked
+          validator_state: under_development
           definition_state_category: blocked
           blocked_by: ALL-425
           protected: true
@@ -511,7 +511,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: disease_evidence_code_lookup
-          validator_state: blocked
+          validator_state: under_development
           definition_state_category: blocked
           blocked_by: ALL-425
           protected: true
@@ -619,7 +619,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: experimental_condition_validation
-          validator_state: planned
+          validator_state: under_development
           definition_state_category: under_development
           protected: true
           curator_action_note: Condition relation validation remains under development until the validation contract is complete.
@@ -661,7 +661,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: experimental_condition_validation
-          validator_state: planned
+          validator_state: under_development
           definition_state_category: under_development
           protected: true
           curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
@@ -681,7 +681,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: experimental_condition_validation
-          validator_state: planned
+          validator_state: under_development
           definition_state_category: under_development
           protected: true
           curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
@@ -702,7 +702,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: experimental_condition_validation
-          validator_state: planned
+          validator_state: under_development
           definition_state_category: under_development
           protected: true
           curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
@@ -723,7 +723,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: experimental_condition_validation
-          validator_state: planned
+          validator_state: under_development
           definition_state_category: under_development
           protected: true
           curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
@@ -744,7 +744,7 @@ object_definitions:
         metadata:
           validatable: true
           validator_binding_id: experimental_condition_validation
-          validator_state: planned
+          validator_state: under_development
           definition_state_category: under_development
           protected: true
           curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
@@ -818,7 +818,7 @@ metadata:
       - validator_id: disease.no_legacy_semantic_lists
         display_name: Current extraction format
         description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
-    planned:
+    under_development:
       - validator_id: disease.disease_ontology_term_lookup
         display_name: Disease ontology lookup
         description: Validate Disease Ontology curies and labels against public.ontologyterm rows with ontology_term_type DOTerm.
@@ -831,7 +831,6 @@ metadata:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
         description: Compose disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable condition decision.
-    blocked:
       - validator_id: disease.subject_materialization
         display_name: Disease subject lookup
         blocked_by: ALL-410

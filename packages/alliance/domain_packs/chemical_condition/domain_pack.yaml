@@ -596,7 +596,7 @@ metadata:
       - validator_id: chemical_condition.export_context_blocker
         display_name: Required export context
         description: Emit blocker findings when host annotation or source reference materialization is missing.
-    planned:
+    under_development:
       - validator_id: chemical_condition.chebi_api_lookup
         display_name: ChEBI lookup
         tool_name: chebi_api_call
@@ -610,7 +610,6 @@ metadata:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
         description: Compose condition relation, condition class/id, chemical, taxon, quantity/unit, and evidence context checks into one auditable ExperimentalCondition decision.
-    blocked:
       - validator_id: chemical_condition.export_submission_projection
         display_name: Chemical condition ready for export
         blocked_by: ALL-425

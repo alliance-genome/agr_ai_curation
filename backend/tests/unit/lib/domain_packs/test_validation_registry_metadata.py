@@ -119,13 +119,14 @@ metadata:
       - validator_id: fixture.shape
         display_name: Fixture envelope shape
         description: Envelope shape validation is active.
-    planned:
+    under_development:
       - validator_id: fixture.future_lookup
-        description: Planned lookup validator.
-    blocked:
+        display_name: Future lookup
+        description: Future lookup validator is under development.
       - validator_id: fixture.export_projection
+        display_name: Export projection
         blocked_by: ALL-999
-        description: Export projection is intentionally blocked.
+        description: Export projection validator is under development.
   validator_bindings:
     active:
       - binding_id: fixture.agent_validator
@@ -560,17 +561,17 @@ def test_registry_exposes_under_development_binding_metadata(tmp_path: Path):
     pack = _loaded_pack(tmp_path)
     registry = DomainPackValidationRegistry.from_domain_pack(pack)
 
-    metadata_by_state = {
-        entry.state: entry.validator_id for entry in registry.validator_metadata
-    }
+    metadata_by_state: dict[ValidationBindingState, set[str]] = {}
+    for entry in registry.validator_metadata:
+        metadata_by_state.setdefault(entry.state, set()).add(entry.validator_id)
     binding_states = {
         binding.binding_id: binding.state for binding in registry.bindings
     }
 
-    assert metadata_by_state[ValidationBindingState.PLANNED] == "fixture.future_lookup"
-    assert (
-        metadata_by_state[ValidationBindingState.BLOCKED] == "fixture.export_projection"
-    )
+    assert metadata_by_state[ValidationBindingState.UNDER_DEVELOPMENT] == {
+        "fixture.future_lookup",
+        "fixture.export_projection",
+    }
     assert (
         binding_states["fixture.symbol_lookup"]
         is ValidationBindingState.UNDER_DEVELOPMENT
@@ -649,7 +650,7 @@ def test_registry_rejects_conflicting_status_and_state_metadata(tmp_path: Path):
             (
                 "validator_id: fixture.shape",
                 "        display_name: Fixture envelope shape",
-                "        status: planned",
+                "        status: under_development",
                 "        state: active",
                 "        description:",
             )
@@ -661,6 +662,28 @@ def test_registry_rejects_conflicting_status_and_state_metadata(tmp_path: Path):
     with pytest.raises(
         ValidationRegistryError,
         match="validators item declares conflicting status/state values",
+    ):
+        DomainPackValidationRegistry.from_domain_pack(pack)
+
+
+@pytest.mark.parametrize("legacy_bucket", ["planned", "blocked"])
+def test_registry_rejects_legacy_validator_metadata_buckets(
+    tmp_path: Path,
+    legacy_bucket: str,
+):
+    metadata_text = _validation_pack_text().replace(
+        "    under_development:",
+        f"    {legacy_bucket}:",
+        1,
+    )
+    pack = _loaded_pack(tmp_path, metadata_text=metadata_text)
+
+    with pytest.raises(
+        ValidationRegistryError,
+        match=(
+            "validators supports only active and under_development buckets; "
+            f"found legacy bucket\\(s\\): {legacy_bucket}"
+        ),
     ):
         DomainPackValidationRegistry.from_domain_pack(pack)
 

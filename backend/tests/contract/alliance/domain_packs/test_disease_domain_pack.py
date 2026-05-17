@@ -312,7 +312,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
         field = fields_by_path[field_path]
         assert field.definition_state.value == "in_development"
         assert field.metadata["validatable"] is True
-        assert field.metadata["validator_state"] == "planned"
+        assert field.metadata["validator_state"] == "under_development"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
         assert binding["state_explanation"]
     condition_relation_type = fields_by_path[
@@ -346,7 +346,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     for field_path in blocked_fields:
         field = fields_by_path[field_path]
         assert field.definition_state.value == "in_development"
-        assert field.metadata["validator_state"] == "blocked"
+        assert field.metadata["validator_state"] == "under_development"
         assert field.metadata["definition_state_category"] == "blocked"
         binding = validator_bindings[field.metadata["validator_binding_id"]]
         assert binding["state_explanation"]

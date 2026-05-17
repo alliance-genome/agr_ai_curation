@@ -75,7 +75,10 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         for entry in validation_registries[
             "agr.alliance.gene_expression"
         ].validator_metadata
-    } >= {ValidationBindingState.PLANNED, ValidationBindingState.BLOCKED}
+    } == {
+        ValidationBindingState.ACTIVE,
+        ValidationBindingState.UNDER_DEVELOPMENT,
+    }
     assert {
         binding.binding_id
         for binding in validation_registries["gene"].bindings
@@ -109,7 +112,10 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
         for entry in validation_registries[
             "agr.alliance.phenotype"
         ].validator_metadata
-    } >= {ValidationBindingState.PLANNED, ValidationBindingState.BLOCKED}
+    } == {
+        ValidationBindingState.ACTIVE,
+        ValidationBindingState.UNDER_DEVELOPMENT,
+    }
 
 
 def test_alliance_validator_metadata_has_curator_facing_display_names():

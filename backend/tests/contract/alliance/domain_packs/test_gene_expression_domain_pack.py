@@ -116,31 +116,40 @@ def test_gene_expression_domain_pack_is_bundled_with_concrete_metadata():
     validators = metadata.metadata["validators"]
     assert tuple(validators) == GENE_EXPRESSION_VALIDATOR_STATES
     assert validators["active"]
-    assert validators["planned"]
-    assert validators["blocked"] == [
-        {
-            "validator_id": "gene_expression.live_write_transport",
-            "display_name": "Live database write path",
-            "blocked_by": "read_only_curation_db",
-            "description": (
-                "Direct live DB writes remain blocked until an approved Alliance "
-                "write transport replaces the read-only submission handoff adapter."
-            ),
-        }
-    ]
+    assert validators["under_development"]
     active_validator_ids = {
         validator["validator_id"] for validator in validators["active"]
     }
-    blocked_validator_ids = {
-        validator["validator_id"] for validator in validators["blocked"]
+    under_development_validator_ids = {
+        validator["validator_id"] for validator in validators["under_development"]
+    }
+    live_write_validator = next(
+        validator
+        for validator in validators["under_development"]
+        if validator["validator_id"] == "gene_expression.live_write_transport"
+    )
+    assert live_write_validator == {
+        "validator_id": "gene_expression.live_write_transport",
+        "display_name": "Live database write path",
+        "blocked_by": "read_only_curation_db",
+        "description": (
+            "Direct live DB writes remain blocked until an approved Alliance "
+            "write transport replaces the read-only submission handoff adapter."
+        ),
     }
     assert "gene_expression.extractor_output_migration" in active_validator_ids
     assert "gene_expression.export_submission_projection" in active_validator_ids
-    assert "gene_expression.extractor_output_migration" not in blocked_validator_ids
-    assert "gene_expression.export_submission_projection" not in blocked_validator_ids
+    assert (
+        "gene_expression.extractor_output_migration"
+        not in under_development_validator_ids
+    )
+    assert (
+        "gene_expression.export_submission_projection"
+        not in under_development_validator_ids
+    )
     assert all(
         validator.get("blocked_by") != "ALL-407"
-        for validator in validators["blocked"]
+        for validator in validators["under_development"]
     )
 
     provider_ref = metadata.metadata[PROVIDER_REFS_METADATA_KEY]["alliance_linkml"]

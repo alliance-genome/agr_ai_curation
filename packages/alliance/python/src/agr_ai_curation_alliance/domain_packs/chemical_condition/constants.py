@@ -15,7 +15,7 @@ CHEMICAL_CONDITION_OBJECT_TYPE = "ChemicalCondition"
 CHEMICAL_TERM_OBJECT_TYPE = "ChemicalTerm"
 REFERENCE_OBJECT_TYPE = "Reference"
 EVIDENCE_QUOTE_OBJECT_TYPE = "EvidenceQuote"
-CHEMICAL_CONDITION_VALIDATOR_STATES = ("active", "planned", "blocked")
+CHEMICAL_CONDITION_VALIDATOR_STATES = ("active", "under_development")
 CHEMICAL_CONDITION_PENDING_VALIDATOR_ID = (
     "chemical_condition.pending_envelope_validator"
 )

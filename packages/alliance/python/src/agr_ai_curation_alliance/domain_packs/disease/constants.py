@@ -13,7 +13,7 @@ DISEASE_DOMAIN_PACK_VERSION = "0.1.0"
 DISEASE_OBJECT_TYPE = "DiseaseAnnotation"
 DISEASE_MODEL_ID = "PendingDiseaseAssertionPayload"
 DISEASE_FIXTURE_PACK_ID = "tool_verified"
-DISEASE_VALIDATOR_STATES = ("active", "planned", "blocked")
+DISEASE_VALIDATOR_STATES = ("active", "under_development")
 DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID = "disease_pending_envelope_validator"
 DISEASE_DOMAIN_PACK_CONVERTER_ID = "agr_ai_curation_alliance.domain_packs.disease"
 
