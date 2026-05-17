@@ -182,6 +182,9 @@ Always review the AI's work:
 - Check ontology term IDs against source databases
 - Verify evidence codes match AGR standards
 - Confirm anatomical mappings make biological sense
+- For domain-pack flows, ask Claude in Agent Studio to inspect the validation
+  plan when you need to know which active validators ran or which validator
+  agent prompt owns a check
 
 ### 4. **Use the Audit Panel**
 The right-side audit panel shows you:

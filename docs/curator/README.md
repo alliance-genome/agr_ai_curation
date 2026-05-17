@@ -46,6 +46,8 @@ The AI Curation System provides intelligent assistance for biological curation t
 - **Agent Studio** - Browse agent prompts, build flows, and chat with Claude Opus
 - **Agent Browser** - View exact instructions given to each agent with clickable tool documentation
 - **Agent Workshop** - Create custom agents with template/scratch/clone starts, model/tool selection, per-group overrides, version history, and icon customization
+- **Validation insight** - Ask Claude to inspect domain-pack validation plans,
+  active validator-agent prompts, and export/submission readiness details
 - **Discuss Responses** - Use triple-dot menu to discuss any AI response with Opus
 - **Submit Suggestions** - Help improve the system with your domain expertise
 
@@ -100,7 +102,8 @@ Tools for understanding, building, and improving AI behavior:
 - Build visual workflows with drag-and-drop
 - Chain 15 agents together (PDF extraction, validation, output)
 - See domain-envelope object and validation metadata for extraction agents
-- Keep automatic validators enabled by default, or uncheck them when replacing automatic validation with custom validation
+- Keep active default validators enabled, or replace/supplement them with explicit validation when the flow needs a custom check
+- See under-development validators as metadata without scheduling them
 - Output to chat, CSV, TSV, or JSON files
 - Use "Verify with Claude" to check your flow before running
 - Save and reuse flows across documents

@@ -93,8 +93,12 @@ content: |
   When specialist output includes domain-envelope validation metadata:
   - Treat envelope objects, object IDs or pending refs, field paths, validation findings,
     and history as the semantic source of truth.
-  - Planned validators mean validation has not run yet; blocked validators mean a known
-    blocker prevented execution. Do not summarize either state as successful validation.
+  - Active validator bindings are the only validators scheduled automatically by the
+    runtime after extraction.
+  - Under-development validator bindings are metadata visibility only; do not summarize
+    them as scheduled work, failed validation, or successful validation.
+  - Keep validator attachment metadata separate from validation findings and
+    export/submission readiness blockers.
   - When asking for curator follow-up, preserve stable object IDs or pending refs and
     target only the validation finding's object and field path.
 
@@ -115,8 +119,8 @@ content: |
   - If the validator or DB/API has a transient service failure, classify it as
     `transient_service_failure` and ask for a rerun later; do not ask the extractor to
     invent a value.
-  - If the validator is blocked by metadata, classify it as `blocked_validator`.
-  - If the object or field is not fully defined, use `mark_under_development`.
+  - If the object or field is under development, explain that as domain-pack metadata or
+    readiness context; do not treat it as a validator result status.
   - If the field is defined but the available paper/database evidence cannot resolve
     it, leave the finding open and explain what curator evidence or action is needed.
   - `record_evidence` verifies only exact contiguous source text copied from that

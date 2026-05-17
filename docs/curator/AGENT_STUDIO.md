@@ -51,14 +51,16 @@ For each agent, you can view:
 
 Extraction agents that use domain packs show what kind of envelope they produce.
 This includes object types, fields, required fields, definition state, provider
-refs, active validators, planned validators, blocked validators, and
+refs, active validator bindings, under-development validator metadata, and
 export-blocking policy. The important idea is simple: the domain envelope object
 is the saved curation record. Review tables and export payloads are generated
 from that saved object.
 
-Planned and blocked validators may appear in the panel even though they do not
-run. They are visible so you can see what the domain pack knows about future or
-currently unavailable validation.
+Active default validators run automatically after extraction. Under-development
+validators are shown as roadmap or context metadata and are not scheduled.
+Validation findings are separate from attachment metadata: findings are the
+current results written back to the envelope, while export and submission
+blockers describe whether the reviewed envelope is ready for final actions.
 
 **Clickable Tool Names**
 
@@ -105,13 +107,11 @@ This is especially valuable when building new flows or troubleshooting ones that
 
 When an extraction agent declares domain-pack validation metadata, Flow Builder
 attaches the default active validators to the extraction node. Active validators
-are enabled by default and can normally be unchecked when you are replacing
-automatic validation with a custom validation step for the same field or object.
-Most opt-outs do not require a reason; if a
-specific validator does, the flow cannot be saved until you enter one.
-Validators explicitly marked by the domain pack as not allowing opt-out stay
-locked on. Planned or blocked validators are shown as metadata so you know why
-they will not run.
+are enabled by default. Curators can skip an active default validator only when
+flow configuration replaces or supplements it with explicit validation for the
+same field or object. Validators explicitly marked by the domain pack as not
+allowing flow replacement stay locked on.
+Under-development validators remain visible metadata only and do not run.
 
 To add a custom validation step, place a data-validation agent after the
 extractor and use its steering prompt to name the envelope object, field path, or
@@ -123,6 +123,12 @@ domain-pack metadata.
 - "Does this flow make sense for extracting expression data?"
 - "What agent should I add to map anatomy terms to WBbt IDs?"
 - "Why isn't my flow generating the output I expected?"
+- "Which validators will run for this extraction agent, and what prompt does each validator agent use?"
+
+When you ask Chat with Claude how validation works, Claude can inspect the
+domain-pack validation plan. If an active binding includes a validator-agent ID,
+Claude can use the existing Agent Studio prompt tools to inspect that validator
+agent's prompt, tools, and group-specific rules.
 
 ### Agent Workshop Tab
 

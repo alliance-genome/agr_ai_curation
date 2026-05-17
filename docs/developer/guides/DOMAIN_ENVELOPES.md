@@ -97,7 +97,7 @@ object definitions, and field definitions, then normalizes them into:
 
 - active and under-development validator bindings,
 - required/export-blocking field policies,
-- field-level opt-out policy,
+- field-level flow replacement/skip policy,
 - Agent Studio validation attachment options,
 - binding matches against envelope objects and fields.
 
@@ -259,11 +259,32 @@ Flow Builder validation attachments are derived from domain-pack metadata.
 Defaults are applied to extraction nodes by
 `apply_flow_validation_attachment_defaults()`. Active validators are enabled by
 default. Under-development validators remain visible metadata and do not carry
-required, blocking, or opt-out runtime policy.
+required, blocking, or flow-replacement runtime policy.
 
 Custom validation agents are regular flow steps. Their steering prompts are
 stored as normal node configuration and should target envelope objects, field
 paths, or curator questions.
+
+When Agent Studio Opus answers validation questions, it should use the live tool
+chain instead of static prompt memory:
+
+1. `get_domain_envelope_state` for saved envelope objects, validation findings,
+   history, and stable object or field references.
+2. `get_domain_pack_validation_plan` for active validator bindings,
+   under-development metadata, flow replacement/supplemental context, and
+   validator-agent IDs.
+3. `get_prompt(agent_id=<validator agent id>)` when a validation plan names the
+   validator agent and the curator needs to inspect that validator's prompt,
+   tools, or group rules.
+4. `get_domain_envelope_review_rows` for curator-visible review rows as
+   projections from envelope objects.
+5. `get_export_submission_readiness` for export/submission blockers, overrides,
+   and readiness checks at an expected envelope revision.
+
+This separates attachment capability state from current validation findings and
+from export/submission blockers. Do not infer validator behavior from agent
+names, legacy candidate/prep payloads, or static docs when these tools can
+inspect the current runtime state.
 
 ## Adding or Updating a Domain Pack
 
@@ -271,7 +292,7 @@ paths, or curator questions.
 2. Define schema refs, model definitions, object definitions, and field paths.
 3. Put provider-specific refs in metadata, not core schema fields.
 4. Declare validators and validator bindings in metadata.
-5. Mark required/export-blocking fields and opt-out policy intentionally.
+5. Mark required/export-blocking fields and flow replacement/skip policy intentionally.
 6. Add fixture packs with concrete envelope examples.
 7. Add or update package conversion/export/submission adapters when needed.
 8. Add contract tests under `backend/tests/contract/alliance/domain_packs/` for

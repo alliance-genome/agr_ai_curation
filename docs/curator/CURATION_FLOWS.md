@@ -24,7 +24,8 @@ Curation Flows are visual workflows that let you chain multiple AI agents togeth
 - Domain-pack extraction agents save their results as domain envelopes
 - Flow Builder shows which curatable objects and field paths the extractor produces
 - Active default validators attach automatically from domain-pack metadata
-- Required/export-blocking validators can only be disabled where policy allows it
+- Active validators can be skipped only when flow configuration replaces or supplements them with explicit validation
+- Under-development validators are visible metadata and are not scheduled
 
 **Repeatable Results**
 - Same workflow = consistent extraction across documents
@@ -41,7 +42,11 @@ Curation Flows are visual workflows that let you chain multiple AI agents togeth
 ## Flow Builder Interface
 
 **Opus Chat (Left Panel)**
-Chat with Claude Opus about your flow - ask for help building it, troubleshooting issues, or understanding what each agent does.
+Chat with Claude Opus about your flow - ask for help building it, troubleshooting
+issues, understanding what each agent does, or checking which active validators
+the domain-pack validation plan will schedule. When validator-agent IDs are
+present, Claude can inspect those validator prompts and tools through Agent
+Studio's existing prompt-inspection tools.
 
 **Agent Palette (Left Panel)**
 A searchable, collapsible list of available agents organized by category. Click or drag agents onto the canvas. Use the search box to filter agents by name, description, or tools.
@@ -122,18 +127,16 @@ is expected to save for review and export.
 
 **Validation Attachments**
 
-Automatic validators are listed on the extraction node. Their state explains
-what will happen when the flow runs:
+Automatic validators are listed on the extraction node. Active default
+validators run after extraction when enabled. They can be unchecked only when
+the flow replaces or supplements that automatic check with explicit validation
+for the same object, field, or curation question. Validators that the domain
+pack marks as not allowing flow replacement stay locked on.
 
-- **active** - can run now when enabled.
-- **planned** - declared by metadata, but not run yet.
-- **blocked** - declared by metadata, but blocked by another dependency.
-
-Active validators are enabled by default. They can normally be unchecked when you
-plan to add a custom validation step for the same field or object. Most opt-outs
-do not require a reason. If a specific validator does require one, save the
-reason in the same panel before saving the flow. Validators that the domain pack
-marks as not allowing opt-out stay locked on.
+Under-development validators can appear as roadmap or context metadata. They do
+not run and do not create validation findings. Current findings, lookup audit
+notes, and export/submission readiness blockers are shown from the saved domain
+envelope after a run.
 
 To add a custom validation step, add a validation agent after the extraction
 node. Use its steering prompt to point at the envelope object, field path, or
