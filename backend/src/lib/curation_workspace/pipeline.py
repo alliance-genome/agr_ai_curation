@@ -54,12 +54,12 @@ from src.schemas.curation_workspace import (
     FieldValidationStatus,
 )
 from src.lib.domain_packs.materialization import materialize_persisted_envelope_review_rows
+from src.lib.domain_packs.structural_checks import run_domain_envelope_structural_checks
 from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_envelopes.persistence import (
     DomainEnvelopeCheckpointRequest,
     write_domain_envelope_checkpoint,
 )
-from src.lib.domain_packs.validation_supervisor import run_validation_supervisor
 from src.schemas.domain_envelope import DomainEnvelope
 
 
@@ -440,19 +440,18 @@ def _refresh_domain_envelope_validation_for_ref(
             f"No domain pack is registered for domain_pack_id={envelope.domain_pack_id!r}"
         )
 
-    policy_result = run_validation_supervisor(
+    structural_result = run_domain_envelope_structural_checks(
         envelope,
         domain_pack,
-        include_active_binding_findings=False,
     )
     dispatch_result = dispatch_active_validator_bindings(
-        policy_result.envelope,
+        structural_result.envelope,
         domain_pack,
-        registry=policy_result.registry,
+        registry=structural_result.registry,
         source_envelope_revision=envelope_row.revision,
     )
     appended_findings = (
-        *policy_result.appended_findings,
+        *structural_result.appended_findings,
         *dispatch_result.appended_findings,
     )
     if not appended_findings:

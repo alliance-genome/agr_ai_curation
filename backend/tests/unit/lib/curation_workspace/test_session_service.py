@@ -42,7 +42,7 @@ from src.lib.curation_workspace.models import (
 )
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
-from src.lib.domain_packs.validation_supervisor import append_validation_findings_to_envelope
+from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.models.sql.database import Base
 from src.models.sql.pdf_document import PDFDocument
 from src.schemas.curation_workspace import (

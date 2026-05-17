@@ -209,7 +209,6 @@ def _field_status_for_finding(
     if finding.summary_status in {
         DomainEnvelopeValidationStatus.PLANNED,
         DomainEnvelopeValidationStatus.BLOCKED,
-        DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT,
         DomainEnvelopeValidationStatus.UNRESOLVED,
     }:
         return FieldValidationStatus.CONFLICT

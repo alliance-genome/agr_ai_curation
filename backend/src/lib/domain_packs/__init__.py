@@ -39,10 +39,10 @@ from .validation_registry import (
     ValidatorMetadataEntry,
     validate_active_validator_agent_references,
 )
-from .validation_supervisor import (
-    ValidationSupervisorResult,
-    append_validation_findings_to_envelope,
-    run_validation_supervisor,
+from .validation_findings import append_validation_findings_to_envelope
+from .structural_checks import (
+    DomainEnvelopeStructuralCheckResult,
+    run_domain_envelope_structural_checks,
 )
 from .validator_dispatch import (
     ActiveValidatorDispatchResult,
@@ -72,7 +72,7 @@ __all__ = [
     "ValidationAttachmentOption",
     "ValidationBindingState",
     "ValidationRegistryError",
-    "ValidationSupervisorResult",
+    "DomainEnvelopeStructuralCheckResult",
     "ValidatorAgentRef",
     "ValidatorBinding",
     "ValidatorBindingMatch",
@@ -89,7 +89,7 @@ __all__ = [
     "materialize_validator_results_into_envelope",
     "project_evidence_anchor_projections",
     "project_validation_summary_projections",
-    "run_validation_supervisor",
+    "run_domain_envelope_structural_checks",
     "stable_object_id",
     "validate_active_validator_agent_references",
 ]

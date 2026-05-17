@@ -1,8 +1,8 @@
 """Active domain-pack validator binding dispatch.
 
 This service owns execution for package-scoped active validator bindings.  It
-keeps biological validation out of the legacy validation supervisor path while
-reusing the shared selector and envelope finding contracts.
+keeps biological validation on the validator-dispatch path while reusing the
+shared selector and envelope finding contracts.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from .validator_result_classification import (
     lookup_status_for_validator_outcome,
     validator_failure_classification,
 )
-from .validation_supervisor import append_validation_findings_to_envelope
+from .validation_findings import append_validation_findings_to_envelope
 
 
 LOGGER = logging.getLogger(__name__)

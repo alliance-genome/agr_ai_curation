@@ -2,7 +2,7 @@
 # Offline provider-agnostic 0.7.0 domain-envelope release-gate suite.
 tests/unit/lib/domain_packs/test_registry.py
 tests/unit/lib/domain_packs/test_materialization.py
-tests/unit/lib/domain_packs/test_validation_registry_supervisor.py
+tests/unit/lib/domain_packs/test_validation_registry_metadata.py
 tests/unit/lib/domain_packs/test_release_gate_matrix.py
 tests/unit/lib/domain_envelopes/test_migration.py
 tests/unit/lib/domain_envelopes/test_patches.py
