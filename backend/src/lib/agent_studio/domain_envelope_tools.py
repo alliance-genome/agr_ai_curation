@@ -397,13 +397,37 @@ def get_domain_pack_validation_plan(
                     1 for option in attachment_options if option.get("allow_opt_out")
                 ),
             },
+            "validation_dispatch_summary": {
+                "active_automatic": sum(
+                    1
+                    for option in attachment_options
+                    if option.get("state") == "active" and option.get("default_enabled")
+                ),
+                "active_flow_opt_out_capable": sum(
+                    1
+                    for option in attachment_options
+                    if option.get("state") == "active" and option.get("allow_opt_out")
+                ),
+                "under_development_metadata": sum(
+                    1
+                    for option in attachment_options
+                    if option.get("state") == "under_development"
+                ),
+                "validator_prompt_inspection": (
+                    "Read validator_bindings[].validator_agent.agent_id or "
+                    "validation_attachments[].validator_agent_id, then call "
+                    "get_prompt(agent_id=<validator agent id>) for the validator prompt."
+                ),
+            },
             "automatic_validation_semantics": (
-                "Active default-enabled attachments are scheduled automatically on extraction nodes. "
-                "Planned, under-development, and blocked validators remain visible metadata. "
-                "Active validators can be "
-                "unchecked when replacing automatic validation with custom validation unless metadata "
-                "explicitly locks the validator; opt-out reasons are requested only when metadata "
-                "explicitly requires one."
+                "Active default-enabled attachments are the only validators scheduled "
+                "automatically on extraction nodes, and runtime dispatch writes their "
+                "findings back into domain envelopes after extraction. Under-development "
+                "validator bindings are explanatory metadata, not scheduled work. Flow "
+                "opt-outs mean an active default validator was skipped or replaced by "
+                "flow configuration; replacement_validators and supplemental_validators "
+                "appear in get_current_flow validation_schedule when configured. Do not "
+                "ask extractor prompts to call validators directly."
             ),
         }
     except ValueError as exc:

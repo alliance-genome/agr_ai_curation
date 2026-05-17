@@ -490,9 +490,11 @@ GET_DOMAIN_PACK_VALIDATION_PLAN_TOOL = {
     "name": "get_domain_pack_validation_plan",
     "description": (
         "Inspect a domain pack's object definitions, field paths, schema/provider "
-        "references, validator bindings, automatic validation defaults, opt-out "
-        "rules, and planned or blocked validators. Use this for flow validation "
-        "semantics and curator-controlled validation choices."
+        "references, validator bindings, active automatic validation defaults, "
+        "under-development validator metadata, and flow opt-out/replacement "
+        "semantics. Use validator_bindings[].validator_agent.agent_id or "
+        "validation_attachments[].validator_agent_id with get_prompt(agent_id=...) "
+        "when a curator asks how a bundled validator works."
     ),
     "input_schema": {
         "type": "object",

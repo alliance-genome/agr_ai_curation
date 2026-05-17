@@ -150,7 +150,26 @@ metadata:
     assert under_development_binding["state_explanation"] == (
         "Lookup dispatch is still being configured."
     )
-    assert "automatic_validation_semantics" in result
+    assert result["validation_dispatch_summary"]["active_automatic"] == 1
+    assert result["validation_dispatch_summary"]["under_development_metadata"] == 1
+    assert "metadata_only" not in result["validation_dispatch_summary"]
+    assert (
+        "get_prompt(agent_id=<validator agent id>)"
+        in result["validation_dispatch_summary"]["validator_prompt_inspection"]
+    )
+    assert (
+        "Active default-enabled attachments are the only validators scheduled automatically"
+        in result["automatic_validation_semantics"]
+    )
+    assert "Under-development validator bindings are explanatory metadata" in result[
+        "automatic_validation_semantics"
+    ]
+    assert "Do not ask extractor prompts to call validators directly" in result[
+        "automatic_validation_semantics"
+    ]
+    assert "planned" not in result["automatic_validation_semantics"].lower()
+    assert "blocked" not in result["automatic_validation_semantics"].lower()
+    assert "opt-out " + "reason" not in json.dumps(result).lower()
     assert "repair" not in json.dumps(result).lower()
 
 

@@ -1569,6 +1569,16 @@ class PromptCatalogService:
             for agent in category.agents:
                 if agent.agent_id == agent_id:
                     return agent
+        try:
+            prompt_key = get_prompt_key_for_agent(agent_id)
+        except ValueError:
+            return None
+        if prompt_key == agent_id:
+            return None
+        for category in self.catalog.categories:
+            for agent in category.agents:
+                if agent.agent_id == prompt_key:
+                    return agent
         return None
 
     def get_agents_by_category(self, category: str) -> List[PromptInfo]:
