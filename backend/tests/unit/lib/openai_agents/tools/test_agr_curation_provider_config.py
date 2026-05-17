@@ -1,4 +1,4 @@
-"""Unit tests for AGR curation provider mapping guard behavior."""
+"""Unit tests for package-owned AGR curation provider mapping behavior."""
 
 import importlib
 import json
@@ -8,7 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from src.lib import identifier_validation
-from src.lib.openai_agents.tools import agr_curation
+
+from agr_ai_curation_alliance.tools import agr_curation
 
 
 @pytest.fixture(autouse=True)
@@ -125,7 +126,7 @@ def test_module_load_fallback_on_missing_groups_file(monkeypatch):
     """Module should not crash when groups config path is invalid at import time."""
     from src.lib.config import groups_loader as gl_module
 
-    module = importlib.import_module("src.lib.openai_agents.tools.agr_curation")
+    module = importlib.import_module("agr_ai_curation_alliance.tools.agr_curation")
     monkeypatch.setenv("GROUPS_CONFIG_PATH", "/tmp/does-not-exist-groups.yaml")
     gl_module.reset_cache()
     # Force DEFAULT_GROUPS_PATH to update for the reload

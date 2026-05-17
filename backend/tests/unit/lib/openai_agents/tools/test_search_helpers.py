@@ -1,4 +1,4 @@
-"""Unit tests for search helper validation/enrichment utilities."""
+"""Unit tests for package-owned search helper validation/enrichment utilities."""
 
 import importlib.util
 import logging
@@ -8,7 +8,10 @@ import pytest
 
 
 def _load_search_helpers_module():
-    module_path = Path(__file__).resolve().parents[5] / "src/lib/openai_agents/tools/search_helpers.py"
+    module_path = (
+        Path(__file__).resolve().parents[6]
+        / "packages/alliance/python/src/agr_ai_curation_alliance/tools/search_helpers.py"
+    )
     spec = importlib.util.spec_from_file_location("test_search_helpers_module", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None

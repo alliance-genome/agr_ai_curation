@@ -28,6 +28,7 @@ _FALLBACK_CATEGORIES = ["Routing", "Extraction", "Validation", "Output", "Input"
 _registry_cache = {
     "categories": None,
     "tools": None,
+    "tool_metadata": None,
 }
 
 
@@ -72,16 +73,31 @@ def get_known_tools() -> set:
     if _registry_cache["tools"] is not None:
         return _registry_cache["tools"]
 
+    tool_metadata = get_known_tool_metadata()
+    if tool_metadata:
+        tools = set(tool_metadata)
+        _registry_cache["tools"] = tools
+        return tools
+
+    # Return empty set - all tools will show as warnings but --force allows
+    return set()
+
+
+def get_known_tool_metadata() -> dict:
+    """Get known tool metadata dynamically from TOOL_REGISTRY."""
+    if _registry_cache["tool_metadata"] is not None:
+        return _registry_cache["tool_metadata"]
+
     try:
         _ensure_backend_path()
         from src.lib.agent_studio.catalog_service import get_all_tools
 
-        tools = set(get_all_tools().keys())
-        _registry_cache["tools"] = tools
-        return tools
+        tool_metadata = dict(get_all_tools())
+        _registry_cache["tool_metadata"] = tool_metadata
+        return tool_metadata
     except ImportError:
-        # Return empty set - all tools will show as warnings but --force allows
-        return set()
+        _registry_cache["tool_metadata"] = {}
+        return {}
 
 
 @dataclass
@@ -158,14 +174,15 @@ def generate_agent_skeleton(config: NewAgentInput) -> str:
     # Build tool imports
     tool_imports = []
     tool_vars = []
+    tool_metadata = get_known_tool_metadata()
     for tool in config.tools:
         # Common tools have known import locations
         if tool in ("search_document", "read_section", "read_subsection"):
             # These are created dynamically, not imported directly
             continue
-        elif tool == "agr_curation_query":
-            tool_imports.append("from ..tools.agr_curation import agr_curation_query")
-            tool_vars.append("agr_curation_query")
+        elif bool(tool_metadata.get(tool, {}).get("package_backed")):
+            tool_imports.append(f"# {tool} is package-owned; keep it in tool binding config.")
+            continue
         else:
             # Generic import - user may need to adjust
             tool_imports.append(f"# TODO: Import {tool} from appropriate module")

@@ -1,8 +1,8 @@
-"""Query-path tests for agr_curation_query gene/allele branches."""
+"""Query-path tests for package-owned agr_curation_query gene/allele branches."""
 
 from types import SimpleNamespace
 
-from src.lib.openai_agents.tools import agr_curation
+from agr_ai_curation_alliance.tools import agr_curation
 
 
 def _unwrap_query_function(tool):

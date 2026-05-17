@@ -444,6 +444,9 @@ def test_repo_shipped_tool_bindings_are_loaded_from_alliance_package():
     }
     assert ("agr.alliance", "default", "packages/alliance/tools/bindings.yaml") in loaded_exports
     assert not any(export.package_id == "agr.core" for export in registry.loaded_binding_exports)
+    assert not (
+        REPO_ROOT / "backend/src/lib/openai_agents/tools/agr_curation.py"
+    ).exists()
 
     expected_bindings = {
         "agr_literature_reference_lookup": ("static", (), "agr.alliance"),
@@ -491,6 +494,14 @@ def test_default_tool_registry_uses_repo_packages_when_runtime_dir_is_absent(
     assert (
         alliance_binding.provider_adapters["groq_schema_constraints"]
         == "agr_ai_curation_alliance.tools.agr_curation:create_groq_agr_curation_query_tool"
+    )
+    assert (
+        alliance_binding.import_path
+        == "agr_ai_curation_alliance.tools.agr_curation:agr_curation_query"
+    )
+    assert (
+        alliance_binding.source.source_file
+        == "python/src/agr_ai_curation_alliance/tools/agr_curation.py"
     )
 
 
