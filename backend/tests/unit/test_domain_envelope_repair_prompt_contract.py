@@ -2,6 +2,7 @@
 
 import re
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -30,9 +31,11 @@ EXTRACTOR_OUTPUT_SCHEMAS = {
 }
 
 FORBIDDEN_TARGET_REPAIR_FRAGMENTS = [
+    "repair_action",
     "repair_hints",
     "repair_notes",
     "repair_mode",
+    "repair-only",
     "repair_patch",
     "repair_result",
     "repair_request",
@@ -44,6 +47,33 @@ FORBIDDEN_TARGET_REPAIR_FRAGMENTS = [
     "ExtractorRepairResponse",
     "extractor_patch",
 ]
+
+# Authoring metadata can still carry policy-only repair markers such as
+# metadata.repair or repairable; runtime result event keys are checked separately.
+FORBIDDEN_TARGET_REPAIR_METADATA_KEYS = frozenset(
+    {
+        "repair",
+        "repair_action",
+        "repair_hints",
+        "repair_notes",
+        "repair_mode",
+        "repair_patch",
+        "repair_result",
+        "repair_request",
+        "repair_history",
+        "repair_requested",
+        "repairable",
+        "extractor_patch",
+    }
+)
+
+FORBIDDEN_TARGET_REPAIR_METADATA_TEXT = (
+    "mark_under_development",
+    "repair_action",
+    "extractor_patch",
+    "repair mode",
+    "repair-only",
+)
 
 
 def _content(relative_path: str) -> str:
@@ -59,6 +89,44 @@ def _yaml(relative_path: str) -> dict:
     data = yaml.safe_load((REPO_ROOT / relative_path).read_text(encoding="utf-8"))
     assert isinstance(data, dict)
     return data
+
+
+def _yaml_paths(*patterns: str) -> list[Path]:
+    paths: set[Path] = set()
+    for pattern in patterns:
+        paths.update(REPO_ROOT.glob(pattern))
+    return sorted(paths)
+
+
+def _collect_forbidden_metadata_surfaces(
+    value: Any,
+    *,
+    path: tuple[str, ...],
+) -> list[str]:
+    violations: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            key_text = str(key)
+            child_path = (*path, key_text)
+            if key_text in FORBIDDEN_TARGET_REPAIR_METADATA_KEYS:
+                violations.append(".".join(child_path))
+            violations.extend(
+                _collect_forbidden_metadata_surfaces(child, path=child_path)
+            )
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            violations.extend(
+                _collect_forbidden_metadata_surfaces(
+                    child,
+                    path=(*path, f"[{index}]"),
+                )
+            )
+    elif isinstance(value, str):
+        normalized_value = value.lower()
+        for fragment in FORBIDDEN_TARGET_REPAIR_METADATA_TEXT:
+            if fragment in normalized_value:
+                violations.append(".".join(path))
+    return violations
 
 
 def test_extractor_prompts_do_not_expose_repair_surfaces():
@@ -96,3 +164,40 @@ def test_extractor_agents_use_plain_extraction_result_schemas():
             "__domain_envelope_extractor_repair_response__",
             False,
         )
+
+
+def test_extractor_group_rules_do_not_expose_repair_surfaces():
+    group_rule_paths = _yaml_paths(
+        "packages/alliance/agents/*_extractor/group_rules/*.yaml",
+        "packages/alliance/agents/gene_expression/group_rules/*.yaml",
+    )
+    assert group_rule_paths
+
+    for path in group_rule_paths:
+        content = str(yaml.safe_load(path.read_text(encoding="utf-8"))["content"])
+        normalized_content = re.sub(r"\s+", " ", content)
+        for fragment in FORBIDDEN_TARGET_REPAIR_FRAGMENTS:
+            assert fragment not in normalized_content, f"{path} contains {fragment}"
+
+
+def test_domain_pack_metadata_omits_repair_only_policy():
+    metadata_paths = _yaml_paths("packages/alliance/domain_packs/*/domain_pack.yaml")
+    assert metadata_paths
+
+    for path in metadata_paths:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        violations = _collect_forbidden_metadata_surfaces(payload, path=(str(path),))
+        assert violations == []
+
+
+def test_validator_dispatch_fixtures_omit_repair_only_policy():
+    fixture_paths = _yaml_paths(
+        "backend/tests/fixtures/domain_packs/**/*.yaml",
+        "packages/alliance/domain_packs/*/fixtures/*.yaml",
+    )
+    assert fixture_paths
+
+    for path in fixture_paths:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+        violations = _collect_forbidden_metadata_surfaces(payload, path=(str(path),))
+        assert violations == []
