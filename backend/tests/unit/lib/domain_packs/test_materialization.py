@@ -411,6 +411,34 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
     DomainEnvelope.model_validate(result.envelope.model_dump(mode="json"))
 
 
+def test_validator_result_materialization_is_deterministic_for_existing_reference():
+    metadata = _validator_metadata()
+    envelope = _validator_envelope()
+    item = _validator_item(metadata, envelope)
+
+    first_result = materialize_validator_results_into_envelope(
+        envelope,
+        metadata,
+        [item],
+        source_envelope_revision=7,
+    )
+    second_result = materialize_validator_results_into_envelope(
+        first_result.envelope,
+        metadata,
+        [item],
+        source_envelope_revision=7,
+    )
+
+    first_reference = first_result.materialized_objects[0]
+    assert second_result.materialized_objects == ()
+    assert [
+        domain_object.object_id
+        for domain_object in second_result.envelope.objects
+        if domain_object.object_type == "Allele"
+    ] == [first_reference.object_id]
+    assert second_result.appended_findings == ()
+
+
 def test_unresolved_validator_result_materializes_missing_field_finding():
     metadata = _validator_metadata()
     envelope = _validator_envelope()

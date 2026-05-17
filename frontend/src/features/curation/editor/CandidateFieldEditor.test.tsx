@@ -368,7 +368,7 @@ function renderEditor(workspace = buildWorkspace()) {
 }
 
 describe('CandidateFieldEditor', () => {
-  it('displays envelope validation, evidence, metadata, and repair history by field', () => {
+  it('displays envelope validation, evidence, metadata, and curator edit history by field', () => {
     renderEditor()
 
     expect(screen.getByText('Unresolved')).toBeInTheDocument()
@@ -389,7 +389,7 @@ describe('CandidateFieldEditor', () => {
       'Path: gene.symbol',
     )
     expect(screen.getByTestId('field-support-details-field_symbol')).toHaveTextContent(
-      'Last repair: old -> abc',
+      'Last curator edit: old -> abc',
     )
   })
 
@@ -461,7 +461,7 @@ describe('CandidateFieldEditor', () => {
     ).toBeInTheDocument()
   })
 
-  it('marks unserializable repair values explicitly', () => {
+  it('marks unserializable curator edit values explicitly', () => {
     const workspace = buildWorkspace()
     const circular: Record<string, unknown> = {}
     circular.self = circular
@@ -470,7 +470,7 @@ describe('CandidateFieldEditor', () => {
     renderEditor(workspace)
 
     expect(screen.getByTestId('field-support-details-field_symbol')).toHaveTextContent(
-      'Last repair: [unserializable value] -> abc',
+      'Last curator edit: [unserializable value] -> abc',
     )
   })
 

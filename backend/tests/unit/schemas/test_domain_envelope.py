@@ -260,3 +260,16 @@ def test_validation_finding_persists_validator_request_and_result_details():
         "canonical_id": "AGR:0001",
         "payload": {"primary_external_id": "AGR:0001"},
     }
+
+
+def test_history_event_kind_omits_repair_events():
+    event_values = {event_kind.value for event_kind in HistoryEventKind}
+
+    assert {
+        "repair_requested",
+        "repair_patch_accepted",
+        "repair_patch_rejected",
+        "repair_final_classified",
+    }.isdisjoint(event_values)
+    assert HistoryEventKind.CURATOR_FIELD_PATCH_ACCEPTED.value in event_values
+    assert HistoryEventKind.VALIDATION_FINDING_ADDED.value in event_values

@@ -116,7 +116,6 @@ const METADATA_KEYS_TO_SKIP = new Set([
   'projection_key',
   'projection_type',
   'provider_refs',
-  'repair',
   'semantic_source',
   'source_field_path',
   'source_of_truth',
@@ -582,7 +581,7 @@ function FieldSupportDetails({
   const latestHistory = history[0]
   const metadata = latestHistory?.metadata
   const metadataText = metadata
-    ? `Last repair: ${formatUnknown(metadata.before)} -> ${formatUnknown(metadata.after)}`
+    ? `Last curator edit: ${formatUnknown(metadata.before)} -> ${formatUnknown(metadata.after)}`
     : null
   const details = [
     candidate.projection_ref ? `Path: ${fieldPath}` : null,
