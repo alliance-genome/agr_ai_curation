@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
@@ -149,6 +150,8 @@ metadata:
     assert under_development_binding["state_explanation"] == (
         "Lookup dispatch is still being configured."
     )
+    assert "automatic_validation_semantics" in result
+    assert "repair" not in json.dumps(result).lower()
 
 
 @pytest.fixture
