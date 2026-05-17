@@ -63,6 +63,7 @@ VALIDATION_STATUS_RANK: dict[DomainEnvelopeValidationStatus, int] = {
     DomainEnvelopeValidationStatus.RESOLVED: 0,
     DomainEnvelopeValidationStatus.WAIVED: 0,
     DomainEnvelopeValidationStatus.PLANNED: 1,
+    DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT: 1,
     DomainEnvelopeValidationStatus.UNRESOLVED: 2,
     DomainEnvelopeValidationStatus.BLOCKED: 3,
 }
@@ -1591,10 +1592,8 @@ def _validation_status(finding: ValidationFinding) -> DomainEnvelopeValidationSt
     validation_metadata = details.get("validation_metadata")
     if isinstance(validation_metadata, Mapping):
         binding_state = _optional_string(validation_metadata.get("binding_state"))
-        if binding_state == DomainEnvelopeValidationStatus.BLOCKED.value:
-            return DomainEnvelopeValidationStatus.BLOCKED
-        if binding_state == DomainEnvelopeValidationStatus.PLANNED.value:
-            return DomainEnvelopeValidationStatus.PLANNED
+        if binding_state == DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT.value:
+            return DomainEnvelopeValidationStatus.UNDER_DEVELOPMENT
 
     if _optional_string(details.get("failure_classification")) == "blocked":
         return DomainEnvelopeValidationStatus.BLOCKED

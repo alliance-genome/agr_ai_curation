@@ -152,13 +152,14 @@ describe('NodeEditor', () => {
       default_enabled: true,
       allow_opt_out: true,
     })
-    const planned = buildValidationAttachmentSelection({
+    const futureBinding = buildValidationAttachmentSelection({
       attachment_id: 'disease:condition-relation',
       label: 'Condition relation type lookup',
       target_label: 'Disease annotation Condition relation type',
       validator_binding_id: 'disease_condition_relation_lookup',
       field_path: 'condition_relations[0].condition_relation_type.name',
-      state: 'planned',
+      state: 'under_development',
+      state_explanation: 'Condition relation dispatch is being wired in the domain pack.',
       enabled: false,
       default_enabled: false,
       allow_opt_out: false,
@@ -188,7 +189,7 @@ describe('NodeEditor', () => {
     render(
       <NodeEditor
         node={buildNode({
-          validation_attachments: [actionable, planned, metadataOnly, underDevelopment],
+          validation_attachments: [actionable, futureBinding, metadataOnly, underDevelopment],
         })}
         onSave={vi.fn()}
         onClose={vi.fn()}
@@ -200,12 +201,13 @@ describe('NodeEditor', () => {
     expect(screen.getByText('Pending disease envelope validator')).toBeInTheDocument()
     expect(screen.getByText('Condition relation type lookup')).toBeInTheDocument()
     expect(screen.getByText('Disease annotation Condition relation type')).toBeInTheDocument()
+    expect(screen.getByText('Condition relation dispatch is being wired in the domain pack.')).toBeInTheDocument()
     expect(screen.queryByText(/condition_relations\[0\]\.condition_relation_type\.name/i)).not.toBeInTheDocument()
     expect(screen.getByText('disease required payload fields')).toBeInTheDocument()
     expect(screen.getByText('Disease ontology term lookup')).toBeInTheDocument()
-    expect(screen.getByText('under development')).toBeInTheDocument()
+    expect(screen.getAllByText('under development')).toHaveLength(2)
     expect(screen.getByText('Ontology dispatch is being wired in the domain pack.')).toBeInTheDocument()
-    expect(screen.getByText(/not scheduled by this checkbox list/i)).toBeInTheDocument()
+    expect(screen.getByText(/Under-development and metadata-only validators are not scheduled by this checkbox list/i)).toBeInTheDocument()
   })
 
   it('shows custom replacement status for validation groups', () => {

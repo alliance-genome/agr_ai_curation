@@ -18,7 +18,7 @@ const entry: ChangelogEntry = {
       heading: 'Agent Studio and Flows',
       bullets: [
         'Agent Studio shows domain-envelope metadata for extraction agents, including object types, field paths, schema/provider references, and validation policy.',
-        'Flow Builder automatically attaches active validators from domain-pack metadata and shows planned or blocked validators distinctly.',
+        'Flow Builder automatically attaches active validators from domain-pack metadata and shows under-development validators as read-only metadata.',
         'Active validators can be unchecked when replacing automatic validation with custom validation; opt-out reasons are requested only when a specific validator policy requires one.',
       ],
     },
