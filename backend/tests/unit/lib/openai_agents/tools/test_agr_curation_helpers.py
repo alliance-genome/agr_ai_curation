@@ -1,7 +1,6 @@
 """Additional helper/branch tests for the package-owned AGR curation tool."""
 
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,11 +8,7 @@ import pytest
 
 from src.lib import identifier_validation
 
-REPO_ROOT = Path(__file__).resolve().parents[6]
-ALLIANCE_PACKAGE_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
-sys.path.insert(0, str(ALLIANCE_PACKAGE_SRC))
-
-from agr_ai_curation_alliance.tools import agr_curation  # noqa: E402
+from agr_ai_curation_alliance.tools import agr_curation
 
 
 @pytest.fixture(autouse=True)

@@ -2,14 +2,7 @@
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-REPO_ROOT = Path(__file__).resolve().parents[6]
-ALLIANCE_PACKAGE_SRC = REPO_ROOT / "packages" / "alliance" / "python" / "src"
-sys.path.insert(0, str(ALLIANCE_PACKAGE_SRC))
-
-from agr_ai_curation_alliance.tools.agr_lookup import (  # noqa: E402
+from agr_ai_curation_alliance.tools.agr_lookup import (
     ALLIANCE_CURATION_DB_PROVIDER,
     alliance_projection_type,
     bulk_item_status_from_lookup_status,
@@ -17,7 +10,7 @@ from agr_ai_curation_alliance.tools.agr_lookup import (  # noqa: E402
     projection_from_entity_match,
     projection_from_result,
 )
-from agr_ai_curation_runtime.agr_lookup import LOOKUP_STATUS_TRANSIENT  # noqa: E402
+from agr_ai_curation_runtime.agr_lookup import LOOKUP_STATUS_TRANSIENT
 
 
 def test_alliance_gene_projection_metadata():
