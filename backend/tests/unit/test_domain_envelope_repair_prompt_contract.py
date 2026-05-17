@@ -48,6 +48,8 @@ FORBIDDEN_TARGET_REPAIR_FRAGMENTS = [
     "extractor_patch",
 ]
 
+# Authoring metadata can still carry policy-only repair markers such as
+# metadata.repair or repairable; runtime result event keys are checked separately.
 FORBIDDEN_TARGET_REPAIR_METADATA_KEYS = frozenset(
     {
         "repair",

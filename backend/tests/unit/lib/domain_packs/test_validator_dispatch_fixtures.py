@@ -31,6 +31,8 @@ FIXTURE_PATH = (
     / "end_to_end_cases.yaml"
 )
 
+# Validator findings serialize runtime result payloads, so this set includes
+# repair patch/event fields rather than domain-pack authoring metadata keys.
 FORBIDDEN_VALIDATOR_REPAIR_RESULT_KEYS = frozenset(
     {
         "repair_action",
