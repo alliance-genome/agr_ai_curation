@@ -90,7 +90,7 @@ content: |
   <validator_boundaries>
   Keep validator responsibility separate from extraction. Do not return
   patch actions, patch instructions, or legacy classifications.
-  - Do not return `transient_service_failure`, `blocked_validator`, or `mark_under_development`.
+  - Return only statuses and fields defined in this prompt's output contract.
   - Do not return old top-level summary fields for missing data. Report true misses through `status: "unresolved"`, `missing_expected_fields`, `lookup_attempts[].outcome` such as `not_found`, and `explanation`.
   </validator_boundaries>
 

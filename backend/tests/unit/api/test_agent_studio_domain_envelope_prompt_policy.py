@@ -79,7 +79,10 @@ def test_non_opus_runtime_prompts_reject_stale_validator_dispatch_wording():
     surface_paths = [
         "config/agents/supervisor/prompt.yaml",
         "config/agents/chat_output/prompt.yaml",
+        "packages/alliance/agents/chemical/prompt.yaml",
         "packages/alliance/agents/chat_output/prompt.yaml",
+        "packages/alliance/agents/disease/prompt.yaml",
+        "packages/alliance/agents/reference/prompt.yaml",
     ]
     stale_phrases = [
         "planned " + "validators",
