@@ -115,8 +115,8 @@ checked against domain-pack object fields, with pinned provider `schema_ref`
 slot/attribute metadata used only when the domain-pack field list cannot prove
 the path directly. At runtime, selector failures become structured findings
 such as `selector_missing`, `selector_ambiguous`, `selector_unresolved_ref`, or
-`selector_missing_field`; the supervisor must not pick a first object ref or
-guess through sibling objects.
+`selector_missing_field`; active validator dispatch must not pick a first object
+ref or guess through sibling objects.
 
 Findings are targeted with `object_id`/`pending_ref_id` plus `field_path` where
 possible. Stable finding IDs are derived from the envelope ID, code, severity,
@@ -146,9 +146,9 @@ validation, and debugging context.
 A successful lookup is not enough to resolve every declared field. When
 domain-pack `expected_result_fields` say that a result value validates an
 envelope field, that value must be present in the lookup response. If the lookup
-partially succeeds but omits a declared result value, the supervisor retries the
-validator once with the missing projection context and records an open
-field-level finding if the value is still absent.
+partially succeeds but omits a declared result value, validator dispatch returns
+an unresolved result with the missing projection context; materialization records
+an open field-level finding.
 
 Shared status constants live in `backend/src/lib/lookup_status.py`; the backend
 tool and packaged Alliance tool both use
@@ -164,7 +164,7 @@ bindings, and unresolved validator outcomes are represented as
 
 Validators return structured decisions and facts such as resolved values,
 resolved objects, missing expected fields, candidates, lookup attempts,
-curator-facing messages, and explanations. The supervisor records those results
+curator-facing messages, and explanations. Materialization records those results
 as findings without asking the extractor to rewrite the target envelope.
 
 Curator-facing changes use review-row and field-edit semantics. A curator may
