@@ -150,7 +150,10 @@ metadata:
     assert under_development_binding["state_explanation"] == (
         "Lookup dispatch is still being configured."
     )
-    assert "automatic_validation_semantics" in result
+    semantics = result["automatic_validation_semantics"].lower()
+    assert "under-development validators remain visible metadata" in semantics
+    assert "planned" not in semantics
+    assert "blocked" not in semantics
     assert "repair" not in json.dumps(result).lower()
 
 

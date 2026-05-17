@@ -399,7 +399,7 @@ def get_domain_pack_validation_plan(
             },
             "automatic_validation_semantics": (
                 "Active default-enabled attachments are scheduled automatically on extraction nodes. "
-                "Planned, under-development, and blocked validators remain visible metadata. "
+                "Under-development validators remain visible metadata and are excluded from automatic scheduling. "
                 "Active validators can be "
                 "unchecked when replacing automatic validation with custom validation unless metadata "
                 "explicitly locks the validator; opt-out reasons are requested only when metadata "
