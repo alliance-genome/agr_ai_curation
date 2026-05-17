@@ -31,6 +31,24 @@ FIXTURE_PATH = (
     / "end_to_end_cases.yaml"
 )
 
+FORBIDDEN_VALIDATOR_REPAIR_RESULT_KEYS = frozenset(
+    {
+        "repair_action",
+        "extractor_patch",
+        "repair_hints",
+        "repair_notes",
+        "repair_mode",
+        "repair_patch",
+        "repair_result",
+        "repair_request",
+        "repair_history",
+        "repair_requested",
+        "repair_patch_accepted",
+        "repair_patch_rejected",
+        "repair_final_classified",
+    }
+)
+
 
 @pytest.fixture(scope="module")
 def dispatch_fixture() -> dict[str, Any]:
@@ -103,6 +121,24 @@ def _validation_attachment_by_binding(
         for option in registry.validation_attachment_options()
         if option.validator_binding_id is not None
     }
+
+
+def _forbidden_repair_keys(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        violations = [
+            key
+            for key in value
+            if key in FORBIDDEN_VALIDATOR_REPAIR_RESULT_KEYS
+        ]
+        for child in value.values():
+            violations.extend(_forbidden_repair_keys(child))
+        return violations
+    if isinstance(value, list):
+        violations: list[str] = []
+        for child in value:
+            violations.extend(_forbidden_repair_keys(child))
+        return violations
+    return []
 
 
 def _node_data_for_flow_case(
@@ -220,7 +256,7 @@ def test_validator_dispatch_end_to_end_fixture_cases(tmp_path, dispatch_fixture,
     assert finding.details["validation_result"]["status"] not in (
         dispatch_fixture["fixture_contract"]["forbidden_runtime_result_statuses"]
     )
-    assert "repair_action" not in finding.details["validation_result"]
+    assert _forbidden_repair_keys(finding.details["validation_result"]) == []
 
     if "failure_classification" in expected_projection:
         assert finding.details["failure_classification"] == (

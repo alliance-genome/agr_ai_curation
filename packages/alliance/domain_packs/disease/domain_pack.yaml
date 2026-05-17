@@ -398,7 +398,7 @@ object_definitions:
           validator_state: active
           definition_state_category: under_development
           protected: true
-          curator_action_note: Use mark_under_development until the disease relation contract is complete.
+          curator_action_note: Disease relation validation remains under development until the relation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -423,7 +423,7 @@ object_definitions:
           definition_state_category: blocked
           blocked_by: ALL-410
           protected: true
-          curator_action_note: Use mark_under_development while disease subject materialization is blocked.
+          curator_action_note: Disease subject materialization remains blocked until a verified Gene, Allele, or AGM subject is available.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -458,7 +458,7 @@ object_definitions:
           definition_state_category: blocked
           blocked_by: ALL-410
           protected: true
-          curator_action_note: Use mark_under_development while disease subject materialization is blocked.
+          curator_action_note: Disease subject materialization remains blocked until a verified subject identifier is available.
       - field_path: single_reference
         field_type: object
         display_name: Source reference
@@ -471,7 +471,7 @@ object_definitions:
           definition_state_category: blocked
           blocked_by: ALL-425
           protected: true
-          curator_action_note: Use mark_under_development while reference materialization is blocked.
+          curator_action_note: Reference materialization remains blocked until source reference projection is verified.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -493,7 +493,7 @@ object_definitions:
           definition_state_category: blocked
           blocked_by: ALL-425
           protected: true
-          curator_action_note: Use mark_under_development while reference materialization is blocked.
+          curator_action_note: Reference materialization remains blocked until source reference projection is verified.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -515,7 +515,7 @@ object_definitions:
           definition_state_category: blocked
           blocked_by: ALL-425
           protected: true
-          curator_action_note: Use mark_under_development while evidence-code lookup is blocked.
+          curator_action_note: Evidence-code lookup remains blocked until source reference projection is verified.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -622,7 +622,7 @@ object_definitions:
           validator_state: planned
           definition_state_category: under_development
           protected: true
-          curator_action_note: Use mark_under_development until condition relation validation is fully defined.
+          curator_action_note: Condition relation validation remains under development until the validation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -642,7 +642,7 @@ object_definitions:
           validator_state: active
           definition_state_category: under_development
           protected: true
-          curator_action_note: Use mark_under_development until condition relation validation is fully defined.
+          curator_action_note: Condition relation validation remains under development until the validation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -664,7 +664,7 @@ object_definitions:
           validator_state: planned
           definition_state_category: under_development
           protected: true
-          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
+          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -684,7 +684,7 @@ object_definitions:
           validator_state: planned
           definition_state_category: under_development
           protected: true
-          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
+          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -705,7 +705,7 @@ object_definitions:
           validator_state: planned
           definition_state_category: under_development
           protected: true
-          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
+          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -726,7 +726,7 @@ object_definitions:
           validator_state: planned
           definition_state_category: under_development
           protected: true
-          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
+          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
@@ -747,7 +747,7 @@ object_definitions:
           validator_state: planned
           definition_state_category: under_development
           protected: true
-          curator_action_note: Use mark_under_development until experimental condition validation is fully defined.
+          curator_action_note: Experimental condition validation remains under development until the validation contract is complete.
           provider_refs:
             alliance_linkml:
               schema_ref: alliance.linkml
