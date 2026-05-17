@@ -21,6 +21,37 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "`lookup_attempts` is an audit trail" in prompt
     assert "`normalized_payload`" in prompt
     assert "are not semantic truth for new domain-envelope runs" in prompt
+    assert "Active default validators are the only validators scheduled automatically" in prompt
+    assert "Under-development validator bindings remain explanatory metadata" in prompt
+    assert "should not be asked to call validators directly" in prompt
+    assert "Validator-agent inspection workflow" in prompt
+    assert "get_prompt(agent_id=<validator agent id>)" in prompt
+
+
+def test_opus_validation_surfaces_reject_stale_validator_dispatch_wording():
+    surface_paths = [
+        "backend/src/api/agent_studio_system_prompt.md",
+        "backend/src/api/agent_studio_opus_tools.py",
+        "backend/src/lib/agent_studio/domain_envelope_tools.py",
+        "backend/src/lib/agent_studio/prompt_builder.py",
+        "backend/src/lib/agent_studio/diagnostic_tools/tool_definitions.py",
+    ]
+    stale_phrases = [
+        "planned " + "validators",
+        "blocked " + "validators",
+        "planned or blocked " + "validators",
+        "planned or blocked " + "metadata",
+        "planned/blocked " + "metadata",
+        "opt-out " + "reason",
+        "requires an opt-out " + "reason",
+        "whether a " + "reason is required",
+        "export-blocking or explicitly " + "locked",
+    ]
+
+    for relative_path in surface_paths:
+        text = (REPO_ROOT / relative_path).read_text(encoding="utf-8").lower()
+        for phrase in stale_phrases:
+            assert phrase not in text, f"{phrase!r} returned in {relative_path}"
 
 
 def test_chat_output_prompts_match_and_preserve_domain_envelope_refs():

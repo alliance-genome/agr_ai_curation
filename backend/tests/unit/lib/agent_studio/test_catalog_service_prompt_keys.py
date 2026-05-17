@@ -6,6 +6,7 @@ import pytest
 
 from src.models.sql.prompts import PromptTemplate
 from src.lib.agent_studio import catalog_service
+from src.lib.agent_studio.models import AgentPrompts, PromptCatalog, PromptInfo
 from src.lib.prompts.context import get_prompt_override
 
 
@@ -17,6 +18,26 @@ def test_get_prompt_key_for_agent_resolves_registry_alias():
 def test_get_prompt_key_for_agent_accepts_canonical_key():
     """Canonical prompt key (folder name) should resolve to itself."""
     assert catalog_service.get_prompt_key_for_agent("gene") == "gene"
+
+
+def test_prompt_catalog_get_agent_accepts_validator_agent_id_from_validation_plan():
+    """Validator-agent IDs from validation plans should inspect the bundled prompt."""
+    service = catalog_service.PromptCatalogService()
+    gene_prompt = PromptInfo(
+        agent_id="gene",
+        agent_name="Gene Validation Agent",
+        description="Validates genes",
+        base_prompt="Gene validator prompt",
+        source_file="database",
+        tools=["agr_curation_query"],
+    )
+    service._catalog = PromptCatalog(
+        categories=[AgentPrompts(category="Validation", agents=[gene_prompt])],
+        total_agents=1,
+        available_groups=[],
+    )
+
+    assert service.get_agent("gene_validation") == gene_prompt
 
 
 def test_get_prompt_key_for_agent_rejects_unknown_key():

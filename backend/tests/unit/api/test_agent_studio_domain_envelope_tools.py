@@ -28,6 +28,19 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert tools_by_name["get_export_submission_readiness"]["input_schema"]["required"] == [
         "session_id"
     ]
+    validation_plan_description = tools_by_name["get_domain_pack_validation_plan"][
+        "description"
+    ]
+    get_prompt_description = tools_by_name["get_prompt"]["description"]
+    assert "active automatic validation defaults" in validation_plan_description
+    assert "under-development validator metadata" in validation_plan_description
+    assert "get_prompt(agent_id=...)" in validation_plan_description
+    assert "validator_bindings[].validator_agent.agent_id" in validation_plan_description
+    assert "Validator-agent IDs returned by get_domain_pack_validation_plan" in (
+        get_prompt_description
+    )
+    assert "planned or blocked validators" not in validation_plan_description
+    assert "opt-out reason" not in validation_plan_description.lower()
 
 
 def test_handle_tool_call_dispatches_domain_envelope_state_with_user_scope(monkeypatch):

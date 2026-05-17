@@ -83,7 +83,7 @@ Domain envelopes separate:
 3. **Curation layer** - curator edits, opt-outs, review decisions, and checkpoints are recorded as history and metadata.
 4. **Projection/export layer** - review rows, files, and submission payloads are materialized projections from envelope objects.
 
-Validation is metadata-driven from domain packs, structural checks, and active validator bindings. Active default validators run automatically on extraction nodes, and curators can uncheck them when they are replacing automatic validation with custom validation. A validator is locked or requires an opt-out reason only when domain-pack metadata explicitly says so. Under-development validator bindings remain explanatory metadata, not scheduled work.
+Validation is metadata-driven from domain packs, structural checks, and active validator bindings. Active default validators are the only validators scheduled automatically, and runtime dispatch writes their findings back into domain envelopes after extraction. Under-development validator bindings remain explanatory metadata, not scheduled work. Flow opt-outs mean an active default validator was skipped or replaced by flow configuration; do not describe them as a separate justification workflow. Extractor prompts describe what to extract and should not be asked to call validators directly.
 
 Validation findings are written back into envelopes and remain visible until a validator rerun resolves them or a curator records a review decision. `lookup_attempts` is an audit trail: it may include transient failed attempts even when the top-level lookup result or projection status succeeds after retry. Always distinguish the final outcome from the audit trail.
 
@@ -252,7 +252,7 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 
 - **`list_domain_envelopes(session_id, document_id, flow_run_id, domain_pack_id, limit)`** - Find visible envelope IDs before inspecting state.
 - **`get_domain_envelope_state(envelope_id, object_id, field_path, include_object_payload, history_limit)`** - Inspect envelope objects, field paths, validation findings, history, lookup attempts, and projection refs.
-- **`get_domain_pack_validation_plan(agent_id, domain_pack_id)`** - Inspect object definitions, schema/provider refs, validator bindings, automatic validation defaults, opt-out rules, planned validators, and blocked validators.
+- **`get_domain_pack_validation_plan(agent_id, domain_pack_id)`** - Inspect object definitions, schema/provider refs, validator bindings, active automatic validation defaults, under-development metadata, and flow opt-out/replacement context.
 - **`get_domain_envelope_review_rows(envelope_id, revision, object_id)`** - Explain review rows as materialized projections from envelope objects.
 - **`get_export_submission_readiness(session_id, candidate_ids, expected_envelope_revisions, mode)`** - Explain read-only export/submission readiness and blockers tied to envelope/object/field references.
 
@@ -263,6 +263,7 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 - **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.
   - agent_id: supervisor, pdf_extraction, gene, gene_extractor, allele, allele_extractor, disease, disease_extractor, chemical, chemical_extractor, gene_ontology, go_annotations, orthologs, gene_expression, phenotype, ontology_mapping, chat_output, csv_formatter, tsv_formatter, json_formatter
   - group_id (optional): WB, FB, MGI, RGD, SGD, ZFIN. Legacy `mod_id` is also accepted.
+  - Validator-agent inspection workflow: call `get_domain_pack_validation_plan`, read `validator_bindings[].validator_agent.agent_id` or `validation_attachments[].validator_agent_id`, then call `get_prompt(agent_id=<validator agent id>)` to inspect that validator's prompt, tools, and group-specific rules.
   - When a curator has an agent selected in the UI, the full prompt is already included in your context (in `<base_prompt>` tags). Reference it directly instead of calling `get_prompt`. Only call `get_prompt` for a DIFFERENT agent or group variant.
   - Do not announce or explain that you already have the prompt in context. Just use it naturally.
 

@@ -1150,7 +1150,7 @@ def _get_current_flow_handler():
                     + (f", {opt_out_count} policy opt-outs" if opt_out_count else "")
                     + (f", {replacement_count} replacement validators" if replacement_count else "")
                     + (f", {supplemental_count} supplemental validators" if supplemental_count else "")
-                    + (f", {inactive_count} planned/blocked metadata" if inactive_count else "")
+                    + (f", {inactive_count} inactive validator metadata" if inactive_count else "")
                     + ")"
                 )
             markdown_lines.append("")
