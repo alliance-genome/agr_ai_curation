@@ -70,7 +70,6 @@ export interface ValidationAttachmentOption {
   target_label?: string
   description?: string
   definition_state?: string
-  blocked_by?: string
   reason?: string
   state_explanation?: string
   affected_fields?: string[]
