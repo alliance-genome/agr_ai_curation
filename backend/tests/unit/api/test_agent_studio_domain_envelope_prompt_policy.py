@@ -48,8 +48,8 @@ VALIDATOR_DISPATCH_CLEANUP_SURFACE_PATHS = (
 )
 
 VALIDATOR_DISPATCH_CLEANUP_SURFACE_GLOBS = (
-    "packages/alliance/agents/*/prompt.yaml",
-    "packages/alliance/domain_packs/*/domain_pack.yaml",
+    "packages/*/agents/*/prompt.yaml",
+    "packages/*/domain_packs/*/domain_pack.yaml",
 )
 
 FORBIDDEN_VALIDATOR_DISPATCH_CLEANUP_PATTERNS = {
