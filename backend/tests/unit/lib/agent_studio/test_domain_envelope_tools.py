@@ -152,7 +152,7 @@ metadata:
     )
     assert result["validation_dispatch_summary"]["active_automatic"] == 1
     assert result["validation_dispatch_summary"]["under_development_metadata"] == 1
-    assert result["validation_dispatch_summary"]["metadata_only"] == 1
+    assert "metadata_only" not in result["validation_dispatch_summary"]
     assert (
         "get_prompt(agent_id=<validator agent id>)"
         in result["validation_dispatch_summary"]["validator_prompt_inspection"]

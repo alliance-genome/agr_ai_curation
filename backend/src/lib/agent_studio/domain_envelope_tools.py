@@ -413,11 +413,6 @@ def get_domain_pack_validation_plan(
                     for option in attachment_options
                     if option.get("state") == "under_development"
                 ),
-                "metadata_only": sum(
-                    1
-                    for option in attachment_options
-                    if option.get("state") == "under_development"
-                ),
                 "validator_prompt_inspection": (
                     "Read validator_bindings[].validator_agent.agent_id or "
                     "validation_attachments[].validator_agent_id, then call "
