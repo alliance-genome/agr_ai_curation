@@ -477,7 +477,7 @@ def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch)
                             {"validator_binding_id": "optional-note-binding"}
                         ],
                         "inactive_metadata": [
-                            {"validator_binding_id": "planned-ontology-binding"}
+                            {"validator_binding_id": "future-ontology-binding"}
                         ],
                         "replacement_validators": [
                             {"validator_binding_id": "allele-custom-binding"}
@@ -533,7 +533,7 @@ def test_get_current_flow_handler_includes_domain_envelope_analysis(monkeypatch)
     assert "Domain Envelope Metadata" in result["execution_order_markdown"]
     assert (
         "1 scheduled validators, 1 policy opt-outs, 1 replacement validators, "
-        "1 supplemental validators, 1 planned/blocked metadata"
+        "1 supplemental validators, 1 under-development metadata"
     ) in result["execution_order_markdown"]
 
 

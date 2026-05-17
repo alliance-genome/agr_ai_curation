@@ -38,7 +38,7 @@ class FlowValidationAttachmentSelection(BaseModel):
     tool_method: Optional[str] = Field(None, max_length=255)
     validator_package_id: Optional[str] = Field(None, max_length=255)
     validator_agent_id: Optional[str] = Field(None, max_length=255)
-    state: Literal["active", "planned", "blocked", "under_development"]
+    state: Literal["active", "under_development"]
     scope: Literal["pack", "object", "field"]
     object_type: Optional[str] = Field(None, max_length=255)
     object_role: Optional[str] = Field(None, max_length=255)
@@ -62,7 +62,7 @@ class FlowValidationAttachmentSelection(BaseModel):
     def validate_attachment_policy(self) -> "FlowValidationAttachmentSelection":
         """Enforce explicit validator opt-out policy at persistence time."""
 
-        if self.state in {"planned", "blocked", "under_development"} and self.enabled:
+        if self.state == "under_development" and self.enabled:
             raise ValueError(
                 "inactive validation attachments cannot be enabled"
             )

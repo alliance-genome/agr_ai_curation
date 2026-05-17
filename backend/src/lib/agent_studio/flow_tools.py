@@ -1040,22 +1040,20 @@ def _get_current_flow_handler():
                         if attachment.get("state") == "active"
                         and not attachment.get("enabled")
                     ]
-                    planned = [
+                    under_development = [
                         attachment
                         for attachment in validation_attachments
-                        if attachment.get("state") == "planned"
-                    ]
-                    blocked = [
-                        attachment
-                        for attachment in validation_attachments
-                        if attachment.get("state") == "blocked"
+                        if attachment.get("state") == "under_development"
                     ]
                     markdown_lines.append(
                         "- **Validation Attachments:** "
                         f"{len(active_enabled)} active scheduled"
                         + (f", {len(opted_out)} opted out" if opted_out else "")
-                        + (f", {len(planned)} planned" if planned else "")
-                        + (f", {len(blocked)} blocked" if blocked else "")
+                        + (
+                            f", {len(under_development)} under development"
+                            if under_development
+                            else ""
+                        )
                     )
             markdown_lines.append(f"- **Output Key:** `{output_key}`")
             markdown_lines.append("")
@@ -1150,7 +1148,7 @@ def _get_current_flow_handler():
                     + (f", {opt_out_count} policy opt-outs" if opt_out_count else "")
                     + (f", {replacement_count} replacement validators" if replacement_count else "")
                     + (f", {supplemental_count} supplemental validators" if supplemental_count else "")
-                    + (f", {inactive_count} planned/blocked metadata" if inactive_count else "")
+                    + (f", {inactive_count} under-development metadata" if inactive_count else "")
                     + ")"
                 )
             markdown_lines.append("")

@@ -1096,8 +1096,8 @@ class TestGetAllAgentToolsStepOrderRuntime:
                         export_blocking=True,
                     ),
                     _validation_attachment(
-                        "planned-lookup",
-                        state="planned",
+                        "future-lookup",
+                        state="under_development",
                         enabled=False,
                         required=False,
                         validator_binding_id=None,
@@ -1118,7 +1118,7 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "manual-opt-out"
         ]
         assert [item["attachment_id"] for item in schedule["inactive_metadata"]] == [
-            "planned-lookup"
+            "future-lookup"
         ]
 
     def test_supplemental_validation_group_runs_custom_validator_node(self, monkeypatch):
@@ -1659,15 +1659,8 @@ class TestBuildSupervisorCustomInstructions:
                         export_blocking=True,
                     ),
                     _validation_attachment(
-                        "planned-lookup",
-                        state="planned",
-                        enabled=False,
-                        required=False,
-                        validator_binding_id=None,
-                    ),
-                    _validation_attachment(
-                        "blocked-export",
-                        state="blocked",
+                        "future-lookup",
+                        state="under_development",
                         enabled=False,
                         required=False,
                         validator_binding_id=None,
@@ -1680,8 +1673,7 @@ class TestBuildSupervisorCustomInstructions:
 
         assert "[schedule 1 validator(s)]" in result
         assert "[validation opt-outs recorded: 1]" in result
-        assert "[planned validators visible: 1]" in result
-        assert "[blocked validators visible: 1]" in result
+        assert "[under-development validators visible: 1]" in result
         assert "do not ask extractor prompts to call validators directly" in result
 
 

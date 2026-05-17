@@ -513,8 +513,8 @@ class TestFlowDefinitionOtherValidations:
 
         assert "cannot be disabled" in str(exc_info.value)
 
-    def test_planned_validation_attachment_cannot_be_enabled(self):
-        """Planned validators stay visible metadata rather than active runs."""
+    def test_under_development_validation_attachment_cannot_be_enabled(self):
+        """Under-development validators stay visible metadata rather than active runs."""
         flow_data = {
             "version": "1.0",
             "nodes": [
@@ -525,9 +525,9 @@ class TestFlowDefinitionOtherValidations:
                     "gene_output",
                     validation_attachments=[
                         make_validation_attachment(
-                            attachment_id="fixture:metadata:planned",
+                            attachment_id="fixture:metadata:future",
                             validator_binding_id=None,
-                            state="planned",
+                            state="under_development",
                             enabled=True,
                             required=False,
                             export_blocking=False,
@@ -543,6 +543,38 @@ class TestFlowDefinitionOtherValidations:
             FlowDefinition(**flow_data)
 
         assert "inactive validation attachments" in str(exc_info.value)
+
+    @pytest.mark.parametrize("legacy_state", ["planned", "blocked"])
+    def test_legacy_validation_attachment_states_are_rejected(self, legacy_state):
+        """Legacy validator capability states are not valid flow attachments."""
+        flow_data = {
+            "version": "1.0",
+            "nodes": [
+                make_task_input_node("task_1", "Extract genes"),
+                make_agent_node(
+                    "n1",
+                    "gene_extractor",
+                    "gene_output",
+                    validation_attachments=[
+                        make_validation_attachment(
+                            attachment_id=f"fixture:metadata:{legacy_state}",
+                            validator_binding_id=None,
+                            state=legacy_state,
+                            enabled=False,
+                            required=False,
+                            export_blocking=False,
+                        )
+                    ],
+                ),
+            ],
+            "edges": [{"id": "e1", "source": "task_1", "target": "n1"}],
+            "entry_node_id": "task_1",
+        }
+
+        with pytest.raises(ValidationError) as exc_info:
+            FlowDefinition(**flow_data)
+
+        assert "Input should be 'active' or 'under_development'" in str(exc_info.value)
 
     def test_custom_input_requires_non_empty_template(self):
         """Custom input mode must provide a non-empty template."""
