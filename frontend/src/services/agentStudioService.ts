@@ -60,7 +60,7 @@ export interface ValidationAttachmentOption {
   tool_method?: string
   validator_package_id?: string
   validator_agent_id?: string
-  state: 'active' | 'planned' | 'blocked' | 'under_development'
+  state: 'active' | 'under_development'
   scope: 'pack' | 'object' | 'field'
   object_type?: string
   object_role?: string
@@ -137,7 +137,7 @@ export interface DomainEnvelopeObjectMetadata {
 
 export interface DomainEnvelopeValidationSummary {
   total: number
-  by_state: Record<'active' | 'planned' | 'blocked' | 'under_development', number>
+  by_state: Record<'active' | 'under_development', number>
   by_scope: Record<'pack' | 'object' | 'field', number>
   default_enabled: number
   required: number

@@ -71,7 +71,6 @@ const compactChipSx = {
 } as const
 
 function humanizeState(value: string): string {
-  if (value === 'blocked') return 'not available'
   if (value === 'under_development') return 'under development'
   return value.replace(/_/g, ' ')
 }
@@ -168,7 +167,7 @@ function validationStateCounts(attachments: ValidationAttachmentView[]) {
       }
       return counts
     },
-    { active: 0, planned: 0, blocked: 0, under_development: 0, enabled: 0, optedOut: 0 }
+    { active: 0, under_development: 0, enabled: 0, optedOut: 0 }
   )
 }
 
@@ -293,12 +292,6 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
       {counts.optedOut > 0 && (
         <Chip size="small" color="warning" variant="outlined" label={`${counts.optedOut} opted out`} sx={compactChipSx} />
       )}
-      {counts.planned > 0 && (
-        <Chip size="small" color="warning" variant="outlined" label={`${counts.planned} planned`} sx={compactChipSx} />
-      )}
-      {counts.blocked > 0 && (
-        <Chip size="small" color="error" variant="outlined" label={`${counts.blocked} unavailable`} sx={compactChipSx} />
-      )}
       {counts.under_development > 0 && (
         <Chip size="small" color="warning" variant="outlined" label={`${counts.under_development} under development`} sx={compactChipSx} />
       )}
@@ -307,7 +300,6 @@ function ValidationChips({ attachments }: { attachments: ValidationAttachmentVie
 }
 
 function validationAttachmentStateLabel(attachment: ValidationAttachmentView): string {
-  if (attachment.state === 'blocked') return 'unavailable'
   if (attachment.state === 'under_development') return 'under development'
   return attachment.state
 }

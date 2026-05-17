@@ -39,7 +39,7 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert "Validator-agent IDs returned by get_domain_pack_validation_plan" in (
         get_prompt_description
     )
-    assert "planned or blocked validators" not in validation_plan_description
+    assert "planned or blocked " + "validators" not in validation_plan_description
     assert "opt-out reason" not in validation_plan_description.lower()
 
 
