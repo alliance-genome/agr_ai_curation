@@ -161,7 +161,7 @@ class TestGetRegistryMetadata:
         assert chemical_extractor.validation_attachments
         assert {
             option["state"] for option in chemical_extractor.validation_attachments
-        }.issuperset({"active", "planned", "blocked"})
+        }.issuperset({"active", "under_development"})
 
     def test_get_registry_metadata_projects_under_development_validator_bindings(self):
         """Under-development bindings should be visible metadata with explanations."""
@@ -177,6 +177,7 @@ class TestGetRegistryMetadata:
             option
             for option in disease_extractor.validation_attachments
             if option["state"] == "under_development"
+            and option.get("validator_binding_id")
         ]
 
         assert under_development

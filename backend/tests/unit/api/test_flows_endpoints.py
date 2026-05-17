@@ -219,7 +219,7 @@ async def test_create_flow_hydrates_metadata_validation_attachments(monkeypatch)
         attachment["state"] == "active" and attachment["enabled"]
         for attachment in attachments
     )
-    assert states.issuperset({"active", "planned", "blocked"})
+    assert states.issuperset({"active", "under_development"})
 
 
 @pytest.mark.asyncio
