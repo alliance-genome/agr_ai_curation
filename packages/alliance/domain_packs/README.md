@@ -8,7 +8,7 @@ provider-neutral `DomainEnvelope`:
 
 - pinned Alliance LinkML schema refs and provider refs,
 - model definitions and curatable object types,
-- field paths, required flags, field metadata, and repair policy,
+- field paths, required flags, field metadata, and curator-edit policy,
 - validator metadata and validator bindings,
 - workspace display/projection metadata,
 - export/submission behavior and adapter targets,

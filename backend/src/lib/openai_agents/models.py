@@ -3,13 +3,8 @@ Shared Pydantic models for OpenAI Agents structured outputs.
 """
 
 from datetime import datetime
-from typing import List, Literal, Optional, Union
-from pydantic import BaseModel, Field, RootModel, StrictStr
-
-from src.lib.domain_packs.repair_patches import (
-    DomainEnvelopeExtractorFinalClassification,
-    DomainEnvelopeRepairPatch,
-)
+from typing import List, Literal, Optional
+from pydantic import BaseModel, Field, StrictStr
 from src.schemas.curation_prep import CurationPrepAgentOutput  # noqa: F401 - re-exported here for runtime schema discovery.
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
@@ -636,60 +631,6 @@ class GeneExtractionFinding(BaseModel):
 
 class GeneExtractionResultEnvelope(DomainEnvelopeExtractionResult):
     """Structured output for gene domain-envelope extraction."""
-
-
-ExtractorRepairOutcome = Union[
-    DomainEnvelopeRepairPatch,
-    DomainEnvelopeExtractorFinalClassification,
-]
-
-
-class GeneExpressionExtractorRepairResponse(
-    RootModel[Union[GeneExpressionEnvelope, ExtractorRepairOutcome]]
-):
-    """Gene-expression first-pass extraction or bounded repair-mode response."""
-
-    __domain_envelope_extractor_repair_response__ = True
-
-
-class PhenotypeExtractorRepairResponse(
-    RootModel[Union[PhenotypeResultEnvelope, ExtractorRepairOutcome]]
-):
-    """Phenotype first-pass extraction or bounded repair-mode response."""
-
-    __domain_envelope_extractor_repair_response__ = True
-
-
-class AlleleExtractorRepairResponse(
-    RootModel[Union[AlleleExtractionResultEnvelope, ExtractorRepairOutcome]]
-):
-    """Allele first-pass extraction or bounded repair-mode response."""
-
-    __domain_envelope_extractor_repair_response__ = True
-
-
-class DiseaseExtractorRepairResponse(
-    RootModel[Union[DiseaseExtractionResultEnvelope, ExtractorRepairOutcome]]
-):
-    """Disease first-pass extraction or bounded repair-mode response."""
-
-    __domain_envelope_extractor_repair_response__ = True
-
-
-class ChemicalExtractorRepairResponse(
-    RootModel[Union[ChemicalExtractionResultEnvelope, ExtractorRepairOutcome]]
-):
-    """Chemical first-pass extraction or bounded repair-mode response."""
-
-    __domain_envelope_extractor_repair_response__ = True
-
-
-class GeneExtractorRepairResponse(
-    RootModel[Union[GeneExtractionResultEnvelope, ExtractorRepairOutcome]]
-):
-    """Gene first-pass extraction or bounded repair-mode response."""
-
-    __domain_envelope_extractor_repair_response__ = True
 
 
 # ============================================================================

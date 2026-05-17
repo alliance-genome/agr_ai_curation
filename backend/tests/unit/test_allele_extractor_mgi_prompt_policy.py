@@ -60,14 +60,14 @@ def test_allele_extractor_prompt_declares_allele_domain_envelope_contract():
     assert "`CurationPrepCandidate`" in content
 
 
-def test_allele_extractor_prompt_declares_bounded_repair_mode_behavior():
+def test_allele_extractor_prompt_uses_validator_dispatch_for_unresolved_values():
     content = _load_allele_extractor_prompt()
 
-    assert "# Repair mode" in content
-    assert "bounded field paths" in content
-    assert "Preserve every stable `object_id` and `pending_ref_id`" in content
-    assert "Repair only the requested field paths" in content
-    assert "`metadata.repair_notes[]`" in content
+    assert "# Unresolved validation" in content
+    assert "Active validator bindings own final allele identity" in content
+    assert "validator result fields and envelope validation findings" in content
+    assert "repair_mode" not in content
+    assert "repair_notes" not in content
 
 
 def test_allele_extractor_mgi_overlay_injects_for_active_mgi_group(monkeypatch):

@@ -56,8 +56,6 @@ output:
           role: source_mention
         - metadata_path: evidence_records[0]
           role: verified_evidence
-      repair_hints:
-        - Preserve pending_ref_id when repairing unresolved expression payload fields.
       metadata:
         extraction_confidence: high
   metadata:
@@ -89,7 +87,6 @@ output:
           - evidence-tmem67-metanephros-1
     notes:
       - Raw evidence, exclusions, ambiguities, and normalization notes are metadata only.
-    repair_notes: []
     provenance:
       source_fixture: tmem67_gene_expression_output
       linkml_commit: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
@@ -103,4 +100,3 @@ output:
   schema_ref:
     schema_id: domain-envelope-extraction
     provider: agr_ai_curation
-  repair_mode: false

@@ -207,10 +207,7 @@ def _metadata_provider_refs(metadata: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _field_source_of_truth(metadata: Mapping[str, Any]) -> str | None:
-    repair_metadata = metadata.get("repair")
-    if not isinstance(repair_metadata, Mapping):
-        return None
-    return _optional_string(repair_metadata.get("source_of_truth"))
+    return _optional_string(metadata.get("source_of_truth"))
 
 
 def _source_of_truth_notes(

@@ -53,7 +53,7 @@ Important fields:
   object semantics.
 - `objects[]`: extracted `CuratableObjectEnvelope` records.
 - `validation_findings[]`: findings attached to objects or fields.
-- `history[]`: audit events for extraction, validation, repair, edits, export,
+- `history[]`: audit events for extraction, validation, curator edits, export,
   and submission.
 - `metadata`: domain-pack-owned metadata outside the semantic object list.
 
@@ -140,7 +140,7 @@ Because attempts record each query made during lookup, a result can have
 transient or not-found attempts even when the top-level lookup later succeeds
 after retry or a detail fetch. Consumers should use the top-level
 `lookup_status` for final outcome and preserve `lookup_attempts` for audit,
-repair, and debugging context.
+validation, and debugging context.
 
 A successful lookup is not enough to resolve every declared field. When
 domain-pack `expected_result_fields` say that a result value validates an
@@ -153,26 +153,23 @@ Shared status constants live in `backend/src/lib/lookup_status.py`; the backend
 tool and packaged Alliance tool both use
 `backend/src/agr_ai_curation_runtime/agr_lookup.py` to avoid drift.
 
-## Validation-Driven Repair
+## Validation Findings and Curator Review
 
-Validation repair uses explicit contracts in
-`backend/src/lib/domain_packs/repair_patches.py`.
+Target envelope-backed extractors return ordinary extraction result schemas.
+They do not return field-patch contracts, retry envelopes, or target-specific
+correction wrappers. Biological validation belongs to package-scoped validator
+bindings, and unresolved validator outcomes are represented as
+`ValidationFinding` records on the envelope.
 
-The supervisor can build a `DomainEnvelopeRepairRequest` from field-level
-validation findings. Repair targets include the finding, object ref, field path,
-current value, validator code, retry budget, and repairability metadata.
+Validators return structured decisions and facts such as resolved values,
+resolved objects, missing expected fields, candidates, lookup attempts,
+curator-facing messages, and explanations. The supervisor records those results
+as findings without asking the extractor to rewrite the target envelope.
 
-Extractor responses are constrained:
-
-- `extractor_patch` may only replace requested field paths.
-- `expected_before` must match the current envelope value.
-- protected or non-repairable fields are rejected.
-- stale revisions and exhausted retry budgets are explicit outcomes.
-- `no_repair_possible` and `mark_under_development` are final classifications,
-  not silent fallbacks.
-
-Accepted patches append envelope history events. Repair does not mutate a review
-row as the semantic authority; review rows are regenerated from the updated
+Curator-facing changes use review-row and field-edit semantics. A curator may
+edit bounded fields, waive or resolve findings when policy allows it, or leave a
+finding open for later package or data work. The envelope revision and history
+remain the durable record, and review rows are regenerated from the persisted
 envelope revision.
 
 ## Persistence and History

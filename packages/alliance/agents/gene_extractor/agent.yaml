@@ -31,7 +31,7 @@ supervisor_routing:
     Use for extracting experimentally supported gene mentions from the loaded
     paper. Returns domain-envelope curatable_objects[] with gene_mention_evidence
     validated-reference objects, plus non-semantic metadata for raw mentions,
-    exclusions, ambiguities, normalization notes, evidence, and bounded repair
+    exclusions, ambiguities, normalization notes, evidence, and curator review
     handoff.
   batchable: false  # Document-based agent, processes one document at a time
 
@@ -48,7 +48,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: GeneExtractorRepairResponse
+output_schema: GeneExtractionResultEnvelope
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

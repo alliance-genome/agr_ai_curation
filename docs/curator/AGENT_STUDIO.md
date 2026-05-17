@@ -258,9 +258,9 @@ ambiguous, not found, transient, blocked, or under development. A transient
 attempt can still appear in the audit trail even when a later retry produced a
 successful top-level lookup result.
 
-Repair attempts are driven by validation findings and field paths. A repair may
-update a bounded field, request a validator rerun, mark a target as under
-development, or conclude that no repair is possible. The envelope history keeps
+Curator review is driven by validation findings and field paths. A review action
+may update a bounded field, resolve or waive a finding when policy allows it, or
+leave the finding open for package or data follow-up. The envelope history keeps
 that trail.
 
 ## Submitting Feedback and Suggestions

@@ -12,7 +12,6 @@ import {
   Typography,
 } from '@mui/material';
 import AccountTreeIcon from '@mui/icons-material/AccountTree';
-import BuildCircleIcon from '@mui/icons-material/BuildCircle';
 import FlagIcon from '@mui/icons-material/Flag';
 import ReportProblemIcon from '@mui/icons-material/ReportProblem';
 import { alpha } from '@mui/material/styles';
@@ -34,13 +33,11 @@ export function domainEnvelopeCountChips(summary: DomainEnvelopeTraceSummary): A
   const envelopeCount = counts.envelope_count ?? 0;
   const objectCount = counts.object_count ?? 0;
   const findingCount = counts.finding_count ?? 0;
-  const repairAttemptCount = counts.repair_attempt_count ?? 0;
   const blockerCount = counts.blocker_count ?? 0;
   return [
     { label: `${envelopeCount} envelopes`, color: 'primary' },
     { label: `${objectCount} objects`, color: 'secondary' },
     { label: `${findingCount} findings`, color: findingCount > 0 ? 'warning' : 'default' },
-    { label: `${repairAttemptCount} repairs`, color: repairAttemptCount > 0 ? 'info' : 'default' },
     { label: `${blockerCount} blockers`, color: blockerCount > 0 ? 'error' : 'default' },
   ];
 }
@@ -84,56 +81,6 @@ function CountMapChips({ values }: { values?: Record<string, number> }) {
       {entries.map(([state, count]) => (
         <Chip key={state} label={`${state}: ${count}`} size="small" variant="outlined" />
       ))}
-    </Box>
-  );
-}
-
-function RepairRows({ summary, dense }: { summary: DomainEnvelopeTraceSummary; dense?: boolean }) {
-  const repairs = summary.repair_attempts ?? [];
-  if (repairs.length === 0) return null;
-
-  return (
-    <Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-        <BuildCircleIcon color="info" fontSize="small" />
-        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Repair Loop</Typography>
-      </Box>
-      <TableContainer>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Action</TableCell>
-              <TableCell>Envelope</TableCell>
-              {!dense && <TableCell>Finding</TableCell>}
-              <TableCell>Field Path</TableCell>
-              {!dense && <TableCell>Attempts</TableCell>}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {repairs.slice(0, dense ? 3 : 8).map((repair, index) => (
-              <TableRow key={`${repair.repair_action}-${repair.patch_id || repair.event_id || index}`}>
-                <TableCell>
-                  <Chip label={repair.repair_action} size="small" color="info" variant="outlined" />
-                </TableCell>
-                <TableCell sx={{ fontFamily: 'monospace' }}>{repair.envelope_id || 'N/A'}</TableCell>
-                {!dense && (
-                  <TableCell sx={{ fontFamily: 'monospace' }}>
-                    {(repair.finding_ids ?? []).join(', ') || 'N/A'}
-                  </TableCell>
-                )}
-                <TableCell sx={{ fontFamily: 'monospace' }}>
-                  {(repair.field_paths ?? []).join(', ') || 'N/A'}
-                </TableCell>
-                {!dense && (
-                  <TableCell>
-                    {repair.retry_budget ? JSON.stringify(repair.retry_budget) : 'N/A'}
-                  </TableCell>
-                )}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </TableContainer>
     </Box>
   );
 }
@@ -252,7 +199,6 @@ export function DomainEnvelopeSignalPanel({
         )}
       </Grid>
 
-      <RepairRows summary={summary} dense={dense} />
       <BlockerRows summary={summary} dense={dense} />
       {!dense && <DefinitionStateRows summary={summary} />}
     </Box>

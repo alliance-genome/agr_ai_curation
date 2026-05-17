@@ -94,11 +94,7 @@ class HistoryEventKind(str, Enum):
     CURATOR_FIELD_PATCH_ACCEPTED = "curator_field_patch_accepted"
     CURATOR_FIELD_PATCH_REJECTED = "curator_field_patch_rejected"
     VALIDATION_FINDING_ADDED = "validation_finding_added"
-    REPAIR_REQUESTED = "repair_requested"
-    REPAIR_PATCH_ACCEPTED = "repair_patch_accepted"
-    REPAIR_PATCH_REJECTED = "repair_patch_rejected"
     VALIDATION_RERUN_REQUESTED = "validation_rerun_requested"
-    REPAIR_FINAL_CLASSIFIED = "repair_final_classified"
     STATUS_CHANGED = "status_changed"
     EXPORTED = "exported"
     SUBMITTED = "submitted"
@@ -374,10 +370,6 @@ class CuratableObjectEnvelope(DomainEnvelopeBaseModel):
     metadata_refs: list[EnvelopeMetadataRef] = Field(
         default_factory=list,
         description="References to raw mentions, exclusions, ambiguities, notes, or evidence in envelope metadata",
-    )
-    repair_hints: list[str] = Field(
-        default_factory=list,
-        description="Provider-owned hints downstream validators may use when requesting repairs",
     )
     metadata: dict[str, Any] = Field(
         default_factory=dict,

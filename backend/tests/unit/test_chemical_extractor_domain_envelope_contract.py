@@ -62,7 +62,7 @@ def _chemical_extractor_schema():
 
 
 def _validate_chemical_extractor_payload(payload: dict[str, object]):
-    return _chemical_extractor_schema().model_validate(payload).root
+    return _chemical_extractor_schema().model_validate(payload)
 
 
 def _schema_ref(schema_id: str, name: str, source_file: str) -> dict[str, object]:
@@ -192,9 +192,6 @@ def _valid_chemical_extractor_payload() -> dict[str, object]:
                     {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
                     {"metadata_path": "evidence_records[0]", "role": "verified_evidence"},
                 ],
-                "repair_hints": [
-                    "Keep pending_ref_id stable; repair only requested payload fields."
-                ],
                 "metadata": {
                     "object_role": "curatable_unit",
                     "condition_kind": "chemical_condition",
@@ -256,7 +253,6 @@ def _valid_chemical_extractor_payload() -> dict[str, object]:
                 }
             ],
             "notes": ["Chemical condition export remains blocked."],
-            "repair_notes": [],
             "provenance": {"semantic_source": "curatable_objects"},
         },
         "run_summary": {
@@ -345,21 +341,29 @@ def test_chemical_extractor_schema_requires_condition_role():
         _chemical_extractor_schema().model_validate(payload)
 
 
-def test_chemical_extractor_schema_requires_repair_context_in_repair_mode():
+@pytest.mark.parametrize(
+    ("location", "field_name", "value"),
+    (
+        ("object", "repair_hints", ["legacy repair hint"]),
+        ("metadata", "repair_notes", ["legacy repair note"]),
+        ("top_level", "repair_mode", True),
+    ),
+)
+def test_chemical_extractor_schema_rejects_repair_surfaces(
+    location: str,
+    field_name: str,
+    value: object,
+):
     payload = _valid_chemical_extractor_payload()
-    payload["repair_mode"] = True
-    payload["curatable_objects"][-1]["repair_hints"] = []
+    if location == "object":
+        payload["curatable_objects"][-1][field_name] = value
+    elif location == "metadata":
+        payload["metadata"][field_name] = value
+    else:
+        payload[field_name] = value
 
-    with pytest.raises(ValidationError, match="repair-mode"):
+    with pytest.raises(ValidationError):
         _chemical_extractor_schema().model_validate(payload)
-
-    payload["metadata"]["repair_notes"] = [
-        "Supervisor requested repair of curatable_objects[3].payload.condition_chemical.curie."
-    ]
-    envelope = _validate_chemical_extractor_payload(payload)
-
-    assert envelope.repair_mode is True
-    assert envelope.curatable_objects[-1].pending_ref_id == "chemical-condition-1"
 
 
 def test_chemical_extractor_prompt_agent_and_group_rules_name_domain_contract():
@@ -379,7 +383,10 @@ def test_chemical_extractor_prompt_agent_and_group_rules_name_domain_contract():
     assert "EvidenceQuotePayload" in prompt_content
     assert '`definition_state: "in_development"`' in prompt_content
     assert 'metadata.export_behavior.status: "blocked"' in prompt_content
-    assert "In repair mode, do not rerun unrelated extraction." in prompt_content
+    assert "Active validator bindings own final ChEBI" in prompt_content
+    assert "repair_mode" not in prompt_content
+    assert "repair_notes" not in prompt_content
+    assert "repair_hints" not in prompt_content
     assert '"normalized_id"' not in prompt_content
     assert '"object_type": "ChemicalAssertion"' not in prompt_content
 

@@ -2,7 +2,7 @@ fixture_pack_id: tool_verified_pending
 domain_pack_id: agr.alliance.phenotype
 fixtures_api_version: 1.0.0
 display_name: Tool-verified pending phenotype fixtures
-description: Production-like pending phenotype assertion envelope preserving extractor evidence, exclusions, ambiguities, and repair audit metadata.
+description: Production-like pending phenotype assertion envelope preserving extractor evidence, exclusions, ambiguities, and curator review metadata.
 fixtures:
   - name: daf2_reduced_brood_size_pending
     description: One pending PhenotypeAnnotation with unresolved subject subtype, grounded phenotype term, and blocked export/write behavior.
@@ -258,4 +258,3 @@ fixtures:
               - reduced-brood-size-evidence-1
         notes:
           - Raw mentions, exclusions, ambiguities, evidence, and normalization notes are metadata only.
-        repair_notes: []

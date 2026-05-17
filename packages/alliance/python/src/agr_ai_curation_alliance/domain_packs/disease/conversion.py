@@ -564,8 +564,6 @@ def validate_disease_extraction_objects(
     errors: list[str] = []
     evidence_by_id = _metadata_evidence_records_by_id(output)
     metadata_payload = output.metadata.model_dump(mode="python")
-    repair_field_ref_count = 0
-
     if output.curatable_objects and not output.metadata.raw_mentions:
         errors.append(
             "disease extractor output must preserve harvested mentions in "
@@ -663,29 +661,6 @@ def validate_disease_extraction_objects(
                 + ", ".join(missing_metadata_refs)
             )
 
-        if output.repair_mode:
-            repair_field_ref_count += len(obj.field_refs)
-            object_ref_keys = set(obj.ref_keys())
-            for field_ref_index, field_ref in enumerate(obj.field_refs):
-                if field_ref.object_ref.ref_key() not in object_ref_keys:
-                    errors.append(
-                        f"{location}.field_refs[{field_ref_index}].object_ref "
-                        "must point at the repaired object"
-                    )
-                if not field_path_exists(obj.payload, field_ref.field_path):
-                    errors.append(
-                        f"{location}.field_refs[{field_ref_index}].field_path "
-                        f"'{field_ref.field_path}' does not exist on repaired object "
-                        "payload"
-                    )
-
-    if output.repair_mode and repair_field_ref_count == 0:
-        errors.append(
-            "curatable_objects[].field_refs must identify repaired field paths "
-            "when repair_mode is true"
-        )
-    if output.repair_mode and not output.metadata.repair_notes:
-        errors.append("metadata.repair_notes must describe repair-mode changes")
     return tuple(errors)
 
 
@@ -842,7 +817,6 @@ def _pending_object_from_extraction_object(
         field_refs=list(obj.field_refs),
         evidence_record_ids=list(obj.evidence_record_ids),
         metadata_refs=metadata_refs,
-        repair_hints=list(obj.repair_hints),
         metadata=_object_metadata(obj.metadata),
     )
 
@@ -1016,7 +990,6 @@ def disease_extraction_output_to_pending_envelope(
         "extraction_summary": source.summary,
         "extraction_metadata": source.metadata.model_dump(mode="python"),
         "run_summary": source.run_summary.model_dump(mode="python"),
-        "repair_mode": source.repair_mode,
         "write_behavior": {"status": "blocked"},
     }
     if document_id is not None:

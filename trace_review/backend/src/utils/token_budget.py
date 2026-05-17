@@ -257,13 +257,10 @@ def create_lightweight_tool_call_summary(tool_call: Dict) -> Dict:
     if isinstance(domain_envelope, dict) and domain_envelope.get("found"):
         envelope_ids = ", ".join(domain_envelope.get("envelope_ids", [])[:3])
         counts = domain_envelope.get("summary", {})
-        repair_count = counts.get("repair_attempt_count", 0)
         blocker_count = counts.get("blocker_count", 0)
         domain_bits = []
         if envelope_ids:
             domain_bits.append(f"envelopes={envelope_ids}")
-        if repair_count:
-            domain_bits.append(f"repairs={repair_count}")
         if blocker_count:
             domain_bits.append(f"blockers={blocker_count}")
         if domain_bits:

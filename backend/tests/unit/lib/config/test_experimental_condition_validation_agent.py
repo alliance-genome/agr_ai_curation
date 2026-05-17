@@ -117,9 +117,9 @@ def test_experimental_condition_prompt_and_tool_grant_name_lower_level_methods()
         'status: "unresolved"',
         "component_validations",
         "unresolved_components",
-        "Do not return `repair_action`",
     ]:
         assert fragment in content
+    assert "repair_action" not in content
 
 
 def test_experimental_condition_schema_accepts_resolved_chemical_condition(

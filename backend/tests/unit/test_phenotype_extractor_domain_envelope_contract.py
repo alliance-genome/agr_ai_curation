@@ -63,7 +63,7 @@ def _phenotype_extractor_schema():
 
 
 def _validate_phenotype_extractor_payload(payload: dict[str, object]):
-    return _phenotype_extractor_schema().model_validate(payload).root
+    return _phenotype_extractor_schema().model_validate(payload)
 
 
 def _schema_ref(schema_id: str, name: str, source_file: str) -> dict[str, str]:
@@ -253,7 +253,6 @@ def _valid_phenotype_payload() -> dict[str, object]:
                 }
             ],
             "notes": ["Export/write behavior is blocked."],
-            "repair_notes": [],
             "provenance": {"semantic_source": "curatable_objects"},
         },
         "run_summary": {
@@ -264,32 +263,6 @@ def _valid_phenotype_payload() -> dict[str, object]:
             "warnings": ["Subject subtype remains pending."],
         },
     }
-
-
-def _add_valid_repair_context(payload: dict[str, object]) -> None:
-    payload["repair_mode"] = True
-    payload["metadata"]["repair_notes"] = [
-        "Supervisor requested repair of curatable_objects[4].payload.phenotype_terms[0].curie."
-    ]
-    for obj in payload["curatable_objects"]:
-        obj["field_refs"] = [
-            {
-                "object_ref": {
-                    "pending_ref_id": obj["pending_ref_id"],
-                    "object_type": obj["object_type"],
-                },
-                "field_path": (
-                    "phenotype_terms[0].curie"
-                    if obj["object_type"] == PHENOTYPE_OBJECT_TYPE
-                    else "payload"
-                ),
-            }
-        ]
-        obj["repair_hints"] = ["Repaired only the supervisor-requested field path."]
-    payload["curatable_objects"][0]["field_refs"][0]["field_path"] = "title"
-    payload["curatable_objects"][1]["field_refs"][0]["field_path"] = "subject_identifier"
-    payload["curatable_objects"][2]["field_refs"][0]["field_path"] = "curie"
-    payload["curatable_objects"][3]["field_refs"][0]["field_path"] = "verified_quote"
 
 
 def test_phenotype_extractor_schema_accepts_domain_pack_objects_and_metadata():
@@ -351,46 +324,29 @@ def test_phenotype_extractor_schema_rejects_dangling_object_refs():
     assert "missing-subject-ref" in str(exc_info.value)
 
 
-def test_phenotype_extractor_schema_requires_bounded_repair_field_refs():
+@pytest.mark.parametrize(
+    ("location", "field_name", "value"),
+    (
+        ("object", "repair_hints", ["legacy repair hint"]),
+        ("metadata", "repair_notes", ["legacy repair note"]),
+        ("top_level", "repair_mode", True),
+    ),
+)
+def test_phenotype_extractor_schema_rejects_repair_surfaces(
+    location: str,
+    field_name: str,
+    value: object,
+):
     payload = copy.deepcopy(_valid_phenotype_payload())
-    payload["repair_mode"] = True
-    payload["metadata"]["repair_notes"] = [
-        "Supervisor requested repair of curatable_objects[4].payload.phenotype_terms[0].curie."
-    ]
+    if location == "object":
+        payload["curatable_objects"][-1][field_name] = value
+    elif location == "metadata":
+        payload["metadata"][field_name] = value
+    else:
+        payload[field_name] = value
 
-    with pytest.raises(ValidationError, match="field_refs must identify repaired field paths"):
+    with pytest.raises(ValidationError):
         _phenotype_extractor_schema().model_validate(payload)
-
-    _add_valid_repair_context(payload)
-
-    envelope = _validate_phenotype_extractor_payload(payload)
-
-    assert envelope.repair_mode is True
-    assert envelope.curatable_objects[-1].field_refs[0].field_path == (
-        "phenotype_terms[0].curie"
-    )
-
-
-def test_phenotype_extractor_schema_rejects_repair_field_paths_missing_from_payload():
-    payload = copy.deepcopy(_valid_phenotype_payload())
-    _add_valid_repair_context(payload)
-    payload["curatable_objects"][-1]["field_refs"][0]["field_path"] = (
-        "not_a_payload_field"
-    )
-
-    with pytest.raises(ValidationError) as exc_info:
-        _phenotype_extractor_schema().model_validate(payload)
-
-    assert "field_refs[0].field_path must resolve" in str(exc_info.value)
-    assert "not_a_payload_field" in str(exc_info.value)
-
-
-def test_phenotype_extractor_repair_payload_mapping_rejects_unexpected_types():
-    schema_cls = _phenotype_extractor_schema()
-    schema_module = sys.modules[schema_cls.__module__]
-
-    with pytest.raises(TypeError, match="expected BaseModel or dict payload, got object"):
-        schema_module._payload_mapping(object())
 
 
 def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract():
@@ -415,7 +371,10 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
     assert "`metadata.export_behavior.status: \"blocked\"`" in prompt_content
     assert "`taxon`" in prompt_content
     assert "payload.phenotype_annotation_subject.taxon" in prompt_content
-    assert "repair_mode: true" in prompt_content
+    assert "Active validator bindings own final subject" in prompt_content
+    assert "repair_mode" not in prompt_content
+    assert "repair_notes" not in prompt_content
+    assert "repair_hints" not in prompt_content
     assert "CurationPrepCandidate" in prompt_content
     assert "normalized_id" not in prompt_content
     assert "candidate_terms" not in prompt_content

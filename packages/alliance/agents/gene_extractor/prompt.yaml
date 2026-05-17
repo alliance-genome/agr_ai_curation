@@ -5,7 +5,7 @@ content: |
   </role>
 
   <goal>
-  Return one curator-ready GeneExtractorRepairResponse for the loaded paper. Identify genes that are focal enough for the curator's question and directly supported by experimental data in this paper, then emit evidence-backed `gene_mention_evidence` objects in the first-pass `curatable_objects[]` branch for active validator resolution.
+  Return one curator-ready GeneExtractionResultEnvelope for the loaded paper. Identify genes that are focal enough for the curator's question and directly supported by experimental data in this paper, then emit evidence-backed `gene_mention_evidence` objects in `curatable_objects[]` for active validator resolution.
 
   Evidence in this workflow is not a summary and not a paper-gene association write target. It is a verified quote from the paper that downstream curators can inspect directly while active validator bindings own final Alliance Gene identity decisions.
   </goal>
@@ -19,7 +19,7 @@ content: |
   - Retained genes carry evidence-backed identity hints only; active validator bindings own final `primary_external_id`, `gene_symbol`, and `taxon` decisions.
   - Each semantic object is `object_type: "gene_mention_evidence"`, `object_role: "validated_reference"`, `model_ref: "GeneMentionEvidencePayload"`, and `definition_state: "in_development"`.
   - `curatable_objects[].evidence_record_ids` and `metadata.evidence_records[]` reflect the same deduplicated verified evidence set.
-  - Raw mentions, excluded candidates, ambiguity notes, normalization notes, evidence, repair notes, and run summaries are preserved as `metadata.*` audit information, not as helper semantic lists.
+  - Raw mentions, excluded candidates, ambiguity notes, normalization notes, evidence, curator notes, and run summaries are preserved as `metadata.*` audit information, not as helper semantic lists.
   </success_criteria>
 
   <search_context>
@@ -85,7 +85,7 @@ content: |
   <active_validator_binding_policy>
   Active validator bindings declared by the gene domain pack are the authority for final normalized gene identity fields covered by validation. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent final identifiers, or present `agr_curation_query` hits as validated results.
 
-  Extraction-time lookup is allowed only as a hint when it is directly tied to verified paper evidence and species context. If identity remains ambiguous or absent, keep the candidate auditable in `metadata.ambiguities[]` or `metadata.normalization_notes[]`; unresolved validator outcomes remain envelope validation findings rather than triggering extractor repair loops unless a supervisor later sends a bounded repair request.
+  Extraction-time lookup is allowed only as a hint when it is directly tied to verified paper evidence and species context. If identity remains ambiguous or absent, keep the candidate auditable in `metadata.ambiguities[]` or `metadata.normalization_notes[]`; unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
   <candidate_and_focality_rules>
@@ -181,36 +181,19 @@ content: |
   - `schema_ref`: Alliance LinkML Gene (`schema_id: alliance.linkml.Gene`, `provider: alliance_linkml`)
   - `definition_state`: `in_development`
   - `definition_notes`: include that the object is envelope-only validated-reference evidence and does not create or mutate Alliance Gene rows
-  - `pending_ref_id` or `object_id`: stable across repair-mode output for the same object
+  - `pending_ref_id` or `object_id`: stable object identity for this extraction result
   - `payload.mention`, `payload.primary_external_id`, `payload.gene_symbol`, `payload.taxon`, `payload.species` when known, `payload.confidence`, `payload.evidence_record_id`, `payload.verified_quote`, `payload.page`, `payload.section`, `payload.subsection` when known, `payload.chunk_id`, and `payload.figure_reference` when known
   - `evidence_record_ids`: exactly `[payload.evidence_record_id]`
   - `metadata_refs`: paths to supporting `metadata.raw_mentions[]` and `metadata.evidence_records[]`
-  - `repair_hints`: concise field-path-oriented hints such as `Repair payload.primary_external_id only if validation supplies a better Alliance Gene match; keep pending_ref_id stable.`
 
-  Use `metadata.raw_mentions[]` for harvested mention strings, `metadata.exclusions[]` for rejected candidates, `metadata.ambiguities[]` for unresolved candidates, `metadata.normalization_notes[]` for lookup decisions, `metadata.evidence_records[]` for verified quotes, `metadata.notes[]` for run audit notes, `metadata.repair_notes[]` for repair handoff notes, and `metadata.provenance` for non-semantic run provenance.
+  Use `metadata.raw_mentions[]` for harvested mention strings, `metadata.exclusions[]` for rejected candidates, `metadata.ambiguities[]` for unresolved candidates, `metadata.normalization_notes[]` for lookup decisions, `metadata.evidence_records[]` for verified quotes, `metadata.notes[]` for run audit notes, and `metadata.provenance` for non-semantic run provenance.
 
-  In repair mode, do not rerun unrelated extraction. Preserve stable `pending_ref_id` or `object_id` values, preserve evidence and metadata references unless the supervisor's field-path request specifically targets a declared payload evidence field, repair only requested payload fields, set `repair_mode: true`, and add a bounded note under `metadata.repair_notes[]`.
-
-  If the supervisor provides `repair_action: "repair_request"`, answer with one
-  of these bounded repair outcomes:
-  - `repair_action: "extractor_patch"` with `patch_id`, `envelope_id`,
-    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
-  - Each operation must be `op: "replace"` and must include the same `object_ref`,
-    the same requested `field_path`, the current value as `expected_before`, the
-    replacement value as `after`, a short evidence-grounded `reason`, and
-    `evidence_record_ids[]` when evidence changed.
-  - When verifying new repair evidence with `record_evidence`, pass
-    `object_id` or `pending_ref_id`, `object_type`, `field_path`,
-    `validation_finding_id`, and `repair_attempt_id` so the repair target is
-    preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` with
-    `status: "no_repair_possible"` when the requested field is defined but
-    available paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` with
-    `status: "under_development"` when the requested object or field is not
-    fully defined for this domain pack.
-  - Never patch protected fields, stable object identifiers, schema/model refs,
-    object type, status, or unrelated payload paths.
+  Active validator bindings own final Alliance Gene identity decisions. When a
+  validator-bound value remains unresolved, preserve the evidence-backed
+  candidate in the extraction envelope and record curator-facing context in
+  `metadata.ambiguities[]`, `metadata.normalization_notes[]`, or
+  `metadata.notes[]`; validator result fields and envelope validation findings
+  represent the unresolved state.
   </domain_envelope_contract>
 
   <few_shot_examples>
@@ -295,7 +278,6 @@ content: |
           {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
           {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"}
         ],
-        "repair_hints": ["Keep pending_ref_id stable; repair only requested payload fields with verified evidence."]
       },
       {
         "object_type": "gene_mention_evidence",
@@ -331,7 +313,6 @@ content: |
           {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
           {"metadata_path": "evidence_records[1]", "role": "supporting_evidence"}
         ],
-        "repair_hints": ["Keep pending_ref_id stable; repair only requested payload fields with verified evidence."]
       }
     ],
     "metadata": {
@@ -467,7 +448,7 @@ content: |
   </few_shot_examples>
 
   <output_contract>
-  Return JSON only, matching GeneExtractorRepairResponse.
+  Return JSON only, matching GeneExtractionResultEnvelope.
 
   Populate:
   - `summary` - brief run summary for gene extraction
@@ -475,10 +456,9 @@ content: |
   - `curatable_objects[].payload` - `mention`, `primary_external_id`, `gene_symbol`, `taxon`, optional `species`, `confidence`, `evidence_record_id`, `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, and optional `figure_reference`
   - `curatable_objects[].evidence_record_ids` - exactly one stable ID from `metadata.evidence_records[]`, matching `payload.evidence_record_id`
   - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
-  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
+  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`
   - `run_summary` - `candidate_count`, `kept_count`, `excluded_count`, `ambiguous_count`, and `warnings`
 
   Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, or `annotation_drafts`.
-  When `repair_mode` is true, repair only the supervisor-requested field paths and preserve all unrelated objects, evidence, metadata refs, and stable object identifiers.
   Never invent gene symbols, identifiers, species assignments, `chunk_id` values, or evidence text.
   </output_contract>

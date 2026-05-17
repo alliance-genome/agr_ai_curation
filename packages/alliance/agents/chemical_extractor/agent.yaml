@@ -32,7 +32,7 @@ supervisor_routing:
     loaded paper. Returns domain-envelope curatable_objects[] with
     ChemicalCondition, ChemicalTerm, Reference, and EvidenceQuote objects, plus
     non-semantic metadata for raw mentions, exclusions, ambiguities,
-    normalization notes, verified evidence, export blockers, and bounded repair
+    normalization notes, verified evidence, export blockers, and curator review
     handoff.
   batchable: false  # Document-based agent, processes one document at a time
 
@@ -49,7 +49,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: ChemicalExtractorRepairResponse
+output_schema: ChemicalExtractionResultEnvelope
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

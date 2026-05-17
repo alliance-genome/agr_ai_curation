@@ -224,7 +224,6 @@ def test_subject_entity_and_agm_prompts_pin_routing_and_output_policy():
             "map_entity_names_to_curies",
             "`agm_candidates`",
             "missing taxon",
-            "Do not return `repair_action`",
         ],
     }
 
@@ -236,3 +235,11 @@ def test_subject_entity_and_agm_prompts_pin_routing_and_output_policy():
         )["content"]
         for fragment in fragments:
             assert fragment in prompt, f"{folder} prompt missing {fragment}"
+        assert "repair_action" not in prompt, f"{folder} prompt still mentions repair_action"
+
+    subject_entity_prompt = yaml.safe_load(
+        (ALLIANCE_AGENTS_PATH / "subject_entity" / "prompt.yaml").read_text(
+            encoding="utf-8"
+        )
+    )["content"]
+    assert "repair_action" not in subject_entity_prompt

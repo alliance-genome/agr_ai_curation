@@ -34,7 +34,7 @@ def test_chat_output_prompts_match_and_preserve_domain_envelope_refs():
     assert config_prompt == package_prompt
     assert "domain_envelope.objects" in config_prompt
     assert "review rows" in config_prompt
-    assert "repair attempts" in config_prompt
+    assert "lookup attempts" in config_prompt
     assert "export/submission blockers" in config_prompt
     assert "`lookup_attempts` as an audit trail" in config_prompt
     assert "`annotation_drafts`" in config_prompt

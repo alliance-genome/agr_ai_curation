@@ -153,11 +153,11 @@ def test_disease_and_chemical_prompt_contracts_use_shared_fields():
             "candidates",
             "ambiguous",
             "Do not wrap",
-            "Do not return `repair_action`",
-            'Only an extractor may return `repair_action: "extractor_patch"`',
         ]:
             assert fragment in content, f"{folder} prompt missing {fragment}"
 
+        assert "repair_action" not in content
+        assert "no_repair_output" not in content
         assert 'status: "under_development"' not in content
         assert "results: List" not in content
         assert "query_summary:" not in content

@@ -6,7 +6,7 @@ content: |
 
   <goal>
   Extract experimentally supported gene expression assertions from the loaded paper
-  into JSON matching GeneExpressionExtractorRepairResponse. Emit one GeneExpressionAnnotation
+  into JSON matching GeneExpressionEnvelope. Emit one GeneExpressionAnnotation
   curatable object per retained expression assertion, and keep curator-auditable
   raw mentions, reagent details, verified evidence, exclusions, and ambiguity
   notes in envelope metadata.
@@ -165,7 +165,7 @@ content: |
   <active_validator_binding_policy>
   Active validator bindings declared by the gene-expression domain pack are the authority for final normalized fields covered by validation, including relation vocabulary and data-provider identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent controlled-vocabulary or provider identifiers, or present lookup hints as validated results.
 
-  Extraction-time lookup is allowed only as a hint tied to verified evidence. Unresolved validator outcomes remain envelope validation findings and should not trigger extractor repair loops unless a supervisor later sends a bounded repair request.
+  Extraction-time lookup is allowed only as a hint tied to verified evidence. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
   <search_infrastructure>
@@ -244,7 +244,7 @@ content: |
   </evidence_record_contract>
 
   <output_contract>
-  Return JSON only, matching GeneExpressionExtractorRepairResponse.
+  Return JSON only, matching GeneExpressionEnvelope.
 
   Populate:
   - `summary` - brief run summary for gene-expression extraction
@@ -257,7 +257,7 @@ content: |
   - `curatable_objects[].payload` - one DB-shaped GeneExpressionAnnotation payload aligned to the domain-pack contract
   - `curatable_objects[].evidence_record_ids` - stable IDs from `metadata.evidence_records[]`
   - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
-  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.repair_notes[]`
+  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`
   - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
 
   Payload field contract:
@@ -294,39 +294,10 @@ content: |
   Never invent genes, IDs, reagent details, or evidence text.
   </output_contract>
 
-  <repair_mode>
-  A supervisor may request bounded repair of a previous gene-expression domain-envelope
-  extraction. In repair mode:
-  - Set `repair_mode: true`.
-  - Return only the affected GeneExpressionAnnotation objects, not unrelated annotations.
-  - Preserve each existing `object_id` or `pending_ref_id`; do not mint a replacement ID
-    for an object that is being repaired.
-  - Repair only the requested object-payload field paths. Use
-    `curatable_objects[].field_refs[]` to identify repaired payload fields and
-    `curatable_objects[].metadata_refs[]` for supporting metadata paths.
-  - Preserve existing evidence IDs and metadata references unless the requested repair
-    specifically changes them.
-  - Add `curatable_objects[].repair_hints[]` and `metadata.repair_notes[]` describing
-    the bounded repair and any unresolved follow-up.
-  - If the requested field cannot be repaired from the available paper/tool evidence,
-    keep the stable object ID, leave unrelated fields unchanged, and record the blocker
-    in `metadata.repair_notes[]`; do not rerun broad extraction.
-  - If the supervisor provides `repair_action: "repair_request"`, answer with
-    `repair_action: "extractor_patch"` and include `patch_id`, `envelope_id`,
-    `expected_revision`, `source_finding_ids[]`, and `operations[]`.
-  - Each patch operation must be `op: "replace"` and must include the same
-    `object_ref`, the same requested `field_path`, the current value as
-    `expected_before`, the replacement value as `after`, a concise
-    evidence-grounded `reason`, and `evidence_record_ids[]` when evidence changed.
-  - When verifying new repair evidence with `record_evidence`, pass `object_id`
-    or `pending_ref_id`, `object_type`, `field_path`, `validation_finding_id`,
-    and `repair_attempt_id` so the repair target is preserved in the tool result.
-  - Use `repair_action: "no_repair_possible"` with
-    `status: "no_repair_possible"` when the field is defined but the available
-    paper/database evidence cannot repair it.
-  - Use `repair_action: "mark_under_development"` with
-    `status: "under_development"` when the requested object or field is not
-    fully defined for this domain pack.
-  - Never patch protected fields, stable object identifiers, schema/model refs,
-    object type, status, or unrelated payload paths.
-  </repair_mode>
+  <unresolved_validation>
+  Active validator bindings own final relation, data-provider, and identifier resolution.
+  When a required validator-bound value is unresolved, keep the extraction envelope
+  evidence-backed, preserve candidate context in `metadata.ambiguities[]`,
+  `metadata.normalization_notes[]`, or `metadata.notes[]`, and leave final decisions
+  for validator result fields and envelope validation findings.
+  </unresolved_validation>

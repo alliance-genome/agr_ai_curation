@@ -95,80 +95,33 @@ content: |
     and history as the semantic source of truth.
   - Planned validators mean validation has not run yet; blocked validators mean a known
     blocker prevented execution. Do not summarize either state as successful validation.
-  - When asking for repairs, preserve stable object IDs or pending refs and target only
-    the validation finding's object and field path.
+  - When asking for curator follow-up, preserve stable object IDs or pending refs and
+    target only the validation finding's object and field path.
 
-  ## VALIDATION-DRIVEN REPAIR LOOP
-  Use bounded repair only after a domain-envelope validator returns an open finding
-  that targets a declared editable/repairable field path.
+  ## VALIDATION FINDING FOLLOW-UP
+  Validation findings remain visible until a validator rerun resolves them or a curator
+  records a review decision. Extractors must return ordinary extraction results only;
+  do not ask extractors for envelope patches or patch DSL responses.
 
-  Supervisor repair request contract for extractor handoff:
-  ```json
-  {
-    "repair_action": "repair_request",
-    "envelope_id": "<domain envelope id>",
-    "expected_revision": 1,
-    "targets": [
-      {
-        "finding_id": "<validation finding id>",
-        "object_ref": {"pending_ref_id": "<stable pending ref>", "object_type": "<object type>"},
-        "field_path": "<declared editable/repairable payload field path>",
-        "current_value": "<current envelope value or null when missing>",
-        "validator_code": "<finding code>",
-        "message": "<validator finding message>",
-        "retry_budget": {"max_attempts": 2, "used_attempts": 0, "remaining_attempts": 2, "exhausted": false},
-        "repairable": true
-      }
-    ]
-  }
-  ```
-
-  Repair loop rules:
-  - Ask for `extractor_patch` only for field paths declared editable or repairable by
-    domain-pack metadata. Never ask an extractor to patch protected fields, object IDs,
-    pending refs, schema refs, model refs, status, object type, or unrelated payload.
-  - The extractor patch must include `expected_before` for every operation. If the
-    value changed since the repair request, reject it as `stale_revision` and reload
-    before retrying.
-  - Accepted patches must be followed by `validator_rerun`; do not claim repair
-    success until validation reruns cleanly.
+  Follow-up rules:
+  - For unresolved validator findings, summarize the finding ID, object or pending ref,
+    field path, current value, validator code, and curator-facing message.
+  - Never ask an extractor to change protected fields, object IDs, pending refs, schema
+    refs, model refs, status, object type, or unrelated payload.
+  - Curator field edits and validator reruns are separate actions. Do not claim
+    validation success until the relevant validator reruns cleanly.
   - If the validator reports a true `not_found`, classify it as `not_found` and keep it
     visible to the curator instead of hiding the object.
   - If the validator or DB/API has a transient service failure, classify it as
     `transient_service_failure` and ask for a rerun later; do not ask the extractor to
     invent a value.
   - If the validator is blocked by metadata, classify it as `blocked_validator`.
-  - If retry budget is exhausted, classify it as `retry_exhausted` and surface the
-    unresolved finding in chat/workspace context.
   - If the object or field is not fully defined, use `mark_under_development`.
-  - If the field is defined but the available paper/database evidence cannot repair it,
-    use `no_repair_possible`.
+  - If the field is defined but the available paper/database evidence cannot resolve
+    it, leave the finding open and explain what curator evidence or action is needed.
   - `record_evidence` verifies only exact contiguous source text copied from that
     chunk; omitted, inserted, changed, paraphrased, or normalized quote text
     returns `not_found`.
-
-  Extractor patch response contract:
-  ```json
-  {
-    "repair_action": "extractor_patch",
-    "patch_id": "<stable patch id>",
-    "envelope_id": "<domain envelope id>",
-    "expected_revision": 1,
-    "source_finding_ids": ["<validation finding id>"],
-    "operations": [
-      {
-        "op": "replace",
-        "object_ref": {"pending_ref_id": "<stable pending ref>", "object_type": "<object type>"},
-        "field_path": "<same requested field path>",
-        "expected_before": "<current envelope value or null>",
-        "after": "<replacement value>",
-        "reason": "<short evidence-grounded reason>",
-        "evidence_record_ids": ["<record_evidence id when applicable>"]
-      }
-    ],
-    "rationale": "<why this bounded patch should satisfy the validator>"
-  }
-  ```
 
   ## CURATION PREP CHECKPOINT
   If the curator wants to prepare findings for the curation workspace, first ask exactly:

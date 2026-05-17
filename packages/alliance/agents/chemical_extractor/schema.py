@@ -10,16 +10,11 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    RootModel,
     StrictStr,
     field_validator,
     model_validator,
 )
 
-from src.lib.domain_packs.repair_patches import (
-    DomainEnvelopeExtractorFinalClassification,
-    DomainEnvelopeRepairPatch,
-)
 from src.lib.openai_agents.models import (
     ChemicalExtractionResultEnvelope as RuntimeChemicalExtractionResultEnvelope,
 )
@@ -409,16 +404,6 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
             elif isinstance(obj, ChemicalConditionCuratableObject):
                 self._validate_condition_object(obj, evidence_by_id, objects_by_ref)
 
-        if self.repair_mode:
-            has_repair_context = bool(self.metadata.repair_notes) or any(
-                obj.repair_hints for obj in self.curatable_objects
-            )
-            if not has_repair_context:
-                raise ValueError(
-                    "repair-mode chemical extractor output must include "
-                    "metadata.repair_notes[] or curatable_objects[].repair_hints[]"
-                )
-
         return self
 
     @classmethod
@@ -607,24 +592,10 @@ def _is_missing_value(value: Any) -> bool:
     return False
 
 
-class ChemicalExtractorRepairResponse(
-    RootModel[
-        ChemicalExtractionResultEnvelope
-        | DomainEnvelopeRepairPatch
-        | DomainEnvelopeExtractorFinalClassification
-    ]
-):
-    """Chemical first-pass extraction or repair_action response schema."""
-
-    __envelope_class__ = True
-    __domain_envelope_extractor_repair_response__ = True
-
-
 __all__ = [
     "ChemicalConditionCuratableObject",
     "ChemicalConditionPayload",
     "ChemicalExtractionResultEnvelope",
-    "ChemicalExtractorRepairResponse",
     "ChemicalTermCuratableObject",
     "ChemicalTermPayload",
     "EvidenceQuoteCuratableObject",

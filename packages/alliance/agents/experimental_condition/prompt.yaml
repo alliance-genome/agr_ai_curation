@@ -78,4 +78,4 @@ content: |
 
   For unresolved conditions, preserve any partial `normalized_components`, keep unfilled expected keys in `missing_expected_fields`, and write a curator-facing `curator_message` that names the blocking components.
 
-  Do not use metadata-only validator states as result statuses. Do not return `repair_action`, compatibility fields, legacy summary stores, or envelope patches. Only extractors and materializers own envelope composition and repair actions.
+  Do not use metadata-only validator states as result statuses. Do not return compatibility fields, legacy summary stores, or envelope patches; envelope composition belongs outside validator results.

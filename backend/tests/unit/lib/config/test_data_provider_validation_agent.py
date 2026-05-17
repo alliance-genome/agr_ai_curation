@@ -113,9 +113,9 @@ def test_data_provider_prompt_and_tool_grant_agree_on_available_methods():
         'status: "unresolved"',
         "lookup_attempts",
         "mismatch_explanations",
-        "Do not return `repair_action`",
     ]:
         assert fragment in content
+    assert "repair_action" not in content
 
 
 @pytest.mark.parametrize(

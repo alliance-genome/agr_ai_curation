@@ -844,7 +844,6 @@ def _build_envelope_target_fields(
     object_type: Any = None,
     field_path: Any = None,
     validation_finding_id: Any = None,
-    repair_attempt_id: Any = None,
 ) -> dict[str, Any]:
     target: dict[str, Any] = {}
     normalized_object_id = _optional_output_string(object_id)
@@ -852,7 +851,6 @@ def _build_envelope_target_fields(
     normalized_object_type = _optional_output_string(object_type)
     normalized_field_path = _optional_output_string(field_path)
     normalized_validation_finding_id = _optional_output_string(validation_finding_id)
-    normalized_repair_attempt_id = _optional_output_string(repair_attempt_id)
 
     if normalized_object_id:
         target["object_id"] = normalized_object_id
@@ -864,8 +862,6 @@ def _build_envelope_target_fields(
         target["field_path"] = normalized_field_path
     if normalized_validation_finding_id:
         target["validation_finding_id"] = normalized_validation_finding_id
-    if normalized_repair_attempt_id:
-        target["repair_attempt_id"] = normalized_repair_attempt_id
 
     return {"envelope_target": target} if target else {}
 
@@ -923,7 +919,6 @@ def create_record_evidence_tool(
         field_path: str | None = None,
         object_type: str | None = None,
         validation_finding_id: str | None = None,
-        repair_attempt_id: str | None = None,
     ) -> dict[str, Any]:
         """Verify exact source-corpus text against a specific Weaviate chunk."""
         if tracker:
@@ -938,7 +933,6 @@ def create_record_evidence_tool(
             object_type=object_type,
             field_path=field_path,
             validation_finding_id=validation_finding_id,
-            repair_attempt_id=repair_attempt_id,
         )
 
         logger.info(

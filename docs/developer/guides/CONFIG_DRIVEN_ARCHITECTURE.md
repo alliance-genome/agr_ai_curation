@@ -125,7 +125,7 @@ agr_ai_curation/
 │       └── tools/bindings.yaml
 ├── backend/
 │   ├── src/lib/config/                  # Runtime config/package loaders
-│   ├── src/lib/domain_packs/            # Domain-pack registry, validation, repair, materialization
+│   ├── src/lib/domain_packs/            # Domain-pack registry, validation, curator review, materialization
 │   ├── src/lib/domain_envelopes/        # Persisted envelope checkpoints and field patches
 │   ├── src/lib/packages/                # Package discovery, manifests, registry, runner
 │   ├── src/lib/agent_studio/            # Agent Studio services and runtime catalog
@@ -254,7 +254,7 @@ runtime/packages/org-custom/domain_packs/my_domain/
 ```
 
 Use `domain_pack.yaml` for object definitions, field paths, schema/provider
-refs, validator bindings, field/export readiness policy, repair hints,
+refs, validator bindings, field/export readiness policy, review metadata,
 workspace display metadata, and export/submission behavior. Extraction agents
 link to the pack through `agent.yaml` curation metadata.
 

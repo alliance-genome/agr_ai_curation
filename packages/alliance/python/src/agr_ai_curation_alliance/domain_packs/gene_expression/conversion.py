@@ -166,22 +166,6 @@ def validate_gene_expression_extraction_objects(
                 + ", ".join(missing_evidence_ids)
             )
 
-        if output.repair_mode:
-            if not obj.field_refs:
-                errors.append(
-                    f"{location}.field_refs must identify repaired field paths "
-                    "when repair_mode is true"
-                )
-            object_ref_keys = set(obj.ref_keys())
-            for field_ref_index, field_ref in enumerate(obj.field_refs):
-                if field_ref.object_ref.ref_key() not in object_ref_keys:
-                    errors.append(
-                        f"{location}.field_refs[{field_ref_index}].object_ref "
-                        "must point at the repaired object"
-                    )
-
-    if output.repair_mode and not output.metadata.repair_notes:
-        errors.append("metadata.repair_notes must describe repair-mode changes")
     return tuple(errors)
 
 
@@ -257,7 +241,6 @@ def _pending_object_from_extraction_object(
         field_refs=list(obj.field_refs),
         evidence_record_ids=list(obj.evidence_record_ids),
         metadata_refs=metadata_refs,
-        repair_hints=list(obj.repair_hints),
         metadata=_object_metadata(obj.metadata),
     )
 
@@ -350,7 +333,6 @@ def gene_expression_extraction_output_to_pending_envelope(
         "extraction_summary": source.summary,
         "extraction_metadata": source.metadata.model_dump(mode="python"),
         "run_summary": source.run_summary.model_dump(mode="python"),
-        "repair_mode": source.repair_mode,
     }
     if document_id is not None:
         metadata["source_document_id"] = document_id

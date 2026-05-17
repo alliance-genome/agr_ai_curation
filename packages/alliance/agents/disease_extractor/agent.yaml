@@ -31,7 +31,7 @@ supervisor_routing:
     loaded paper. Returns DiseaseAnnotation curatable_objects[] with pending
     disease assertion payloads, required context blockers, and non-semantic
     metadata for raw mentions, exclusions, ambiguities, evidence,
-    normalization notes, and bounded repair handoff.
+    normalization notes, and curator review handoff.
   batchable: false  # Document-based agent, processes one document at a time
 
 # -----------------------------------------------------------------------------
@@ -47,7 +47,7 @@ tools:
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
 # -----------------------------------------------------------------------------
-output_schema: DiseaseExtractorRepairResponse
+output_schema: DiseaseExtractionResultEnvelope
 
 # -----------------------------------------------------------------------------
 # MODEL CONFIGURATION

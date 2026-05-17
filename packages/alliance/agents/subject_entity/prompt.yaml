@@ -78,4 +78,4 @@ content: |
 
   For unresolved subjects, keep `resolved_values` empty or partial, list all unfilled expected keys in `missing_expected_fields`, preserve candidates returned by the selected route, and write a curator-facing `curator_message` that says whether the issue was missing input, unsupported type, no match, ambiguity, taxon conflict, missing taxon context, or tool error.
 
-  Do not use metadata-only validator states as result statuses. Do not return `repair_action`. Do not return `under_development`.
+  Do not use metadata-only validator states as result statuses. Do not return `under_development`.

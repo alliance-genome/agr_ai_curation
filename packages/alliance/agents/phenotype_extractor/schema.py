@@ -8,15 +8,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
-    RootModel,
     StrictStr,
     model_validator,
 )
 
-from src.lib.domain_packs.repair_patches import (
-    DomainEnvelopeExtractorFinalClassification,
-    DomainEnvelopeRepairPatch,
-)
 from src.lib.openai_agents.models import (
     PhenotypeResultEnvelope as RuntimePhenotypeResultEnvelope,
 )
@@ -381,17 +376,11 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
                     )
                 )
 
-            if self.repair_mode:
-                errors.extend(_repair_ref_errors(obj, location, objects_by_ref))
-
         if self.curatable_objects and not objects_by_type.get(PHENOTYPE_OBJECT_TYPE):
             errors.append(
                 "phenotype extractor curatable_objects[] must include at least one "
                 "PhenotypeAnnotation when retained objects are present"
             )
-
-        if self.repair_mode and not self.metadata.repair_notes:
-            errors.append("metadata.repair_notes must describe repair-mode changes")
 
         if errors:
             raise ValueError("; ".join(errors))
@@ -580,49 +569,6 @@ def _annotation_errors(
     return errors
 
 
-def _repair_ref_errors(
-    obj: CuratableObjectEnvelope,
-    location: str,
-    objects_by_ref: dict[tuple[str, str], CuratableObjectEnvelope],
-) -> list[str]:
-    errors: list[str] = []
-    if not obj.field_refs:
-        errors.append(
-            f"{location}.field_refs must identify repaired field paths when repair_mode is true"
-        )
-        return errors
-
-    object_ref_keys = set(obj.ref_keys())
-    payload = _payload_mapping(obj.payload)
-    for ref_index, field_ref in enumerate(obj.field_refs):
-        ref_key = field_ref.object_ref.ref_key()
-        if ref_key not in object_ref_keys:
-            errors.append(
-                f"{location}.field_refs[{ref_index}].object_ref must point at the repaired object"
-            )
-            continue
-        referenced_object = objects_by_ref.get(ref_key)
-        if referenced_object is None:
-            errors.append(
-                f"{location}.field_refs[{ref_index}].object_ref references an unknown object"
-            )
-            continue
-        if (
-            field_ref.object_ref.object_type is not None
-            and field_ref.object_ref.object_type != referenced_object.object_type
-        ):
-            errors.append(
-                f"{location}.field_refs[{ref_index}].object_ref.object_type must "
-                "match the repaired object"
-            )
-        if not field_path_exists(payload, field_ref.field_path):
-            errors.append(
-                f"{location}.field_refs[{ref_index}].field_path must resolve in "
-                f"the repaired object payload: {field_ref.field_path}"
-            )
-    return errors
-
-
 def _objects_by_type(
     objects: list[PhenotypeCuratableObject],
 ) -> dict[str, list[CuratableObjectEnvelope]]:
@@ -649,14 +595,6 @@ def _objects_by_ref(
     return objects_by_ref, errors
 
 
-def _payload_mapping(payload: Any) -> dict[str, Any]:
-    if isinstance(payload, BaseModel):
-        return payload.model_dump(mode="python")
-    if isinstance(payload, dict):
-        return payload
-    raise TypeError(f"expected BaseModel or dict payload, got {type(payload).__name__}")
-
-
 def _object_ref_label(object_ref: Any) -> str:
     ref_kind, ref_value = object_ref.ref_key()
     if object_ref.object_type:
@@ -676,25 +614,11 @@ def _has_missing_strings(values: list[str]) -> bool:
     return any(_is_missing(value) for value in values)
 
 
-class PhenotypeExtractorRepairResponse(
-    RootModel[
-        PhenotypeResultEnvelope
-        | DomainEnvelopeRepairPatch
-        | DomainEnvelopeExtractorFinalClassification
-    ]
-):
-    """Phenotype first-pass extraction or repair_action response schema."""
-
-    __envelope_class__ = True
-    __domain_envelope_extractor_repair_response__ = True
-
-
 __all__ = [
     "EvidenceQuoteObject",
     "EvidenceQuotePayload",
     "PhenotypeAnnotationObject",
     "PhenotypeAnnotationPayload",
-    "PhenotypeExtractorRepairResponse",
     "PhenotypeResultEnvelope",
     "PhenotypeSubjectObject",
     "PhenotypeSubjectPayload",

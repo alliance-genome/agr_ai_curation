@@ -69,8 +69,6 @@ fixtures:
               role: source_mention
             - metadata_path: extraction_metadata.evidence_records[0]
               role: verified_evidence
-          repair_hints:
-            - Preserve pending_ref_id when repairing unresolved expression payload fields.
           metadata:
             grounding:
               alliance_curation_db:
@@ -130,7 +128,6 @@ fixtures:
                 - evidence-tmem67-metanephros-1
           notes:
             - Raw evidence, exclusions, ambiguities, and normalization notes are metadata only.
-          repair_notes: []
           provenance:
             source_fixture: tmem67_pending
             grounding_date: "2026-05-09"
