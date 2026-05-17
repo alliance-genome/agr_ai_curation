@@ -485,6 +485,56 @@ describe('SubmissionPreviewDialog', () => {
     expect(onSubmit).not.toHaveBeenCalled()
   })
 
+  it('keeps submit disabled when a ready envelope-backed object has blocking findings', async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn()
+    const blocker: CurationSubmissionReadinessBlocker = {
+      envelope_id: 'envelope-1',
+      object_id: 'artifact-1',
+      field_path: 'artifact.title',
+      severity: 'blocker',
+      status: 'open',
+      code: 'museum.catalog.title_unverified',
+      message: 'Title requires external catalog verification.',
+      provider_refs: {},
+      projection_ref: {},
+      details: {
+        validation_metadata: {
+          binding_state: 'active',
+          required: true,
+          blocking: true,
+        },
+      },
+    }
+
+    serviceMocks.fetchSubmissionPreview
+      .mockResolvedValueOnce(buildResponse())
+      .mockResolvedValueOnce(
+        buildResponse({
+          mode: 'direct_submit',
+          readyCandidateIds: ['candidate-ready', 'candidate-pending'],
+          readyCandidateBlockers: [blocker],
+        }),
+      )
+
+    renderDialog({
+      onSubmit,
+    })
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchSubmissionPreview).toHaveBeenCalledTimes(1)
+    })
+
+    await user.click(screen.getByRole('button', { name: 'Submit mode' }))
+
+    expect(
+      await screen.findByText('Title requires external catalog verification.'),
+    ).toBeInTheDocument()
+    expect(screen.getByText(/Resolve readiness blockers before submission/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled()
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('allows direct submit when every object is ready for the preview-resolved target', async () => {
     const user = userEvent.setup()
     const onSubmit = vi.fn()

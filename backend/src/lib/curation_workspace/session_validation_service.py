@@ -112,17 +112,17 @@ def _validation_result_for_field(
     *,
     envelope_results: dict[str, FieldValidationResult] | None = None,
 ) -> FieldValidationResult:
+    if envelope_results is not None:
+        envelope_result = envelope_results.get(field.field_key)
+        if envelope_result is not None:
+            return envelope_result
+
     if field.dirty:
         return FieldValidationResult(
             status="overridden",
             resolver="curator_override",
             warnings=["Curator value differs from the AI-seeded draft."],
         )
-
-    if envelope_results is not None:
-        envelope_result = envelope_results.get(field.field_key)
-        if envelope_result is not None:
-            return envelope_result
 
     field_status, field_warnings = field_validation_status(field.value)
     return FieldValidationResult(

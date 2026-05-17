@@ -1774,7 +1774,7 @@ def test_validate_candidate_only_refreshes_requested_field_subset(db_session):
     assert response.candidate.validation.stale_field_keys == ["field_b"]
 
 
-def test_validate_candidate_uses_envelope_findings_and_preserves_dirty_overrides(db_session):
+def test_validate_candidate_uses_envelope_findings_instead_of_dirty_draft_state(db_session):
     document = _create_document(db_session)
     session_row = _create_review_session(
         db_session,
@@ -1907,10 +1907,17 @@ def test_validate_candidate_uses_envelope_findings_and_preserves_dirty_overrides
     assert fields_by_key["gene.symbol"].validation_result.resolver == (
         "domain_envelope_validation_findings"
     )
-    assert fields_by_key["gene.identifier"].validation_result.status == "overridden"
+    assert fields_by_key["gene.identifier"].validation_result.status == "skipped"
+    assert fields_by_key["gene.identifier"].validation_result.resolver == (
+        "domain_envelope_validation_findings"
+    )
+    assert (
+        "validation status was not inferred from the populated draft value"
+        in fields_by_key["gene.identifier"].validation_result.warnings[0]
+    )
     assert response.validation_snapshot.summary.counts.validated == 1
-    assert response.validation_snapshot.summary.counts.overridden == 1
-    assert response.validation_snapshot.summary.counts.skipped == 0
+    assert response.validation_snapshot.summary.counts.overridden == 0
+    assert response.validation_snapshot.summary.counts.skipped == 1
 
 
 def test_submission_preview_builds_preview_payload_and_candidate_readiness(db_session):
@@ -2531,7 +2538,13 @@ def test_submission_export_blocks_missing_required_domain_field_without_allowed_
         ),
     )
 
-    blocker = response.submission.readiness[0].blockers[0]
+    readiness = response.submission.readiness[0]
+    assert readiness.ready is False
+    assert response.submission.payload is not None
+    assert response.submission.payload.payload_json is not None
+    assert response.submission.payload.payload_json["candidate_count"] == 0
+    assert response.submission.payload.payload_json["domain_envelope_candidates"] == []
+    blocker = readiness.blockers[0]
     assert blocker.envelope_id == seeded["envelope_id"]
     assert blocker.object_id == "artifact-1"
     assert blocker.field_path == "artifact.title"
@@ -2940,6 +2953,23 @@ def test_submission_export_blocks_open_blocking_validation_findings(
         "catalog_schema": {"class": "Artifact", "field": "title"}
     }
     assert "curator_override" not in blocker.details
+
+    with pytest.raises(HTTPException) as exc:
+        module.execute_submission(
+            db_session,
+            seeded["session_id"],
+            CurationSubmissionExecuteRequest(
+                session_id=seeded["session_id"],
+                target_key=DEFAULT_JSON_BUNDLE_TARGET_KEY,
+            ),
+            actor_claims={"sub": "curator-1"},
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail["message"] == (
+        "Domain-envelope readiness blockers prevent direct submission"
+    )
+    assert exc.value.detail["blockers"][0]["code"] == "museum.catalog.title_unverified"
 
 
 def test_submission_export_keeps_required_non_blocking_findings_visible_without_blocking(
