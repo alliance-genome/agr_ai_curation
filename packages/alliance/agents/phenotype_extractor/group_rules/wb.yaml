@@ -23,10 +23,3 @@ content: |
   ### Phenotype vs disease distinction
   - "Neurodegeneration in a C. elegans mutant" → phenotype (not a disease in worms).
   - C. elegans models of human diseases produce phenotypes that model disease features.
-
-
-  ### Shared domain-envelope output contract
-  - Emit retained semantic findings only in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
-  - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
-  - Each retained assertion must be a `PhenotypeAnnotation` object with `object_role: curatable_unit`, `model_ref: PhenotypeAnnotationPayload`, `definition_state: in_development`, blocked export/write metadata, and object refs to `PhenotypeSubject`, `PhenotypeTerm`, `Reference`, and `EvidenceQuote` objects.
-  - Use `PhenotypeSubject` for pending or resolved gene/allele/AGM subject context and `PhenotypeTerm` for the grounded phenotype ontology CURIE; unresolved terms belong in `metadata.ambiguities[]`, not in a semantic helper list.

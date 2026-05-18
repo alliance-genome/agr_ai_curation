@@ -156,12 +156,19 @@ def test_core_generated_contract_summarizes_tool_and_domain_metadata(monkeypatch
     assert "domain_pack:agr.alliance.phenotype" in bundle.layers[1].source_ref
 
 
-def test_phenotype_editable_prompt_does_not_duplicate_generated_contract_facts():
-    prompt_path = (
+def test_phenotype_editable_prompts_do_not_duplicate_generated_contract_facts():
+    agent_prompt_dir = (
         Path(__file__).resolve().parents[5]
-        / "packages/alliance/agents/phenotype_extractor/prompt.yaml"
+        / "packages/alliance/agents/phenotype_extractor"
     )
-    content = prompt_path.read_text(encoding="utf-8")
+    editable_prompt_paths = [
+        agent_prompt_dir / "prompt.yaml",
+        *sorted((agent_prompt_dir / "group_rules").glob("*.yaml")),
+    ]
+    content_by_path = {
+        prompt_path: prompt_path.read_text(encoding="utf-8")
+        for prompt_path in editable_prompt_paths
+    }
 
     forbidden_fragments = [
         "<search_infrastructure>",
@@ -176,9 +183,22 @@ def test_phenotype_editable_prompt_does_not_duplicate_generated_contract_facts()
         "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
         "PhenotypeResultEnvelope",
         "curatable_objects[] is the only semantic object list",
+        "Shared domain-envelope output contract",
+        "curatable_objects[]",
+        "top-level `items[]`",
+        "`annotations[]`",
+        "PhenotypeAnnotation",
+        "`object_role: curatable_unit`",
+        "`model_ref: PhenotypeAnnotationPayload`",
+        "`definition_state: in_development`",
+        "blocked export/write metadata",
+        "PhenotypeSubject",
+        "PhenotypeTerm",
+        "EvidenceQuote",
     ]
-    for fragment in forbidden_fragments:
-        assert fragment not in content
+    for prompt_path, content in content_by_path.items():
+        for fragment in forbidden_fragments:
+            assert fragment not in content, f"{fragment!r} found in {prompt_path}"
 
 
 def test_prompt_layers_keep_expected_order_and_editability(prompt_cache):
