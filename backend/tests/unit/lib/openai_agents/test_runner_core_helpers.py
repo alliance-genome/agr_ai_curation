@@ -62,6 +62,7 @@ def test_now_iso_is_parseable_utc_timestamp():
 
 def test_log_used_prompts_returns_zero_when_no_prompts(monkeypatch):
     monkeypatch.setattr(runner, "get_used_prompts", lambda: [])
+    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [])
     assert runner._log_used_prompts_to_db(trace_id="trace-1") == 0
 
 
@@ -74,6 +75,7 @@ def test_log_used_prompts_persists_entries_and_updates_span(monkeypatch):
         id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     )
     monkeypatch.setattr(runner, "get_used_prompts", lambda: [used_prompt])
+    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [])
 
     captured = {}
 
@@ -85,7 +87,7 @@ def test_log_used_prompts_persists_entries_and_updates_span(monkeypatch):
         def __init__(self, _db):
             pass
 
-        def log_all_used_prompts(self, prompts, trace_id, session_id):
+        def log_all_used_prompts(self, prompts, trace_id, session_id, **_kwargs):
             captured["service"] = {
                 "prompt_count": len(prompts),
                 "trace_id": trace_id,
@@ -131,6 +133,7 @@ def test_log_used_prompts_returns_zero_when_db_write_fails(monkeypatch):
         id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
     )
     monkeypatch.setattr(runner, "get_used_prompts", lambda: [used_prompt])
+    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [])
     monkeypatch.setattr(runner, "SessionLocal", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
 
     assert runner._log_used_prompts_to_db(trace_id="trace-3") == 0
@@ -211,7 +214,7 @@ def test_log_used_prompts_continues_when_span_update_fails(monkeypatch):
         def __init__(self, _db):
             pass
 
-        def log_all_used_prompts(self, prompts, trace_id, session_id):
+        def log_all_used_prompts(self, prompts, trace_id, session_id, **_kwargs):
             return [SimpleNamespace(id=1)]
 
     class _FakeDB:

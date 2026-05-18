@@ -76,7 +76,12 @@ from .streaming_tools import (
 )
 
 # Prompt context tracking for execution logging
-from src.lib.prompts.context import clear_prompt_context, commit_pending_prompts, get_used_prompts
+from src.lib.prompts.context import (
+    clear_prompt_context,
+    commit_pending_prompts,
+    get_used_prompt_runs,
+    get_used_prompts,
+)
 from src.lib.prompts.service import PromptService
 from src.models.sql.database import SessionLocal
 
@@ -487,8 +492,9 @@ def _log_used_prompts_to_db(
     Returns:
         Number of prompts logged
     """
+    used_prompt_runs = get_used_prompt_runs()
     used_prompts = get_used_prompts()
-    if not used_prompts:
+    if not used_prompts and not used_prompt_runs:
         logger.debug("No prompts to log")
         return 0
 
@@ -506,10 +512,19 @@ def _log_used_prompts_to_db(
                 }
                 for p in used_prompts
             ]
+            prompt_assemblies = [
+                {
+                    "effective_prompt_hash": run.assembly.effective_prompt_hash,
+                    "layer_manifest": run.assembly.layer_manifest,
+                }
+                for run in used_prompt_runs
+                if run.assembly is not None
+            ]
             span.update(
                 metadata={
                     "prompts_used": prompt_versions,
                     "prompt_count": len(prompt_versions),
+                    "prompt_assemblies": prompt_assemblies,
                 }
             )
             logger.debug("Added %s prompt versions to span metadata", len(prompt_versions))
@@ -521,11 +536,34 @@ def _log_used_prompts_to_db(
         db = SessionLocal()
         try:
             service = PromptService(db)
-            entries = service.log_all_used_prompts(
-                prompts=used_prompts,
-                trace_id=trace_id,
-                session_id=session_id,
-            )
+            entries = []
+            if used_prompt_runs:
+                for run in used_prompt_runs:
+                    if not run.prompts:
+                        continue
+                    entries.extend(
+                        service.log_all_used_prompts(
+                            prompts=run.prompts,
+                            trace_id=trace_id,
+                            session_id=session_id,
+                            effective_prompt_hash=(
+                                run.assembly.effective_prompt_hash
+                                if run.assembly is not None
+                                else None
+                            ),
+                            layer_manifest=(
+                                run.assembly.layer_manifest
+                                if run.assembly is not None
+                                else None
+                            ),
+                        )
+                    )
+            else:
+                entries = service.log_all_used_prompts(
+                    prompts=used_prompts,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                )
             db.commit()
             logger.info(
                 "Logged %s prompt usages to database",

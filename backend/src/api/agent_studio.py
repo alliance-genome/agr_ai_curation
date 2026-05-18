@@ -92,6 +92,7 @@ from src.lib.agent_studio.custom_agent_service import (
     set_custom_agent_visibility,
 )
 from src.lib.agent_studio.catalog_service import get_agent_by_id, get_agent_metadata
+from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.agent_studio.tool_idea_service import (
     create_tool_idea_request,
@@ -726,8 +727,8 @@ async def get_combined_prompt(
     """Get a combined prompt (base + group rules)."""
     try:
         service = get_prompt_catalog()
-        combined = service.get_combined_prompt(request.agent_id, request.group_id)
-        if combined is None:
+        bundle = service.get_effective_prompt_bundle(request.agent_id, group_id=request.group_id)
+        if bundle is None:
             raise HTTPException(
                 status_code=404,
                 detail=f"Agent '{request.agent_id}' or group '{request.group_id}' not found"
@@ -735,7 +736,9 @@ async def get_combined_prompt(
         return CombinedPromptResponse(
             agent_id=request.agent_id,
             group_id=request.group_id,
-            combined_prompt=combined,
+            combined_prompt=bundle.render(),
+            effective_prompt_hash=bundle.hash,
+            layer_manifest=bundle.to_manifest(),
         )
     except HTTPException:
         raise
@@ -789,8 +792,6 @@ async def get_prompt_preview(
                     access_denied_detail="Access denied to custom agent",
                     not_found_error_types=(CustomAgentNotFoundError,),
                 )
-            preview = custom_agent.custom_prompt
-
             custom_group_rules_enabled = bool(
                 getattr(
                     custom_agent,
@@ -803,51 +804,53 @@ async def get_prompt_preview(
                 or getattr(custom_agent, "mod_prompt_overrides", None)
                 or {}
             )
-
-            if resolved_group_id and custom_group_rules_enabled:
-                group_prompt = get_custom_agent_group_prompt(
-                    parent_agent_key=custom_agent.parent_agent_key,
-                    group_id=resolved_group_id,
-                    group_prompt_overrides=custom_group_overrides,
+            parent_agent_key = str(custom_agent.parent_agent_key or "").strip()
+            if not parent_agent_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Custom agent is missing its system template source.",
                 )
-                if group_prompt:
-                    preview = (
-                        f"{preview}\n\n## GROUP-SPECIFIC RULES\n\n"
-                        f"The following rules are specific to {resolved_group_id}:\n\n"
-                        f"{group_prompt}\n\n## END GROUP-SPECIFIC RULES\n"
+            overlay_parts = [str(custom_agent.custom_prompt or "").strip()]
+            if resolved_group_id and custom_group_rules_enabled:
+                override_prompt = str(
+                    custom_group_overrides.get(resolved_group_id.upper()) or ""
+                ).strip()
+                if override_prompt:
+                    overlay_parts.append(
+                        f"## Curator group overlay: {resolved_group_id.upper()}\n{override_prompt}"
                     )
+            bundle = build_agent_prompt_layers(
+                parent_agent_key,
+                group_id=resolved_group_id if custom_group_rules_enabled else None,
+                overlay="\n\n".join(part for part in overlay_parts if part),
+            )
 
             return PromptPreviewResponse(
                 agent_id=agent_id,
-                prompt=preview,
+                prompt=bundle.render(),
                 group_id=resolved_group_id,
                 source="custom_agent",
-                parent_agent_key=custom_agent.parent_agent_key,
+                parent_agent_key=parent_agent_key,
                 include_group_rules=custom_group_rules_enabled,
+                effective_prompt_hash=bundle.hash,
+                layer_manifest=bundle.to_manifest(),
             )
 
         # System agent preview
         service = get_prompt_catalog()
-        if resolved_group_id:
-            prompt = service.get_combined_prompt(agent_id, resolved_group_id)
-            if prompt is None:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Agent '{agent_id}' or group '{resolved_group_id}' not found",
-                )
-        else:
-            agent = service.get_agent(agent_id)
-            if not agent:
-                raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
-            prompt = agent.base_prompt
+        bundle = service.get_effective_prompt_bundle(agent_id, group_id=resolved_group_id)
+        if bundle is None:
+            raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
 
         return PromptPreviewResponse(
             agent_id=agent_id,
-            prompt=prompt,
+            prompt=bundle.render(),
             group_id=resolved_group_id,
             source="system_agent",
             parent_agent_key=None,
             include_group_rules=None,
+            effective_prompt_hash=bundle.hash,
+            layer_manifest=bundle.to_manifest(),
         )
     except HTTPException:
         raise

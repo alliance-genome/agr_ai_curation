@@ -13,7 +13,7 @@ Agent names use catalog_service.py AGENT_REGISTRY IDs (e.g., 'pdf_extraction', '
 
 import uuid
 from sqlalchemy import Column, String, Integer, Boolean, Text, DateTime, ForeignKey, Index, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 from .database import Base
 
@@ -125,6 +125,8 @@ class PromptExecutionLog(Base):
     prompt_type = Column(String(50), nullable=False)  # 'system' or 'group_rules'
     group_id = Column(String(20), nullable=True)  # NULL for base prompts
     prompt_version = Column(Integer, nullable=False)  # Denormalized for easy querying
+    effective_prompt_hash = Column(String(64), nullable=True)
+    layer_manifest = Column(JSONB, nullable=True)
 
     # Timing
     executed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())

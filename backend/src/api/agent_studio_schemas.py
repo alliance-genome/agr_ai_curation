@@ -39,6 +39,8 @@ class CombinedPromptResponse(BaseModel):
     agent_id: str
     group_id: str
     combined_prompt: str
+    effective_prompt_hash: str
+    layer_manifest: Dict[str, Any]
 
 
 class PromptPreviewResponse(BaseModel):
@@ -52,6 +54,8 @@ class PromptPreviewResponse(BaseModel):
     source: str
     parent_agent_key: Optional[str] = None
     include_group_rules: Optional[bool] = None
+    effective_prompt_hash: str
+    layer_manifest: Dict[str, Any]
 
 
 class AgentTestRequest(BaseModel):

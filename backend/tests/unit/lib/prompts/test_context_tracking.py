@@ -9,6 +9,7 @@ from src.lib.prompts.context import (
     commit_pending_prompts,
     get_pending_for_agent,
     get_prompt_override,
+    get_used_prompt_runs,
     get_used_prompts,
     set_pending_prompts,
     set_prompt_override,
@@ -34,7 +35,13 @@ def test_pending_prompts_commit_and_used_tracking():
     prompt_b = _prompt("rules")
     original = [prompt_a, prompt_b]
 
-    set_pending_prompts("Gene Specialist", original)
+    layer_manifest = {"agent_id": "gene", "layers": [], "hash": "hash-1"}
+    set_pending_prompts(
+        "Gene Specialist",
+        original,
+        effective_prompt_hash="hash-1",
+        layer_manifest=layer_manifest,
+    )
     pending = get_pending_for_agent("Gene Specialist")
     assert pending == [prompt_a, prompt_b]
 
@@ -45,6 +52,12 @@ def test_pending_prompts_commit_and_used_tracking():
     commit_pending_prompts("Gene Specialist")
     used = get_used_prompts()
     assert used == [prompt_a, prompt_b]
+    used_runs = get_used_prompt_runs()
+    assert len(used_runs) == 1
+    assert used_runs[0].prompts == [prompt_a, prompt_b]
+    assert used_runs[0].assembly is not None
+    assert used_runs[0].assembly.effective_prompt_hash == "hash-1"
+    assert used_runs[0].assembly.layer_manifest == layer_manifest
 
     # Strict audit trail: committing again logs again (no de-dupe).
     commit_pending_prompts("Gene Specialist")

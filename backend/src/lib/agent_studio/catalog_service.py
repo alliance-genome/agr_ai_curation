@@ -33,6 +33,12 @@ from dataclasses import dataclass, replace
 from agents import Agent
 from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
 from src.lib.file_outputs import FileValidationError, sanitize_output_descriptor
+from src.lib.prompts.assembly import (
+    PromptLayerBundle,
+    build_agent_prompt_layers,
+    prompt_templates_for_bundle,
+)
+from src.lib.prompts.context import set_pending_prompts
 
 # Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry
@@ -1600,27 +1606,30 @@ class PromptCatalogService:
         Returns:
             Combined prompt string, or None if agent/group not found
         """
-        agent = self.get_agent(agent_id)
-        if not agent:
+        bundle = self.get_effective_prompt_bundle(agent_id, group_id=group_id)
+        if bundle is None:
             return None
+        return bundle.render()
 
-        has_group_rules = bool(getattr(agent, "has_group_rules", getattr(agent, "has_mod_rules", False)))
-        group_rules = getattr(agent, "group_rules", getattr(agent, "mod_rules", {}))
-        if not has_group_rules or group_id not in group_rules:
-            return agent.base_prompt
+    def get_effective_prompt_bundle(
+        self,
+        agent_id: str,
+        *,
+        group_id: str | List[str] | None = None,
+        overlay: str | None = None,
+        runtime_context: str | Dict[str, Any] | List[Any] | None = None,
+    ) -> Optional[PromptLayerBundle]:
+        """Build the shared effective prompt bundle for catalog/preview callers."""
 
-        group_rule = group_rules[group_id]
-        combined = f"""{agent.base_prompt}
-
-## GROUP-SPECIFIC RULES
-
-The following rules are specific to {group_id}:
-
-{group_rule.content}
-
-## END GROUP-SPECIFIC RULES
-"""
-        return combined
+        if not self.get_agent(agent_id):
+            return None
+        prompt_key = get_prompt_key_for_agent(agent_id)
+        return build_agent_prompt_layers(
+            prompt_key,
+            group_id=group_id,
+            overlay=overlay,
+            runtime_context=runtime_context,
+        )
 
 
 # Singleton instance
@@ -1765,54 +1774,74 @@ def _build_runtime_instructions(
     *,
     output_schema: Optional[Any],
     canonical_tool_ids: List[str],
-) -> str:
-    """Build final instructions from DB spec + runtime context injections."""
-    from src.lib.openai_agents.prompt_utils import (
-        format_document_context_for_prompt,
-        inject_structured_output_instruction,
+) -> PromptLayerBundle:
+    """Build final instructions through the shared prompt assembler."""
+
+    del output_schema
+    active_groups = list(runtime_kwargs.get("active_groups", []) or [])
+    group_ids = (
+        active_groups
+        if bool(getattr(db_agent, "group_rules_enabled", False))
+        else []
+    )
+    prompt_agent_id = str(getattr(db_agent, "agent_key", "") or "").strip()
+    overlay = None
+
+    if str(getattr(db_agent, "visibility", "") or "").strip() != "system":
+        prompt_agent_id = str(
+            getattr(db_agent, "template_source", None)
+            or getattr(db_agent, "group_rules_component", None)
+            or ""
+        ).strip()
+        if not prompt_agent_id:
+            raise ValueError(
+                f"Custom agent '{db_agent.agent_key}' cannot be assembled without a template_source"
+            )
+        overlay = _build_curator_overlay(db_agent, group_ids)
+
+    return build_agent_prompt_layers(
+        prompt_agent_id,
+        group_id=group_ids,
+        overlay=overlay,
+        runtime_context=_build_runtime_context(
+            runtime_kwargs=runtime_kwargs,
+            canonical_tool_ids=canonical_tool_ids,
+        ),
     )
 
-    instructions = str(getattr(db_agent, "instructions", "") or "")
 
-    # Inject group-specific rules when configured and requested at runtime.
-    active_groups = list(runtime_kwargs.get("active_groups", []) or [])
-    if bool(getattr(db_agent, "group_rules_enabled", False)) and active_groups:
-        component_name = (
-            getattr(db_agent, "group_rules_component", None)
-            or getattr(db_agent, "template_source", None)
-            or db_agent.agent_key
-        )
-        try:
-            instructions = _inject_group_rules_with_overrides(
-                base_prompt=instructions,
-                group_ids=active_groups,
-                component_name=component_name,
-                group_overrides=dict(getattr(db_agent, "mod_prompt_overrides", {}) or {}),
-            )
-        except Exception:
-            logger.exception(
-                "[CatalogService] Failed group-rules injection for '%s'",
-                db_agent.agent_key,
-            )
-            raise ValueError(
-                f"Failed group-rules injection for agent '{db_agent.agent_key}'"
-            )
+def _build_curator_overlay(db_agent: Any, active_groups: List[str]) -> str:
+    """Build custom-agent overlay content without replacing locked layers."""
+
+    parts = [str(getattr(db_agent, "instructions", "") or "").strip()]
+    group_overrides = dict(
+        getattr(db_agent, "group_prompt_overrides", None)
+        or getattr(db_agent, "mod_prompt_overrides", None)
+        or {}
+    )
+    for raw_group in active_groups:
+        group_id = str(raw_group or "").strip().upper()
+        override = str(group_overrides.get(group_id) or "").strip()
+        if override:
+            parts.append(f"## Curator group overlay: {group_id}\n{override}")
+    return "\n\n".join(part for part in parts if part)
+
+
+def _build_runtime_context(
+    *,
+    runtime_kwargs: Dict[str, Any],
+    canonical_tool_ids: List[str],
+) -> str:
+    """Build runtime-only prompt content for the final assembler call."""
+
+    from src.lib.openai_agents.prompt_utils import format_document_context_for_prompt
 
     tool_id_set = set(canonical_tool_ids)
-
-    # Inject document structure context for document-aware tools.
-    if bool(tool_id_set & _DOCUMENT_TOOL_IDS):
-        context_text, _structure_info = format_document_context_for_prompt(
-            hierarchy=runtime_kwargs.get("hierarchy"),
-            sections=runtime_kwargs.get("sections"),
-            abstract=runtime_kwargs.get("abstract"),
-        )
-        if context_text:
-            instructions += context_text
+    parts: List[str] = []
+    preamble_lines: List[str] = []
 
     document_name = runtime_kwargs.get("document_name")
     if document_name:
-        preamble_lines: List[str] = []
         if tool_id_set & _DOCUMENT_TOOL_IDS:
             preamble_lines.append(
                 f'You are helping the user with the document: "{document_name}"'
@@ -1825,20 +1854,23 @@ def _build_runtime_instructions(
             preamble_lines.append(
                 f'Use "{sanitized_stem}" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
             )
-        if preamble_lines:
-            instructions = "\n".join(preamble_lines) + "\n\n" + instructions
+
+    if preamble_lines:
+        parts.append("\n".join(preamble_lines))
+
+    if bool(tool_id_set & _DOCUMENT_TOOL_IDS):
+        context_text, _structure_info = format_document_context_for_prompt(
+            hierarchy=runtime_kwargs.get("hierarchy"),
+            sections=runtime_kwargs.get("sections"),
+            abstract=runtime_kwargs.get("abstract"),
+        )
+        if context_text:
+            parts.append(context_text)
 
     if "record_evidence" in canonical_tool_ids:
-        instructions = instructions.rstrip() + "\n\n" + _RECORD_EVIDENCE_RUNTIME_NOTE
+        parts.append(_RECORD_EVIDENCE_RUNTIME_NOTE)
 
-    # Reinforce structured-output generation when output schema is configured.
-    if output_schema is not None:
-        instructions = inject_structured_output_instruction(
-            instructions,
-            output_type=output_schema,
-        )
-
-    return instructions
+    return "\n\n".join(part.strip() for part in parts if part and str(part).strip())
 
 
 def _resolve_output_schema(schema_key: str) -> Optional[Any]:
@@ -1945,12 +1977,13 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     else:
         tools = []
 
-    instructions = _build_runtime_instructions(
+    prompt_bundle = _build_runtime_instructions(
         db_agent=db_agent,
         runtime_kwargs=runtime_kwargs,
         output_schema=output_schema,
         canonical_tool_ids=canonical_tool_ids,
     )
+    instructions = prompt_bundle.render()
 
     model_id_override = str(kwargs.get("model_id_override") or "").strip()
     effective_model_id = model_id_override or db_agent.model_id
@@ -1984,7 +2017,7 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         provider_override=model_provider,
     )
 
-    return Agent(
+    runtime_agent = Agent(
         name=db_agent.name,
         instructions=instructions,
         model=get_model_for_agent(effective_model_id, provider_override=model_provider),
@@ -1993,6 +2026,13 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         output_type=output_schema,
         output_guardrails=output_guardrails,
     )
+    set_pending_prompts(
+        runtime_agent.name,
+        list(prompt_templates_for_bundle(prompt_bundle)),
+        effective_prompt_hash=prompt_bundle.hash,
+        layer_manifest=prompt_bundle.to_manifest(),
+    )
+    return runtime_agent
 
 
 def _get_db_agent_row(agent_id: str, kwargs: Dict[str, Any]) -> Optional[Any]:

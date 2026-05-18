@@ -34,9 +34,10 @@ Usage:
         db.close()
 """
 
-from typing import Optional, List
-from uuid import UUID
+from typing import Any, List, Optional
 from sqlalchemy import func
+from uuid import UUID
+
 from sqlalchemy.orm import Session
 import logging
 
@@ -62,6 +63,8 @@ class PromptService:
         trace_id: Optional[str] = None,
         session_id: Optional[str] = None,
         flow_execution_id: Optional[UUID] = None,
+        effective_prompt_hash: Optional[str] = None,
+        layer_manifest: Optional[dict[str, Any]] = None,
     ) -> PromptExecutionLog:
         """Record that a prompt was used in an execution.
 
@@ -88,6 +91,8 @@ class PromptService:
             prompt_type=prompt.prompt_type,
             group_id=prompt.group_id,
             prompt_version=prompt.version,
+            effective_prompt_hash=effective_prompt_hash,
+            layer_manifest=layer_manifest,
         )
         self.db.add(log_entry)
         return log_entry
@@ -113,6 +118,8 @@ class PromptService:
         trace_id: Optional[str] = None,
         session_id: Optional[str] = None,
         flow_execution_id: Optional[UUID] = None,
+        effective_prompt_hash: Optional[str] = None,
+        layer_manifest: Optional[dict[str, Any]] = None,
     ) -> List[PromptExecutionLog]:
         """Log multiple prompts that were used in an execution.
 
@@ -134,6 +141,8 @@ class PromptService:
                 trace_id=trace_id,
                 session_id=session_id,
                 flow_execution_id=flow_execution_id,
+                effective_prompt_hash=effective_prompt_hash,
+                layer_manifest=layer_manifest,
             )
             entries.append(entry)
         return entries

@@ -50,7 +50,7 @@ from src.lib.curation_workspace.curation_prep_constants import CURATION_PREP_AGE
 from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
 )
-from src.lib.prompts.cache import get_prompt
+from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
 from src.lib.prompts.context import set_pending_prompts
 from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import CurationExtractionSourceKind
@@ -983,52 +983,41 @@ The tool returns file information including a download URL that will render as a
 
     specialist_tools.append(export_to_file_tool)
 
-    # Get base prompt from cache (zero DB queries at runtime)
-    base_prompt = get_prompt("supervisor")
-    prompts_used = [base_prompt]
-
-    # Build instructions from cached prompt
-    instructions = base_prompt.content
-
-    instructions += (
-        "\n\n"
+    runtime_prompt_parts = [
         "CURATION PREP RULES:\n"
         f'- If the curator wants to move findings into curation prep, first ask exactly "{CURATION_PREP_CONFIRMATION_QUESTION}"\n'
         "- Do not call prepare_for_curation in the same turn as the confirmation question.\n"
         "- Only call prepare_for_curation after the next user turn explicitly confirms the scope.\n"
         "- When you call prepare_for_curation, pass the user's confirmation text verbatim and include confirmed scope keys when you know them.\n"
         "- If scope is still ambiguous, ask a follow-up clarification question instead of preparing everything."
+    ]
+    runtime_prompt_parts.append(
+        _build_runtime_tool_availability_note(
+            tool_specs=tool_specs,
+            available_specialist_tools=specialist_tools,
+            document_loaded=bool(document_id and user_id),
+        )
     )
-
-    instructions += "\n\n" + _build_runtime_tool_availability_note(
-        tool_specs=tool_specs,
-        available_specialist_tools=specialist_tools,
-        document_loaded=bool(document_id and user_id),
+    prompt_bundle = build_agent_prompt_layers(
+        "supervisor",
+        group_id=active_groups,
+        runtime_context="\n\n".join(part for part in runtime_prompt_parts if part),
     )
-
-    # Inject group-specific rules for supervisor dispatch behavior
-    if active_groups:
-        try:
-            from ...group_rules import inject_group_rules
-
-            instructions = inject_group_rules(
-                base_prompt=instructions,
-                group_ids=active_groups,
-                component_type="agents",
-                component_name="supervisor",
-                prompts_out=prompts_used,  # Collect group prompts for tracking
-            )
-            logger.info("Supervisor configured with group-specific dispatch rules: %s", active_groups)
-        except ImportError as e:
-            logger.warning("Could not import group config for supervisor, skipping injection: %s", e)
-        except Exception as e:
-            # Don't fail if supervisor rules don't exist - they're optional
-            logger.debug("No supervisor group rules found or error: %s", e)
+    prompts_used = list(prompt_templates_for_bundle(prompt_bundle))
+    base_prompt_version = next(
+        (
+            prompt.version
+            for prompt in prompts_used
+            if prompt.agent_name == "supervisor" and prompt.prompt_type == "system"
+        ),
+        None,
+    )
+    instructions = prompt_bundle.render()
 
     logger.info(
         "Creating Supervisor agent, model=%s prompt_v=%s groups=%s",
         effective_model,
-        base_prompt.version,
+        base_prompt_version,
         active_groups,
     )
 
@@ -1048,7 +1037,12 @@ The tool returns file information including a download URL that will render as a
     )
 
     # Register prompts for execution logging (committed when agent actually runs)
-    set_pending_prompts(supervisor.name, prompts_used)
+    set_pending_prompts(
+        supervisor.name,
+        prompts_used,
+        effective_prompt_hash=prompt_bundle.hash,
+        layer_manifest=prompt_bundle.to_manifest(),
+    )
 
     # Log supervisor configuration to Langfuse for trace visibility
     from ..langfuse_client import log_agent_config as log_agent_config_to_langfuse
@@ -1061,12 +1055,14 @@ The tool returns file information including a download URL that will render as a
         model_settings={
             "temperature": effective_temperature,
             "reasoning": effective_reasoning,
-            "prompt_version": base_prompt.version,
+            "prompt_version": base_prompt_version,
         },
         metadata={
             "document_id": document_id,
             "user_id": user_id,
-            "specialist_count": len(specialist_tools)
+            "specialist_count": len(specialist_tools),
+            "effective_prompt_hash": prompt_bundle.hash,
+            "layer_manifest": prompt_bundle.to_manifest(),
         }
     )
 

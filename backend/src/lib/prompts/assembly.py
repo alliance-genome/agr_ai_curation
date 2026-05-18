@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -75,6 +76,9 @@ class PromptLayerBundle:
             "layers": [layer.to_manifest() for layer in self.layers],
             "hash": self.hash,
         }
+
+
+_PROMPT_TEMPLATE_SOURCE_RE = re.compile(r"prompt_templates:([^:,\s]+):")
 
 
 def build_agent_core_prompt(agent_id: str) -> PromptLayerBundle:
@@ -180,6 +184,23 @@ def build_agent_prompt_layers(
         )
 
     return _bundle(canonical_agent_id, layers)
+
+
+def prompt_templates_for_bundle(bundle: PromptLayerBundle) -> tuple[PromptTemplate, ...]:
+    """Return active prompt template rows referenced by an assembled bundle."""
+
+    cache = get_all_active_prompts()
+    by_id = {str(prompt.id): prompt for prompt in cache.values() if prompt.id is not None}
+    templates: list[PromptTemplate] = []
+    seen: set[str] = set()
+    for layer in bundle.layers:
+        for prompt_id in _PROMPT_TEMPLATE_SOURCE_RE.findall(layer.source_ref):
+            prompt = by_id.get(prompt_id)
+            if prompt is None or prompt_id in seen:
+                continue
+            templates.append(prompt)
+            seen.add(prompt_id)
+    return tuple(templates)
 
 
 def _resolve_system_agent(agent_id: str) -> AgentDefinition:

@@ -463,9 +463,18 @@ class TestGetRegistryMetadata:
         from src.api import agent_studio as api_module
 
         class _FakeService:
-            def get_agent(self, agent_id):
+            def get_effective_prompt_bundle(self, agent_id, group_id=None):
                 assert agent_id == "gene"
-                return SimpleNamespace(base_prompt="SYSTEM BASE PROMPT")
+                assert group_id is None
+                return SimpleNamespace(
+                    render=lambda: "SYSTEM BASE PROMPT",
+                    hash="hash-system",
+                    to_manifest=lambda: {
+                        "agent_id": "gene",
+                        "layers": [],
+                        "hash": "hash-system",
+                    },
+                )
 
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: _FakeService())
 
@@ -491,8 +500,6 @@ class TestGetRegistryMetadata:
             group_prompt_overrides={},
             group_rules_enabled=True,
         )
-        fake_rule_prompt = "WB ONLY RULES"
-
         # Build a lightweight module-like object for local imports in endpoint
         fake_custom_module = SimpleNamespace(
             parse_custom_agent_id=lambda _aid: "uuid",
@@ -507,9 +514,15 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
-            "get_custom_agent_group_prompt",
-            lambda parent_agent_key, group_id, group_prompt_overrides: (
-                fake_rule_prompt if parent_agent_key == "gene" and group_id == "WB" else None
+            "build_agent_prompt_layers",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                render=lambda: "SYSTEM BASE PROMPT\n\nWB ONLY RULES\n\nCUSTOM BASE PROMPT",
+                hash="hash-custom",
+                to_manifest=lambda: {
+                    "agent_id": "gene",
+                    "layers": [{"kind": "curator_overlay"}],
+                    "hash": "hash-custom",
+                },
             ),
         )
         monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
@@ -553,8 +566,16 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
-            "get_custom_agent_group_prompt",
-            lambda parent_agent_key, group_id, group_prompt_overrides: group_prompt_overrides.get(group_id),
+            "build_agent_prompt_layers",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                render=lambda: "SYSTEM BASE PROMPT\n\nCUSTOM BASE PROMPT\n\nCUSTOM WB OVERRIDE",
+                hash="hash-custom",
+                to_manifest=lambda: {
+                    "agent_id": "gene",
+                    "layers": [{"kind": "curator_overlay"}],
+                    "hash": "hash-custom",
+                },
+            ),
         )
         monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
 
@@ -634,7 +655,7 @@ class TestGetRegistryMetadata:
         caplog.set_level(logging.ERROR, logger=api_module.logger.name)
 
         class _BrokenService:
-            def get_agent(self, _agent_id):
+            def get_effective_prompt_bundle(self, _agent_id, group_id=None):
                 raise RuntimeError("preview exploded")
 
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: _BrokenService())
