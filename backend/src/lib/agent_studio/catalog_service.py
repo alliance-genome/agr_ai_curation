@@ -1760,7 +1760,10 @@ def _build_runtime_instructions(
 def _build_curator_overlay(db_agent: Any, active_groups: List[str]) -> str:
     """Build custom-agent overlay content without replacing locked layers."""
 
-    from src.lib.agent_studio.custom_agent_service import normalize_custom_overlay_for_parent
+    from src.lib.agent_studio.custom_agent_service import (
+        normalize_custom_overlay_for_parent,
+        normalize_editable_group_prompt_overrides,
+    )
 
     parent_agent_key = str(
         getattr(db_agent, "template_source", None)
@@ -1779,7 +1782,9 @@ def _build_curator_overlay(db_agent: Any, active_groups: List[str]) -> str:
         )
 
     parts = [overlay.content]
-    group_overrides = dict(getattr(db_agent, "group_prompt_overrides", None) or {})
+    group_overrides = normalize_editable_group_prompt_overrides(
+        getattr(db_agent, "group_prompt_overrides", None) or {}
+    )
     for raw_group in active_groups:
         group_id = str(raw_group or "").strip().upper()
         override = str(group_overrides.get(group_id) or "").strip()

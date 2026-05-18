@@ -11,6 +11,7 @@ from src.lib.agent_studio.custom_agent_service import (
     get_custom_agent_group_prompt,
     make_custom_agent_id,
     normalize_custom_overlay_for_parent,
+    normalize_editable_group_prompt_overrides,
     normalize_group_prompt_overrides,
     parse_custom_agent_id,
 )
@@ -41,6 +42,13 @@ def test_normalize_group_prompt_overrides_cleans_keys_and_empty_values():
         "WB": "WormBase custom rules",
         "MGI": "Mouse rules",
     }
+
+
+def test_normalize_editable_group_prompt_overrides_rejects_locked_prompt_markers():
+    with pytest.raises(ValueError, match="Locked core/generated prompt contracts"):
+        normalize_editable_group_prompt_overrides({
+            "WB": "Edited platform runtime contract prose.",
+        })
 
 
 def test_normalize_custom_overlay_removes_exact_parent_layers(monkeypatch):
@@ -122,6 +130,15 @@ def test_get_custom_agent_group_prompt_prefers_override():
         group_prompt_overrides={"WB": "custom wb rules"},
     )
     assert override_content == "custom wb rules"
+
+
+def test_get_custom_agent_group_prompt_rejects_locked_override():
+    with pytest.raises(ValueError, match="Locked core/generated prompt contracts"):
+        get_custom_agent_group_prompt(
+            parent_agent_key="gene",
+            group_id="WB",
+            group_prompt_overrides={"WB": "Platform Runtime Contract\nDo not edit."},
+        )
 
 
 def test_get_custom_agent_group_prompt_falls_back_to_cached_rules(monkeypatch):
@@ -218,6 +235,33 @@ def test_create_custom_agent_requires_model_for_scratch_mode():
             name="Scratch Agent",
             template_source=None,
             model_id=None,
+        )
+
+
+def test_create_custom_agent_rejects_locked_group_prompt_override():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    class FakeQuery:
+        def filter(self, *_args, **_kwargs):
+            return self
+
+        def first(self):
+            return None
+
+    class FakeDB:
+        def query(self, *_args, **_kwargs):
+            return FakeQuery()
+
+    with pytest.raises(ValueError, match="Locked core/generated prompt contracts"):
+        service.create_custom_agent(
+            db=FakeDB(),
+            user_id=7,
+            name="Locked Group Override",
+            template_source=None,
+            model_id="gpt-4o",
+            group_prompt_overrides={
+                "WB": "Generated runtime contract\nCurator tried to copy this.",
+            },
         )
 
 
@@ -473,6 +517,35 @@ def test_update_custom_agent_rejects_unknown_tool_ids(monkeypatch):
             custom_agent=custom_agent,
             tool_ids=["missing_tool"],
         )
+
+
+def test_update_custom_agent_rejects_locked_group_prompt_override():
+    import src.lib.agent_studio.custom_agent_service as service
+
+    custom_agent = SimpleNamespace(
+        id=uuid.uuid4(),
+        user_id=7,
+        name="Existing Agent",
+        custom_prompt="Prompt",
+        group_prompt_overrides={},
+        include_group_rules=True,
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning=None,
+        tool_ids=[],
+        output_schema_key=None,
+    )
+
+    with pytest.raises(ValueError, match="Locked core/generated prompt contracts"):
+        service.update_custom_agent(
+            db=SimpleNamespace(),
+            custom_agent=custom_agent,
+            group_prompt_overrides={
+                "WB": "Platform Runtime Contract\nCurator tried to copy this.",
+            },
+        )
+
+    assert custom_agent.group_prompt_overrides == {}
 
 
 def test_update_custom_agent_preserves_inherited_system_managed_tool_ids(monkeypatch):

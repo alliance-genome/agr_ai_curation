@@ -81,7 +81,6 @@ from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
     CustomAgentAccessError,
     CustomAgentNotFoundError,
-    LOCKED_PROMPT_MARKERS,
     clone_visible_agent_for_user,
     custom_agent_to_dict,
     get_custom_agent_group_prompt,
@@ -90,7 +89,9 @@ from src.lib.agent_studio.custom_agent_service import (
     list_custom_agents_visible_to_user,
     make_custom_agent_id,
     normalize_custom_overlay_for_parent,
+    normalize_editable_group_prompt_overrides,
     parse_custom_agent_id,
+    reject_locked_prompt_markers,
     set_custom_agent_visibility,
 )
 from src.lib.agent_studio.catalog_service import get_agent_by_id, get_agent_metadata
@@ -727,11 +728,25 @@ def _build_custom_agent_effective_prompt_bundle(
             getattr(custom_agent, "include_mod_rules", False),
         )
     )
-    custom_group_overrides = (
-        getattr(custom_agent, "group_prompt_overrides", None)
-        or getattr(custom_agent, "mod_prompt_overrides", None)
-        or {}
-    )
+    try:
+        custom_group_overrides = normalize_editable_group_prompt_overrides(
+            getattr(custom_agent, "group_prompt_overrides", None)
+            or getattr(custom_agent, "mod_prompt_overrides", None)
+            or {}
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Custom agent group override contains copied locked/core prompt text.",
+            exc_info=(type(exc), exc, exc.__traceback__),
+            extra={"custom_agent_id": agent_id},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Custom agent group rules contain copied locked/core prompt text "
+                "that needs coordinator review before preview."
+            ),
+        ) from exc
     parent_agent_key = str(custom_agent.parent_agent_key or "").strip()
     if not parent_agent_key:
         raise HTTPException(
@@ -2364,7 +2379,12 @@ async def _handle_tool_call(
                 "success": False,
                 "error": "proposed prompt exceeds maximum size (40,000 characters).",
             }
-        if any(marker in updated_prompt for marker in LOCKED_PROMPT_MARKERS):
+        try:
+            reject_locked_prompt_markers(
+                updated_prompt,
+                target="Prompt update",
+            )
+        except ValueError:
             return {
                 "success": False,
                 "error": (

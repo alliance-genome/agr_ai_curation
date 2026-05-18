@@ -69,6 +69,25 @@ def _collapse_prompt_whitespace(prompt: str) -> str:
     return "\n".join(collapsed).strip()
 
 
+def locked_prompt_marker_in(prompt: str) -> Optional[str]:
+    """Return the locked/core prompt marker copied into editable text, if any."""
+    lowered_prompt = str(prompt or "").lower()
+    for marker in LOCKED_PROMPT_MARKERS:
+        if marker.lower() in lowered_prompt:
+            return marker
+    return None
+
+
+def reject_locked_prompt_markers(prompt: str, *, target: str) -> None:
+    """Reject editable prompt text that copies locked/generated contracts."""
+    marker = locked_prompt_marker_in(prompt)
+    if marker:
+        raise ValueError(
+            f"{target} targets editable curator-authored prompt text only. "
+            "Locked core/generated prompt contracts cannot be edited or copied."
+        )
+
+
 def normalize_custom_overlay_for_parent(
     parent_agent_key: Optional[str],
     custom_prompt: Optional[str],
@@ -122,8 +141,7 @@ def normalize_custom_overlay_for_parent(
         removed_layer_kinds.append(layer.kind)
 
     normalized_content = _collapse_prompt_whitespace(content)
-    lowered_remaining_content = normalized_content.lower()
-    if any(marker.lower() in lowered_remaining_content for marker in LOCKED_PROMPT_MARKERS):
+    if locked_prompt_marker_in(normalized_content):
         return CustomOverlayNormalization(
             content=normalized_content,
             status="needs_review",
@@ -203,6 +221,19 @@ def normalize_group_prompt_overrides(
             continue
         normalized[group_id] = prompt
 
+    return normalized
+
+
+def normalize_editable_group_prompt_overrides(
+    group_prompt_overrides: Optional[Dict[str, str]],
+) -> Dict[str, str]:
+    """Normalize and validate editable group prompt override payloads."""
+    normalized = normalize_group_prompt_overrides(group_prompt_overrides)
+    for group_id, prompt in normalized.items():
+        reject_locked_prompt_markers(
+            prompt,
+            target=f"Group prompt override '{group_id}'",
+        )
     return normalized
 
 
@@ -416,7 +447,7 @@ def create_custom_agent(
     if overlay_normalization.status == "needs_review":
         raise ValueError(overlay_normalization.warning or "Custom prompt needs coordinator review")
     agent_prompt = overlay_normalization.content
-    normalized_group_overrides = normalize_group_prompt_overrides(group_prompt_overrides)
+    normalized_group_overrides = normalize_editable_group_prompt_overrides(group_prompt_overrides)
     custom_uuid = uuid.uuid4()
 
     effective_model_id = _validate_model_id(model_id or parent_defaults["model_id"] or "")
@@ -731,7 +762,7 @@ def update_custom_agent(
     current_group_overrides = _read_group_prompt_overrides(custom_agent)
     next_group_overrides: Optional[Dict[str, str]] = None
     if group_prompt_overrides is not None:
-        next_group_overrides = normalize_group_prompt_overrides(group_prompt_overrides)
+        next_group_overrides = normalize_editable_group_prompt_overrides(group_prompt_overrides)
     next_custom_prompt = custom_prompt
     if custom_prompt is not None:
         overlay_normalization = normalize_custom_overlay_for_parent(
@@ -866,8 +897,11 @@ def revert_custom_agent_to_version(
         )
     )
 
+    target_group_overrides = normalize_editable_group_prompt_overrides(
+        _read_group_prompt_overrides(target)
+    )
     custom_agent.custom_prompt = target.custom_prompt
-    _write_group_prompt_overrides(custom_agent, _read_group_prompt_overrides(target))
+    _write_group_prompt_overrides(custom_agent, target_group_overrides)
     custom_agent.version = int(custom_agent.version or 1) + 1
     return custom_agent
 
@@ -991,7 +1025,7 @@ def get_custom_agent_group_prompt(
     if not normalized_group_id:
         return None
 
-    overrides = normalize_group_prompt_overrides(group_prompt_overrides)
+    overrides = normalize_editable_group_prompt_overrides(group_prompt_overrides)
     override = overrides.get(normalized_group_id)
     if override:
         return override

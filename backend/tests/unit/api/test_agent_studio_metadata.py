@@ -802,6 +802,49 @@ class TestGetRegistryMetadata:
 
         assert "CUSTOM WB OVERRIDE" in result.prompt
 
+    def test_get_prompt_preview_custom_agent_rejects_locked_group_override(self, monkeypatch):
+        """Prompt preview should not assemble copied locked text from group overrides."""
+        import asyncio
+        from src.api import agent_studio as api_module
+
+        fake_custom = SimpleNamespace(
+            parent_agent_key="gene",
+            custom_prompt="CUSTOM BASE PROMPT",
+            group_prompt_overrides={
+                "WB": "Platform Runtime Contract\nCurator tried to copy this.",
+            },
+            group_rules_enabled=True,
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: fake_custom,
+        )
+        monkeypatch.setattr(
+            api_module,
+            "build_agent_prompt_layers",
+            lambda *_args, **_kwargs: pytest.fail("locked group override was assembled"),
+        )
+
+        with pytest.raises(api_module.HTTPException) as exc_info:
+            asyncio.run(
+                api_module.get_prompt_preview(
+                    agent_id="ca_11111111-2222-3333-4444-555555555555",
+                    group_id="WB",
+                    user={"sub": "test-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "needs coordinator review" in exc_info.value.detail
+
     def test_get_prompt_preview_custom_agent_lookup_errors_are_sanitized(self, monkeypatch, caplog):
         import asyncio
         from src.api import agent_studio as api_module
