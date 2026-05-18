@@ -29,7 +29,7 @@ The AI Curation System provides intelligent assistance for biological curation t
 - **Gene Ontology** - GO terms, hierarchies, and biological processes
 - **GO Annotations** - Gene annotations with evidence codes
 - **Orthology Relationships** - Cross-species gene relationships
-- **Ontology Term Mapping** - Map anatomical, developmental, and cellular component labels to official term IDs
+- **Ontology Term Resolver Agent** - Resolve exact CURIEs and typed/scoped ontology labels or synonyms to official term IDs
 - **Research Papers** - Information extracted from uploaded PDF documents
 
 ### Build Automated Curation Workflows
