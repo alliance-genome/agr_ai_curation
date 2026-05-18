@@ -279,10 +279,15 @@ def _merge_custom_agents_into_catalog(
 
         prompt_bundle = None
         if template_source:
+            overlay_for_layer_projection = (
+                ""
+                if overlay_normalization.status == "needs_review"
+                else overlay_normalization.content
+            )
             try:
                 prompt_bundle = build_agent_prompt_layers(
                     template_source,
-                    overlay=overlay_normalization.content,
+                    overlay=overlay_for_layer_projection,
                 )
             except Exception as exc:
                 logger.warning(
@@ -305,6 +310,9 @@ def _merge_custom_agents_into_catalog(
             prompt_layers=prompt_layers,
             effective_prompt_hash=effective_prompt_hash,
             layer_manifest=layer_manifest,
+            custom_prompt_overlay_status=overlay_normalization.status,
+            custom_prompt_removed_layer_kinds=overlay_normalization.removed_layer_kinds,
+            custom_prompt_warning=overlay_normalization.warning,
             tools=tools,
             subcategory=(
                 "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"

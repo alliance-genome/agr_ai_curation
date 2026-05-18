@@ -129,6 +129,18 @@ class PromptInfo(BaseModel):
         default_factory=dict,
         description="Raw structured layer manifest for Agent Studio and tools",
     )
+    custom_prompt_overlay_status: Optional[Literal["clean", "deduplicated", "needs_review"]] = Field(
+        None,
+        description="Normalization status for custom-agent curator overlay text",
+    )
+    custom_prompt_removed_layer_kinds: List[str] = Field(
+        default_factory=list,
+        description="Locked/generated parent layer kinds removed from a legacy custom overlay",
+    )
+    custom_prompt_warning: Optional[str] = Field(
+        None,
+        description="Coordinator-review warning for ambiguous legacy custom overlay text",
+    )
     tools: List[str] = Field(
         default_factory=list,
         description="List of tools available to this agent"

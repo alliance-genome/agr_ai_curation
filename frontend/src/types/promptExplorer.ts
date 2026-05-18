@@ -81,6 +81,9 @@ export interface PromptInfo {
   prompt_layers?: PromptLayerInfo[]
   effective_prompt_hash?: string
   layer_manifest?: Record<string, unknown>
+  custom_prompt_overlay_status?: 'clean' | 'deduplicated' | 'needs_review'
+  custom_prompt_removed_layer_kinds?: string[]
+  custom_prompt_warning?: string
   tools: string[]
   model?: string
   subcategory?: string  // Subcategory for palette grouping

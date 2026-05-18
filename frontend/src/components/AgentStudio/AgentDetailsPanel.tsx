@@ -31,6 +31,7 @@ import {
   ListItemText,
   Card,
   CardContent,
+  Alert,
 } from '@mui/material'
 import { styled, alpha } from '@mui/material/styles'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
@@ -180,6 +181,11 @@ function AgentDetailsPanel({
 
   // Load combined prompt when needed
   useEffect(() => {
+    if (agent?.custom_prompt_overlay_status === 'needs_review') {
+      setCombinedPrompt(null)
+      setLoadingCombined(false)
+      return
+    }
     if (agent && selectedGroupId && agent.has_group_rules) {
       setLoadingCombined(true)
       fetchCombinedPrompt(agent.agent_id, selectedGroupId)
@@ -228,14 +234,20 @@ function AgentDetailsPanel({
     return agent.base_prompt
   }
 
-  // Copy prompt to clipboard
-  const handleCopy = () => {
-    const layerPreview = agent?.prompt_layers && agent.prompt_layers.length > 0
+  const overlayNeedsReview = agent?.custom_prompt_overlay_status === 'needs_review'
+  const getPromptLayerPreview = (): string => {
+    return agent?.prompt_layers && agent.prompt_layers.length > 0
       ? agent.prompt_layers.map((layer) => layer.content).filter(Boolean).join('\n\n')
       : ''
+  }
+
+  // Copy prompt to clipboard
+  const handleCopy = () => {
+    const layerPreview = getPromptLayerPreview()
+    const reviewMessage = 'Curator overlay needs coordinator review before it can be included in the effective prompt.'
     const content = agent && selectedGroupId && agent.has_group_rules
-      ? (combinedPrompt || getPromptContent())
-      : (layerPreview || getPromptContent())
+      ? (combinedPrompt || (overlayNeedsReview ? (layerPreview || reviewMessage) : getPromptContent()))
+      : (layerPreview || (overlayNeedsReview ? reviewMessage : getPromptContent()))
     navigator.clipboard.writeText(content).catch((err) => {
       console.error('Failed to copy:', err)
     })
@@ -279,10 +291,17 @@ function AgentDetailsPanel({
   const generatedLayers = layersByKind.core_generated || []
   const baseLayers = layersByKind.base_prompt || []
   const overlayLayers = layersByKind.curator_overlay || []
+  const layerPreview = getPromptLayerPreview()
   const selectedGroupRule = selectedGroupId ? agent.group_rules[selectedGroupId] : undefined
+  const overlayReviewMessage = agent.custom_prompt_warning
+    || 'Curator overlay needs coordinator review before it can be included in the effective prompt.'
   const effectivePromptPreview = selectedGroupId && agent.has_group_rules
-    ? (combinedPrompt || (loadingCombined ? 'Loading effective prompt preview...' : getPromptContent()))
-    : (promptLayers.length > 0
+    ? (combinedPrompt || (loadingCombined
+      ? 'Loading effective prompt preview...'
+      : (overlayNeedsReview ? (layerPreview || overlayReviewMessage) : getPromptContent())))
+    : (overlayNeedsReview
+      ? (layerPreview || overlayReviewMessage)
+      : promptLayers.length > 0
       ? promptLayers.map((layer) => layer.content).filter(Boolean).join('\n\n')
       : agent.base_prompt)
 
@@ -659,9 +678,14 @@ function AgentDetailsPanel({
                   : 'Select a group to view group rules.',
               }
             )}
-            {renderLayerSection('Curator Overlay', overlayLayers, '', {
+            {overlayNeedsReview && (
+              <Alert severity="warning" variant="outlined">
+                {overlayReviewMessage}
+              </Alert>
+            )}
+            {renderLayerSection('Curator Overlay', overlayNeedsReview ? [] : overlayLayers, overlayNeedsReview ? agent.base_prompt : '', {
               locked: false,
-              editable: true,
+              editable: !overlayNeedsReview,
               emptyText: 'No curator overlay is applied.',
             })}
             <Box>
