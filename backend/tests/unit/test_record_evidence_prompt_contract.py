@@ -4,6 +4,8 @@ from pathlib import Path
 
 import yaml
 
+from src.lib.prompts import assembly
+
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PROMPT_ROOTS = ["config", "packages", "alliance_agents"]
@@ -35,6 +37,21 @@ def _runtime_prompt_content(path: Path) -> str:
     return content
 
 
+def _effective_runtime_prompt_content(path: Path) -> str:
+    agent_yaml = path.with_name("agent.yaml")
+    if not agent_yaml.exists():
+        return _runtime_prompt_content(path)
+    data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
+    assert isinstance(data, dict), f"{agent_yaml.relative_to(REPO_ROOT)} did not parse as YAML mapping"
+    agent_id = str(data["agent_id"])
+    return "\n\n".join(
+        [
+            assembly.build_agent_core_prompt(agent_id).render(),
+            _runtime_prompt_content(path),
+        ]
+    )
+
+
 def _record_evidence_tool_policy_description(path: Path) -> str:
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert isinstance(data, dict), f"{path.relative_to(REPO_ROOT)} did not parse as YAML mapping"
@@ -51,7 +68,7 @@ def test_record_evidence_prompt_contract_has_no_stale_fuzzy_source_matching_lang
 
     stale_hits = []
     for path in searched_prompts:
-        content = _runtime_prompt_content(path)
+        content = _effective_runtime_prompt_content(path)
         content_lower = content.lower()
         for phrase in STALE_RECORD_EVIDENCE_PHRASES:
             if phrase.lower() in content_lower:
@@ -79,7 +96,7 @@ def test_record_evidence_runtime_prompts_state_exact_source_text_contract():
 
     missing = []
     for path in _record_evidence_prompt_files():
-        content = " ".join(_runtime_prompt_content(path).lower().split())
+        content = " ".join(_effective_runtime_prompt_content(path).lower().split())
         for fragment in required_fragments:
             if fragment.lower() not in content:
                 missing.append(f"{path.relative_to(REPO_ROOT)}: {fragment}")

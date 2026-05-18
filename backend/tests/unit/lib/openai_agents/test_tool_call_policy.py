@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.lib.openai_agents.tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
+    required_package_tool_names_from_metadata,
     required_tool_names_for_available_tools,
 )
 
@@ -30,3 +31,24 @@ def test_package_required_tools_apply_without_document_tools():
 
 def test_empty_tool_set_has_no_required_policy():
     assert required_tool_names_for_available_tools([]) == frozenset()
+
+
+def test_available_tool_names_must_be_strings():
+    try:
+        required_tool_names_for_available_tools(["search_document", None])  # type: ignore[list-item]
+    except TypeError as exc:
+        assert "must be strings" in str(exc)
+    else:
+        raise AssertionError("Expected non-string tool names to raise TypeError")
+
+
+def test_required_package_tool_names_are_derived_from_metadata():
+    required = required_package_tool_names_from_metadata(
+        {"agr_curation_query", "get_agent_contract"},
+        {
+            "agr_curation_query": {"required_tool_call": {"enforce": True}},
+            "get_agent_contract": {"required_tool_call": {"enforce": False}},
+        },
+    )
+
+    assert required == {"agr_curation_query"}

@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from src.lib.prompts import assembly
 from src.lib.openai_agents import models as agent_models
 from src.schemas.models import DomainEnvelopeExtractionResult
 
@@ -85,6 +86,20 @@ def _content(relative_path: str) -> str:
     return content
 
 
+def _runtime_content(relative_path: str) -> str:
+    prompt_path = REPO_ROOT / relative_path
+    agent_yaml = prompt_path.with_name("agent.yaml")
+    agent_data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
+    assert isinstance(agent_data, dict)
+    agent_id = str(agent_data["agent_id"])
+    return "\n\n".join(
+        [
+            assembly.build_agent_core_prompt(agent_id).render(),
+            _content(relative_path),
+        ]
+    )
+
+
 def _yaml(relative_path: str) -> dict:
     data = yaml.safe_load((REPO_ROOT / relative_path).read_text(encoding="utf-8"))
     assert isinstance(data, dict)
@@ -140,13 +155,15 @@ def test_extractor_prompts_do_not_expose_repair_surfaces():
 
 def test_extractor_prompts_delegate_unresolved_state_to_validators():
     required_fragments = [
+        "Active validator binding",
+        "validator-bound unresolved candidates",
         "Active validator bindings own",
         "validator result fields",
         "envelope validation findings",
     ]
 
     for relative_path in EXTRACTOR_PROMPTS:
-        content = _content(relative_path)
+        content = _runtime_content(relative_path)
         normalized_content = re.sub(r"\s+", " ", content).lower()
         for fragment in required_fragments:
             assert fragment.lower() in normalized_content, f"{relative_path} missing {fragment}"

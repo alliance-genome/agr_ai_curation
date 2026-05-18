@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+from src.lib.config.agent_loader import load_agent_definitions, reset_cache
 from src.lib.config.agent_sources import resolve_agent_config_sources
+from src.lib.prompts import assembly
 from src.schemas.models.base import ExclusionReasonCode
 
 
@@ -21,7 +23,14 @@ def _load_prompt_content(folder_name: str) -> str:
     prompt_path = source.prompt_yaml
     assert prompt_path is not None
     data = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
-    return str(data.get("content") or "")
+    editable_content = str(data.get("content") or "")
+    try:
+        agents = load_agent_definitions(_repo_root() / "packages", force_reload=True)
+        agent = next(agent for agent in agents.values() if agent.folder_name == folder_name)
+        generated_content = assembly._build_core_generated_content(agent)
+    finally:
+        reset_cache()
+    return "\n\n".join([generated_content, editable_content])
 
 
 def _extractor_prompt_sources():
@@ -87,10 +96,10 @@ def test_non_gene_extractor_prompts_include_record_evidence_domain_guidance(
     assert "Strong quote examples:" in content
     assert "Weak quote examples:" in content
     assert "curatable_objects[]" in content
-    assert "metadata.evidence_records[]" in content
+    assert "metadata.evidence_records[]" in content or "verified evidence records" in content
     assert "evidence_record_ids" in content
     assert re.search(
-        r"Do not emit top-level\s+`items\[\]`,\s+`annotations\[\]`,\s+"
+        r"Do not emit top-level(?: legacy semantic lists:)?\s+`items\[\]`,\s+`annotations\[\]`,\s+"
         r"`genes\[\]`,\s+`alleles\[\]`,\s+`diseases\[\]`,\s+"
         r"`chemicals\[\]`,\s+(?:or\s+)?`phenotypes\[\]`",
         content,

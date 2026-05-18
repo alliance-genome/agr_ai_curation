@@ -41,6 +41,7 @@ from .evidence_summary import (
 )
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
+    required_package_tool_names_from_metadata,
     required_tool_names_for_available_tools,
 )
 
@@ -373,12 +374,10 @@ def _tool_provider_adapter_factories(adapter_key: str) -> Dict[str, Any]:
 
 
 def _required_package_tool_names(available_tool_names: set[str]) -> set[str]:
-    required: set[str] = set()
-    for tool_name in available_tool_names:
-        required_call = _tool_metadata_by_name().get(tool_name, {}).get("required_tool_call")
-        if isinstance(required_call, dict) and bool(required_call.get("enforce")):
-            required.add(tool_name)
-    return required
+    return required_package_tool_names_from_metadata(
+        available_tool_names,
+        _tool_metadata_by_name(),
+    )
 
 
 def _required_tool_names_for_agent(agent: Agent) -> Optional[set[str]]:

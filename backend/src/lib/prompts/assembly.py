@@ -15,6 +15,7 @@ from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.domain_packs.validation_registry import ValidationBindingState
 from src.lib.openai_agents.tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
+    required_package_tool_names_from_metadata,
     required_tool_names_for_available_tools,
 )
 from src.lib.openai_agents.prompt_utils import inject_structured_output_instruction
@@ -36,6 +37,19 @@ These backend-owned instructions are part of the system-agent contract.
 Editable prompts may add task and domain guidance, but must not override locked runtime,
 schema, tool, audit, or safety requirements.
 """
+
+TOOL_POLICY_SUMMARIES = {
+    "record_evidence": (
+        "- Evidence policy: retained paper quotes must be backed by verified "
+        "record_evidence results from the active document; record_evidence verifies "
+        "only exact contiguous source text copied from that chunk, and omitted, "
+        "inserted, changed, paraphrased, or normalized quote text returns `not_found`."
+    ),
+    "get_agent_contract": (
+        "- Detailed field, tool, schema, validator, and ontology facts are served "
+        "by the read-only get_agent_contract helper."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -323,16 +337,11 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
                 "- Required tool-call policy: call at least one of "
                 f"{', '.join(sorted(required_tools))} before final output."
             )
-        if "record_evidence" in agent.tools:
-            lines.append(
-                "- Evidence policy: retained paper quotes must be backed by verified "
-                "record_evidence results from the active document."
-            )
-        if "get_agent_contract" in agent.tools:
-            lines.append(
-                "- Detailed field, tool, schema, validator, and ontology facts are served "
-                "by the read-only get_agent_contract helper."
-            )
+        lines.extend(
+            summary
+            for tool_name, summary in TOOL_POLICY_SUMMARIES.items()
+            if tool_name in agent.tools
+        )
 
     if agent.output_schema:
         lines.append(
@@ -363,7 +372,7 @@ def _agent_uses_extraction_safety_rule(agent: AgentDefinition) -> bool:
     if not domain_pack_id:
         return False
     category = str(agent.category or "").strip().lower()
-    return category == "extraction" or agent.folder_name.endswith("_extractor")
+    return category == "extraction"
 
 
 def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
@@ -407,6 +416,10 @@ def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
         if binding.state is ValidationBindingState.ACTIVE
     ]
     if active_bindings:
+        lines.append(
+            "- Active validator bindings own validator result fields and envelope "
+            "validation findings."
+        )
         lines.extend(
             f"- Active validator binding: {_format_active_validator_binding(binding)}."
             for binding in active_bindings
@@ -533,15 +546,15 @@ def _required_package_tool_names(available_tool_names: set[str]) -> set[str]:
     from src.lib.packages.tool_registry import load_tool_registry
 
     registry = load_tool_registry()
-    required: set[str] = set()
-    for tool_name in available_tool_names:
-        binding = registry.get(tool_name)
-        if binding is None:
-            continue
-        required_call = binding.metadata.get("required_tool_call")
-        if isinstance(required_call, Mapping) and bool(required_call.get("enforce")):
-            required.add(tool_name)
-    return required
+    metadata_by_name = {
+        tool_name: binding.metadata
+        for tool_name in available_tool_names
+        if (binding := registry.get(tool_name)) is not None
+    }
+    return required_package_tool_names_from_metadata(
+        available_tool_names,
+        metadata_by_name,
+    )
 
 
 def _domain_pack_validation_registries() -> Mapping[str, Any]:

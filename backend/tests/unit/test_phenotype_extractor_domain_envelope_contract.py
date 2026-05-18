@@ -15,6 +15,7 @@ from src.lib.config import agent_loader, agent_sources, schema_discovery
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate_with_evidence,
 )
+from src.lib.prompts import assembly
 from src.lib.domain_packs.loader import load_domain_fixture_pack
 from src.schemas.models import LEGACY_SEMANTIC_LIST_FIELDS
 
@@ -354,6 +355,7 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
     prompt_content = str(
         yaml.safe_load(source.prompt_yaml.read_text(encoding="utf-8"))["content"]
     )
+    generated_content = assembly.build_agent_core_prompt("phenotype_extractor").render()
     agent_data = yaml.safe_load(source.agent_yaml.read_text(encoding="utf-8"))
 
     assert agent_data["tools"] == [
@@ -365,27 +367,26 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
         "agr_curation_query",
     ]
     assert "curatable_objects[]" in agent_data["supervisor_routing"]["description"]
-    assert "`PhenotypeAnnotation`" in prompt_content
-    assert "PhenotypeAnnotationPayload" in prompt_content
-    assert "alliance.linkml.PhenotypeAnnotation" in prompt_content
-    assert "`definition_state: \"in_development\"`" in prompt_content
-    assert "`metadata.export_behavior.status: \"blocked\"`" in prompt_content
-    assert "`taxon`" in prompt_content
-    assert "payload.phenotype_annotation_subject.taxon" in prompt_content
-    assert "Active validator bindings own final subject" in prompt_content
+    assert "locked generated runtime contract owns deterministic tool inventory" in prompt_content
+    assert "PhenotypeAnnotation(PhenotypeAnnotationPayload role=curatable_unit" in generated_content
+    assert "Schema/provider refs: alliance_linkml." in generated_content
+    assert "PhenotypeSubject" in generated_content
+    assert "PhenotypeTerm" in generated_content
+    assert "taxon" in generated_content
+    assert "PhenotypeSubject.taxon->phenotype_subject_entity_validator" in generated_content
+    assert "Active validator bindings own validator result fields" in generated_content
     assert "repair_mode" not in prompt_content
     assert "repair_notes" not in prompt_content
     assert "repair_hints" not in prompt_content
-    assert "CurationPrepCandidate" in prompt_content
     assert "normalized_id" not in prompt_content
     assert "candidate_terms" not in prompt_content
 
     for group_rule_file in source.group_rule_files:
         content = str(yaml.safe_load(group_rule_file.read_text(encoding="utf-8"))["content"])
-        assert "PhenotypeAnnotation" in content
-        assert "PhenotypeSubject" in content
-        assert "PhenotypeTerm" in content
-        assert "metadata.ambiguities[]" in content
+        assert "PhenotypeAnnotation" not in content
+        assert "PhenotypeSubject" not in content
+        assert "PhenotypeTerm" not in content
+        assert "metadata.ambiguities[]" not in content
 
 
 def test_phenotype_payload_persists_as_curatable_objects_only_for_new_runs():
