@@ -434,7 +434,7 @@ class GeneExpressionEnvelope(DomainEnvelopeExtractionResult):
 # ============================================================================
 
 class PhenotypeCandidateTerm(BaseModel):
-    """Candidate ontology mapping for a phenotype mention."""
+    """Candidate ontology term resolution for a phenotype mention."""
     label: str = Field(
         ...,
         description="Candidate phenotype term label"
@@ -1098,57 +1098,4 @@ class OrthologsResult(BaseModel):
     species_represented: List[str] = Field(
         default_factory=list,
         description="List of species with orthologs found"
-    )
-
-
-# ============================================================================
-# Ontology Mapping Structured Output Models
-# ============================================================================
-
-class OntologyMapping(BaseModel):
-    """A mapping from a label to an ontology term."""
-    label: str = Field(..., description="The input label that was mapped")
-    curie: Optional[str] = Field(
-        None,
-        description="The mapped ontology CURIE (e.g., 'WBbt:0005062', 'GO:0005634')"
-    )
-    name: Optional[str] = Field(
-        None,
-        description="The official ontology term name"
-    )
-    ontology_type: Optional[str] = Field(
-        None,
-        description="Type of ontology (e.g., 'WBBTTerm', 'WBLSTerm', 'GOTerm')"
-    )
-    confidence: str = Field(
-        "low",
-        description="Mapping confidence: 'high' (exact), 'medium' (fuzzy), 'low' (no match)"
-    )
-    alternatives: List[str] = Field(
-        default_factory=list,
-        description="Alternative CURIEs if multiple matches found"
-    )
-
-
-class OntologyMappingEnvelope(BaseModel):
-    """
-    Structured output for Ontology Mapping queries.
-
-    Contains mappings from labels to ontology term IDs.
-    """
-    organism: str = Field(
-        ...,
-        description="Data provider code (WB, FB, MGI, etc.)"
-    )
-    mappings: List[OntologyMapping] = Field(
-        default_factory=list,
-        description="List of label-to-term mappings"
-    )
-    unmapped_labels: List[str] = Field(
-        default_factory=list,
-        description="Labels that could not be mapped"
-    )
-    reasoning: Optional[str] = Field(
-        None,
-        description="Explanation of mapping process and decisions"
     )

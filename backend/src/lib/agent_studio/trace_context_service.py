@@ -16,6 +16,11 @@ from urllib.parse import quote
 
 import httpx
 
+from src.lib.agent_studio.trace_agent_metadata import (
+    get_trace_agent_patterns,
+    normalize_trace_agent_id,
+    trace_agent_display_name,
+)
 from src.lib.upstream_error_diagnostics import looks_like_header_or_html_response
 
 from .models import (
@@ -628,47 +633,7 @@ def _identify_agent_from_observation(obs: Any) -> Optional[str]:
     # Check observation name
     name = getattr(obs, 'name', '')
 
-    # Known agent patterns -> normalized AGENT_REGISTRY IDs
-    # IMPORTANT: These must match catalog_service.py AGENT_REGISTRY keys
-    agent_patterns = {
-        'supervisor': 'supervisor',
-        'gene_extraction': 'gene_extractor',
-        'gene_extractor': 'gene_extractor',
-        'ask_gene_extractor_': 'gene_extractor',
-        'gene_expression': 'gene_expression',
-        'allele_variant_extraction': 'allele_extractor',
-        'allele_extractor': 'allele_extractor',
-        'ask_allele_extractor_': 'allele_extractor',
-        'disease_extraction': 'disease_extractor',
-        'disease_extractor': 'disease_extractor',
-        'ask_disease_extractor_': 'disease_extractor',
-        'chemical_extraction': 'chemical_extractor',
-        'chemical_extractor': 'chemical_extractor',
-        'ask_chemical_extractor_': 'chemical_extractor',
-        'phenotype_extraction': 'phenotype_extractor',
-        'phenotype_extractor': 'phenotype_extractor',
-        'phenotype_specialist': 'phenotype_extractor',
-        'ask_phenotype_extractor_': 'phenotype_extractor',
-        'ask_phenotype_': 'phenotype_extractor',
-        'gene_agent': 'gene',
-        'allele_agent': 'allele',
-        'disease_agent': 'disease',
-        'chemical_agent': 'chemical',
-        'gene_ontology': 'gene_ontology',
-        'go_annotations': 'go_annotations',
-        'orthologs': 'orthologs',
-        'ontology_mapping': 'ontology_mapping',
-        'chat_output': 'chat_output',
-        'csv_formatter': 'csv_formatter',
-        'tsv_formatter': 'tsv_formatter',
-        'json_formatter': 'json_formatter',
-        # Normalize pdf_specialist -> pdf_extraction to match AGENT_REGISTRY
-        'pdf_specialist': 'pdf_extraction',
-        'pdf': 'pdf_extraction',
-        'pdf_extraction': 'pdf_extraction',
-    }
-
-    for pattern, agent_id in agent_patterns.items():
+    for pattern, agent_id in get_trace_agent_patterns().items():
         if pattern in name.lower():
             return agent_id
 
@@ -676,7 +641,6 @@ def _identify_agent_from_observation(obs: Any) -> Optional[str]:
     if hasattr(obs, 'metadata') and obs.metadata:
         if 'agent' in obs.metadata:
             raw_id = obs.metadata['agent']
-            # Normalize any pdf_specialist references to pdf_extraction
             return _normalize_agent_id(raw_id)
 
     return None
@@ -688,25 +652,7 @@ def _normalize_agent_id(agent_id: str) -> str:
 
     Handles inconsistencies like 'pdf_specialist' vs 'pdf_extraction'.
     """
-    # Mapping from legacy/trace names to canonical AGENT_REGISTRY IDs
-    normalization_map = {
-        'pdf_specialist': 'pdf_extraction',
-        'pdf': 'pdf_extraction',
-        'gene_extraction': 'gene_extractor',
-        'ask_gene_extractor_specialist': 'gene_extractor',
-        'allele_variant_extraction': 'allele_extractor',
-        'ask_allele_extractor_specialist': 'allele_extractor',
-        'disease_extraction': 'disease_extractor',
-        'ask_disease_extractor_specialist': 'disease_extractor',
-        'chemical_extraction': 'chemical_extractor',
-        'ask_chemical_extractor_specialist': 'chemical_extractor',
-        'phenotype_extraction': 'phenotype_extractor',
-        'phenotype_extractor': 'phenotype_extractor',
-        'phenotype_specialist': 'phenotype_extractor',
-        'ask_phenotype_extractor_specialist': 'phenotype_extractor',
-        'ask_phenotype_specialist': 'phenotype_extractor',
-    }
-    return normalization_map.get(agent_id, agent_id)
+    return normalize_trace_agent_id(agent_id)
 
 
 def _agent_id_to_name(agent_id: str) -> str:
@@ -715,32 +661,7 @@ def _agent_id_to_name(agent_id: str) -> str:
 
     Uses normalized IDs that match AGENT_REGISTRY keys.
     """
-    # Map normalized agent IDs to display names
-    # These should match AGENT_REGISTRY 'name' values
-    names = {
-        'supervisor': 'Supervisor',
-        'gene_extractor': 'Gene Extraction Agent',
-        'gene_expression': 'Gene Expression Extractor',
-        'allele_extractor': 'Allele/Variant Extraction Agent',
-        'disease_extractor': 'Disease Extraction Agent',
-        'chemical_extractor': 'Chemical Extraction Agent',
-        'phenotype_extractor': 'Phenotype Extraction Agent',
-        'gene': 'Gene Validation Agent',
-        'allele': 'Allele Validation Agent',
-        'disease': 'Disease Ontology Agent',
-        'chemical': 'Chemical Ontology Agent',
-        'gene_ontology': 'Gene Ontology Agent',
-        'go_annotations': 'GO Annotations Agent',
-        'orthologs': 'Orthologs Agent',
-        'ontology_mapping': 'Ontology Mapping Agent',
-        'chat_output': 'Chat Output',
-        'csv_formatter': 'CSV File Formatter',
-        'tsv_formatter': 'TSV File Formatter',
-        'json_formatter': 'JSON File Formatter',
-        # Normalized: 'pdf_extraction' not 'pdf_specialist'
-        'pdf_extraction': 'General PDF Extraction Agent',
-    }
-    return names.get(agent_id, agent_id.replace('_', ' ').title())
+    return trace_agent_display_name(agent_id)
 
 
 def _extract_group_from_observation(obs: Any) -> Optional[str]:

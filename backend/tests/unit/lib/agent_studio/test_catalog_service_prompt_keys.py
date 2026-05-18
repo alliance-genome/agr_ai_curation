@@ -20,6 +20,20 @@ def test_get_prompt_key_for_agent_accepts_canonical_key():
     assert catalog_service.get_prompt_key_for_agent("gene") == "gene"
 
 
+def test_get_prompt_key_for_agent_uses_explicit_system_agent_key():
+    """A bundle with an explicit public key resolves to that key."""
+    assert (
+        catalog_service.get_prompt_key_for_agent("ontology_term_validation")
+        == "ontology_term_validation"
+    )
+
+
+def test_get_prompt_key_for_agent_rejects_noncanonical_folder_alias():
+    """A folder name is not an alias when the bundle declares another public key."""
+    with pytest.raises(ValueError, match="Unknown agent_id"):
+        catalog_service.get_prompt_key_for_agent("ontology_term")
+
+
 def test_prompt_catalog_get_agent_accepts_validator_agent_id_from_validation_plan():
     """Validator-agent IDs from validation plans should inspect the bundled prompt."""
     service = catalog_service.PromptCatalogService()

@@ -9,8 +9,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
-from src.lib.config.agent_loader import AgentDefinition, load_agent_definitions
+from src.lib.config.agent_loader import (
+    AgentDefinition,
+    canonical_system_agent_key,
+    load_agent_definitions,
+)
 from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.domain_packs.validation_registry import ValidationBindingState
 from src.lib.openai_agents.tool_call_policy import (
@@ -268,11 +271,11 @@ def _resolve_system_agent(agent_id: str) -> AgentDefinition:
 
     definitions = load_agent_definitions()
     for agent in definitions.values():
-        if requested_id in {
-            agent.agent_id,
-            agent.folder_name,
-            canonical_system_agent_key(agent),
-        }:
+        canonical_agent_id = canonical_system_agent_key(agent)
+        accepted_ids = {agent.agent_id, canonical_agent_id}
+        if agent.folder_name == canonical_agent_id:
+            accepted_ids.add(agent.folder_name)
+        if requested_id in accepted_ids:
             return agent
 
     raise ValueError(f"Unknown system agent '{requested_id}'")

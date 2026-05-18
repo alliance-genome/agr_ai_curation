@@ -425,7 +425,7 @@ discovery resolves.
 | `GeneOntologyResultEnvelope` | Gene ontology agent |
 | `GOAnnotationResultEnvelope` | GO annotations agent |
 | `OrthologResultEnvelope` | Orthologs agent |
-| `OntologyMappingResultEnvelope` | Ontology mapping agent |
+| `OntologyTermValidationResult` | Ontology term resolver agent |
 
 ---
 
@@ -531,7 +531,7 @@ docker compose exec postgres psql -U postgres ai_curation -c \
 | `gene_ontology` | Validation | GO term lookup via QuickGO |
 | `go_annotations` | Validation | GO annotations via GO Consortium API |
 | `orthologs` | Validation | Cross-species ortholog lookup |
-| `ontology_mapping` | Validation | Free-text to ontology term mapping |
+| `ontology_term_validation` | Validation | Typed ontology term resolver |
 | `chat_output` | Output | Final answer formatting |
 | `csv_formatter` | Output | CSV file output |
 | `tsv_formatter` | Output | TSV file output |

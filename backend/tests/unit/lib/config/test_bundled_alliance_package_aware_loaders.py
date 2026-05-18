@@ -215,8 +215,8 @@ def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
     expected_schemas = {
         "gene_ontology": "GOTermResultEnvelope",
         "go_annotations": "GOAnnotationsResult",
-        "ontology_mapping": "OntologyMappingEnvelope",
         "orthologs": "OrthologsResult",
+        "ontology_term": "OntologyTermValidationResult",
     }
     shared_fields = set(DomainValidatorResultBase.model_fields)
 
@@ -230,10 +230,10 @@ def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
         assert "result" not in schema.model_fields
         assert "validation_result" not in schema.model_fields
 
-    ontology_schema = schema_discovery.get_schema_for_agent("ontology_mapping")
+    ontology_schema = schema_discovery.get_schema_for_agent("ontology_term")
     assert ontology_schema is not None
-    assert "unmapped_labels" in ontology_schema.model_fields
-    assert "unmapped_terms" not in ontology_schema.model_fields
+    assert "ontology_term_candidates" in ontology_schema.model_fields
+    assert "unmapped_labels" not in ontology_schema.model_fields
 
 
 @pytest.mark.parametrize(
@@ -256,9 +256,9 @@ def test_bundled_alliance_ontology_context_schemas_use_shared_validator_root(
             },
         ),
         (
-            "ontology_mapping",
-            "OntologyMappingEnvelope",
-            {"mappings", "unmapped_labels"},
+            "ontology_term",
+            "OntologyTermValidationResult",
+            {"ontology_term_candidates"},
         ),
         (
             "orthologs",
@@ -333,7 +333,7 @@ def test_legacy_ontology_context_schemas_match_package_validator_shape(
     [
         "gene_ontology",
         "go_annotations",
-        "ontology_mapping",
+        "ontology_term",
         "orthologs",
     ],
 )
@@ -351,7 +351,7 @@ def test_legacy_ontology_context_agent_routing_matches_package_examples(agent_na
     package_batching = str(package_routing["batching_instructions"])
 
     assert legacy_routing == package_routing
-    assert package_batching.rstrip().endswith('etc."')
+    assert package_batching.strip()
     assert str(legacy_routing["batching_instructions"]) == package_batching
 
 
@@ -359,7 +359,6 @@ def test_bundled_alliance_ontology_context_agents_are_not_active_readiness_gates
     context_agent_ids = {
         "gene_ontology_lookup",
         "go_annotations_lookup",
-        "ontology_mapping_lookup",
         "orthologs_lookup",
     }
     active_agent_ids = set()
@@ -386,6 +385,56 @@ def test_bundled_alliance_ontology_context_agents_are_not_active_readiness_gates
 
     assert active_agent_ids
     assert context_agent_ids.isdisjoint(active_agent_ids)
+
+
+def test_bundled_alliance_removes_retired_ontology_mapping_route(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    schemas = schema_discovery.discover_agent_schemas(force_reload=True)
+
+    assert "ontology_mapping_lookup" not in agents
+    assert "OntologyMappingEnvelope" not in schemas
+    assert not (REPO_PACKAGES_DIR / "alliance" / "agents" / "ontology_mapping").exists()
+    assert not (REPO_LEGACY_AGENTS_DIR / "ontology_mapping").exists()
+
+
+def test_retired_ontology_mapping_identifiers_are_not_active_runtime_references():
+    forbidden_fragments = (
+        "ontology_mapping_lookup",
+        "ask_ontology_mapping_specialist",
+        "OntologyMappingEnvelope",
+    )
+    scanned_paths = [
+        REPO_ROOT / ".env.example",
+        REPO_ROOT / "alliance_agents",
+        REPO_ROOT / "alliance_config" / "agent_studio_system_prompt.md",
+        REPO_ROOT / "backend" / "src" / "api" / "agent_studio_system_prompt.md",
+        REPO_ROOT / "backend" / "src" / "lib" / "agent_studio",
+        REPO_ROOT / "backend" / "src" / "lib" / "openai_agents",
+        REPO_ROOT / "backend" / "src" / "schemas" / "models",
+        REPO_ROOT / "config" / "agents",
+        REPO_ROOT / "docs" / "curator",
+        REPO_ROOT / "frontend" / "src" / "components" / "AgentStudio" / "FlowBuilder" / "smartDefaultUtils.ts",
+        REPO_ROOT / "frontend" / "src" / "components" / "AgentStudio" / "FlowBuilder" / "smartDefaultUtils.test.ts",
+        REPO_ROOT / "packages" / "alliance" / "agents",
+        REPO_ROOT / "packages" / "alliance" / "package.yaml",
+        REPO_ROOT / "packages" / "alliance" / "tools" / "bindings.yaml",
+        REPO_ROOT / "scripts" / "migrate_prompts_to_yaml.py",
+    ]
+
+    offenders: dict[str, list[str]] = {}
+    for path in scanned_paths:
+        files = [path] if path.is_file() else sorted(path.rglob("*"))
+        for file_path in files:
+            if not file_path.is_file() or file_path.suffix in {".pyc", ".pyo"}:
+                continue
+            text = file_path.read_text(encoding="utf-8")
+            matches = [fragment for fragment in forbidden_fragments if fragment in text]
+            if matches:
+                offenders[str(file_path.relative_to(REPO_ROOT))] = matches
+
+    assert offenders == {}
 
 
 def test_bundled_alliance_output_resolution_prefers_package_schema(monkeypatch):

@@ -22,14 +22,14 @@ The AI Curation System provides intelligent assistance for biological curation t
 
 ### Ask Questions About Biological Data
 
-- **Gene Expression Curation** - Extract gene expression patterns from research papers with ontology term mapping
+- **Gene Expression Curation** - Extract gene expression patterns from research papers with typed ontology term resolution
 - **Disease Ontology** - Disease classifications, hierarchies, and term relationships
 - **Chemical Entities** - Chemical compounds and their properties via ChEBI
 - **Gene Information** - Gene details across model organisms
 - **Gene Ontology** - GO terms, hierarchies, and biological processes
 - **GO Annotations** - Gene annotations with evidence codes
 - **Orthology Relationships** - Cross-species gene relationships
-- **Ontology Term Mapping** - Map anatomical, developmental, and cellular component labels to official term IDs
+- **Ontology Term Resolver Agent** - Resolve exact CURIEs and typed/scoped ontology labels or synonyms to official term IDs
 - **Research Papers** - Information extracted from uploaded PDF documents
 
 ### Build Automated Curation Workflows
@@ -143,7 +143,7 @@ The system includes 15 specialist agents organized by function:
 |----------|--------|
 | **System** | Supervisor Agent (routes to specialists) |
 | **PDF Extraction** | PDF Extraction Agent, Gene Expression Extractor |
-| **Data Validation** | Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, Ontology Mapping |
+| **Data Validation** | Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, Ontology Term Resolver |
 | **Output** | Chat Output, CSV Formatter, TSV Formatter, JSON Formatter |
 
 For detailed agent documentation, see **[Available Agents](AVAILABLE_AGENTS.md)**.

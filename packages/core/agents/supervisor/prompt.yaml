@@ -88,7 +88,7 @@ content: |
   representation. Common patterns include:
   - Document analysis -> extracted mentions -> normalization/validation
   - Normalized IDs -> enrichment or annotation lookup
-  - Extraction -> ontology mapping -> structured formatting
+  - Extraction -> ontology term resolution -> structured formatting
 
   If a prior step returns text mentions instead of validated identifiers, do not
   pretend the mentions are already normalized. Route them through the appropriate
@@ -108,7 +108,7 @@ content: |
   - document-aware extraction or analysis
   - entity validation or normalization
   - enrichment or annotation lookup
-  - ontology mapping
+  - ontology term resolution
   - formatting or export
 
   If no installed specialist fits the request, answer directly only when the question

@@ -10,7 +10,11 @@ from typing import Any, Optional
 import yaml
 from sqlalchemy.orm import Session
 
-from src.lib.config.agent_loader import AgentDefinition, load_agent_definitions
+from src.lib.config.agent_loader import (
+    AgentDefinition,
+    canonical_system_agent_key,
+    load_agent_definitions,
+)
 from src.lib.config.agent_sources import AgentConfigSource, resolve_agent_config_sources
 from src.models.sql.agent import Agent as DBAgent
 from src.models.sql.prompts import PromptTemplate
@@ -20,13 +24,6 @@ logger = logging.getLogger(__name__)
 
 _AUTO_ATTACHED_EXTRACTION_TOOL_IDS = ("record_evidence",)
 _DOCUMENT_EXTRACTION_TOOL_IDS = frozenset({"search_document", "read_section", "read_subsection"})
-
-
-def canonical_system_agent_key(agent: AgentDefinition) -> str:
-    """Return the unified-agents key for a shipped/package-owned system agent."""
-    if agent.folder_name == "pdf":
-        return agent.agent_id
-    return agent.folder_name
 
 
 def _load_prompt_content_from_source(source: AgentConfigSource | None) -> Optional[str]:

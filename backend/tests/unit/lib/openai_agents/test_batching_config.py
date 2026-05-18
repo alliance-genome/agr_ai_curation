@@ -1,5 +1,4 @@
 """Tests for registry-driven batching config."""
-import pytest
 from src.lib.openai_agents.streaming_tools import get_batching_config, BATCHING_NUDGE_CONFIG
 
 
@@ -22,7 +21,7 @@ class TestGetBatchingConfig:
         """Agents without batching config should not appear."""
         config = get_batching_config()
         # PDF agent doesn't have batching
-        assert "ask_pdf_specialist" not in config
+        assert "ask_pdf_extraction_specialist" not in config
 
     def test_get_batching_config_matches_hardcoded(self):
         """Generated config should match original hardcoded values."""
@@ -40,7 +39,7 @@ class TestGetBatchingConfig:
             "ask_allele_specialist",
             "ask_disease_specialist",
             "ask_chemical_specialist",
-            "ask_ontology_mapping_specialist",
+            "ask_ontology_term_validation_specialist",
             "ask_gene_ontology_specialist",
             "ask_go_annotations_specialist",
         ]

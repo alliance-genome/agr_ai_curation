@@ -183,9 +183,10 @@ def _load_base_prompt(source: AgentConfigSource, db: Session) -> Optional[str]:
         Agent name if loaded successfully, None otherwise
 
     Note:
-        The agent_name is derived from folder name for backwards compatibility,
-        except for explicit canonical-id migrations (currently `pdf` ->
-        `pdf_extraction`) where prompt.yaml `agent_id` is authoritative.
+        The agent_name is derived from the folder name unless prompt.yaml
+        declares an explicit `system_agent_key` for the unified runtime row.
+        The PDF bundle also keeps its pre-release canonicalization to
+        `pdf_extraction`.
     """
     prompt_yaml = source.prompt_yaml
 
@@ -208,16 +209,21 @@ def _load_base_prompt(source: AgentConfigSource, db: Session) -> Optional[str]:
             logger.warning('Missing content in %s', prompt_yaml)
             return None
 
-        # Default to folder name for legacy compatibility.
-        agent_name = source.folder_name
+        configured_system_agent_key = str(data.get("system_agent_key") or "").strip()
+        agent_name = configured_system_agent_key or source.folder_name
 
         # Validate/consume agent_id if present.
         yaml_agent_id = data.get("agent_id")
-        if yaml_agent_id and yaml_agent_id != agent_name:
+        if (
+            not configured_system_agent_key
+            and yaml_agent_id
+            and yaml_agent_id != agent_name
+        ):
             # Pre-release canonicalization: load PDF prompts under `pdf_extraction`.
             if agent_name == "pdf" and yaml_agent_id == "pdf_extraction":
                 agent_name = yaml_agent_id
 
+        if yaml_agent_id and yaml_agent_id not in {source.folder_name, agent_name}:
             logger.warning(
                 f"agent_id mismatch in {source.folder_name}/prompt.yaml: "
                 f"agent_id='{yaml_agent_id}' but folder name is '{agent_name}'. "

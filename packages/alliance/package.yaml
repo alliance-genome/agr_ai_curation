@@ -63,8 +63,6 @@ agent_bundles:
   - name: go_annotations
     has_schema: true
   - name: json_formatter
-  - name: ontology_mapping
-    has_schema: true
   - name: ontology_term
     has_schema: true
   - name: orthologs

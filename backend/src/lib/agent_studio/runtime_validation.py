@@ -93,17 +93,16 @@ def _normalize_tool_ids(raw_tool_ids: Any) -> Tuple[List[str], Optional[str]]:
 def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
     """Load expected system-agent keys from layered runtime agent definitions."""
     try:
-        from src.lib.config.agent_loader import load_agent_definitions
+        from src.lib.config.agent_loader import (
+            canonical_system_agent_key,
+            load_agent_definitions,
+        )
 
         agent_defs = load_agent_definitions()
-        expected_keys = set()
-        for agent in agent_defs.values():
-            # Canonicalize PDF agent to `pdf_extraction` while preserving
-            # legacy folder-key behavior for other agents.
-            if agent.folder_name == "pdf":
-                expected_keys.add(agent.agent_id)
-            else:
-                expected_keys.add(agent.folder_name)
+        expected_keys = {
+            canonical_system_agent_key(agent)
+            for agent in agent_defs.values()
+        }
         return expected_keys, None
     except Exception as exc:
         return set(), f"Failed to load expected system agents from layered sources: {exc}"

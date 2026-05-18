@@ -55,7 +55,7 @@ AGENT_NAME_MAP = {
     "gene_expression": "gene_expression_agent",
     "gene_ontology": "gene_ontology_agent",
     "go_annotations": "go_annotations_agent",
-    "ontology_mapping": "ontology_mapping_agent",
+    "ontology_term_validation": "ontology_term_agent",
     "orthologs": "orthologs_agent",
     "chat_output": "chat_output_agent",
     "csv_formatter": "csv_formatter_agent",

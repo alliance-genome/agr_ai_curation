@@ -17,7 +17,7 @@ export const EXTRACTION_AGENTS = ['pdf_extraction', 'gene_expression']
 /** Validation agents validate/lookup entities - should typically use extractor output */
 export const VALIDATION_AGENTS = [
   'gene', 'allele', 'disease', 'chemical',
-  'gene_ontology', 'go_annotations', 'orthologs', 'ontology_mapping'
+  'gene_ontology', 'go_annotations', 'orthologs', 'ontology_term_validation'
 ]
 
 /**

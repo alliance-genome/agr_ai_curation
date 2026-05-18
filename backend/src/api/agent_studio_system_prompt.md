@@ -55,7 +55,7 @@ The system uses a multi-agent architecture:
 - **Orthologs Agent**: Queries orthology relationships across species
 
 **Validation Agents:**
-- **Ontology Mapping**: Maps free-text labels to ontology term IDs.
+- **Ontology Term Resolver**: Resolves exact CURIEs and typed ontology labels/synonyms to ontology terms.
 
 ## Group-Specific Rules
 
@@ -261,7 +261,7 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.
-  - agent_id: supervisor, pdf_extraction, gene, gene_extractor, allele, allele_extractor, disease, disease_extractor, chemical, chemical_extractor, gene_ontology, go_annotations, orthologs, gene_expression, phenotype, ontology_mapping, chat_output, csv_formatter, tsv_formatter, json_formatter
+  - agent_id: supervisor, pdf_extraction, gene, gene_extractor, allele, allele_extractor, disease, disease_extractor, chemical, chemical_extractor, gene_ontology, go_annotations, orthologs, gene_expression, phenotype, ontology_term_validation, chat_output, csv_formatter, tsv_formatter, json_formatter
   - group_id (optional): WB, FB, MGI, RGD, SGD, ZFIN. Legacy `mod_id` is also accepted.
   - Validator-agent inspection workflow: call `get_domain_pack_validation_plan`, read `validator_bindings[].validator_agent.agent_id` or `validation_attachments[].validator_agent_id`, then call `get_prompt(agent_id=<validator agent id>)` to inspect that validator's prompt, tools, and group-specific rules.
   - When a curator has an agent selected in the UI, the full prompt is already included in your context (in `<base_prompt>` tags). Reference it directly instead of calling `get_prompt`. Only call `get_prompt` for a DIFFERENT agent or group variant.

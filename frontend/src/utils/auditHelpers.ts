@@ -166,7 +166,7 @@ export function formatAuditEvent(event: AuditEvent): string {
  * ```ts
  * getEventPrefix('SUPERVISOR_START') // Returns: "[SUPERVISOR]"
  * getEventPrefix('TOOL_START')       // Returns: "[TOOL]"
- * getEventPrefix('TOOL_START', { toolName: 'ask_pdf_specialist' }) // Returns: "[AGENT]"
+ * getEventPrefix('TOOL_START', { toolName: 'ask_pdf_extraction_specialist' }) // Returns: "[AGENT]"
  * getEventPrefix('SUPERVISOR_ERROR') // Returns: "[SUPERVISOR ERROR]"
  * ```
  */

@@ -215,8 +215,10 @@ def run_package_scoped_validator_agent(
     from agents import Runner
 
     from src.lib.agent_studio.catalog_service import get_agent_by_id
-    from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
-    from src.lib.config.agent_loader import get_agent_definition_for_package
+    from src.lib.config.agent_loader import (
+        canonical_system_agent_key,
+        get_agent_definition_for_package,
+    )
 
     agent_definition = get_agent_definition_for_package(
         request.validator_agent.package_id,

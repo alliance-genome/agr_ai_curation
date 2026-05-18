@@ -783,8 +783,8 @@ BATCHING_NUDGE_CONFIG = {
         "example": 'ask_chemical_specialist("Look up these chemicals: glucose, ATP, ethanol, ...")',
         "entity": "chemicals",
     },
-    "ask_ontology_mapping_specialist": {
-        "example": 'ask_ontology_mapping_specialist("Map these labels: pharynx, L3 larval stage, nucleus, ...")',
+    "ask_ontology_term_validation_specialist": {
+        "example": 'ask_ontology_term_validation_specialist("Resolve these typed ontology terms: anatomy pharynx for WB, life stage L3 larval stage for WB, GO cellular component nucleus, ...")',
         "entity": "terms",
     },
     "ask_gene_ontology_specialist": {

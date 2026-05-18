@@ -15,9 +15,11 @@ from typing import Any, Dict, Optional
 from src.lib.config.agent_loader import (
     AgentDefinition,
     ModelConfig,
+    canonical_system_agent_key,
     load_agent_definitions,
     get_agent_definition,
 )
+
 logger = logging.getLogger(__name__)
 
 
@@ -498,57 +500,54 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
             "Returns plain text output only - JSON conversion is handled by a separate Formatter Agent",
             "Does NOT extract expression data from mutant phenotypes or experimental perturbations (heat shock, RNAi knockdown, drug treatment) - only baseline/wild-type expression",
             "Does NOT annotate transgenic markers used solely for strain identification (e.g., rol-6, myo-2::GFP co-injection markers)",
-            "Ontology term ID mapping (WBbt, FBbt, GO:CC IDs) is NOT performed - only human-readable labels are extracted; a separate ontology_mapping agent handles ID resolution",
+            "Ontology term ID resolution is handled by typed validator attachments or the Ontology Term Resolver Agent; this extractor only extracts human-readable labels",
             "Requires at least one document search or read tool call before returning results",
         ],
     },
-    "ontology_mapping_lookup": {
-        "summary": "Maps free-text labels (anatomy, life stage, cellular component) to standardized ontology term CURIEs by querying the AGR Curation Database.",
+    "ontology_term_validation": {
+        "summary": "Resolves ontology term CURIEs and typed labels with package lookup helpers while preserving ambiguous or unresolved candidates.",
         "capabilities": [
             {
-                "name": "Anatomy term mapping",
-                "description": "Map anatomical location labels to species-specific ontology term CURIEs (WBbt, FBbt, MA, EMAPA, ZFA, UBERON)",
-                "example_query": "Map 'linker cell' for C. elegans",
-                "example_result": "Returns WBbt:0005062 with confidence='high'",
+                "name": "Exact CURIE lookup",
+                "description": "Validate exact ontology CURIEs against unique curation database ontology terms.",
+                "example_query": "Validate GO:0005634",
+                "example_result": "Returns the matched term facts or an unresolved result if the CURIE is absent",
             },
             {
-                "name": "Life stage term mapping",
-                "description": "Map developmental stage labels to species-specific ontology term CURIEs (WBls, FBdv, MMUSDV, ZFS, HsapDv)",
-                "example_query": "Map 'L3 larval stage' for C. elegans",
-                "example_result": "Returns WBls:0000035 with confidence='high'",
+                "name": "Typed label and synonym lookup",
+                "description": "Resolve labels or synonyms using an explicit ontology_term_type such as DOTerm, ECOTerm, GOTerm, MPTerm, or WBPhenotypeTerm.",
+                "example_query": "Resolve 'abnormal locomotor behavior' as an MPTerm",
+                "example_result": "Returns one resolved term or preserves ambiguous candidates for curator review",
             },
             {
-                "name": "GO Cellular Component mapping",
-                "description": "Map cellular component labels to GO term CURIEs (species-independent)",
-                "example_query": "Map 'nucleus' to GO term",
-                "example_result": "Returns GO:0005634 with confidence='high'",
+                "name": "Provider-scoped anatomy and life-stage lookup",
+                "description": "Resolve anatomy and developmental stage labels using provider context for species-specific term families.",
+                "example_query": "Resolve 'linker cell' for WormBase anatomy",
+                "example_result": "Returns the provider-appropriate ontology term or unresolved candidates",
             },
             {
-                "name": "Batch label mapping",
-                "description": "Process multiple labels in a single request from prior agent output",
-                "example_query": "Map these labels: pharynx, L3 larval stage, nucleus",
-                "example_result": "Returns mappings for all labels with confidence scores and unmapped_labels list",
+                "name": "GO aspect lookup",
+                "description": "Resolve Gene Ontology labels using an optional GO aspect filter.",
+                "example_query": "Resolve 'nucleus' as a GO cellular component",
+                "example_result": "Returns GO term candidates with lookup context",
             },
         ],
         "data_sources": [
             {
                 "name": "AGR Curation Database",
-                "description": "PostgreSQL database containing ontology terms, synonyms, and relationships from all Alliance MODs",
+                "description": "PostgreSQL database containing ontology terms and synonyms from Alliance curation data",
                 "species_supported": ["C. elegans (WB)", "D. melanogaster (FB)", "M. musculus (MGI)", "D. rerio (ZFIN)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)", "X. laevis (XB)", "H. sapiens (HGNC)"],
-                "data_types": ["anatomy ontology terms", "life stage ontology terms", "GO Cellular Component terms", "term synonyms", "ontology relationships"],
+                "data_types": ["ontology CURIEs", "typed ontology labels", "term synonyms", "anatomy terms", "life-stage terms", "GO terms"],
             },
         ],
         "limitations": [
-            "Cannot extract labels from PDFs - receives labels from prior agent output (e.g., Gene Expression agent)",
+            "Cannot extract labels from PDFs - receives terms from prior extraction output or domain-pack validator inputs",
             "Cannot validate gene symbols - use Gene Validation Agent instead",
-            "Cannot look up disease terms - use Disease Agent instead",
-            "Cannot create new ontology terms - only maps to existing terms",
-            "Requires organism context to select correct species-specific ontology",
-            "May return parent term instead of exact term when specificity is unavailable",
+            "Cannot validate chemicals as ChEBI entities - use Chemical Validation Agent instead",
+            "Cannot create new ontology terms - only resolves existing terms",
+            "Requires ontology_term_type for generic label or synonym lookup",
+            "Requires data_provider for provider-scoped anatomy and life-stage lookup",
         ],
-    },
-    "ontology_term_validation": {
-        "summary": "Validates ontology term CURIEs and labels with package lookup helpers while preserving ambiguous or unresolved candidates.",
     },
     "controlled_vocabulary_validation": {
         "summary": "Validates controlled vocabulary terms by vocabulary name, term name, abbreviation, synonym, and obsolete state.",
@@ -789,8 +788,8 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
             "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone",
             "Distinguishes phenotypes from diseases — clinical conditions are handled by the Disease Extraction Agent",
             "Wild-type/control observations are baselines, not phenotype assertions",
-            "Ontology term mapping is suggestive only — a downstream ontology mapping agent handles formal ID resolution",
-            "Does not use agr_curation_query — phenotype ontology validation is deferred to the ontology mapping step",
+            "Ontology term hints are suggestive only; typed ontology validation is handled by domain-pack attachments or the Ontology Term Resolver Agent",
+            "Does not use agr_curation_query directly; phenotype ontology validation is deferred to typed ontology term resolution",
         ],
     },
     "chat_output_formatter": {
@@ -905,15 +904,17 @@ def _agent_definition_to_registry_entry(
     if not doc and agent_def.description.strip():
         doc = {"summary": agent_def.description.strip()}
 
+    system_agent_key = canonical_system_agent_key(agent_def)
+    supervisor_tool_name = f"ask_{system_agent_key.replace('-', '_')}_specialist"
+
     # Build batching config if agent is batchable
     batching = None
     if agent_def.supervisor_routing.batchable:
         entity = agent_def.supervisor_routing.batching_entity
-        tool_name = agent_def.tool_name
         # Generate example: ask_gene_specialist("Look up these genes: ...")
         batching = {
             "entity": entity,
-            "example": f'{tool_name}("Look up these {entity}: ...")',
+            "example": f'{supervisor_tool_name}("Look up these {entity}: ...")',
         }
 
     return {
@@ -931,7 +932,7 @@ def _agent_definition_to_registry_entry(
         "config_defaults": _build_config_defaults(agent_def.model_config),
         "supervisor": {
             "enabled": agent_def.supervisor_routing.enabled,
-            "tool_name": agent_def.tool_name,
+            "tool_name": supervisor_tool_name,
         },
         "batching": batching,
         "frontend": {
@@ -999,12 +1000,17 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
         entry = _agent_definition_to_registry_entry(agent_def)
         registry[agent_id] = entry
 
-        # Keep legacy folder-name aliases except for `pdf`.
-        # `pdf` is intentionally canonicalized to `pdf_extraction` only.
+        # Keep folder-name aliases only when the folder is the configured
+        # public key. Bundles with an explicit system_agent_key expose that
+        # canonical route only.
         if (
             agent_def.folder_name != agent_id
             and agent_def.folder_name not in registry
             and agent_def.folder_name != "pdf"
+            and (
+                not agent_def.system_agent_key
+                or agent_def.system_agent_key == agent_def.folder_name
+            )
         ):
             registry[agent_def.folder_name] = entry
 

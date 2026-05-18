@@ -80,7 +80,7 @@ When you select a node, this panel shows its configuration options where you can
 | **GO Term Lookup Agent** | Looks up Gene Ontology term definitions |
 | **Gene GO Annotations Agent** | Retrieves existing GO annotations for genes |
 | **Ortholog Lookup Agent** | Queries orthology relationships across species |
-| **Ontology Mapping Agent** | Maps free-text labels to ontology term IDs |
+| **Ontology Term Resolver Agent** | Resolves exact CURIEs and typed ontology labels or synonyms to ontology terms |
 
 ### Output
 | Agent | Description |
@@ -334,16 +334,16 @@ Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → 
 **Instructions for Initial Instructions node:**
 "Extract all gene expression data from this paper, including anatomical locations and developmental stages."
 
-### Example 2: Ontology Mapping Pipeline
+### Example 2: Ontology Term Resolution Pipeline
 
-**Goal:** Extract expression data and map terms to official IDs
+**Goal:** Extract expression data and resolve terms to official IDs
 
 ```
-Initial Instructions → PDF Extraction Agent → Gene Expression Extractor → Ontology Mapping Agent → TSV File Formatter
+Initial Instructions -> PDF Extraction Agent -> Gene Expression Extractor -> Ontology Term Resolver Agent -> TSV File Formatter
 ```
 
-**Instructions for Ontology Mapping Agent node:**
-"Map all anatomy terms to WBbt IDs and all stage terms to WBls IDs."
+**Instructions for Ontology Term Resolver Agent node:**
+"Resolve all anatomy labels using WormBase provider-scoped anatomy lookup and all stage labels using WormBase provider-scoped life-stage lookup. Preserve unresolved or ambiguous candidates."
 
 ### Example 3: Full Pipeline with File Export
 
@@ -413,7 +413,7 @@ Use names like "C. elegans Expression to WBbt CSV" rather than "Flow 1".
 
 - **Refine your instructions:** Add more specific custom instructions to agents
 - **Review automatic validation:** Check the extractor node's validation attachments and any validation findings in the review workspace
-- **Add validation agents:** Include Ontology Mapping Agent or another validation agent when you need custom checks beyond the domain-pack defaults
+- **Add validation agents:** Include Ontology Term Resolver Agent or another validation agent when you need custom checks beyond the domain-pack defaults
 
 ## Common Questions
 

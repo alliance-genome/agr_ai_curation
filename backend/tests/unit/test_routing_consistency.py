@@ -19,7 +19,8 @@ _backend_path = Path(__file__).parent.parent.parent
 if str(_backend_path) not in sys.path:
     sys.path.insert(0, str(_backend_path))
 
-from src.schemas.models import Destination, RoutingPlan, SCHEMA_REGISTRY
+from src.schemas.models import Destination, RoutingPlan, SCHEMA_REGISTRY  # noqa: E402
+from src.schemas.domain_validator import is_domain_validator_result_schema  # noqa: E402
 
 
 def get_generated_schema(schema_name: str) -> dict:
@@ -74,14 +75,31 @@ class TestRoutingConsistency:
         )
 
     def test_response_envelope_schemas_exist(self):
-        """Verify each destination has a corresponding envelope schema in SCHEMA_REGISTRY."""
-        # Get all registered envelope schemas from SCHEMA_REGISTRY
-        envelope_schemas = {}
+        """Verify each destination has a corresponding response schema."""
+        from src.lib.config.agent_loader import load_agent_definitions
+        from src.lib.config.schema_discovery import discover_agent_schemas
+
+        # Get all registered core envelope schemas from SCHEMA_REGISTRY.
+        response_schemas = {}
         for schema_name, model_class in SCHEMA_REGISTRY.items():
             class_name = model_class.__name__
             if class_name.endswith("Envelope") and class_name != "StructuredMessageEnvelope":
                 # schema_name is already in snake_case (e.g., 'disease_ontology')
-                envelope_schemas[schema_name] = class_name
+                response_schemas[schema_name] = class_name
+
+        # Package-owned validator agents can expose their public route through
+        # agent_id while keeping the typed result contract in package schema.py.
+        agent_definitions = load_agent_definitions(
+            force_reload=True,
+        )
+        agent_schemas = discover_agent_schemas(
+            force_reload=True,
+        )
+        for agent_id, agent in agent_definitions.items():
+            output_schema = str(agent.output_schema or "").strip()
+            schema_class = agent_schemas.get(output_schema)
+            if schema_class and is_domain_validator_result_schema(schema_class):
+                response_schemas[agent_id] = schema_class.__name__
 
         # Get destinations that need envelopes (skip special ones)
         skip_destinations = {
@@ -107,15 +125,52 @@ class TestRoutingConsistency:
         for dest in destinations_needing_envelopes:
             # Check if destination or its mapped name exists
             mapped_name = name_mappings.get(dest, dest)
-            if mapped_name not in envelope_schemas:
+            if mapped_name not in response_schemas:
                 missing_envelopes.append(dest)
 
         assert not missing_envelopes, (
-            f"These destinations don't have envelope schemas in SCHEMA_REGISTRY:\n"
+            f"These destinations don't have response schemas:\n"
             f"{missing_envelopes}\n"
-            f"Available envelopes: {sorted(envelope_schemas.keys())}\n"
-            f"Create missing envelope schema files in backend/src/schemas/models/ and register in SCHEMA_REGISTRY"
+            f"Available response schemas: {sorted(response_schemas.keys())}\n"
+            "Create missing core envelope schemas or package-owned validator result "
+            "schemas for the destination route"
         )
+
+    def test_ontology_term_supervisor_tool_name_matches_runtime_key(self):
+        """Keep the public ontology resolver prompt aligned with generated tools."""
+        from src.lib.agent_studio.registry_builder import build_agent_registry
+        from src.lib.config.agent_loader import canonical_system_agent_key
+        from src.lib.config.agent_loader import get_agent_definition
+
+        repo_root = Path(__file__).resolve().parents[3]
+        prompt_content = (
+            repo_root / "config/agents/supervisor/prompt.yaml"
+        ).read_text(encoding="utf-8")
+        agent_content = (
+            repo_root / "packages/alliance/agents/ontology_term/agent.yaml"
+        ).read_text(encoding="utf-8")
+        mirror_agent_content = (
+            repo_root / "alliance_agents/ontology_term/agent.yaml"
+        ).read_text(encoding="utf-8")
+        agent = get_agent_definition("ontology_term_validation")
+        assert agent is not None
+
+        expected_tool_name = (
+            f"ask_{canonical_system_agent_key(agent).replace('-', '_')}_specialist"
+        )
+        assert expected_tool_name == "ask_ontology_term_validation_specialist"
+
+        registry_entry = build_agent_registry()["ontology_term_validation"]
+        assert registry_entry["supervisor"]["tool_name"] == expected_tool_name
+
+        stale_tool_name = "ask_ontology_term_specialist"
+        assert expected_tool_name in prompt_content
+        assert expected_tool_name in agent_content
+        assert expected_tool_name in mirror_agent_content
+        assert agent.tool_name == expected_tool_name
+        assert stale_tool_name not in prompt_content
+        assert stale_tool_name not in agent_content
+        assert stale_tool_name not in mirror_agent_content
 
 
 if __name__ == "__main__":

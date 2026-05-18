@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
-    "ask_pdf_specialist": "General PDF Extraction Agent",
+    "ask_pdf_extraction_specialist": "General PDF Extraction Agent",
     "ask_gene_specialist": "Gene Validation Agent",
     "ask_gene_extractor_specialist": "Gene Extraction Agent",
     "ask_allele_specialist": "Allele Validation Agent",
@@ -22,7 +22,7 @@ BUILTIN_SPECIALIST_DISPLAY_NAMES: Dict[str, str] = {
     "ask_gene_ontology_specialist": "Gene Ontology Agent",
     "ask_go_annotations_specialist": "GO Annotations Agent",
     "ask_orthologs_specialist": "Orthologs Agent",
-    "ask_ontology_mapping_specialist": "Ontology Mapping Agent",
+    "ask_ontology_term_validation_specialist": "Ontology Term Resolver Agent",
     "ask_chat_output_specialist": "Chat Output Agent",
     "ask_csv_formatter_specialist": "CSV File Formatter",
     "ask_tsv_formatter_specialist": "TSV File Formatter",

@@ -21,7 +21,7 @@ MOCK_SUPERVISOR_SPECS = [
         "agent_key": "pdf_extraction",
         "name": "PDF Specialist",
         "description": "Document search and extraction",
-        "tool_name": "ask_pdf_specialist",
+        "tool_name": "ask_pdf_extraction_specialist",
         "requires_document": True,
         "group_rules_enabled": True,
     },
@@ -59,7 +59,7 @@ def test_generate_routing_table_has_descriptions():
         return_value=MOCK_SUPERVISOR_SPECS,
     ):
         table = _supervisor_module().generate_routing_table()
-    lines = [l for l in table.split('\n') if l.startswith('|') and 'ask_' in l]
+    lines = [line for line in table.split('\n') if line.startswith('|') and 'ask_' in line]
     for line in lines:
         # Should have tool name | description
         parts = line.split('|')

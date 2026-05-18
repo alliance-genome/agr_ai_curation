@@ -249,7 +249,7 @@ def test_create_dynamic_specialist_tools_skips_document_required_tools_without_d
         "_get_supervisor_specialist_specs",
         lambda: [
             {
-                "tool_name": "ask_pdf_specialist",
+                "tool_name": "ask_pdf_extraction_specialist",
                 "agent_key": "pdf_extraction",
                 "description": "PDF extraction",
                 "requires_document": True,
@@ -483,7 +483,7 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
         "_get_supervisor_specialist_specs",
         lambda: [
             {"tool_name": "ask_gene_specialist", "requires_document": False},
-            {"tool_name": "ask_pdf_specialist", "requires_document": True},
+            {"tool_name": "ask_pdf_extraction_specialist", "requires_document": True},
         ],
     )
     _patch_supervisor_prompt_bundle(monkeypatch, version=7)
@@ -519,7 +519,7 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
     assert "Only these specialist tools are currently installed" in created.instructions
     assert "ask_gene_specialist" in created.instructions
     assert "No PDF document is currently loaded" in created.instructions
-    assert "ask_pdf_specialist" in created.instructions
+    assert "ask_pdf_extraction_specialist" in created.instructions
     assert supervisor_agent.CURATION_PREP_CONFIRMATION_QUESTION in created.instructions
     assert any(getattr(tool, "name", "") == "prepare_for_curation" for tool in created.tools)
     assert any(getattr(tool, "name", "") == "export_to_file" for tool in created.tools)
@@ -592,12 +592,12 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
     monkeypatch.setattr(
         supervisor_agent,
         "_get_supervisor_specialist_specs",
-        lambda: [{"tool_name": "ask_pdf_specialist", "requires_document": True}],
+        lambda: [{"tool_name": "ask_pdf_extraction_specialist", "requires_document": True}],
     )
     monkeypatch.setattr(
         supervisor_agent,
         "_create_dynamic_specialist_tools",
-        lambda **kwargs: captured_dynamic.update(kwargs) or [SimpleNamespace(name="ask_pdf_specialist")],
+        lambda **kwargs: captured_dynamic.update(kwargs) or [SimpleNamespace(name="ask_pdf_extraction_specialist")],
     )
     _patch_supervisor_prompt_bundle(monkeypatch, version=9)
     monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)

@@ -43,6 +43,7 @@ def _agent_definition(
     folder_name: str,
     agent_id: str,
     *,
+    system_agent_key: str | None = None,
     category: str = "Validation",
     tools: list[str] | None = None,
     output_schema: str | None = None,
@@ -52,6 +53,7 @@ def _agent_definition(
         folder_name=folder_name,
         agent_id=agent_id,
         name=f"{folder_name.title()} Agent",
+        system_agent_key=system_agent_key,
         description=f"{folder_name} description",
         category=category,
         supervisor_routing=SupervisorRouting(
@@ -158,6 +160,51 @@ def test_sync_system_agents_upserts_reactivates_and_deactivates(monkeypatch):
 
     assert stale_agent.is_active is False
     assert stale_agent.supervisor_enabled is False
+
+
+def test_sync_uses_explicit_system_agent_key_and_deactivates_folder_alias(monkeypatch):
+    """A bundle can expose its public Agent Studio route by agent_id."""
+    import src.lib.agent_studio.system_agent_sync as module
+
+    stale_folder_alias = SimpleNamespace(
+        agent_key="ontology_term",
+        is_active=True,
+        supervisor_enabled=True,
+    )
+    db = _DBStub([stale_folder_alias])
+
+    monkeypatch.setattr(
+        module,
+        "resolve_agent_config_sources",
+        lambda _agents_path=None: (SimpleNamespace(folder_name="ontology_term"),),
+    )
+    monkeypatch.setattr(
+        module,
+        "load_agent_definitions",
+        lambda _agents_path=None, force_reload=False: {
+            "ontology_term_validation": _agent_definition(
+                "ontology_term",
+                "ontology_term_validation",
+                system_agent_key="ontology_term_validation",
+                output_schema="OntologyTermValidationResult",
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        module,
+        "_get_active_system_prompt",
+        lambda _db, *, folder_name, agent_id: f"prompt:{folder_name}:{agent_id}",
+    )
+
+    result = module.sync_system_agents(db, force_reload=True)
+
+    assert result["inserted"] == 1
+    assert result["deactivated"] == 1
+    assert result["discovered"] == 1
+    assert db.added[0].agent_key == "ontology_term_validation"
+    assert db.added[0].template_source == "ontology_term_validation"
+    assert stale_folder_alias.is_active is False
+    assert stale_folder_alias.supervisor_enabled is False
 
 
 def test_sync_skips_agent_with_missing_prompt(monkeypatch):

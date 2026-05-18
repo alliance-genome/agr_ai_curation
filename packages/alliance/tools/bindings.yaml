@@ -374,12 +374,8 @@ tools:
           agent_name: Gene Ontology Agent
           methods: [search_go_terms]
           description: The GO Agent searches for Gene Ontology terms.
-        ontology_mapping:
-          agent_name: Ontology Mapping Agent
-          methods: [search_anatomy_terms, search_life_stage_terms, search_go_terms]
-          description: The Ontology Mapping agent maps free-text labels to ontology term IDs.
         ontology_term_validation:
-          agent_name: Ontology Term Validation Agent
+          agent_name: Ontology Term Resolver Agent
           methods:
             - get_ontology_term
             - get_ontology_terms
@@ -388,7 +384,7 @@ tools:
             - search_life_stage_terms
             - search_go_terms
             - map_curies_to_names
-          description: The Ontology Term Validation agent validates generic ontology CURIE/name fields and preserves ambiguous or unresolved candidates.
+          description: The Ontology Term Resolver agent validates exact ontology CURIEs and resolves typed label or synonym lookups while preserving ambiguous or unresolved candidates.
         controlled_vocabulary_validation:
           agent_name: Controlled Vocabulary Validation Agent
           methods:

@@ -559,7 +559,7 @@ Keep the existing extraction logic but enhance with new specialized analyzers.
     "needs_pdf": false,
     "ontologies_needed": ["WormBase"],
     "genes_to_lookup": ["ent-1"],
-    "execution_order": ["gene_lookup", "ontology_mapping"]
+    "execution_order": ["gene_lookup", "ontology_term_validation"]
   },
   "metadata": {
     "destination": "gene_specialist",

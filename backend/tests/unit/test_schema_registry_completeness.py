@@ -39,7 +39,6 @@ def test_all_schema_files_have_registry_entries():
     excluded_stems = {
         "__init__",  # Registry definition file
         "base",  # Contains shared base types (Destination, RoutingPlan, etc.)
-        "ontology_mapping_item",  # Helper class used within ontology_mapping
     }
 
     # Schema files are all remaining files
@@ -107,7 +106,6 @@ def test_no_helper_classes_in_registry():
 
     # These should NOT be in the registry
     forbidden_names = [
-        'ontology_mapping_item',
         'structured_message_envelope',  # base class
         'destination',  # enum
         'routing_plan',  # helper for supervisor

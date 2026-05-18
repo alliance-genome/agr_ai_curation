@@ -31,7 +31,11 @@ import re
 from dataclasses import dataclass, replace
 
 from agents import Agent
-from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
+from src.lib.config.agent_loader import (
+    canonical_system_agent_key,
+    get_agent_definition,
+    get_agent_by_folder,
+)
 from src.lib.file_outputs import FileValidationError, sanitize_output_descriptor
 from src.lib.prompts.assembly import (
     PromptLayerBundle,
@@ -100,18 +104,19 @@ def _is_thread_exhaustion_error(exc: BaseException) -> bool:
 
 
 def get_prompt_key_for_agent(registry_agent_id: str) -> str:
-    """Resolve a registry agent ID/alias to canonical prompt cache key (folder name)."""
+    """Resolve a registry agent ID to the canonical prompt cache key."""
     if registry_agent_id == "task_input":
         return "task_input"
 
-    # Canonical key is the resolved agent bundle folder name.
     by_folder = get_agent_by_folder(registry_agent_id)
     if by_folder:
-        return by_folder.folder_name
+        canonical_key = canonical_system_agent_key(by_folder)
+        if registry_agent_id == canonical_key:
+            return canonical_key
 
     by_agent_id = get_agent_definition(registry_agent_id)
     if by_agent_id:
-        return by_agent_id.folder_name
+        return canonical_system_agent_key(by_agent_id)
 
     entry = AGENT_REGISTRY.get(registry_agent_id)
     if entry:

@@ -31,7 +31,7 @@ def test_build_custom_tool_display_names_maps_custom_tool_from_description():
 def test_build_custom_tool_display_names_ignores_non_custom_tools():
     agent = SimpleNamespace(
         tools=[
-            SimpleNamespace(name="ask_pdf_specialist", description="Ask the PDF Specialist"),
+            SimpleNamespace(name="ask_pdf_extraction_specialist", description="Ask the PDF Specialist"),
             SimpleNamespace(name="search_document", description="Search document"),
         ]
     )
@@ -49,13 +49,14 @@ def test_resolve_tool_display_name_prefers_custom_names():
 
 
 def test_resolve_tool_display_name_uses_builtin_specialist_labels():
-    resolved = _resolve_tool_display_name("ask_pdf_specialist", {})
+    resolved = _resolve_tool_display_name("ask_pdf_extraction_specialist", {})
     assert resolved == "General PDF Extraction Agent"
 
 
 @pytest.mark.parametrize(
     ("tool_name", "expected_label"),
     [
+        ("ask_pdf_extraction_specialist", "General PDF Extraction Agent"),
         ("ask_gene_specialist", "Gene Validation Agent"),
         ("ask_gene_extractor_specialist", "Gene Extraction Agent"),
         ("ask_allele_specialist", "Allele Validation Agent"),
@@ -69,7 +70,7 @@ def test_resolve_tool_display_name_uses_builtin_specialist_labels():
         ("ask_gene_ontology_specialist", "Gene Ontology Agent"),
         ("ask_go_annotations_specialist", "GO Annotations Agent"),
         ("ask_orthologs_specialist", "Orthologs Agent"),
-        ("ask_ontology_mapping_specialist", "Ontology Mapping Agent"),
+        ("ask_ontology_term_validation_specialist", "Ontology Term Resolver Agent"),
         ("ask_chat_output_specialist", "Chat Output Agent"),
         ("ask_csv_formatter_specialist", "CSV File Formatter"),
         ("ask_tsv_formatter_specialist", "TSV File Formatter"),

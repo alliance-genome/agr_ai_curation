@@ -27,7 +27,7 @@ class Destination(str, Enum):
     GO_ANNOTATIONS = "go_annotations"
     ALLIANCE_ORTHOLOGS = "alliance_orthologs"
     GENE_EXPRESSION = "gene_expression"
-    ONTOLOGY_MAPPING = "ontology_mapping"
+    ONTOLOGY_TERM = "ontology_term_validation"
 
 
 class RoutingPlan(BaseModel):
@@ -48,7 +48,7 @@ class RoutingPlan(BaseModel):
     )
     execution_order: List[str] = Field(
         default_factory=list,
-        description="Ordered list of handler names to execute. Valid handlers: pdf_extraction, disease_ontology, chemical_ontology, gene_curation, allele_curation, gene_expression, ontology_mapping, gene_ontology, go_annotations, alliance_orthologs, synthesize"
+        description="Ordered list of handler names to execute. Valid handlers: pdf_extraction, disease_ontology, chemical_ontology, gene_curation, allele_curation, gene_expression, ontology_term_validation, gene_ontology, go_annotations, alliance_orthologs, synthesize"
     )
 
 
