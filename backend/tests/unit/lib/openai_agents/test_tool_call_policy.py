@@ -11,8 +11,8 @@ from src.lib.openai_agents.tool_call_policy import (
 
 def test_document_tools_take_precedence_over_package_required_tools():
     required = required_tool_names_for_available_tools(
-        {"search_document", "agr_curation_query"},
-        required_package_tool_names_resolver=lambda _tools: {"agr_curation_query"},
+        {"search_document", "tool_alpha"},
+        required_package_tool_names_resolver=lambda _tools: {"tool_alpha"},
     )
 
     assert required == DOCUMENT_REQUIRED_TOOL_NAMES
@@ -20,13 +20,13 @@ def test_document_tools_take_precedence_over_package_required_tools():
 
 def test_package_required_tools_apply_without_document_tools():
     required = required_tool_names_for_available_tools(
-        {"agr_curation_query", "get_agent_contract"},
+        {"tool_alpha", "tool_beta"},
         required_package_tool_names_resolver=lambda tools: {
-            tool for tool in tools if tool == "agr_curation_query"
+            tool for tool in tools if tool == "tool_alpha"
         },
     )
 
-    assert required == frozenset({"agr_curation_query"})
+    assert required == frozenset({"tool_alpha"})
 
 
 def test_empty_tool_set_has_no_required_policy():
@@ -44,11 +44,11 @@ def test_available_tool_names_must_be_strings():
 
 def test_required_package_tool_names_are_derived_from_metadata():
     required = required_package_tool_names_from_metadata(
-        {"agr_curation_query", "get_agent_contract"},
+        {"tool_alpha", "tool_beta"},
         {
-            "agr_curation_query": {"required_tool_call": {"enforce": True}},
-            "get_agent_contract": {"required_tool_call": {"enforce": False}},
+            "tool_alpha": {"required_tool_call": {"enforce": True}},
+            "tool_beta": {"required_tool_call": {"enforce": False}},
         },
     )
 
-    assert required == {"agr_curation_query"}
+    assert required == {"tool_alpha"}

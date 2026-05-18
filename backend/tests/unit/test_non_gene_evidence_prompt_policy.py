@@ -27,7 +27,7 @@ def _load_prompt_content(folder_name: str) -> str:
     try:
         agents = load_agent_definitions(_repo_root() / "packages", force_reload=True)
         agent = next(agent for agent in agents.values() if agent.folder_name == folder_name)
-        generated_content = assembly._build_core_generated_content(agent)
+        generated_content = assembly.build_agent_core_prompt(agent.agent_id).render()
     finally:
         reset_cache()
     return "\n\n".join([generated_content, editable_content])
@@ -96,10 +96,10 @@ def test_non_gene_extractor_prompts_include_record_evidence_domain_guidance(
     assert "Strong quote examples:" in content
     assert "Weak quote examples:" in content
     assert "curatable_objects[]" in content
-    assert "metadata.evidence_records[]" in content or "verified evidence records" in content
+    assert "verified record_evidence results" in content
     assert "evidence_record_ids" in content
     assert re.search(
-        r"Do not emit top-level(?: legacy semantic lists:)?\s+`items\[\]`,\s+`annotations\[\]`,\s+"
+        r"Do not emit top-level legacy semantic lists:\s+`items\[\]`,\s+`annotations\[\]`,\s+"
         r"`genes\[\]`,\s+`alleles\[\]`,\s+`diseases\[\]`,\s+"
         r"`chemicals\[\]`,\s+(?:or\s+)?`phenotypes\[\]`",
         content,
