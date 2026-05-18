@@ -42,6 +42,7 @@ tools:
   - read_section
   - read_subsection
   - record_evidence
+  - get_agent_contract
   - agr_curation_query
 
 # -----------------------------------------------------------------------------

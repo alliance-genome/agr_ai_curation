@@ -1,4 +1,15 @@
 tool_policies:
+  get_agent_contract:
+    display_name: Agent Contract Lookup
+    description: Read deterministic runtime contract metadata for generated system agents without reading live envelope state or executing validation.
+    category: Runtime Metadata
+    curator_visible: false
+    allow_attach: false
+    allow_execute: true
+    config:
+      runtime_contract_helper:
+        read_only: true
+        deterministic: true
   agr_curation_query:
     display_name: AGR Curation Query
     description: Query Alliance curation data for genes, alleles, ontology terms, and validator reference lookups with structured attempts and provider projections.

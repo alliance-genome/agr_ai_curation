@@ -1,6 +1,36 @@
 package_id: agr.alliance
 bindings_api_version: 1.0.0
 tools:
+  - tool_id: get_agent_contract
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.agent_contract:get_agent_contract
+    required_context: []
+    description: Read-only deterministic agent contract lookup for tools, output schemas, domain-envelope metadata, validator bindings, ontology constraints, and field-level details
+    source_file: backend/src/lib/openai_agents/tools/agent_contract.py
+    metadata:
+      name: Agent Contract Lookup
+      category: Runtime Metadata
+      audit:
+        display_name: Agent Contract Lookup
+      documentation:
+        summary: Inspect compact, deterministic runtime contract metadata for generated system agents without reading live envelope state or executing validation.
+        parameters:
+          - name: agent_id
+            type: string
+            required: true
+            description: Runtime agent identifier whose contract should be inspected.
+          - name: topic
+            type: string
+            required: true
+            description: One of tools, output_schema, domain_envelope, validator_bindings, ontology_constraints, or field.
+          - name: field_path
+            type: string
+            required: false
+            description: Field path for field-specific lookup; use object_type.field_path when disambiguation is needed.
+          - name: detail_level
+            type: string
+            required: false
+            description: Use summary for compact responses or detail for field/schema/tool metadata details.
   - tool_id: agr_curation_query
     binding_kind: static
     callable: agr_ai_curation_alliance.tools.agr_curation:agr_curation_query

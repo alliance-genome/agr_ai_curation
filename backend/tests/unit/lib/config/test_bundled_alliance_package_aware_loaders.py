@@ -63,6 +63,7 @@ def test_bundled_alliance_gene_extractor_declares_record_evidence(monkeypatch):
         "read_section",
         "read_subsection",
         "record_evidence",
+        "get_agent_contract",
         "agr_curation_query",
     ]
 
@@ -78,6 +79,7 @@ def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
         "read_section",
         "read_subsection",
         "record_evidence",
+        "get_agent_contract",
         "agr_curation_query",
     ]
 
@@ -93,6 +95,7 @@ def test_bundled_alliance_allele_extractor_declares_record_evidence(monkeypatch)
         "read_section",
         "read_subsection",
         "record_evidence",
+        "get_agent_contract",
         "agr_curation_query",
     ]
 

@@ -18,7 +18,7 @@ from src.models.sql.database import SessionLocal
 
 CUSTOM_AGENT_PREFIX = "ca_"
 _DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
-_SYSTEM_MANAGED_INHERITED_TOOL_IDS = {"record_evidence"}
+_SYSTEM_MANAGED_INHERITED_TOOL_IDS = {"get_agent_contract", "record_evidence"}
 
 
 class CustomAgentError(Exception):

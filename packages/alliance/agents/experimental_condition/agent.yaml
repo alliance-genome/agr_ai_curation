@@ -30,6 +30,7 @@ supervisor_routing:
     path, expected result field, and lower-level validator/tool evidence.
 
 tools:
+  - get_agent_contract
   - agr_curation_query
   - chebi_api_call
 
