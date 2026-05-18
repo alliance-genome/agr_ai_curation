@@ -155,9 +155,7 @@ type TabValue = 'overview' | 'guidance' | 'envelope' | 'prompts'
 interface AgentDetailsPanelProps {
   agent: PromptInfo | null
   selectedGroupId: string | null
-  viewMode: 'base' | 'group' | 'combined'
   onGroupSelect: (groupId: string | null) => void
-  onViewModeChange: (mode: 'base' | 'group' | 'combined') => void
   onDiscussWithClaude?: (agentId: string, agentName: string) => void
   onCloneToWorkshop?: (agentId: string) => void
 }
@@ -165,7 +163,6 @@ interface AgentDetailsPanelProps {
 function AgentDetailsPanel({
   agent,
   selectedGroupId,
-  viewMode,
   onGroupSelect,
   onDiscussWithClaude,
   onCloneToWorkshop,
@@ -211,29 +208,6 @@ function AgentDetailsPanel({
     setActiveTab(newValue)
   }
 
-  // Get prompt content based on view mode
-  const getPromptContent = (): string => {
-    if (!agent) return ''
-
-    if (viewMode === 'base') {
-      return agent.base_prompt
-    }
-
-    if (viewMode === 'group' && selectedGroupId && agent.group_rules[selectedGroupId]) {
-      return agent.group_rules[selectedGroupId].content
-    }
-
-    if (viewMode === 'combined' && combinedPrompt) {
-      return combinedPrompt
-    }
-
-    if (viewMode === 'combined' && loadingCombined) {
-      return 'Loading combined prompt...'
-    }
-
-    return agent.base_prompt
-  }
-
   const overlayNeedsReview = agent?.custom_prompt_overlay_status === 'needs_review'
   const getPromptLayerPreview = (): string => {
     return agent?.prompt_layers && agent.prompt_layers.length > 0
@@ -246,8 +220,8 @@ function AgentDetailsPanel({
     const layerPreview = getPromptLayerPreview()
     const reviewMessage = 'Curator overlay needs coordinator review before it can be included in the effective prompt.'
     const content = agent && selectedGroupId && agent.has_group_rules
-      ? (combinedPrompt || (overlayNeedsReview ? (layerPreview || reviewMessage) : getPromptContent()))
-      : (layerPreview || (overlayNeedsReview ? reviewMessage : getPromptContent()))
+      ? (combinedPrompt || (overlayNeedsReview ? (layerPreview || reviewMessage) : agent.base_prompt))
+      : (layerPreview || (overlayNeedsReview ? reviewMessage : agent?.base_prompt || ''))
     navigator.clipboard.writeText(content).catch((err) => {
       console.error('Failed to copy:', err)
     })
@@ -295,10 +269,11 @@ function AgentDetailsPanel({
   const selectedGroupRule = selectedGroupId ? agent.group_rules[selectedGroupId] : undefined
   const overlayReviewMessage = agent.custom_prompt_warning
     || 'Curator overlay needs coordinator review before it can be included in the effective prompt.'
+  const promptLayerError = agent.prompt_layer_error
   const effectivePromptPreview = selectedGroupId && agent.has_group_rules
     ? (combinedPrompt || (loadingCombined
       ? 'Loading effective prompt preview...'
-      : (overlayNeedsReview ? (layerPreview || overlayReviewMessage) : getPromptContent())))
+      : (overlayNeedsReview ? (layerPreview || overlayReviewMessage) : agent.base_prompt)))
     : (overlayNeedsReview
       ? (layerPreview || overlayReviewMessage)
       : promptLayers.length > 0
@@ -308,7 +283,7 @@ function AgentDetailsPanel({
   const renderLayerSection = (
     title: string,
     layers: PromptLayerInfo[],
-    fallbackContent = '',
+    displayContent = '',
     options: { locked?: boolean; editable?: boolean; emptyText?: string } = {}
   ) => {
     const hasLayers = layers.length > 0
@@ -316,7 +291,7 @@ function AgentDetailsPanel({
     const editable = options.editable ?? (hasLayers ? layers.some((layer) => layer.editable) : false)
     const content = hasLayers
       ? layers.map((layer) => layer.content).filter(Boolean).join('\n\n')
-      : fallbackContent
+      : displayContent
     const source = hasLayers
       ? layers.map((layer) => layer.provenance).filter(Boolean).join(', ')
       : agent.source_file
@@ -652,6 +627,11 @@ function AgentDetailsPanel({
               </Box>
             </Box>
 
+            {promptLayerError && (
+              <Alert severity="error" variant="outlined">
+                {promptLayerError}
+              </Alert>
+            )}
             {renderLayerSection('Core Prompt', coreLayers, '', {
               locked: true,
               editable: false,

@@ -574,6 +574,87 @@ class TestGetRegistryMetadata:
         assert flagged_overlay not in "\n\n".join(layer.content for layer in custom.prompt_layers)
         assert not any(layer.kind == "curator_overlay" for layer in custom.prompt_layers)
 
+    def test_merge_custom_agents_surfaces_prompt_layer_projection_errors(self, monkeypatch):
+        """Custom-agent catalog entries should expose layer assembly failures."""
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo
+
+        base_catalog = PromptCatalog(
+            categories=[
+                AgentPrompts(
+                    category="Validation",
+                    agents=[
+                        PromptInfo(
+                            agent_id="gene",
+                            agent_name="Gene Specialist",
+                            description="Curate genes",
+                            base_prompt="Parent base prompt",
+                            source_file="database",
+                            has_group_rules=False,
+                            group_rules={},
+                            tools=[],
+                        )
+                    ],
+                )
+            ],
+            total_agents=1,
+            available_groups=[],
+        )
+        fake_custom = SimpleNamespace(
+            id="11111111-2222-3333-4444-555555555555",
+            user_id=123,
+            template_source="gene",
+            category="Validation",
+            tool_ids=[],
+            name="Layer Error Agent",
+            description="Custom prompt variant",
+            custom_prompt="Curator note",
+            group_prompt_overrides={},
+            created_at=None,
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_visible_to_user",
+            lambda _db, _uid: [fake_custom],
+        )
+        monkeypatch.setattr(
+            api_module,
+            "normalize_custom_overlay_for_parent",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                content="Curator note",
+                status="clean",
+                removed_layer_kinds=[],
+                warning=None,
+            ),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "build_agent_prompt_layers",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("layer projection failed")),
+        )
+
+        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+            base_catalog,
+            {"sub": "test-sub"},
+            SimpleNamespace(query=lambda *_args, **_kwargs: None),
+        )
+
+        custom = next(
+            a
+            for c in catalog.categories
+            for a in c.agents
+            if a.agent_name == "Layer Error Agent"
+        )
+        assert custom.prompt_layers == []
+        assert custom.effective_prompt_hash is None
+        assert "layer projection failed" in (custom.prompt_layer_error or "")
+
     def test_get_prompt_preview_system_agent(self, monkeypatch):
         """Prompt preview should return base prompt for system agent without group_id."""
         import asyncio

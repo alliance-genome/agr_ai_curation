@@ -81,6 +81,7 @@ export interface PromptInfo {
   prompt_layers?: PromptLayerInfo[]
   effective_prompt_hash?: string
   layer_manifest?: Record<string, unknown>
+  prompt_layer_error?: string
   custom_prompt_overlay_status?: 'clean' | 'deduplicated' | 'needs_review'
   custom_prompt_removed_layer_kinds?: string[]
   custom_prompt_warning?: string

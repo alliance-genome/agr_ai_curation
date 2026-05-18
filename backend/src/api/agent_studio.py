@@ -278,6 +278,7 @@ def _merge_custom_agents_into_catalog(
             )
 
         prompt_bundle = None
+        prompt_layer_error = None
         if template_source:
             overlay_for_layer_projection = (
                 ""
@@ -295,6 +296,7 @@ def _merge_custom_agents_into_catalog(
                     custom.id,
                     exc,
                 )
+                prompt_layer_error = f"Prompt layer metadata could not be built: {exc}"
         prompt_layers, effective_prompt_hash, layer_manifest = catalog_service._layer_projection(prompt_bundle)
 
         prompt_info = PromptInfo(
@@ -310,6 +312,7 @@ def _merge_custom_agents_into_catalog(
             prompt_layers=prompt_layers,
             effective_prompt_hash=effective_prompt_hash,
             layer_manifest=layer_manifest,
+            prompt_layer_error=prompt_layer_error,
             custom_prompt_overlay_status=overlay_normalization.status,
             custom_prompt_removed_layer_kinds=overlay_normalization.removed_layer_kinds,
             custom_prompt_warning=overlay_normalization.warning,

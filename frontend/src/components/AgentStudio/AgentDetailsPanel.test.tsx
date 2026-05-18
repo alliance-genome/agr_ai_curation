@@ -27,9 +27,9 @@ function buildFlaggedAgent(): PromptInfo {
     source_file: 'custom_agent:11111111-2222-3333-4444-555555555555',
     has_group_rules: true,
     group_rules: {
-      WB: {
-        group_id: 'WB',
-        content: 'WB group rules',
+      GROUP_A: {
+        group_id: 'GROUP_A',
+        content: 'Group A rules',
         source_file: 'database',
       },
     },
@@ -69,10 +69,8 @@ describe('AgentDetailsPanel', () => {
     render(
       <AgentDetailsPanel
         agent={buildFlaggedAgent()}
-        selectedGroupId="WB"
-        viewMode="combined"
+        selectedGroupId="GROUP_A"
         onGroupSelect={vi.fn()}
-        onViewModeChange={vi.fn()}
       />
     )
 

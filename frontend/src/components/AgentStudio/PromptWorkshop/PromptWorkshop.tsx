@@ -486,7 +486,7 @@ function PromptWorkshop({
     .filter((layer) => layer.kind === 'base_prompt')
     .map((layer) => layer.content)
     .join('\n\n') || parentAgent?.base_prompt || ''
-  const overlayStatus = selectedCustomAgent?.custom_prompt_overlay_status || 'clean'
+  const overlayStatus = selectedCustomAgent?.custom_prompt_overlay_status
   const overlayWarning = selectedCustomAgent?.custom_prompt_warning || ''
   const removedLayerKinds = selectedCustomAgent?.custom_prompt_removed_layer_kinds || []
   const markedCustomPrompt = useMemo(() => {

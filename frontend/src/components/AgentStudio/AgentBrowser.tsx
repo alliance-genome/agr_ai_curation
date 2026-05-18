@@ -113,10 +113,8 @@ interface AgentBrowserProps {
   catalog: PromptCatalog
   selectedAgentId: string | null
   selectedGroupId: string | null
-  viewMode: 'base' | 'group' | 'combined'
   onAgentSelect: (agentId: string) => void
   onGroupSelect: (groupId: string | null) => void
-  onViewModeChange: (mode: 'base' | 'group' | 'combined') => void
   onDiscussWithClaude?: (agentId: string, agentName: string) => void
   onCloneToWorkshop?: (agentId: string) => void
 }
@@ -127,10 +125,8 @@ function AgentBrowser({
   catalog,
   selectedAgentId,
   selectedGroupId,
-  viewMode,
   onAgentSelect,
   onGroupSelect,
-  onViewModeChange,
   onDiscussWithClaude,
   onCloneToWorkshop,
 }: AgentBrowserProps) {
@@ -373,9 +369,7 @@ function AgentBrowser({
           <AgentDetailsPanel
             agent={selectedAgent}
             selectedGroupId={selectedGroupId}
-            viewMode={viewMode}
             onGroupSelect={onGroupSelect}
-            onViewModeChange={onViewModeChange}
             onDiscussWithClaude={onDiscussWithClaude}
             onCloneToWorkshop={onCloneToWorkshop}
           />

@@ -129,6 +129,10 @@ class PromptInfo(BaseModel):
         default_factory=dict,
         description="Raw structured layer manifest for Agent Studio and tools",
     )
+    prompt_layer_error: Optional[str] = Field(
+        None,
+        description="Prompt-layer assembly error surfaced to Agent Studio instead of hidden as empty layers",
+    )
     custom_prompt_overlay_status: Optional[Literal["clean", "deduplicated", "needs_review"]] = Field(
         None,
         description="Normalization status for custom-agent curator overlay text",

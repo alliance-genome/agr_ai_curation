@@ -1507,6 +1507,7 @@ def _build_catalog() -> PromptCatalog:
         # Resolve show_in_palette from frontend config (defaults to True)
         frontend_config = config.get("frontend", {})
         show_in_palette = frontend_config.get("show_in_palette", True)
+        prompt_layer_error = None
         try:
             prompt_bundle = build_agent_prompt_layers(agent_id)
         except Exception as exc:
@@ -1516,6 +1517,7 @@ def _build_catalog() -> PromptCatalog:
                 exc,
             )
             prompt_bundle = None
+            prompt_layer_error = f"Prompt layer metadata could not be built: {exc}"
         prompt_layers, effective_prompt_hash, layer_manifest = _layer_projection(prompt_bundle)
 
         # Create PromptInfo with version metadata
@@ -1530,6 +1532,7 @@ def _build_catalog() -> PromptCatalog:
             prompt_layers=prompt_layers,
             effective_prompt_hash=effective_prompt_hash,
             layer_manifest=layer_manifest,
+            prompt_layer_error=prompt_layer_error,
             tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
             subcategory=config.get("subcategory"),
             show_in_palette=show_in_palette,

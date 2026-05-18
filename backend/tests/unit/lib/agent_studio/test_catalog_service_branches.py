@@ -318,6 +318,7 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
     db_agent = SimpleNamespace(
         agent_key="gene",
         instructions="BASE",
+        visibility="system",
         group_rules_enabled=True,
         group_rules_component="gene",
         template_source=None,
