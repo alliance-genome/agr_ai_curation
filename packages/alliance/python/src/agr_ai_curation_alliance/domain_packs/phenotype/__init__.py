@@ -124,12 +124,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
         subject_payload = _subject_payload(item)
         subject_resolution_state = subject_payload["resolution_state"]
         ontology_lookup_hint = _ontology_lookup_hint(item, evidence_records)
-        primary_evidence_record_id = ontology_lookup_hint.get("evidence_record_id")
-        if primary_evidence_record_id is None:
-            primary_evidence_record_id = _required_string(
-                evidence_records[0].get("evidence_record_id"),
-                "evidence_records[].evidence_record_id",
-            )
+        primary_evidence_record_id = ontology_lookup_hint["evidence_record_id"]
         term_evidence_record_ids = [primary_evidence_record_id]
         for raw_record in evidence_records:
             record_id = _required_string(

@@ -221,15 +221,6 @@ class PhenotypeTermPayload(BaseModel):
                 raise ValueError(
                     "pending PhenotypeTerm payload.write_blocked_reason is required"
                 )
-        if (
-            self.ontology_lookup_hint is not None
-            and self.ontology_lookup_hint.evidence_record_id is not None
-            and not self.ontology_lookup_hint.evidence_record_id.strip()
-        ):
-            raise ValueError(
-                "PhenotypeTerm payload.ontology_lookup_hint.evidence_record_id "
-                "must not be empty"
-            )
         return self
 
 
