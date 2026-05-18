@@ -113,11 +113,23 @@ def test_catalog_exposes_multiple_validation_options_for_extraction_agent():
 
     options = catalog["chemical_extractor"]
     states = {option["state"] for option in options}
+    condition_ontology_options = [
+        option
+        for option in options
+        if option.get("validator_binding_id")
+        == "chemical_condition.condition_ontology_lookup"
+    ]
 
     assert len(options) >= 3
     assert "active" in states
     assert "under_development" in states
     assert any(option["default_enabled"] for option in options if option["state"] == "active")
+    assert condition_ontology_options
+    assert {
+        option["validator_agent_id"] for option in condition_ontology_options
+    } == {"ontology_term_validation"}
+    assert "ontology_mapping" not in catalog
+    assert "ontology_mapping_lookup" not in catalog
 
 
 def test_apply_defaults_selects_active_and_keeps_under_development_visible():

@@ -115,6 +115,13 @@ describe('isValidationAgent', () => {
     expect(isValidationAgent('ontology_term_validation')).toBe(true)
   })
 
+  it('does not expose retired ontology mapping validation defaults', () => {
+    expect(isValidationAgent('ontology_mapping')).toBe(false)
+    expect(isValidationAgent('ontology_mapping_lookup')).toBe(false)
+    expect(VALIDATION_AGENTS).not.toContain('ontology_mapping')
+    expect(VALIDATION_AGENTS).not.toContain('ontology_mapping_lookup')
+  })
+
   it('returns false for extraction agents', () => {
     expect(isValidationAgent('pdf_extraction')).toBe(false)
     expect(isValidationAgent('gene_expression')).toBe(false)

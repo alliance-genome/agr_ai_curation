@@ -198,6 +198,66 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_reference_materialization",
         "disease_evidence_code_lookup",
     } == {binding["binding_id"] for binding in validator_bindings["under_development"]}
+    disease_term_binding = next(
+        binding
+        for binding in validator_bindings["active"]
+        if binding["binding_id"] == "disease_ontology_term_lookup"
+    )
+    assert disease_term_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "ontology_term_validation",
+    }
+    assert disease_term_binding["input_fields"]["curie"] == {
+        "source": "payload",
+        "path": "disease_annotation_object.curie",
+        "required": False,
+    }
+    assert disease_term_binding["input_fields"]["label"] == {
+        "source": "payload",
+        "path": "disease_annotation_object.name",
+        "required": False,
+    }
+    assert disease_term_binding["input_fields"]["ontology_term_type"]["source"] == (
+        "literal"
+    )
+    assert disease_term_binding["input_fields"]["ontology_term_type"]["value"] == (
+        "DOTerm"
+    )
+    assert disease_term_binding["input_fields"]["accepted_prefixes"]["source"] == (
+        "literal"
+    )
+    assert disease_term_binding["input_fields"]["accepted_prefixes"]["value"] == [
+        "DOID"
+    ]
+    assert disease_term_binding["expected_result_fields"] == {
+        "curie": "disease_annotation_object.curie",
+        "label": "disease_annotation_object.name",
+    }
+    evidence_code_binding = next(
+        binding
+        for binding in validator_bindings["under_development"]
+        if binding["binding_id"] == "disease_evidence_code_lookup"
+    )
+    assert evidence_code_binding["input_fields"]["curie"] == {
+        "source": "payload",
+        "path": "evidence_code_curies[0]",
+        "required": False,
+    }
+    assert evidence_code_binding["input_fields"]["ontology_term_type"]["source"] == (
+        "literal"
+    )
+    assert evidence_code_binding["input_fields"]["ontology_term_type"]["value"] == (
+        "ECOTerm"
+    )
+    assert evidence_code_binding["input_fields"]["accepted_prefixes"]["source"] == (
+        "literal"
+    )
+    assert evidence_code_binding["input_fields"]["accepted_prefixes"]["value"] == [
+        "ECO"
+    ]
+    assert evidence_code_binding["expected_result_fields"] == {
+        "curie": "evidence_code_curies[0]",
+    }
 
 
 def test_disease_pack_records_db_projection_and_representative_rows():

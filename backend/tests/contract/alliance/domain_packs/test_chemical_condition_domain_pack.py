@@ -208,6 +208,46 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
     assert condition_curie_binding["blocking"] is False
     assert condition_curie_binding["allow_opt_out"] is True
     assert condition_curie_binding["curator_override"] == {"allowed": False}
+    condition_class_binding = next(
+        binding
+        for binding in validator_bindings["active"]
+        if binding["binding_id"] == "chemical_condition.condition_ontology_lookup"
+    )
+    assert condition_class_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "ontology_term_validation",
+    }
+    assert condition_class_binding["input_fields"]["curie"] == {
+        "source": "payload",
+        "path": "condition_class.curie",
+        "required": False,
+    }
+    assert condition_class_binding["input_fields"]["label"] == {
+        "source": "payload",
+        "path": "condition_class.name",
+        "required": False,
+    }
+    assert condition_class_binding["input_fields"]["ontology_family"]["source"] == (
+        "literal"
+    )
+    assert condition_class_binding["input_fields"]["ontology_family"]["value"] == (
+        "condition"
+    )
+    assert condition_class_binding["input_fields"]["ontology_term_type"]["source"] == (
+        "literal"
+    )
+    assert condition_class_binding["input_fields"]["ontology_term_type"]["value"] == (
+        "ZECOTerm"
+    )
+    assert condition_class_binding["input_fields"]["accepted_prefixes"]["source"] == (
+        "literal"
+    )
+    assert condition_class_binding["input_fields"]["accepted_prefixes"]["value"] == [
+        "ZECO"
+    ]
+    assert condition_class_binding["expected_result_fields"] == {
+        "condition_class_curie": "condition_class.curie",
+    }
     under_development_bindings = {
         binding["binding_id"]: binding
         for binding in validator_bindings["under_development"]
