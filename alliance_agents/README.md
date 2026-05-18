@@ -46,7 +46,7 @@ If you're using this software outside of Alliance:
 | `chemical/` | chemical_validation | Chemical/compound (ChEBI) lookups |
 | `gene_ontology/` | gene_ontology_lookup | GO term searches |
 | `go_annotations/` | go_annotations_lookup | Gene-to-GO annotation queries |
-| `ontology_mapping/` | ontology_mapping_lookup | Free-text to ontology ID mappings |
+| `ontology_term/` | ontology_term_validation | Typed ontology term resolver |
 | `orthologs/` | orthologs_lookup | Ortholog relationship queries |
 
 ### Extraction Agents

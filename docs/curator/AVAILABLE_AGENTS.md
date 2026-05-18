@@ -12,8 +12,8 @@ All agents are defined in configuration files (YAML) and stored in the database.
 
 | Agent Name | Data Source | What It Does | Example Questions |
 |-----------|-------------|--------------|-------------------|
-| **Gene Expression Extractor** | Uploaded Papers + AGR Database | Extracts gene expression patterns from research papers. Captures anatomical locations, developmental stages, and subcellular locations. Coordinates with Ontology Mapping Agent for term ID resolution. | "Extract gene expression patterns from this paper" "What anatomical structures show dmd-3 expression?" "Find negative evidence for gene X expression" |
-| **Ontology Mapping Agent** | AGR Curation Database | Maps human-readable labels to official ontology term IDs across 45+ ontology types (see [Supported Ontology Types](#supported-ontology-types) below). | "Map 'linker cell' to WBbt term" "Find CURIE for 'L3 larval stage'" "What is the term ID for 'nucleus'?" |
+| **Gene Expression Extractor** | Uploaded Papers + AGR Database | Extracts gene expression patterns from research papers. Captures anatomical locations, developmental stages, and subcellular locations. Coordinates with typed validation attachments or the Ontology Term Resolver Agent for term ID resolution. | "Extract gene expression patterns from this paper" "What anatomical structures show dmd-3 expression?" "Find negative evidence for gene X expression" |
+| **Ontology Term Resolver Agent** | AGR Curation Database | Resolves exact CURIEs and typed ontology labels/synonyms to official ontology terms. Use provider-scoped lookup for anatomy and life stage labels, GO lookup for GO terms, and `ontology_term_type` for generic label/synonym lookup. | "Resolve 'linker cell' using WormBase anatomy lookup" "Find CURIE for the WormBase life stage 'L3 larval stage'" "Resolve 'nucleus' as a GO cellular component term" |
 | **Disease Ontology Agent** | Disease Ontology (DOID) | Searches disease classifications, hierarchies, and term relationships. | "What is DOID:4325?" "Show me child terms of cancer" "What diseases are related to diabetes?" |
 | **Gene Validation Agent** | AGR Curation Database | Validates gene identifiers against the Alliance Curation Database. Supports lookup by symbol, name, ID, or cross-reference. | "Look up the gene daf-16" "Validate these genes: daf-16, lin-3, unc-54" "Show me gene symbols for WBGene00001345" |
 | **Allele Validation Agent** | AGR Curation Database | Validates allele/variant identifiers against the Alliance Curation Database. Supports lookup by symbol, ID, or gene association. | "Find all Ulk1 alleles in mouse" "Look up these alleles: e1370, n765, tm1234" "Tell me about MGI:3689906" |
@@ -46,11 +46,11 @@ When flows generate files, they appear in the chat as downloadable cards showing
 
 Files remain available throughout your session. Download important files before ending your session.
 
-## Supported Ontology Types
+## Ontology Term Resolver Paths
 
-The **Ontology Mapping Agent** supports mapping labels to official term IDs across **45 distinct ontology types** in the AGR Curation Database. These ontologies cover anatomy, life stages, phenotypes, diseases, chemicals, experimental conditions, cell types, sequences, evidence codes, and more.
+The **Ontology Term Resolver Agent** supports exact CURIE lookup, typed label and synonym lookup with an explicit `ontology_term_type`, provider-scoped anatomy and life-stage lookup, and GO lookup with optional `go_aspect`. Use the dedicated Chemical Ontology Agent for ChEBI chemical validation.
 
-### Complete Ontology Type List
+### Common Typed Lookup Examples
 
 #### ANATOMY ONTOLOGIES (9 types)
 - **WBBTTerm** (WBbt:) - C. elegans anatomy
@@ -86,13 +86,6 @@ The **Ontology Mapping Agent** supports mapping labels to official term IDs acro
 - **DOTerm** (DOID:) - Disease Ontology
 - **MPATHTerm** (MPATH:) - Mouse pathology
 
-#### CHEMICAL/MOLECULAR ONTOLOGIES (5 types)
-- **CHEBITerm** (CHEBI:) - Chemical entities
-- **Molecule** (WB:) - WormBase molecules
-- **XSMOTerm** (XSMO:) - Xenopus small molecule
-- **MODTerm** (MOD:) - Protein modification
-- **ATPTerm** (ATP:) - Anatomical therapeutic chemical
-
 #### EXPERIMENTAL/CONDITION ONTOLOGIES (4 types)
 - **XCOTerm** (XCO:) - Experimental condition
 - **ZECOTerm** (ZECO:) - Zebrafish experimental condition
@@ -121,13 +114,14 @@ The **Ontology Mapping Agent** supports mapping labels to official term IDs acro
 #### TAXONOMY ONTOLOGIES (1 type)
 - **NCBITaxonTerm** (NCBITaxon:) - NCBI Taxonomy
 
-### Mapping Workflow
+### Resolution Workflow
 
-When you request ontology mappings, the agent:
-1. Identifies the organism from context
-2. Selects appropriate ontology types for that organism
-3. Queries the AGR Curation Database for term matches across all 45 ontology types
-4. Returns CURIEs (e.g., `WBbt:0005062`, `GO:0005634`) with confidence scores
+When you request ontology term resolution, the agent:
+1. Uses exact CURIE lookup first when a CURIE is supplied
+2. Uses provider-scoped anatomy or life-stage lookup when organism/provider context is supplied
+3. Uses GO lookup for Gene Ontology labels, with `go_aspect` when known
+4. Uses typed label/synonym lookup only when an `ontology_term_type` is supplied
+5. Returns resolved values or preserves unresolved and ambiguous candidates for curator review
 
 ## How Agents Work Together
 

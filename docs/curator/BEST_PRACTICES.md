@@ -72,11 +72,11 @@ Use the **triple-dot menu (⋮)** button on any AI response in the chat interfac
 
 ✅ "Create GO annotations for the gene unc-54, focusing on molecular function terms from the Experimental Evidence category (EXP, IDA, IPI, IMP, IGI, IEP)."
 
-### Ontology Mapping
+### Ontology Term Resolution
 
 ❌ "Map these terms to the right ontology."
 
-✅ "Map the following anatomical terms to WormBase anatomy ontology (WBbt): 'intestine', 'pharynx', 'body wall muscle', 'hypodermis'."
+✅ "Resolve the following anatomy labels with WormBase provider-scoped anatomy lookup: 'intestine', 'pharynx', 'body wall muscle', 'hypodermis'."
 
 ### Gene Information Queries
 
@@ -104,7 +104,7 @@ The AI Curation System connects to **specialized agents** that query authoritati
 
 ### Available Agent Categories
 
-- **Ontology Mapping** (45+ ontologies): Anatomical, developmental, phenotype, disease, chemical, and biological ontologies across multiple groups
+- **Ontology Term Resolver**: Exact CURIE lookup, typed label/synonym lookup with `ontology_term_type`, provider-scoped anatomy and life-stage lookup, and GO lookup with optional aspect filtering
 - **Gene Information**: WormBase, FlyBase, MGI, RGD, SGD, Xenbase, ZFIN gene data
 - **Disease Ontology**: Disease classifications, hierarchies, and relationships (DOID)
 - **Gene Ontology**: GO terms, annotations with evidence codes, term hierarchies
@@ -215,7 +215,7 @@ The right-side audit panel shows you:
 
 **Remember:** The AI is a powerful assistant with broad knowledge of biocuration practices and access to extensive databases. The key to success is **clear, explicit communication** about:
 
-1. **What** you want (gene data, ontology mapping, annotations, etc.)
+1. **What** you want (gene data, ontology term resolution, annotations, etc.)
 2. **Where** to look (specific paper sections, databases, ontologies)
 3. **How** to format results (table, JSON, list, etc.)
 4. **Which** standards to use (specific ontologies, evidence codes, term IDs)

@@ -31,7 +31,7 @@ Browse the instructions given to each AI agent and chat with Opus about them.
 See all agent prompts organized by subcategory:
 - **System** - Supervisor Agent that routes your queries to specialists (internal, not available in Flow Builder)
 - **PDF Extraction** - PDF Extraction Agent and Gene Expression Extractor
-- **Data Validation** - Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, and Ontology Mapping agents
+- **Data Validation** - Gene, Allele, Disease, Chemical, GO Term, GO Annotations, Ortholog, and Ontology Term Resolver agents
 - **Output** - Chat Output, CSV Formatter, TSV Formatter, JSON Formatter agents
 - **My Custom Agents** - Custom agents you have created in Agent Workshop
 - **Shared Agents** - Custom agents shared by other users in your project

@@ -31,7 +31,7 @@ content: |-
 
   ## Constraints and Evidence Rules
 
-  - Do not add new interpretation, curation decisions, literature claims, ontology mappings, or identifiers.
+  - Do not add new interpretation, curation decisions, literature claims, ontology term resolutions, or identifiers.
   - Do not fabricate or guess at missing information.
   - For domain-pack runs, treat `domain_envelope.objects` as the semantic source of truth. Use envelope/object/field/finding references exactly as provided.
   - Treat review rows, chat summaries, CSV/TSV/JSON payloads, and submission payloads as projections from domain-envelope objects.

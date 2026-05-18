@@ -346,11 +346,11 @@ curl "http://localhost:8001/api/traces/sessions/ef55be6a-a67a-4258-9430-bf31f42b
       "status": "error",
       "trace_id": "d6006a2407ddeabac11bde2e645d6ef8",
       "trace_id_short": "d6006a24",
-      "listed_trace": { "trace_name": "ontology_mapping_specialist_config" },
+      "listed_trace": { "trace_name": "ontology_term_specialist_config" },
       "error": {
         "trace_id": "d6006a2407ddeabac11bde2e645d6ef8",
         "trace_id_short": "d6006a24",
-        "trace_name": "ontology_mapping_specialist_config",
+        "trace_name": "ontology_term_specialist_config",
         "source": "remote",
         "message": "Trace fetch or analysis error summary"
       }
@@ -1032,7 +1032,7 @@ If a single trace cannot be fetched or analyzed, it appears as a `status: "error
 | Trace Name | Contains | Purpose |
 |------------|----------|---------|
 | `query_supervisor_config` | User query + AI response | Main conversation turns |
-| `ontology_mapping_specialist_config` | Ontology lookups | Specialist agent work |
+| `ontology_term_specialist_config` | Ontology term lookups | Specialist agent work |
 | `allele_specialist_config` | Allele database queries | Specialist agent work |
 | `pdf_specialist_config` | PDF extraction | Specialist agent work |
 

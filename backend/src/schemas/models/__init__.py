@@ -35,7 +35,6 @@ from .synthesis import SynthesisEnvelope
 from .pdf_specialist import PdfSpecialistEnvelope
 from .gene_curation import GeneCurationEnvelope
 from .gene_expression import GeneExpressionEnvelope
-from .ontology_mapping import OntologyMappingEnvelope
 from .pdf_extraction import PdfExtractionEnvelope
 from .disease_ontology import DiseaseOntologyEnvelope
 from .chemical_ontology import ChemicalOntologyEnvelope
@@ -54,9 +53,6 @@ from .database_query_plan import DatabaseQueryPlan
 from .crew_execution_task import CrewExecutionTask
 from .external_api_plan import ExternalAPIPlan
 
-from .ontology_mapping_item import OntologyMapping
-
-
 # Explicit registry: schema_name -> Pydantic model class
 # This registry is used by schema_loader.py to:
 # 1. Generate JSON schemas for OpenAI structured output
@@ -73,7 +69,6 @@ SCHEMA_REGISTRY: Dict[str, Type[BaseModel]] = {
     'pdf_specialist': PdfSpecialistEnvelope,
     'gene_curation': GeneCurationEnvelope,
     'gene_expression': GeneExpressionEnvelope,
-    'ontology_mapping': OntologyMappingEnvelope,
     'pdf_extraction': PdfExtractionEnvelope,
     'disease_ontology': DiseaseOntologyEnvelope,
     'chemical_ontology': ChemicalOntologyEnvelope,
@@ -122,7 +117,6 @@ __all__ = [
     'PdfSpecialistEnvelope',
     'GeneCurationEnvelope',
     'GeneExpressionEnvelope',
-    'OntologyMappingEnvelope',
     'PdfExtractionEnvelope',
     'DiseaseOntologyEnvelope',
     'ChemicalOntologyEnvelope',
@@ -140,7 +134,4 @@ __all__ = [
     'DatabaseQueryPlan',
     'CrewExecutionTask',
     'ExternalAPIPlan',
-
-    # Helper classes (not in SCHEMA_REGISTRY)
-    'OntologyMapping',
 ]

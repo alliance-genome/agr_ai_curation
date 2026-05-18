@@ -1986,7 +1986,7 @@ content: |
             ("gene_ontology", "gene_ontology"),
             ("gene_expression", "gene_expression"),
             ("csv_formatter", "csv_formatter"),
-            ("ontology_mapping", "ontology_mapping"),
+            ("ontology_term", "ontology_term"),
         ]
 
         for folder_name, expected_agent_name in test_cases:

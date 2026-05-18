@@ -390,7 +390,7 @@ def fetch_trace_for_opus(trace_id: str, *, logger: Any) -> Optional[str]:
                 # Try to identify the agent
                 for agent_pattern in ["supervisor", "gene_extraction", "gene_extractor", "ask_gene_extractor_", "gene_expression", "allele_variant_extraction", "allele_extractor", "ask_allele_extractor_", "disease_extraction", "disease_extractor", "ask_disease_extractor_", "chemical_extraction", "chemical_extractor", "ask_chemical_extractor_", "phenotype_extraction", "phenotype_extractor", "phenotype_specialist", "ask_phenotype_extractor_", "ask_phenotype_", "pdf_specialist", "gene", "allele",
                                      "disease", "chemical", "gene_ontology", "go_annotations",
-                                     "orthologs", "ontology_mapping", "chat_output",
+                                     "orthologs", "ontology_term_validation", "ontology_term", "chat_output",
                                      "csv_formatter", "tsv_formatter", "json_formatter"]:
                     if agent_pattern in obs_name.lower():
                         agents_used.add(agent_pattern)

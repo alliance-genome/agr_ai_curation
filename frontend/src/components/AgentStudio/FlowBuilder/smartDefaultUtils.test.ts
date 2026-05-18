@@ -111,8 +111,8 @@ describe('isValidationAgent', () => {
     expect(isValidationAgent('orthologs')).toBe(true)
   })
 
-  it('returns true for ontology_mapping agent', () => {
-    expect(isValidationAgent('ontology_mapping')).toBe(true)
+  it('returns true for ontology_term_validation agent', () => {
+    expect(isValidationAgent('ontology_term_validation')).toBe(true)
   })
 
   it('returns false for extraction agents', () => {
@@ -133,7 +133,7 @@ describe('isValidationAgent', () => {
   it('includes all expected validation agents', () => {
     expect(VALIDATION_AGENTS).toEqual([
       'gene', 'allele', 'disease', 'chemical',
-      'gene_ontology', 'go_annotations', 'orthologs', 'ontology_mapping'
+      'gene_ontology', 'go_annotations', 'orthologs', 'ontology_term_validation'
     ])
   })
 })

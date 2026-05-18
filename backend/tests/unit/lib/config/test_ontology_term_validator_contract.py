@@ -100,6 +100,7 @@ def test_ontology_term_validator_bundle_uses_shared_result_contract(monkeypatch)
     schema = schemas["OntologyTermValidationResult"]
 
     assert agent.folder_name == "ontology_term"
+    assert agent.name == "Ontology Term Resolver Agent"
     assert agent.output_schema == "OntologyTermValidationResult"
     assert agent.tools == ["get_agent_contract", "agr_curation_query"]
     assert issubclass(schema, DomainValidatorResultBase)

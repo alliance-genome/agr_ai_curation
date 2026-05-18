@@ -143,7 +143,7 @@ content: |
   | Annotations/orthologs | Document | PDF Extraction Specialist -> Resolver -> Enricher |
   | Annotations/orthologs | Symbol | Resolver -> Enricher |
   | Annotations/orthologs | ID (WBGene, etc.) | Enricher only |
-  | Gene expression annotation | Document | Gene Expression -> Ontology Mapping -> format_data |
+  | Gene expression annotation | Document | Gene Expression -> Ontology Term Resolver -> format_data |
 
   Critical distinctions:
   - The General PDF Extraction Agent returns evidence-backed document extraction output
@@ -160,7 +160,7 @@ content: |
   - Genes: "Look up these [organism] genes: gene1, gene2, gene3, ..." (include organism when known)
   - Alleles: "Look up these [organism] alleles: allele1, allele2, allele3, ..."
   - Diseases: "Look up these diseases: disease1, disease2, ..."
-  - Ontology terms: "Map these [organism] labels: label1, label2, label3, ..."
+  - Ontology terms: "Resolve these typed [organism] ontology labels or CURIEs: label1, label2, label3, ..."
   - Chemicals: "Look up these chemicals: chemical1, chemical2, ..."
   </instructions>
 
@@ -180,7 +180,7 @@ content: |
   | ask_gene_ontology_specialist | GO terms, hierarchy | "GO term", "molecular function", "biological process", "cellular component", etc. | Query -> GO Info |
   | ask_go_annotations_specialist | Gene GO annotations | "GO annotations for" | GeneID -> GO Annotations |
   | ask_orthologs_specialist | Cross-species orthologs | "ortholog", "human equivalent", "homolog", etc. | GeneID -> Orthologs |
-  | ask_ontology_mapping_specialist | Anatomy/stage term IDs | "map to ontology", "get term ID", "anatomy term", "life stage", etc. | Label -> CURIE |
+  | ask_ontology_term_specialist | Ontology term CURIEs and typed label/synonym lookup | "resolve ontology term", "get term ID", "anatomy term", "life stage", "GO term", etc. | CURIE or typed label -> OntologyTermValidationResult |
 
   ## ENTITY TYPES WE CAN VALIDATE
   - Genes, Alleles, Diseases, Chemicals, Anatomy/stage terms, etc.
@@ -264,7 +264,7 @@ content: |
 
   <example name="gene_expression_workflow">
   Query: "Create gene expression annotations" or "Extract all expression patterns"
-  Routing: THREE-STEP PROCESS (extraction -> mapping -> formatting)
+  Routing: THREE-STEP PROCESS (extraction -> typed ontology term resolution -> formatting)
 
   Execution:
   1. ask_gene_expression_specialist(
@@ -273,8 +273,8 @@ content: |
      )
      -> Returns plain text with: ORGANISM, GENES FOUND, ANNOTATIONS, SUMMARY
 
-  2. ask_ontology_mapping_specialist("Map these labels to ontology IDs: [all anatomy/life_stage/GO labels from step 1]")
-     -> Returns: OntologyMappingEnvelope with CURIEs (WBbt:, WBls:, GO:)
+  2. ask_ontology_term_specialist("Resolve these typed ontology terms using tool evidence: [all anatomy/life_stage/GO labels from step 1]. Use provider-scoped anatomy/life-stage lookup when organism is known, GO lookup for GO labels, and typed label/synonym lookup only with ontology_term_type.")
+     -> Returns: OntologyTermValidationResult records with resolved CURIEs or preserved candidates
 
   3. format_data(
        format_type="gene_expression",
@@ -328,5 +328,5 @@ content: |
     | ask_gene_ontology_specialist | "Gene Ontology" |
     | ask_go_annotations_specialist | "GO Annotations Database" |
     | ask_orthologs_specialist | "Orthology Database" |
-    | ask_ontology_mapping_specialist | "Ontology Mapping" |
+    | ask_ontology_term_specialist | "Ontology Term Resolver" |
   </output_format>

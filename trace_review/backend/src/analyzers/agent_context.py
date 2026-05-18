@@ -180,8 +180,8 @@ class AgentContextAnalyzer:
             return "gene_ontology_specialist"
         if "ortholog" in instructions_lower:
             return "orthologs_specialist"
-        if "ontology mapping" in instructions_lower:
-            return "ontology_mapping_specialist"
+        if "ontology term" in instructions_lower or "ontology resolver" in instructions_lower:
+            return "ontology_term_specialist"
 
         return "unknown"
 

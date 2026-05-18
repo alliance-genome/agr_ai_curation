@@ -568,7 +568,6 @@ answering validator-agent inspection questions from domain-pack validation plans
 - chat_output: Displays results in chat; csv_formatter, tsv_formatter, json_formatter: File exports
 - gene, allele, disease, chemical: Database query agents
 - gene_ontology, go_annotations, orthologs: GO and orthology agents
-- ontology_mapping: Maps text labels to ontology IDs
 - Validator-agent IDs returned by get_domain_pack_validation_plan are valid prompt
   inspection targets, for example gene_validation, allele_validation,
   disease_validation, ontology_term_validation, controlled_vocabulary_validation,

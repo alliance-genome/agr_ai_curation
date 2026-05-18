@@ -31,7 +31,7 @@ content: |-
 
   ## Constraints and Evidence Rules
 
-  - Do not add new interpretation, curation decisions, literature claims, ontology mappings, or identifiers.
+  - Do not add new interpretation, curation decisions, literature claims, ontology term resolutions, or identifiers.
   - Do not fabricate or guess at missing information.
   - If data is incomplete, explicitly note what is missing or requires manual verification.
   - Bold important identifiers and key terms when it improves scannability.
