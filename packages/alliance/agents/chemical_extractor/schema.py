@@ -119,23 +119,33 @@ class VocabularyTermSnapshotPayload(ChemicalExtractorPayloadModel):
 class OntologyTermSnapshotPayload(ChemicalExtractorPayloadModel):
     """Embedded ontology term snapshot for condition classes."""
 
-    curie: StrictStr
+    curie: StrictStr | None = None
     name: StrictStr
 
-    @field_validator("curie", "name", mode="before")
+    @field_validator("curie", mode="before")
+    @classmethod
+    def _validate_optional_curie(cls, value: object) -> object:
+        return _strip_optional_string(value)
+
+    @field_validator("name", mode="before")
     @classmethod
     def _validate_required_strings(cls, value: object, info) -> object:
         return _strip_required_string(value, info.field_name)
 
 
 class ChemicalTermPayload(ChemicalExtractorPayloadModel):
-    """Payload for one validated chemical ontology term reference."""
+    """Payload for one chemical ontology term candidate or reference."""
 
-    curie: StrictStr
+    curie: StrictStr | None = None
     name: StrictStr
     source_mentions: list[StrictStr] = Field(default_factory=list)
 
-    @field_validator("curie", "name", mode="before")
+    @field_validator("curie", mode="before")
+    @classmethod
+    def _validate_optional_curie(cls, value: object) -> object:
+        return _strip_optional_string(value)
+
+    @field_validator("name", mode="before")
     @classmethod
     def _validate_required_strings(cls, value: object, info) -> object:
         return _strip_required_string(value, info.field_name)
@@ -398,7 +408,10 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
 
         for obj in self.curatable_objects:
             if isinstance(obj, ChemicalTermCuratableObject):
-                _validate_chebi_curie(obj.payload.curie, "ChemicalTerm.payload.curie")
+                if obj.payload.curie is not None:
+                    _validate_chebi_curie(
+                        obj.payload.curie, "ChemicalTerm.payload.curie"
+                    )
             elif isinstance(obj, EvidenceQuoteCuratableObject):
                 self._validate_evidence_quote_object(obj, evidence_by_id)
             elif isinstance(obj, ChemicalConditionCuratableObject):
@@ -427,10 +440,11 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
         evidence_by_id: Mapping[str, Any],
         objects_by_ref: Mapping[tuple[str, str], ChemicalExtractorCuratableObject],
     ) -> None:
-        _validate_chebi_curie(
-            obj.payload.condition_chemical.curie,
-            "ChemicalCondition.payload.condition_chemical.curie",
-        )
+        if obj.payload.condition_chemical.curie is not None:
+            _validate_chebi_curie(
+                obj.payload.condition_chemical.curie,
+                "ChemicalCondition.payload.condition_chemical.curie",
+            )
 
         if obj.evidence_record_ids != obj.payload.evidence_record_ids:
             raise ValueError(
@@ -449,6 +463,7 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
         resolved_ref_types: set[str] = set()
         referenced_evidence_ids: set[str] = set()
         referenced_chemical_curies: set[str] = set()
+        referenced_chemical_names: set[str] = set()
         unknown_refs: list[str] = []
 
         for object_ref in obj.object_refs:
@@ -469,7 +484,9 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
             if isinstance(referenced_object, EvidenceQuoteCuratableObject):
                 referenced_evidence_ids.add(referenced_object.payload.evidence_record_id)
             elif isinstance(referenced_object, ChemicalTermCuratableObject):
-                referenced_chemical_curies.add(referenced_object.payload.curie)
+                if referenced_object.payload.curie is not None:
+                    referenced_chemical_curies.add(referenced_object.payload.curie)
+                referenced_chemical_names.add(referenced_object.payload.name)
 
         if unknown_refs:
             raise ValueError(
@@ -494,10 +511,21 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
                 + ", ".join(missing_evidence_refs)
             )
 
-        if obj.payload.condition_chemical.curie not in referenced_chemical_curies:
+        if obj.payload.condition_chemical.curie is not None:
+            chemical_ref_matches = (
+                obj.payload.condition_chemical.curie in referenced_chemical_curies
+            )
+            match_label = "payload.curie matches payload.condition_chemical.curie"
+        else:
+            chemical_ref_matches = (
+                obj.payload.condition_chemical.name in referenced_chemical_names
+            )
+            match_label = "payload.name matches payload.condition_chemical.name"
+
+        if not chemical_ref_matches:
             raise ValueError(
                 "ChemicalCondition object_refs[] must include a ChemicalTerm whose "
-                "payload.curie matches payload.condition_chemical.curie"
+                f"{match_label}"
             )
 
         export_behavior = obj.metadata.get("export_behavior")

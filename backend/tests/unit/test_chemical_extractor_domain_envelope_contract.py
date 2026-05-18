@@ -284,6 +284,25 @@ def test_chemical_extractor_schema_accepts_chemical_condition_objects():
     assert envelope.metadata.ambiguities[0].mention == "Dex"
 
 
+def test_chemical_extractor_schema_accepts_label_backed_pending_ontology_candidates():
+    payload = _valid_chemical_extractor_payload()
+    del payload["curatable_objects"][1]["payload"]["curie"]
+    condition_payload = payload["curatable_objects"][-1]["payload"]
+    del condition_payload["condition_class"]["curie"]
+    del condition_payload["condition_chemical"]["curie"]
+
+    envelope = _validate_chemical_extractor_payload(payload)
+
+    chemical_term = envelope.curatable_objects[1]
+    condition = envelope.curatable_objects[-1]
+    assert chemical_term.payload.curie is None
+    assert chemical_term.payload.name == "sirolimus"
+    assert condition.payload.condition_class.curie is None
+    assert condition.payload.condition_class.name == "chemical treatment"
+    assert condition.payload.condition_chemical.curie is None
+    assert condition.payload.condition_chemical.name == "sirolimus"
+
+
 @pytest.mark.parametrize("legacy_field", sorted(LEGACY_SEMANTIC_LIST_FIELDS))
 def test_chemical_extractor_schema_rejects_top_level_legacy_lists(legacy_field):
     payload = _valid_chemical_extractor_payload()

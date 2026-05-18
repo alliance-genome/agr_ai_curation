@@ -602,7 +602,7 @@ def validate_disease_extraction_objects(
             errors.append(
                 f"{location}.payload uses legacy flat disease helper fields "
                 f"{', '.join(forbidden_payload_fields)}; use "
-                "disease_annotation_object.curie/name instead"
+                "disease_annotation_object.name with optional curie instead"
             )
 
         missing_payload_fields = _missing_or_empty_payload_fields(obj.payload)

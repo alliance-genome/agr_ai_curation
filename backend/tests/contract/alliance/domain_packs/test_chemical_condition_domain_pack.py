@@ -192,7 +192,7 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
         "curie": {
             "source": "payload",
             "path": "condition_chemical.curie",
-            "required": True,
+            "required": False,
         },
         "name": {
             "source": "payload",

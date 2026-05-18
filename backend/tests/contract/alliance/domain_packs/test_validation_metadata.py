@@ -510,6 +510,11 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "condition_chemical.curie",
         "condition_chemical.name",
     )
+    chemical_condition_chebi_binding = chemical_condition_bindings[
+        "chemical_condition.chebi_api_lookup"
+    ]
+    assert chemical_condition_chebi_binding.input_fields["curie"].required is False
+    assert chemical_condition_chebi_binding.input_fields["name"].required is False
     assert chemical_condition_bindings[
         "chemical_condition.condition_ontology_lookup"
     ].object_types == ("ChemicalCondition",)

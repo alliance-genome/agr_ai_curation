@@ -242,7 +242,8 @@ object_definitions:
       - field_path: condition_class.curie
         field_type: string
         display_name: Condition class CURIE
-        required: true
+        description: Optional exact-CURIE fast path; label-backed condition-class candidates remain valid for ontology validation without it.
+        required: false
         metadata:
           editable: true
           source_of_truth: alliance_linkml
@@ -292,7 +293,8 @@ object_definitions:
       - field_path: condition_chemical.curie
         field_type: string
         display_name: Chemical CURIE
-        required: true
+        description: Optional ChEBI exact-CURIE fast path; chemical name candidates remain valid for ChEBI validation without it.
+        required: false
         metadata:
           validatable: true
           validator_binding_id: chemical_condition.chebi_api_lookup
@@ -592,7 +594,7 @@ metadata:
         description: Required chemical-condition field paths declared in this pack must be present in each pending object payload.
       - validator_id: chemical_condition.chebi_curie_format
         display_name: ChEBI CURIE check
-        description: Require CHEBI CURIE syntax for condition_chemical.curie and ChemicalTerm.curie until external ChEBI lookup is wired.
+        description: Check CHEBI CURIE syntax only when condition_chemical.curie or ChemicalTerm.curie is supplied; name-only candidates are admitted for ChEBI lookup.
       - validator_id: chemical_condition.export_context_blocker
         display_name: Required export context
         description: Emit blocker findings when host annotation or source reference materialization is missing.
@@ -652,7 +654,7 @@ metadata:
           curie:
             source: payload
             path: condition_chemical.curie
-            required: true
+            required: false
           name:
             source: payload
             path: condition_chemical.name
@@ -681,7 +683,7 @@ metadata:
           curie:
             source: payload
             path: curie
-            required: true
+            required: false
           name:
             source: payload
             path: name
