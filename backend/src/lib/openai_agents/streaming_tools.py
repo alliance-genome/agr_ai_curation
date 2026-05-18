@@ -218,6 +218,7 @@ def _append_agent_runtime_instruction(
         title=title,
         content=instruction,
         source_ref=source_ref,
+        target_agent=runtime_agent,
     )
     return runtime_agent
 
@@ -1203,7 +1204,7 @@ async def run_specialist_with_events(
 
     # Commit pending prompts for this specialist - moves from pending to used
     # This is where the agent ACTUALLY executes, so we log the prompts now
-    commit_pending_prompts(agent)
+    commit_pending_prompts(runtime_agent)
 
     # Create a run config that disables tracing to avoid OpenTelemetry context conflicts
     # The parent supervisor run already has tracing enabled via Langfuse

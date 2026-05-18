@@ -96,7 +96,7 @@ def test_runtime_instruction_append_updates_pending_prompt_assembly():
         title="Runtime test instruction",
         source_ref="test:runtime_instruction",
     )
-    commit_pending_prompts(source_agent)
+    commit_pending_prompts(runtime_agent)
 
     assert runtime_agent is not source_agent
     assert runtime_agent.instructions == "base\n\nRuntime-only instruction."
@@ -109,6 +109,77 @@ def test_runtime_instruction_append_updates_pending_prompt_assembly():
     assert used_run.assembly.layer_manifest["layers"][-1]["content"] == (
         "Runtime-only instruction."
     )
+
+
+def test_runtime_instruction_append_does_not_accumulate_on_reused_source_agent():
+    clear_prompt_context()
+    prompt = PromptTemplate(
+        id=uuid.uuid4(),
+        agent_name="gene",
+        prompt_type="system",
+        content="base",
+        version=1,
+        is_active=True,
+    )
+    source_agent = SimpleNamespace(name="Gene Specialist", instructions="base")
+    prompt_run_id = set_pending_prompts(
+        "Gene Specialist",
+        [prompt],
+        effective_prompt_hash="hash-1",
+        layer_manifest={
+            "agent_id": "gene",
+            "layers": [
+                {
+                    "id": "gene:base_prompt",
+                    "kind": "base_prompt",
+                    "title": "Editable base prompt",
+                    "content": "base",
+                    "provenance": "prompt_template:system",
+                    "editable": True,
+                    "locked": False,
+                    "source_ref": "prompt_templates:active:gene:system:base:v1",
+                    "hash": "base-layer-hash",
+                }
+            ],
+            "hash": "hash-1",
+        },
+    )
+    bind_prompt_run(source_agent, prompt_run_id)
+
+    first_runtime_agent = streaming_tools._append_agent_runtime_instruction(
+        source_agent,
+        source_agent,
+        instruction="first runtime",
+        layer_id_suffix="first",
+        title="First runtime",
+        source_ref="test:first_runtime",
+    )
+    commit_pending_prompts(first_runtime_agent)
+
+    second_runtime_agent = streaming_tools._append_agent_runtime_instruction(
+        source_agent,
+        source_agent,
+        instruction="second runtime",
+        layer_id_suffix="second",
+        title="Second runtime",
+        source_ref="test:second_runtime",
+    )
+    commit_pending_prompts(second_runtime_agent)
+
+    used_runs = get_used_prompt_runs()
+    first_layers = used_runs[0].assembly.layer_manifest["layers"]
+    second_layers = used_runs[1].assembly.layer_manifest["layers"]
+
+    assert [layer["id"] for layer in first_layers] == [
+        "gene:base_prompt",
+        "gene:runtime_context:first",
+    ]
+    assert [layer["id"] for layer in second_layers] == [
+        "gene:base_prompt",
+        "gene:runtime_context:second",
+    ]
+    assert first_layers[-1]["content"] == "first runtime"
+    assert second_layers[-1]["content"] == "second runtime"
 
 
 def test_extract_tool_name_prefers_name_then_tool_name():

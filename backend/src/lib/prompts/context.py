@@ -193,6 +193,21 @@ def _resolve_prompt_run_id(agent_or_name: Any) -> Optional[str]:
     return pending_ids[0]
 
 
+def _bind_prompt_run_id_to_object(agent: Any, prompt_run_id: str) -> None:
+    object_ids = _get_prompt_run_ids_by_object_id().copy()
+    object_ids[id(agent)] = prompt_run_id
+    _prompt_run_ids_by_object_id.set(object_ids)
+
+
+def _append_prompt_run_id_for_agent(agent_name: str, prompt_run_id: str) -> None:
+    run_ids_by_agent = {
+        name: list(run_ids)
+        for name, run_ids in _get_pending_run_ids_by_agent().items()
+    }
+    run_ids_by_agent.setdefault(agent_name, []).append(prompt_run_id)
+    _pending_prompt_run_ids_by_agent.set(run_ids_by_agent)
+
+
 def set_pending_prompts(
     agent_name: str,
     prompts: List[PromptTemplate],
@@ -228,12 +243,7 @@ def set_pending_prompts(
     )
     _pending_prompt_runs.set(run_pending)
 
-    run_ids_by_agent = {
-        name: list(run_ids)
-        for name, run_ids in _get_pending_run_ids_by_agent().items()
-    }
-    run_ids_by_agent.setdefault(agent_name, []).append(prompt_run_id)
-    _pending_prompt_run_ids_by_agent.set(run_ids_by_agent)
+    _append_prompt_run_id_for_agent(agent_name, prompt_run_id)
 
     return prompt_run_id
 
@@ -245,17 +255,24 @@ def append_pending_prompt_runtime_context(
     title: str,
     content: str,
     source_ref: str,
+    target_agent: Any = None,
 ) -> None:
     """Append runtime prompt content to a pending run's assembly metadata."""
 
     from src.lib.prompts.assembly import append_runtime_context_to_manifest
 
-    prompt_run_id = _resolve_prompt_run_id(agent_or_name)
-    if prompt_run_id is None:
+    source_prompt_run_id = _resolve_prompt_run_id(agent_or_name)
+    if source_prompt_run_id is None:
         return
 
     run_pending = _get_pending_runs().copy()
-    current = run_pending.get(prompt_run_id)
+    current_prompt_run_id = source_prompt_run_id
+    if target_agent is not None and not isinstance(target_agent, str):
+        target_prompt_run_id = _get_prompt_run_ids_by_object_id().get(id(target_agent))
+        if target_prompt_run_id:
+            current_prompt_run_id = target_prompt_run_id
+
+    current = run_pending.get(current_prompt_run_id)
     if current is None or current.assembly is None:
         return
 
@@ -266,7 +283,7 @@ def append_pending_prompt_runtime_context(
         content=content,
         source_ref=source_ref,
     )
-    run_pending[prompt_run_id] = PromptRun(
+    updated_run = PromptRun(
         agent_name=current.agent_name,
         prompts=list(current.prompts),
         assembly=PromptAssemblyMetadata(
@@ -274,6 +291,17 @@ def append_pending_prompt_runtime_context(
             layer_manifest=layer_manifest,
         ),
     )
+    if (
+        target_agent is not None
+        and not isinstance(target_agent, str)
+        and _get_prompt_run_ids_by_object_id().get(id(target_agent)) is None
+    ):
+        target_prompt_run_id = f"{current.agent_name}:{uuid.uuid4().hex}"
+        run_pending[target_prompt_run_id] = updated_run
+        _append_prompt_run_id_for_agent(current.agent_name, target_prompt_run_id)
+        _bind_prompt_run_id_to_object(target_agent, target_prompt_run_id)
+    else:
+        run_pending[current_prompt_run_id] = updated_run
     _pending_prompt_runs.set(run_pending)
 
 
@@ -306,19 +334,13 @@ def commit_pending_prompts(agent_or_name: Any) -> None:
         agent_or_name: The Agent object with a bound prompt run id.
     """
     prompt_run_id = _resolve_prompt_run_id(agent_or_name)
-    agent_name = str(getattr(agent_or_name, "name", agent_or_name))
 
     pending_runs = _get_pending_runs()
     pending_run = pending_runs.get(prompt_run_id) if prompt_run_id else None
 
-    pending = _get_pending()
     if pending_run is not None:
         used = list(_get_used())
         used.extend(pending_run.prompts)
-        _used_prompts.set(used)
-    elif agent_name in pending:
-        used = list(_get_used())
-        used.extend(pending[agent_name])
         _used_prompts.set(used)
 
     if pending_run is not None:

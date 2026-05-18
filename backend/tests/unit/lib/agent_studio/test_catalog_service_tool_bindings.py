@@ -44,6 +44,17 @@ class _FakeDB:
         return _FakeQuery(self._rows)
 
 
+class _FakePromptBundle:
+    hash = "hash-fake"
+    layers = ()
+
+    def render(self):
+        return "instructions"
+
+    def to_manifest(self):
+        return {"agent_id": "fake", "layers": [], "hash": self.hash}
+
+
 def test_resolve_tools_rejects_unknown_binding(monkeypatch):
     monkeypatch.setattr(catalog_service, "TOOL_BINDINGS", {})
 
@@ -152,7 +163,7 @@ def test_create_db_agent_propagates_tool_resolution_errors(monkeypatch):
         tool_ids=["curation_db_sql"],
         name="Disease Specialist",
     )
-    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **_kwargs: "instructions")
+    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **_kwargs: _FakePromptBundle())
     monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: (_ for _ in ()).throw(ValueError("tool resolution failed")))
 
     from src.lib.openai_agents import config as agent_config
@@ -327,7 +338,8 @@ def test_create_db_agent_requires_package_declared_lookup_tool_call(monkeypatch)
         name="Gene Validation Agent (Custom)",
     )
 
-    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **_kwargs: "instructions")
+    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **_kwargs: _FakePromptBundle())
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: ())
     monkeypatch.setattr(
         catalog_service,
         "resolve_tools",
@@ -354,6 +366,8 @@ def test_create_db_agent_requires_package_declared_lookup_tool_call(monkeypatch)
     class _FakeAgent:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
+            for key, value in kwargs.items():
+                setattr(self, key, value)
 
     monkeypatch.setattr(guardrails_mod, "ToolCallTracker", _DummyTracker)
     monkeypatch.setattr(guardrails_mod, "create_tool_required_output_guardrail", _fake_guardrail)
