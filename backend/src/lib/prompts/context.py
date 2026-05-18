@@ -238,34 +238,6 @@ def set_pending_prompts(
     return prompt_run_id
 
 
-def set_pending_prompt_assembly(
-    agent_or_name: Any,
-    *,
-    effective_prompt_hash: str,
-    layer_manifest: Dict[str, Any],
-) -> None:
-    """Attach effective prompt assembly metadata to a pending agent run."""
-
-    prompt_run_id = _resolve_prompt_run_id(agent_or_name)
-    if prompt_run_id is None:
-        return
-
-    agent_name = str(getattr(agent_or_name, "name", agent_or_name))
-    pending_prompts = _get_pending()
-    run_pending = _get_pending_runs().copy()
-    current = run_pending.get(prompt_run_id)
-    prompts = list(current.prompts if current else pending_prompts.get(agent_name, []))
-    run_pending[prompt_run_id] = PromptRun(
-        agent_name=agent_name,
-        prompts=prompts,
-        assembly=PromptAssemblyMetadata(
-            effective_prompt_hash=effective_prompt_hash,
-            layer_manifest=dict(layer_manifest),
-        ),
-    )
-    _pending_prompt_runs.set(run_pending)
-
-
 def append_pending_prompt_runtime_context(
     agent_or_name: Any,
     *,

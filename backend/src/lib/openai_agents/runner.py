@@ -1318,7 +1318,6 @@ async def run_agent_streamed(
     clear_collected_events()
     clear_pending_configs()  # Clear agent configs from previous requests
     reset_consecutive_call_tracker()  # Reset batching nudge tracker for new query
-    clear_prompt_context()  # Clear prompt tracking for new request
 
     # Use pre-fetched document context if provided, otherwise fetch
     # This optimization avoids redundant Weaviate queries when called from flow executor
@@ -1344,6 +1343,7 @@ async def run_agent_streamed(
     # Use provided agent OR create the supervisor agent with all domain specialists
     # All agent settings come from environment variables (see config.py)
     if agent is None:
+        clear_prompt_context()  # Clear prompt tracking before creating new runtime agents
         agent = create_supervisor_agent(
             document_id=document_id,
             user_id=user_id,

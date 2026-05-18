@@ -203,35 +203,6 @@ def prompt_templates_for_bundle(bundle: PromptLayerBundle) -> tuple[PromptTempla
     return tuple(templates)
 
 
-def append_runtime_context_layer(
-    bundle: PromptLayerBundle,
-    *,
-    layer_id_suffix: str,
-    title: str,
-    content: str,
-    source_ref: str,
-) -> PromptLayerBundle:
-    """Return a new bundle with an additional runtime-context layer."""
-
-    layer_content = _normalize_optional_text(content)
-    if not layer_content:
-        return bundle
-
-    return _bundle(
-        bundle.agent_id,
-        (
-            *bundle.layers,
-            _runtime_context_layer(
-                agent_id=bundle.agent_id,
-                layer_id_suffix=layer_id_suffix,
-                title=title,
-                content=layer_content,
-                source_ref=source_ref,
-            ),
-        ),
-    )
-
-
 def append_runtime_context_to_manifest(
     layer_manifest: Mapping[str, Any],
     *,
