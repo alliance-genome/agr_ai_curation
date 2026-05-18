@@ -136,6 +136,36 @@ class TestRoutingConsistency:
             "schemas for the destination route"
         )
 
+    def test_ontology_term_supervisor_tool_name_matches_runtime_key(self):
+        """Keep the public ontology resolver prompt aligned with generated tools."""
+        from src.lib.agent_studio.registry_builder import build_agent_registry
+        from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
+        from src.lib.config.agent_loader import get_agent_definition
+
+        repo_root = Path(__file__).resolve().parents[3]
+        prompt_content = (
+            repo_root / "config/agents/supervisor/prompt.yaml"
+        ).read_text(encoding="utf-8")
+        agent_content = (
+            repo_root / "packages/alliance/agents/ontology_term/agent.yaml"
+        ).read_text(encoding="utf-8")
+        agent = get_agent_definition("ontology_term_validation")
+        assert agent is not None
+
+        expected_tool_name = (
+            f"ask_{canonical_system_agent_key(agent).replace('-', '_')}_specialist"
+        )
+        assert expected_tool_name == "ask_ontology_term_validation_specialist"
+
+        registry_entry = build_agent_registry()["ontology_term_validation"]
+        assert registry_entry["supervisor"]["tool_name"] == expected_tool_name
+
+        stale_tool_name = "ask_ontology_term_specialist"
+        assert expected_tool_name in prompt_content
+        assert expected_tool_name in agent_content
+        assert stale_tool_name not in prompt_content
+        assert stale_tool_name not in agent_content
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

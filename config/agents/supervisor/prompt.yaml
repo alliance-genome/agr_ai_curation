@@ -180,7 +180,7 @@ content: |
   | ask_gene_ontology_specialist | GO terms, hierarchy | "GO term", "molecular function", "biological process", "cellular component", etc. | Query -> GO Info |
   | ask_go_annotations_specialist | Gene GO annotations | "GO annotations for" | GeneID -> GO Annotations |
   | ask_orthologs_specialist | Cross-species orthologs | "ortholog", "human equivalent", "homolog", etc. | GeneID -> Orthologs |
-  | ask_ontology_term_specialist | Ontology term CURIEs and typed label/synonym lookup | "resolve ontology term", "get term ID", "anatomy term", "life stage", "GO term", etc. | CURIE or typed label -> OntologyTermValidationResult |
+  | ask_ontology_term_validation_specialist | Ontology term CURIEs and typed label/synonym lookup | "resolve ontology term", "get term ID", "anatomy term", "life stage", "GO term", etc. | CURIE or typed label -> OntologyTermValidationResult |
 
   ## ENTITY TYPES WE CAN VALIDATE
   - Genes, Alleles, Diseases, Chemicals, Anatomy/stage terms, etc.
@@ -273,7 +273,7 @@ content: |
      )
      -> Returns plain text with: ORGANISM, GENES FOUND, ANNOTATIONS, SUMMARY
 
-  2. ask_ontology_term_specialist("Resolve these typed ontology terms using tool evidence: [all anatomy/life_stage/GO labels from step 1]. Use provider-scoped anatomy/life-stage lookup when organism is known, GO lookup for GO labels, and typed label/synonym lookup only with ontology_term_type.")
+  2. ask_ontology_term_validation_specialist("Resolve these typed ontology terms using tool evidence: [all anatomy/life_stage/GO labels from step 1]. Use provider-scoped anatomy/life-stage lookup when organism is known, GO lookup for GO labels, and typed label/synonym lookup only with ontology_term_type.")
      -> Returns: OntologyTermValidationResult records with resolved CURIEs or preserved candidates
 
   3. format_data(
@@ -328,5 +328,5 @@ content: |
     | ask_gene_ontology_specialist | "Gene Ontology" |
     | ask_go_annotations_specialist | "GO Annotations Database" |
     | ask_orthologs_specialist | "Orthology Database" |
-    | ask_ontology_term_specialist | "Ontology Term Resolver" |
+    | ask_ontology_term_validation_specialist | "Ontology Term Resolver" |
   </output_format>

@@ -18,6 +18,7 @@ from src.lib.config.agent_loader import (
     load_agent_definitions,
     get_agent_definition,
 )
+from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
 logger = logging.getLogger(__name__)
 
 
@@ -902,15 +903,17 @@ def _agent_definition_to_registry_entry(
     if not doc and agent_def.description.strip():
         doc = {"summary": agent_def.description.strip()}
 
+    system_agent_key = canonical_system_agent_key(agent_def)
+    supervisor_tool_name = f"ask_{system_agent_key.replace('-', '_')}_specialist"
+
     # Build batching config if agent is batchable
     batching = None
     if agent_def.supervisor_routing.batchable:
         entity = agent_def.supervisor_routing.batching_entity
-        tool_name = agent_def.tool_name
         # Generate example: ask_gene_specialist("Look up these genes: ...")
         batching = {
             "entity": entity,
-            "example": f'{tool_name}("Look up these {entity}: ...")',
+            "example": f'{supervisor_tool_name}("Look up these {entity}: ...")',
         }
 
     return {
@@ -928,7 +931,7 @@ def _agent_definition_to_registry_entry(
         "config_defaults": _build_config_defaults(agent_def.model_config),
         "supervisor": {
             "enabled": agent_def.supervisor_routing.enabled,
-            "tool_name": agent_def.tool_name,
+            "tool_name": supervisor_tool_name,
         },
         "batching": batching,
         "frontend": {

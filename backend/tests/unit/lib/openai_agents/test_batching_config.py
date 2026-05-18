@@ -39,7 +39,7 @@ class TestGetBatchingConfig:
             "ask_allele_specialist",
             "ask_disease_specialist",
             "ask_chemical_specialist",
-            "ask_ontology_term_specialist",
+            "ask_ontology_term_validation_specialist",
             "ask_gene_ontology_specialist",
             "ask_go_annotations_specialist",
         ]

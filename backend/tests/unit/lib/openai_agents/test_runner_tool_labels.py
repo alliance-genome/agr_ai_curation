@@ -69,7 +69,7 @@ def test_resolve_tool_display_name_uses_builtin_specialist_labels():
         ("ask_gene_ontology_specialist", "Gene Ontology Agent"),
         ("ask_go_annotations_specialist", "GO Annotations Agent"),
         ("ask_orthologs_specialist", "Orthologs Agent"),
-        ("ask_ontology_term_specialist", "Ontology Term Resolver Agent"),
+        ("ask_ontology_term_validation_specialist", "Ontology Term Resolver Agent"),
         ("ask_chat_output_specialist", "Chat Output Agent"),
         ("ask_csv_formatter_specialist", "CSV File Formatter"),
         ("ask_tsv_formatter_specialist", "TSV File Formatter"),

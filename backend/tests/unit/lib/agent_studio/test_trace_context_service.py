@@ -272,6 +272,10 @@ def test_extract_and_normalize_helpers():
         trace_context_service._normalize_agent_id("ask_ontology_term_specialist")
         == "ontology_term_validation"
     )
+    assert (
+        trace_context_service._normalize_agent_id("ask_ontology_term_validation_specialist")
+        == "ontology_term_validation"
+    )
 
     obs_name = _obs(name="ask_disease_extractor_specialist", metadata=None)
     assert trace_context_service._identify_agent_from_observation(obs_name) == "disease_extractor"
@@ -279,6 +283,11 @@ def test_extract_and_normalize_helpers():
     obs_ontology = _obs(name="ask_ontology_term_specialist", metadata=None)
     assert (
         trace_context_service._identify_agent_from_observation(obs_ontology)
+        == "ontology_term_validation"
+    )
+    obs_ontology_validation = _obs(name="ask_ontology_term_validation_specialist", metadata=None)
+    assert (
+        trace_context_service._identify_agent_from_observation(obs_ontology_validation)
         == "ontology_term_validation"
     )
 
