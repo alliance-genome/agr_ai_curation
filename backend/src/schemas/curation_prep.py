@@ -348,6 +348,8 @@ class CurationPrepRunMetadata(CurationPrepBaseModel):
 class CurationPrepAgentOutput(CurationPrepBaseModel):
     """Structured output emitted by curation prep."""
 
+    __envelope_class__ = True
+
     envelope_refs: list[CurationPrepEnvelopeRef] = Field(
         default_factory=list,
         description=(
