@@ -121,7 +121,6 @@ def build_agent_prompt_layers(
     """Build final prompt layers in deterministic effective-prompt order."""
     agent = _resolve_system_agent(agent_id)
     canonical_agent_id = canonical_system_agent_key(agent)
-    prompt_agent_name = _prompt_agent_name(agent)
     cache = get_all_active_prompts()
 
     layers = list(build_agent_core_prompt(canonical_agent_id).layers)
@@ -129,7 +128,7 @@ def build_agent_prompt_layers(
         _prompt_template_layer(
             _required_prompt_template(
                 cache,
-                agent_name=prompt_agent_name,
+                agent_name=canonical_agent_id,
                 prompt_type="system",
                 group_id=None,
             ),
@@ -145,7 +144,7 @@ def build_agent_prompt_layers(
     group_layer = _build_group_rules_layer(
         cache,
         canonical_agent_id=canonical_agent_id,
-        prompt_agent_name=prompt_agent_name,
+        prompt_agent_name=canonical_agent_id,
         group_ids=_normalize_group_ids(group_id),
     )
     if group_layer is not None:
@@ -201,25 +200,20 @@ def _resolve_system_agent(agent_id: str) -> AgentDefinition:
     raise ValueError(f"Unknown system agent '{requested_id}'")
 
 
-def _prompt_agent_name(agent: AgentDefinition) -> str:
-    return canonical_system_agent_key(agent)
-
-
 def _build_core_generated_content(agent: AgentDefinition) -> str:
     fragments: list[str] = []
     schema_key = str(agent.output_schema or "").strip()
     if schema_key:
-        output_type = None
-        try:
-            output_type = resolve_output_schema(schema_key)
-        except Exception:
-            output_type = None
+        output_type = resolve_output_schema(schema_key)
+        if output_type is None:
+            raise ValueError(
+                f"Output schema '{schema_key}' for agent '{agent.agent_id}' is not registered"
+            )
 
         fragments.append(
             inject_structured_output_instruction(
                 "",
                 output_type=output_type,
-                output_type_name=schema_key if output_type is None else None,
                 insert_after_first_section=False,
             ).strip()
         )
@@ -265,7 +259,7 @@ def _prompt_template_layer(
         layer_id=layer_id,
         kind=kind,
         title=title,
-        content=str(prompt.content or ""),
+        content=_prompt_template_content(prompt),
         provenance=provenance,
         editable=editable,
         locked=locked,
@@ -293,7 +287,7 @@ def _build_group_rules_layer(
         return None
 
     content = "\n\n".join(
-        f"## {prompt.group_id}\n{str(prompt.content or '').strip()}"
+        f"## {prompt.group_id}\n{_prompt_template_content(prompt)}"
         for prompt in prompts
     )
     source_ref = ",".join(_prompt_template_source_ref(prompt) for prompt in prompts)
@@ -321,6 +315,15 @@ def _prompt_template_source_ref(prompt: PromptTemplate) -> str:
         f"prompt_templates:{prompt_id}:"
         f"{prompt.agent_name}:{prompt.prompt_type}:{group}:v{prompt.version}"
     )
+
+
+def _prompt_template_content(prompt: PromptTemplate) -> str:
+    if prompt.content is None:
+        raise ValueError(
+            "PromptTemplate content is required for "
+            f"{prompt.agent_name}:{prompt.prompt_type}:{prompt.group_id or 'base'}"
+        )
+    return str(prompt.content).strip()
 
 
 def _normalize_group_ids(group_id: str | Sequence[str] | None) -> tuple[str, ...]:
@@ -365,7 +368,9 @@ def _make_layer(
     locked: bool,
     source_ref: str,
 ) -> PromptLayer:
-    normalized_content = str(content or "").strip()
+    if content is None:
+        raise ValueError(f"Prompt layer '{layer_id}' content is required")
+    normalized_content = str(content).strip()
     layer_hash = _stable_hash(
         {
             "id": layer_id,

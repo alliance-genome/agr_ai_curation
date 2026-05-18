@@ -250,7 +250,11 @@ def test_core_plus_org_custom_runtime_loads_without_alliance_package(monkeypatch
     assert agents["demo_agent_validation"].curation.adapter_key == "demo"
 
     schemas = schema_discovery.discover_agent_schemas(packages_dir, force_reload=True)
-    assert set(schemas) == {"DemoValidationEnvelope"}
+    assert set(schemas) == {
+        "CurationPrepAgentOutput",
+        "DemoValidationEnvelope",
+        "PdfExtractionResultEnvelope",
+    }
     assert schema_discovery.get_schema_for_agent("demo_agent").__name__ == "DemoValidationEnvelope"
 
     tool_registry = load_tool_registry(
