@@ -100,7 +100,7 @@ def trace_agent_display_name(
         registry_name = str(registry_entry.get("name") or "").strip()
         if registry_name:
             return registry_name
-    return normalized_id.replace("_", " ").title()
+    return normalized_id
 
 
 def _agent_registry() -> Mapping[str, Mapping[str, Any]]:

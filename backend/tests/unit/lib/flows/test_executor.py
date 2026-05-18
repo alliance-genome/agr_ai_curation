@@ -1795,7 +1795,7 @@ class TestGetAllAgentToolsCreatedNames:
 
         assert len(tools) == 1
         assert "ask_gene_specialist" in created_names
-        assert "ask_pdf_specialist" not in created_names
+        assert "ask_pdf_extraction_specialist" not in created_names
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -1949,7 +1949,7 @@ class TestBuildSupervisorUnavailableSteps:
         assert "[unavailable" in result
         assert "Step 2: PDF Specialist" in result
         # Should NOT have a tool reference for the unavailable step
-        assert "ask_pdf_specialist" not in result
+        assert "ask_pdf_extraction_specialist" not in result
 
     def test_available_steps_not_marked_unavailable(self):
         """Steps with available tools should not be marked unavailable."""

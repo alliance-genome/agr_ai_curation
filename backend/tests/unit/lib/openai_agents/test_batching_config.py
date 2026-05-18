@@ -21,7 +21,7 @@ class TestGetBatchingConfig:
         """Agents without batching config should not appear."""
         config = get_batching_config()
         # PDF agent doesn't have batching
-        assert "ask_pdf_specialist" not in config
+        assert "ask_pdf_extraction_specialist" not in config
 
     def test_get_batching_config_matches_hardcoded(self):
         """Generated config should match original hardcoded values."""

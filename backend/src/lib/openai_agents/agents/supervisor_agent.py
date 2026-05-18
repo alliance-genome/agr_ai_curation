@@ -439,7 +439,7 @@ def _create_streaming_tool(
 
     Args:
         agent: The specialist agent to wrap
-        tool_name: The tool name (e.g., "ask_pdf_specialist")
+        tool_name: The tool name (e.g., "ask_pdf_extraction_specialist")
         tool_description: Description for the LLM
         specialist_name: Human-readable name for audit events
         run_config: Optional run configuration

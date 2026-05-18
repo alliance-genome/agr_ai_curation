@@ -10,6 +10,11 @@ import httpx
 import pytest
 
 import src.lib.agent_studio.trace_context_service as trace_context_service
+from src.lib.agent_studio.trace_agent_metadata import (
+    get_trace_agent_patterns,
+    normalize_trace_agent_id,
+    trace_agent_display_name,
+)
 
 
 def _obs(**kwargs):
@@ -265,6 +270,24 @@ async def test_get_trace_context_for_explorer_wraps_unexpected_errors(monkeypatc
         await trace_context_service.get_trace_context_for_explorer("trace-1")
 
 
+def test_trace_agent_metadata_handles_registry_patterns_directly():
+    registry = {
+        "alpha_agent": {
+            "name": "Alpha Agent",
+            "supervisor": {"tool_name": "ask_alpha_specialist"},
+        },
+        "beta_agent": {"name": "", "supervisor": {}},
+    }
+
+    patterns = get_trace_agent_patterns(registry)
+
+    assert patterns["ask_alpha_specialist"] == "alpha_agent"
+    assert normalize_trace_agent_id("ask_alpha_specialist", registry) == "alpha_agent"
+    assert normalize_trace_agent_id("beta_agent", registry) == "beta_agent"
+    assert trace_agent_display_name("alpha_agent", registry) == "Alpha Agent"
+    assert trace_agent_display_name("made_up_agent", registry) == "made_up_agent"
+
+
 def test_extract_and_normalize_helpers():
     assert trace_context_service._normalize_agent_id("pdf_specialist") == "pdf_extraction"
     assert trace_context_service._normalize_agent_id("gene_extractor") == "gene_extractor"
@@ -296,7 +319,7 @@ def test_extract_and_normalize_helpers():
 
     assert trace_context_service._agent_id_to_name("pdf_extraction") == "General PDF Extraction Agent"
     assert trace_context_service._agent_id_to_name("ontology_term") == "Ontology Term Resolver Agent"
-    assert trace_context_service._agent_id_to_name("made_up_agent") == "Made Up Agent"
+    assert trace_context_service._agent_id_to_name("made_up_agent") == "made_up_agent"
 
     obs_group_new = _obs(metadata={"active_groups": "WB"})
     obs_group_old = _obs(metadata={"active_mods": "RGD"})

@@ -31,7 +31,7 @@ def test_build_custom_tool_display_names_maps_custom_tool_from_description():
 def test_build_custom_tool_display_names_ignores_non_custom_tools():
     agent = SimpleNamespace(
         tools=[
-            SimpleNamespace(name="ask_pdf_specialist", description="Ask the PDF Specialist"),
+            SimpleNamespace(name="ask_pdf_extraction_specialist", description="Ask the PDF Specialist"),
             SimpleNamespace(name="search_document", description="Search document"),
         ]
     )
