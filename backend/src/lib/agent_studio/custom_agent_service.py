@@ -1,5 +1,6 @@
 """Custom agent service for Agent Workshop CRUD and runtime resolution."""
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,12 +21,15 @@ from src.models.sql.database import SessionLocal
 CUSTOM_AGENT_PREFIX = "ca_"
 _DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
 _SYSTEM_MANAGED_INHERITED_TOOL_IDS = {"get_agent_contract", "record_evidence"}
-_LOCKED_PROMPT_MARKERS = (
+LOCKED_PROMPT_MARKERS = (
     "Platform Runtime Contract",
     "backend-owned instructions",
+    "Generated runtime contract",
     "structured output",
     "JSON schema",
 )
+
+logger = logging.getLogger(__name__)
 
 
 class CustomAgentError(Exception):
@@ -92,7 +96,15 @@ def normalize_custom_overlay_for_parent(
 
     try:
         bundle = build_agent_prompt_layers(parent_key, group_id=group_id)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Could not resolve parent prompt layers for custom overlay cleanup.",
+            exc_info=(type(exc), exc, exc.__traceback__),
+            extra={
+                "parent_agent_key": parent_key,
+                "group_id": group_id,
+            },
+        )
         return CustomOverlayNormalization(
             content=_collapse_prompt_whitespace(content),
             status="needs_review",
@@ -111,7 +123,7 @@ def normalize_custom_overlay_for_parent(
 
     normalized_content = _collapse_prompt_whitespace(content)
     lowered_remaining_content = normalized_content.lower()
-    if any(marker.lower() in lowered_remaining_content for marker in _LOCKED_PROMPT_MARKERS):
+    if any(marker.lower() in lowered_remaining_content for marker in LOCKED_PROMPT_MARKERS):
         return CustomOverlayNormalization(
             content=normalized_content,
             status="needs_review",

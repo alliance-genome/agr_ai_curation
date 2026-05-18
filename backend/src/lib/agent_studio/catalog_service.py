@@ -80,7 +80,7 @@ _INLINE_PACKAGE_TOOL_IDS = frozenset({
 })
 
 
-def _layer_projection(bundle: Optional[PromptLayerBundle]) -> tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
+def layer_projection(bundle: Optional[PromptLayerBundle]) -> tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
     """Project an assembled bundle into Agent Studio catalog fields."""
 
     if bundle is None:
@@ -1512,13 +1512,13 @@ def _build_catalog() -> PromptCatalog:
             prompt_bundle = build_agent_prompt_layers(agent_id)
         except Exception as exc:
             logger.warning(
-                "Could not build prompt layer projection for %s: %s",
+                "Could not build prompt layer projection for %s.",
                 agent_id,
-                exc,
+                exc_info=(type(exc), exc, exc.__traceback__),
             )
             prompt_bundle = None
-            prompt_layer_error = f"Prompt layer metadata could not be built: {exc}"
-        prompt_layers, effective_prompt_hash, layer_manifest = _layer_projection(prompt_bundle)
+            prompt_layer_error = "Prompt layer metadata could not be built."
+        prompt_layers, effective_prompt_hash, layer_manifest = layer_projection(prompt_bundle)
 
         # Create PromptInfo with version metadata
         prompt_info = PromptInfo(

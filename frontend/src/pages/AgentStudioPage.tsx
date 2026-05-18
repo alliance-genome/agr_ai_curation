@@ -313,10 +313,7 @@ function AgentStudioPage() {
     activeTab === 'agent_workshop' ? workshopSelectedAgentId : (selectedAgentId || undefined)
   const effectiveSelectedGroupId =
     activeTab === 'agent_workshop' ? workshopSelectedGroupId : (selectedGroupId || undefined)
-  const effectiveViewMode =
-    activeTab === 'agent_workshop'
-      ? (effectiveSelectedGroupId ? 'combined' : 'base')
-      : (effectiveSelectedGroupId ? 'combined' : 'base')
+  const effectiveViewMode = effectiveSelectedGroupId ? 'combined' : 'base'
   const flowDefinition: FlowContextDefinition | undefined =
     activeTab === 'flows' && flowState
       ? {

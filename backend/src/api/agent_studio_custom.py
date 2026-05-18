@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, NoReturn, Optional
+from typing import Any, Dict, List, Literal, NoReturn, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -179,7 +179,7 @@ class CustomAgentResponse(BaseModel):
     name: str
     description: Optional[str] = None
     custom_prompt: str
-    custom_prompt_overlay_status: str = "clean"
+    custom_prompt_overlay_status: Literal["clean", "deduplicated", "needs_review"] = "clean"
     custom_prompt_removed_layer_kinds: List[str] = Field(default_factory=list)
     custom_prompt_warning: Optional[str] = None
     group_prompt_overrides: Dict[str, str] = Field(

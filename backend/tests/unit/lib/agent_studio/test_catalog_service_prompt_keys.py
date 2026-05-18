@@ -149,7 +149,7 @@ def test_build_catalog_surfaces_prompt_layer_projection_errors(monkeypatch):
 
     assert agent.prompt_layers == []
     assert agent.effective_prompt_hash is None
-    assert "broken layer assembly" in (agent.prompt_layer_error or "")
+    assert agent.prompt_layer_error == "Prompt layer metadata could not be built."
 
 
 def test_build_catalog_core_only_registry_hides_missing_alliance_agents(monkeypatch):

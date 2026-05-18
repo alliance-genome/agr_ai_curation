@@ -81,6 +81,7 @@ from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry
 from src.lib.agent_studio.custom_agent_service import (
     CustomAgentAccessError,
     CustomAgentNotFoundError,
+    LOCKED_PROMPT_MARKERS,
     clone_visible_agent_for_user,
     custom_agent_to_dict,
     get_custom_agent_group_prompt,
@@ -292,12 +293,12 @@ def _merge_custom_agents_into_catalog(
                 )
             except Exception as exc:
                 logger.warning(
-                    "Could not build prompt layer projection for custom agent %s: %s",
+                    "Could not build prompt layer projection for custom agent %s.",
                     custom.id,
-                    exc,
+                    exc_info=(type(exc), exc, exc.__traceback__),
                 )
-                prompt_layer_error = f"Prompt layer metadata could not be built: {exc}"
-        prompt_layers, effective_prompt_hash, layer_manifest = catalog_service._layer_projection(prompt_bundle)
+                prompt_layer_error = "Prompt layer metadata could not be built."
+        prompt_layers, effective_prompt_hash, layer_manifest = catalog_service.layer_projection(prompt_bundle)
 
         prompt_info = PromptInfo(
             agent_id=make_custom_agent_id(custom.id),
@@ -2363,14 +2364,7 @@ async def _handle_tool_call(
                 "success": False,
                 "error": "proposed prompt exceeds maximum size (40,000 characters).",
             }
-        if any(
-            marker in updated_prompt
-            for marker in (
-                "Platform Runtime Contract",
-                "backend-owned instructions",
-                "Generated runtime contract",
-            )
-        ):
+        if any(marker in updated_prompt for marker in LOCKED_PROMPT_MARKERS):
             return {
                 "success": False,
                 "error": (

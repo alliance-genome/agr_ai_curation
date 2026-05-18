@@ -153,13 +153,12 @@ def test_custom_agent_preview_treats_custom_prompt_as_overlay(
     prompt_parity_service,
 ):
     import src.api.agent_studio as api_module
-    from src.lib.agent_studio import custom_agent_service
 
     custom_uuid = uuid.uuid4()
-    monkeypatch.setattr(custom_agent_service, "parse_custom_agent_id", lambda _agent_id: custom_uuid)
+    monkeypatch.setattr(api_module, "parse_custom_agent_id", lambda _agent_id: custom_uuid)
     monkeypatch.setattr(api_module, "set_global_user_from_cognito", lambda _db, _user: SimpleNamespace(id=7))
     monkeypatch.setattr(
-        custom_agent_service,
+        api_module,
         "get_custom_agent_for_user",
         lambda _db, _uuid, _user_id: SimpleNamespace(
             custom_prompt="Curator overlay instructions",

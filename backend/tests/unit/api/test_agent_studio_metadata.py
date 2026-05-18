@@ -653,7 +653,7 @@ class TestGetRegistryMetadata:
         )
         assert custom.prompt_layers == []
         assert custom.effective_prompt_hash is None
-        assert "layer projection failed" in (custom.prompt_layer_error or "")
+        assert custom.prompt_layer_error == "Prompt layer metadata could not be built."
 
     def test_get_prompt_preview_system_agent(self, monkeypatch):
         """Prompt preview should return base prompt for system agent without group_id."""
