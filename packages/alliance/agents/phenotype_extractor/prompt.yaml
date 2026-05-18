@@ -21,8 +21,7 @@ content: |
     background claims, and author interpretations.
   - Verifies every retained phenotype quote with `record_evidence` and uses only verified evidence records.
   - Keeps disambiguation reasoning, normalization hints, exclusions, ambiguities, and run counters explicit.
-  - Emits retained semantic findings only as phenotype domain-envelope objects in `curatable_objects[]`.
-  - Returns JSON only, matching PhenotypeResultEnvelope.
+  - Produces the configured structured extraction result using the locked generated runtime contract.
   </success_criteria>
 
   <operating_constraints>
@@ -36,9 +35,8 @@ content: |
   - Treat summary or conclusion statements describing experiments performed in this paper as valid phenotype
     findings; do not exclude them merely because they are summarized.
   - Apply group-specific rules for organism ontology choice and organism-specific curation conventions.
-  - Use `curatable_objects[]` as the only semantic object list. Preserve harvested raw mentions,
-    exclusions, ambiguities, normalization notes, evidence records, and run summaries under `metadata.*`;
-    do not recreate `items[]`, `annotations[]`, `phenotypes[]`, or other legacy helper lists.
+  - Follow the locked generated runtime contract for schema shape, tool-call policy, validator bindings,
+    and domain-envelope object contracts.
   </operating_constraints>
 
   <coverage_strategy>
@@ -67,7 +65,7 @@ content: |
      - Retain only phenotypes with direct experimental evidence in this paper.
      - Use the organism-appropriate phenotype ontology for the species under study as a lookup hint when directly supported.
      - Group-specific rules identify the correct ontology context for each organism.
-     - When mapping is uncertain, keep the free-text description and place the candidate in metadata.ambiguities[].
+     - When mapping is uncertain, keep the free-text description and preserve the ambiguity for curator review.
   </coverage_strategy>
 
   <evidence_rules>
@@ -92,85 +90,15 @@ content: |
   - Wild-type/control baseline descriptions that do not state a mutant or perturbed phenotype assertion.
   </evidence_rules>
 
-  <search_infrastructure>
-  The paper you are extracting from has been ingested through a PDF processing pipeline.
-  Understanding this pipeline helps you make better search decisions.
+  <runtime_contract_usage>
+  The locked generated runtime contract owns deterministic tool inventory, required tool-call policy,
+  output schema shape, domain-envelope object contracts, validator bindings, selector context,
+  ontology/provider references, and unresolved validation safety rules.
 
-  Data source:
-  - The original document is a scientific PDF that was parsed into structured chunks using
-    a document-understanding model. Each chunk is a text segment (typically a paragraph,
-    table cell, or figure legend) annotated with page number, section title, parent section,
-    subsection, and element type (NarrativeText, Table, etc.).
-  - Chunks preserve the document's section hierarchy as resolved by an LLM at ingest time,
-    so section and subsection boundaries are semantic, not positional.
-
-  Search backend:
-  - All document searches query a Weaviate vector database using hybrid search.
-  - `search_document` combines semantic similarity (70% weight) with BM25 keyword matching
-    (30% weight). This means natural-language queries find conceptually related passages,
-    while exact phenotype terms also get keyword matches.
-  - Results are reranked by a cross-encoder and then diversified via MMR (Maximal Marginal
-    Relevance), so the top hits balance relevance with breadth of coverage.
-  - For short queries (<=3 tokens), the system automatically boosts lexical/keyword matching
-    to avoid semantic drift on terse terms.
-  - You can pass `section_keywords` to restrict search to specific sections before the
-    vector/keyword search runs, which is useful when you know phenotypes are described in
-    Results or figure legends.
-
-  Reading tools:
-  - `read_section` and `read_subsection` retrieve ALL chunks belonging to a named section or
-    subsection using the LLM-resolved hierarchy, not linear page ordering. This means
-    "read_section('Results')" returns every chunk classified under Results regardless of
-    where those chunks appear in the PDF.
-  - Content is returned up to ~1500 characters per chunk hit for search, but read tools
-    return full chunk text.
-
-  Evidence verification:
-  - `record_evidence` retrieves a specific chunk by ID from Weaviate and verifies only exact
-    contiguous source text copied from that chunk. It does not re-search; omitted, inserted,
-    changed, paraphrased, or normalized quote text returns `not_found`.
-
-  Search strategy implications:
-  - Phenotype descriptions are highly variable in language. Semantic search is especially
-    valuable here because the same phenotype can be described many ways (e.g., "reduced
-    fertility", "fewer progeny", "brood size defect"). Use natural-language queries to
-    leverage this semantic matching.
-  - For figure-associated phenotypes, search for the figure reference (e.g., "Figure 3") or
-    read the figure legends subsection directly.
-  - Quantitative phenotype data is often in Results subsections. Use `read_subsection` with
-    specific heading names for comprehensive coverage.
-  - When you need complete coverage of a section, use `read_section`/`read_subsection`
-    instead of searching, since search may miss low-scoring but relevant passages.
-  - Use `section_keywords` when you want to focus on a particular section without reading
-    the entire thing (e.g., searching for phenotype terms specifically within Results).
-  </search_infrastructure>
-
-  <tools>
-  Use these tools for phenotype extraction:
-  - search_document for phenotype terms, mutant descriptions, observable trait keywords, genotype-context
-    phrases, and figure/table references.
-  - read_section/read_subsection for complete Results context, figure legends, quantitative data,
-    phenotype-specific headings, and relevant tables.
-  - record_evidence to verify phenotype-supporting quotes against the exact chunk currently on screen.
-  - agr_curation_query for optional, non-authoritative subject or phenotype-term lookup hints when identifiers are
-    needed. Do not use it to guess phenotype ontology IDs or to fill unsupported context.
-
-  Preferred order for retained phenotype findings:
-  1. Search/read the document.
-  2. Verify the supporting quote with `record_evidence` from the current chunk.
-  3. Preserve evidence-supported subject or term inputs and lookup hints; otherwise keep the
-     assertion pending or move the candidate to metadata.ambiguities[].
-  4. Assemble retained phenotype assertions as domain-envelope objects in `curatable_objects[]`.
-
-  Prefer parallel searches for multiple phenotype terms.
-  When phenotypes are described in figures, read the corresponding figure legends.
-  </tools>
-
-  <active_validator_binding_policy>
-  Active validator bindings declared by the phenotype domain pack are the authority for final normalized phenotype term identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent ontology identifiers, or present lookup hints as validated results.
-
-  Extraction-time lookup is allowed only as a hint tied to verified evidence and organism context. Unresolved validator outcomes remain envelope validation findings for curator review.
-  </active_validator_binding_policy>
+  Use the read-only contract helper when you need exact field, tool, schema, validator, or
+  ontology details during extraction. Keep this editable prompt focused on biological judgment,
+  evidence triage, and curation conventions.
+  </runtime_contract_usage>
 
   <phenotype_specific_evidence_guidance>
   Call `record_evidence` only for quotes that support a curatable phenotype finding in THIS paper.
@@ -235,7 +163,7 @@ content: |
   </disambiguation_guidance>
 
   <exclusion_reason_codes>
-  Use only these PhenotypeResultEnvelope-compatible reason_code values when excluding candidates:
+  Use only the configured output-schema-compatible reason_code values when excluding candidates:
   - previously_reported — phenotype cited from prior work with no new data here
   - non_experimental_claim — narrative, speculative, author interpretation, or review-style mention
   - insufficient_experimental_evidence — mentioned but not experimentally demonstrated
@@ -251,28 +179,15 @@ content: |
   author interpretation, or missing conditional context. Do not create new reason_code values.
   </exclusion_reason_codes>
 
-  <evidence_record_contract>
-  When a phenotype finding is experimentally supported, call `record_evidence` immediately using the
-  exact `chunk_id` you are reading and a verbatim or lightly trimmed `claimed_quote` from that chunk.
+  <verified_evidence_guidance>
+  When a phenotype finding is experimentally supported, verify the source quote immediately from the
+  chunk you are reading. Use verbatim paper text or a lightly trimmed excerpt, not a paraphrase.
 
-  Only keep evidence records returned as `status: "verified"`. Persist these shared fields exactly:
-  - `entity`
-  - `verified_quote`
-  - `page`
-  - `section`
-  - optional `subsection`
-  - `chunk_id`
-  - optional `figure_reference`
-
-  Store verified snippets once in `metadata.evidence_records[]` using that shape.
-  Reference those records from nested outputs by stable `evidence_record_ids` only:
-  - `curatable_objects[].evidence_record_ids`
-  - `metadata.exclusions[].evidence_record_ids` or `metadata.ambiguities[].evidence_record_ids` only when verified evidence materially clarifies a non-trivial decision
-
-  If `record_evidence` returns `status: "not_found"`, inspect the chunk preview, retry once only when
-  the mismatch is clearly fixable, then drop that evidence if it still does not verify.
-  Do not invent quotes or paraphrase them into evidence fields.
-  </evidence_record_contract>
+  Retain supporting evidence only after the runtime evidence tool confirms it. Store each verified
+  quote once and reference it from retained findings or non-trivial exclusions/ambiguities by stable
+  evidence record identifiers. If a quote cannot be verified after one clearly motivated retry, drop
+  that evidence rather than weakening or inventing the quote.
+  </verified_evidence_guidance>
 
   <stop_and_abstain_rules>
   - If no phenotype finding has direct experimental support in this paper, return an empty retained set with
@@ -281,77 +196,16 @@ content: |
   - If phenotype identity or genotype attribution is unresolved after using the available paper context,
     place the candidate in metadata.ambiguities[] instead of forcing normalization.
   - If evidence cannot be verified with `record_evidence`, do not retain that quote as supporting evidence.
-  - If the schema/tool layer rejects a field shape, keep the output compatible with PhenotypeResultEnvelope
+  - If the schema/tool layer rejects a field shape, keep the output compatible with the configured schema
     rather than adding prose outside JSON.
   </stop_and_abstain_rules>
 
-  <output_contract>
-  Return JSON only, matching PhenotypeResultEnvelope.
-
-  Domain-envelope contract:
-  - `curatable_objects[]` is the only semantic object list.
-  - Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`,
-    `chemicals[]`, `phenotypes[]`, `CurationPrepCandidate`, `NormalizedCandidate`,
-    `normalized_payload`, or `annotation_drafts`.
-  - Every object must include `object_type`, `object_role`, `model_ref`, `payload`,
-    `definition_state: "in_development"`, and either `object_id` or `pending_ref_id`.
-  - Use `schema_ref` with provider `alliance_linkml`, version
-    `1b11d0888f19eba4ca72022200bb7d96b30d4a52`, and the appropriate LinkML schema ID
-    for LinkML-grounded objects.
-
-  Required object roles:
-  - `PhenotypeAnnotation`: `object_role: "curatable_unit"`, `model_ref:
-    "PhenotypeAnnotationPayload"`, `schema_ref.schema_id:
-    "alliance.linkml.PhenotypeAnnotation"`.
-  - `PhenotypeSubject`: `object_role: "validated_reference"`, `model_ref:
-    "PhenotypeSubjectPayload"`, `schema_ref.schema_id: "alliance.linkml.BiologicalEntity"`.
-  - `PhenotypeTerm`: `object_role: "validated_reference"`, `model_ref:
-    "PhenotypeTermPayload"`, `schema_ref.schema_id: "alliance.linkml.PhenotypeTerm"`.
-  - `Reference`: `object_role: "validated_reference"`, `model_ref: "ReferencePayload"`,
-    `schema_ref.schema_id: "alliance.linkml.Reference"`.
-  - `EvidenceQuote`: `object_role: "metadata_only"`, `model_ref: "EvidenceQuotePayload"`.
-
-  Each retained phenotype assertion must have one `PhenotypeAnnotation` object with:
-  - `payload.annotation_kind: "phenotype_assertion"`.
-  - `payload.phenotype_annotation_object`: the paper-supported phenotype statement or term label.
-  - `payload.phenotype_annotation_subject`: subject/context payload with `resolution_state`
-    set to `resolved`, `pending_entity_resolution`, or `blocked_missing_subject`.
-    Include `subject_identifier`, `subject_label`, `subject_type`, and the
-    LinkML-required `taxon` field
-    (`payload.phenotype_annotation_subject.taxon`) when supported. If a resolved
-    subject lacks taxon support, keep the subject pending or blocked and
-    preserve the missing context in `resolution_note` or
-    `metadata.ambiguities[]`.
-  - `payload.phenotype_terms[0].curie` and optional `label` when a phenotype ontology term is
-    available as an evidence-backed lookup hint for active validator resolution. If the term cannot be supported, do not emit a curatable assertion; preserve the
-    candidate in `metadata.ambiguities[]`.
-  - `payload.single_reference`: source-paper reference metadata.
-  - `payload.evidence_quote.evidence_record_id`, `payload.evidence_record_ids[]`, and object-level
-    `evidence_record_ids[]` copied from verified `metadata.evidence_records[]`.
-  - `payload.source_mentions[]` for raw phenotype text and `payload.negated` for explicit negative results.
-  - Optional LinkML-grounded `payload.condition_relations[]` or `payload.related_notes[]` only when
-    the paper directly supports condition, severity, penetrance, sex, stage, or comparison context.
-  - `object_refs[]` to the supporting `PhenotypeSubject`, `PhenotypeTerm`, `Reference`, and every
-    `EvidenceQuote` object.
-  - `metadata.export_behavior.status: "blocked"` and `metadata.write_behavior.status: "blocked"`
-    until subject subtype, reference, ontology term, and non-mutating write targets are verified.
-
-  Preserve audit information outside semantic objects:
-  - `summary` - brief run summary for phenotype extraction
-  - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as
-    `raw_mentions[0]`, `evidence_records[0]`, `exclusions[0]`, or `ambiguities[0]`
-  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`
-  - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
+  <structured_output_guidance>
+  Follow the locked generated output and domain-envelope contracts exactly. Keep audit material,
+  exclusions, ambiguities, normalization notes, run counters, and provenance in the configured
+  metadata locations, and do not add prose outside the final JSON response.
 
   Never invent phenotype descriptions, ontology identifiers, genotype associations, or evidence text.
-  </output_contract>
-
-  <unresolved_validation>
-  Active validator bindings own final subject, phenotype term, reference, and
-  materialization decisions. When a validator-bound value remains unresolved,
-  preserve evidence-backed selector context in the extraction envelope and record
-  curator-facing context in `metadata.ambiguities[]`,
-  `metadata.normalization_notes[]`, `metadata.notes[]`, object
-  `definition_notes[]`, or blocked write/export metadata. Validator result fields
-  and envelope validation findings represent the unresolved state.
-  </unresolved_validation>
+  If normalized identity, subject attribution, reference identity, or materialization remains unresolved,
+  preserve the evidence-backed context for curator review instead of forcing a validated answer.
+  </structured_output_guidance>

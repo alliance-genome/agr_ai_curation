@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
 
-from src.lib.config.agent_loader import AgentDefinition
+from src.lib.config.agent_loader import AgentDefinition, CurationConfig
 from src.lib.prompts import assembly
 from src.lib.prompts.cache import PromptNotFoundError
 from src.models.sql.prompts import PromptTemplate
@@ -23,12 +25,18 @@ def _agent(
     folder_name: str = "demo_agent",
     agent_id: str = "demo_agent_validation",
     output_schema: str | None = "DemoStructuredOutput",
+    category: str = "",
+    tools: list[str] | None = None,
+    domain_pack_id: str | None = None,
 ) -> AgentDefinition:
     return AgentDefinition(
         folder_name=folder_name,
         agent_id=agent_id,
         name="Demo Validation Agent",
+        category=category,
+        tools=tools or [],
         output_schema=output_schema,
+        curation=CurationConfig(domain_pack_id=domain_pack_id),
     )
 
 
@@ -100,6 +108,77 @@ def test_core_prompt_layers_are_locked_and_do_not_use_prompt_templates(prompt_ca
     assert "DemoStructuredOutput structured output" in bundle.layers[1].content
     assert "Base prompt" not in bundle.render()
     assert "Group alpha rules" not in bundle.render()
+
+
+def test_core_generated_contract_summarizes_tool_and_domain_metadata(monkeypatch):
+    monkeypatch.setattr(
+        assembly,
+        "load_agent_definitions",
+        lambda: {
+            "phenotype_extractor": _agent(
+                folder_name="phenotype_extractor",
+                agent_id="phenotype_extractor",
+                category="Extraction",
+                tools=[
+                    "search_document",
+                    "read_section",
+                    "record_evidence",
+                    "get_agent_contract",
+                    "agr_curation_query",
+                ],
+                output_schema="PhenotypeResultEnvelope",
+                domain_pack_id="agr.alliance.phenotype",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        assembly,
+        "_domain_pack_validation_registries",
+        lambda: {"agr.alliance.phenotype": _phenotype_registry_stub()},
+    )
+
+    bundle = assembly.build_agent_core_prompt("phenotype_extractor")
+    generated = bundle.layers[1].content
+
+    assert "Tool inventory from agent.yaml" in generated
+    assert "call at least one document retrieval tool" in generated
+    assert "get_agent_contract" in generated
+    assert "Domain envelope pack: agr.alliance.phenotype v0.1.0" in generated
+    assert "PhenotypeAnnotation(PhenotypeAnnotationPayload role=curatable_unit" in generated
+    assert "Pending unresolved shapes: PhenotypeTerm=pending_ontology_resolution" in generated
+    assert "PhenotypeTerm.curie->phenotype_term_ontology_validator" in generated
+    assert "accepted_prefixes<-literal:[MP, WBPhenotype, ZP]" in generated
+    assert "No extractor should invent exact ontology CURIEs" in generated
+
+    assert len(generated.splitlines()) <= 40
+    assert len(generated.split()) <= 1500
+    assert "prompt_templates:" not in bundle.layers[1].source_ref
+    assert "domain_pack:agr.alliance.phenotype" in bundle.layers[1].source_ref
+
+
+def test_phenotype_editable_prompt_does_not_duplicate_generated_contract_facts():
+    prompt_path = (
+        Path(__file__).resolve().parents[5]
+        / "packages/alliance/agents/phenotype_extractor/prompt.yaml"
+    )
+    content = prompt_path.read_text(encoding="utf-8")
+
+    forbidden_fragments = [
+        "<search_infrastructure>",
+        "<tools>",
+        "<active_validator_binding_policy>",
+        "<output_contract>",
+        "<evidence_record_contract>",
+        "phenotype_term_ontology_validator",
+        "accepted_prefixes",
+        "schema_ref.schema_id",
+        "alliance_linkml",
+        "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+        "PhenotypeResultEnvelope",
+        "curatable_objects[] is the only semantic object list",
+    ]
+    for fragment in forbidden_fragments:
+        assert fragment not in content
 
 
 def test_prompt_layers_keep_expected_order_and_editability(prompt_cache):
@@ -185,3 +264,103 @@ def test_prompt_template_content_is_required(prompt_cache):
 
     with pytest.raises(ValueError, match="demo_agent:system:base"):
         assembly.build_agent_prompt_layers("demo_agent")
+
+
+def _value(value: str) -> SimpleNamespace:
+    return SimpleNamespace(value=value)
+
+
+def _field(
+    field_path: str,
+    *,
+    required: bool = False,
+    validator_binding_id: str | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        field_path=field_path,
+        field_type=_value("string"),
+        required=required,
+        metadata=(
+            {"validator_binding_id": validator_binding_id}
+            if validator_binding_id
+            else {}
+        ),
+    )
+
+
+def _selector(source: str, *, path: str | None = None, value=None) -> SimpleNamespace:
+    return SimpleNamespace(source=source, path=path, value=value)
+
+
+def _phenotype_registry_stub() -> SimpleNamespace:
+    metadata = SimpleNamespace(
+        pack_id="agr.alliance.phenotype",
+        version="0.1.0",
+        status=_value("in_development"),
+        metadata_api_version="1.0.0",
+        metadata={"semantic_source": "domain_envelope.objects"},
+        schema_refs=[
+            SimpleNamespace(
+                provider="alliance_linkml",
+                name="PhenotypeAnnotation",
+                version="1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+            )
+        ],
+        object_definitions=[
+            SimpleNamespace(
+                object_type="PhenotypeAnnotation",
+                model_ref="PhenotypeAnnotationPayload",
+                metadata={"object_role": "curatable_unit"},
+                fields=[
+                    _field("phenotype_annotation_object", required=True),
+                    _field(
+                        "phenotype_terms[0].curie",
+                        required=True,
+                        validator_binding_id="phenotype_term_ontology_validator",
+                    ),
+                    _field("evidence_record_ids[0]", required=True),
+                ],
+            ),
+            SimpleNamespace(
+                object_type="PhenotypeTerm",
+                model_ref="PhenotypeTermPayload",
+                metadata={
+                    "object_role": "validated_reference",
+                    "validation_state": "pending_ontology_resolution",
+                },
+                fields=[
+                    _field(
+                        "curie",
+                        required=True,
+                        validator_binding_id="phenotype_term_ontology_validator",
+                    ),
+                    _field(
+                        "label",
+                        validator_binding_id="phenotype_term_ontology_validator",
+                    ),
+                ],
+            ),
+        ],
+    )
+    binding = SimpleNamespace(
+        state=assembly.ValidationBindingState.ACTIVE,
+        binding_id="phenotype_term_ontology_validator",
+        object_types=("PhenotypeTerm",),
+        field_paths=("curie", "label"),
+        input_fields={
+            "curie": _selector("payload", path="curie"),
+            "label": _selector("payload", path="label"),
+            "ontology_family": _selector("literal", value="phenotype"),
+            "accepted_prefixes": _selector(
+                "literal",
+                value=["MP", "WBPhenotype", "ZP"],
+            ),
+        },
+        required=True,
+        blocking=False,
+        allow_opt_out=True,
+    )
+    return SimpleNamespace(
+        domain_pack=SimpleNamespace(metadata=metadata),
+        bindings=(binding,),
+    )
