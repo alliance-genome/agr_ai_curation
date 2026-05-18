@@ -9,6 +9,43 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 from src.lib.agent_studio.models import ChatContext
 
 
+TRACE_AGENT_NAME_PATTERNS = (
+    "supervisor",
+    "gene_extraction",
+    "gene_extractor",
+    "ask_gene_extractor_",
+    "gene_expression",
+    "allele_variant_extraction",
+    "allele_extractor",
+    "ask_allele_extractor_",
+    "disease_extraction",
+    "disease_extractor",
+    "ask_disease_extractor_",
+    "chemical_extraction",
+    "chemical_extractor",
+    "ask_chemical_extractor_",
+    "phenotype_extraction",
+    "phenotype_extractor",
+    "phenotype_specialist",
+    "ask_phenotype_extractor_",
+    "ask_phenotype_",
+    "pdf_specialist",
+    "gene",
+    "allele",
+    "disease",
+    "chemical",
+    "gene_ontology",
+    "go_annotations",
+    "orthologs",
+    "ontology_term_validation",
+    "ontology_term",
+    "chat_output",
+    "csv_formatter",
+    "tsv_formatter",
+    "json_formatter",
+)
+
+
 def list_anthropic_catalog_models(
     *,
     list_model_definitions: Callable[[], Iterable[Any]],
@@ -388,10 +425,7 @@ def fetch_trace_for_opus(trace_id: str, *, logger: Any) -> Optional[str]:
             # Identify agents from generation observations
             if obs_type == "GENERATION":
                 # Try to identify the agent
-                for agent_pattern in ["supervisor", "gene_extraction", "gene_extractor", "ask_gene_extractor_", "gene_expression", "allele_variant_extraction", "allele_extractor", "ask_allele_extractor_", "disease_extraction", "disease_extractor", "ask_disease_extractor_", "chemical_extraction", "chemical_extractor", "ask_chemical_extractor_", "phenotype_extraction", "phenotype_extractor", "phenotype_specialist", "ask_phenotype_extractor_", "ask_phenotype_", "pdf_specialist", "gene", "allele",
-                                     "disease", "chemical", "gene_ontology", "go_annotations",
-                                     "orthologs", "ontology_term_validation", "ontology_term", "chat_output",
-                                     "csv_formatter", "tsv_formatter", "json_formatter"]:
+                for agent_pattern in TRACE_AGENT_NAME_PATTERNS:
                     if agent_pattern in obs_name.lower():
                         agents_used.add(agent_pattern)
                         break

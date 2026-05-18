@@ -1,5 +1,4 @@
 """Tests for registry-driven batching config."""
-import pytest
 from src.lib.openai_agents.streaming_tools import get_batching_config, BATCHING_NUDGE_CONFIG
 
 
