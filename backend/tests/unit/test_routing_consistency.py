@@ -22,8 +22,8 @@ if str(_backend_path) not in sys.path:
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ALLIANCE_AGENTS_PATH = REPO_ROOT / "packages" / "alliance" / "agents"
 
-from src.schemas.models import Destination, RoutingPlan, SCHEMA_REGISTRY
-from src.schemas.domain_validator import is_domain_validator_result_schema
+from src.schemas.models import Destination, RoutingPlan, SCHEMA_REGISTRY  # noqa: E402
+from src.schemas.domain_validator import is_domain_validator_result_schema  # noqa: E402
 
 
 def get_generated_schema(schema_name: str) -> dict:
