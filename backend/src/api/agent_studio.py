@@ -2316,7 +2316,7 @@ async def _handle_tool_call(
                 "success": False,
                 "error": "proposed prompt exceeds maximum size (40,000 characters).",
             }
-        if target_prompt == "main" and any(
+        if any(
             marker in updated_prompt
             for marker in (
                 "Platform Runtime Contract",

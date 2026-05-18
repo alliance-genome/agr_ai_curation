@@ -460,6 +460,32 @@ describe('PromptWorkshop', () => {
     expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue('')
   }, 15000)
 
+  it('clearly marks existing overlays that need copied-core review in the prompt preview', async () => {
+    const flaggedAgent = buildCustomAgent({
+      custom_prompt: 'Partial Platform Runtime Contract prose with local curator edits.',
+      custom_prompt_overlay_status: 'needs_review',
+      custom_prompt_warning: 'Custom overlay contains locked/core prompt markers but did not match exact parent layers for safe cleanup.',
+    })
+    serviceMocks.listCustomAgents.mockResolvedValue({ custom_agents: [flaggedAgent], total: 1 })
+
+    render(<PromptWorkshop catalog={buildCatalogWithPromptLayers()} initialCustomAgentId={flaggedAgent.id} />)
+
+    await waitForAgentName('My Agent')
+
+    fireEvent.click(await screen.findByText('Curator Overlay'))
+    expect(screen.getAllByText(/Custom overlay contains locked\/core prompt markers/).length).toBeGreaterThan(0)
+    expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue(
+      'Partial Platform Runtime Contract prose with local curator edits.'
+    )
+
+    fireEvent.click(await screen.findByText('Effective Prompt Preview'))
+    expect(screen.getAllByText((_content, element) => {
+      const text = element?.textContent || ''
+      return text.includes('[Custom overlay needs coordinator review before runtime use]')
+        && text.includes('Partial Platform Runtime Contract prose with local curator edits.')
+    }).length).toBeGreaterThan(0)
+  }, 15000)
+
   it('shows domain-envelope and automatic validation metadata for the selected template', async () => {
     metadataMocks.agents = {
       gene: {

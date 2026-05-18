@@ -300,6 +300,14 @@ const REASONING_HELP_TEXT = [
   '• high: slowest, use only for hard ambiguity',
 ].join('\n')
 
+function formatLayerKind(kind: string): string {
+  return kind
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
+
 interface PromptWorkshopProps {
   catalog: PromptCatalog
   initialParentAgentId?: string | null
@@ -478,12 +486,33 @@ function PromptWorkshop({
     .filter((layer) => layer.kind === 'base_prompt')
     .map((layer) => layer.content)
     .join('\n\n') || parentAgent?.base_prompt || ''
+  const overlayStatus = selectedCustomAgent?.custom_prompt_overlay_status || 'clean'
+  const overlayWarning = selectedCustomAgent?.custom_prompt_warning || ''
+  const removedLayerKinds = selectedCustomAgent?.custom_prompt_removed_layer_kinds || []
+  const markedCustomPrompt = useMemo(() => {
+    if (!customPrompt.trim()) return ''
+    if (overlayStatus === 'needs_review') {
+      return [
+        '[Custom overlay needs coordinator review before runtime use]',
+        overlayWarning || 'This overlay contains locked/core prompt markers that could not be safely separated from curator-authored guidance.',
+        customPrompt,
+      ].join('\n\n')
+    }
+    if (overlayStatus === 'deduplicated') {
+      const removedLayers = removedLayerKinds.map(formatLayerKind).join(', ') || 'locked parent layers'
+      return [
+        `[Custom overlay deduplicated: removed copied ${removedLayers}]`,
+        customPrompt,
+      ].join('\n\n')
+    }
+    return customPrompt
+  }, [customPrompt, overlayStatus, overlayWarning, removedLayerKinds])
   const effectivePromptPreview = [
     parentCorePrompt,
     parentGeneratedContract,
     parentBasePrompt,
     includeGroupRules ? selectedGroupPromptForContext : '',
-    customPrompt,
+    markedCustomPrompt,
   ].filter((part) => part && part.trim()).join('\n\n')
 
   const hasSelectedGroupOverride = useMemo(
@@ -1782,6 +1811,16 @@ function PromptWorkshop({
                   <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Curator Overlay</Typography>
                 </AccordionSummary>
                 <AccordionDetails>
+                  {overlayStatus === 'needs_review' && (
+                    <Alert severity="warning" sx={{ mb: 1.5 }}>
+                      {overlayWarning || 'This saved overlay contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
+                    </Alert>
+                  )}
+                  {overlayStatus === 'deduplicated' && (
+                    <Alert severity="info" sx={{ mb: 1.5 }}>
+                      Removed copied locked/template layers from this overlay: {removedLayerKinds.map(formatLayerKind).join(', ') || 'parent prompt layers'}.
+                    </Alert>
+                  )}
                   <TextField
                     fullWidth
                     multiline
