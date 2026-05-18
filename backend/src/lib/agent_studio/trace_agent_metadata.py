@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
+from src.lib.config.agent_loader import canonical_system_agent_key
 
 TRACE_AGENT_ALIASES = {
     "pdf_specialist": "pdf_extraction",

@@ -2,7 +2,7 @@
 # AGENT DEFINITION: ontology_term
 # =============================================================================
 # Validates generic ontology term CURIE and label fields against package tools.
-# Tool name generated at runtime: ask_ontology_term_specialist
+# Tool name generated at runtime: ask_ontology_term_validation_specialist
 # =============================================================================
 
 agent_id: ontology_term_validation

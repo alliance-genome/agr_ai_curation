@@ -9,8 +9,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
-from src.lib.config.agent_loader import AgentDefinition, load_agent_definitions
+from src.lib.config.agent_loader import (
+    AgentDefinition,
+    canonical_system_agent_key,
+    load_agent_definitions,
+)
 from src.lib.config.schema_discovery import resolve_output_schema
 from src.lib.domain_packs.validation_registry import ValidationBindingState
 from src.lib.openai_agents.tool_call_policy import (

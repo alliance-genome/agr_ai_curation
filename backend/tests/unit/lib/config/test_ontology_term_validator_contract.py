@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
+from src.lib.config.agent_loader import canonical_system_agent_key
 from src.lib.config import agent_loader, prompt_loader, schema_discovery
 from src.schemas.domain_validator import DomainValidatorResultBase
 

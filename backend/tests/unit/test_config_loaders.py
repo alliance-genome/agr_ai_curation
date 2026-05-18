@@ -76,8 +76,11 @@ class TestAgentLoader:
 
     def test_ontology_term_agent_declares_public_system_key(self):
         """The generic ontology resolver is publicly keyed by agent_id."""
-        from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
-        from src.lib.config.agent_loader import load_agent_definitions, get_agent_definition
+        from src.lib.config.agent_loader import (
+            canonical_system_agent_key,
+            get_agent_definition,
+            load_agent_definitions,
+        )
 
         load_agent_definitions(ALLIANCE_AGENTS_PATH)
         ontology_term = get_agent_definition("ontology_term_validation")
@@ -86,6 +89,7 @@ class TestAgentLoader:
         assert ontology_term.folder_name == "ontology_term"
         assert ontology_term.system_agent_key == "ontology_term_validation"
         assert canonical_system_agent_key(ontology_term) == "ontology_term_validation"
+        assert ontology_term.tool_name == "ask_ontology_term_validation_specialist"
 
     def test_pdf_agent_not_batchable(self):
         """Test that PDF agent is marked as not batchable."""
@@ -123,7 +127,9 @@ class TestAgentLoader:
         # Check tool structure
         tool_names = [t["tool_name"] for t in tools]
         assert "ask_gene_specialist" in tool_names
-        assert "ask_pdf_specialist" in tool_names
+        assert "ask_pdf_extraction_specialist" in tool_names
+        assert "ask_ontology_term_validation_specialist" in tool_names
+        assert "ask_ontology_term_specialist" not in tool_names
 
         # Check batchable flags
         gene_tool = next(t for t in tools if t["tool_name"] == "ask_gene_specialist")
@@ -160,6 +166,20 @@ class TestAgentLoader:
         assert gene is not None
         assert gene.agent_id == "gene_validation"
         assert gene.folder_name == "gene"
+
+    def test_get_agent_by_tool_name_uses_explicit_system_agent_key(self):
+        """Agents with explicit system keys resolve by public supervisor tool name."""
+        from src.lib.config.agent_loader import load_agent_definitions, get_agent_by_tool_name
+
+        load_agent_definitions(ALLIANCE_AGENTS_PATH)
+
+        ontology_term = get_agent_by_tool_name("ask_ontology_term_validation_specialist")
+        stale_folder_tool = get_agent_by_tool_name("ask_ontology_term_specialist")
+
+        assert ontology_term is not None
+        assert ontology_term.agent_id == "ontology_term_validation"
+        assert ontology_term.folder_name == "ontology_term"
+        assert stale_folder_tool is None
 
     def test_list_agents_enabled_only(self):
         """Test listing only supervisor-enabled agents."""

@@ -31,9 +31,12 @@ import re
 from dataclasses import dataclass, replace
 
 from agents import Agent
-from src.lib.config.agent_loader import get_agent_definition, get_agent_by_folder
+from src.lib.config.agent_loader import (
+    canonical_system_agent_key,
+    get_agent_definition,
+    get_agent_by_folder,
+)
 from src.lib.file_outputs import FileValidationError, sanitize_output_descriptor
-from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
 from src.lib.prompts.assembly import (
     PromptLayerBundle,
     build_agent_prompt_layers,

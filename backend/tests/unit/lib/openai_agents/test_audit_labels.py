@@ -9,7 +9,10 @@ from src.lib.openai_agents.audit_labels import (
 
 
 def test_resolve_tool_display_name_uses_builtin_map():
-    assert resolve_tool_display_name("ask_pdf_specialist") == "General PDF Extraction Agent"
+    assert (
+        resolve_tool_display_name("ask_pdf_extraction_specialist")
+        == "General PDF Extraction Agent"
+    )
 
 
 def test_resolve_tool_display_name_uses_builtin_phenotype_map():

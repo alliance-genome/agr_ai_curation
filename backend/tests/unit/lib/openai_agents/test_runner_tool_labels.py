@@ -49,13 +49,14 @@ def test_resolve_tool_display_name_prefers_custom_names():
 
 
 def test_resolve_tool_display_name_uses_builtin_specialist_labels():
-    resolved = _resolve_tool_display_name("ask_pdf_specialist", {})
+    resolved = _resolve_tool_display_name("ask_pdf_extraction_specialist", {})
     assert resolved == "General PDF Extraction Agent"
 
 
 @pytest.mark.parametrize(
     ("tool_name", "expected_label"),
     [
+        ("ask_pdf_extraction_specialist", "General PDF Extraction Agent"),
         ("ask_gene_specialist", "Gene Validation Agent"),
         ("ask_gene_extractor_specialist", "Gene Extraction Agent"),
         ("ask_allele_specialist", "Allele Validation Agent"),

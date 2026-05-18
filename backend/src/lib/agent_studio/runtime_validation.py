@@ -93,8 +93,10 @@ def _normalize_tool_ids(raw_tool_ids: Any) -> Tuple[List[str], Optional[str]]:
 def _load_expected_system_agent_keys() -> Tuple[set[str], Optional[str]]:
     """Load expected system-agent keys from layered runtime agent definitions."""
     try:
-        from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
-        from src.lib.config.agent_loader import load_agent_definitions
+        from src.lib.config.agent_loader import (
+            canonical_system_agent_key,
+            load_agent_definitions,
+        )
 
         agent_defs = load_agent_definitions()
         expected_keys = {

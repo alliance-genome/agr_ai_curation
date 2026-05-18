@@ -15,10 +15,11 @@ from typing import Any, Dict, Optional
 from src.lib.config.agent_loader import (
     AgentDefinition,
     ModelConfig,
+    canonical_system_agent_key,
     load_agent_definitions,
     get_agent_definition,
 )
-from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
+
 logger = logging.getLogger(__name__)
 
 
