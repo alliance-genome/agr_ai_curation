@@ -5,7 +5,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, NoReturn, Optional
+from typing import Any, Dict, List, Literal, NoReturn, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -179,6 +179,9 @@ class CustomAgentResponse(BaseModel):
     name: str
     description: Optional[str] = None
     custom_prompt: str
+    custom_prompt_overlay_status: Literal["clean", "deduplicated", "needs_review"] = "clean"
+    custom_prompt_removed_layer_kinds: List[str] = Field(default_factory=list)
+    custom_prompt_warning: Optional[str] = None
     group_prompt_overrides: Dict[str, str] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("group_prompt_overrides", "mod_prompt_overrides"),
@@ -486,6 +489,12 @@ async def revert_custom_agent_endpoint(
 ) -> CustomAgentResponse:
     """Revert custom-agent prompt to a specific saved version."""
     db_user = set_global_user_from_cognito(db, user)
+    log_context = _custom_agent_log_context(
+        action="revert",
+        db_user=db_user,
+        request=request,
+        custom_agent_id=custom_agent_id,
+    )
     try:
         custom_agent = get_custom_agent_for_user(db, custom_agent_id, db_user.id)
         revert_custom_agent_to_version(
@@ -502,6 +511,15 @@ async def revert_custom_agent_endpoint(
         _raise_custom_agent_lookup_http_exception(
             exc=exc,
             log_message=f"Failed to revert custom agent '{custom_agent_id}' to version {version}",
+        )
+    except ValueError as exc:
+        db.rollback()
+        _raise_custom_agent_validation_http_exception(
+            exc=exc,
+            status_code=400,
+            detail="Custom agent revert is invalid",
+            log_message=f"Failed to revert custom agent '{custom_agent_id}' to version {version}",
+            log_extra=log_context,
         )
 
 

@@ -35,6 +35,7 @@ import {
 import type {
   PromptCatalog,
   ChatContext,
+  FlowContextDefinition,
   AgentWorkshopContext,
   ToolIdeaConversationEntry,
   WorkshopPromptUpdateProposal,
@@ -171,7 +172,6 @@ function AgentStudioPage() {
   }, [])
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'base' | 'group' | 'combined'>('base')
   const [currentFlowId, setCurrentFlowId] = useState<string | null>(null)
   const [agentWorkshopTemplateSource, setAgentWorkshopTemplateSource] = useState<string | null>(null)
   const [agentWorkshopCustomAgentId, setAgentWorkshopCustomAgentId] = useState<string | null>(null)
@@ -313,10 +313,30 @@ function AgentStudioPage() {
     activeTab === 'agent_workshop' ? workshopSelectedAgentId : (selectedAgentId || undefined)
   const effectiveSelectedGroupId =
     activeTab === 'agent_workshop' ? workshopSelectedGroupId : (selectedGroupId || undefined)
-  const effectiveViewMode =
-    activeTab === 'agent_workshop'
-      ? (effectiveSelectedGroupId ? 'combined' : 'base')
-      : viewMode
+  const effectiveViewMode = effectiveSelectedGroupId ? 'combined' : 'base'
+  const flowDefinition: FlowContextDefinition | undefined =
+    activeTab === 'flows' && flowState
+      ? {
+          nodes: flowState.nodes.map((node) => ({
+            id: node.id,
+            agent_id: node.agent_id,
+            agent_display_name: node.agent_display_name,
+            task_instructions: node.task_instructions,
+            custom_instructions: node.custom_instructions,
+            input_source: node.input_source,
+            custom_input: node.custom_input,
+            output_filename_template: node.output_filename_template,
+            output_key: node.output_key,
+            validation_attachments: node.validation_attachments?.map((attachment) => ({
+              ...attachment,
+            }) as Record<string, unknown>),
+          })),
+          edges: flowState.edges.map((edge) => ({
+            source: edge.source,
+            target: edge.target,
+          })),
+        }
+      : undefined
 
   // Build chat context for Opus (includes active tab, flow state, and agent workshop state)
   const chatContext: ChatContext = {
@@ -328,10 +348,7 @@ function AgentStudioPage() {
     // Flow context (when on flows tab)
     active_tab: activeTab,
     flow_name: activeTab === 'flows' ? flowState?.flowName : undefined,
-    flow_definition: activeTab === 'flows' && flowState ? {
-      nodes: flowState.nodes,
-      edges: flowState.edges,
-    } : undefined,
+    flow_definition: flowDefinition,
     agent_workshop: activeTab === 'agent_workshop' ? (agentWorkshopContext || undefined) : undefined,
   }
 
@@ -347,13 +364,11 @@ function AgentStudioPage() {
     setSelectedAgentId(agentId)
     // Reset group selection when changing agents
     setSelectedGroupId(null)
-    setViewMode('base')
   }
 
   // Handle group selection
   const handleGroupSelect = (groupId: string | null) => {
     setSelectedGroupId(groupId)
-    setViewMode(groupId ? 'combined' : 'base')
   }
 
   // Handle flow state changes from FlowBuilder
@@ -557,10 +572,8 @@ Agent ID: ${agentId}`
                     catalog={catalog}
                     selectedAgentId={selectedAgentId}
                     selectedGroupId={selectedGroupId}
-                    viewMode={viewMode}
                     onAgentSelect={handleAgentSelect}
                     onGroupSelect={handleGroupSelect}
-                    onViewModeChange={setViewMode}
                     onDiscussWithClaude={handleDiscussWithClaude}
                     onCloneToWorkshop={handleCloneToWorkshop}
                   />

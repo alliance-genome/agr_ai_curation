@@ -257,9 +257,9 @@ Include `token_info` in responses for budget management:
 - **`submit_prompt_suggestion`** - Submit improvement suggestions.
   - Types: improvement, bug, clarification, group_specific, missing_case. Legacy `mod_specific` is also accepted.
   - Use when: concrete improvement identified, curator agrees, sufficient detail available
-- **`update_workshop_prompt_draft`** - Propose updates for the Agent Workshop draft prompt.
+- **`update_workshop_prompt_draft`** - Propose updates for editable Agent Workshop prompt layers.
   - Use when: the curator asks you to rewrite the draft or make focused edits, OR when you identify a concrete low-risk improvement and the curator approves applying it.
-  - Set `target_prompt="main"` for base system prompt edits.
+  - Set `target_prompt="main"` for curator overlay edits. Core/generated/base prompt layers are read-only context.
   - Set `target_prompt="group"` for group-specific edits to the currently selected group prompt (include `target_group_id` for clarity). Legacy `target_prompt="mod"` and `target_mod_id` are also accepted.
   - For full rewrites: use `apply_mode="replace"` with `updated_prompt`.
   - For focused changes: use `apply_mode="targeted_edit"` with `edits` (`replace_text` or `replace_section`).

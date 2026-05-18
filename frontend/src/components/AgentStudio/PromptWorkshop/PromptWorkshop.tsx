@@ -43,6 +43,7 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
 import SearchIcon from '@mui/icons-material/Search'
 import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined'
 import DeleteIcon from '@mui/icons-material/Delete'
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
 
 import type {
   PromptCatalog,
@@ -148,6 +149,20 @@ const SectionHeader = styled(Typography)(({ theme }) => ({
   paddingLeft: theme.spacing(1.5),
   borderLeft: `3px solid ${theme.palette.primary.main}`,
   marginBottom: theme.spacing(2),
+}))
+
+const PromptLayerPreview = styled(Box)(({ theme }) => ({
+  padding: theme.spacing(1.5),
+  borderRadius: 6,
+  border: `1px solid ${alpha(theme.palette.divider, 0.5)}`,
+  backgroundColor: alpha(theme.palette.common.black, 0.12),
+  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+  fontSize: '0.78rem',
+  lineHeight: 1.55,
+  whiteSpace: 'pre-wrap',
+  wordBreak: 'break-word',
+  maxHeight: 260,
+  overflow: 'auto',
 }))
 
 const StyledToggleButtonGroup = styled(ToggleButtonGroup)(({ theme }) => ({
@@ -284,6 +299,14 @@ const REASONING_HELP_TEXT = [
   '• medium: recommended default',
   '• high: slowest, use only for hard ambiguity',
 ].join('\n')
+
+function formatLayerKind(kind: string): string {
+  return kind
+    .split('_')
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
 
 interface PromptWorkshopProps {
   catalog: PromptCatalog
@@ -449,6 +472,48 @@ function PromptWorkshop({
     }
     return groupRuleSourceAgent?.group_rules[selectedGroupId]?.content
   }, [debouncedGroupPromptOverrides, groupRuleSourceAgent, selectedGroupId])
+
+  const parentPromptLayers = parentAgent?.prompt_layers || []
+  const parentCorePrompt = parentPromptLayers
+    .filter((layer) => layer.kind === 'core_static')
+    .map((layer) => layer.content)
+    .join('\n\n')
+  const parentGeneratedContract = parentPromptLayers
+    .filter((layer) => layer.kind === 'core_generated')
+    .map((layer) => layer.content)
+    .join('\n\n')
+  const parentBasePrompt = parentPromptLayers
+    .filter((layer) => layer.kind === 'base_prompt')
+    .map((layer) => layer.content)
+    .join('\n\n') || parentAgent?.base_prompt || ''
+  const overlayStatus = selectedCustomAgent?.custom_prompt_overlay_status
+  const overlayWarning = selectedCustomAgent?.custom_prompt_warning || ''
+  const removedLayerKinds = selectedCustomAgent?.custom_prompt_removed_layer_kinds || []
+  const markedCustomPrompt = useMemo(() => {
+    if (!customPrompt.trim()) return ''
+    if (overlayStatus === 'needs_review') {
+      return [
+        '[Custom overlay needs coordinator review before runtime use]',
+        overlayWarning || 'This overlay contains locked/core prompt markers that could not be safely separated from curator-authored guidance.',
+        customPrompt,
+      ].join('\n\n')
+    }
+    if (overlayStatus === 'deduplicated') {
+      const removedLayers = removedLayerKinds.map(formatLayerKind).join(', ') || 'locked parent layers'
+      return [
+        `[Custom overlay deduplicated: removed copied ${removedLayers}]`,
+        customPrompt,
+      ].join('\n\n')
+    }
+    return customPrompt
+  }, [customPrompt, overlayStatus, overlayWarning, removedLayerKinds])
+  const effectivePromptPreview = [
+    parentCorePrompt,
+    parentGeneratedContract,
+    parentBasePrompt,
+    includeGroupRules ? selectedGroupPromptForContext : '',
+    markedCustomPrompt,
+  ].filter((part) => part && part.trim()).join('\n\n')
 
   const hasSelectedGroupOverride = useMemo(
     () => Boolean(selectedGroupId && Object.prototype.hasOwnProperty.call(groupPromptOverrides, selectedGroupId)),
@@ -739,11 +804,10 @@ function PromptWorkshop({
         return
       }
 
-      const basePrompt = parentAgent?.base_prompt || ''
       setName(parentAgent ? `${parentAgent.agent_name} (Custom)` : '')
       setDescription('')
-      setCustomPrompt(basePrompt)
-      setDebouncedPromptDraft(basePrompt)
+      setCustomPrompt('')
+      setDebouncedPromptDraft('')
       setGroupPromptOverrides({})
       setDebouncedGroupPromptOverrides({})
       setIncludeGroupRules(true)
@@ -1013,7 +1077,7 @@ function PromptWorkshop({
       setError('Please enter a custom agent name')
       return
     }
-    if (!customPrompt.trim()) {
+    if (!customPrompt.trim() && !parentAgentId) {
       setError('Prompt text cannot be empty')
       return
     }
@@ -1689,10 +1753,10 @@ function PromptWorkshop({
             </Stack>
           </SectionCard>
 
-          {/* ── Section 2: System Prompt ── */}
+          {/* ── Section 2: Prompt Layers ── */}
           <SectionCard elevation={0}>
             <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1.5} sx={{ mb: 2 }}>
-              <SectionHeader sx={{ mb: 0 }}>System Prompt</SectionHeader>
+              <SectionHeader sx={{ mb: 0 }}>Prompt Layers</SectionHeader>
               {onVerifyRequest && (
                 <Button size="small" variant="outlined" onClick={handleDiscussPromptChangesWithClaude}>
                   Discuss prompt changes with Claude
@@ -1702,36 +1766,50 @@ function PromptWorkshop({
             <Stack spacing={1}>
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Main Prompt</Typography>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Core Prompt</Typography>
+                    <Chip size="small" icon={<LockOutlinedIcon />} label="Read-only" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                  </Stack>
                 </AccordionSummary>
                 <AccordionDetails>
-                  <TextField
-                    fullWidth
-                    multiline
-                    minRows={12}
-                    value={customPrompt}
-                    onChange={(event) => setCustomPrompt(event.target.value)}
-                    placeholder="Enter the system prompt for this agent..."
-                    variant="outlined"
-                    sx={{
-                      '& .MuiInputBase-root': {
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                        fontSize: '0.85rem',
-                        backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
-                        borderRadius: 1.5,
-                      },
-                      '& .MuiOutlinedInput-notchedOutline': {
-                        borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                      },
-                    }}
-                  />
+                  <PromptLayerPreview>
+                    {parentCorePrompt || 'No backend-owned core prompt layer was returned for this template.'}
+                  </PromptLayerPreview>
                 </AccordionDetails>
               </StyledAccordion>
 
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Group Prompt Overrides</Typography>
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Generated Contract</Typography>
+                    <Chip size="small" icon={<LockOutlinedIcon />} label="Read-only" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                  </Stack>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <PromptLayerPreview>
+                    {parentGeneratedContract || 'No generated runtime contract layer is required for this template.'}
+                  </PromptLayerPreview>
+                </AccordionDetails>
+              </StyledAccordion>
+
+              <StyledAccordion defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Base Prompt</Typography>
+                    <Chip size="small" label="Read-only in Workshop" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
+                  </Stack>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <PromptLayerPreview>
+                    {parentBasePrompt || 'No base prompt is available for this template.'}
+                  </PromptLayerPreview>
+                </AccordionDetails>
+              </StyledAccordion>
+
+              <StyledAccordion defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Group Rules</Typography>
                     {hasAnyGroupOverrides && (
                       <Chip size="small" label={`${Object.keys(groupPromptOverrides).length} override${Object.keys(groupPromptOverrides).length !== 1 ? 's' : ''}`} color="warning" variant="outlined" sx={{ height: 20, fontSize: '0.7rem' }} />
                     )}
@@ -1821,6 +1899,55 @@ function PromptWorkshop({
                       </Stack>
                     )}
                   </Stack>
+                </AccordionDetails>
+              </StyledAccordion>
+
+              <StyledAccordion defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Curator Overlay</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  {overlayStatus === 'needs_review' && (
+                    <Alert severity="warning" sx={{ mb: 1.5 }}>
+                      {overlayWarning || 'This saved overlay contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
+                    </Alert>
+                  )}
+                  {overlayStatus === 'deduplicated' && (
+                    <Alert severity="info" sx={{ mb: 1.5 }}>
+                      Removed copied locked/template layers from this overlay: {removedLayerKinds.map(formatLayerKind).join(', ') || 'parent prompt layers'}.
+                    </Alert>
+                  )}
+                  <TextField
+                    fullWidth
+                    multiline
+                    minRows={12}
+                    value={customPrompt}
+                    onChange={(event) => setCustomPrompt(event.target.value)}
+                    placeholder="Add curator-authored guidance that should sit on top of the locked core/base prompt..."
+                    variant="outlined"
+                    sx={{
+                      '& .MuiInputBase-root': {
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                        fontSize: '0.85rem',
+                        backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
+                        borderRadius: 1.5,
+                      },
+                      '& .MuiOutlinedInput-notchedOutline': {
+                        borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                      },
+                    }}
+                  />
+                </AccordionDetails>
+              </StyledAccordion>
+
+              <StyledAccordion defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Effective Prompt Preview</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <PromptLayerPreview>
+                    {effectivePromptPreview || 'No effective prompt preview is available yet.'}
+                  </PromptLayerPreview>
                 </AccordionDetails>
               </StyledAccordion>
             </Stack>

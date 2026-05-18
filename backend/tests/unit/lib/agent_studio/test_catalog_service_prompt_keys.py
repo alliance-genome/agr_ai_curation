@@ -109,6 +109,49 @@ def test_build_catalog_accepts_group_rules_and_legacy_mod_rules(monkeypatch):
     assert agent.group_rules["FB"].content == "fb rules"
 
 
+def test_build_catalog_surfaces_prompt_layer_projection_errors(monkeypatch):
+    """Layer assembly failures should be visible in catalog metadata."""
+    base_prompt = PromptTemplate(
+        id=uuid.uuid4(),
+        agent_name="gene",
+        prompt_type="system",
+        group_id=None,
+        content="base prompt",
+        version=1,
+        is_active=True,
+    )
+
+    monkeypatch.setattr(catalog_service, "AGENT_REGISTRY", {
+        "gene": {
+            "name": "Gene Specialist",
+            "description": "Curate genes",
+            "category": "Validation",
+            "tools": [],
+            "factory": lambda: None,
+            "subcategory": "Data Validation",
+        }
+    })
+    monkeypatch.setattr(catalog_service, "expand_tools_for_agent", lambda _a, _t: [])
+    monkeypatch.setattr(
+        catalog_service,
+        "build_agent_prompt_layers",
+        lambda _agent_id: (_ for _ in ()).throw(ValueError("broken layer assembly")),
+    )
+
+    from src.lib.prompts import cache as prompt_cache
+    monkeypatch.setattr(prompt_cache, "is_initialized", lambda: True)
+    monkeypatch.setattr(prompt_cache, "get_all_active_prompts", lambda: {
+        "gene:system:base": base_prompt,
+    })
+
+    catalog = catalog_service._build_catalog()
+    agent = catalog.categories[0].agents[0]
+
+    assert agent.prompt_layers == []
+    assert agent.effective_prompt_hash is None
+    assert agent.prompt_layer_error == "Prompt layer metadata could not be built."
+
+
 def test_build_catalog_core_only_registry_hides_missing_alliance_agents(monkeypatch):
     """Catalog build should stay valid when only task_input and supervisor exist."""
     supervisor_prompt = PromptTemplate(

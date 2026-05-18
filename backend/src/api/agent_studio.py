@@ -88,7 +88,10 @@ from src.lib.agent_studio.custom_agent_service import (
     get_custom_agent_visible_to_user,
     list_custom_agents_visible_to_user,
     make_custom_agent_id,
+    normalize_custom_overlay_for_parent,
+    normalize_editable_group_prompt_overrides,
     parse_custom_agent_id,
+    reject_locked_prompt_markers,
     set_custom_agent_visibility,
 )
 from src.lib.agent_studio.catalog_service import get_agent_by_id, get_agent_metadata
@@ -258,6 +261,10 @@ def _merge_custom_agents_into_catalog(
             if str(group_id).strip() and isinstance(content, str) and content.strip()
         }
         effective_group_rules: Dict[str, GroupRuleInfo] = {}
+        overlay_normalization = normalize_custom_overlay_for_parent(
+            template_source,
+            getattr(custom, "custom_prompt", ""),
+        )
 
         for group_id, parent_group_rule in template_group_rules.items():
             override_content = normalized_overrides.get(group_id.upper())
@@ -272,16 +279,45 @@ def _merge_custom_agents_into_catalog(
                 created_by=parent_group_rule.created_by,
             )
 
+        prompt_bundle = None
+        prompt_layer_error = None
+        if template_source:
+            overlay_for_layer_projection = (
+                ""
+                if overlay_normalization.status == "needs_review"
+                else overlay_normalization.content
+            )
+            try:
+                prompt_bundle = build_agent_prompt_layers(
+                    template_source,
+                    overlay=overlay_for_layer_projection,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not build prompt layer projection for custom agent %s.",
+                    custom.id,
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                prompt_layer_error = "Prompt layer metadata could not be built."
+        prompt_layers, effective_prompt_hash, layer_manifest = catalog_service.layer_projection(prompt_bundle)
+
         prompt_info = PromptInfo(
             agent_id=make_custom_agent_id(custom.id),
             agent_name=custom.name,
             description=custom.description or (
                 f"Custom agent from {template_name}" if template_name else "Custom scratch agent"
             ),
-            base_prompt=custom.custom_prompt,
+            base_prompt=overlay_normalization.content,
             source_file=f"custom_agent:{custom.id}",
             has_group_rules=bool(effective_group_rules),
             group_rules=effective_group_rules,
+            prompt_layers=prompt_layers,
+            effective_prompt_hash=effective_prompt_hash,
+            layer_manifest=layer_manifest,
+            prompt_layer_error=prompt_layer_error,
+            custom_prompt_overlay_status=overlay_normalization.status,
+            custom_prompt_removed_layer_kinds=overlay_normalization.removed_layer_kinds,
+            custom_prompt_warning=overlay_normalization.warning,
             tools=tools,
             subcategory=(
                 "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
@@ -659,6 +695,98 @@ def _custom_agent_template_source(custom: Any) -> Optional[str]:
     return template_source or None
 
 
+def _build_custom_agent_effective_prompt_bundle(
+    *,
+    agent_id: str,
+    group_id: Optional[str],
+    user: Dict[str, Any],
+    db: Session,
+    lookup_custom_agent: Callable[[Session, uuid.UUID, Any], Any],
+) -> tuple[Any, str, bool]:
+    """Assemble a custom agent over its locked parent prompt layers."""
+
+    custom_uuid = parse_custom_agent_id(agent_id)
+    if not custom_uuid:
+        raise HTTPException(status_code=400, detail="Invalid custom agent id")
+
+    db_user = set_global_user_from_cognito(db, user)
+    try:
+        custom_agent = lookup_custom_agent(db, custom_uuid, db_user.id)
+    except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
+        _raise_agent_studio_lookup_http_exception(
+            exc=exc,
+            log_message=f"Failed to load custom agent '{agent_id}' for prompt assembly",
+            not_found_detail="Custom agent not found",
+            access_denied_detail="Access denied to custom agent",
+            not_found_error_types=(CustomAgentNotFoundError,),
+        )
+
+    custom_group_rules_enabled = bool(
+        getattr(
+            custom_agent,
+            "group_rules_enabled",
+            getattr(custom_agent, "include_mod_rules", False),
+        )
+    )
+    try:
+        custom_group_overrides = normalize_editable_group_prompt_overrides(
+            getattr(custom_agent, "group_prompt_overrides", None)
+            or getattr(custom_agent, "mod_prompt_overrides", None)
+            or {}
+        )
+    except ValueError as exc:
+        logger.warning(
+            "Custom agent group override contains copied locked/core prompt text.",
+            exc_info=(type(exc), exc, exc.__traceback__),
+            extra={"custom_agent_id": agent_id},
+        )
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Custom agent group rules contain copied locked/core prompt text "
+                "that needs coordinator review before preview."
+            ),
+        ) from exc
+    parent_agent_key = str(custom_agent.parent_agent_key or "").strip()
+    if not parent_agent_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Custom agent is missing its system template source.",
+        )
+
+    active_group_id = group_id if custom_group_rules_enabled else None
+    overlay_normalization = normalize_custom_overlay_for_parent(
+        parent_agent_key,
+        str(custom_agent.custom_prompt or ""),
+        group_id=active_group_id,
+    )
+    if overlay_normalization.status == "needs_review":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Custom agent overlay contains copied locked/core prompt text "
+                "that needs coordinator review before preview."
+            ),
+        )
+
+    overlay_parts = [overlay_normalization.content]
+    if active_group_id:
+        override_prompt = str(
+            custom_group_overrides.get(active_group_id.upper()) or ""
+        ).strip()
+        if override_prompt:
+            overlay_parts.append(
+                f"## Curator group overlay: {active_group_id.upper()}\n{override_prompt}"
+            )
+
+    bundle = build_agent_prompt_layers(
+        parent_agent_key,
+        group_id=active_group_id,
+        overlay="\n\n".join(part for part in overlay_parts if part),
+    )
+    return bundle, parent_agent_key, custom_group_rules_enabled
+
+
 # ============================================================================
 # Catalog Endpoints
 # ============================================================================
@@ -722,10 +850,27 @@ async def refresh_catalog(
 )
 async def get_combined_prompt(
     request: CombinedPromptRequest,
-    user: Dict[str, Any] = get_auth_dependency()
+    user: Dict[str, Any] = get_auth_dependency(),
+    db: Session = Depends(get_db),
 ):
     """Get a combined prompt (base + group rules)."""
     try:
+        if request.agent_id.startswith("ca_"):
+            bundle, _, _ = _build_custom_agent_effective_prompt_bundle(
+                agent_id=request.agent_id,
+                group_id=request.group_id,
+                user=user,
+                db=db,
+                lookup_custom_agent=get_custom_agent_visible_to_user,
+            )
+            return CombinedPromptResponse(
+                agent_id=request.agent_id,
+                group_id=request.group_id,
+                combined_prompt=bundle.render(),
+                effective_prompt_hash=bundle.hash,
+                layer_manifest=bundle.to_manifest(),
+            )
+
         service = get_prompt_catalog()
         bundle = service.get_effective_prompt_bundle(request.agent_id, group_id=request.group_id)
         if bundle is None:
@@ -770,59 +915,14 @@ async def get_prompt_preview(
         resolved_group_id = group_id or mod_id
         # Custom agent preview with ownership check
         if agent_id.startswith("ca_"):
-            from src.lib.agent_studio.custom_agent_service import (
-                parse_custom_agent_id,
-                get_custom_agent_for_user,
-                CustomAgentNotFoundError,
-                CustomAgentAccessError,
-            )
-
-            custom_uuid = parse_custom_agent_id(agent_id)
-            if not custom_uuid:
-                raise HTTPException(status_code=400, detail="Invalid custom agent id")
-
-            db_user = set_global_user_from_cognito(db, user)
-            try:
-                custom_agent = get_custom_agent_for_user(db, custom_uuid, db_user.id)
-            except (CustomAgentNotFoundError, CustomAgentAccessError) as exc:
-                _raise_agent_studio_lookup_http_exception(
-                    exc=exc,
-                    log_message=f"Failed to load prompt preview for custom agent '{agent_id}'",
-                    not_found_detail="Custom agent not found",
-                    access_denied_detail="Access denied to custom agent",
-                    not_found_error_types=(CustomAgentNotFoundError,),
+            bundle, parent_agent_key, custom_group_rules_enabled = (
+                _build_custom_agent_effective_prompt_bundle(
+                    agent_id=agent_id,
+                    group_id=resolved_group_id,
+                    user=user,
+                    db=db,
+                    lookup_custom_agent=get_custom_agent_for_user,
                 )
-            custom_group_rules_enabled = bool(
-                getattr(
-                    custom_agent,
-                    "group_rules_enabled",
-                    getattr(custom_agent, "include_mod_rules", False),
-                )
-            )
-            custom_group_overrides = (
-                getattr(custom_agent, "group_prompt_overrides", None)
-                or getattr(custom_agent, "mod_prompt_overrides", None)
-                or {}
-            )
-            parent_agent_key = str(custom_agent.parent_agent_key or "").strip()
-            if not parent_agent_key:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Custom agent is missing its system template source.",
-                )
-            overlay_parts = [str(custom_agent.custom_prompt or "").strip()]
-            if resolved_group_id and custom_group_rules_enabled:
-                override_prompt = str(
-                    custom_group_overrides.get(resolved_group_id.upper()) or ""
-                ).strip()
-                if override_prompt:
-                    overlay_parts.append(
-                        f"## Curator group overlay: {resolved_group_id.upper()}\n{override_prompt}"
-                    )
-            bundle = build_agent_prompt_layers(
-                parent_agent_key,
-                group_id=resolved_group_id if custom_group_rules_enabled else None,
-                overlay="\n\n".join(part for part in overlay_parts if part),
             )
 
             return PromptPreviewResponse(
@@ -2278,6 +2378,19 @@ async def _handle_tool_call(
             return {
                 "success": False,
                 "error": "proposed prompt exceeds maximum size (40,000 characters).",
+            }
+        try:
+            reject_locked_prompt_markers(
+                updated_prompt,
+                target="Prompt update",
+            )
+        except ValueError:
+            return {
+                "success": False,
+                "error": (
+                    "Prompt update targets the editable curator overlay only. "
+                    "Locked core/generated prompt contracts cannot be edited or copied into the overlay."
+                ),
             }
 
         return {

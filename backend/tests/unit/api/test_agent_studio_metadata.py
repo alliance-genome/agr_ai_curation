@@ -457,6 +457,204 @@ class TestGetRegistryMetadata:
         custom = next(a for a in all_agents if a.agent_name == "Shared Gene Agent")
         assert custom.subcategory == "Shared Agents"
 
+    def test_merge_custom_agents_marks_needs_review_overlay_without_projecting_it(self, monkeypatch):
+        """Ambiguous legacy overlay text should be visible as flagged metadata, not prompt content."""
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo
+
+        base_catalog = PromptCatalog(
+            categories=[
+                AgentPrompts(
+                    category="Validation",
+                    agents=[
+                        PromptInfo(
+                            agent_id="gene",
+                            agent_name="Gene Specialist",
+                            description="Curate genes",
+                            base_prompt="Parent base prompt",
+                            source_file="database",
+                            has_group_rules=False,
+                            group_rules={},
+                            tools=[],
+                        )
+                    ],
+                )
+            ],
+            total_agents=1,
+            available_groups=[],
+        )
+        flagged_overlay = "Curator note\n\nPlatform Runtime Contract copied fragment"
+        fake_custom = SimpleNamespace(
+            id="11111111-2222-3333-4444-555555555555",
+            user_id=123,
+            template_source="gene",
+            category="Validation",
+            tool_ids=[],
+            name="Flagged Gene Agent",
+            description="Custom prompt variant",
+            custom_prompt=flagged_overlay,
+            group_prompt_overrides={},
+            created_at=None,
+        )
+        captured_overlays = []
+
+        def _fake_build_agent_prompt_layers(_agent_id, **kwargs):
+            captured_overlays.append(kwargs.get("overlay"))
+            return SimpleNamespace(
+                hash="hash-without-flagged-overlay",
+                to_manifest=lambda: {
+                    "agent_id": "gene",
+                    "hash": "hash-without-flagged-overlay",
+                    "layers": [
+                        {
+                            "id": "gene:core_static",
+                            "kind": "core_static",
+                            "title": "Core Prompt",
+                            "content": "Locked core prompt",
+                            "provenance": "backend_static",
+                            "editable": False,
+                            "locked": True,
+                            "source_ref": "core",
+                            "hash": "hash-core",
+                        },
+                        {
+                            "id": "gene:base_prompt",
+                            "kind": "base_prompt",
+                            "title": "Base Prompt",
+                            "content": "Parent base prompt",
+                            "provenance": "prompt_template:system",
+                            "editable": True,
+                            "locked": False,
+                            "source_ref": "base",
+                            "hash": "hash-base",
+                        },
+                    ],
+                },
+            )
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_visible_to_user",
+            lambda _db, _uid: [fake_custom],
+        )
+        monkeypatch.setattr(
+            api_module,
+            "normalize_custom_overlay_for_parent",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                content=flagged_overlay,
+                status="needs_review",
+                removed_layer_kinds=["core_static"],
+                warning="Custom overlay still contains locked/core prompt markers after safe cleanup.",
+            ),
+        )
+        monkeypatch.setattr(api_module, "build_agent_prompt_layers", _fake_build_agent_prompt_layers)
+
+        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+            base_catalog,
+            {"sub": "test-sub"},
+            SimpleNamespace(query=lambda *_args, **_kwargs: None),
+        )
+
+        custom = next(
+            a
+            for c in catalog.categories
+            for a in c.agents
+            if a.agent_name == "Flagged Gene Agent"
+        )
+        assert captured_overlays == [""]
+        assert custom.custom_prompt_overlay_status == "needs_review"
+        assert custom.custom_prompt_removed_layer_kinds == ["core_static"]
+        assert "locked/core prompt markers" in custom.custom_prompt_warning
+        assert custom.base_prompt == flagged_overlay
+        assert flagged_overlay not in "\n\n".join(layer.content for layer in custom.prompt_layers)
+        assert not any(layer.kind == "curator_overlay" for layer in custom.prompt_layers)
+
+    def test_merge_custom_agents_surfaces_prompt_layer_projection_errors(self, monkeypatch):
+        """Custom-agent catalog entries should expose layer assembly failures."""
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import PromptCatalog, AgentPrompts, PromptInfo
+
+        base_catalog = PromptCatalog(
+            categories=[
+                AgentPrompts(
+                    category="Validation",
+                    agents=[
+                        PromptInfo(
+                            agent_id="gene",
+                            agent_name="Gene Specialist",
+                            description="Curate genes",
+                            base_prompt="Parent base prompt",
+                            source_file="database",
+                            has_group_rules=False,
+                            group_rules={},
+                            tools=[],
+                        )
+                    ],
+                )
+            ],
+            total_agents=1,
+            available_groups=[],
+        )
+        fake_custom = SimpleNamespace(
+            id="11111111-2222-3333-4444-555555555555",
+            user_id=123,
+            template_source="gene",
+            category="Validation",
+            tool_ids=[],
+            name="Layer Error Agent",
+            description="Custom prompt variant",
+            custom_prompt="Curator note",
+            group_prompt_overrides={},
+            created_at=None,
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "list_custom_agents_visible_to_user",
+            lambda _db, _uid: [fake_custom],
+        )
+        monkeypatch.setattr(
+            api_module,
+            "normalize_custom_overlay_for_parent",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                content="Curator note",
+                status="clean",
+                removed_layer_kinds=[],
+                warning=None,
+            ),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "build_agent_prompt_layers",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("layer projection failed")),
+        )
+
+        catalog = api_module._merge_custom_agents_into_catalog(  # type: ignore
+            base_catalog,
+            {"sub": "test-sub"},
+            SimpleNamespace(query=lambda *_args, **_kwargs: None),
+        )
+
+        custom = next(
+            a
+            for c in catalog.categories
+            for a in c.agents
+            if a.agent_name == "Layer Error Agent"
+        )
+        assert custom.prompt_layers == []
+        assert custom.effective_prompt_hash is None
+        assert custom.prompt_layer_error == "Prompt layer metadata could not be built."
+
     def test_get_prompt_preview_system_agent(self, monkeypatch):
         """Prompt preview should return base prompt for system agent without group_id."""
         import asyncio
@@ -500,17 +698,25 @@ class TestGetRegistryMetadata:
             group_prompt_overrides={},
             group_rules_enabled=True,
         )
-        # Build a lightweight module-like object for local imports in endpoint
-        fake_custom_module = SimpleNamespace(
-            parse_custom_agent_id=lambda _aid: "uuid",
-            get_custom_agent_for_user=lambda _db, _uuid, _uid: fake_custom,
-            CustomAgentNotFoundError=type("CustomAgentNotFoundError", (Exception,), {}),
-            CustomAgentAccessError=type("CustomAgentAccessError", (Exception,), {}),
-        )
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: fake_custom,
+        )
+        monkeypatch.setattr(
+            api_module,
+            "normalize_custom_overlay_for_parent",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                content="CUSTOM BASE PROMPT",
+                status="clean",
+                removed_layer_kinds=[],
+                warning=None,
+            ),
         )
         monkeypatch.setattr(
             api_module,
@@ -525,7 +731,6 @@ class TestGetRegistryMetadata:
                 },
             ),
         )
-        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
 
         result = asyncio.run(
             api_module.get_prompt_preview(
@@ -552,17 +757,25 @@ class TestGetRegistryMetadata:
             group_rules_enabled=True,
         )
 
-        fake_custom_module = SimpleNamespace(
-            parse_custom_agent_id=lambda _aid: "uuid",
-            get_custom_agent_for_user=lambda _db, _uuid, _uid: fake_custom,
-            CustomAgentNotFoundError=type("CustomAgentNotFoundError", (Exception,), {}),
-            CustomAgentAccessError=type("CustomAgentAccessError", (Exception,), {}),
-        )
-
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: fake_custom,
+        )
+        monkeypatch.setattr(
+            api_module,
+            "normalize_custom_overlay_for_parent",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                content="CUSTOM BASE PROMPT",
+                status="clean",
+                removed_layer_kinds=[],
+                warning=None,
+            ),
         )
         monkeypatch.setattr(
             api_module,
@@ -577,7 +790,6 @@ class TestGetRegistryMetadata:
                 },
             ),
         )
-        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
 
         result = asyncio.run(
             api_module.get_prompt_preview(
@@ -590,14 +802,54 @@ class TestGetRegistryMetadata:
 
         assert "CUSTOM WB OVERRIDE" in result.prompt
 
+    def test_get_prompt_preview_custom_agent_rejects_locked_group_override(self, monkeypatch):
+        """Prompt preview should not assemble copied locked text from group overrides."""
+        import asyncio
+        from src.api import agent_studio as api_module
+
+        fake_custom = SimpleNamespace(
+            parent_agent_key="gene",
+            custom_prompt="CUSTOM BASE PROMPT",
+            group_prompt_overrides={
+                "WB": "Platform Runtime Contract\nCurator tried to copy this.",
+            },
+            group_rules_enabled=True,
+        )
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: fake_custom,
+        )
+        monkeypatch.setattr(
+            api_module,
+            "build_agent_prompt_layers",
+            lambda *_args, **_kwargs: pytest.fail("locked group override was assembled"),
+        )
+
+        with pytest.raises(api_module.HTTPException) as exc_info:
+            asyncio.run(
+                api_module.get_prompt_preview(
+                    agent_id="ca_11111111-2222-3333-4444-555555555555",
+                    group_id="WB",
+                    user={"sub": "test-sub"},
+                    db=SimpleNamespace(),
+                )
+            )
+
+        assert exc_info.value.status_code == 409
+        assert "needs coordinator review" in exc_info.value.detail
+
     def test_get_prompt_preview_custom_agent_lookup_errors_are_sanitized(self, monkeypatch, caplog):
         import asyncio
         from src.api import agent_studio as api_module
 
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
-
-        CustomAgentNotFoundError = type("CustomAgentNotFoundError", (Exception,), {})
-        CustomAgentAccessError = type("CustomAgentAccessError", (Exception,), {})
 
         monkeypatch.setattr(
             api_module,
@@ -605,15 +857,13 @@ class TestGetRegistryMetadata:
             lambda _db, _user: SimpleNamespace(id=123),
         )
 
-        fake_custom_module = SimpleNamespace(
-            parse_custom_agent_id=lambda _aid: "uuid",
-            get_custom_agent_for_user=lambda _db, _uuid, _uid: (_ for _ in ()).throw(
-                CustomAgentNotFoundError("custom prompt missing")
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: (_ for _ in ()).throw(
+                api_module.CustomAgentNotFoundError("custom prompt missing")
             ),
-            CustomAgentNotFoundError=CustomAgentNotFoundError,
-            CustomAgentAccessError=CustomAgentAccessError,
         )
-        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
 
         with pytest.raises(api_module.HTTPException) as not_found_exc:
             asyncio.run(
@@ -630,8 +880,12 @@ class TestGetRegistryMetadata:
         assert "custom prompt missing" not in str(not_found_exc.value.detail)
         assert "custom prompt missing" in caplog.text
 
-        fake_custom_module.get_custom_agent_for_user = lambda _db, _uuid, _uid: (_ for _ in ()).throw(
-            CustomAgentAccessError("custom prompt forbidden")
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: (_ for _ in ()).throw(
+                api_module.CustomAgentAccessError("custom prompt forbidden")
+            ),
         )
         with pytest.raises(api_module.HTTPException) as access_exc:
             asyncio.run(
