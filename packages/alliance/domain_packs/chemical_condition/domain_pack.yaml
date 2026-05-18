@@ -458,7 +458,8 @@ object_definitions:
       - field_path: curie
         field_type: string
         display_name: Chemical CURIE
-        required: true
+        description: Optional ChEBI exact-CURIE fast path; chemical name candidates remain valid for ChEBI validation without it.
+        required: false
         metadata:
           validatable: true
           validator_binding_id: chemical_condition.term_chebi_api_lookup

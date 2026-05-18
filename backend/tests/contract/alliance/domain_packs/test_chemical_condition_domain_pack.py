@@ -158,6 +158,16 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
         "source_reference": REFERENCE_OBJECT_TYPE,
         "evidence_quote": EVIDENCE_QUOTE_OBJECT_TYPE,
     }
+    condition_fields = {field.field_path: field for field in condition.fields}
+    assert condition_fields["condition_chemical.curie"].required is False
+
+    chemical_term = next(
+        item
+        for item in metadata.object_definitions
+        if item.object_type == CHEMICAL_TERM_OBJECT_TYPE
+    )
+    chemical_term_fields = {field.field_path: field for field in chemical_term.fields}
+    assert chemical_term_fields["curie"].required is False
 
     validators = metadata.metadata["validators"]
     assert tuple(validators) == CHEMICAL_CONDITION_VALIDATOR_STATES
@@ -208,6 +218,21 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
     assert condition_curie_binding["blocking"] is False
     assert condition_curie_binding["allow_opt_out"] is True
     assert condition_curie_binding["curator_override"] == {"allowed": False}
+    term_curie_binding = next(
+        binding
+        for binding in validator_bindings["active"]
+        if binding["binding_id"] == "chemical_condition.term_chebi_api_lookup"
+    )
+    assert term_curie_binding["input_fields"]["curie"] == {
+        "source": "payload",
+        "path": "curie",
+        "required": False,
+    }
+    assert term_curie_binding["input_fields"]["name"] == {
+        "source": "payload",
+        "path": "name",
+        "required": False,
+    }
     condition_class_binding = next(
         binding
         for binding in validator_bindings["active"]
