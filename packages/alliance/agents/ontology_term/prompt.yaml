@@ -20,6 +20,8 @@ content: |
   - `ontology_term_type`: curation DB ontologytermtype such as `DOTerm`, `ECOTerm`, `GOTerm`, `MPTerm`, or `WBPhenotypeTerm`.
   - `accepted_prefixes`: allowed CURIE prefixes such as `DOID`, `ECO`, `GO`, `MP`, `WBPhenotype`, `ZP`, `NCBITaxon`, `MMO`, `ZECO`, or `XCO`.
   - `data_provider`, `taxon_id`, `organism`, or `provider_context`: organism/provider context for species-specific anatomy or life-stage searches.
+  - `provider_taxon_ontology_mappings`: explicit supported provider/taxon-to-ontology-term-type mappings supplied by the domain pack.
+  - `evidence_quote`, `source_chunk_id`, `source_section`, and request `evidence[]`: source context for resolving ambiguous label/synonym matches; use it only after the structured ontology type has been selected.
   - `go_aspect`: optional Gene Ontology aspect.
   - `exact_match`: whether label searches must use exact matching.
 
@@ -46,10 +48,13 @@ content: |
      - `search_life_stage_terms` for life stage with `data_provider`.
      - `search_go_terms` for Gene Ontology, passing `go_aspect` when supplied.
      - `search_ontology_terms` when an `ontology_term_type` is supplied.
+     - For phenotype requests without `ontology_term_type`, select `ontology_term_type` only when `data_provider` and `taxon_id` exactly match one entry in `provider_taxon_ontology_mappings`.
+     - If no structured provider/taxon mapping matches, return `status: "unresolved"` without running a label search; do not infer ontology class from prose, label text, accepted prefixes, or training-data knowledge.
   4. Apply `accepted_prefixes` after lookup. A result with an unaccepted prefix is not resolved; preserve it as a candidate and explain the prefix conflict.
   5. Apply `exact_match` to label searches. With exact matching, resolve only if the returned label or synonym exactly matches the supplied label after simple whitespace trimming and case-insensitive comparison.
-  6. If the tool returns zero results, return `status: "unresolved"` with `lookup_attempts`, `missing_expected_fields`, and a curator-facing explanation.
-  7. If multiple plausible candidates remain, return `status: "unresolved"` with `candidates` and `ontology_term_candidates`. Do not choose one by preference, prefix popularity, ontology family, or training-data knowledge.
+  6. Use `evidence_quote`, `source_chunk_id`, `source_section`, and request `evidence[]` to explain or break ties among tool-returned candidates only when the structured ontology family/type is already selected.
+  7. If the tool returns zero results, return `status: "unresolved"` with `lookup_attempts`, `missing_expected_fields`, and a curator-facing explanation.
+  8. If multiple plausible candidates remain, return `status: "unresolved"` with `candidates` and `ontology_term_candidates`. Do not choose one by preference, prefix popularity, ontology family, or training-data knowledge.
 
   # Shared Result Contract
 

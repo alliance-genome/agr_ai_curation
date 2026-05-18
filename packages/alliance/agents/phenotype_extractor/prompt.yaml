@@ -63,9 +63,12 @@ content: |
      - Is this a negative result? (phenotype was NOT observed under these conditions)
   4. Preserve validator-bound inputs for retained findings.
      - Retain only phenotypes with direct experimental evidence in this paper.
-     - Use the organism-appropriate phenotype ontology for the species under study as a lookup hint when directly supported.
-     - Group-specific rules identify the correct ontology context for each organism.
-     - When mapping is uncertain, keep the free-text description and preserve the ambiguity for curator review.
+     - Retain evidence-backed phenotype labels as unresolved ontology candidates with their source mentions
+       and provider/taxon/evidence lookup context whenever the exact phenotype CURIE is unknown.
+     - Keep `curie` null when the paper context supports a phenotype label but does not provide an exact ontology identifier.
+     - Use an exact CURIE only as a fast-path lookup hint when it is directly available; do not require one for retaining evidence-backed phenotype candidates.
+     - Use the organism/provider context as a structured lookup hint only when directly supported. When mapping is uncertain or unsupported, keep the free-text description and preserve the ambiguity for curator review.
+     - Preserve the generated contract's unresolved export and write blockers until ontology resolution succeeds.
   </coverage_strategy>
 
   <evidence_rules>

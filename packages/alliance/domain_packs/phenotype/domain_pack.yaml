@@ -32,6 +32,15 @@ enum_definitions:
       - value: blocked_missing_subject
         label: Blocked missing subject
     definition_state: in_development
+  - enum_id: PhenotypeTermResolutionState
+    display_name: Phenotype term resolution state
+    description: Resolution state for phenotype ontology candidates retained for validation.
+    values:
+      - value: resolved
+        label: Resolved
+      - value: pending_ontology_resolution
+        label: Pending ontology resolution
+    definition_state: in_development
 model_definitions:
   - model_id: PhenotypeAnnotationPayload
     display_name: Phenotype annotation payload
@@ -220,7 +229,8 @@ object_definitions:
       - field_path: phenotype_terms[0].curie
         field_type: string
         display_name: First phenotype term CURIE
-        required: true
+        description: Optional exact-CURIE fast path; label-backed pending candidates remain valid without it.
+        required: false
         metadata:
           validator_binding_id: phenotype_term_ontology_validator
           editable: true
@@ -246,6 +256,42 @@ object_definitions:
           curator_action_note: >-
               Display-only label is not a LinkML edit target; updates grounded
               phenotype term fields such as phenotype_terms[0].curie.
+      - field_path: phenotype_terms[0].source_mentions[0]
+        field_type: string
+        display_name: First phenotype term source mention
+        metadata:
+          protected: true
+          curator_action_note: Source mentions anchor pending ontology candidates to paper text.
+      - field_path: phenotype_terms[0].ontology_lookup_hint.data_provider
+        field_type: string
+        display_name: Phenotype term lookup data provider
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+          protected: true
+      - field_path: phenotype_terms[0].ontology_lookup_hint.taxon_id
+        field_type: string
+        display_name: Phenotype term lookup taxon
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+          protected: true
+      - field_path: phenotype_terms[0].ontology_lookup_hint.evidence_record_id
+        field_type: string
+        display_name: Phenotype term lookup evidence record
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+          protected: true
+      - field_path: phenotype_terms[0].export_state
+        field_type: string
+        display_name: Phenotype term export state
+        metadata:
+          protected: true
+          curator_action_note: Pending ontology candidates are blocked from export until validator resolution succeeds.
+      - field_path: phenotype_terms[0].write_blocked_reason
+        field_type: string
+        display_name: Phenotype term write blocker
+        metadata:
+          protected: true
+          curator_action_note: Pending ontology candidates are blocked from write materialization until validator resolution succeeds.
       - field_path: single_reference
         field_type: object_ref
         display_name: Evidence reference
@@ -411,10 +457,16 @@ object_definitions:
           source_file: model/schema/ontologyTerm.yaml
           class: PhenotypeTerm
     fields:
+      - field_path: resolution_state
+        field_type: enum
+        display_name: Resolution state
+        required: true
+        enum_ref: PhenotypeTermResolutionState
       - field_path: curie
         field_type: string
         display_name: Term CURIE
-        required: true
+        description: Optional exact-CURIE fast path; pending label candidates use validator lookup.
+        required: false
         metadata:
           validator_binding_id: phenotype_term_ontology_validator
           provider_refs:
@@ -430,6 +482,30 @@ object_definitions:
       - field_path: label
         field_type: string
         display_name: Curator-facing label
+      - field_path: source_mentions[0]
+        field_type: string
+        display_name: First source mention
+      - field_path: ontology_lookup_hint.data_provider
+        field_type: string
+        display_name: Lookup data provider
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+      - field_path: ontology_lookup_hint.taxon_id
+        field_type: string
+        display_name: Lookup taxon
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+      - field_path: ontology_lookup_hint.evidence_record_id
+        field_type: string
+        display_name: Lookup evidence record
+        metadata:
+          validator_binding_id: phenotype_term_ontology_validator
+      - field_path: export_state
+        field_type: string
+        display_name: Export state
+      - field_path: write_blocked_reason
+        field_type: string
+        display_name: Write blocked reason
   - object_type: Reference
     display_name: Reference
     description: Pending literature/reference object for the source paper.
@@ -557,16 +633,38 @@ metadata:
           domain_pack_id: agr.alliance.phenotype
           object_types:
             - PhenotypeTerm
-          field_paths:
-            - curie
-            - label
         input_fields:
           curie:
             source: payload
             path: curie
+            required: false
           label:
             source: payload
             path: label
+            required: false
+          data_provider:
+            source: payload
+            path: ontology_lookup_hint.data_provider
+            required: false
+          taxon_id:
+            source: payload
+            path: ontology_lookup_hint.taxon_id
+            required: false
+          evidence_record_id:
+            source: payload
+            path: ontology_lookup_hint.evidence_record_id
+            required: false
+          evidence_quote:
+            source: evidence_record
+            path: verified_quote
+            required: false
+          source_chunk_id:
+            source: evidence_record
+            path: chunk_id
+            required: false
+          source_section:
+            source: evidence_record
+            path: section
             required: false
           ontology_family:
             source: literal
@@ -576,7 +674,31 @@ metadata:
             value:
               - MP
               - WBPhenotype
-              - ZP
+          provider_taxon_ontology_mappings:
+            source: literal
+            value:
+              - data_provider: WB
+                taxon_id: NCBITaxon:6239
+                ontology_term_type: WBPhenotypeTerm
+                accepted_prefixes:
+                  - WBPhenotype
+                grounding:
+                  package_tool: agr_curation_query.search_ontology_terms
+                  live_db_term_type_verified: true
+                  representative_terms:
+                    - WBPhenotype:0000180
+                    - WBPhenotype:0000886
+              - data_provider: MGI
+                taxon_id: NCBITaxon:10090
+                ontology_term_type: MPTerm
+                accepted_prefixes:
+                  - MP
+                grounding:
+                  package_tool: agr_curation_query.search_ontology_terms
+                  live_db_term_type_verified: true
+                  representative_terms:
+                    - MP:0001569
+                    - MP:0003733
         expected_result_fields:
           curie: curie
           label: label
@@ -746,6 +868,39 @@ metadata:
     verified_fixture_terms:
       - curie: WBPhenotype:0000886
       - curie: WBPhenotype:0001174
+      - curie: MP:0001569
+      - curie: MP:0003733
+    phenotype_provider_taxon_mappings:
+      active:
+        - data_provider: WB
+          taxon_id: NCBITaxon:6239
+          ontology_term_type: WBPhenotypeTerm
+          accepted_prefixes:
+            - WBPhenotype
+          evidence:
+            - public.ontologyterm rows verify WBPhenotypeTerm.
+            - phenotype fixtures carry WBPhenotype terms.
+            - package tool supports typed search_ontology_terms.
+        - data_provider: MGI
+          taxon_id: NCBITaxon:10090
+          ontology_term_type: MPTerm
+          accepted_prefixes:
+            - MP
+          evidence:
+            - public.ontologyterm rows verify MPTerm.
+            - live phenotype projection fixture verifies MP phenotype terms.
+            - package tool supports typed search_ontology_terms.
+      under_development:
+        - data_provider: RGD
+          reason: Rat provider mapping to MP is not enabled until provider/taxon-specific fixture and live projection coverage are present.
+        - data_provider: HGNC
+          reason: Human phenotype mapping to HPO is not enabled because HPO term type/tool coverage is not verified in this release.
+        - data_provider: ZFIN
+          reason: Zebrafish ZP mapping is not enabled until ZP ontology term type and fixture coverage are verified.
+        - data_provider: FB
+          reason: Fly FBcv phenotype mapping is not enabled until DB/tool/test grounding is verified.
+        - data_provider: SGD
+          reason: Yeast APO phenotype mapping is not enabled until DB/tool/test grounding is verified.
     verified_fixture_subjects:
       - primary_external_id: WB:WBGene00000912
       - primary_external_id: WB:WBVar00000001

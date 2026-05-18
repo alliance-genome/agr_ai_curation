@@ -148,13 +148,24 @@ def _valid_phenotype_payload() -> dict[str, object]:
                 ),
                 "definition_state": "in_development",
                 "payload": {
+                    "resolution_state": "pending_ontology_resolution",
                     "curie": "WBPhenotype:0000886",
                     "label": "reduced brood size",
                     "source_mentions": ["reduced brood size"],
+                    "ontology_lookup_hint": {
+                        "data_provider": "WB",
+                        "taxon_id": "NCBITaxon:6239",
+                        "evidence_record_id": "reduced-brood-size-evidence-1",
+                    },
+                    "export_state": "blocked_pending_ontology_resolution",
+                    "write_blocked_reason": "phenotype term CURIE unresolved",
                 },
+                "evidence_record_ids": ["reduced-brood-size-evidence-1"],
                 "metadata": {
                     "validation_state": "pending_ontology_resolution",
                     "validator_binding_id": "phenotype_term_ontology_validator",
+                    "export_state": "blocked_pending_ontology_resolution",
+                    "write_blocked_reason": "phenotype term CURIE unresolved",
                 },
             },
             {
@@ -185,8 +196,17 @@ def _valid_phenotype_payload() -> dict[str, object]:
                     "phenotype_annotation_subject": subject_payload,
                     "phenotype_terms": [
                         {
+                            "resolution_state": "pending_ontology_resolution",
                             "curie": "WBPhenotype:0000886",
                             "label": "reduced brood size",
+                            "source_mentions": ["reduced brood size"],
+                            "ontology_lookup_hint": {
+                                "data_provider": "WB",
+                                "taxon_id": "NCBITaxon:6239",
+                                "evidence_record_id": "reduced-brood-size-evidence-1",
+                            },
+                            "export_state": "blocked_pending_ontology_resolution",
+                            "write_blocked_reason": "phenotype term CURIE unresolved",
                         }
                     ],
                     "single_reference": {
@@ -275,6 +295,24 @@ def test_phenotype_extractor_schema_accepts_domain_pack_objects_and_metadata():
     assert annotation.payload.phenotype_terms[0].curie == "WBPhenotype:0000886"
     assert annotation.evidence_record_ids == ["reduced-brood-size-evidence-1"]
     assert envelope.metadata.exclusions[0].reason_code == "previously_reported"
+
+
+def test_phenotype_extractor_schema_accepts_pending_term_without_curie():
+    payload = _valid_phenotype_payload()
+    term = payload["curatable_objects"][2]
+    term["payload"]["curie"] = None
+    annotation_term = payload["curatable_objects"][-1]["payload"]["phenotype_terms"][0]
+    annotation_term["curie"] = None
+
+    envelope = _validate_phenotype_extractor_payload(payload)
+
+    phenotype_term = envelope.curatable_objects[2]
+    assert phenotype_term.payload.curie is None
+    assert phenotype_term.payload.label == "reduced brood size"
+    assert phenotype_term.payload.resolution_state == "pending_ontology_resolution"
+    assert phenotype_term.payload.export_state == (
+        "blocked_pending_ontology_resolution"
+    )
 
 
 def test_phenotype_extractor_schema_requires_taxon_for_resolved_subjects():

@@ -102,6 +102,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
     )
     objects: list[CuratableObjectEnvelope] = [reference_object]
     validation_findings: list[ValidationFinding] = []
+    evidence_records_by_id: dict[str, Mapping[str, Any]] = {}
 
     retained_count = 0
     skipped_without_evidence = 0
@@ -114,7 +115,7 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
 
         retained_count += 1
         label = _required_string(item.get("label"), "extraction.items[].label")
-        normalized_id = _required_string(
+        normalized_id = _optional_string(
             item.get("normalized_id"),
             "extraction.items[].normalized_id",
         )
@@ -122,6 +123,15 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
         negated = _optional_bool(item.get("negated"), "extraction.items[].negated")
         subject_payload = _subject_payload(item)
         subject_resolution_state = subject_payload["resolution_state"]
+        ontology_lookup_hint = _ontology_lookup_hint(item, evidence_records)
+        primary_evidence_record_id = ontology_lookup_hint["evidence_record_id"]
+        term_evidence_record_ids = [primary_evidence_record_id]
+        for raw_record in evidence_records:
+            record_id = _required_string(
+                raw_record.get("evidence_record_id"),
+                "evidence_records[].evidence_record_id",
+            )
+            evidence_records_by_id.setdefault(record_id, raw_record)
 
         subject_ref_id = f"phenotype-subject-{retained_count}"
         phenotype_term_ref_id = f"phenotype-term-{retained_count}"
@@ -156,14 +166,21 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
                 status=CuratableObjectStatus.PENDING,
                 definition_state=DefinitionState.IN_DEVELOPMENT,
                 payload={
+                    "resolution_state": "pending_ontology_resolution",
                     "curie": normalized_id,
                     "label": label,
                     "source_mentions": source_mentions,
+                    "ontology_lookup_hint": ontology_lookup_hint,
+                    "export_state": "blocked_pending_ontology_resolution",
+                    "write_blocked_reason": "phenotype term CURIE unresolved",
                 },
+                evidence_record_ids=term_evidence_record_ids,
                 metadata={
                     "object_role": "validated_reference",
                     "validation_state": "pending_ontology_resolution",
                     "validator_binding_id": PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
+                    "export_state": "blocked_pending_ontology_resolution",
+                    "write_blocked_reason": "phenotype term CURIE unresolved",
                 },
             )
         )
@@ -210,8 +227,13 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
                 "phenotype_annotation_subject": deepcopy(subject_payload),
                 "phenotype_terms": [
                     {
+                        "resolution_state": "pending_ontology_resolution",
                         "curie": normalized_id,
                         "label": label,
+                        "source_mentions": source_mentions,
+                        "ontology_lookup_hint": ontology_lookup_hint,
+                        "export_state": "blocked_pending_ontology_resolution",
+                        "write_blocked_reason": "phenotype term CURIE unresolved",
                     }
                 ],
                 "single_reference": {
@@ -246,7 +268,12 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
         validation_findings.extend(
             _blocker_findings_for_annotation(
                 annotation_ref=annotation_ref,
+                phenotype_term_ref=ObjectRef(
+                    pending_ref_id=phenotype_term_ref_id,
+                    object_type=PHENOTYPE_TERM_OBJECT_TYPE,
+                ),
                 subject_resolution_state=subject_resolution_state,
+                phenotype_term_curie=normalized_id,
             )
         )
 
@@ -299,6 +326,10 @@ def build_pending_phenotype_envelope_from_tool_verified_fixture(
             "semantic_source": "domain_envelope.objects",
             "export_behavior": {"status": "blocked"},
             "write_behavior": {"status": "blocked"},
+            "evidence_records": [
+                _evidence_quote_payload(record, record_id)
+                for record_id, record in evidence_records_by_id.items()
+            ],
         },
     )
 
@@ -385,12 +416,15 @@ def validate_pending_phenotype_envelope(
                 )
             )
 
-        if not _first_phenotype_term_curie(annotation.payload):
+        if not _first_phenotype_term_identifier(annotation.payload):
             findings.append(
                 ValidationFinding(
                     severity=ValidationFindingSeverity.ERROR,
                     code="alliance.phenotype.missing_phenotype_term",
-                    message="PhenotypeAnnotation requires a first phenotype term CURIE.",
+                    message=(
+                        "PhenotypeAnnotation requires a first phenotype term CURIE "
+                        "or label for ontology resolution."
+                    ),
                     object_ref=annotation_ref,
                 )
             )
@@ -450,6 +484,64 @@ def validate_pending_phenotype_envelope(
                         "a blocker finding."
                     ),
                     object_ref=annotation_ref,
+                )
+            )
+
+    phenotype_terms = [
+        obj for obj in envelope.objects if obj.object_type == PHENOTYPE_TERM_OBJECT_TYPE
+    ]
+    for phenotype_term in phenotype_terms:
+        term_ref = ObjectRef(
+            pending_ref_id=phenotype_term.pending_ref_id,
+            object_type=phenotype_term.object_type,
+        )
+        if _optional_string(
+            phenotype_term.metadata.get("validation_state"),
+            "metadata.validation_state",
+        ) != "pending_ontology_resolution":
+            continue
+        if phenotype_term.metadata.get("export_state") != (
+            "blocked_pending_ontology_resolution"
+        ):
+            findings.append(
+                ValidationFinding(
+                    severity=ValidationFindingSeverity.BLOCKER,
+                    code="alliance.phenotype.term_export_state_not_blocked",
+                    message=(
+                        "Pending phenotype term export state must block export "
+                        "until ontology resolution succeeds."
+                    ),
+                    object_ref=term_ref,
+                )
+            )
+        write_blocked_reason = phenotype_term.metadata.get("write_blocked_reason")
+        if not isinstance(write_blocked_reason, str) or not write_blocked_reason.strip():
+            findings.append(
+                ValidationFinding(
+                    severity=ValidationFindingSeverity.BLOCKER,
+                    code="alliance.phenotype.term_write_blocker_missing",
+                    message="Pending phenotype term must carry a write blocker reason.",
+                    object_ref=term_ref,
+                )
+            )
+        if (
+            _optional_string(phenotype_term.payload.get("curie"), "payload.curie")
+            is None
+            and not _has_finding(
+                envelope,
+                "alliance.phenotype.ontology_resolution_required",
+                phenotype_term.pending_ref_id,
+            )
+        ):
+            findings.append(
+                ValidationFinding(
+                    severity=ValidationFindingSeverity.BLOCKER,
+                    code="alliance.phenotype.ontology_resolution_blocker_missing",
+                    message=(
+                        "Pending phenotype ontology resolution must be represented "
+                        "by a blocker finding."
+                    ),
+                    object_ref=term_ref,
                 )
             )
 
@@ -554,7 +646,9 @@ def _blocked_write_behavior() -> dict[str, Any]:
 def _blocker_findings_for_annotation(
     *,
     annotation_ref: ObjectRef,
+    phenotype_term_ref: ObjectRef,
     subject_resolution_state: str,
+    phenotype_term_curie: str | None,
 ) -> list[ValidationFinding]:
     findings = [
         ValidationFinding(
@@ -571,6 +665,24 @@ def _blocker_findings_for_annotation(
             },
         )
     ]
+    if phenotype_term_curie is None:
+        findings.append(
+            ValidationFinding(
+                severity=ValidationFindingSeverity.BLOCKER,
+                code="alliance.phenotype.ontology_resolution_required",
+                message=(
+                    "Phenotype term is pending ontology resolution; export and write "
+                    "remain blocked until the validator resolves a CURIE."
+                ),
+                object_ref=phenotype_term_ref,
+                details={
+                    "validator_binding_id": PHENOTYPE_TERM_VALIDATOR_BINDING_ID,
+                    "resolution_state": "pending_ontology_resolution",
+                    "export_state": "blocked_pending_ontology_resolution",
+                    "write_blocked_reason": "phenotype term CURIE unresolved",
+                },
+            )
+        )
     if subject_resolution_state in {
         "blocked_missing_subject",
         "pending_entity_resolution",
@@ -595,6 +707,31 @@ def _blocker_findings_for_annotation(
             )
         )
     return findings
+
+
+def _ontology_lookup_hint(
+    item: Mapping[str, Any],
+    evidence_records: Sequence[Mapping[str, Any]],
+) -> dict[str, str]:
+    hint: dict[str, str] = {}
+    data_provider = _optional_string(
+        item.get("data_provider"),
+        "extraction.items[].data_provider",
+    )
+    taxon_id = _optional_string(item.get("taxon"), "extraction.items[].taxon")
+    evidence_record_id = None
+    if evidence_records:
+        evidence_record_id = _required_string(
+            evidence_records[0].get("evidence_record_id"),
+            "evidence_records[].evidence_record_id",
+        )
+    if data_provider:
+        hint["data_provider"] = data_provider
+    if taxon_id:
+        hint["taxon_id"] = taxon_id
+    if evidence_record_id:
+        hint["evidence_record_id"] = evidence_record_id
+    return hint
 
 
 def _subject_payload(item: Mapping[str, Any]) -> dict[str, Any]:
@@ -841,7 +978,7 @@ def _has_finding(
     return False
 
 
-def _first_phenotype_term_curie(payload: Mapping[str, Any]) -> str | None:
+def _first_phenotype_term_identifier(payload: Mapping[str, Any]) -> str | None:
     terms = payload.get("phenotype_terms")
     if not isinstance(terms, Sequence) or isinstance(terms, (str, bytes, bytearray)):
         return None
@@ -850,7 +987,10 @@ def _first_phenotype_term_curie(payload: Mapping[str, Any]) -> str | None:
     first_term = terms[0]
     if not isinstance(first_term, Mapping):
         return None
-    return _optional_string(first_term.get("curie"), "phenotype_terms[0].curie")
+    return _optional_string(
+        first_term.get("curie"),
+        "phenotype_terms[0].curie",
+    ) or _optional_string(first_term.get("label"), "phenotype_terms[0].label")
 
 
 def _required_mapping(value: Any, field_name: str) -> Mapping[str, Any]:

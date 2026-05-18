@@ -69,6 +69,9 @@ _EXPECTED_OBJECT_REF_TYPES = frozenset(
 _SUBJECT_RESOLUTION_STATES = frozenset(
     {"resolved", "pending_entity_resolution", "blocked_missing_subject"}
 )
+_TERM_RESOLUTION_STATES = frozenset(
+    {"resolved", "pending_ontology_resolution"}
+)
 
 
 class PhenotypeSubjectPayload(BaseModel):
@@ -125,22 +128,99 @@ class PhenotypeSubjectPayload(BaseModel):
         return self
 
 
+class OntologyLookupHintPayload(BaseModel):
+    """Structured context for phenotype ontology term lookup."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    data_provider: StrictStr | None = Field(
+        default=None,
+        description="Alliance data provider abbreviation such as WB or MGI",
+    )
+    taxon_id: StrictStr | None = Field(
+        default=None,
+        description="NCBI Taxon CURIE for ontology class selection",
+    )
+    evidence_record_id: StrictStr | None = Field(
+        default=None,
+        description="Evidence record ID that supplies quote/chunk context",
+    )
+
+    @model_validator(mode="after")
+    def _validate_hint_values(self) -> "OntologyLookupHintPayload":
+        for field_name in ("data_provider", "taxon_id", "evidence_record_id"):
+            value = getattr(self, field_name)
+            if value is not None and _is_missing(value):
+                raise ValueError(f"ontology_lookup_hint.{field_name} must not be empty")
+        return self
+
+
 class PhenotypeTermPayload(BaseModel):
     """Pending phenotype ontology term reference."""
 
     model_config = ConfigDict(extra="forbid")
 
-    curie: StrictStr = Field(description="Phenotype ontology CURIE")
-    label: StrictStr | None = Field(default=None, description="Curator-facing term label")
+    resolution_state: Literal[
+        "resolved",
+        "pending_ontology_resolution",
+    ] = Field(
+        default="pending_ontology_resolution",
+        description="Phenotype ontology term resolution state",
+    )
+    curie: StrictStr | None = Field(
+        default=None,
+        description="Phenotype ontology CURIE when already supplied or resolved",
+    )
+    label: StrictStr | None = Field(
+        default=None,
+        description="Curator-facing term label or source label for lookup",
+    )
     source_mentions: list[StrictStr] = Field(
         default_factory=list,
         description="Paper text that supported this phenotype term candidate",
     )
+    ontology_lookup_hint: OntologyLookupHintPayload | None = Field(
+        default=None,
+        description="Structured provider/taxon/evidence context for ontology lookup",
+    )
+    export_state: Literal[
+        "blocked_pending_ontology_resolution",
+        "ready_after_ontology_resolution",
+    ] = Field(
+        default="blocked_pending_ontology_resolution",
+        description="Export gate for unresolved phenotype term candidates",
+    )
+    write_blocked_reason: StrictStr | None = Field(
+        default="phenotype term CURIE unresolved",
+        description="Curator-facing write blocker while the phenotype CURIE is unresolved",
+    )
 
     @model_validator(mode="after")
-    def _validate_curie(self) -> "PhenotypeTermPayload":
-        if _is_missing(self.curie):
-            raise ValueError("PhenotypeTerm payload.curie must not be empty")
+    def _validate_resolution_state(self) -> "PhenotypeTermPayload":
+        if _is_missing(self.curie) and _is_missing(self.label):
+            raise ValueError(
+                "PhenotypeTerm payload requires curie or label for ontology lookup"
+            )
+        if _has_missing_strings(self.source_mentions):
+            raise ValueError(
+                "PhenotypeTerm payload.source_mentions must not contain empty values"
+            )
+        if self.resolution_state == "resolved" and _is_missing(self.curie):
+            raise ValueError("resolved PhenotypeTerm payload.curie is required")
+        if self.resolution_state == "pending_ontology_resolution":
+            if not self.source_mentions:
+                raise ValueError(
+                    "pending PhenotypeTerm payload.source_mentions must include "
+                    "at least one source mention"
+                )
+            if self.export_state != "blocked_pending_ontology_resolution":
+                raise ValueError(
+                    "pending PhenotypeTerm payload.export_state must block export"
+                )
+            if _is_missing(self.write_blocked_reason):
+                raise ValueError(
+                    "pending PhenotypeTerm payload.write_blocked_reason is required"
+                )
         return self
 
 
@@ -244,9 +324,12 @@ class PhenotypeAnnotationPayload(BaseModel):
     def _validate_required_values(self) -> "PhenotypeAnnotationPayload":
         if _is_missing(self.phenotype_annotation_object):
             raise ValueError("PhenotypeAnnotation payload.phenotype_annotation_object is required")
-        if not self.phenotype_terms or _is_missing(self.phenotype_terms[0].curie):
+        if not self.phenotype_terms or (
+            _is_missing(self.phenotype_terms[0].curie)
+            and _is_missing(self.phenotype_terms[0].label)
+        ):
             raise ValueError(
-                "PhenotypeAnnotation payload.phenotype_terms[0].curie is required"
+                "PhenotypeAnnotation payload.phenotype_terms[0] requires curie or label"
             )
         if _is_missing(self.evidence_quote.evidence_record_id):
             raise ValueError("PhenotypeAnnotation payload.evidence_quote.evidence_record_id is required")
@@ -366,6 +449,8 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
                 errors.extend(_evidence_quote_errors(obj, location, evidence_by_id))
             elif isinstance(obj, PhenotypeSubjectObject):
                 errors.extend(_subject_errors(obj, location))
+            elif isinstance(obj, PhenotypeTermObject):
+                errors.extend(_term_errors(obj, location, evidence_by_id))
             elif isinstance(obj, PhenotypeAnnotationObject):
                 errors.extend(
                     _annotation_errors(
@@ -483,6 +568,48 @@ def _subject_errors(obj: PhenotypeSubjectObject, location: str) -> list[str]:
         errors.append(
             f"{location}.metadata.validation_state must match payload.resolution_state"
         )
+    return errors
+
+
+def _term_errors(
+    obj: PhenotypeTermObject,
+    location: str,
+    evidence_by_id: dict[str, Any],
+) -> list[str]:
+    errors: list[str] = []
+    validation_state = obj.metadata.get("validation_state")
+    if validation_state not in _TERM_RESOLUTION_STATES:
+        errors.append(
+            f"{location}.metadata.validation_state must describe phenotype term resolution"
+        )
+    if validation_state != obj.payload.resolution_state:
+        errors.append(
+            f"{location}.metadata.validation_state must match payload.resolution_state"
+        )
+
+    if obj.payload.resolution_state == "pending_ontology_resolution":
+        if obj.metadata.get("export_state") != "blocked_pending_ontology_resolution":
+            errors.append(
+                f"{location}.metadata.export_state must block pending ontology terms"
+            )
+        write_blocked_reason = obj.metadata.get("write_blocked_reason")
+        if not isinstance(write_blocked_reason, str) or not write_blocked_reason.strip():
+            errors.append(
+                f"{location}.metadata.write_blocked_reason is required for pending ontology terms"
+            )
+
+    hint = obj.payload.ontology_lookup_hint
+    if hint is not None and hint.evidence_record_id is not None:
+        if hint.evidence_record_id not in obj.evidence_record_ids:
+            errors.append(
+                f"{location}.evidence_record_ids must include "
+                "payload.ontology_lookup_hint.evidence_record_id"
+            )
+        if hint.evidence_record_id not in evidence_by_id:
+            errors.append(
+                f"{location}.payload.ontology_lookup_hint.evidence_record_id must "
+                f"resolve in metadata.evidence_records[]: {hint.evidence_record_id}"
+            )
     return errors
 
 
@@ -617,6 +744,7 @@ def _has_missing_strings(values: list[str]) -> bool:
 __all__ = [
     "EvidenceQuoteObject",
     "EvidenceQuotePayload",
+    "OntologyLookupHintPayload",
     "PhenotypeAnnotationObject",
     "PhenotypeAnnotationPayload",
     "PhenotypeResultEnvelope",
