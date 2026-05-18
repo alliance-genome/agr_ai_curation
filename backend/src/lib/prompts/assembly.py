@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
@@ -75,6 +76,9 @@ class PromptLayerBundle:
             "layers": [layer.to_manifest() for layer in self.layers],
             "hash": self.hash,
         }
+
+
+_PROMPT_TEMPLATE_SOURCE_RE = re.compile(r"prompt_templates:([^:,\s]+):")
 
 
 def build_agent_core_prompt(agent_id: str) -> PromptLayerBundle:
@@ -180,6 +184,62 @@ def build_agent_prompt_layers(
         )
 
     return _bundle(canonical_agent_id, layers)
+
+
+def prompt_templates_for_bundle(bundle: PromptLayerBundle) -> tuple[PromptTemplate, ...]:
+    """Return active prompt template rows referenced by an assembled bundle."""
+
+    cache = get_all_active_prompts()
+    by_id = {str(prompt.id): prompt for prompt in cache.values() if prompt.id is not None}
+    templates: list[PromptTemplate] = []
+    seen: set[str] = set()
+    for layer in bundle.layers:
+        for prompt_id in _PROMPT_TEMPLATE_SOURCE_RE.findall(layer.source_ref):
+            prompt = by_id.get(prompt_id)
+            if prompt is None or prompt_id in seen:
+                continue
+            templates.append(prompt)
+            seen.add(prompt_id)
+    return tuple(templates)
+
+
+def append_runtime_context_to_manifest(
+    layer_manifest: Mapping[str, Any],
+    *,
+    layer_id_suffix: str,
+    title: str,
+    content: str,
+    source_ref: str,
+) -> dict[str, Any]:
+    """Return a manifest extended with an additional runtime-context layer."""
+
+    agent_id = str(layer_manifest.get("agent_id") or "").strip()
+    if not agent_id:
+        raise ValueError("layer_manifest agent_id is required")
+
+    layer_content = _normalize_optional_text(content)
+    if not layer_content:
+        return dict(layer_manifest)
+
+    layers = [dict(layer) for layer in layer_manifest.get("layers", []) or []]
+    runtime_layer = _runtime_context_layer(
+        agent_id=agent_id,
+        layer_id_suffix=layer_id_suffix,
+        title=title,
+        content=layer_content,
+        source_ref=source_ref,
+    )
+    layers.append(runtime_layer.to_manifest())
+    return {
+        "agent_id": agent_id,
+        "layers": layers,
+        "hash": _stable_hash(
+            {
+                "agent_id": agent_id,
+                "layers": [str(layer["hash"]) for layer in layers],
+            }
+        ),
+    }
 
 
 def _resolve_system_agent(agent_id: str) -> AgentDefinition:
@@ -322,6 +382,29 @@ def _prompt_template_content(prompt: PromptTemplate) -> str:
             f"{prompt.agent_name}:{prompt.prompt_type}:{prompt.group_id or 'base'}"
         )
     return str(prompt.content).strip()
+
+
+def _runtime_context_layer(
+    *,
+    agent_id: str,
+    layer_id_suffix: str,
+    title: str,
+    content: str,
+    source_ref: str,
+) -> PromptLayer:
+    suffix = re.sub(r"[^a-zA-Z0-9_.:-]+", "_", str(layer_id_suffix or "").strip())
+    if not suffix:
+        raise ValueError("runtime context layer_id_suffix is required")
+    return _make_layer(
+        layer_id=f"{agent_id}:runtime_context:{suffix}",
+        kind="runtime_context",
+        title=title,
+        content=content,
+        provenance="runtime_context",
+        editable=False,
+        locked=True,
+        source_ref=source_ref,
+    )
 
 
 def _normalize_group_ids(group_id: str | Sequence[str] | None) -> tuple[str, ...]:

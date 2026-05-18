@@ -1,10 +1,18 @@
 """Branch tests for run_agent_streamed orchestration paths."""
 
+import uuid
 from types import SimpleNamespace
 
 import pytest
 
 from src.lib.openai_agents import runner
+from src.lib.prompts.context import (
+    bind_prompt_run,
+    clear_prompt_context,
+    get_used_prompt_runs,
+    set_pending_prompts,
+)
+from src.models.sql.prompts import PromptTemplate
 
 
 async def _collect_events(async_gen):
@@ -33,12 +41,48 @@ def _raw_response_stream_event(data):
     return SimpleNamespace(type="raw_response_event", data=data)
 
 
+def _prompt(content: str) -> PromptTemplate:
+    return PromptTemplate(
+        id=uuid.uuid4(),
+        agent_name="flow_supervisor",
+        prompt_type="system",
+        group_id=None,
+        content=content,
+        version=1,
+        is_active=True,
+    )
+
+
+def _manifest(agent_id: str, content: str, hash_value: str) -> dict:
+    return {
+        "agent_id": agent_id,
+        "layers": [
+            {
+                "id": f"{agent_id}:base_prompt",
+                "kind": "base_prompt",
+                "title": "Editable base prompt",
+                "content": content,
+                "provenance": "prompt_template:system",
+                "editable": True,
+                "locked": False,
+                "source_ref": f"prompt_templates:active:{agent_id}:system:base:v1",
+                "hash": f"{hash_value}:layer",
+            }
+        ],
+        "hash": hash_value,
+    }
+
+
 def _patch_common_runtime(monkeypatch, captured):
     monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
     monkeypatch.setattr(runner, "clear_pending_configs", lambda: None)
     monkeypatch.setattr(runner, "reset_consecutive_call_tracker", lambda: None)
     monkeypatch.setattr(runner, "clear_prompt_context", lambda: None)
-    monkeypatch.setattr(runner, "commit_pending_prompts", lambda agent_name: captured.setdefault("committed", []).append(agent_name))
+    monkeypatch.setattr(
+        runner,
+        "commit_pending_prompts",
+        lambda agent: captured.setdefault("committed", []).append(getattr(agent, "name", agent)),
+    )
     monkeypatch.setattr(runner, "set_current_trace_id", lambda trace_id: captured.setdefault("trace_ids", []).append(trace_id))
     def _flush():
         captured["flushed"] = captured.get("flushed", 0) + 1
@@ -93,6 +137,66 @@ async def test_run_agent_streamed_without_langfuse(monkeypatch):
         {"role": "user", "content": "hello"},
     ]
     assert captured["logged"][0][0] == fallback_trace
+
+
+@pytest.mark.asyncio
+async def test_run_agent_streamed_preserves_bound_prompt_runs_for_provided_agent(monkeypatch):
+    captured = {}
+    agent = SimpleNamespace(name="Flow Supervisor", model="gpt-5", tools=[])
+    prompt = _prompt("flow prompt")
+
+    clear_prompt_context()
+    bind_prompt_run(
+        agent,
+        set_pending_prompts(
+            agent.name,
+            [prompt],
+            effective_prompt_hash="hash-flow",
+            layer_manifest=_manifest("flow_supervisor", "flow prompt", "hash-flow"),
+        ),
+    )
+
+    monkeypatch.setattr(runner, "clear_collected_events", lambda: None)
+    monkeypatch.setattr(runner, "clear_pending_configs", lambda: None)
+    monkeypatch.setattr(runner, "reset_consecutive_call_tracker", lambda: None)
+    monkeypatch.setattr(runner, "get_langfuse", lambda: None)
+    monkeypatch.setattr(
+        runner,
+        "set_current_trace_id",
+        lambda trace_id: captured.setdefault("trace_ids", []).append(trace_id),
+    )
+
+    async def _fake_run_agent_with_tracing(**_kwargs):
+        yield {
+            "type": "RUN_FINISHED",
+            "data": {"response_length": 5, "tool_calls": 0, "agents_used": ["Flow Supervisor"]},
+        }
+
+    def _capture_prompt_logging(**_kwargs):
+        captured["used_prompt_runs"] = get_used_prompt_runs()
+        return len(captured["used_prompt_runs"])
+
+    monkeypatch.setattr(runner, "_run_agent_with_tracing", _fake_run_agent_with_tracing)
+    monkeypatch.setattr(runner, "_log_used_prompts_to_db", _capture_prompt_logging)
+
+    try:
+        events = await _collect_events(
+            runner.run_agent_streamed(
+                context_messages=[{"role": "user", "content": "hello"}],
+                user_id="user-flow",
+                agent=agent,
+            )
+        )
+    finally:
+        clear_prompt_context()
+
+    assert events[-1]["type"] == "RUN_FINISHED"
+    assert len(captured["used_prompt_runs"]) == 1
+    used_run = captured["used_prompt_runs"][0]
+    assert used_run.agent_name == "Flow Supervisor"
+    assert used_run.prompts == [prompt]
+    assert used_run.assembly is not None
+    assert used_run.assembly.effective_prompt_hash == "hash-flow"
 
 
 @pytest.mark.asyncio

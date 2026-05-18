@@ -89,6 +89,7 @@ ALLOWED_ALLIANCE_TEST_PATHS = {
     Path("backend/tests/unit/lib/test_weaviate_documents_runtime.py"),
     Path("backend/tests/unit/lib/prompts/test_cache_core.py"),
     Path("backend/tests/unit/lib/prompts/test_cache_overrides.py"),
+    Path("backend/tests/unit/lib/prompts/test_assembly_callsite_parity.py"),
     Path("backend/tests/unit/lib/prompts/test_context_tracking.py"),
     Path("backend/tests/unit/lib/prompts/test_service_core.py"),
     Path("backend/tests/unit/lib/agent_studio/test_agent_service.py"),

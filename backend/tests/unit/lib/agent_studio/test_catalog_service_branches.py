@@ -1,6 +1,5 @@
 """Additional branch tests for catalog_service helpers and service methods."""
 
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -260,17 +259,19 @@ def test_build_catalog_and_service_branches(monkeypatch):
     assert service.get_agent("missing") is None
     assert service.get_agents_by_category("missing") == []
 
-    fake_agent = SimpleNamespace(
-        base_prompt="BASE",
-        has_group_rules=True,
-        group_rules={"WB": SimpleNamespace(content="WB rules")},
+    fake_bundle = SimpleNamespace(
+        render=lambda: "BASE\n\nWB rules",
     )
-    monkeypatch.setattr(service, "get_agent", lambda _agent_id: fake_agent)
+    monkeypatch.setattr(
+        service,
+        "get_effective_prompt_bundle",
+        lambda agent_id, group_id=None: (
+            fake_bundle if agent_id == "gene" and group_id == "WB" else None
+        ),
+    )
     combined = service.get_combined_prompt("gene", "WB")
-    assert "GROUP-SPECIFIC RULES" in combined
     assert "WB rules" in combined
-    assert service.get_combined_prompt("gene", "FB") == "BASE"
-    monkeypatch.setattr(service, "get_agent", lambda _agent_id: None)
+    assert service.get_combined_prompt("gene", "FB") is None
     assert service.get_combined_prompt("missing", "WB") is None
 
 
@@ -298,42 +299,21 @@ def test_singleton_context_and_runtime_helpers(monkeypatch):
 
 
 def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
-    fake_cache_module = SimpleNamespace(
-        get_prompt_optional=lambda _component, prompt_type, group_id=None: (
-            SimpleNamespace(content="group rule")
-            if prompt_type == "group_rules" and group_id == "WB"
-            else None
-        )
-    )
-    monkeypatch.setitem(sys.modules, "src.lib.prompts.cache", fake_cache_module)
-
-    injected = catalog_service._inject_group_rules_with_overrides(
-        base_prompt="BASE\n## GROUP-SPECIFIC RULES",
-        group_ids=[" wb "],
-        component_name="gene",
-        group_overrides={"WB": "override rule"},
-    )
-    assert "override rule" in injected
-
-    no_groups = catalog_service._inject_group_rules_with_overrides(
-        base_prompt="BASE",
-        group_ids=[],
-        component_name="gene",
-    )
-    assert no_groups == "BASE"
-
-    fallback = catalog_service._inject_group_rules_with_overrides(
-        base_prompt="BASE",
-        group_ids=["WB"],
-        component_name="gene",
-        group_overrides={},
-    )
-    assert "group rule" in fallback
-
     from src.lib.openai_agents import prompt_utils
     monkeypatch.setattr(prompt_utils, "format_document_context_for_prompt", lambda **_kwargs: ("\nCTX", {}))
-    monkeypatch.setattr(prompt_utils, "inject_structured_output_instruction", lambda text, output_type: text + f"\nSCHEMA:{output_type}")
-    monkeypatch.setattr(catalog_service, "_inject_group_rules_with_overrides", lambda **kwargs: kwargs["base_prompt"] + "\nRULES")
+    captured_assembly = {}
+
+    def _fake_build_agent_prompt_layers(agent_id, **kwargs):
+        kwargs["agent_id"] = agent_id
+        captured_assembly.update(kwargs)
+        runtime_context = str(kwargs.get("runtime_context") or "")
+        return SimpleNamespace(
+            render=lambda: runtime_context,
+            hash="hash-runtime",
+            to_manifest=lambda: {"agent_id": kwargs["agent_id"], "layers": [], "hash": "hash-runtime"},
+        )
+
+    monkeypatch.setattr(catalog_service, "build_agent_prompt_layers", _fake_build_agent_prompt_layers)
 
     db_agent = SimpleNamespace(
         agent_key="gene",
@@ -341,9 +321,9 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
         group_rules_enabled=True,
         group_rules_component="gene",
         template_source=None,
-        mod_prompt_overrides={},
+        group_prompt_overrides={},
     )
-    runtime_text = catalog_service._build_runtime_instructions(
+    runtime_bundle = catalog_service._build_runtime_instructions(
         db_agent=db_agent,
         runtime_kwargs={
             "active_groups": ["WB"],
@@ -352,13 +332,14 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "abstract": None,
             "document_name": "Paper A",
         },
-        output_schema="SchemaX",
         canonical_tool_ids=["search_document", "record_evidence"],
     )
+    runtime_text = runtime_bundle.render()
+    assert captured_assembly["agent_id"] == "gene"
+    assert captured_assembly["group_id"] == ["WB"]
+    assert "CTX" in captured_assembly["runtime_context"]
     assert runtime_text.startswith('You are helping the user with the document: "Paper A"')
-    assert "RULES" in runtime_text
     assert "Call `record_evidence` once for each distinct evidence quote you intend to keep." in runtime_text
-    assert "SCHEMA:SchemaX" in runtime_text
 
     runtime_text_with_evidence = catalog_service._build_runtime_instructions(
         db_agent=db_agent,
@@ -369,9 +350,8 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "abstract": None,
             "document_name": "Paper A",
         },
-        output_schema="SchemaX",
         canonical_tool_ids=["search_document", "record_evidence"],
-    )
+    ).render()
     assert "Use multiple evidence records when one quote alone does not fully support" in runtime_text_with_evidence
     assert "Each claimed quote should be a single contiguous excerpt." in runtime_text_with_evidence
 
@@ -381,14 +361,12 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "active_groups": ["WB"],
             "document_name": "Smith et al. (2024).pdf",
         },
-        output_schema=None,
         canonical_tool_ids=["save_tsv_file"],
-    )
+    ).render()
     assert formatter_runtime_text.startswith(
         'Use "Smith_et_al_2024" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
     )
     assert 'You are helping the user with the document: "Smith et al. (2024).pdf"' not in formatter_runtime_text
-    assert "RULES" in formatter_runtime_text
 
     formatter_runtime_text_with_invalid_filename = catalog_service._build_runtime_instructions(
         db_agent=db_agent,
@@ -396,25 +374,13 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "active_groups": ["WB"],
             "document_name": "().pdf",
         },
-        output_schema=None,
         canonical_tool_ids=["save_tsv_file"],
-    )
+    ).render()
     assert formatter_runtime_text_with_invalid_filename.startswith(
         'Use "output" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
     )
-
-    monkeypatch.setattr(
-        catalog_service,
-        "_inject_group_rules_with_overrides",
-        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("inject failed")),
-    )
-    with pytest.raises(ValueError, match="Failed group-rules injection"):
-        catalog_service._build_runtime_instructions(
-            db_agent=db_agent,
-            runtime_kwargs={"active_groups": ["WB"]},
-            output_schema=None,
-            canonical_tool_ids=[],
-        )
+    with pytest.raises(TypeError, match="list items must be strings"):
+        catalog_service._additional_runtime_contexts({"additional_runtime_context": ["ok", 7]})
 
     import src.lib.config.schema_discovery as schema_discovery
 
@@ -492,7 +458,16 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
     monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
     monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: captured.setdefault("settings", kwargs) or kwargs)
     monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: ["csv-tool"])
-    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **_kwargs: "INSTR")
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {"agent_id": "gene", "layers": [], "hash": "hash-1"},
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
     monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row)
@@ -507,6 +482,7 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
     fake_row = SimpleNamespace(
         id="agent-id",
         agent_key="gene_extractor",
+        visibility="system",
         instructions="BASE",
         mod_prompt_overrides={},
         group_rules_enabled=False,
@@ -524,12 +500,22 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
     monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
     monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
     monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {"agent_id": "gene_extractor", "layers": [], "hash": "hash-1"},
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
     monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row)
     canonical_schema = schema_discovery.get_agent_schema("GeneExtractionResultEnvelope")
 
-    assert "GeneExtractionResultEnvelope" in built.instructions
+    assert built.instructions == "INSTR"
     assert built.output_type is canonical_schema
 
 
@@ -563,7 +549,16 @@ def test_create_db_agent_applies_model_overrides(monkeypatch):
         "build_model_settings",
         lambda **kwargs: captured.setdefault("settings", kwargs) or kwargs,
     )
-    monkeypatch.setattr(catalog_service, "_build_runtime_instructions", lambda **_kwargs: "INSTR")
+    monkeypatch.setattr(
+        catalog_service,
+        "_build_runtime_instructions",
+        lambda **_kwargs: SimpleNamespace(
+            render=lambda: "INSTR",
+            hash="hash-1",
+            to_manifest=lambda: {"agent_id": "gene", "layers": [], "hash": "hash-1"},
+        ),
+    )
+    monkeypatch.setattr(catalog_service, "prompt_templates_for_bundle", lambda _bundle: [])
     monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(

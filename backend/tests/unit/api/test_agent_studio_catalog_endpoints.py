@@ -115,7 +115,12 @@ class TestAgentStudioCatalogEndpoints:
     def test_get_combined_prompt_success_and_404(self, monkeypatch):
         import src.api.agent_studio as api_module
 
-        service = SimpleNamespace(get_combined_prompt=lambda agent_id, group_id: f"{agent_id}-{group_id}-prompt")
+        bundle = SimpleNamespace(
+            render=lambda: "gene-WB-prompt",
+            hash="hash-1",
+            to_manifest=lambda: {"agent_id": "gene", "layers": [], "hash": "hash-1"},
+        )
+        service = SimpleNamespace(get_effective_prompt_bundle=lambda agent_id, group_id: bundle)
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
 
         success = asyncio.run(
@@ -126,11 +131,12 @@ class TestAgentStudioCatalogEndpoints:
         )
         assert success.combined_prompt == "gene-WB-prompt"
         assert success.group_id == "WB"
+        assert success.effective_prompt_hash == "hash-1"
 
         monkeypatch.setattr(
             api_module,
             "get_prompt_catalog",
-            lambda: SimpleNamespace(get_combined_prompt=lambda *_args, **_kwargs: None),
+            lambda: SimpleNamespace(get_effective_prompt_bundle=lambda *_args, **_kwargs: None),
         )
         with pytest.raises(HTTPException) as not_found_exc:
             asyncio.run(
@@ -146,7 +152,7 @@ class TestAgentStudioCatalogEndpoints:
 
         caplog.set_level(logging.ERROR, logger=api_module.logger.name)
         service = SimpleNamespace(
-            get_combined_prompt=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+            get_effective_prompt_bundle=lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
         )
         monkeypatch.setattr(api_module, "get_prompt_catalog", lambda: service)
 

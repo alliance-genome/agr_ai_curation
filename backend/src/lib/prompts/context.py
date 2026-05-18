@@ -7,17 +7,19 @@ The supervisor eagerly creates all specialist agents before routing, so logging
 at creation would overcount (prompts logged for agents that never run). Instead:
 
 1. Agent factories store prompts via set_pending_prompts(agent.name, prompts)
-2. Execution wrappers call commit_pending_prompts(agent.name) when agent runs
+   and bind the returned run id to the created Agent object's identity.
+2. Execution wrappers call commit_pending_prompts(agent) when agent runs
 3. After all execution, runner calls get_used_prompts() and logs them
 
 Usage:
     # In agent factory
     from src.lib.prompts.context import set_pending_prompts
-    set_pending_prompts("Gene Specialist", [base_prompt, group_rule_prompt])
+    prompt_run_id = set_pending_prompts("Gene Specialist", [base_prompt, group_rule_prompt])
+    bind_prompt_run(agent, prompt_run_id)
 
     # In execution wrapper (when agent actually runs)
     from src.lib.prompts.context import commit_pending_prompts
-    commit_pending_prompts(agent.name)
+    commit_pending_prompts(agent)
 
     # After all execution (in runner)
     from src.lib.prompts.context import get_used_prompts, clear_prompt_context
@@ -26,21 +28,48 @@ Usage:
     clear_prompt_context()
 """
 
+import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 
 from src.models.sql.prompts import PromptTemplate
-
-# Thread-safe storage: agent_name -> list of prompts pending execution
-_pending_prompts: ContextVar[Optional[Dict[str, List[PromptTemplate]]]] = ContextVar(
-    "pending_prompts", default=None
-)
 
 # Prompts that were actually used (logged after execution)
 # Note: Uses default=None pattern (matching langfuse_client.py) to avoid shared mutable state
 _used_prompts: ContextVar[Optional[List[PromptTemplate]]] = ContextVar(
     "used_prompts", default=None
+)
+
+
+@dataclass(frozen=True)
+class PromptAssemblyMetadata:
+    """Effective prompt assembly metadata for one runtime agent execution."""
+
+    effective_prompt_hash: str
+    layer_manifest: Dict[str, Any]
+
+
+@dataclass(frozen=True)
+class PromptRun:
+    """Prompt templates and effective assembly metadata for one agent run."""
+
+    agent_name: str
+    prompts: List[PromptTemplate]
+    assembly: Optional[PromptAssemblyMetadata] = None
+
+
+_pending_prompt_runs: ContextVar[Optional[Dict[str, PromptRun]]] = ContextVar(
+    "pending_prompt_runs", default=None
+)
+_pending_prompt_run_ids_by_agent: ContextVar[Optional[Dict[str, List[str]]]] = ContextVar(
+    "pending_prompt_run_ids_by_agent", default=None
+)
+_prompt_run_ids_by_object_id: ContextVar[Optional[Dict[int, str]]] = ContextVar(
+    "prompt_run_ids_by_object_id", default=None
+)
+_used_prompt_runs: ContextVar[Optional[List[PromptRun]]] = ContextVar(
+    "used_prompt_runs", default=None
 )
 
 
@@ -88,25 +117,172 @@ def get_prompt_override() -> Optional[PromptOverride]:
     return prompt_override_var.get(None)
 
 
-def _get_pending() -> Dict[str, List[PromptTemplate]]:
-    """Get or initialize the pending prompts dict."""
-    pending = _pending_prompts.get()
+def _get_pending_runs() -> Dict[str, PromptRun]:
+    """Get or initialize the pending prompt runs dict."""
+    pending = _pending_prompt_runs.get()
     if pending is None:
         pending = {}
-        _pending_prompts.set(pending)
+        _pending_prompt_runs.set(pending)
     return pending
 
 
-def set_pending_prompts(agent_name: str, prompts: List[PromptTemplate]) -> None:
+def _get_pending_run_ids_by_agent() -> Dict[str, List[str]]:
+    """Get or initialize the agent-name to pending run id index."""
+    pending = _pending_prompt_run_ids_by_agent.get()
+    if pending is None:
+        pending = {}
+        _pending_prompt_run_ids_by_agent.set(pending)
+    return pending
+
+
+def _get_prompt_run_ids_by_object_id() -> Dict[int, str]:
+    """Get or initialize the Agent object identity to pending run id index."""
+    pending = _prompt_run_ids_by_object_id.get()
+    if pending is None:
+        pending = {}
+        _prompt_run_ids_by_object_id.set(pending)
+    return pending
+
+
+def bind_prompt_run(agent: Any, prompt_run_id: Optional[str]) -> Any:
+    """Bind a prompt run id to an Agent-like object's identity and return it."""
+
+    if prompt_run_id:
+        object_ids = _get_prompt_run_ids_by_object_id().copy()
+        object_ids[id(agent)] = prompt_run_id
+        _prompt_run_ids_by_object_id.set(object_ids)
+    return agent
+
+
+def _resolve_prompt_run_id(agent_or_name: Any) -> Optional[str]:
+    """Resolve the unique pending prompt run id for an Agent-like object."""
+
+    if not isinstance(agent_or_name, str):
+        prompt_run_id = _get_prompt_run_ids_by_object_id().get(id(agent_or_name))
+        if prompt_run_id:
+            return prompt_run_id
+
+    if isinstance(agent_or_name, str):
+        agent_name = agent_or_name
+    else:
+        agent_name = getattr(agent_or_name, "name", None)
+    if not agent_name:
+        return None
+
+    pending_ids = _get_pending_run_ids_by_agent().get(str(agent_name), [])
+    if not pending_ids:
+        return None
+    if len(pending_ids) > 1:
+        raise ValueError(
+            f"Prompt run for agent '{agent_name}' is ambiguous; commit using the Agent instance."
+        )
+    return pending_ids[0]
+
+
+def _bind_prompt_run_id_to_object(agent: Any, prompt_run_id: str) -> None:
+    bind_prompt_run(agent, prompt_run_id)
+
+
+def _append_prompt_run_id_for_agent(agent_name: str, prompt_run_id: str) -> None:
+    run_ids_by_agent = {
+        name: list(run_ids)
+        for name, run_ids in _get_pending_run_ids_by_agent().items()
+    }
+    run_ids_by_agent.setdefault(agent_name, []).append(prompt_run_id)
+    _pending_prompt_run_ids_by_agent.set(run_ids_by_agent)
+
+
+def set_pending_prompts(
+    agent_name: str,
+    prompts: List[PromptTemplate],
+    *,
+    effective_prompt_hash: Optional[str] = None,
+    layer_manifest: Optional[Dict[str, Any]] = None,
+) -> str:
     """Called by agent factories to register prompts for potential logging.
 
     Args:
         agent_name: The Agent.name value (e.g., "Gene Specialist", "PDF Specialist")
         prompts: List of PromptTemplate objects (base prompt + any group rules)
+        effective_prompt_hash: Hash of the final assembled prompt, when available
+        layer_manifest: Structured layer manifest for the final assembled prompt
     """
-    pending = _get_pending().copy()
-    pending[agent_name] = list(prompts)
-    _pending_prompts.set(pending)
+    prompt_run_id = f"{agent_name}:{uuid.uuid4().hex}"
+
+    run_pending = _get_pending_runs().copy()
+    assembly = None
+    if effective_prompt_hash and layer_manifest is not None:
+        assembly = PromptAssemblyMetadata(
+            effective_prompt_hash=effective_prompt_hash,
+            layer_manifest=dict(layer_manifest),
+        )
+    run_pending[prompt_run_id] = PromptRun(
+        agent_name=agent_name,
+        prompts=list(prompts),
+        assembly=assembly,
+    )
+    _pending_prompt_runs.set(run_pending)
+
+    _append_prompt_run_id_for_agent(agent_name, prompt_run_id)
+
+    return prompt_run_id
+
+
+def append_pending_prompt_runtime_context(
+    agent_or_name: Any,
+    *,
+    layer_id_suffix: str,
+    title: str,
+    content: str,
+    source_ref: str,
+    target_agent: Any = None,
+) -> None:
+    """Append runtime prompt content to a pending run's assembly metadata."""
+
+    from src.lib.prompts.assembly import append_runtime_context_to_manifest
+
+    source_prompt_run_id = _resolve_prompt_run_id(agent_or_name)
+    if source_prompt_run_id is None:
+        return
+
+    run_pending = _get_pending_runs().copy()
+    current_prompt_run_id = source_prompt_run_id
+    if target_agent is not None and not isinstance(target_agent, str):
+        target_prompt_run_id = _get_prompt_run_ids_by_object_id().get(id(target_agent))
+        if target_prompt_run_id:
+            current_prompt_run_id = target_prompt_run_id
+
+    current = run_pending.get(current_prompt_run_id)
+    if current is None or current.assembly is None:
+        return
+
+    layer_manifest = append_runtime_context_to_manifest(
+        current.assembly.layer_manifest,
+        layer_id_suffix=layer_id_suffix,
+        title=title,
+        content=content,
+        source_ref=source_ref,
+    )
+    updated_run = PromptRun(
+        agent_name=current.agent_name,
+        prompts=list(current.prompts),
+        assembly=PromptAssemblyMetadata(
+            effective_prompt_hash=str(layer_manifest["hash"]),
+            layer_manifest=layer_manifest,
+        ),
+    )
+    if (
+        target_agent is not None
+        and not isinstance(target_agent, str)
+        and _get_prompt_run_ids_by_object_id().get(id(target_agent)) is None
+    ):
+        target_prompt_run_id = f"{current.agent_name}:{uuid.uuid4().hex}"
+        run_pending[target_prompt_run_id] = updated_run
+        _append_prompt_run_id_for_agent(current.agent_name, target_prompt_run_id)
+        _bind_prompt_run_id_to_object(target_agent, target_prompt_run_id)
+    else:
+        run_pending[current_prompt_run_id] = updated_run
+    _pending_prompt_runs.set(run_pending)
 
 
 def _get_used() -> List[PromptTemplate]:
@@ -118,7 +294,16 @@ def _get_used() -> List[PromptTemplate]:
     return used
 
 
-def commit_pending_prompts(agent_name: str) -> None:
+def _get_used_runs() -> List[PromptRun]:
+    """Get or initialize the used prompt runs list."""
+    used = _used_prompt_runs.get()
+    if used is None:
+        used = []
+        _used_prompt_runs.set(used)
+    return used
+
+
+def commit_pending_prompts(agent_or_name: Any) -> None:
     """Called by execution wrappers when agent actually executes.
 
     Moves prompts from pending to used. Strict audit trail: log every
@@ -126,13 +311,22 @@ def commit_pending_prompts(agent_name: str) -> None:
     are logged twice.
 
     Args:
-        agent_name: The Agent.name value (must match what was passed to set_pending_prompts)
+        agent_or_name: The Agent object with a bound prompt run id.
     """
-    pending = _get_pending()
-    if agent_name in pending:
+    prompt_run_id = _resolve_prompt_run_id(agent_or_name)
+
+    pending_runs = _get_pending_runs()
+    pending_run = pending_runs.get(prompt_run_id) if prompt_run_id else None
+
+    if pending_run is not None:
         used = list(_get_used())
-        used.extend(pending[agent_name])
+        used.extend(pending_run.prompts)
         _used_prompts.set(used)
+
+    if pending_run is not None:
+        used_runs = list(_get_used_runs())
+        used_runs.append(pending_run)
+        _used_prompt_runs.set(used_runs)
 
 
 def get_used_prompts() -> List[PromptTemplate]:
@@ -144,13 +338,22 @@ def get_used_prompts() -> List[PromptTemplate]:
     return list(_get_used())
 
 
+def get_used_prompt_runs() -> List[PromptRun]:
+    """Return prompt usage grouped by agent execution."""
+
+    return list(_get_used_runs())
+
+
 def clear_prompt_context() -> None:
     """Called at start of request to reset.
 
     Should be called at the beginning of each request to ensure clean state.
     """
-    _pending_prompts.set({})
     _used_prompts.set([])
+    _pending_prompt_runs.set({})
+    _pending_prompt_run_ids_by_agent.set({})
+    _prompt_run_ids_by_object_id.set({})
+    _used_prompt_runs.set([])
     prompt_override_var.set(None)
 
 
@@ -163,5 +366,12 @@ def get_pending_for_agent(agent_name: str) -> Optional[List[PromptTemplate]]:
     Returns:
         List of pending prompts for the agent, or None if not found.
     """
-    pending = _get_pending()
-    return pending.get(agent_name)
+    pending_runs = _get_pending_runs()
+    pending_ids = _get_pending_run_ids_by_agent().get(agent_name, [])
+    prompts = [
+        prompt
+        for prompt_run_id in pending_ids
+        if (prompt_run := pending_runs.get(prompt_run_id)) is not None
+        for prompt in prompt_run.prompts
+    ]
+    return prompts or None

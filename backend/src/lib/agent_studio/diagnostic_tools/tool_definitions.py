@@ -281,23 +281,26 @@ def _create_get_prompt_handler():
                 "available_agents": available_agents
             }
 
-        # Get the prompt (with group rules if specified)
         resolved_group_id = group_id or mod_id
-        if resolved_group_id:
-            prompt = catalog.get_combined_prompt(agent_id, resolved_group_id)
-            has_group_rules = (
-                resolved_group_id in agent.group_rules if agent.group_rules else False
-            )
-        else:
-            prompt = agent.base_prompt
-            has_group_rules = False
+        bundle = catalog.get_effective_prompt_bundle(agent_id, group_id=resolved_group_id)
+        if bundle is None:
+            return {
+                "status": "error",
+                "message": f"Agent '{agent_id}' not found",
+            }
+        has_group_rules = bool(
+            resolved_group_id and any(layer.kind == "group_rules" for layer in bundle.layers)
+        )
 
         return {
             "status": "ok",
             "agent_id": agent_id,
             "agent_name": agent.agent_name,
             "description": agent.description,
-            "prompt": prompt,
+            "prompt": bundle.render(),
+            "effective_prompt_hash": bundle.hash,
+            "layer_manifest": bundle.to_manifest(),
+            "layers": [layer.to_manifest() for layer in bundle.layers],
             "source_file": agent.source_file,
             "has_group_rules": agent.has_group_rules,
             "group_id_applied": resolved_group_id if has_group_rules else None,
@@ -551,9 +554,10 @@ Each annotation includes: GO term, evidence code, assigned_by (curation source).
     # -------------------------------------------------------------------------
     registry.register(
         name="get_prompt",
-        description="""Get an agent's prompt from the prompt catalog.
+        description="""Get an agent's effective prompt from the shared prompt assembler.
 
-Use this to inspect what instructions any specialist or validator agent receives.
+Use this to inspect the flat prompt, structured layers, layer manifest, and
+effective prompt hash any specialist or validator agent receives.
 Useful for understanding agent behavior, troubleshooting routing issues, and
 answering validator-agent inspection questions from domain-pack validation plans.
 

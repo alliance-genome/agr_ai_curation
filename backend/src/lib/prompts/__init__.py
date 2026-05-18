@@ -28,13 +28,18 @@ from .cache import (
     PromptNotFoundError,
 )
 from .context import (
+    PromptAssemblyMetadata,
     PromptOverride,
+    PromptRun,
     set_prompt_override,
     get_prompt_override,
     clear_prompt_override,
+    bind_prompt_run,
     set_pending_prompts,
+    append_pending_prompt_runtime_context,
     commit_pending_prompts,
     get_used_prompts,
+    get_used_prompt_runs,
     clear_prompt_context,
     get_pending_for_agent,
 )
@@ -52,13 +57,18 @@ __all__ = [
     "is_initialized",
     "PromptNotFoundError",
     # Context tracking
+    "PromptAssemblyMetadata",
     "PromptOverride",
+    "PromptRun",
     "set_prompt_override",
     "get_prompt_override",
     "clear_prompt_override",
+    "bind_prompt_run",
     "set_pending_prompts",
+    "append_pending_prompt_runtime_context",
     "commit_pending_prompts",
     "get_used_prompts",
+    "get_used_prompt_runs",
     "clear_prompt_context",
     "get_pending_for_agent",
     # Models

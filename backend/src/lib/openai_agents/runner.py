@@ -76,7 +76,12 @@ from .streaming_tools import (
 )
 
 # Prompt context tracking for execution logging
-from src.lib.prompts.context import clear_prompt_context, commit_pending_prompts, get_used_prompts
+from src.lib.prompts.context import (
+    clear_prompt_context,
+    commit_pending_prompts,
+    get_used_prompt_runs,
+    get_used_prompts,
+)
 from src.lib.prompts.service import PromptService
 from src.models.sql.database import SessionLocal
 
@@ -487,10 +492,34 @@ def _log_used_prompts_to_db(
     Returns:
         Number of prompts logged
     """
+    used_prompt_runs = get_used_prompt_runs()
     used_prompts = get_used_prompts()
-    if not used_prompts:
+    if not used_prompts and not used_prompt_runs:
         logger.debug("No prompts to log")
         return 0
+    if used_prompts and not used_prompt_runs:
+        logger.warning(
+            "Skipping prompt usage logging because prompt runs are missing assembly metadata",
+            extra={"trace_id": trace_id, "session_id": session_id},
+        )
+        return 0
+
+    missing_assembly_agents = [
+        run.agent_name for run in used_prompt_runs if run.assembly is None
+    ]
+    if missing_assembly_agents:
+        logger.error(
+            "Skipping prompt usage logging because prompt runs lack assembly metadata: %s",
+            missing_assembly_agents,
+            extra={"trace_id": trace_id, "session_id": session_id},
+        )
+        return 0
+
+    used_prompts = [
+        prompt
+        for run in used_prompt_runs
+        for prompt in run.prompts
+    ]
 
     # Add prompt version metadata to Langfuse span if provided
     # Note: Using span.update(metadata=...) since span.event() only exists on trace objects
@@ -506,10 +535,18 @@ def _log_used_prompts_to_db(
                 }
                 for p in used_prompts
             ]
+            prompt_assemblies = [
+                {
+                    "effective_prompt_hash": run.assembly.effective_prompt_hash,
+                    "layer_manifest": run.assembly.layer_manifest,
+                }
+                for run in used_prompt_runs
+            ]
             span.update(
                 metadata={
                     "prompts_used": prompt_versions,
                     "prompt_count": len(prompt_versions),
+                    "prompt_assemblies": prompt_assemblies,
                 }
             )
             logger.debug("Added %s prompt versions to span metadata", len(prompt_versions))
@@ -521,11 +558,20 @@ def _log_used_prompts_to_db(
         db = SessionLocal()
         try:
             service = PromptService(db)
-            entries = service.log_all_used_prompts(
-                prompts=used_prompts,
-                trace_id=trace_id,
-                session_id=session_id,
-            )
+            entries = []
+            for run in used_prompt_runs:
+                if not run.prompts:
+                    continue
+                assert run.assembly is not None
+                entries.extend(
+                    service.log_all_used_prompts(
+                        prompts=run.prompts,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        effective_prompt_hash=run.assembly.effective_prompt_hash,
+                        layer_manifest=run.assembly.layer_manifest,
+                    )
+                )
             db.commit()
             logger.info(
                 "Logged %s prompt usages to database",
@@ -1272,7 +1318,6 @@ async def run_agent_streamed(
     clear_collected_events()
     clear_pending_configs()  # Clear agent configs from previous requests
     reset_consecutive_call_tracker()  # Reset batching nudge tracker for new query
-    clear_prompt_context()  # Clear prompt tracking for new request
 
     # Use pre-fetched document context if provided, otherwise fetch
     # This optimization avoids redundant Weaviate queries when called from flow executor
@@ -1298,6 +1343,7 @@ async def run_agent_streamed(
     # Use provided agent OR create the supervisor agent with all domain specialists
     # All agent settings come from environment variables (see config.py)
     if agent is None:
+        clear_prompt_context()  # Clear prompt tracking before creating new runtime agents
         agent = create_supervisor_agent(
             document_id=document_id,
             user_id=user_id,
@@ -1313,9 +1359,11 @@ async def run_agent_streamed(
             specialist_reasoning_override=specialist_reasoning,
         )
         agent_name = agent.name
+        agent_for_prompt_commit = agent
     else:
         # Custom agent provided (e.g., flow supervisor)
         agent_name = getattr(agent, 'name', 'Custom Agent')
+        agent_for_prompt_commit = agent
         logger.info(
             "Using provided agent: %s",
             agent_name,
@@ -1324,7 +1372,7 @@ async def run_agent_streamed(
 
     # Commit pending prompts for whichever agent we're using
     # (supervisor runs immediately after creation, unlike specialists which are on-demand)
-    commit_pending_prompts(agent_name)
+    commit_pending_prompts(agent_for_prompt_commit)
 
     # Generate a fallback trace ID (used when Langfuse not configured)
     doc_prefix = document_id[:8] if document_id else "nodoc"

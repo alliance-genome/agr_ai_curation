@@ -8,10 +8,7 @@ Python module used for group-rule logic.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from src.models.sql.prompts import PromptTemplate
+from typing import Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -61,80 +58,6 @@ def get_groups_from_cognito(cognito_groups: List[str]) -> List[str]:
         "get_groups_from_cognito() is deprecated; use get_groups_from_provider_groups()."
     )
     return get_groups_from_provider_groups(cognito_groups)
-
-
-def inject_group_rules(
-    base_prompt: str,
-    group_ids: List[str],
-    component_type: str,
-    component_name: str,
-    injection_marker: str = "## GROUP-SPECIFIC RULES",
-    prompts_out: Optional[List["PromptTemplate"]] = None,
-) -> str:
-    """Inject group-specific rules into a prompt from cached prompt templates."""
-    del component_type
-
-    if not group_ids:
-        logger.debug("No group IDs provided, returning base prompt unchanged")
-        return base_prompt
-
-    normalized_groups = [normalize_group_id(g) for g in group_ids]
-    logger.info("Injecting rules for groups: %s", normalized_groups)
-
-    from src.lib.prompts.cache import get_prompt_optional, is_initialized
-
-    if not is_initialized():
-        raise RuntimeError(
-            "Prompt cache not initialized. Call initialize_prompt_cache() at startup."
-        )
-
-    collected_content: List[str] = []
-    collected_groups: List[str] = []
-
-    for group_id in normalized_groups:
-        prompt = get_prompt_optional(component_name, "group_rules", group_id=group_id)
-        if not prompt:
-            logger.debug("No cached group rules found for %s/%s", component_name, group_id)
-            continue
-
-        collected_content.append(prompt.content)
-        collected_groups.append(group_id)
-        if prompts_out is not None:
-            prompts_out.append(prompt)
-        logger.debug(
-            "Loaded %s rules for %s from cache (v%s)",
-            group_id,
-            component_name,
-            prompt.version,
-        )
-
-    if not collected_content:
-        logger.warning(
-            "No group rules found in cache for %s/%s",
-            normalized_groups,
-            component_name,
-        )
-        return base_prompt
-
-    formatted_rules = "\n".join(collected_content)
-    group_list = ", ".join(collected_groups)
-    injection_block = f"""
-{injection_marker}
-
-The following rules are specific to the organization group(s) you are working with: {group_list}
-Apply these rules when searching for and interpreting results.
-
-{formatted_rules}
-
-## END GROUP-SPECIFIC RULES
-"""
-
-    if injection_marker in base_prompt:
-        logger.debug("Found injection marker, replacing at marker position")
-        return base_prompt.replace(injection_marker, injection_block)
-
-    logger.debug("No injection marker found, appending to end of prompt")
-    return base_prompt + "\n" + injection_block
 
 
 def get_available_groups() -> List[str]:

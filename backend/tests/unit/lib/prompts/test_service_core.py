@@ -71,12 +71,21 @@ def test_log_all_used_prompts_adds_entries():
     service = PromptService(db)
     prompts = [_prompt(1), _prompt(2)]
 
-    entries = service.log_all_used_prompts(prompts, trace_id="trace-1", session_id="session-1")
+    layer_manifest = {"agent_id": "gene", "layers": [], "hash": "hash-1"}
+    entries = service.log_all_used_prompts(
+        prompts,
+        trace_id="trace-1",
+        session_id="session-1",
+        effective_prompt_hash="hash-1",
+        layer_manifest=layer_manifest,
+    )
 
     assert len(entries) == 2
     assert db.add.call_count == 2
     assert entries[0].trace_id == "trace-1"
     assert entries[1].session_id == "session-1"
+    assert entries[0].effective_prompt_hash == "hash-1"
+    assert entries[1].layer_manifest == layer_manifest
 
 
 def test_create_version_increments_version_and_adds_prompt():
@@ -174,4 +183,3 @@ def test_deactivate_current_updates_active_rows():
     service._deactivate_current(agent_name="gene", prompt_type="system", group_id=None)
 
     assert query.updated_values == {"is_active": False}
-

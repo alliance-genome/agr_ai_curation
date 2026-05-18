@@ -8,6 +8,35 @@ import pytest
 from src.lib.openai_agents.agents import supervisor_agent
 
 
+def _patch_supervisor_prompt_bundle(monkeypatch, *, version: int = 1):
+    prompt = SimpleNamespace(
+        agent_name="supervisor",
+        prompt_type="system",
+        group_id=None,
+        version=version,
+        id="prompt-id",
+    )
+
+    def _bundle(_agent_id, group_id=None, runtime_context=None):
+        rendered = "\n\n".join(
+            part
+            for part in ["Base prompt", str(runtime_context or "").strip()]
+            if part
+        )
+        return SimpleNamespace(
+            render=lambda: rendered,
+            hash=f"hash-{version}",
+            to_manifest=lambda: {
+                "agent_id": "supervisor",
+                "layers": [],
+                "hash": f"hash-{version}",
+            },
+        )
+
+    monkeypatch.setattr(supervisor_agent, "build_agent_prompt_layers", _bundle)
+    monkeypatch.setattr(supervisor_agent, "prompt_templates_for_bundle", lambda _bundle: [prompt])
+
+
 class _Field:
     def __eq__(self, _other):
         return True
@@ -457,15 +486,13 @@ def test_create_supervisor_agent_without_document_adds_unavailable_note(monkeypa
             {"tool_name": "ask_pdf_specialist", "requires_document": True},
         ],
     )
-    monkeypatch.setattr(
-        supervisor_agent,
-        "get_prompt",
-        lambda _name: SimpleNamespace(content="Base prompt", version=7),
-    )
+    _patch_supervisor_prompt_bundle(monkeypatch, version=7)
     monkeypatch.setattr(
         supervisor_agent,
         "set_pending_prompts",
-        lambda name, prompts: captured_pending.update({"name": name, "prompts": prompts}),
+        lambda name, prompts, **kwargs: captured_pending.update(
+            {"name": name, "prompts": prompts, "kwargs": kwargs}
+        ),
     )
     monkeypatch.setattr(
         "src.lib.openai_agents.langfuse_client.log_agent_config",
@@ -515,11 +542,7 @@ def test_create_supervisor_agent_with_zero_specialists_enables_core_only_mode(mo
     )
     monkeypatch.setattr(supervisor_agent, "_build_model_settings", lambda **_kwargs: None)
     monkeypatch.setattr(supervisor_agent, "_get_supervisor_specialist_specs", lambda: [])
-    monkeypatch.setattr(
-        supervisor_agent,
-        "get_prompt",
-        lambda _name: SimpleNamespace(content="Base prompt", version=11),
-    )
+    _patch_supervisor_prompt_bundle(monkeypatch, version=11)
     monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
     monkeypatch.setattr(
         "src.lib.openai_agents.langfuse_client.log_agent_config",
@@ -576,11 +599,7 @@ def test_create_supervisor_agent_with_document_extracts_sections_and_enables_gua
         "_create_dynamic_specialist_tools",
         lambda **kwargs: captured_dynamic.update(kwargs) or [SimpleNamespace(name="ask_pdf_specialist")],
     )
-    monkeypatch.setattr(
-        supervisor_agent,
-        "get_prompt",
-        lambda _name: SimpleNamespace(content="Base prompt", version=9),
-    )
+    _patch_supervisor_prompt_bundle(monkeypatch, version=9)
     monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
     monkeypatch.setattr("src.lib.openai_agents.langfuse_client.log_agent_config", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -634,11 +653,7 @@ def test_create_supervisor_agent_applies_model_overrides(monkeypatch):
         "_create_dynamic_specialist_tools",
         lambda **kwargs: captured_dynamic.update(kwargs) or [],
     )
-    monkeypatch.setattr(
-        supervisor_agent,
-        "get_prompt",
-        lambda _name: SimpleNamespace(content="Base prompt", version=12),
-    )
+    _patch_supervisor_prompt_bundle(monkeypatch, version=12)
     monkeypatch.setattr(supervisor_agent, "set_pending_prompts", lambda *_a, **_k: None)
     monkeypatch.setattr("src.lib.openai_agents.langfuse_client.log_agent_config", lambda **_kwargs: None)
     monkeypatch.setattr(
