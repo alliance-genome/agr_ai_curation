@@ -609,12 +609,12 @@ class TestActiveGroupPropagation:
 
 
 class TestGetAllAgentToolsCustomInstructions:
-    """Tests that get_all_agent_tools prepends per-node custom_instructions."""
+    """Tests that get_all_agent_tools passes per-node runtime prompt context."""
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_custom_instructions_prepended(self, mock_get_agent, mock_streaming):
-        """Agent instructions should have custom instructions prepended."""
+        """Agent construction should receive custom instructions as runtime context."""
         base_prompt = "You are the gene specialist."
         mock_agent = MagicMock(spec=Agent)
         mock_agent.instructions = base_prompt
@@ -627,14 +627,11 @@ class TestGetAllAgentToolsCustomInstructions:
 
         get_all_agent_tools(flow)
 
-        assert mock_agent.instructions.startswith("## CUSTOM INSTRUCTIONS")
-        assert "Only curate C. elegans genes" in mock_agent.instructions
-        assert "HIGHEST PRIORITY" in mock_agent.instructions
-        assert base_prompt in mock_agent.instructions
-        # Custom instructions come before the base prompt
-        custom_pos = mock_agent.instructions.index("Only curate C. elegans genes")
-        base_pos = mock_agent.instructions.index(base_prompt)
-        assert custom_pos < base_pos
+        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        assert runtime_context.startswith("## CUSTOM INSTRUCTIONS")
+        assert "Only curate C. elegans genes" in runtime_context
+        assert "HIGHEST PRIORITY" in runtime_context
+        assert mock_agent.instructions == base_prompt
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -651,6 +648,7 @@ class TestGetAllAgentToolsCustomInstructions:
         get_all_agent_tools(flow)
 
         assert mock_agent.instructions == base_prompt
+        assert "additional_runtime_context" not in mock_get_agent.call_args.kwargs
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -672,8 +670,10 @@ class TestGetAllAgentToolsCustomInstructions:
 
         get_all_agent_tools(flow)
 
-        assert "Custom gene stuff" in gene_agent.instructions
+        gene_runtime_context = mock_get_agent.call_args_list[0].kwargs["additional_runtime_context"][0]
+        assert "Custom gene stuff" in gene_runtime_context
         assert disease_agent.instructions == "Disease base"
+        assert "additional_runtime_context" not in mock_get_agent.call_args_list[1].kwargs
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -690,8 +690,10 @@ class TestGetAllAgentToolsCustomInstructions:
 
         get_all_agent_tools(flow)
 
-        assert "Override everything" in mock_agent.instructions
-        assert "HIGHEST PRIORITY" in mock_agent.instructions
+        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        assert "Override everything" in runtime_context
+        assert "HIGHEST PRIORITY" in runtime_context
+        assert mock_agent.instructions is None
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -708,6 +710,7 @@ class TestGetAllAgentToolsCustomInstructions:
         get_all_agent_tools(flow)
 
         assert mock_agent.instructions == base_prompt
+        assert "additional_runtime_context" not in mock_get_agent.call_args.kwargs
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -725,14 +728,15 @@ class TestGetAllAgentToolsCustomInstructions:
 
         get_all_agent_tools(flow)
 
-        assert mock_agent.instructions.startswith("## OUTPUT EVIDENCE REQUIREMENT")
-        assert "include supporting evidence from earlier steps" in mock_agent.instructions
-        assert base_prompt in mock_agent.instructions
+        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        assert runtime_context.startswith("## OUTPUT EVIDENCE REQUIREMENT")
+        assert "include supporting evidence from earlier steps" in runtime_context
+        assert mock_agent.instructions == base_prompt
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_custom_instructions_and_include_evidence_share_prefix(self, mock_get_agent, mock_streaming):
-        """Custom instructions and evidence guidance should both prepend before the base prompt."""
+        """Custom instructions and evidence guidance should share one runtime context."""
         base_prompt = "You are the output specialist."
         mock_agent = MagicMock(spec=Agent)
         mock_agent.instructions = base_prompt
@@ -750,10 +754,14 @@ class TestGetAllAgentToolsCustomInstructions:
 
         get_all_agent_tools(flow)
 
-        assert mock_agent.instructions.startswith("## CUSTOM INSTRUCTIONS")
-        assert "Group results by species." in mock_agent.instructions
-        assert "## OUTPUT EVIDENCE REQUIREMENT" in mock_agent.instructions
-        assert mock_agent.instructions.index("## OUTPUT EVIDENCE REQUIREMENT") < mock_agent.instructions.index(base_prompt)
+        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        assert runtime_context.startswith("## CUSTOM INSTRUCTIONS")
+        assert "Group results by species." in runtime_context
+        assert "## OUTPUT EVIDENCE REQUIREMENT" in runtime_context
+        assert runtime_context.index("## CUSTOM INSTRUCTIONS") < runtime_context.index(
+            "## OUTPUT EVIDENCE REQUIREMENT"
+        )
+        assert mock_agent.instructions == base_prompt
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -771,8 +779,9 @@ class TestGetAllAgentToolsCustomInstructions:
 
         get_all_agent_tools(flow)
 
-        assert mock_agent.instructions.startswith("## OUTPUT EVIDENCE REQUIREMENT")
-        assert base_prompt in mock_agent.instructions
+        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        assert runtime_context.startswith("## OUTPUT EVIDENCE REQUIREMENT")
+        assert mock_agent.instructions == base_prompt
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
@@ -790,9 +799,10 @@ class TestGetAllAgentToolsCustomInstructions:
 
         get_all_agent_tools(flow)
 
-        assert mock_agent.instructions.startswith("## OUTPUT EVIDENCE EXCLUSION")
-        assert "do NOT include supporting evidence" in mock_agent.instructions
-        assert base_prompt in mock_agent.instructions
+        runtime_context = mock_get_agent.call_args.kwargs["additional_runtime_context"][0]
+        assert runtime_context.startswith("## OUTPUT EVIDENCE EXCLUSION")
+        assert "do NOT include supporting evidence" in runtime_context
+        assert mock_agent.instructions == base_prompt
 
 
 # ===========================================================================
@@ -829,11 +839,13 @@ class TestGetAllAgentToolsDuplicateAgents:
     def test_duplicate_agents_different_custom_instructions(self, mock_get_agent, mock_streaming):
         """Each step gets its own custom instructions, not merged."""
         agents_created = []
+        runtime_contexts = []
 
         def create_fresh_agent(aid, **kw):
             agent = MagicMock(spec=Agent)
             agent.instructions = f"Base {aid}"
             agents_created.append(agent)
+            runtime_contexts.append(kw.get("additional_runtime_context", []))
             return agent
 
         mock_get_agent.side_effect = create_fresh_agent
@@ -848,22 +860,26 @@ class TestGetAllAgentToolsDuplicateAgents:
 
         assert len(agents_created) == 2
         # Step 1 agent has only C. elegans instructions
-        assert "C. elegans" in agents_created[0].instructions
-        assert "zebrafish" not in agents_created[0].instructions
+        assert "C. elegans" in runtime_contexts[0][0]
+        assert "zebrafish" not in runtime_contexts[0][0]
+        assert agents_created[0].instructions == "Base gene"
         # Step 2 agent has only zebrafish instructions
-        assert "zebrafish" in agents_created[1].instructions
-        assert "C. elegans" not in agents_created[1].instructions
+        assert "zebrafish" in runtime_contexts[1][0]
+        assert "C. elegans" not in runtime_contexts[1][0]
+        assert agents_created[1].instructions == "Base gene"
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
     def test_duplicate_agent_one_with_custom_one_without(self, mock_get_agent, mock_streaming):
         """Only the step with custom instructions should be modified."""
         agents_created = []
+        runtime_contexts = []
 
         def create_fresh_agent(aid, **kw):
             agent = MagicMock(spec=Agent)
             agent.instructions = "Base gene"
             agents_created.append(agent)
+            runtime_contexts.append(kw.get("additional_runtime_context", []))
             return agent
 
         mock_get_agent.side_effect = create_fresh_agent
@@ -877,8 +893,9 @@ class TestGetAllAgentToolsDuplicateAgents:
         get_all_agent_tools(flow)
 
         assert len(agents_created) == 2
-        assert "Special focus" in agents_created[0].instructions
+        assert "Special focus" in runtime_contexts[0][0]
         assert agents_created[1].instructions == "Base gene"
+        assert runtime_contexts[1] == []
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")

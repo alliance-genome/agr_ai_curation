@@ -1,11 +1,19 @@
 """Focused helper tests for streaming_tools core runtime behavior."""
 
+import uuid
 from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
 
 from src.lib.openai_agents import streaming_tools
+from src.lib.prompts.context import (
+    clear_prompt_context,
+    commit_pending_prompts,
+    get_used_prompt_runs,
+    set_pending_prompts,
+)
+from src.models.sql.prompts import PromptTemplate
 
 
 class _Envelope(BaseModel):
@@ -14,10 +22,12 @@ class _Envelope(BaseModel):
 
 @pytest.fixture(autouse=True)
 def _reset_streaming_state():
+    clear_prompt_context()
     streaming_tools.reset_consecutive_call_tracker()
     streaming_tools.clear_collected_events()
     streaming_tools.set_live_event_list(None)
     yield
+    clear_prompt_context()
     streaming_tools.reset_consecutive_call_tracker()
     streaming_tools.clear_collected_events()
     streaming_tools.set_live_event_list(None)
@@ -40,6 +50,63 @@ def test_build_json_only_instruction_without_schema():
     text = streaming_tools._build_json_only_instruction(None)
     assert "IMPORTANT OUTPUT FORMAT REQUIREMENT" in text
     assert "schema exactly" not in text.lower()
+
+
+def test_runtime_instruction_append_updates_pending_prompt_assembly():
+    clear_prompt_context()
+    prompt = PromptTemplate(
+        id=uuid.uuid4(),
+        agent_name="gene",
+        prompt_type="system",
+        content="base",
+        version=1,
+        is_active=True,
+    )
+    set_pending_prompts(
+        "Gene Specialist",
+        [prompt],
+        effective_prompt_hash="hash-1",
+        layer_manifest={
+            "agent_id": "gene",
+            "layers": [
+                {
+                    "id": "gene:base_prompt",
+                    "kind": "base_prompt",
+                    "title": "Editable base prompt",
+                    "content": "base",
+                    "provenance": "prompt_template:system",
+                    "editable": True,
+                    "locked": False,
+                    "source_ref": "prompt_templates:active:gene:system:base:v1",
+                    "hash": "base-layer-hash",
+                }
+            ],
+            "hash": "hash-1",
+        },
+    )
+    source_agent = SimpleNamespace(name="Gene Specialist", instructions="base")
+
+    runtime_agent = streaming_tools._append_agent_runtime_instruction(
+        source_agent,
+        source_agent,
+        instruction="Runtime-only instruction.",
+        layer_id_suffix="runtime_test",
+        title="Runtime test instruction",
+        source_ref="test:runtime_instruction",
+    )
+    commit_pending_prompts("Gene Specialist")
+
+    assert runtime_agent is not source_agent
+    assert runtime_agent.instructions == "base\n\nRuntime-only instruction."
+    used_run = get_used_prompt_runs()[0]
+    assert used_run.assembly is not None
+    assert used_run.assembly.effective_prompt_hash != "hash-1"
+    assert used_run.assembly.layer_manifest["layers"][-1]["id"] == (
+        "gene:runtime_context:runtime_test"
+    )
+    assert used_run.assembly.layer_manifest["layers"][-1]["content"] == (
+        "Runtime-only instruction."
+    )
 
 
 def test_extract_tool_name_prefers_name_then_tool_name():

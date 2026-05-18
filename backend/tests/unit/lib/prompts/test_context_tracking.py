@@ -4,6 +4,7 @@ import uuid
 
 from src.lib.prompts.context import (
     PromptOverride,
+    append_pending_prompt_runtime_context,
     clear_prompt_context,
     clear_prompt_override,
     commit_pending_prompts,
@@ -62,6 +63,53 @@ def test_pending_prompts_commit_and_used_tracking():
     # Strict audit trail: committing again logs again (no de-dupe).
     commit_pending_prompts("Gene Specialist")
     assert get_used_prompts() == [prompt_a, prompt_b, prompt_a, prompt_b]
+
+
+def test_pending_prompt_runtime_context_updates_assembly_before_commit():
+    clear_prompt_context()
+    prompt = _prompt("base")
+    layer_manifest = {
+        "agent_id": "gene",
+        "layers": [
+            {
+                "id": "gene:base_prompt",
+                "kind": "base_prompt",
+                "title": "Editable base prompt",
+                "content": "base",
+                "provenance": "prompt_template:system",
+                "editable": True,
+                "locked": False,
+                "source_ref": "prompt_templates:active:gene:system:base:v1",
+                "hash": "base-layer-hash",
+            }
+        ],
+        "hash": "hash-1",
+    }
+    set_pending_prompts(
+        "Gene Specialist",
+        [prompt],
+        effective_prompt_hash="hash-1",
+        layer_manifest=layer_manifest,
+    )
+
+    append_pending_prompt_runtime_context(
+        "Gene Specialist",
+        layer_id_suffix="tool_efficiency",
+        title="Tool efficiency runtime instruction",
+        content="Batch large lookup lists in one tool call.",
+        source_ref="test:tool_efficiency",
+    )
+    commit_pending_prompts("Gene Specialist")
+
+    used_run = get_used_prompt_runs()[0]
+    assert used_run.assembly is not None
+    assert used_run.assembly.effective_prompt_hash != "hash-1"
+    layers = used_run.assembly.layer_manifest["layers"]
+    assert [layer["id"] for layer in layers] == [
+        "gene:base_prompt",
+        "gene:runtime_context:tool_efficiency",
+    ]
+    assert layers[-1]["content"] == "Batch large lookup lists in one tool call."
 
 
 def test_commit_pending_prompts_noop_for_unknown_agent():

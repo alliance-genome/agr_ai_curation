@@ -185,7 +185,7 @@ def _build_flow_step_instruction_prefix(
     custom_instructions: Optional[str],
     include_evidence: Optional[bool],
 ) -> str:
-    """Build step-local instructions prepended onto the selected agent."""
+    """Build step-local instructions for the selected agent's runtime layer."""
 
     sections: List[str] = []
 
@@ -753,7 +753,6 @@ async def _run_custom_flow_validator_agent(
     if not validator_agent_id:
         raise ValueError("validation attachment target node is missing agent_id")
 
-    agent = get_agent_by_id(validator_agent_id, **dict(agent_context))
     instruction_prefix = (
         "## FLOW VALIDATOR REQUEST\n\n"
         "You are running as a Flow Builder validation attachment. Validate only the "
@@ -762,7 +761,10 @@ async def _run_custom_flow_validator_agent(
         "request_id, validator_binding_id, validator_agent, and target exactly.\n\n"
         "---\n\n"
     )
-    agent.instructions = instruction_prefix + (agent.instructions or "")
+    runtime_context = [instruction_prefix]
+    agent_kwargs = dict(agent_context)
+    agent_kwargs["additional_runtime_context"] = runtime_context
+    agent = get_agent_by_id(validator_agent_id, **agent_kwargs)
 
     tool_name = (
         "validate_"
@@ -1689,8 +1691,20 @@ def get_all_agent_tools(
                 current_custom_instructions=data.get("custom_instructions"),
             )
         else:
+            custom_instr = data.get("custom_instructions")
+            include_evidence = _resolve_flow_step_include_evidence(
+                entry=entry,
+                raw_include_evidence=data.get("include_evidence"),
+            )
+            step_instruction_prefix = _build_flow_step_instruction_prefix(
+                custom_instructions=custom_instr,
+                include_evidence=include_evidence,
+            )
+            agent_kwargs = dict(context)
+            if step_instruction_prefix:
+                agent_kwargs["additional_runtime_context"] = [step_instruction_prefix]
             try:
-                agent = get_agent_by_id(agent_id, **context)
+                agent = get_agent_by_id(agent_id, **agent_kwargs)
             except Exception as e:
                 logger.warning("[Flow Executor] Failed to create agent '%s': %s", agent_id, e)
                 unavailable_steps.append({
@@ -1701,17 +1715,7 @@ def get_all_agent_tools(
                 })
                 continue
 
-            custom_instr = data.get("custom_instructions")
-            include_evidence = _resolve_flow_step_include_evidence(
-                entry=entry,
-                raw_include_evidence=data.get("include_evidence"),
-            )
-            step_instruction_prefix = _build_flow_step_instruction_prefix(
-                custom_instructions=custom_instr,
-                include_evidence=include_evidence,
-            )
             if step_instruction_prefix:
-                agent.instructions = step_instruction_prefix + (agent.instructions or "")
                 applied_overrides: List[str] = []
                 if custom_instr and custom_instr.strip():
                     applied_overrides.append("custom_instructions")

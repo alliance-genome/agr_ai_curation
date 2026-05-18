@@ -182,6 +182,40 @@ def set_pending_prompt_assembly(
     _pending_prompt_runs.set(run_pending)
 
 
+def append_pending_prompt_runtime_context(
+    agent_name: str,
+    *,
+    layer_id_suffix: str,
+    title: str,
+    content: str,
+    source_ref: str,
+) -> None:
+    """Append runtime prompt content to a pending run's assembly metadata."""
+
+    from src.lib.prompts.assembly import append_runtime_context_to_manifest
+
+    run_pending = _get_pending_runs().copy()
+    current = run_pending.get(agent_name)
+    if current is None or current.assembly is None:
+        return
+
+    layer_manifest = append_runtime_context_to_manifest(
+        current.assembly.layer_manifest,
+        layer_id_suffix=layer_id_suffix,
+        title=title,
+        content=content,
+        source_ref=source_ref,
+    )
+    run_pending[agent_name] = PromptRun(
+        prompts=list(current.prompts),
+        assembly=PromptAssemblyMetadata(
+            effective_prompt_hash=str(layer_manifest["hash"]),
+            layer_manifest=layer_manifest,
+        ),
+    )
+    _pending_prompt_runs.set(run_pending)
+
+
 def _get_used() -> List[PromptTemplate]:
     """Get or initialize the used prompts list."""
     used = _used_prompts.get()

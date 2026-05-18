@@ -190,3 +190,34 @@ def test_custom_agent_preview_treats_custom_prompt_as_overlay(
     assert "WB group rules" in response.prompt
     assert "Curator overlay instructions" in response.prompt
     assert "Curator WB overlay" in response.prompt
+
+
+def test_runtime_additional_context_is_final_assembler_layer(prompt_parity_service):
+    runtime_bundle = catalog_service._build_runtime_instructions(
+        SimpleNamespace(
+            agent_key="demo_agent",
+            visibility="system",
+            group_rules_enabled=True,
+        ),
+        {
+            "active_groups": ["WB"],
+            "additional_runtime_context": [
+                "## FLOW STEP INSTRUCTIONS\n\nUse the step-local output contract."
+            ],
+        },
+        output_schema=None,
+        canonical_tool_ids=[],
+    )
+
+    assert "Editable base prompt" in runtime_bundle.render()
+    assert "WB group rules" in runtime_bundle.render()
+    assert "Use the step-local output contract." in runtime_bundle.render()
+    assert runtime_bundle.layer_order == (
+        "core_static",
+        "base_prompt",
+        "group_rules",
+        "runtime_context",
+    )
+    assert runtime_bundle.to_manifest()["layers"][-1]["content"] == (
+        "## FLOW STEP INSTRUCTIONS\n\nUse the step-local output contract."
+    )

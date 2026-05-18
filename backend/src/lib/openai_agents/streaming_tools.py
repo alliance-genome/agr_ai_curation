@@ -41,7 +41,10 @@ from .evidence_summary import (
 )
 
 # Prompt context tracking for execution logging
-from src.lib.prompts.context import commit_pending_prompts
+from src.lib.prompts.context import (
+    append_pending_prompt_runtime_context,
+    commit_pending_prompts,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +193,33 @@ def _build_json_only_instruction(output_type: Any) -> str:
         "After completing tool calls, respond with ONLY valid JSON (no markdown, no backticks).\n"
         "Do NOT return markdown tables, prose explanations, or fenced code blocks.\n"
     )
+
+
+def _append_agent_runtime_instruction(
+    runtime_agent: Agent,
+    source_agent: Agent,
+    *,
+    instruction: str,
+    layer_id_suffix: str,
+    title: str,
+    source_ref: str,
+) -> Agent:
+    """Append runtime-only prompt content and keep pending assembly metadata aligned."""
+
+    if runtime_agent is source_agent:
+        runtime_agent = copy.copy(source_agent)
+    runtime_agent.instructions = (
+        f"{getattr(runtime_agent, 'instructions', '') or ''}\n\n"
+        f"{instruction}"
+    ).strip()
+    append_pending_prompt_runtime_context(
+        source_agent.name,
+        layer_id_suffix=layer_id_suffix,
+        title=title,
+        content=instruction,
+        source_ref=source_ref,
+    )
+    return runtime_agent
 
 
 def _try_parse_markdown_field_table(raw_text: str) -> Optional[Dict[str, Any]]:
@@ -1135,15 +1165,20 @@ async def run_specialist_with_events(
     # For this provider/path, run with tools and plain-text JSON, then validate.
     if _should_use_groq_tool_json_compat(agent):
         groq_tool_json_compat_mode = True
+        json_only_instruction = _build_json_only_instruction(expected_output_type)
         runtime_agent = copy.copy(agent)
         runtime_agent.output_type = None
         runtime_agent.tools = _adapt_tools_for_groq_schema_constraints(
             list(getattr(agent, "tools", []) or [])
         )
-        runtime_agent.instructions = (
-            f"{getattr(agent, 'instructions', '') or ''}\n\n"
-            f"{_build_json_only_instruction(expected_output_type)}"
-        ).strip()
+        runtime_agent = _append_agent_runtime_instruction(
+            runtime_agent,
+            agent,
+            instruction=json_only_instruction,
+            layer_id_suffix="groq_json_only",
+            title="Groq JSON-only runtime instruction",
+            source_ref="src.lib.openai_agents.streaming_tools:groq_json_only",
+        )
         logger.info(
             "%s enabling Groq JSON/tool compatibility mode (output_type disabled for initial run)",
             specialist_name,
@@ -1152,12 +1187,14 @@ async def run_specialist_with_events(
 
     efficiency_instruction = _build_tool_efficiency_instruction(agent, input_text)
     if efficiency_instruction:
-        if runtime_agent is agent:
-            runtime_agent = copy.copy(agent)
-        runtime_agent.instructions = (
-            f"{getattr(runtime_agent, 'instructions', '') or ''}\n\n"
-            f"{efficiency_instruction}"
-        ).strip()
+        runtime_agent = _append_agent_runtime_instruction(
+            runtime_agent,
+            agent,
+            instruction=efficiency_instruction,
+            layer_id_suffix="tool_efficiency",
+            title="Tool efficiency runtime instruction",
+            source_ref="src.lib.openai_agents.streaming_tools:tool_efficiency",
+        )
         logger.info(
             "%s applying tool-efficiency instruction for large list workload",
             specialist_name,

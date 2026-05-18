@@ -1870,7 +1870,26 @@ def _build_runtime_context(
     if "record_evidence" in canonical_tool_ids:
         parts.append(_RECORD_EVIDENCE_RUNTIME_NOTE)
 
+    parts.extend(_additional_runtime_contexts(runtime_kwargs))
+
     return "\n\n".join(part.strip() for part in parts if part and str(part).strip())
+
+
+def _additional_runtime_contexts(runtime_kwargs: Dict[str, Any]) -> List[str]:
+    raw_contexts = runtime_kwargs.get("additional_runtime_context")
+    if raw_contexts is None:
+        return []
+    if isinstance(raw_contexts, str):
+        return [raw_contexts.strip()] if raw_contexts.strip() else []
+    if not isinstance(raw_contexts, list):
+        raise ValueError("additional_runtime_context must be a string or list of strings")
+
+    contexts: List[str] = []
+    for raw_context in raw_contexts:
+        text = str(raw_context or "").strip()
+        if text:
+            contexts.append(text)
+    return contexts
 
 
 def _resolve_output_schema(schema_key: str) -> Optional[Any]:
