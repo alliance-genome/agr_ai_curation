@@ -2,6 +2,30 @@
 """Tests for enhanced AGENT_REGISTRY with frontend and batching fields."""
 
 
+TARGET_VALIDATION_AGENT_ICONS = {
+    "agm_validation": "🧬",
+    "controlled_vocabulary_validation": "🏷️",
+    "data_provider_validation": "🏢",
+    "experimental_condition_validation": "🧪",
+    "ontology_term_validation": "🔎",
+    "reference_validation": "📚",
+    "subject_entity_validation": "🎯",
+}
+
+
+def _documentation_strings(value):
+    if isinstance(value, str):
+        yield value
+        return
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _documentation_strings(child)
+        return
+    if isinstance(value, list):
+        for child in value:
+            yield from _documentation_strings(child)
+
+
 class TestEnhancedRegistry:
     """Tests for AGENT_REGISTRY frontend and batching enhancements."""
 
@@ -65,3 +89,52 @@ class TestEnhancedRegistry:
         assert curation_prep is not None
         frontend = curation_prep.get("frontend", {})
         assert frontend.get("show_in_palette") is True
+
+    def test_newer_validation_agents_have_browser_metadata(self):
+        """Newer validation agents should render useful Agent Browser tabs."""
+        from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
+
+        for agent_id, expected_icon in TARGET_VALIDATION_AGENT_ICONS.items():
+            config = AGENT_REGISTRY[agent_id]
+            assert config["frontend"]["icon"] == expected_icon
+
+            documentation = config.get("documentation")
+            assert documentation is not None, f"{agent_id}: missing documentation"
+            assert documentation.get("summary"), f"{agent_id}: missing summary"
+            assert len(documentation.get("capabilities", [])) >= 3, (
+                f"{agent_id}: expected at least three capabilities"
+            )
+            for capability in documentation["capabilities"]:
+                assert capability.get("example_query"), (
+                    f"{agent_id}: capability missing query language"
+                )
+                assert capability.get("example_result"), (
+                    f"{agent_id}: capability missing result language"
+                )
+            assert documentation.get("data_sources"), (
+                f"{agent_id}: missing data sources"
+            )
+            assert len(documentation.get("limitations", [])) >= 4, (
+                f"{agent_id}: expected at least four guidance limitations"
+            )
+
+    def test_agent_browser_documentation_omits_retired_ontology_mapping_copy(self):
+        """Agent Browser docs should reference typed ontology resolution only."""
+        from src.lib.agent_studio.registry_builder import AGENT_DOCUMENTATION
+
+        browser_documentation = {
+            agent_id: AGENT_DOCUMENTATION[agent_id]
+            for agent_id in [
+                *TARGET_VALIDATION_AGENT_ICONS,
+                "gene_expression_extraction",
+                "phenotype_extractor",
+            ]
+        }
+
+        documentation_text = "\n".join(
+            _documentation_strings(browser_documentation)
+        ).lower()
+        assert "ontology mapping agent" not in documentation_text
+        assert "ontology mapping" not in documentation_text
+        assert "mapping route" not in documentation_text
+        assert "old mapping" not in documentation_text

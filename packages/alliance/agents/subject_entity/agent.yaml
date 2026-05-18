@@ -42,7 +42,7 @@ required_params: []
 batch_capabilities: []
 
 frontend:
-  icon: "SUB"
+  icon: "🎯"
   show_in_palette: true
 
 group_rules_enabled: false

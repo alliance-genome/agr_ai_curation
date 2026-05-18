@@ -43,7 +43,7 @@ required_params: []
 batch_capabilities: []
 
 frontend:
-  icon: "book"
+  icon: "📚"
   show_in_palette: true
 
 group_rules_enabled: false
