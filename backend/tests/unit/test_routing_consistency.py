@@ -19,7 +19,11 @@ _backend_path = Path(__file__).parent.parent.parent
 if str(_backend_path) not in sys.path:
     sys.path.insert(0, str(_backend_path))
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+ALLIANCE_AGENTS_PATH = REPO_ROOT / "packages" / "alliance" / "agents"
+
 from src.schemas.models import Destination, RoutingPlan, SCHEMA_REGISTRY
+from src.schemas.domain_validator import is_domain_validator_result_schema
 
 
 def get_generated_schema(schema_name: str) -> dict:
@@ -74,14 +78,33 @@ class TestRoutingConsistency:
         )
 
     def test_response_envelope_schemas_exist(self):
-        """Verify each destination has a corresponding envelope schema in SCHEMA_REGISTRY."""
-        # Get all registered envelope schemas from SCHEMA_REGISTRY
-        envelope_schemas = {}
+        """Verify each destination has a corresponding response schema."""
+        from src.lib.config.agent_loader import load_agent_definitions
+        from src.lib.config.schema_discovery import discover_agent_schemas
+
+        # Get all registered core envelope schemas from SCHEMA_REGISTRY.
+        response_schemas = {}
         for schema_name, model_class in SCHEMA_REGISTRY.items():
             class_name = model_class.__name__
             if class_name.endswith("Envelope") and class_name != "StructuredMessageEnvelope":
                 # schema_name is already in snake_case (e.g., 'disease_ontology')
-                envelope_schemas[schema_name] = class_name
+                response_schemas[schema_name] = class_name
+
+        # Package-owned validator agents can expose their public route through
+        # agent_id while keeping the typed result contract in package schema.py.
+        agent_definitions = load_agent_definitions(
+            ALLIANCE_AGENTS_PATH,
+            force_reload=True,
+        )
+        agent_schemas = discover_agent_schemas(
+            ALLIANCE_AGENTS_PATH,
+            force_reload=True,
+        )
+        for agent_id, agent in agent_definitions.items():
+            output_schema = str(agent.output_schema or "").strip()
+            schema_class = agent_schemas.get(output_schema)
+            if schema_class and is_domain_validator_result_schema(schema_class):
+                response_schemas[agent_id] = schema_class.__name__
 
         # Get destinations that need envelopes (skip special ones)
         skip_destinations = {
@@ -107,14 +130,15 @@ class TestRoutingConsistency:
         for dest in destinations_needing_envelopes:
             # Check if destination or its mapped name exists
             mapped_name = name_mappings.get(dest, dest)
-            if mapped_name not in envelope_schemas:
+            if mapped_name not in response_schemas:
                 missing_envelopes.append(dest)
 
         assert not missing_envelopes, (
-            f"These destinations don't have envelope schemas in SCHEMA_REGISTRY:\n"
+            f"These destinations don't have response schemas:\n"
             f"{missing_envelopes}\n"
-            f"Available envelopes: {sorted(envelope_schemas.keys())}\n"
-            f"Create missing envelope schema files in backend/src/schemas/models/ and register in SCHEMA_REGISTRY"
+            f"Available response schemas: {sorted(response_schemas.keys())}\n"
+            "Create missing core envelope schemas or package-owned validator result "
+            "schemas for the destination route"
         )
 
 
