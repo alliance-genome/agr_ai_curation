@@ -463,7 +463,7 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
         resolved_ref_types: set[str] = set()
         referenced_evidence_ids: set[str] = set()
         referenced_chemical_curies: set[str] = set()
-        referenced_chemical_names: set[str] = set()
+        referenced_chemical_names: list[str] = []
         unknown_refs: list[str] = []
 
         for object_ref in obj.object_refs:
@@ -486,7 +486,7 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
             elif isinstance(referenced_object, ChemicalTermCuratableObject):
                 if referenced_object.payload.curie is not None:
                     referenced_chemical_curies.add(referenced_object.payload.curie)
-                referenced_chemical_names.add(referenced_object.payload.name)
+                referenced_chemical_names.append(referenced_object.payload.name)
 
         if unknown_refs:
             raise ValueError(
@@ -517,9 +517,18 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
             )
             match_label = "payload.curie matches payload.condition_chemical.curie"
         else:
-            chemical_ref_matches = (
-                obj.payload.condition_chemical.name in referenced_chemical_names
-            )
+            matching_chemical_names = [
+                name
+                for name in referenced_chemical_names
+                if name == obj.payload.condition_chemical.name
+            ]
+            if len(matching_chemical_names) > 1:
+                raise ValueError(
+                    "ChemicalCondition object_refs[] must not include multiple "
+                    "ChemicalTerm objects with the same payload.name when "
+                    "payload.condition_chemical.curie is absent"
+                )
+            chemical_ref_matches = len(matching_chemical_names) == 1
             match_label = "payload.name matches payload.condition_chemical.name"
 
         if not chemical_ref_matches:

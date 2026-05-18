@@ -303,6 +303,27 @@ def test_chemical_extractor_schema_accepts_label_backed_pending_ontology_candida
     assert condition.payload.condition_chemical.name == "sirolimus"
 
 
+def test_chemical_extractor_schema_rejects_ambiguous_label_backed_chemical_refs():
+    payload = _valid_chemical_extractor_payload()
+    ambiguous_chemical_ref = "chemical-reference-ambiguous"
+    ambiguous_chemical = copy.deepcopy(payload["curatable_objects"][1])
+    ambiguous_chemical["pending_ref_id"] = ambiguous_chemical_ref
+    ambiguous_chemical["payload"]["curie"] = "CHEBI:12345"
+    payload["curatable_objects"].insert(2, ambiguous_chemical)
+    condition = payload["curatable_objects"][-1]
+    del condition["payload"]["condition_chemical"]["curie"]
+    condition["object_refs"].insert(
+        1,
+        {
+            "pending_ref_id": ambiguous_chemical_ref,
+            "object_type": CHEMICAL_TERM_OBJECT_TYPE,
+        },
+    )
+
+    with pytest.raises(ValidationError, match="multiple ChemicalTerm objects"):
+        _chemical_extractor_schema().model_validate(payload)
+
+
 @pytest.mark.parametrize("legacy_field", sorted(LEGACY_SEMANTIC_LIST_FIELDS))
 def test_chemical_extractor_schema_rejects_top_level_legacy_lists(legacy_field):
     payload = _valid_chemical_extractor_payload()
