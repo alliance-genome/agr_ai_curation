@@ -35,11 +35,6 @@ from typing import Any, List, Dict, Optional
 
 from src.models.sql.prompts import PromptTemplate
 
-# Thread-safe storage: agent_name -> list of prompts pending execution
-_pending_prompts: ContextVar[Optional[Dict[str, List[PromptTemplate]]]] = ContextVar(
-    "pending_prompts", default=None
-)
-
 # Prompts that were actually used (logged after execution)
 # Note: Uses default=None pattern (matching langfuse_client.py) to avoid shared mutable state
 _used_prompts: ContextVar[Optional[List[PromptTemplate]]] = ContextVar(
@@ -122,15 +117,6 @@ def get_prompt_override() -> Optional[PromptOverride]:
     return prompt_override_var.get(None)
 
 
-def _get_pending() -> Dict[str, List[PromptTemplate]]:
-    """Get or initialize the pending prompts dict."""
-    pending = _pending_prompts.get()
-    if pending is None:
-        pending = {}
-        _pending_prompts.set(pending)
-    return pending
-
-
 def _get_pending_runs() -> Dict[str, PromptRun]:
     """Get or initialize the pending prompt runs dict."""
     pending = _pending_prompt_runs.get()
@@ -194,9 +180,7 @@ def _resolve_prompt_run_id(agent_or_name: Any) -> Optional[str]:
 
 
 def _bind_prompt_run_id_to_object(agent: Any, prompt_run_id: str) -> None:
-    object_ids = _get_prompt_run_ids_by_object_id().copy()
-    object_ids[id(agent)] = prompt_run_id
-    _prompt_run_ids_by_object_id.set(object_ids)
+    bind_prompt_run(agent, prompt_run_id)
 
 
 def _append_prompt_run_id_for_agent(agent_name: str, prompt_run_id: str) -> None:
@@ -224,10 +208,6 @@ def set_pending_prompts(
         layer_manifest: Structured layer manifest for the final assembled prompt
     """
     prompt_run_id = f"{agent_name}:{uuid.uuid4().hex}"
-
-    pending = _get_pending().copy()
-    pending[agent_name] = list(prompts)
-    _pending_prompts.set(pending)
 
     run_pending = _get_pending_runs().copy()
     assembly = None
@@ -369,7 +349,6 @@ def clear_prompt_context() -> None:
 
     Should be called at the beginning of each request to ensure clean state.
     """
-    _pending_prompts.set({})
     _used_prompts.set([])
     _pending_prompt_runs.set({})
     _pending_prompt_run_ids_by_agent.set({})
@@ -387,5 +366,12 @@ def get_pending_for_agent(agent_name: str) -> Optional[List[PromptTemplate]]:
     Returns:
         List of pending prompts for the agent, or None if not found.
     """
-    pending = _get_pending()
-    return pending.get(agent_name)
+    pending_runs = _get_pending_runs()
+    pending_ids = _get_pending_run_ids_by_agent().get(agent_name, [])
+    prompts = [
+        prompt
+        for prompt_run_id in pending_ids
+        if (prompt_run := pending_runs.get(prompt_run_id)) is not None
+        for prompt in prompt_run.prompts
+    ]
+    return prompts or None
