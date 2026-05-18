@@ -8,6 +8,7 @@ from pydantic import BaseModel
 
 from src.lib.openai_agents import streaming_tools
 from src.lib.prompts.context import (
+    bind_prompt_run,
     clear_prompt_context,
     commit_pending_prompts,
     get_used_prompt_runs,
@@ -62,7 +63,8 @@ def test_runtime_instruction_append_updates_pending_prompt_assembly():
         version=1,
         is_active=True,
     )
-    set_pending_prompts(
+    source_agent = SimpleNamespace(name="Gene Specialist", instructions="base")
+    prompt_run_id = set_pending_prompts(
         "Gene Specialist",
         [prompt],
         effective_prompt_hash="hash-1",
@@ -84,7 +86,7 @@ def test_runtime_instruction_append_updates_pending_prompt_assembly():
             "hash": "hash-1",
         },
     )
-    source_agent = SimpleNamespace(name="Gene Specialist", instructions="base")
+    bind_prompt_run(source_agent, prompt_run_id)
 
     runtime_agent = streaming_tools._append_agent_runtime_instruction(
         source_agent,
@@ -94,7 +96,7 @@ def test_runtime_instruction_append_updates_pending_prompt_assembly():
         title="Runtime test instruction",
         source_ref="test:runtime_instruction",
     )
-    commit_pending_prompts("Gene Specialist")
+    commit_pending_prompts(source_agent)
 
     assert runtime_agent is not source_agent
     assert runtime_agent.instructions == "base\n\nRuntime-only instruction."

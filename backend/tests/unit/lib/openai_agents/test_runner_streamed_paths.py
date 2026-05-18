@@ -38,7 +38,11 @@ def _patch_common_runtime(monkeypatch, captured):
     monkeypatch.setattr(runner, "clear_pending_configs", lambda: None)
     monkeypatch.setattr(runner, "reset_consecutive_call_tracker", lambda: None)
     monkeypatch.setattr(runner, "clear_prompt_context", lambda: None)
-    monkeypatch.setattr(runner, "commit_pending_prompts", lambda agent_name: captured.setdefault("committed", []).append(agent_name))
+    monkeypatch.setattr(
+        runner,
+        "commit_pending_prompts",
+        lambda agent: captured.setdefault("committed", []).append(getattr(agent, "name", agent)),
+    )
     monkeypatch.setattr(runner, "set_current_trace_id", lambda trace_id: captured.setdefault("trace_ids", []).append(trace_id))
     def _flush():
         captured["flushed"] = captured.get("flushed", 0) + 1

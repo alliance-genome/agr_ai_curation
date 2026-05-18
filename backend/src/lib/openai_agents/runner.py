@@ -1351,9 +1351,11 @@ async def run_agent_streamed(
             specialist_reasoning_override=specialist_reasoning,
         )
         agent_name = agent.name
+        agent_for_prompt_commit = agent
     else:
         # Custom agent provided (e.g., flow supervisor)
         agent_name = getattr(agent, 'name', 'Custom Agent')
+        agent_for_prompt_commit = agent
         logger.info(
             "Using provided agent: %s",
             agent_name,
@@ -1362,7 +1364,7 @@ async def run_agent_streamed(
 
     # Commit pending prompts for whichever agent we're using
     # (supervisor runs immediately after creation, unlike specialists which are on-demand)
-    commit_pending_prompts(agent_name)
+    commit_pending_prompts(agent_for_prompt_commit)
 
     # Generate a fallback trace ID (used when Langfuse not configured)
     doc_prefix = document_id[:8] if document_id else "nodoc"

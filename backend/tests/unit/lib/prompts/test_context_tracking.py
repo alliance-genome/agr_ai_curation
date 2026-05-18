@@ -1,10 +1,13 @@
 """Additional unit tests for prompt context tracking."""
 
 import uuid
+from types import SimpleNamespace
 
+import pytest
 from src.lib.prompts.context import (
     PromptOverride,
     append_pending_prompt_runtime_context,
+    bind_prompt_run,
     clear_prompt_context,
     clear_prompt_override,
     commit_pending_prompts,
@@ -28,6 +31,26 @@ def _prompt(content: str) -> PromptTemplate:
         version=1,
         is_active=True,
     )
+
+
+def _manifest(agent_id: str, content: str, hash_value: str) -> dict:
+    return {
+        "agent_id": agent_id,
+        "layers": [
+            {
+                "id": f"{agent_id}:base_prompt",
+                "kind": "base_prompt",
+                "title": "Editable base prompt",
+                "content": content,
+                "provenance": "prompt_template:system",
+                "editable": True,
+                "locked": False,
+                "source_ref": f"prompt_templates:active:{agent_id}:system:base:v1",
+                "hash": f"{hash_value}:layer",
+            }
+        ],
+        "hash": hash_value,
+    }
 
 
 def test_pending_prompts_commit_and_used_tracking():
@@ -110,6 +133,51 @@ def test_pending_prompt_runtime_context_updates_assembly_before_commit():
         "gene:runtime_context:tool_efficiency",
     ]
     assert layers[-1]["content"] == "Batch large lookup lists in one tool call."
+
+
+def test_duplicate_agent_names_commit_by_bound_prompt_run_id():
+    clear_prompt_context()
+    prompt_a = _prompt("step 1")
+    prompt_b = _prompt("step 2")
+    agent_a = SimpleNamespace(name="Gene Specialist")
+    agent_b = SimpleNamespace(name="Gene Specialist")
+
+    bind_prompt_run(
+        agent_a,
+        set_pending_prompts(
+            agent_a.name,
+            [prompt_a],
+            effective_prompt_hash="hash-step-1",
+            layer_manifest=_manifest("gene", "step 1", "hash-step-1"),
+        ),
+    )
+    bind_prompt_run(
+        agent_b,
+        set_pending_prompts(
+            agent_b.name,
+            [prompt_b],
+            effective_prompt_hash="hash-step-2",
+            layer_manifest=_manifest("gene", "step 2", "hash-step-2"),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="ambiguous"):
+        commit_pending_prompts("Gene Specialist")
+
+    commit_pending_prompts(agent_a)
+    commit_pending_prompts(agent_b)
+
+    used_runs = get_used_prompt_runs()
+    assert [run.prompts for run in used_runs] == [[prompt_a], [prompt_b]]
+    assert [run.assembly.effective_prompt_hash for run in used_runs if run.assembly] == [
+        "hash-step-1",
+        "hash-step-2",
+    ]
+    assert [
+        run.assembly.layer_manifest["layers"][0]["content"]
+        for run in used_runs
+        if run.assembly
+    ] == ["step 1", "step 2"]
 
 
 def test_commit_pending_prompts_noop_for_unknown_agent():

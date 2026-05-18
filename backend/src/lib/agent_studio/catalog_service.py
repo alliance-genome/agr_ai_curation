@@ -38,7 +38,7 @@ from src.lib.prompts.assembly import (
     build_agent_prompt_layers,
     prompt_templates_for_bundle,
 )
-from src.lib.prompts.context import set_pending_prompts
+from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
 
 # Config-driven registry builder (loads metadata from YAML definitions)
 from .registry_builder import build_agent_registry
@@ -2045,12 +2045,13 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
         output_type=output_schema,
         output_guardrails=output_guardrails,
     )
-    set_pending_prompts(
+    prompt_run_id = set_pending_prompts(
         runtime_agent.name,
         list(prompt_templates_for_bundle(prompt_bundle)),
         effective_prompt_hash=prompt_bundle.hash,
         layer_manifest=prompt_bundle.to_manifest(),
     )
+    bind_prompt_run(runtime_agent, prompt_run_id)
     return runtime_agent
 
 

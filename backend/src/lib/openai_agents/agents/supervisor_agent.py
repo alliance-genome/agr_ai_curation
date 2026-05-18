@@ -51,7 +51,7 @@ from src.lib.curation_workspace.extraction_results import (
     list_extraction_results,
 )
 from src.lib.prompts.assembly import build_agent_prompt_layers, prompt_templates_for_bundle
-from src.lib.prompts.context import set_pending_prompts
+from src.lib.prompts.context import bind_prompt_run, set_pending_prompts
 from src.schemas.curation_prep import CurationPrepScopeConfirmation
 from src.schemas.curation_workspace import CurationExtractionSourceKind
 
@@ -1037,12 +1037,13 @@ The tool returns file information including a download URL that will render as a
     )
 
     # Register prompts for execution logging (committed when agent actually runs)
-    set_pending_prompts(
+    prompt_run_id = set_pending_prompts(
         supervisor.name,
         prompts_used,
         effective_prompt_hash=prompt_bundle.hash,
         layer_manifest=prompt_bundle.to_manifest(),
     )
+    bind_prompt_run(supervisor, prompt_run_id)
 
     # Log supervisor configuration to Langfuse for trace visibility
     from ..langfuse_client import log_agent_config as log_agent_config_to_langfuse
