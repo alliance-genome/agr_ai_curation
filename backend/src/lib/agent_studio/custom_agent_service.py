@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from src.lib.agent_studio.agent_service import get_agent_by_key, get_project_ids_for_user
 from src.lib.agent_studio.tool_policy_service import get_tool_policy_cache
 from src.lib.config.models_loader import get_model
+from src.lib.prompts.assembly import build_agent_prompt_layers
 from src.models.sql.agent import Agent as CustomAgent, ProjectMember
 from src.models.sql.custom_agent import CustomAgentVersion
 from src.models.sql.database import SessionLocal
@@ -19,6 +20,12 @@ from src.models.sql.database import SessionLocal
 CUSTOM_AGENT_PREFIX = "ca_"
 _DOCUMENT_TOOL_IDS = {"search_document", "read_section", "read_subsection"}
 _SYSTEM_MANAGED_INHERITED_TOOL_IDS = {"get_agent_contract", "record_evidence"}
+_LOCKED_PROMPT_MARKERS = (
+    "Platform Runtime Contract",
+    "backend-owned instructions",
+    "structured output",
+    "JSON schema",
+)
 
 
 class CustomAgentError(Exception):
@@ -31,6 +38,102 @@ class CustomAgentNotFoundError(CustomAgentError):
 
 class CustomAgentAccessError(CustomAgentError):
     """Raised when a user attempts to access another user's custom agent."""
+
+
+@dataclass(frozen=True)
+class CustomOverlayNormalization:
+    """Result of treating custom-agent instructions as curator overlay text."""
+
+    content: str
+    status: str
+    removed_layer_kinds: List[str]
+    warning: Optional[str] = None
+
+
+def _collapse_prompt_whitespace(prompt: str) -> str:
+    lines = [line.rstrip() for line in str(prompt or "").splitlines()]
+    collapsed: List[str] = []
+    blank_seen = False
+    for line in lines:
+        if line.strip():
+            collapsed.append(line)
+            blank_seen = False
+            continue
+        if not blank_seen:
+            collapsed.append("")
+        blank_seen = True
+    return "\n".join(collapsed).strip()
+
+
+def normalize_custom_overlay_for_parent(
+    parent_agent_key: Optional[str],
+    custom_prompt: Optional[str],
+    *,
+    group_id: str | List[str] | None = None,
+) -> CustomOverlayNormalization:
+    """Remove copied parent/core layers from custom prompts when exact and safe.
+
+    Custom agents store curator-authored overlay instructions in `instructions`.
+    Older rows and clone flows may contain a copy of the system/base prompt there.
+    Exact parent layer copies are removed from the overlay so final prompt assembly
+    cannot duplicate locked contracts; ambiguous partial copies are flagged.
+    """
+
+    original = str(custom_prompt or "")
+    content = original
+    removed_layer_kinds: List[str] = []
+    parent_key = str(parent_agent_key or "").strip()
+    if not parent_key or not content.strip():
+        return CustomOverlayNormalization(
+            content=_collapse_prompt_whitespace(content),
+            status="clean",
+            removed_layer_kinds=[],
+        )
+
+    try:
+        bundle = build_agent_prompt_layers(parent_key, group_id=group_id)
+    except Exception:
+        return CustomOverlayNormalization(
+            content=_collapse_prompt_whitespace(content),
+            status="needs_review",
+            removed_layer_kinds=[],
+            warning="Parent prompt layers could not be resolved for overlay cleanup.",
+        )
+
+    for layer in bundle.layers:
+        if layer.kind in {"curator_overlay", "runtime_context"}:
+            continue
+        layer_content = str(layer.content or "").strip()
+        if not layer_content or layer_content not in content:
+            continue
+        content = content.replace(layer_content, "\n\n")
+        removed_layer_kinds.append(layer.kind)
+
+    normalized_content = _collapse_prompt_whitespace(content)
+    if removed_layer_kinds:
+        return CustomOverlayNormalization(
+            content=normalized_content,
+            status="deduplicated",
+            removed_layer_kinds=removed_layer_kinds,
+        )
+
+    lowered = original.lower()
+    if any(marker.lower() in lowered for marker in _LOCKED_PROMPT_MARKERS):
+        return CustomOverlayNormalization(
+            content=normalized_content,
+            status="needs_review",
+            removed_layer_kinds=[],
+            warning=(
+                "Custom overlay contains locked/core prompt markers but did not "
+                "match exact parent layers for safe cleanup."
+            ),
+        )
+
+    return CustomOverlayNormalization(
+        content=normalized_content,
+        status="clean",
+        removed_layer_kinds=[],
+    )
 
 
 def _read_group_prompt_overrides(agent_obj: Any) -> Dict[str, str]:
@@ -268,13 +371,11 @@ def create_custom_agent(
 
     selected_template_key = str(template_source or "").strip()
     parent_defaults: Dict[str, Any] = {}
-    parent_prompt = ""
     parent_agent_key: Optional[str] = None
 
     if selected_template_key:
         parent_template = _resolve_system_template_agent(db, selected_template_key)
         parent_agent_key = parent_template.agent_key
-        parent_prompt = parent_template.instructions
         parent_defaults = {
             "model_id": parent_template.model_id,
             "model_temperature": float(parent_template.model_temperature or 0.1),
@@ -295,7 +396,14 @@ def create_custom_agent(
             "category": "Custom",
         }
 
-    agent_prompt = custom_prompt if custom_prompt is not None else parent_prompt
+    agent_prompt = custom_prompt if custom_prompt is not None else ""
+    overlay_normalization = normalize_custom_overlay_for_parent(
+        parent_agent_key,
+        agent_prompt,
+    )
+    if overlay_normalization.status == "needs_review":
+        raise ValueError(overlay_normalization.warning or "Custom prompt needs coordinator review")
+    agent_prompt = overlay_normalization.content
     normalized_group_overrides = normalize_group_prompt_overrides(group_prompt_overrides)
     custom_uuid = uuid.uuid4()
 
@@ -364,7 +472,11 @@ def create_custom_agent(
         version=1,
         custom_prompt=agent_prompt,
         mod_prompt_overrides=normalized_group_overrides,
-        notes="Initial version",
+        notes=(
+            "Initial version"
+            if overlay_normalization.status != "deduplicated"
+            else "Initial version; copied parent/core prompt layers removed from curator overlay"
+        ),
     ))
 
     return custom_agent
@@ -538,13 +650,23 @@ def clone_visible_agent_for_user(
     template_source = str(source_agent.template_source or "").strip() or (
         source_agent.agent_key if source_agent.visibility == "system" else None
     )
+    cloned_overlay = (
+        CustomOverlayNormalization(content="", status="clean", removed_layer_kinds=[])
+        if source_agent.visibility == "system"
+        else normalize_custom_overlay_for_parent(
+            template_source,
+            source_agent.instructions,
+        )
+    )
+    if cloned_overlay.status == "needs_review":
+        raise ValueError(cloned_overlay.warning or "Custom prompt needs coordinator review")
 
     return create_custom_agent(
         db=db,
         user_id=user_id,
         name=clone_name,
         template_source=template_source,
-        custom_prompt=source_agent.instructions,
+        custom_prompt=cloned_overlay.content,
         group_prompt_overrides=_read_group_prompt_overrides(source_agent),
         description=source_agent.description,
         icon=source_agent.icon,
@@ -598,10 +720,19 @@ def update_custom_agent(
     next_group_overrides: Optional[Dict[str, str]] = None
     if group_prompt_overrides is not None:
         next_group_overrides = normalize_group_prompt_overrides(group_prompt_overrides)
+    next_custom_prompt = custom_prompt
+    if custom_prompt is not None:
+        overlay_normalization = normalize_custom_overlay_for_parent(
+            getattr(custom_agent, "template_source", None),
+            custom_prompt,
+        )
+        if overlay_normalization.status == "needs_review":
+            raise ValueError(overlay_normalization.warning or "Custom prompt needs coordinator review")
+        next_custom_prompt = overlay_normalization.content
 
     prompt_changed = (
-        custom_prompt is not None
-        and custom_prompt != custom_agent.custom_prompt
+        next_custom_prompt is not None
+        and next_custom_prompt != custom_agent.custom_prompt
     )
     group_overrides_changed = (
         next_group_overrides is not None
@@ -621,7 +752,7 @@ def update_custom_agent(
         )
 
     if prompt_changed:
-        custom_agent.custom_prompt = custom_prompt
+        custom_agent.custom_prompt = next_custom_prompt
     if group_overrides_changed and next_group_overrides is not None:
         _write_group_prompt_overrides(custom_agent, next_group_overrides)
 
@@ -776,7 +907,10 @@ def get_custom_agent_runtime_info(
             custom_agent_uuid=custom_agent.id,
             custom_agent_id=make_custom_agent_id(custom_agent.id),
             display_name=custom_agent.name,
-            custom_prompt=custom_agent.custom_prompt,
+            custom_prompt=normalize_custom_overlay_for_parent(
+                getattr(custom_agent, "template_source", None),
+                custom_agent.custom_prompt,
+            ).content,
             group_prompt_overrides=_read_group_prompt_overrides(custom_agent),
             include_group_rules=bool(
                 getattr(custom_agent, "group_rules_enabled", getattr(custom_agent, "include_mod_rules", False))
@@ -800,6 +934,11 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         getattr(custom_agent, "group_rules_enabled", getattr(custom_agent, "include_mod_rules", False))
     )
 
+    overlay_normalization = normalize_custom_overlay_for_parent(
+        custom_agent.template_source,
+        custom_agent.custom_prompt,
+    )
+
     return {
         "id": str(custom_agent.id),
         "agent_id": make_custom_agent_id(custom_agent.id),
@@ -807,7 +946,10 @@ def custom_agent_to_dict(custom_agent: CustomAgent) -> Dict[str, Any]:
         "template_source": custom_agent.template_source,
         "name": custom_agent.name,
         "description": custom_agent.description,
-        "custom_prompt": custom_agent.custom_prompt,
+        "custom_prompt": overlay_normalization.content,
+        "custom_prompt_overlay_status": overlay_normalization.status,
+        "custom_prompt_removed_layer_kinds": overlay_normalization.removed_layer_kinds,
+        "custom_prompt_warning": overlay_normalization.warning,
         "group_prompt_overrides": group_prompt_overrides,
         "mod_prompt_overrides": group_prompt_overrides,
         "icon": custom_agent.icon,

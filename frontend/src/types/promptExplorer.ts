@@ -49,6 +49,26 @@ export interface GroupRuleInfo {
   created_by?: string
 }
 
+export type PromptLayerKind =
+  | 'core_static'
+  | 'core_generated'
+  | 'base_prompt'
+  | 'group_rules'
+  | 'curator_overlay'
+  | 'runtime_context'
+
+export interface PromptLayerInfo {
+  id: string
+  kind: PromptLayerKind
+  title: string
+  content: string
+  provenance: string
+  editable: boolean
+  locked: boolean
+  source_ref: string
+  hash: string
+}
+
 // Individual agent prompt information
 export interface PromptInfo {
   agent_id: string
@@ -58,6 +78,9 @@ export interface PromptInfo {
   source_file: string  // Legacy file path or 'database'
   has_group_rules: boolean
   group_rules: Record<string, GroupRuleInfo>
+  prompt_layers?: PromptLayerInfo[]
+  effective_prompt_hash?: string
+  layer_manifest?: Record<string, unknown>
   tools: string[]
   model?: string
   subcategory?: string  // Subcategory for palette grouping
@@ -163,6 +186,9 @@ export interface CustomAgent {
   name: string
   description?: string
   custom_prompt: string
+  custom_prompt_overlay_status?: 'clean' | 'deduplicated' | 'needs_review'
+  custom_prompt_removed_layer_kinds?: string[]
+  custom_prompt_warning?: string
   group_prompt_overrides: Record<string, string>
   icon: string
   include_group_rules: boolean
@@ -199,6 +225,12 @@ export interface PromptPreviewResponse {
   source: 'system_agent' | 'custom_agent'
   parent_agent_key?: string
   include_group_rules?: boolean
+  effective_prompt_hash?: string
+  layer_manifest?: {
+    agent_id: string
+    layers: PromptLayerInfo[]
+    hash: string
+  }
 }
 
 export interface CustomAgentTestEvent {

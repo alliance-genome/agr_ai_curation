@@ -8,7 +8,7 @@ Defines data structures for:
 - Trace context for execution history
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator
 from datetime import datetime
 
@@ -76,6 +76,27 @@ class GroupRuleInfo(BaseModel):
     created_by: Optional[str] = Field(None, description="Who created this version")
 
 
+class PromptLayerInfo(BaseModel):
+    """Structured prompt layer metadata for Agent Studio display."""
+
+    id: str = Field(..., description="Stable layer identifier")
+    kind: Literal[
+        "core_static",
+        "core_generated",
+        "base_prompt",
+        "group_rules",
+        "curator_overlay",
+        "runtime_context",
+    ] = Field(..., description="Prompt layer kind")
+    title: str = Field(..., description="Curator-readable layer title")
+    content: str = Field(..., description="Layer prompt text")
+    provenance: str = Field(..., description="Where this layer came from")
+    editable: bool = Field(..., description="Whether curators may edit this layer")
+    locked: bool = Field(..., description="Whether backend APIs protect this layer from editing")
+    source_ref: str = Field(..., description="Stable source reference for audit/display")
+    hash: str = Field(..., description="Stable layer content hash")
+
+
 class PromptInfo(BaseModel):
     """Information about a single agent's prompt."""
 
@@ -95,6 +116,18 @@ class PromptInfo(BaseModel):
         default_factory=dict,
         description="Group-specific rules keyed by group ID",
         validation_alias=AliasChoices("group_rules", "mod_rules"),
+    )
+    prompt_layers: List[PromptLayerInfo] = Field(
+        default_factory=list,
+        description="Structured effective prompt layers with lock/editability metadata",
+    )
+    effective_prompt_hash: Optional[str] = Field(
+        None,
+        description="Hash of the effective prompt represented by prompt_layers",
+    )
+    layer_manifest: Dict[str, object] = Field(
+        default_factory=dict,
+        description="Raw structured layer manifest for Agent Studio and tools",
     )
     tools: List[str] = Field(
         default_factory=list,

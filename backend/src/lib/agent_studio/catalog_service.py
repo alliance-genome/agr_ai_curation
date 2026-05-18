@@ -80,6 +80,15 @@ _INLINE_PACKAGE_TOOL_IDS = frozenset({
 })
 
 
+def _layer_projection(bundle: Optional[PromptLayerBundle]) -> tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
+    """Project an assembled bundle into Agent Studio catalog fields."""
+
+    if bundle is None:
+        return [], None, {}
+    manifest = bundle.to_manifest()
+    return list(manifest.get("layers", [])), bundle.hash, manifest
+
+
 def _is_thread_exhaustion_error(exc: BaseException) -> bool:
     """Recognize thread-creation failures across Python/runtime variants."""
 
@@ -1498,6 +1507,16 @@ def _build_catalog() -> PromptCatalog:
         # Resolve show_in_palette from frontend config (defaults to True)
         frontend_config = config.get("frontend", {})
         show_in_palette = frontend_config.get("show_in_palette", True)
+        try:
+            prompt_bundle = build_agent_prompt_layers(agent_id)
+        except Exception as exc:
+            logger.warning(
+                "Could not build prompt layer projection for %s: %s",
+                agent_id,
+                exc,
+            )
+            prompt_bundle = None
+        prompt_layers, effective_prompt_hash, layer_manifest = _layer_projection(prompt_bundle)
 
         # Create PromptInfo with version metadata
         prompt_info = PromptInfo(
@@ -1508,6 +1527,9 @@ def _build_catalog() -> PromptCatalog:
             source_file=system_prompt.source_file or "database",
             has_group_rules=bool(group_rules),
             group_rules=group_rules,
+            prompt_layers=prompt_layers,
+            effective_prompt_hash=effective_prompt_hash,
+            layer_manifest=layer_manifest,
             tools=expand_tools_for_agent(agent_id, config.get("tools", [])),
             subcategory=config.get("subcategory"),
             show_in_palette=show_in_palette,
@@ -1735,7 +1757,25 @@ def _build_runtime_instructions(
 def _build_curator_overlay(db_agent: Any, active_groups: List[str]) -> str:
     """Build custom-agent overlay content without replacing locked layers."""
 
-    parts = [str(getattr(db_agent, "instructions", "") or "").strip()]
+    from src.lib.agent_studio.custom_agent_service import normalize_custom_overlay_for_parent
+
+    parent_agent_key = str(
+        getattr(db_agent, "template_source", None)
+        or getattr(db_agent, "group_rules_component", None)
+        or ""
+    ).strip()
+    overlay = normalize_custom_overlay_for_parent(
+        parent_agent_key,
+        getattr(db_agent, "instructions", "") or "",
+        group_id=active_groups,
+    )
+    if overlay.status == "needs_review":
+        raise ValueError(
+            overlay.warning
+            or f"Custom agent '{getattr(db_agent, 'agent_key', '')}' needs coordinator review"
+        )
+
+    parts = [overlay.content]
     group_overrides = dict(getattr(db_agent, "group_prompt_overrides", None) or {})
     for raw_group in active_groups:
         group_id = str(raw_group or "").strip().upper()

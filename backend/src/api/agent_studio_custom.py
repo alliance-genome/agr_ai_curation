@@ -179,6 +179,9 @@ class CustomAgentResponse(BaseModel):
     name: str
     description: Optional[str] = None
     custom_prompt: str
+    custom_prompt_overlay_status: str = "clean"
+    custom_prompt_removed_layer_kinds: List[str] = Field(default_factory=list)
+    custom_prompt_warning: Optional[str] = None
     group_prompt_overrides: Dict[str, str] = Field(
         default_factory=dict,
         validation_alias=AliasChoices("group_prompt_overrides", "mod_prompt_overrides"),

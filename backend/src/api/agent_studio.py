@@ -88,6 +88,7 @@ from src.lib.agent_studio.custom_agent_service import (
     get_custom_agent_visible_to_user,
     list_custom_agents_visible_to_user,
     make_custom_agent_id,
+    normalize_custom_overlay_for_parent,
     parse_custom_agent_id,
     set_custom_agent_visibility,
 )
@@ -258,6 +259,10 @@ def _merge_custom_agents_into_catalog(
             if str(group_id).strip() and isinstance(content, str) and content.strip()
         }
         effective_group_rules: Dict[str, GroupRuleInfo] = {}
+        overlay_normalization = normalize_custom_overlay_for_parent(
+            template_source,
+            getattr(custom, "custom_prompt", ""),
+        )
 
         for group_id, parent_group_rule in template_group_rules.items():
             override_content = normalized_overrides.get(group_id.upper())
@@ -272,16 +277,34 @@ def _merge_custom_agents_into_catalog(
                 created_by=parent_group_rule.created_by,
             )
 
+        prompt_bundle = None
+        if template_source:
+            try:
+                prompt_bundle = build_agent_prompt_layers(
+                    template_source,
+                    overlay=overlay_normalization.content,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Could not build prompt layer projection for custom agent %s: %s",
+                    custom.id,
+                    exc,
+                )
+        prompt_layers, effective_prompt_hash, layer_manifest = catalog_service._layer_projection(prompt_bundle)
+
         prompt_info = PromptInfo(
             agent_id=make_custom_agent_id(custom.id),
             agent_name=custom.name,
             description=custom.description or (
                 f"Custom agent from {template_name}" if template_name else "Custom scratch agent"
             ),
-            base_prompt=custom.custom_prompt,
+            base_prompt=overlay_normalization.content,
             source_file=f"custom_agent:{custom.id}",
             has_group_rules=bool(effective_group_rules),
             group_rules=effective_group_rules,
+            prompt_layers=prompt_layers,
+            effective_prompt_hash=effective_prompt_hash,
+            layer_manifest=layer_manifest,
             tools=tools,
             subcategory=(
                 "My Custom Agents" if custom.user_id == db_user.id else "Shared Agents"
@@ -810,7 +833,21 @@ async def get_prompt_preview(
                     status_code=400,
                     detail="Custom agent is missing its system template source.",
                 )
-            overlay_parts = [str(custom_agent.custom_prompt or "").strip()]
+            overlay_normalization = normalize_custom_overlay_for_parent(
+                parent_agent_key,
+                str(custom_agent.custom_prompt or ""),
+                group_id=resolved_group_id if custom_group_rules_enabled else None,
+            )
+            if overlay_normalization.status == "needs_review":
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Custom agent overlay contains copied locked/core prompt text "
+                        "that needs coordinator review before preview."
+                    ),
+                )
+
+            overlay_parts = [overlay_normalization.content]
             if resolved_group_id and custom_group_rules_enabled:
                 override_prompt = str(
                     custom_group_overrides.get(resolved_group_id.upper()) or ""
@@ -2278,6 +2315,21 @@ async def _handle_tool_call(
             return {
                 "success": False,
                 "error": "proposed prompt exceeds maximum size (40,000 characters).",
+            }
+        if target_prompt == "main" and any(
+            marker in updated_prompt
+            for marker in (
+                "Platform Runtime Contract",
+                "backend-owned instructions",
+                "Generated runtime contract",
+            )
+        ):
+            return {
+                "success": False,
+                "error": (
+                    "Prompt update targets the editable curator overlay only. "
+                    "Locked core/generated prompt contracts cannot be edited or copied into the overlay."
+                ),
             }
 
         return {

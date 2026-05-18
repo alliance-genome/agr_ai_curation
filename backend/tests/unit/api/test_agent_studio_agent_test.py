@@ -634,6 +634,32 @@ class TestAgentWorkshopSystemPrompt:
         assert result["proposed_prompt"] == "You are a strict gene expression extraction assistant."
         assert result["change_summary"] == "Tightened extraction and citation requirements."
 
+    def test_handle_update_workshop_prompt_tool_rejects_locked_layer_copy(self):
+        from src.api import agent_studio as api_module
+        from src.lib.agent_studio.models import ChatContext, AgentWorkshopContext
+
+        context = ChatContext(
+            active_tab="agent_workshop",
+            agent_workshop=AgentWorkshopContext(template_source="gene"),
+        )
+
+        result = asyncio.run(
+            api_module._handle_tool_call(
+                tool_name="update_workshop_prompt_draft",
+                tool_input={
+                    "updated_prompt": "## Platform Runtime Contract\nbackend-owned instructions",
+                    "apply_mode": "replace",
+                },
+                context=context,
+                user_email="dev@example.org",
+                user_auth_sub="auth-sub-1",
+                messages=[],
+            )
+        )
+
+        assert result["success"] is False
+        assert "Locked core/generated prompt contracts cannot be edited" in result["error"]
+
     def test_handle_tool_call_blocks_flow_tools_outside_flows_tab(self):
         from src.api import agent_studio as api_module
         from src.lib.agent_studio.models import ChatContext

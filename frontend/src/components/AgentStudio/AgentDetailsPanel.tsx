@@ -18,14 +18,13 @@ import {
   Paper,
   Chip,
   Button,
-  ToggleButton,
-  ToggleButtonGroup,
   Select,
   MenuItem,
   FormControl,
   InputLabel,
   IconButton,
   Tooltip,
+  Stack,
   List,
   ListItem,
   ListItemIcon,
@@ -42,9 +41,11 @@ import StorageIcon from '@mui/icons-material/Storage'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined'
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline'
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
+import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
 
 import { fetchCombinedPrompt } from '@/services/agentStudioService'
-import type { PromptInfo } from '@/types/promptExplorer'
+import type { PromptInfo, PromptLayerInfo } from '@/types/promptExplorer'
 import { useAgentMetadata } from '@/contexts/AgentMetadataContext'
 import ToolDetailsDialog from './ToolDetailsDialog'
 import DomainEnvelopeMetadataPanel from './DomainEnvelopeMetadataPanel'
@@ -165,7 +166,6 @@ function AgentDetailsPanel({
   selectedGroupId,
   viewMode,
   onGroupSelect,
-  onViewModeChange,
   onDiscussWithClaude,
   onCloneToWorkshop,
 }: AgentDetailsPanelProps) {
@@ -180,7 +180,7 @@ function AgentDetailsPanel({
 
   // Load combined prompt when needed
   useEffect(() => {
-    if (viewMode === 'combined' && agent && selectedGroupId && agent.has_group_rules) {
+    if (agent && selectedGroupId && agent.has_group_rules) {
       setLoadingCombined(true)
       fetchCombinedPrompt(agent.agent_id, selectedGroupId)
         .then(setCombinedPrompt)
@@ -189,8 +189,10 @@ function AgentDetailsPanel({
           setCombinedPrompt(null)
         })
         .finally(() => setLoadingCombined(false))
+      return
     }
-  }, [viewMode, agent, selectedGroupId])
+    setCombinedPrompt(null)
+  }, [agent, selectedGroupId])
 
   useEffect(() => {
     if (activeTab === 'envelope' && !domainEnvelopeMetadata) {
@@ -228,7 +230,12 @@ function AgentDetailsPanel({
 
   // Copy prompt to clipboard
   const handleCopy = () => {
-    const content = getPromptContent()
+    const layerPreview = agent?.prompt_layers && agent.prompt_layers.length > 0
+      ? agent.prompt_layers.map((layer) => layer.content).filter(Boolean).join('\n\n')
+      : ''
+    const content = agent && selectedGroupId && agent.has_group_rules
+      ? (combinedPrompt || getPromptContent())
+      : (layerPreview || getPromptContent())
     navigator.clipboard.writeText(content).catch((err) => {
       console.error('Failed to copy:', err)
     })
@@ -263,6 +270,64 @@ function AgentDetailsPanel({
 
   const { documentation } = agent
   const canCloneToWorkshop = agent.agent_id !== 'task_input'
+  const promptLayers = agent.prompt_layers || []
+  const layersByKind = promptLayers.reduce<Record<string, PromptLayerInfo[]>>((acc, layer) => {
+    acc[layer.kind] = [...(acc[layer.kind] || []), layer]
+    return acc
+  }, {})
+  const coreLayers = layersByKind.core_static || []
+  const generatedLayers = layersByKind.core_generated || []
+  const baseLayers = layersByKind.base_prompt || []
+  const overlayLayers = layersByKind.curator_overlay || []
+  const selectedGroupRule = selectedGroupId ? agent.group_rules[selectedGroupId] : undefined
+  const effectivePromptPreview = selectedGroupId && agent.has_group_rules
+    ? (combinedPrompt || (loadingCombined ? 'Loading effective prompt preview...' : getPromptContent()))
+    : (promptLayers.length > 0
+      ? promptLayers.map((layer) => layer.content).filter(Boolean).join('\n\n')
+      : agent.base_prompt)
+
+  const renderLayerSection = (
+    title: string,
+    layers: PromptLayerInfo[],
+    fallbackContent = '',
+    options: { locked?: boolean; editable?: boolean; emptyText?: string } = {}
+  ) => {
+    const hasLayers = layers.length > 0
+    const locked = options.locked ?? (hasLayers ? layers.every((layer) => layer.locked) : false)
+    const editable = options.editable ?? (hasLayers ? layers.some((layer) => layer.editable) : false)
+    const content = hasLayers
+      ? layers.map((layer) => layer.content).filter(Boolean).join('\n\n')
+      : fallbackContent
+    const source = hasLayers
+      ? layers.map((layer) => layer.provenance).filter(Boolean).join(', ')
+      : agent.source_file
+
+    return (
+      <Box>
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+            {title}
+          </Typography>
+          <Chip
+            size="small"
+            icon={locked ? <LockOutlinedIcon /> : <EditOutlinedIcon />}
+            label={locked ? 'Read-only' : (editable ? 'Editable' : 'Context')}
+            color={locked ? 'default' : 'primary'}
+            variant="outlined"
+            sx={{ height: 22, fontSize: '0.7rem' }}
+          />
+        </Stack>
+        <PromptContent elevation={0}>
+          {content || options.emptyText || 'No content for this layer.'}
+        </PromptContent>
+        {source && (
+          <Typography variant="caption" color="text.secondary">
+            Source: {source}
+          </Typography>
+        )}
+      </Box>
+    )
+  }
 
   return (
     <PanelContainer>
@@ -535,25 +600,10 @@ function AgentDetailsPanel({
         {/* Prompts Tab */}
         {activeTab === 'prompts' && (
           <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', gap: 2 }}>
-            {/* View Mode Controls */}
+            {/* Group selector and copy control */}
             <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
               {agent.has_group_rules && (
                 <>
-                  <ToggleButtonGroup
-                    value={viewMode}
-                    exclusive
-                    onChange={(_, val) => val && onViewModeChange(val)}
-                    size="small"
-                  >
-                    <ToggleButton value="base">Base</ToggleButton>
-                    <ToggleButton value="group" disabled={!selectedGroupId}>
-                      Group Only
-                    </ToggleButton>
-                    <ToggleButton value="combined" disabled={!selectedGroupId}>
-                      Combined
-                    </ToggleButton>
-                  </ToggleButtonGroup>
-
                   <FormControl size="small" sx={{ minWidth: 120 }}>
                     <InputLabel>Group</InputLabel>
                     <Select
@@ -575,7 +625,7 @@ function AgentDetailsPanel({
               )}
 
               <Box sx={{ ml: 'auto' }}>
-                <Tooltip title="Copy prompt">
+                <Tooltip title="Copy effective prompt preview">
                   <IconButton onClick={handleCopy} size="small">
                     <ContentCopyIcon fontSize="small" />
                   </IconButton>
@@ -583,15 +633,55 @@ function AgentDetailsPanel({
               </Box>
             </Box>
 
-            {/* Prompt Content */}
-            <PromptContent elevation={0}>
-              {getPromptContent()}
-            </PromptContent>
-
-            {/* Source File */}
-            <Typography variant="caption" color="text.secondary">
-              Source: {agent.source_file}
-            </Typography>
+            {renderLayerSection('Core Prompt', coreLayers, '', {
+              locked: true,
+              editable: false,
+              emptyText: 'No backend-owned core prompt layer was returned for this agent.',
+            })}
+            {renderLayerSection('Generated Contract', generatedLayers, '', {
+              locked: true,
+              editable: false,
+              emptyText: 'No generated runtime contract layer is required for this agent.',
+            })}
+            {renderLayerSection('Base Prompt', baseLayers, agent.base_prompt, {
+              locked: false,
+              editable: true,
+            })}
+            {renderLayerSection(
+              'Group Rules',
+              [],
+              selectedGroupRule?.content || '',
+              {
+                locked: false,
+                editable: Boolean(selectedGroupRule),
+                emptyText: selectedGroupId
+                  ? `No group rules were returned for ${selectedGroupId}.`
+                  : 'Select a group to view group rules.',
+              }
+            )}
+            {renderLayerSection('Curator Overlay', overlayLayers, '', {
+              locked: false,
+              editable: true,
+              emptyText: 'No curator overlay is applied.',
+            })}
+            <Box>
+              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                  Effective Prompt Preview
+                </Typography>
+                {agent.effective_prompt_hash && (
+                  <Chip
+                    size="small"
+                    label={agent.effective_prompt_hash.slice(0, 12)}
+                    variant="outlined"
+                    sx={{ height: 22, fontSize: '0.7rem' }}
+                  />
+                )}
+              </Stack>
+              <PromptContent elevation={0}>
+                {effectivePromptPreview}
+              </PromptContent>
+            </Box>
           </Box>
         )}
       </TabContent>

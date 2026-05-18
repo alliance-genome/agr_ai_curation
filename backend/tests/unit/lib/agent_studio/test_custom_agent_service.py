@@ -10,6 +10,7 @@ from src.lib.agent_studio.custom_agent_service import (
     create_custom_agent,
     get_custom_agent_group_prompt,
     make_custom_agent_id,
+    normalize_custom_overlay_for_parent,
     normalize_group_prompt_overrides,
     parse_custom_agent_id,
 )
@@ -40,6 +41,47 @@ def test_normalize_group_prompt_overrides_cleans_keys_and_empty_values():
         "WB": "WormBase custom rules",
         "MGI": "Mouse rules",
     }
+
+
+def test_normalize_custom_overlay_removes_exact_parent_layers(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    layers = (
+        SimpleNamespace(kind="core_static", content="LOCKED CORE"),
+        SimpleNamespace(kind="base_prompt", content="PARENT BASE"),
+    )
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=layers),
+    )
+
+    result = normalize_custom_overlay_for_parent(
+        "gene",
+        "LOCKED CORE\n\nPARENT BASE\n\nKeep curator guidance.",
+    )
+
+    assert result.status == "deduplicated"
+    assert result.content == "Keep curator guidance."
+    assert result.removed_layer_kinds == ["core_static", "base_prompt"]
+
+
+def test_normalize_custom_overlay_flags_ambiguous_locked_copy(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=()),
+    )
+
+    result = normalize_custom_overlay_for_parent(
+        "gene",
+        "Partial Platform Runtime Contract prose with local edits.",
+    )
+
+    assert result.status == "needs_review"
+    assert result.warning
 
 
 def test_get_custom_agent_group_prompt_prefers_override():
@@ -115,6 +157,7 @@ def test_create_custom_agent_creates_unified_custom_agent(monkeypatch):
     assert custom.parent_agent_key == "gene"
     assert custom.user_id == 7
     assert custom.agent_key.startswith("ca_")
+    assert custom.custom_prompt == ""
 
 
 def test_create_custom_agent_requires_model_for_scratch_mode():
@@ -676,6 +719,16 @@ def test_clone_visible_agent_for_user_clones_from_visible_source(monkeypatch):
     monkeypatch.setattr(service, "get_agent_by_key", lambda _db, _key, user_id=None: source)
     monkeypatch.setattr(service, "_generate_clone_name", lambda _db, _uid, _name: "Shared Agent (Copy)")
     monkeypatch.setattr(service, "_has_active_custom_name", lambda _db, _uid, _name: False)
+    monkeypatch.setattr(
+        service,
+        "normalize_custom_overlay_for_parent",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            content="prompt",
+            status="clean",
+            removed_layer_kinds=[],
+            warning=None,
+        ),
+    )
 
     def _fake_create_custom_agent(**kwargs):
         observed.update(kwargs)

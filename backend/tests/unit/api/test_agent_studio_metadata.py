@@ -514,6 +514,16 @@ class TestGetRegistryMetadata:
         )
         monkeypatch.setattr(
             api_module,
+            "normalize_custom_overlay_for_parent",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                content="CUSTOM BASE PROMPT",
+                status="clean",
+                removed_layer_kinds=[],
+                warning=None,
+            ),
+        )
+        monkeypatch.setattr(
+            api_module,
             "build_agent_prompt_layers",
             lambda *_args, **_kwargs: SimpleNamespace(
                 render=lambda: "SYSTEM BASE PROMPT\n\nWB ONLY RULES\n\nCUSTOM BASE PROMPT",
@@ -563,6 +573,16 @@ class TestGetRegistryMetadata:
             api_module,
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "normalize_custom_overlay_for_parent",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                content="CUSTOM BASE PROMPT",
+                status="clean",
+                removed_layer_kinds=[],
+                warning=None,
+            ),
         )
         monkeypatch.setattr(
             api_module,

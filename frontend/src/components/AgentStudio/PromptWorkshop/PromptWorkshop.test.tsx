@@ -91,6 +91,46 @@ function buildCatalogWithGroupRule(): PromptCatalog {
   }
 }
 
+function buildCatalogWithPromptLayers(): PromptCatalog {
+  const catalog = buildCatalogWithGroupRule()
+  catalog.categories[0].agents[0].prompt_layers = [
+    {
+      id: 'gene:core_static',
+      kind: 'core_static',
+      title: 'Platform runtime contract',
+      content: 'Locked core contract',
+      provenance: 'backend_static',
+      editable: false,
+      locked: true,
+      source_ref: 'core',
+      hash: 'hash-core',
+    },
+    {
+      id: 'gene:core_generated',
+      kind: 'core_generated',
+      title: 'Generated runtime contract',
+      content: 'Locked generated contract',
+      provenance: 'backend_generated',
+      editable: false,
+      locked: true,
+      source_ref: 'generated',
+      hash: 'hash-generated',
+    },
+    {
+      id: 'gene:base_prompt',
+      kind: 'base_prompt',
+      title: 'Editable base prompt',
+      content: 'System base prompt',
+      provenance: 'prompt_template:system',
+      editable: true,
+      locked: false,
+      source_ref: 'base',
+      hash: 'hash-base',
+    },
+  ]
+  return catalog
+}
+
 function buildCatalogWithTemplateSpecificGroupRules(): PromptCatalog {
   return {
     categories: [
@@ -201,7 +241,7 @@ async function waitForAgentName(value: string): Promise<void> {
 }
 
 async function getGroupOverrideSelect(): Promise<HTMLElement> {
-  const accordionButton = screen.getByRole('button', { name: /Group Prompt Overrides/ })
+  const accordionButton = screen.getByRole('button', { name: /Group Rules/ })
   if (accordionButton.getAttribute('aria-expanded') !== 'true') {
     fireEvent.click(accordionButton)
   }
@@ -398,6 +438,27 @@ describe('PromptWorkshop', () => {
     expect(payload.model_id).toBe('gpt-4o')
     expect(payload).not.toHaveProperty('parent_agent_id')
   }, 15000) // Increased because full workshop bootstrap can exceed the default timeout under CI load.
+
+  it('shows locked inherited layers separately from the editable curator overlay', async () => {
+    render(<PromptWorkshop catalog={buildCatalogWithPromptLayers()} />)
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
+    })
+
+    fireEvent.click(await screen.findByText('Core Prompt'))
+    expect(screen.getByText('Locked core contract')).toBeInTheDocument()
+    expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0)
+
+    fireEvent.click(await screen.findByText('Generated Contract'))
+    expect(screen.getByText('Locked generated contract')).toBeInTheDocument()
+
+    fireEvent.click(await screen.findByText('Base Prompt'))
+    expect(screen.getByText('System base prompt')).toBeInTheDocument()
+
+    fireEvent.click(await screen.findByText('Curator Overlay'))
+    expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue('')
+  }, 15000)
 
   it('shows domain-envelope and automatic validation metadata for the selected template', async () => {
     metadataMocks.agents = {
@@ -695,10 +756,10 @@ describe('PromptWorkshop', () => {
       />
     )
 
-    fireEvent.click(await screen.findByText('Main Prompt'))
+    fireEvent.click(await screen.findByText('Curator Overlay'))
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Enter the system prompt for this agent...')).toHaveValue(
+      expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue(
         'Updated prompt from Claude'
       )
     })
@@ -735,10 +796,10 @@ describe('PromptWorkshop', () => {
     templatesDeferred.resolve(templates)
     customAgentsDeferred.resolve({ custom_agents: [], total: 0 })
 
-    fireEvent.click(await screen.findByText('Main Prompt'))
+    fireEvent.click(await screen.findByText('Curator Overlay'))
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('Enter the system prompt for this agent...')).toHaveValue(
+      expect(screen.getByPlaceholderText('Add curator-authored guidance that should sit on top of the locked core/base prompt...')).toHaveValue(
         'Late-arriving update from Claude'
       )
     }, { timeout: 10000 })

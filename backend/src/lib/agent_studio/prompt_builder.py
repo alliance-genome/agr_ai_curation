@@ -563,16 +563,17 @@ Configured model options:
 {model_catalog_text}
 
 Use this workshop context to give concrete prompt-engineering feedback, especially:
-1. how to improve the draft prompt structure and specificity,
+1. how to improve the editable curator overlay structure and specificity,
 2. what to test next in flow execution (and when to compare with the template-source prompt),
 3. how group rules may interact with the current draft.
 4. proactively identify concrete prompt improvements during normal conversation and suggest them.
 5. before making any draft update call, ask for permission in plain language (e.g., "Want me to apply this as a targeted edit?").
 6. after clear approval, call `update_workshop_prompt_draft`:
-   - set `target_prompt="main"` for general/global draft behavior changes,
-   - set `target_prompt="group"` for group-specific wording/rules and include `target_group_id`,
+   - set `target_prompt="main"` for editable curator-overlay behavior changes,
+   - set `target_prompt="group"` for editable group-specific override wording/rules and include `target_group_id`,
    - full rewrite: `apply_mode="replace"` and provide `updated_prompt`,
    - small scoped tweaks: `apply_mode="targeted_edit"` and provide `edits`.
+   - never copy locked core/generated/base prompt contracts into `updated_prompt`.
 7. when the curator is in Agent Workshop, do NOT call flow-only tools (`get_current_flow`, `get_available_agents`, `get_flow_templates`, `create_flow`, `validate_flow`) unless they explicitly switch to Flows.
 8. after a curator applies a prompt update, verify the current `<workshop_prompt_draft>` contains the intended change and provide a quick quality review.
 8a. before reviewing or commenting on current prompt text, use `refresh_workshop_prompt`; after it returns, treat conversation history and older versions as historical only and never report text as present unless it appears in the refreshed `current_prompt`.
@@ -586,7 +587,7 @@ Use this workshop context to give concrete prompt-engineering feedback, especial
    - for extraction/factual behavior, prioritize deterministic wording over creative language.
 10. in reviews, explicitly check whether the updated prompt follows the playbook above and call out any misses.
 11. choose the right target for edits:
-   - use main prompt updates for behavior that should apply across all groups,
+   - use main prompt updates for overlay guidance that should apply across all groups,
    - use group prompt updates only for organism/group-specific exceptions or conventions.
 
 <workshop_prompt_draft>
