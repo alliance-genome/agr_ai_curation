@@ -144,7 +144,6 @@ def build_agent_prompt_layers(
     group_layer = _build_group_rules_layer(
         cache,
         canonical_agent_id=canonical_agent_id,
-        prompt_agent_name=canonical_agent_id,
         group_ids=_normalize_group_ids(group_id),
     )
     if group_layer is not None:
@@ -271,7 +270,6 @@ def _build_group_rules_layer(
     cache: Mapping[str, PromptTemplate],
     *,
     canonical_agent_id: str,
-    prompt_agent_name: str,
     group_ids: tuple[str, ...],
 ) -> PromptLayer | None:
     if not group_ids:
@@ -279,7 +277,7 @@ def _build_group_rules_layer(
 
     prompts: list[PromptTemplate] = []
     for group in group_ids:
-        prompt = cache.get(_prompt_cache_key(prompt_agent_name, "group_rules", group))
+        prompt = cache.get(_prompt_cache_key(canonical_agent_id, "group_rules", group))
         if prompt is not None:
             prompts.append(prompt)
 
