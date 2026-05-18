@@ -78,7 +78,7 @@ class PromptTemplate(Base):
             "agent_name",
             "prompt_type",
             "group_id",
-            postgresql_where=(is_active == True),
+            postgresql_where=(is_active.is_(True)),
         ),
         # Index for version lookups
         Index(
