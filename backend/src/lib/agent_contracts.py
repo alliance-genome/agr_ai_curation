@@ -42,7 +42,7 @@ def get_agent_contract(
         normalized_topic = _required_text(topic, "topic").lower()
     except ValueError as exc:
         return _error(str(exc))
-    normalized_detail_level = _optional_text(detail_level) or "summary"
+    normalized_detail_level = _optional_text(detail_level)
     normalized_field_path = _optional_text(field_path)
 
     if normalized_topic not in AGENT_CONTRACT_TOPICS:
@@ -184,14 +184,6 @@ def get_agent_contract(
             )
         return {**base, "field_path": normalized_field_path, "matches": matches}
 
-    return _error(
-        f"Unsupported contract topic '{normalized_topic}'.",
-        agent_id=normalized_agent_id,
-        topic=normalized_topic,
-        detail_level=normalized_detail_level,
-    )
-
-
 def get_extraction_contract(
     agent_id: str,
     topic: str = "domain_envelope",
@@ -268,7 +260,16 @@ def _tool_contracts(
     resolver = tool_details_resolver or _tool_details
     contracts: list[dict[str, Any]] = []
     for tool_id in _string_list(entry.get("tools")):
-        details = resolver(agent_id, tool_id) or {}
+        details = resolver(agent_id, tool_id)
+        if details is None:
+            contracts.append(
+                {
+                    "tool_id": tool_id,
+                    "resolved": False,
+                    "error": "Tool details were not found.",
+                }
+            )
+            continue
         contract = {
             "tool_id": tool_id,
             "name": _optional_text(details.get("name")) or tool_id,

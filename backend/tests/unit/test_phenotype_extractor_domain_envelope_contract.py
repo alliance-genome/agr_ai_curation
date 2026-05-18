@@ -361,6 +361,7 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
         "read_section",
         "read_subsection",
         "record_evidence",
+        "get_agent_contract",
         "agr_curation_query",
     ]
     assert "curatable_objects[]" in agent_data["supervisor_routing"]["description"]

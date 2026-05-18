@@ -238,6 +238,36 @@ def test_invalid_topic_and_missing_field_paths_return_structured_errors(tmp_path
     assert "was not found" in unknown["error"]
 
 
+def test_invalid_detail_level_and_unresolved_tool_details_are_explicit(tmp_path):
+    registry = _fixture_registry(tmp_path)
+
+    invalid_detail_level = get_agent_contract(
+        "fixture_extractor",
+        "tools",
+        detail_level="  ",
+        agent_registry=_agent_registry(),
+        registries={"fixture.contract": registry},
+    )
+    unresolved_tool = get_agent_contract(
+        "fixture_extractor",
+        "tools",
+        agent_registry=_agent_registry(),
+        registries={"fixture.contract": registry},
+        tool_details_resolver=lambda _agent_id, _tool_id: None,
+    )
+
+    assert invalid_detail_level["success"] is False
+    assert "Unsupported detail_level" in invalid_detail_level["error"]
+    assert unresolved_tool["success"] is True
+    assert unresolved_tool["tools"] == [
+        {
+            "tool_id": "fixture_lookup",
+            "resolved": False,
+            "error": "Tool details were not found.",
+        }
+    ]
+
+
 def test_validator_agent_contract_is_project_agnostic_and_uses_same_service(tmp_path):
     registry = _fixture_registry(tmp_path)
 
