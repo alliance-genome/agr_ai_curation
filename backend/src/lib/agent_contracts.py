@@ -226,9 +226,9 @@ def _default_agent_registry() -> Mapping[str, Mapping[str, Any]]:
 
 
 def _tool_details(agent_id: str, tool_id: str) -> Mapping[str, Any] | None:
-    from src.lib.agent_studio.catalog_service import get_tool_details_for_agent
+    from src.lib.agent_studio.catalog_service import get_tool_for_agent
 
-    return get_tool_details_for_agent(agent_id, tool_id)
+    return get_tool_for_agent(tool_id, agent_id)
 
 
 def _output_schema_name(agent_id: str, entry: Mapping[str, Any]) -> str | None:

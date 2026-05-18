@@ -162,6 +162,17 @@ def test_compact_summary_response_is_read_only_and_deterministic(tmp_path):
     ]
 
 
+def test_tools_topic_uses_default_catalog_resolver_for_real_agent():
+    result = get_agent_contract("gene_extractor", "tools")
+
+    assert result["success"] is True
+    assert result["tools"]
+    assert all(tool.get("resolved", True) is True for tool in result["tools"])
+    tool_ids = {tool["tool_id"] for tool in result["tools"]}
+    assert "get_agent_contract" in tool_ids
+    assert "search_document" in tool_ids
+
+
 def test_field_specific_detail_response_uses_domain_pack_metadata(tmp_path):
     registry = _fixture_registry(tmp_path)
 
