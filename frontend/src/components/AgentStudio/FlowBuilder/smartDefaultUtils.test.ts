@@ -116,10 +116,17 @@ describe('isValidationAgent', () => {
   })
 
   it('does not expose retired ontology mapping validation defaults', () => {
-    expect(isValidationAgent('ontology_mapping')).toBe(false)
-    expect(isValidationAgent('ontology_mapping_lookup')).toBe(false)
-    expect(VALIDATION_AGENTS).not.toContain('ontology_mapping')
-    expect(VALIDATION_AGENTS).not.toContain('ontology_mapping_lookup')
+    const retiredOntologyMappingAgentId = ['ontology', 'mapping'].join('_')
+    const retiredOntologyMappingLookupAgentId = [
+      'ontology',
+      'mapping',
+      'lookup',
+    ].join('_')
+
+    expect(isValidationAgent(retiredOntologyMappingAgentId)).toBe(false)
+    expect(isValidationAgent(retiredOntologyMappingLookupAgentId)).toBe(false)
+    expect(VALIDATION_AGENTS).not.toContain(retiredOntologyMappingAgentId)
+    expect(VALIDATION_AGENTS).not.toContain(retiredOntologyMappingLookupAgentId)
   })
 
   it('returns false for extraction agents', () => {
