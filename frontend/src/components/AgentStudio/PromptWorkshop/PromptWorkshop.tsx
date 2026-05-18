@@ -1808,44 +1808,6 @@ function PromptWorkshop({
 
               <StyledAccordion defaultExpanded={false}>
                 <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Curator Overlay</Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  {overlayStatus === 'needs_review' && (
-                    <Alert severity="warning" sx={{ mb: 1.5 }}>
-                      {overlayWarning || 'This saved overlay contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
-                    </Alert>
-                  )}
-                  {overlayStatus === 'deduplicated' && (
-                    <Alert severity="info" sx={{ mb: 1.5 }}>
-                      Removed copied locked/template layers from this overlay: {removedLayerKinds.map(formatLayerKind).join(', ') || 'parent prompt layers'}.
-                    </Alert>
-                  )}
-                  <TextField
-                    fullWidth
-                    multiline
-                    minRows={12}
-                    value={customPrompt}
-                    onChange={(event) => setCustomPrompt(event.target.value)}
-                    placeholder="Add curator-authored guidance that should sit on top of the locked core/base prompt..."
-                    variant="outlined"
-                    sx={{
-                      '& .MuiInputBase-root': {
-                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                        fontSize: '0.85rem',
-                        backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
-                        borderRadius: 1.5,
-                      },
-                      '& .MuiOutlinedInput-notchedOutline': {
-                        borderColor: (theme) => alpha(theme.palette.divider, 0.3),
-                      },
-                    }}
-                  />
-                </AccordionDetails>
-              </StyledAccordion>
-
-              <StyledAccordion defaultExpanded={false}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
                   <Stack direction="row" spacing={1} alignItems="center">
                     <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Group Rules</Typography>
                     {hasAnyGroupOverrides && (
@@ -1937,6 +1899,44 @@ function PromptWorkshop({
                       </Stack>
                     )}
                   </Stack>
+                </AccordionDetails>
+              </StyledAccordion>
+
+              <StyledAccordion defaultExpanded={false}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="subtitle2" sx={{ fontSize: '0.85rem' }}>Curator Overlay</Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  {overlayStatus === 'needs_review' && (
+                    <Alert severity="warning" sx={{ mb: 1.5 }}>
+                      {overlayWarning || 'This saved overlay contains locked/core prompt markers that need coordinator review before the final prompt is trusted.'}
+                    </Alert>
+                  )}
+                  {overlayStatus === 'deduplicated' && (
+                    <Alert severity="info" sx={{ mb: 1.5 }}>
+                      Removed copied locked/template layers from this overlay: {removedLayerKinds.map(formatLayerKind).join(', ') || 'parent prompt layers'}.
+                    </Alert>
+                  )}
+                  <TextField
+                    fullWidth
+                    multiline
+                    minRows={12}
+                    value={customPrompt}
+                    onChange={(event) => setCustomPrompt(event.target.value)}
+                    placeholder="Add curator-authored guidance that should sit on top of the locked core/base prompt..."
+                    variant="outlined"
+                    sx={{
+                      '& .MuiInputBase-root': {
+                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+                        fontSize: '0.85rem',
+                        backgroundColor: (theme) => alpha(theme.palette.common.black, 0.15),
+                        borderRadius: 1.5,
+                      },
+                      '& .MuiOutlinedInput-notchedOutline': {
+                        borderColor: (theme) => alpha(theme.palette.divider, 0.3),
+                      },
+                    }}
+                  />
                 </AccordionDetails>
               </StyledAccordion>
 

@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import AgentDetailsPanel from './AgentDetailsPanel'
 import type { PromptInfo } from '@/types/promptExplorer'
@@ -64,7 +64,35 @@ function buildFlaggedAgent(): PromptInfo {
   }
 }
 
+function buildCleanCustomAgent(): PromptInfo {
+  return {
+    ...buildFlaggedAgent(),
+    base_prompt: 'Curator overlay guidance',
+    prompt_layers: [
+      ...(buildFlaggedAgent().prompt_layers || []),
+      {
+        id: 'gene:curator_overlay',
+        kind: 'curator_overlay',
+        title: 'Curator Overlay',
+        content: 'Curator overlay guidance',
+        provenance: 'custom_agent',
+        editable: true,
+        locked: false,
+        source_ref: 'custom_agent',
+        hash: 'hash-overlay',
+      },
+    ],
+    custom_prompt_overlay_status: 'clean',
+    custom_prompt_removed_layer_kinds: [],
+    custom_prompt_warning: undefined,
+  }
+}
+
 describe('AgentDetailsPanel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
   it('marks flagged custom overlays and excludes them from effective preview rendering', () => {
     render(
       <AgentDetailsPanel
@@ -84,5 +112,34 @@ describe('AgentDetailsPanel', () => {
     expect(effectivePromptSection).toHaveTextContent('Safe locked core contract')
     expect(effectivePromptSection).toHaveTextContent('Parent base prompt')
     expect(effectivePromptSection).not.toHaveTextContent('Platform Runtime Contract copied fragment')
+  })
+
+  it('keeps locked layers in the selected-group fallback for custom agents', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    serviceMocks.fetchCombinedPrompt.mockRejectedValue(new Error('combined preview unavailable'))
+
+    render(
+      <AgentDetailsPanel
+        agent={buildCleanCustomAgent()}
+        selectedGroupId="GROUP_A"
+        onGroupSelect={vi.fn()}
+      />
+    )
+
+    await waitFor(() => {
+      expect(serviceMocks.fetchCombinedPrompt).toHaveBeenCalledWith(
+        'ca_11111111-2222-3333-4444-555555555555',
+        'GROUP_A'
+      )
+    })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Prompts' }))
+
+    const effectivePromptSection = screen.getByText('Effective Prompt Preview').closest('div')?.parentElement
+    expect(effectivePromptSection).toHaveTextContent('Safe locked core contract')
+    expect(effectivePromptSection).toHaveTextContent('Parent base prompt')
+    expect(effectivePromptSection).toHaveTextContent('Curator overlay guidance')
+
+    consoleError.mockRestore()
   })
 })

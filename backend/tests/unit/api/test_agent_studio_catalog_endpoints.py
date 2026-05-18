@@ -127,6 +127,7 @@ class TestAgentStudioCatalogEndpoints:
             api_module.get_combined_prompt(
                 request=api_module.CombinedPromptRequest(agent_id="gene", group_id="WB"),
                 user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
             )
         )
         assert success.combined_prompt == "gene-WB-prompt"
@@ -143,9 +144,88 @@ class TestAgentStudioCatalogEndpoints:
                 api_module.get_combined_prompt(
                     request=api_module.CombinedPromptRequest(agent_id="gene", group_id="WB"),
                     user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
                 )
             )
         assert not_found_exc.value.status_code == 404
+
+    def test_get_combined_prompt_supports_custom_agents(self, monkeypatch):
+        import src.api.agent_studio as api_module
+
+        fake_custom = SimpleNamespace(
+            parent_agent_key="gene",
+            custom_prompt="Curator overlay",
+            group_prompt_overrides={"WB": "Custom WB overlay"},
+            group_rules_enabled=True,
+        )
+        observed = {}
+
+        monkeypatch.setattr(
+            api_module,
+            "set_global_user_from_cognito",
+            lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_visible_to_user",
+            lambda _db, _uuid, _uid: fake_custom,
+        )
+        monkeypatch.setattr(
+            api_module,
+            "normalize_custom_overlay_for_parent",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                content="Curator overlay",
+                status="clean",
+                removed_layer_kinds=[],
+                warning=None,
+            ),
+        )
+
+        def _build_agent_prompt_layers(agent_id, **kwargs):
+            observed["agent_id"] = agent_id
+            observed["group_id"] = kwargs.get("group_id")
+            observed["overlay"] = kwargs.get("overlay")
+            return SimpleNamespace(
+                render=lambda: (
+                    "Locked core\n\nParent base\n\nWB rules\n\n"
+                    "Curator overlay\n\nCustom WB overlay"
+                ),
+                hash="hash-custom-wb",
+                to_manifest=lambda: {
+                    "agent_id": "gene",
+                    "hash": "hash-custom-wb",
+                    "layers": [
+                        {"kind": "core_static", "locked": True, "editable": False},
+                        {"kind": "core_generated", "locked": True, "editable": False},
+                        {"kind": "group_rules", "locked": False, "editable": True},
+                        {"kind": "curator_overlay", "locked": False, "editable": True},
+                    ],
+                },
+            )
+
+        monkeypatch.setattr(api_module, "build_agent_prompt_layers", _build_agent_prompt_layers)
+
+        result = asyncio.run(
+            api_module.get_combined_prompt(
+                request=api_module.CombinedPromptRequest(
+                    agent_id="ca_11111111-2222-3333-4444-555555555555",
+                    group_id="WB",
+                ),
+                user={"sub": "auth-sub"},
+                db=SimpleNamespace(),
+            )
+        )
+
+        assert result.combined_prompt == (
+            "Locked core\n\nParent base\n\nWB rules\n\nCurator overlay\n\nCustom WB overlay"
+        )
+        assert result.effective_prompt_hash == "hash-custom-wb"
+        assert observed == {
+            "agent_id": "gene",
+            "group_id": "WB",
+            "overlay": "Curator overlay\n\n## Curator group overlay: WB\nCustom WB overlay",
+        }
+        assert result.layer_manifest["layers"][0]["locked"] is True
 
     def test_get_combined_prompt_maps_unexpected_errors_to_500(self, monkeypatch, caplog):
         import src.api.agent_studio as api_module
@@ -161,6 +241,7 @@ class TestAgentStudioCatalogEndpoints:
                 api_module.get_combined_prompt(
                     request=api_module.CombinedPromptRequest(agent_id="gene", mod_id="WB"),
                     user={"sub": "auth-sub"},
+                    db=SimpleNamespace(),
                 )
             )
         assert exc_info.value.status_code == 500

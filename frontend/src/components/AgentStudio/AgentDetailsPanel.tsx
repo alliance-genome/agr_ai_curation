@@ -220,7 +220,7 @@ function AgentDetailsPanel({
     const layerPreview = getPromptLayerPreview()
     const reviewMessage = 'Curator overlay needs coordinator review before it can be included in the effective prompt.'
     const content = agent && selectedGroupId && agent.has_group_rules
-      ? (combinedPrompt || (overlayNeedsReview ? (layerPreview || reviewMessage) : agent.base_prompt))
+      ? (combinedPrompt || layerPreview || (overlayNeedsReview ? reviewMessage : agent.base_prompt))
       : (layerPreview || (overlayNeedsReview ? reviewMessage : agent?.base_prompt || ''))
     navigator.clipboard.writeText(content).catch((err) => {
       console.error('Failed to copy:', err)
@@ -273,7 +273,7 @@ function AgentDetailsPanel({
   const effectivePromptPreview = selectedGroupId && agent.has_group_rules
     ? (combinedPrompt || (loadingCombined
       ? 'Loading effective prompt preview...'
-      : (overlayNeedsReview ? (layerPreview || overlayReviewMessage) : agent.base_prompt)))
+      : (layerPreview || (overlayNeedsReview ? overlayReviewMessage : agent.base_prompt))))
     : (overlayNeedsReview
       ? (layerPreview || overlayReviewMessage)
       : promptLayers.length > 0

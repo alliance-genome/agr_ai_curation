@@ -698,17 +698,15 @@ class TestGetRegistryMetadata:
             group_prompt_overrides={},
             group_rules_enabled=True,
         )
-        # Build a lightweight module-like object for local imports in endpoint
-        fake_custom_module = SimpleNamespace(
-            parse_custom_agent_id=lambda _aid: "uuid",
-            get_custom_agent_for_user=lambda _db, _uuid, _uid: fake_custom,
-            CustomAgentNotFoundError=type("CustomAgentNotFoundError", (Exception,), {}),
-            CustomAgentAccessError=type("CustomAgentAccessError", (Exception,), {}),
-        )
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: fake_custom,
         )
         monkeypatch.setattr(
             api_module,
@@ -733,7 +731,6 @@ class TestGetRegistryMetadata:
                 },
             ),
         )
-        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
 
         result = asyncio.run(
             api_module.get_prompt_preview(
@@ -760,17 +757,15 @@ class TestGetRegistryMetadata:
             group_rules_enabled=True,
         )
 
-        fake_custom_module = SimpleNamespace(
-            parse_custom_agent_id=lambda _aid: "uuid",
-            get_custom_agent_for_user=lambda _db, _uuid, _uid: fake_custom,
-            CustomAgentNotFoundError=type("CustomAgentNotFoundError", (Exception,), {}),
-            CustomAgentAccessError=type("CustomAgentAccessError", (Exception,), {}),
-        )
-
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=123),
+        )
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: fake_custom,
         )
         monkeypatch.setattr(
             api_module,
@@ -795,7 +790,6 @@ class TestGetRegistryMetadata:
                 },
             ),
         )
-        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
 
         result = asyncio.run(
             api_module.get_prompt_preview(
@@ -814,24 +808,19 @@ class TestGetRegistryMetadata:
 
         caplog.set_level(logging.WARNING, logger=api_module.logger.name)
 
-        CustomAgentNotFoundError = type("CustomAgentNotFoundError", (Exception,), {})
-        CustomAgentAccessError = type("CustomAgentAccessError", (Exception,), {})
-
         monkeypatch.setattr(
             api_module,
             "set_global_user_from_cognito",
             lambda _db, _user: SimpleNamespace(id=123),
         )
 
-        fake_custom_module = SimpleNamespace(
-            parse_custom_agent_id=lambda _aid: "uuid",
-            get_custom_agent_for_user=lambda _db, _uuid, _uid: (_ for _ in ()).throw(
-                CustomAgentNotFoundError("custom prompt missing")
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: (_ for _ in ()).throw(
+                api_module.CustomAgentNotFoundError("custom prompt missing")
             ),
-            CustomAgentNotFoundError=CustomAgentNotFoundError,
-            CustomAgentAccessError=CustomAgentAccessError,
         )
-        monkeypatch.setitem(__import__("sys").modules, "src.lib.agent_studio.custom_agent_service", fake_custom_module)
 
         with pytest.raises(api_module.HTTPException) as not_found_exc:
             asyncio.run(
@@ -848,8 +837,12 @@ class TestGetRegistryMetadata:
         assert "custom prompt missing" not in str(not_found_exc.value.detail)
         assert "custom prompt missing" in caplog.text
 
-        fake_custom_module.get_custom_agent_for_user = lambda _db, _uuid, _uid: (_ for _ in ()).throw(
-            CustomAgentAccessError("custom prompt forbidden")
+        monkeypatch.setattr(
+            api_module,
+            "get_custom_agent_for_user",
+            lambda _db, _uuid, _uid: (_ for _ in ()).throw(
+                api_module.CustomAgentAccessError("custom prompt forbidden")
+            ),
         )
         with pytest.raises(api_module.HTTPException) as access_exc:
             asyncio.run(

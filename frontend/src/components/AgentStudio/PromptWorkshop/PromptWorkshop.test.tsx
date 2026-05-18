@@ -446,6 +446,16 @@ describe('PromptWorkshop', () => {
       expect(serviceMocks.fetchAgentTemplates).toHaveBeenCalled()
     })
 
+    const expectBefore = (firstLabel: string, secondLabel: string) => {
+      const first = screen.getByText(firstLabel)
+      const second = screen.getByText(secondLabel)
+      expect(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
+    expectBefore('Core Prompt', 'Generated Contract')
+    expectBefore('Generated Contract', 'Group Rules')
+    expectBefore('Group Rules', 'Curator Overlay')
+    expectBefore('Curator Overlay', 'Effective Prompt Preview')
+
     fireEvent.click(await screen.findByText('Core Prompt'))
     expect(screen.getByText('Locked core contract')).toBeInTheDocument()
     expect(screen.getAllByText('Read-only').length).toBeGreaterThan(0)
