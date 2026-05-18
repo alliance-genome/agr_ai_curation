@@ -507,6 +507,32 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     ].field_paths == (
         "condition_class.curie",
     )
+    chemical_condition_ontology_binding = chemical_condition_bindings[
+        "chemical_condition.condition_ontology_lookup"
+    ]
+    assert chemical_condition_ontology_binding.validator_agent is not None
+    assert (
+        chemical_condition_ontology_binding.validator_agent.agent_id
+        == "ontology_term_validation"
+    )
+    assert chemical_condition_ontology_binding.input_fields["curie"].path == (
+        "condition_class.curie"
+    )
+    assert chemical_condition_ontology_binding.input_fields["curie"].required is False
+    assert chemical_condition_ontology_binding.input_fields["label"].path == (
+        "condition_class.name"
+    )
+    assert chemical_condition_ontology_binding.input_fields["label"].required is False
+    assert (
+        chemical_condition_ontology_binding.input_fields["ontology_term_type"].value
+        == "ZECOTerm"
+    )
+    assert chemical_condition_ontology_binding.input_fields[
+        "accepted_prefixes"
+    ].value == ["ZECO"]
+    assert chemical_condition_ontology_binding.expected_result_fields == {
+        "condition_class_curie": "condition_class.curie",
+    }
     assert "chemical_condition.chebi_api_lookup" in registries[
         "agr.alliance.chemical_condition"
     ].policy_for(
@@ -724,19 +750,19 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "disease",
                 "accepted_prefixes": ["DOID"],
+                "optional_inputs": ["curie", "label"],
                 "expected_result_fields": {
                     "curie": "disease_annotation_object.curie",
                     "label": "disease_annotation_object.name",
-                    "ontology_term_type": "DOTerm",
                 },
             },
             "disease_evidence_code_lookup": {
                 "state": ValidationBindingState.UNDER_DEVELOPMENT,
                 "ontology_family": "evidence",
                 "accepted_prefixes": ["ECO"],
+                "optional_inputs": ["curie"],
                 "expected_result_fields": {
                     "curie": "evidence_code_curies[0]",
-                    "ontology_term_type": "ECOTerm",
                 },
             },
         },
@@ -755,6 +781,9 @@ def test_representative_ontology_term_bindings_target_generic_validator():
             "chemical_condition.condition_ontology_lookup": {
                 "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "condition",
+                "ontology_term_type": "ZECOTerm",
+                "accepted_prefixes": ["ZECO"],
+                "optional_inputs": ["curie", "label"],
                 "expected_result_fields": {
                     "condition_class_curie": "condition_class.curie",
                 },
@@ -783,11 +812,31 @@ def test_representative_ontology_term_bindings_target_generic_validator():
                 binding.input_fields["ontology_family"].value
                 == expected["ontology_family"]
             )
+            assert all(
+                isinstance(field_path, str) and field_path.strip()
+                for field_path in binding.expected_result_fields.values()
+            )
+            assert set(binding.expected_result_fields.values()).isdisjoint(
+                {"DOTerm", "ECOTerm", "ZECOTerm", "DOID", "ECO", "ZECO"}
+            )
+            if binding.state is ValidationBindingState.ACTIVE:
+                assert "state_explanation" not in binding.raw
+            else:
+                assert "state_explanation" in binding.raw
+            if "ontology_term_type" in expected:
+                assert (
+                    binding.input_fields["ontology_term_type"].value
+                    == expected["ontology_term_type"]
+                )
             if "accepted_prefixes" in expected:
                 assert (
                     binding.input_fields["accepted_prefixes"].value
                     == expected["accepted_prefixes"]
                 )
+            for input_name in expected.get("optional_inputs", []):
+                selector = binding.input_fields.get(input_name)
+                assert selector is not None
+                assert selector.required is False
 
 
 def test_representative_alliance_active_validators_dispatch_unresolved_results():

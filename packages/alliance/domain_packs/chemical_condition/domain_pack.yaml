@@ -706,13 +706,24 @@ metadata:
           field_paths:
             - condition_class.curie
         input_fields:
-          condition_class_curie:
+          curie:
             source: payload
             path: condition_class.curie
+            required: false
+          label:
+            source: payload
+            path: condition_class.name
             required: false
           ontology_family:
             source: literal
             value: condition
+          ontology_term_type:
+            source: literal
+            value: ZECOTerm
+          accepted_prefixes:
+            source: literal
+            value:
+              - ZECO
         expected_result_fields:
           condition_class_curie: condition_class.curie
         required: true

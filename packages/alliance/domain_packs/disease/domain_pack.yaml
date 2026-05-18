@@ -878,9 +878,11 @@ metadata:
           curie:
             source: payload
             path: disease_annotation_object.curie
+            required: false
           label:
             source: payload
             path: disease_annotation_object.name
+            required: false
           ontology_family:
             source: literal
             value: disease
@@ -894,7 +896,6 @@ metadata:
         expected_result_fields:
           curie: disease_annotation_object.curie
           label: disease_annotation_object.name
-          ontology_term_type: DOTerm
         required: true
         blocking: false
         allow_opt_out: true
@@ -1133,6 +1134,7 @@ metadata:
           curie:
             source: payload
             path: evidence_code_curies[0]
+            required: false
           ontology_family:
             source: literal
             value: evidence
@@ -1145,7 +1147,6 @@ metadata:
               - ECO
         expected_result_fields:
           curie: evidence_code_curies[0]
-          ontology_term_type: ECOTerm
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

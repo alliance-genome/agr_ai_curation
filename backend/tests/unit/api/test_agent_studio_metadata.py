@@ -173,6 +173,15 @@ class TestGetRegistryMetadata:
 
         assert disease_extractor is not None
         assert disease_extractor.validation_attachments
+        assert all(
+            option.get("validator_agent_id") != "ontology_mapping"
+            for option in disease_extractor.validation_attachments
+        )
+        assert any(
+            option.get("validator_binding_id") == "disease_ontology_term_lookup"
+            and option.get("validator_agent_id") == "ontology_term_validation"
+            for option in disease_extractor.validation_attachments
+        )
         under_development = [
             option
             for option in disease_extractor.validation_attachments

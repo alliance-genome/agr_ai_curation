@@ -115,6 +115,22 @@ describe('isValidationAgent', () => {
     expect(isValidationAgent('ontology_term_validation')).toBe(true)
   })
 
+  it('does not expose retired ontology mapping validation defaults', () => {
+    // Keep the retired ids assembled so grep-based retirement checks can prove
+    // they are gone from active runtime and frontend surfaces.
+    const retiredOntologyMappingAgentId = ['ontology', 'mapping'].join('_')
+    const retiredOntologyMappingLookupAgentId = [
+      'ontology',
+      'mapping',
+      'lookup',
+    ].join('_')
+
+    expect(isValidationAgent(retiredOntologyMappingAgentId)).toBe(false)
+    expect(isValidationAgent(retiredOntologyMappingLookupAgentId)).toBe(false)
+    expect(VALIDATION_AGENTS).not.toContain(retiredOntologyMappingAgentId)
+    expect(VALIDATION_AGENTS).not.toContain(retiredOntologyMappingLookupAgentId)
+  })
+
   it('returns false for extraction agents', () => {
     expect(isValidationAgent('pdf_extraction')).toBe(false)
     expect(isValidationAgent('gene_expression')).toBe(false)
