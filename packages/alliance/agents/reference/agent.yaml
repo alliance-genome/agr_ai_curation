@@ -46,4 +46,51 @@ frontend:
   icon: "📚"
   show_in_palette: true
 
+documentation:
+  summary: >
+    Resolves source-paper references by PMID, DOI, AGRKB CURIE, MOD reference
+    ID, title, or citation text through Alliance literature lookup.
+  capabilities:
+    - name: "Identifier lookup"
+      description: >
+        Looks up exact PMID, DOI, AGRKB, or MOD reference identifiers for a
+        source paper.
+      example_query: "Validate reference PMID:12345678"
+      example_result: >
+        Returns the matched reference identifier, title, publication year, and
+        validation status.
+    - name: "Title and citation search"
+      description: >
+        Searches by supplied title or citation text when an exact identifier is
+        missing.
+      example_query: "Find the Alliance reference for title 'Regulation of daf-16 in longevity'"
+      example_result: "Returns best matching references or ambiguous candidates for curator review."
+    - name: "Source-reference materialization"
+      description: >
+        Preserves lookup evidence for source_reference fields used by downstream
+        curation payloads.
+      example_query: "Validate the source reference for this allele association"
+      example_result: >
+        Returns a per-reference result with matched CURIE, identifier evidence,
+        and unresolved notes.
+  data_sources:
+    - name: "Alliance Literature Reference API"
+      description: >
+        Alliance-backed literature reference lookup service for publication
+        identifiers, titles, and citation metadata.
+      species_supported: null
+      data_types:
+        - "PMIDs"
+        - "DOIs"
+        - "AGRKB reference CURIEs"
+        - "MOD reference IDs"
+        - "titles"
+        - "citation metadata"
+  limitations:
+    - "Requires an identifier, title, or citation string from upstream extraction or domain-pack input."
+    - "Fuzzy title and citation searches can return multiple plausible matches."
+    - "Does not read or summarize paper content; use PDF Extraction Agent for document text."
+    - "Cannot create missing literature records or correct external reference metadata."
+    - "Lookup quality depends on the Alliance literature service and indexed reference metadata."
+
 group_rules_enabled: false

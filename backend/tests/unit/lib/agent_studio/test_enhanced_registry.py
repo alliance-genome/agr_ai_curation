@@ -120,10 +120,10 @@ class TestEnhancedRegistry:
 
     def test_agent_browser_documentation_omits_retired_ontology_mapping_copy(self):
         """Agent Browser docs should reference typed ontology resolution only."""
-        from src.lib.agent_studio.registry_builder import AGENT_DOCUMENTATION
+        from src.lib.agent_studio.catalog_service import AGENT_REGISTRY
 
         browser_documentation = {
-            agent_id: AGENT_DOCUMENTATION[agent_id]
+            agent_id: AGENT_REGISTRY[agent_id]["documentation"]
             for agent_id in [
                 *TARGET_VALIDATION_AGENT_ICONS,
                 "gene_expression_extraction",

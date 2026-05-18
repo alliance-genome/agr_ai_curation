@@ -121,6 +121,7 @@ class AgentDefinition:
     group_rules_enabled: bool = False
     frontend: FrontendConfig = field(default_factory=FrontendConfig)
     curation: CurationConfig = field(default_factory=CurationConfig)
+    documentation: Optional[Dict[str, Any]] = None
 
     @property
     def tool_name(self) -> str:
@@ -208,6 +209,7 @@ class AgentDefinition:
             group_rules_enabled=data.get("group_rules_enabled", False),
             frontend=frontend,
             curation=curation,
+            documentation=data.get("documentation"),
         )
 
 

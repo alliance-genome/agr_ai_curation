@@ -125,7 +125,7 @@ class TestAgentDocumentationCoverage:
             + ", ".join(missing_summaries)
         )
 
-    def test_agent_without_static_documentation_uses_package_description_summary(self):
+    def test_agent_without_static_documentation_uses_package_owned_documentation(self):
         """Package-owned agents should not need hardcoded core documentation."""
         configured_agents = load_agent_definitions(force_reload=True)
         registry = build_agent_registry()
@@ -134,7 +134,8 @@ class TestAgentDocumentationCoverage:
         entry = registry["data_provider_validation"]
 
         assert "data_provider_validation" not in AGENT_DOCUMENTATION
-        assert entry["documentation"] == {"summary": agent_def.description.strip()}
+        assert agent_def.documentation is not None
+        assert entry["documentation"] == agent_def.documentation
 
     def test_pdf_alias_is_not_exposed_in_registry(self):
         """Registry should expose only canonical `pdf_extraction` id."""

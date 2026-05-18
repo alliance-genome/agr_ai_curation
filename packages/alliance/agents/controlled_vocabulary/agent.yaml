@@ -49,4 +49,52 @@ frontend:
   icon: "🏷️"
   show_in_palette: true
 
+documentation:
+  summary: >
+    Validates controlled vocabulary terms by vocabulary name, term name,
+    abbreviation, synonym, and obsolete state.
+  capabilities:
+    - name: "Vocabulary term lookup"
+      description: >
+        Checks a submitted term name against a specific Alliance controlled
+        vocabulary.
+      example_query: "Validate relation term 'is_model_of' in the disease relation vocabulary"
+      example_result: >
+        Returns the matching vocabulary term, abbreviation, and validation
+        status.
+    - name: "Abbreviation and synonym matching"
+      description: >
+        Resolves vocabulary terms from abbreviations or synonyms when the
+        canonical term name was not supplied.
+      example_query: "Resolve abbreviation 'IDA' in the evidence code vocabulary"
+      example_result: >
+        Returns the canonical vocabulary term or ambiguous candidates for
+        curator review.
+    - name: "Obsolete-term checks"
+      description: >
+        Flags obsolete controlled vocabulary terms according to the field's
+        accepted obsolete-term policy.
+      example_query: "Check whether this expression relation vocabulary term is still current"
+      example_result: >
+        Returns an accepted, obsolete, ambiguous, or unresolved result with
+        evidence details.
+  data_sources:
+    - name: "Alliance Curation Database"
+      description: >
+        Alliance controlled vocabulary rows, including names, abbreviations,
+        synonyms, and obsolete status.
+      species_supported: null
+      data_types:
+        - "vocabulary names"
+        - "vocabulary terms"
+        - "abbreviations"
+        - "synonyms"
+        - "obsolete flags"
+  limitations:
+    - "Requires the target vocabulary name or field context to avoid cross-vocabulary ambiguity."
+    - "Does not validate ontology identities; use Ontology Term Resolver Agent for ontology CURIEs or typed ontology labels."
+    - "Cannot decide biological correctness of a term choice outside the submitted field context."
+    - "Cannot create or update controlled vocabulary rows."
+    - "Common abbreviations may produce ambiguous results unless the vocabulary is specified."
+
 group_rules_enabled: false
