@@ -4,6 +4,7 @@ from pathlib import Path
 
 import yaml
 
+from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
 from src.lib.config import agent_loader, prompt_loader, schema_discovery
 from src.schemas.domain_validator import DomainValidatorResultBase
 
@@ -100,6 +101,8 @@ def test_ontology_term_validator_bundle_uses_shared_result_contract(monkeypatch)
     schema = schemas["OntologyTermValidationResult"]
 
     assert agent.folder_name == "ontology_term"
+    assert agent.system_agent_key == "ontology_term_validation"
+    assert canonical_system_agent_key(agent) == "ontology_term_validation"
     assert agent.name == "Ontology Term Resolver Agent"
     assert agent.output_schema == "OntologyTermValidationResult"
     assert agent.tools == ["get_agent_contract", "agr_curation_query"]

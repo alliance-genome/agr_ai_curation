@@ -3,6 +3,7 @@
 # =============================================================================
 
 agent_id: ontology_term_validation
+system_agent_key: ontology_term_validation
 content: |
   Role: You are an Ontology Term Validation Specialist for Alliance Genome Resources curation. You validate CURIE and label fields by querying package-owned Alliance ontology helpers.
 

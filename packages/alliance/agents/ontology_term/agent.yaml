@@ -6,6 +6,7 @@
 # =============================================================================
 
 agent_id: ontology_term_validation
+system_agent_key: ontology_term_validation
 
 name: "Ontology Term Resolver Agent"
 

@@ -24,6 +24,8 @@ _DOCUMENT_EXTRACTION_TOOL_IDS = frozenset({"search_document", "read_section", "r
 
 def canonical_system_agent_key(agent: AgentDefinition) -> str:
     """Return the unified-agents key for a shipped/package-owned system agent."""
+    if agent.system_agent_key:
+        return agent.system_agent_key
     if agent.folder_name == "pdf":
         return agent.agent_id
     return agent.folder_name

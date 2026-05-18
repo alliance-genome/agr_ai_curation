@@ -28,10 +28,12 @@ def _agent(
     category: str = "",
     tools: list[str] | None = None,
     domain_pack_id: str | None = None,
+    system_agent_key: str | None = None,
 ) -> AgentDefinition:
     return AgentDefinition(
         folder_name=folder_name,
         agent_id=agent_id,
+        system_agent_key=system_agent_key,
         name="Demo Validation Agent",
         category=category,
         tools=tools or [],
@@ -263,6 +265,32 @@ def test_hashes_are_stable_for_same_inputs(prompt_cache):
         layer.hash for layer in first.layers
     ]
     assert first.to_manifest() == second.to_manifest()
+
+
+def test_prompt_layers_reject_noncanonical_folder_alias(monkeypatch, prompt_cache):
+    monkeypatch.setattr(
+        assembly,
+        "load_agent_definitions",
+        lambda: {
+            "ontology_term_validation": _agent(
+                folder_name="ontology_term",
+                agent_id="ontology_term_validation",
+                system_agent_key="ontology_term_validation",
+            )
+        },
+    )
+    prompt_cache.clear()
+    prompt_cache["ontology_term_validation:system:base"] = _prompt(
+        "ontology_term_validation",
+        "system",
+        "Ontology term prompt",
+    )
+
+    bundle = assembly.build_agent_prompt_layers("ontology_term_validation")
+    assert bundle.agent_id == "ontology_term_validation"
+
+    with pytest.raises(ValueError, match="Unknown system agent 'ontology_term'"):
+        assembly.build_agent_prompt_layers("ontology_term")
 
 
 def test_base_prompt_is_required(prompt_cache):

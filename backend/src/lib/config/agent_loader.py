@@ -85,6 +85,7 @@ class AgentDefinition:
     Attributes:
         folder_name: The folder name (e.g., "gene", "allele")
         agent_id: Unique identifier (e.g., "gene_validation")
+        system_agent_key: Optional public key for the unified system-agent row
         name: Human-readable name
         description: Brief description of agent capabilities
         category: Agent category (e.g., "Validation", "Extraction")
@@ -106,6 +107,7 @@ class AgentDefinition:
     name: str
     package_id: Optional[str] = None
     package_path: Optional[Path] = None
+    system_agent_key: Optional[str] = None
     description: str = ""
     category: str = ""
     subcategory: str = ""
@@ -192,6 +194,7 @@ class AgentDefinition:
             name=data.get("name", folder_name.replace("_", " ").title()),
             package_id=package_id,
             package_path=package_path,
+            system_agent_key=str(data.get("system_agent_key") or "").strip() or None,
             description=data.get("description", "").strip(),
             category=data.get("category", ""),
             subcategory=data.get("subcategory", ""),

@@ -145,6 +145,15 @@ class TestAgentDocumentationCoverage:
         assert registry.get("pdf") is None
         assert pdf_extraction_entry is not None
 
+    def test_explicit_system_agent_key_suppresses_folder_alias(self):
+        """The ontology resolver exposes only `ontology_term_validation` publicly."""
+        registry = build_agent_registry()
+
+        ontology_entry = registry.get("ontology_term_validation")
+
+        assert ontology_entry is not None
+        assert registry.get("ontology_term") is None
+
     def test_build_agent_registry_core_only_runtime_excludes_alliance_agents(
         self,
         monkeypatch,

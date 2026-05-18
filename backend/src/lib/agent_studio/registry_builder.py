@@ -996,12 +996,17 @@ def build_agent_registry() -> Dict[str, Dict[str, Any]]:
         entry = _agent_definition_to_registry_entry(agent_def)
         registry[agent_id] = entry
 
-        # Keep legacy folder-name aliases except for `pdf`.
-        # `pdf` is intentionally canonicalized to `pdf_extraction` only.
+        # Keep folder-name aliases only when the folder is the configured
+        # public key. Bundles with an explicit system_agent_key expose that
+        # canonical route only.
         if (
             agent_def.folder_name != agent_id
             and agent_def.folder_name not in registry
             and agent_def.folder_name != "pdf"
+            and (
+                not agent_def.system_agent_key
+                or agent_def.system_agent_key == agent_def.folder_name
+            )
         ):
             registry[agent_def.folder_name] = entry
 

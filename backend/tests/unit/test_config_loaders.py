@@ -74,6 +74,19 @@ class TestAgentLoader:
         # Check output schema
         assert gene.output_schema == "GeneResultEnvelope"
 
+    def test_ontology_term_agent_declares_public_system_key(self):
+        """The generic ontology resolver is publicly keyed by agent_id."""
+        from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
+        from src.lib.config.agent_loader import load_agent_definitions, get_agent_definition
+
+        load_agent_definitions(ALLIANCE_AGENTS_PATH)
+        ontology_term = get_agent_definition("ontology_term_validation")
+
+        assert ontology_term is not None
+        assert ontology_term.folder_name == "ontology_term"
+        assert ontology_term.system_agent_key == "ontology_term_validation"
+        assert canonical_system_agent_key(ontology_term) == "ontology_term_validation"
+
     def test_pdf_agent_not_batchable(self):
         """Test that PDF agent is marked as not batchable."""
         from src.lib.config.agent_loader import load_agent_definitions, get_agent_definition
@@ -2008,6 +2021,31 @@ content: Test content for {folder_name}
             with patch("src.lib.config.prompt_loader._upsert_prompt"):
                 agent_name = _load_base_prompt(source, mock_db)
                 assert agent_name == expected_agent_name, f"Failed for {folder_name}"
+
+    def test_prompt_loader_honors_explicit_system_agent_key(self, tmp_path):
+        """Prompt rows can be keyed to the public unified system-agent route."""
+        from unittest.mock import MagicMock, patch
+        from src.lib.config.agent_sources import resolve_agent_config_sources
+        from src.lib.config.prompt_loader import _load_base_prompt
+
+        agent_folder = tmp_path / "ontology_term"
+        agent_folder.mkdir()
+        (agent_folder / "prompt.yaml").write_text("""
+agent_id: ontology_term_validation
+system_agent_key: ontology_term_validation
+content: Test ontology term prompt.
+""")
+
+        mock_db = MagicMock()
+        source = resolve_agent_config_sources(tmp_path)[0]
+
+        with patch("src.lib.config.prompt_loader._upsert_prompt") as mock_upsert:
+            agent_name = _load_base_prompt(source, mock_db)
+
+            assert agent_name == "ontology_term_validation"
+            mock_upsert.assert_called_once()
+            call_kwargs = mock_upsert.call_args[1]
+            assert call_kwargs["agent_name"] == "ontology_term_validation"
 
     def test_real_agent_folder_names(self):
         """Verify the repo override layer only keeps core/override bundles."""
