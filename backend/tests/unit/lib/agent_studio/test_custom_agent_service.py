@@ -84,6 +84,37 @@ def test_normalize_custom_overlay_flags_ambiguous_locked_copy(monkeypatch):
     assert result.warning
 
 
+def test_normalize_custom_overlay_flags_mixed_exact_and_ambiguous_locked_copy(monkeypatch):
+    import src.lib.agent_studio.custom_agent_service as service
+
+    layers = (
+        SimpleNamespace(kind="core_static", content="LOCKED CORE"),
+        SimpleNamespace(kind="generated_contract", content="Generated contract body."),
+    )
+    monkeypatch.setattr(
+        service,
+        "build_agent_prompt_layers",
+        lambda *_args, **_kwargs: SimpleNamespace(layers=layers),
+    )
+
+    result = normalize_custom_overlay_for_parent(
+        "gene",
+        (
+            "LOCKED CORE\n\n"
+            "Edited Platform Runtime Contract prose with local curator edits.\n\n"
+            "Keep curator guidance."
+        ),
+    )
+
+    assert result.status == "needs_review"
+    assert result.content == (
+        "Edited Platform Runtime Contract prose with local curator edits.\n\n"
+        "Keep curator guidance."
+    )
+    assert result.removed_layer_kinds == ["core_static"]
+    assert result.warning
+
+
 def test_get_custom_agent_group_prompt_prefers_override():
     override_content = get_custom_agent_group_prompt(
         parent_agent_key="gene",

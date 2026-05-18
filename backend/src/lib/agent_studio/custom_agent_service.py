@@ -110,23 +110,23 @@ def normalize_custom_overlay_for_parent(
         removed_layer_kinds.append(layer.kind)
 
     normalized_content = _collapse_prompt_whitespace(content)
+    lowered_remaining_content = normalized_content.lower()
+    if any(marker.lower() in lowered_remaining_content for marker in _LOCKED_PROMPT_MARKERS):
+        return CustomOverlayNormalization(
+            content=normalized_content,
+            status="needs_review",
+            removed_layer_kinds=removed_layer_kinds,
+            warning=(
+                "Custom overlay still contains locked/core prompt markers after "
+                "safe cleanup."
+            ),
+        )
+
     if removed_layer_kinds:
         return CustomOverlayNormalization(
             content=normalized_content,
             status="deduplicated",
             removed_layer_kinds=removed_layer_kinds,
-        )
-
-    lowered = original.lower()
-    if any(marker.lower() in lowered for marker in _LOCKED_PROMPT_MARKERS):
-        return CustomOverlayNormalization(
-            content=normalized_content,
-            status="needs_review",
-            removed_layer_kinds=[],
-            warning=(
-                "Custom overlay contains locked/core prompt markers but did not "
-                "match exact parent layers for safe cleanup."
-            ),
         )
 
     return CustomOverlayNormalization(
