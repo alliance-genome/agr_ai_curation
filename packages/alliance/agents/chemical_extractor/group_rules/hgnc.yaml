@@ -6,6 +6,6 @@ content: |
   - Emit retained chemical-condition findings only as `ChemicalCondition` curatable units in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   - For each retained condition, also emit supporting `ChemicalTerm` and `Reference` validated-reference objects plus one `EvidenceQuote` metadata-only object per verified quote.
   - Use `model_ref: ChemicalConditionPayload`, `ChemicalTermPayload`, `ReferencePayload`, and `EvidenceQuotePayload`; all objects must declare `definition_state: in_development`.
-  - `ChemicalCondition.payload.condition_chemical.curie` and `ChemicalTerm.payload.curie` must be grounded CHEBI CURIEs; unresolved or ambiguous chemicals belong in `metadata.ambiguities[]` or `metadata.exclusions[]`, not in a retained condition.
+  - `ChemicalCondition.payload.condition_chemical.curie` and `ChemicalTerm.payload.curie` are optional exact-CURIE fast paths; retain name-backed chemical candidates for active ChEBI validation when the exact CHEBI CURIE is unresolved.
   - ChemicalCondition export/submission must remain blocked with `metadata.export_behavior.status: blocked`, `exportable: false`, and `submit: false` until host annotation and source reference materialization are supplied.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.

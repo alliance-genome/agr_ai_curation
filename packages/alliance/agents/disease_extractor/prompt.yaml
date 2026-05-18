@@ -258,8 +258,8 @@ content: |
 
   `curatable_objects[].payload` must use the disease domain-pack field names:
   - `mention` - exact disease mention from the paper
-  - `disease_annotation_object.curie` - an evidence-backed disease ontology CURIE hint for active validator resolution
   - `disease_annotation_object.name` - an evidence-backed disease ontology label hint for active validator resolution
+  - `disease_annotation_object.curie` only when evidence or tool output supports an exact DOID CURIE; label-backed disease candidates remain valid for active validator resolution without it
   - `role` - one of primary, background, comparative, model_context, or unspecified
   - `confidence` - high, medium, or low
   - `evidence_record_ids[]` - the same stable IDs used on `curatable_objects[].evidence_record_ids[]`

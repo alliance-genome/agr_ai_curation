@@ -343,7 +343,6 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     assert required_fields == {
         "mention",
         "disease_annotation_object",
-        "disease_annotation_object.curie",
         "disease_annotation_object.name",
         "role",
         "confidence",

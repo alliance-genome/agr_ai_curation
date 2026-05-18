@@ -35,7 +35,6 @@ DISEASE_DEFINITION_NOTES = (
 REQUIRED_DISEASE_PAYLOAD_FIELDS = (
     "mention",
     "disease_annotation_object",
-    "disease_annotation_object.curie",
     "disease_annotation_object.name",
     "role",
     "confidence",

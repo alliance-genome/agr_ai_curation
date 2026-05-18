@@ -116,6 +116,18 @@ def test_disease_extractor_schema_accepts_pending_disease_annotation_output():
     )
 
 
+def test_disease_extractor_schema_accepts_label_backed_pending_disease_candidates():
+    payload = _valid_disease_extractor_payload()
+    del payload["curatable_objects"][0]["payload"]["disease_annotation_object"]["curie"]
+
+    envelope = _validate_disease_extractor_payload(payload)
+
+    obj = envelope.curatable_objects[0]
+    assert obj.payload["disease_annotation_object"] == {
+        "name": "Andersen-Tawil syndrome",
+    }
+
+
 @pytest.mark.parametrize("legacy_field", sorted(LEGACY_SEMANTIC_LIST_FIELDS))
 def test_disease_extractor_schema_rejects_top_level_legacy_semantic_lists(
     legacy_field: str,
@@ -142,14 +154,13 @@ def test_disease_extractor_schema_rejects_legacy_flat_disease_payload_fields():
 
     message = str(exc_info.value)
     assert "legacy flat disease helper fields" in message
-    assert "disease_annotation_object.curie/name" in message
+    assert "disease_annotation_object.name with optional curie" in message
 
 
 @pytest.mark.parametrize(
     "field_path",
     [
         "mention",
-        "disease_annotation_object.curie",
         "disease_annotation_object.name",
     ],
 )
@@ -250,7 +261,7 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
     assert "`object_type`: `DiseaseAnnotation`" in prompt_content
     assert "`object_role`: `curatable_unit`" in prompt_content
     assert "`model_ref`: `PendingDiseaseAssertionPayload`" in prompt_content
-    assert "`disease_annotation_object.curie`" in prompt_content
+    assert "`disease_annotation_object.name`" in prompt_content
     assert "Do not use legacy flat payload fields" in prompt_content
     assert "Active validator bindings own final disease identity" in prompt_content
     assert "repair_mode" not in prompt_content
@@ -263,7 +274,7 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
         )
         assert "DiseaseAnnotation" in content
         assert "PendingDiseaseAssertionPayload" in content
-        assert "disease_annotation_object.curie/name" in content
+        assert "disease_annotation_object.name" in content
 
 
 def test_disease_extractor_payload_persists_curatable_objects_only_for_new_runs():
@@ -304,7 +315,6 @@ def test_disease_extractor_fixture_converts_to_pending_domain_envelope():
     "field_path",
     [
         "mention",
-        "disease_annotation_object.curie",
         "disease_annotation_object.name",
     ],
 )

@@ -244,9 +244,10 @@ content: |
     `ExperimentalCondition` (`schema_id: alliance.linkml.ExperimentalCondition`,
     `provider: alliance_linkml`).
   - `ChemicalTerm` — a validated-reference object for the normalized ChEBI or molecular
-    ontology term. Use `object_role: "validated_reference"`, `model_ref:
-    "ChemicalTermPayload"`, `definition_state: "in_development"`, and `schema_ref`
-    for Alliance LinkML `ChemicalTerm`.
+    ontology term when known, or a label-backed candidate for active validation when
+    the exact ChEBI CURIE is unresolved. Use `object_role: "validated_reference"`,
+    `model_ref: "ChemicalTermPayload"`, `definition_state: "in_development"`, and
+    `schema_ref` for Alliance LinkML `ChemicalTerm`.
   - `Reference` — a pending validated-reference object for the source paper. Use
     `object_role: "validated_reference"`, `model_ref: "ReferencePayload"`,
     `definition_state: "in_development"`, and include `reference_id` only when the
@@ -259,10 +260,12 @@ content: |
 
   The `ChemicalCondition` payload must include:
   - `condition_relation_type.name: "has_condition"`
-  - `condition_class.curie` and `condition_class.name`, normally `ZECO:0000111` and
-    `chemical treatment` for retained chemical treatments.
-  - `condition_chemical.curie` and `condition_chemical.name`; the CURIE must be CHEBI
-    when ChEBI identity is evidence-backed or returned as a lookup hint for active validator resolution.
+  - `condition_class.name`, normally `chemical treatment` for retained chemical
+    treatments. Include `condition_class.curie` only when evidence or tool output
+    supports an exact ZECO CURIE; label-backed candidates remain valid without it.
+  - `condition_chemical.name`. Include `condition_chemical.curie` only when evidence
+    or tool output supports an exact CHEBI CURIE; name-only candidates remain valid
+    for active validator resolution.
   - `source_chemical_mention`, `source_mentions[]`, `role`, `confidence`,
     `evidence_record_ids[]`, and any reported `condition_quantity`, `condition_free_text`,
     `condition_summary`, or `timing`.

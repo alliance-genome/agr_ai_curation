@@ -672,9 +672,7 @@ def _validate_condition_object(
 
     required_payload_fields = {
         "condition_relation_type.name",
-        "condition_class.curie",
         "condition_class.name",
-        "condition_chemical.curie",
         "condition_chemical.name",
         "source_chemical_mention",
         "evidence_record_ids[0]",
@@ -784,7 +782,7 @@ def _validate_chemical_term_object(
 
     missing_payload_fields = sorted(
         field_path
-        for field_path in ("curie", "name")
+        for field_path in ("name",)
         if not field_path_exists(chemical_term.payload, field_path)
     )
     if missing_payload_fields:
