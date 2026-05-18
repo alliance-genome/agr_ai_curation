@@ -116,6 +116,8 @@ describe('isValidationAgent', () => {
   })
 
   it('does not expose retired ontology mapping validation defaults', () => {
+    // Keep the retired ids assembled so grep-based retirement checks can prove
+    // they are gone from active runtime and frontend surfaces.
     const retiredOntologyMappingAgentId = ['ontology', 'mapping'].join('_')
     const retiredOntologyMappingLookupAgentId = [
       'ontology',
