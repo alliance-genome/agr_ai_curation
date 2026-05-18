@@ -42,7 +42,63 @@ required_params: []
 batch_capabilities: []
 
 frontend:
-  icon: "SUB"
+  icon: "🎯"
   show_in_palette: true
+
+documentation:
+  summary: >
+    Routes biological annotation subjects by explicit subject type to gene,
+    allele, or affected genomic model validation paths.
+  capabilities:
+    - name: "Subject type routing"
+      description: >
+        Uses the submitted subject_type to choose the correct validation path
+        for gene, allele, or AGM subjects.
+      example_query: "Validate this phenotype subject with subject_type allele and ID WB:WBVar0001"
+      example_result: >
+        Returns the selected validator route and the type-specific validation
+        result.
+    - name: "Identifier and label preservation"
+      description: >
+        Keeps the submitted identifier, label, taxon, and field path together
+        while validating the subject entity.
+      example_query: "Check subject label daf-16 with gene subject type for WormBase"
+      example_result: >
+        Returns matched gene evidence or unresolved notes tied to the original
+        subject field.
+    - name: "Per-subject review decisions"
+      description: >
+        Reports one validation outcome per submitted subject so mixed subject
+        batches remain auditable.
+      example_query: "Validate these phenotype and disease annotation subjects"
+      example_result: >
+        Returns accepted, ambiguous, or unresolved subject results with selected
+        validator metadata.
+  data_sources:
+    - name: "Alliance Curation Database"
+      description: >
+        Alliance entity records used by gene, allele, and affected genomic model
+        validation routes.
+      species_supported:
+        - "C. elegans (WB)"
+        - "D. melanogaster (FB)"
+        - "D. rerio (ZFIN)"
+        - "M. musculus (MGI)"
+        - "R. norvegicus (RGD)"
+        - "S. cerevisiae (SGD)"
+        - "X. laevis (XB)"
+        - "H. sapiens (HGNC)"
+      data_types:
+        - "genes"
+        - "alleles"
+        - "affected genomic models"
+        - "entity labels"
+        - "taxon context"
+  limitations:
+    - "Requires an explicit subject_type; it does not guess whether a value is a gene, allele, or AGM."
+    - "Does not validate references, ontology terms, controlled vocabulary terms, or experimental conditions."
+    - "Ambiguous or missing type-specific lookup results still require curator review."
+    - "Cannot create missing subject records or assign new entity identifiers."
+    - "Only routes among the supported subject validation paths exposed by the package."
 
 group_rules_enabled: false

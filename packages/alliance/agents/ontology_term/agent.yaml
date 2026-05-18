@@ -47,7 +47,63 @@ required_params: []
 batch_capabilities: []
 
 frontend:
-  icon: "OT"
+  icon: "🔎"
   show_in_palette: true
+
+documentation:
+  summary: >
+    Resolves exact ontology CURIEs and typed ontology-term labels with package
+    lookup helpers while preserving ambiguous or unresolved candidates.
+  capabilities:
+    - name: "Exact CURIE lookup"
+      description: >
+        Validate exact ontology CURIEs against unique curation database ontology
+        terms.
+      example_query: "Validate GO:0005634"
+      example_result: "Returns the matched term facts or an unresolved result if the CURIE is absent."
+    - name: "Typed label and synonym lookup"
+      description: >
+        Resolve labels or synonyms using an explicit ontology_term_type such as
+        DOTerm, ECOTerm, GOTerm, MPTerm, or WBPhenotypeTerm.
+      example_query: "Resolve 'abnormal locomotor behavior' as an MPTerm"
+      example_result: "Returns one resolved term or preserves ambiguous candidates for curator review."
+    - name: "Provider-scoped anatomy and life-stage lookup"
+      description: >
+        Resolve anatomy and developmental stage labels using provider context
+        for species-specific term families.
+      example_query: "Resolve 'linker cell' for WormBase anatomy"
+      example_result: "Returns the provider-appropriate ontology term or unresolved candidates."
+    - name: "GO aspect lookup"
+      description: "Resolve Gene Ontology labels using an optional GO aspect filter."
+      example_query: "Resolve 'nucleus' as a GO cellular component"
+      example_result: "Returns GO term candidates with lookup context."
+  data_sources:
+    - name: "AGR Curation Database"
+      description: >
+        PostgreSQL database containing ontology terms and synonyms from Alliance
+        curation data.
+      species_supported:
+        - "C. elegans (WB)"
+        - "D. melanogaster (FB)"
+        - "M. musculus (MGI)"
+        - "D. rerio (ZFIN)"
+        - "R. norvegicus (RGD)"
+        - "S. cerevisiae (SGD)"
+        - "X. laevis (XB)"
+        - "H. sapiens (HGNC)"
+      data_types:
+        - "ontology CURIEs"
+        - "typed ontology labels"
+        - "term synonyms"
+        - "anatomy terms"
+        - "life-stage terms"
+        - "GO terms"
+  limitations:
+    - "Cannot extract labels from PDFs; receives terms from prior extraction output or domain-pack validator inputs."
+    - "Cannot validate gene symbols; use Gene Validation Agent instead."
+    - "Cannot validate chemicals as ChEBI entities; use Chemical Validation Agent instead."
+    - "Cannot create new ontology terms; only resolves existing terms."
+    - "Requires ontology_term_type for generic label or synonym lookup."
+    - "Requires data_provider for provider-scoped anatomy and life-stage lookup."
 
 group_rules_enabled: false
