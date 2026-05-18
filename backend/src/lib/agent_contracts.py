@@ -273,8 +273,8 @@ def _tool_contracts(
         contract = {
             "tool_id": tool_id,
             "name": _optional_text(details.get("name")) or tool_id,
-            "category": _optional_text(details.get("category")) or "Tool",
-            "description": _optional_text(details.get("description")) or "",
+            "category": _optional_text(details.get("category")),
+            "description": _optional_text(details.get("description")),
             "required_context": list(details.get("required_context") or []),
         }
         agent_context = details.get("agent_context")

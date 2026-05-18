@@ -279,6 +279,31 @@ def test_invalid_detail_level_and_unresolved_tool_details_are_explicit(tmp_path)
     ]
 
 
+def test_partial_resolved_tool_details_keep_missing_metadata_visible(tmp_path):
+    registry = _fixture_registry(tmp_path)
+
+    result = get_agent_contract(
+        "fixture_extractor",
+        "tools",
+        agent_registry=_agent_registry(),
+        registries={"fixture.contract": registry},
+        tool_details_resolver=lambda _agent_id, _tool_id: {
+            "name": "Partial Fixture Lookup"
+        },
+    )
+
+    assert result["success"] is True
+    assert result["tools"] == [
+        {
+            "tool_id": "fixture_lookup",
+            "name": "Partial Fixture Lookup",
+            "category": None,
+            "description": None,
+            "required_context": [],
+        }
+    ]
+
+
 def test_validator_agent_contract_is_project_agnostic_and_uses_same_service(tmp_path):
     registry = _fixture_registry(tmp_path)
 
