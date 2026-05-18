@@ -12,6 +12,12 @@ from typing import Any, Literal
 from src.lib.agent_studio.system_agent_sync import canonical_system_agent_key
 from src.lib.config.agent_loader import AgentDefinition, load_agent_definitions
 from src.lib.config.schema_discovery import resolve_output_schema
+from src.lib.domain_packs.validation_registry import ValidationBindingState
+from src.lib.openai_agents.tool_call_policy import (
+    DOCUMENT_REQUIRED_TOOL_NAMES,
+    required_package_tool_names_from_metadata,
+    required_tool_names_for_available_tools,
+)
 from src.lib.openai_agents.prompt_utils import inject_structured_output_instruction
 from src.lib.prompts.cache import PromptNotFoundError, get_all_active_prompts
 from src.models.sql.prompts import PromptTemplate
@@ -31,6 +37,19 @@ These backend-owned instructions are part of the system-agent contract.
 Editable prompts may add task and domain guidance, but must not override locked runtime,
 schema, tool, audit, or safety requirements.
 """
+
+TOOL_POLICY_SUMMARIES = {
+    "record_evidence": (
+        "- Evidence policy: retained paper quotes must be backed by verified "
+        "record_evidence results from the active document; record_evidence verifies "
+        "only exact contiguous source text copied from that chunk, and omitted, "
+        "inserted, changed, paraphrased, or normalized quote text returns `not_found`."
+    ),
+    "get_agent_contract": (
+        "- Detailed field, tool, schema, validator, and ontology facts are served "
+        "by the read-only get_agent_contract helper."
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -261,6 +280,10 @@ def _resolve_system_agent(agent_id: str) -> AgentDefinition:
 
 def _build_core_generated_content(agent: AgentDefinition) -> str:
     fragments: list[str] = []
+    runtime_contract = _build_compact_runtime_contract(agent)
+    if runtime_contract:
+        fragments.append(runtime_contract)
+
     schema_key = str(agent.output_schema or "").strip()
     if schema_key:
         output_type = resolve_output_schema(schema_key)
@@ -281,10 +304,276 @@ def _build_core_generated_content(agent: AgentDefinition) -> str:
 
 
 def _core_generated_source_ref(agent: AgentDefinition) -> str:
+    refs = [f"agent_config:{agent.agent_id}"]
     schema_key = str(agent.output_schema or "").strip()
     if schema_key:
-        return f"agent_config:{agent.agent_id}:output_schema:{schema_key}"
-    return f"agent_config:{agent.agent_id}"
+        refs.append(f"output_schema:{schema_key}")
+    if agent.tools:
+        refs.append("tools:agent_yaml+package_tool_registry")
+    domain_pack_id = _agent_domain_pack_id(agent)
+    if domain_pack_id:
+        refs.append(f"domain_pack:{domain_pack_id}")
+    return "|".join(refs)
+
+
+def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
+    lines: list[str] = []
+    if agent.tools or agent.output_schema or _agent_domain_pack_id(agent):
+        lines.append("## Generated Runtime Contract")
+
+    if agent.tools:
+        lines.append(f"- Tool inventory from agent.yaml: {', '.join(agent.tools)}.")
+        required_tools = required_tool_names_for_available_tools(
+            agent.tools,
+            required_package_tool_names_resolver=_required_package_tool_names,
+        )
+        if required_tools == DOCUMENT_REQUIRED_TOOL_NAMES:
+            lines.append(
+                "- Required tool-call policy: call at least one document retrieval tool "
+                "(search_document, read_section, or read_subsection) before final output."
+            )
+        elif required_tools:
+            lines.append(
+                "- Required tool-call policy: call at least one of "
+                f"{', '.join(sorted(required_tools))} before final output."
+            )
+        lines.extend(
+            summary
+            for tool_name, summary in TOOL_POLICY_SUMMARIES.items()
+            if tool_name in agent.tools
+        )
+
+    if agent.output_schema:
+        lines.append(
+            f"- Output contract from agent.yaml: produce JSON matching {agent.output_schema}; "
+            "the structured-output layer below is authoritative for final response shape."
+        )
+
+    domain_lines = _build_domain_pack_contract_lines(agent)
+    lines.extend(domain_lines)
+
+    if _agent_uses_extraction_safety_rule(agent):
+        lines.append(
+            "- Runtime safety rule: No extractor should invent exact ontology CURIEs to "
+            "satisfy validation; validator-bound unresolved candidates must be allowed "
+            "through the schema when evidence supports the candidate but normalized "
+            "identity is pending."
+        )
+
+    return "\n".join(lines)
+
+
+def _agent_domain_pack_id(agent: AgentDefinition) -> str | None:
+    return str(agent.curation.domain_pack_id or "").strip() or None
+
+
+def _agent_uses_extraction_safety_rule(agent: AgentDefinition) -> bool:
+    domain_pack_id = _agent_domain_pack_id(agent)
+    if not domain_pack_id:
+        return False
+    category = str(agent.category or "").strip().lower()
+    return category == "extraction"
+
+
+def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
+    domain_pack_id = _agent_domain_pack_id(agent)
+    if not domain_pack_id:
+        return []
+
+    registry = _domain_pack_validation_registries().get(domain_pack_id)
+    if registry is None:
+        raise ValueError(
+            f"Domain pack '{domain_pack_id}' for agent '{agent.agent_id}' is not registered"
+        )
+
+    metadata = registry.domain_pack.metadata
+    semantic_source = str(metadata.metadata.get("semantic_source") or "").strip()
+    semantic_suffix = f"; semantic source {semantic_source}" if semantic_source else ""
+    lines = [
+        f"- Domain envelope pack: {metadata.pack_id} v{metadata.version} "
+        f"({metadata.status.value}{semantic_suffix})."
+    ]
+
+    provider_refs = _format_schema_refs(metadata.schema_refs)
+    if provider_refs:
+        lines.append(f"- Schema/provider refs: {provider_refs}.")
+
+    object_summary = _format_object_summary(metadata.object_definitions)
+    if object_summary:
+        lines.append(f"- Extractor envelope objects: {object_summary}.")
+
+    pending_summary = _format_pending_object_summary(metadata.object_definitions)
+    if pending_summary:
+        lines.append(f"- Pending unresolved shapes: {pending_summary}.")
+
+    validator_fields = _format_validator_bound_fields(metadata.object_definitions)
+    if validator_fields:
+        lines.append(f"- Validator-bound fields: {validator_fields}.")
+
+    active_bindings = [
+        binding
+        for binding in registry.bindings
+        if binding.state is ValidationBindingState.ACTIVE
+    ]
+    if active_bindings:
+        lines.append(
+            "- Active validator bindings own validator result fields and envelope "
+            "validation findings."
+        )
+        lines.extend(
+            f"- Active validator binding: {_format_active_validator_binding(binding)}."
+            for binding in active_bindings
+        )
+
+    return lines
+
+
+def _format_schema_refs(schema_refs: Sequence[Any]) -> str:
+    refs: list[str] = []
+    for schema_ref in schema_refs[:3]:
+        provider = str(getattr(schema_ref, "provider", "") or "").strip()
+        name = str(getattr(schema_ref, "name", "") or "").strip()
+        version = str(getattr(schema_ref, "version", "") or "").strip()
+        short_version = version[:12] if version else ""
+        label = ".".join(part for part in (provider, name) if part)
+        if short_version:
+            label = f"{label}@{short_version}" if label else short_version
+        if label:
+            refs.append(label)
+    if len(schema_refs) > 3:
+        refs.append(f"+{len(schema_refs) - 3} more")
+    return "; ".join(refs)
+
+
+def _format_object_summary(object_definitions: Sequence[Any]) -> str:
+    chunks: list[str] = []
+    for object_definition in object_definitions:
+        role = _metadata_text(object_definition.metadata, "object_role")
+        required_fields = [
+            field.field_path
+            for field in object_definition.fields
+            if bool(getattr(field, "required", False))
+        ]
+        required_suffix = (
+            f" required[{_join_limited(required_fields, limit=6)}]"
+            if required_fields
+            else ""
+        )
+        role_suffix = f" role={role}" if role else ""
+        chunks.append(
+            f"{object_definition.object_type}({object_definition.model_ref or 'no model'}"
+            f"{role_suffix}{required_suffix})"
+        )
+    return "; ".join(chunks)
+
+
+def _format_pending_object_summary(object_definitions: Sequence[Any]) -> str:
+    chunks: list[str] = []
+    for object_definition in object_definitions:
+        validation_state = _metadata_text(object_definition.metadata, "validation_state")
+        if not validation_state or not validation_state.startswith("pending_"):
+            continue
+        required_fields = [
+            field.field_path
+            for field in object_definition.fields
+            if bool(getattr(field, "required", False))
+        ]
+        required_suffix = (
+            f"; required {_join_limited(required_fields, limit=4)}"
+            if required_fields
+            else ""
+        )
+        chunks.append(
+            f"{object_definition.object_type}={validation_state}{required_suffix}"
+        )
+    return "; ".join(chunks)
+
+
+def _format_validator_bound_fields(object_definitions: Sequence[Any]) -> str:
+    fields: list[str] = []
+    for object_definition in object_definitions:
+        for field in object_definition.fields:
+            binding_id = _metadata_text(field.metadata, "validator_binding_id")
+            if binding_id:
+                fields.append(
+                    f"{object_definition.object_type}.{field.field_path}->{binding_id}"
+                )
+    return _join_limited(fields, limit=10)
+
+
+def _format_active_validator_binding(binding: Any) -> str:
+    targets = []
+    if binding.object_types:
+        targets.append(f"objects[{', '.join(binding.object_types)}]")
+    if binding.field_paths:
+        targets.append(f"fields[{', '.join(binding.field_paths)}]")
+    target_text = " ".join(targets) or "pack scope"
+    policy_bits = [
+        bit
+        for bit, enabled in (
+            ("required", binding.required),
+            ("blocking", binding.blocking),
+            ("opt-out allowed", binding.allow_opt_out),
+        )
+        if enabled
+    ]
+    policy_text = f"; {'/'.join(policy_bits)}" if policy_bits else ""
+    selectors = _format_input_selectors(binding.input_fields)
+    selector_text = f"; selectors {selectors}" if selectors else ""
+    return f"{binding.binding_id} targets {target_text}{policy_text}{selector_text}"
+
+
+def _format_input_selectors(input_fields: Mapping[str, Any]) -> str:
+    selectors: list[str] = []
+    for name, selector in sorted(input_fields.items()):
+        source = str(getattr(selector, "source", "") or "").strip()
+        path = str(getattr(selector, "path", "") or "").strip()
+        if source == "literal":
+            value = getattr(selector, "value", None)
+            if isinstance(value, list):
+                value_text = "[" + ", ".join(str(item) for item in value) + "]"
+            else:
+                value_text = str(value)
+            selectors.append(f"{name}<-literal:{value_text}")
+        elif path:
+            selectors.append(f"{name}<-{source}.{path}")
+        else:
+            selectors.append(f"{name}<-{source}")
+    return _join_limited(selectors, limit=8)
+
+
+def _required_package_tool_names(available_tool_names: set[str]) -> set[str]:
+    from src.lib.packages.tool_registry import load_tool_registry
+
+    registry = load_tool_registry()
+    metadata_by_name = {
+        tool_name: binding.metadata
+        for tool_name in available_tool_names
+        if (binding := registry.get(tool_name)) is not None
+    }
+    return required_package_tool_names_from_metadata(
+        available_tool_names,
+        metadata_by_name,
+    )
+
+
+def _domain_pack_validation_registries() -> Mapping[str, Any]:
+    from src.lib.flows.validation_attachments import domain_pack_validation_registries
+
+    return domain_pack_validation_registries()
+
+
+def _metadata_text(metadata: Mapping[str, Any], key: str) -> str | None:
+    value = metadata.get(key)
+    if not isinstance(value, str):
+        return None
+    return value.strip() or None
+
+
+def _join_limited(values: Sequence[str], *, limit: int) -> str:
+    selected = [value for value in values if value][:limit]
+    suffix = f", +{len(values) - limit} more" if len(values) > limit else ""
+    return ", ".join(selected) + suffix
 
 
 def _required_prompt_template(

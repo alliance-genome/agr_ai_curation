@@ -39,6 +39,11 @@ from .evidence_summary import (
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
+from .tool_call_policy import (
+    DOCUMENT_REQUIRED_TOOL_NAMES,
+    required_package_tool_names_from_metadata,
+    required_tool_names_for_available_tools,
+)
 
 # Prompt context tracking for execution logging
 from src.lib.prompts.context import (
@@ -48,7 +53,7 @@ from src.lib.prompts.context import (
 
 logger = logging.getLogger(__name__)
 
-_DOCUMENT_REQUIRED_TOOL_NAMES = {"search_document", "read_section", "read_subsection"}
+_DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
 _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
 
 
@@ -369,12 +374,10 @@ def _tool_provider_adapter_factories(adapter_key: str) -> Dict[str, Any]:
 
 
 def _required_package_tool_names(available_tool_names: set[str]) -> set[str]:
-    required: set[str] = set()
-    for tool_name in available_tool_names:
-        required_call = _tool_metadata_by_name().get(tool_name, {}).get("required_tool_call")
-        if isinstance(required_call, dict) and bool(required_call.get("enforce")):
-            required.add(tool_name)
-    return required
+    return required_package_tool_names_from_metadata(
+        available_tool_names,
+        _tool_metadata_by_name(),
+    )
 
 
 def _required_tool_names_for_agent(agent: Agent) -> Optional[set[str]]:
@@ -386,15 +389,11 @@ def _required_tool_names_for_agent(agent: Agent) -> Optional[set[str]]:
     if not available_tool_names:
         return None
 
-    # Match unified catalog semantics:
-    # - Document tools take precedence when present.
-    # - Package-owned required-call metadata applies when document tools are absent.
-    if available_tool_names & _DOCUMENT_REQUIRED_TOOL_NAMES:
-        return set(_DOCUMENT_REQUIRED_TOOL_NAMES)
-    package_required_tools = _required_package_tool_names(available_tool_names)
-    if package_required_tools:
-        return package_required_tools
-    return None
+    required_tools = required_tool_names_for_available_tools(
+        available_tool_names,
+        required_package_tool_names_resolver=_required_package_tool_names,
+    )
+    return set(required_tools) if required_tools else None
 
 
 def _agent_tool_names(agent: Agent) -> set[str]:
