@@ -19,9 +19,6 @@ _backend_path = Path(__file__).parent.parent.parent
 if str(_backend_path) not in sys.path:
     sys.path.insert(0, str(_backend_path))
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ALLIANCE_AGENTS_PATH = REPO_ROOT / "packages" / "alliance" / "agents"
-
 from src.schemas.models import Destination, RoutingPlan, SCHEMA_REGISTRY  # noqa: E402
 from src.schemas.domain_validator import is_domain_validator_result_schema  # noqa: E402
 
@@ -93,11 +90,9 @@ class TestRoutingConsistency:
         # Package-owned validator agents can expose their public route through
         # agent_id while keeping the typed result contract in package schema.py.
         agent_definitions = load_agent_definitions(
-            ALLIANCE_AGENTS_PATH,
             force_reload=True,
         )
         agent_schemas = discover_agent_schemas(
-            ALLIANCE_AGENTS_PATH,
             force_reload=True,
         )
         for agent_id, agent in agent_definitions.items():

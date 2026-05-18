@@ -268,14 +268,25 @@ async def test_get_trace_context_for_explorer_wraps_unexpected_errors(monkeypatc
 def test_extract_and_normalize_helpers():
     assert trace_context_service._normalize_agent_id("pdf_specialist") == "pdf_extraction"
     assert trace_context_service._normalize_agent_id("gene_extractor") == "gene_extractor"
+    assert (
+        trace_context_service._normalize_agent_id("ask_ontology_term_specialist")
+        == "ontology_term_validation"
+    )
 
     obs_name = _obs(name="ask_disease_extractor_specialist", metadata=None)
     assert trace_context_service._identify_agent_from_observation(obs_name) == "disease_extractor"
+
+    obs_ontology = _obs(name="ask_ontology_term_specialist", metadata=None)
+    assert (
+        trace_context_service._identify_agent_from_observation(obs_ontology)
+        == "ontology_term_validation"
+    )
 
     obs_meta = _obs(name="unknown", metadata={"agent": "pdf_specialist"})
     assert trace_context_service._identify_agent_from_observation(obs_meta) == "pdf_extraction"
 
     assert trace_context_service._agent_id_to_name("pdf_extraction") == "General PDF Extraction Agent"
+    assert trace_context_service._agent_id_to_name("ontology_term") == "Ontology Term Resolver Agent"
     assert trace_context_service._agent_id_to_name("made_up_agent") == "Made Up Agent"
 
     obs_group_new = _obs(metadata={"active_groups": "WB"})
