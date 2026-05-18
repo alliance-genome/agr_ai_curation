@@ -485,6 +485,21 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert phenotype_term_binding.validator_agent is not None
     assert phenotype_term_binding.validator_agent.agent_id == "ontology_term_validation"
     assert phenotype_term_binding.state is ValidationBindingState.ACTIVE
+    assert phenotype_term_binding.object_types == ("PhenotypeTerm",)
+    assert phenotype_term_binding.field_paths == ()
+    assert phenotype_term_binding.input_fields["curie"].required is False
+    assert phenotype_term_binding.input_fields["label"].required is False
+    assert phenotype_term_binding.input_fields["data_provider"].path == (
+        "ontology_lookup_hint.data_provider"
+    )
+    assert phenotype_term_binding.input_fields["taxon_id"].path == (
+        "ontology_lookup_hint.taxon_id"
+    )
+    assert (
+        phenotype_term_binding.input_fields["provider_taxon_ontology_mappings"]
+        .value[0]["ontology_term_type"]
+        == "WBPhenotypeTerm"
+    )
 
     assert chemical_condition_bindings[
         "chemical_condition.chebi_api_lookup"
@@ -770,7 +785,17 @@ def test_representative_ontology_term_bindings_target_generic_validator():
             "phenotype_term_ontology_validator": {
                 "state": ValidationBindingState.ACTIVE,
                 "ontology_family": "phenotype",
-                "accepted_prefixes": ["MP", "WBPhenotype", "ZP"],
+                "accepted_prefixes": ["MP", "WBPhenotype"],
+                "optional_inputs": [
+                    "curie",
+                    "label",
+                    "data_provider",
+                    "taxon_id",
+                    "evidence_record_id",
+                    "evidence_quote",
+                    "source_chunk_id",
+                    "source_section",
+                ],
                 "expected_result_fields": {
                     "curie": "curie",
                     "label": "label",

@@ -50,10 +50,15 @@ envelope:
         validator_binding_id: phenotype_subject_entity_validator
     - object_type: PhenotypeTerm
       payload:
+        resolution_state: pending_ontology_resolution
         curie: WBPhenotype:0000886
         label: reduced brood size
         source_mentions:
           - reduced brood size
+        ontology_lookup_hint:
+          evidence_record_id: verified_exact
+        export_state: blocked_pending_ontology_resolution
+        write_blocked_reason: phenotype term CURIE unresolved
       pending_ref_id: phenotype-term-1
       schema_ref:
         schema_id: alliance.linkml.PhenotypeTerm
@@ -63,10 +68,14 @@ envelope:
         uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/ontologyTerm.yaml
       status: pending
       definition_state: in_development
+      evidence_record_ids:
+        - verified_exact
       metadata:
         object_role: validated_reference
         validation_state: pending_ontology_resolution
         validator_binding_id: phenotype_term_ontology_validator
+        export_state: blocked_pending_ontology_resolution
+        write_blocked_reason: phenotype term CURIE unresolved
     - object_type: EvidenceQuote
       payload:
         evidence_record_id: verified_exact
@@ -104,8 +113,15 @@ envelope:
           resolution_state: blocked_missing_subject
           resolution_note: Tool-verified phenotype extraction did not provide a durable phenotype_annotation_subject identifier and subtype.
         phenotype_terms:
-          - curie: WBPhenotype:0000886
+          - resolution_state: pending_ontology_resolution
+            curie: WBPhenotype:0000886
             label: reduced brood size
+            source_mentions:
+              - reduced brood size
+            ontology_lookup_hint:
+              evidence_record_id: verified_exact
+            export_state: blocked_pending_ontology_resolution
+            write_blocked_reason: phenotype term CURIE unresolved
         single_reference:
           title: Brood size phenotype evidence fixture paper
           filename: test_tool_verified_phenotype_paper.pdf
@@ -210,3 +226,19 @@ envelope:
       status: blocked
     write_behavior:
       status: blocked
+    evidence_records:
+      - evidence_record_id: verified_exact
+        entity: reduced brood size
+        verified_quote: daf-2(e1370) adults produced 40% fewer progeny than wild type.
+        page: 5
+        section: Results
+        chunk_id: chunk-phenotype-count
+        subsection: Fertility defects
+        figure_reference: Figure 5A
+      - evidence_record_id: verified_supporting
+        entity: reduced brood size
+        verified_quote: Brood size was reduced to 120 +/- 15 embryos in daf-2(e1370) adults compared with 200 +/- 12 in controls.
+        page: 6
+        section: Results
+        chunk_id: chunk-phenotype-supporting
+        subsection: Quantification

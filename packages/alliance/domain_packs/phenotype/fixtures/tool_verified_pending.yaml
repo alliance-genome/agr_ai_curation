@@ -77,14 +77,25 @@ fixtures:
           status: pending
           definition_state: in_development
           payload:
+            resolution_state: pending_ontology_resolution
             curie: WBPhenotype:0000886
             label: reduced brood size
             source_mentions:
               - reduced brood size
+            ontology_lookup_hint:
+              data_provider: WB
+              taxon_id: NCBITaxon:6239
+              evidence_record_id: reduced-brood-size-evidence-1
+            export_state: blocked_pending_ontology_resolution
+            write_blocked_reason: phenotype term CURIE unresolved
+          evidence_record_ids:
+            - reduced-brood-size-evidence-1
           metadata:
             object_role: validated_reference
             validation_state: pending_ontology_resolution
             validator_binding_id: phenotype_term_ontology_validator
+            export_state: blocked_pending_ontology_resolution
+            write_blocked_reason: phenotype term CURIE unresolved
         - object_type: EvidenceQuote
           object_role: metadata_only
           pending_ref_id: evidence-quote-1
@@ -129,8 +140,17 @@ fixtures:
               subject_type: gene
               taxon: NCBITaxon:6239
             phenotype_terms:
-              - curie: WBPhenotype:0000886
+              - resolution_state: pending_ontology_resolution
+                curie: WBPhenotype:0000886
                 label: reduced brood size
+                source_mentions:
+                  - reduced brood size
+                ontology_lookup_hint:
+                  data_provider: WB
+                  taxon_id: NCBITaxon:6239
+                  evidence_record_id: reduced-brood-size-evidence-1
+                export_state: blocked_pending_ontology_resolution
+                write_blocked_reason: phenotype term CURIE unresolved
             single_reference:
               title: Brood size phenotype evidence fixture paper
               filename: test_tool_verified_phenotype_paper.pdf
