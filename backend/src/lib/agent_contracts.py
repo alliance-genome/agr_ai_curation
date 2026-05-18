@@ -191,7 +191,11 @@ def get_extraction_contract(
     detail_level: str = "summary",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Alias for extractor-oriented callers; delegates to get_agent_contract."""
+    """Extractor-facing alias that preserves get_agent_contract as source of truth.
+
+    The Linear contract scope intentionally pre-provisions narrow names for
+    prompt-facing/package callers without creating a second metadata service.
+    """
 
     return get_agent_contract(
         agent_id=agent_id,
@@ -208,7 +212,11 @@ def get_domain_pack_field_info(
     detail_level: str = "detail",
     **kwargs: Any,
 ) -> dict[str, Any]:
-    """Alias for field-oriented callers; delegates to get_agent_contract."""
+    """Field-focused alias that preserves get_agent_contract as source of truth.
+
+    The Linear contract scope intentionally pre-provisions narrow names for
+    prompt-facing/package callers without creating a second metadata service.
+    """
 
     return get_agent_contract(
         agent_id=agent_id,
