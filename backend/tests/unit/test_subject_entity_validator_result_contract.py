@@ -122,7 +122,7 @@ def test_subject_entity_and_agm_agents_load_with_shared_result_schemas(monkeypat
 
         assert agent.folder_name == case["folder"]
         assert agent.output_schema == case["schema"]
-        assert agent.tools == ["agr_curation_query"]
+        assert agent.tools == ["get_agent_contract", "agr_curation_query"]
         assert issubclass(schema, DomainValidatorResultBase)
         assert REQUIRED_SHARED_FIELDS <= set(schema.model_fields)
         assert case["extra_fields"] <= set(schema.model_fields)

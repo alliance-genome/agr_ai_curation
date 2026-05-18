@@ -101,7 +101,7 @@ def test_ontology_term_validator_bundle_uses_shared_result_contract(monkeypatch)
 
     assert agent.folder_name == "ontology_term"
     assert agent.output_schema == "OntologyTermValidationResult"
-    assert agent.tools == ["agr_curation_query"]
+    assert agent.tools == ["get_agent_contract", "agr_curation_query"]
     assert issubclass(schema, DomainValidatorResultBase)
     assert "ontology_term_candidates" in schema.model_fields
 
@@ -131,12 +131,14 @@ def test_ontology_term_prompt_and_tool_grant_agree_on_available_methods():
     tools_payload = _load_yaml(TOOLS_BINDINGS_PATH)
 
     content = prompt_payload["content"]
-    agr_tool = tools_payload["tools"][0]
+    agr_tool = next(
+        tool for tool in tools_payload["tools"] if tool["tool_id"] == "agr_curation_query"
+    )
     methods = agr_tool["metadata"]["agent_methods"]["ontology_term_validation"][
         "methods"
     ]
 
-    assert agent_payload["tools"] == ["agr_curation_query"]
+    assert agent_payload["tools"] == ["get_agent_contract", "agr_curation_query"]
     assert agr_tool["tool_id"] == "agr_curation_query"
     for method in methods:
         assert method in agr_tool["metadata"]["methods"]

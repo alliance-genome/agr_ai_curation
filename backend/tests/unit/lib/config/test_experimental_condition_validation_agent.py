@@ -77,7 +77,7 @@ def test_experimental_condition_agent_bundle_loads_with_component_tool_grants(
     agent = agents["experimental_condition_validation"]
     assert agent.folder_name == "experimental_condition"
     assert agent.category == "Validation"
-    assert agent.tools == ["agr_curation_query", "chebi_api_call"]
+    assert agent.tools == ["get_agent_contract", "agr_curation_query", "chebi_api_call"]
     assert agent.output_schema == "ExperimentalConditionValidationResult"
 
     schema = schemas["ExperimentalConditionValidationResult"]
@@ -97,12 +97,18 @@ def test_experimental_condition_prompt_and_tool_grant_name_lower_level_methods()
     tools_payload = yaml.safe_load(TOOLS_BINDINGS_PATH.read_text(encoding="utf-8"))
 
     content = prompt_payload["content"]
-    agr_tool = tools_payload["tools"][0]
+    agr_tool = next(
+        tool for tool in tools_payload["tools"] if tool["tool_id"] == "agr_curation_query"
+    )
     methods = agr_tool["metadata"]["agent_methods"][
         "experimental_condition_validation"
     ]["methods"]
 
-    assert agent_payload["tools"] == ["agr_curation_query", "chebi_api_call"]
+    assert agent_payload["tools"] == [
+        "get_agent_contract",
+        "agr_curation_query",
+        "chebi_api_call",
+    ]
     for method in methods:
         assert method in agr_tool["metadata"]["methods"]
         assert f"`{method}`" in content

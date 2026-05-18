@@ -66,6 +66,7 @@ _RECORD_EVIDENCE_RUNTIME_NOTE = (
     "- Only persist evidence records that came back `verified`.\n"
 )
 _INLINE_PACKAGE_TOOL_IDS = frozenset({
+    "get_agent_contract",
     "record_evidence",
     "search_document",
     "read_section",

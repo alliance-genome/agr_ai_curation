@@ -77,7 +77,7 @@ def test_controlled_vocabulary_agent_bundle_loads_with_narrow_tool_grant(monkeyp
     agent = agents["controlled_vocabulary_validation"]
     assert agent.folder_name == "controlled_vocabulary"
     assert agent.category == "Validation"
-    assert agent.tools == ["agr_curation_query"]
+    assert agent.tools == ["get_agent_contract", "agr_curation_query"]
     assert agent.output_schema == "ControlledVocabularyValidationResult"
 
     schema = schemas["ControlledVocabularyValidationResult"]

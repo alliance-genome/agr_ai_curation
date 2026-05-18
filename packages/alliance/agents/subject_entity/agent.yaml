@@ -26,6 +26,7 @@ supervisor_routing:
     do not merge subjects with different subject_type values.
 
 tools:
+  - get_agent_contract
   - agr_curation_query
 
 output_schema: SubjectEntityValidationResult

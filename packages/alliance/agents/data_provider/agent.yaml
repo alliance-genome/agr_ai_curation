@@ -30,6 +30,7 @@ supervisor_routing:
     name, and taxon context.
 
 tools:
+  - get_agent_contract
   - agr_curation_query
 
 output_schema: DataProviderValidationResult

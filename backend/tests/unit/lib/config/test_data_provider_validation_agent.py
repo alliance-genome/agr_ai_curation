@@ -79,7 +79,7 @@ def test_data_provider_agent_bundle_loads_with_narrow_tool_grant(monkeypatch):
     agent = agents["data_provider_validation"]
     assert agent.folder_name == "data_provider"
     assert agent.category == "Validation"
-    assert agent.tools == ["agr_curation_query"]
+    assert agent.tools == ["get_agent_contract", "agr_curation_query"]
     assert agent.output_schema == "DataProviderValidationResult"
 
     schema = schemas["DataProviderValidationResult"]
@@ -94,12 +94,14 @@ def test_data_provider_prompt_and_tool_grant_agree_on_available_methods():
     tools_payload = yaml.safe_load(TOOLS_BINDINGS_PATH.read_text(encoding="utf-8"))
 
     content = prompt_payload["content"]
-    agr_tool = tools_payload["tools"][0]
+    agr_tool = next(
+        tool for tool in tools_payload["tools"] if tool["tool_id"] == "agr_curation_query"
+    )
     methods = agr_tool["metadata"]["agent_methods"]["data_provider_validation"][
         "methods"
     ]
 
-    assert agent_payload["tools"] == ["agr_curation_query"]
+    assert agent_payload["tools"] == ["get_agent_contract", "agr_curation_query"]
     for method in methods:
         assert method in agr_tool["metadata"]["methods"]
         assert f"`{method}`" in content

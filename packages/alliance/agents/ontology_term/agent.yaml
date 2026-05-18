@@ -31,6 +31,7 @@ supervisor_routing:
     prefixes, and exact-match policy.
 
 tools:
+  - get_agent_contract
   - agr_curation_query
 
 output_schema: OntologyTermValidationResult

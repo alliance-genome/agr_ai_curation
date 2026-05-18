@@ -121,7 +121,7 @@ def test_disease_and_chemical_agents_use_shared_result_schemas(monkeypatch):
 
         assert agent.folder_name == folder
         assert agent.output_schema == case["schema_name"]
-        assert agent.tools == [case["tool"]]
+        assert agent.tools == ["get_agent_contract", case["tool"]]
         assert issubclass(schema, DomainValidatorResultBase)
         assert REQUIRED_SHARED_FIELDS <= set(schema.model_fields)
         assert not (LEGACY_TOP_LEVEL_FIELDS & set(schema.model_fields))

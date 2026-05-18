@@ -27,6 +27,7 @@ supervisor_routing:
     title, citation, and source document context distinct in the request.
 
 tools:
+  - get_agent_contract
   - agr_literature_reference_lookup
 
 output_schema: ReferenceValidationResult
