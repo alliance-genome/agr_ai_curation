@@ -180,6 +180,33 @@ def test_duplicate_agent_names_commit_by_bound_prompt_run_id():
     ] == ["step 1", "step 2"]
 
 
+def test_bind_prompt_run_uses_object_identity_without_mutating_agent():
+    clear_prompt_context()
+    prompt = _prompt("slotted")
+
+    class _SlottedAgent:
+        __slots__ = ("name",)
+
+        def __init__(self) -> None:
+            self.name = "Gene Specialist"
+
+    agent = _SlottedAgent()
+    prompt_run_id = set_pending_prompts(
+        agent.name,
+        [prompt],
+        effective_prompt_hash="hash-slotted",
+        layer_manifest=_manifest("gene", "slotted", "hash-slotted"),
+    )
+
+    assert bind_prompt_run(agent, prompt_run_id) is agent
+    commit_pending_prompts(agent)
+
+    used_runs = get_used_prompt_runs()
+    assert len(used_runs) == 1
+    assert used_runs[0].assembly is not None
+    assert used_runs[0].assembly.effective_prompt_hash == "hash-slotted"
+
+
 def test_commit_pending_prompts_noop_for_unknown_agent():
     clear_prompt_context()
     commit_pending_prompts("Unknown Agent")

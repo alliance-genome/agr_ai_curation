@@ -1,6 +1,5 @@
 """Additional branch tests for catalog_service helpers and service methods."""
 
-import sys
 from types import SimpleNamespace
 
 import pytest
@@ -300,38 +299,6 @@ def test_singleton_context_and_runtime_helpers(monkeypatch):
 
 
 def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
-    fake_cache_module = SimpleNamespace(
-        get_prompt_optional=lambda _component, prompt_type, group_id=None: (
-            SimpleNamespace(content="group rule")
-            if prompt_type == "group_rules" and group_id == "WB"
-            else None
-        )
-    )
-    monkeypatch.setitem(sys.modules, "src.lib.prompts.cache", fake_cache_module)
-
-    injected = catalog_service._inject_group_rules_with_overrides(
-        base_prompt="BASE\n## GROUP-SPECIFIC RULES",
-        group_ids=[" wb "],
-        component_name="gene",
-        group_overrides={"WB": "override rule"},
-    )
-    assert "override rule" in injected
-
-    no_groups = catalog_service._inject_group_rules_with_overrides(
-        base_prompt="BASE",
-        group_ids=[],
-        component_name="gene",
-    )
-    assert no_groups == "BASE"
-
-    fallback = catalog_service._inject_group_rules_with_overrides(
-        base_prompt="BASE",
-        group_ids=["WB"],
-        component_name="gene",
-        group_overrides={},
-    )
-    assert "group rule" in fallback
-
     from src.lib.openai_agents import prompt_utils
     monkeypatch.setattr(prompt_utils, "format_document_context_for_prompt", lambda **_kwargs: ("\nCTX", {}))
     captured_assembly = {}
@@ -354,7 +321,7 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
         group_rules_enabled=True,
         group_rules_component="gene",
         template_source=None,
-        mod_prompt_overrides={},
+        group_prompt_overrides={},
     )
     runtime_bundle = catalog_service._build_runtime_instructions(
         db_agent=db_agent,
@@ -365,7 +332,6 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "abstract": None,
             "document_name": "Paper A",
         },
-        output_schema="SchemaX",
         canonical_tool_ids=["search_document", "record_evidence"],
     )
     runtime_text = runtime_bundle.render()
@@ -384,7 +350,6 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "abstract": None,
             "document_name": "Paper A",
         },
-        output_schema="SchemaX",
         canonical_tool_ids=["search_document", "record_evidence"],
     ).render()
     assert "Use multiple evidence records when one quote alone does not fully support" in runtime_text_with_evidence
@@ -396,7 +361,6 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "active_groups": ["WB"],
             "document_name": "Smith et al. (2024).pdf",
         },
-        output_schema=None,
         canonical_tool_ids=["save_tsv_file"],
     ).render()
     assert formatter_runtime_text.startswith(
@@ -410,12 +374,13 @@ def test_group_rules_runtime_and_agent_lookup_paths(monkeypatch):
             "active_groups": ["WB"],
             "document_name": "().pdf",
         },
-        output_schema=None,
         canonical_tool_ids=["save_tsv_file"],
     ).render()
     assert formatter_runtime_text_with_invalid_filename.startswith(
         'Use "output" as the base output filename when calling save_*_file tools unless the user explicitly requests a different filename.'
     )
+    with pytest.raises(TypeError, match="list items must be strings"):
+        catalog_service._additional_runtime_contexts({"additional_runtime_context": ["ok", 7]})
 
     import src.lib.config.schema_discovery as schema_discovery
 

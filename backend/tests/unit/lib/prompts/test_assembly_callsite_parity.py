@@ -129,7 +129,6 @@ def test_catalog_preview_diagnostic_and_runtime_share_prompt_bundle(
             group_rules_enabled=True,
         ),
         {"active_groups": ["WB"]},
-        output_schema=None,
         canonical_tool_ids=[],
     )
 
@@ -205,7 +204,6 @@ def test_runtime_additional_context_is_final_assembler_layer(prompt_parity_servi
                 "## FLOW STEP INSTRUCTIONS\n\nUse the step-local output contract."
             ],
         },
-        output_schema=None,
         canonical_tool_ids=[],
     )
 

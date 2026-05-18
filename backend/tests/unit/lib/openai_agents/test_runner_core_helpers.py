@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from datetime import datetime
 
 from src.lib.openai_agents import runner
+from src.lib.prompts.context import PromptAssemblyMetadata, PromptRun
 
 
 def test_configure_api_mode_uses_provider_mode(monkeypatch):
@@ -60,6 +61,18 @@ def test_now_iso_is_parseable_utc_timestamp():
     assert parsed.tzinfo is not None
 
 
+def _prompt_run(prompt, *, hash_value="hash-1", layer_manifest=None):
+    manifest = layer_manifest or {"agent_id": "supervisor", "layers": [], "hash": hash_value}
+    return PromptRun(
+        agent_name="Query Supervisor",
+        prompts=[prompt],
+        assembly=PromptAssemblyMetadata(
+            effective_prompt_hash=hash_value,
+            layer_manifest=manifest,
+        ),
+    )
+
+
 def test_log_used_prompts_returns_zero_when_no_prompts(monkeypatch):
     monkeypatch.setattr(runner, "get_used_prompts", lambda: [])
     monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [])
@@ -75,7 +88,7 @@ def test_log_used_prompts_persists_entries_and_updates_span(monkeypatch):
         id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
     )
     monkeypatch.setattr(runner, "get_used_prompts", lambda: [used_prompt])
-    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [])
+    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [_prompt_run(used_prompt)])
 
     captured = {}
 
@@ -92,6 +105,8 @@ def test_log_used_prompts_persists_entries_and_updates_span(monkeypatch):
                 "prompt_count": len(prompts),
                 "trace_id": trace_id,
                 "session_id": session_id,
+                "effective_prompt_hash": _kwargs["effective_prompt_hash"],
+                "layer_manifest": _kwargs["layer_manifest"],
             }
             return [SimpleNamespace(id=1)]
 
@@ -119,9 +134,53 @@ def test_log_used_prompts_persists_entries_and_updates_span(monkeypatch):
     assert count == 1
     assert captured["service"]["prompt_count"] == 1
     assert captured["service"]["trace_id"] == "trace-2"
+    assert captured["service"]["effective_prompt_hash"] == "hash-1"
     assert captured["span_metadata"]["prompt_count"] == 1
+    assert captured["span_metadata"]["prompt_assemblies"][0]["effective_prompt_hash"] == "hash-1"
     assert db.committed is True
     assert db.closed is True
+
+
+def test_log_used_prompts_skips_legacy_prompt_rows_without_prompt_runs(monkeypatch):
+    used_prompt = SimpleNamespace(
+        agent_name="Supervisor",
+        prompt_type="base",
+        group_id=None,
+        version=1,
+        id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    )
+    monkeypatch.setattr(runner, "get_used_prompts", lambda: [used_prompt])
+    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [])
+    monkeypatch.setattr(
+        runner,
+        "SessionLocal",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy prompt rows must not be logged")),
+    )
+
+    assert runner._log_used_prompts_to_db(trace_id="trace-legacy") == 0
+
+
+def test_log_used_prompts_skips_prompt_runs_without_assembly(monkeypatch):
+    used_prompt = SimpleNamespace(
+        agent_name="Supervisor",
+        prompt_type="base",
+        group_id=None,
+        version=1,
+        id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+    )
+    monkeypatch.setattr(runner, "get_used_prompts", lambda: [used_prompt])
+    monkeypatch.setattr(
+        runner,
+        "get_used_prompt_runs",
+        lambda: [PromptRun(agent_name="Query Supervisor", prompts=[used_prompt])],
+    )
+    monkeypatch.setattr(
+        runner,
+        "SessionLocal",
+        lambda: (_ for _ in ()).throw(AssertionError("unassembled prompt runs must not be logged")),
+    )
+
+    assert runner._log_used_prompts_to_db(trace_id="trace-no-assembly") == 0
 
 
 def test_log_used_prompts_returns_zero_when_db_write_fails(monkeypatch):
@@ -133,7 +192,7 @@ def test_log_used_prompts_returns_zero_when_db_write_fails(monkeypatch):
         id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
     )
     monkeypatch.setattr(runner, "get_used_prompts", lambda: [used_prompt])
-    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [])
+    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [_prompt_run(used_prompt)])
     monkeypatch.setattr(runner, "SessionLocal", lambda: (_ for _ in ()).throw(RuntimeError("db down")))
 
     assert runner._log_used_prompts_to_db(trace_id="trace-3") == 0
@@ -205,6 +264,7 @@ def test_log_used_prompts_continues_when_span_update_fails(monkeypatch):
         id="cccccccc-cccc-cccc-cccc-cccccccccccc",
     )
     monkeypatch.setattr(runner, "get_used_prompts", lambda: [used_prompt])
+    monkeypatch.setattr(runner, "get_used_prompt_runs", lambda: [_prompt_run(used_prompt)])
 
     class _BadSpan:
         def update(self, metadata):

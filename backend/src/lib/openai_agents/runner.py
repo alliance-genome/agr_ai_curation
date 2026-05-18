@@ -497,6 +497,29 @@ def _log_used_prompts_to_db(
     if not used_prompts and not used_prompt_runs:
         logger.debug("No prompts to log")
         return 0
+    if used_prompts and not used_prompt_runs:
+        logger.warning(
+            "Skipping prompt usage logging because prompt runs are missing assembly metadata",
+            extra={"trace_id": trace_id, "session_id": session_id},
+        )
+        return 0
+
+    missing_assembly_agents = [
+        run.agent_name for run in used_prompt_runs if run.assembly is None
+    ]
+    if missing_assembly_agents:
+        logger.error(
+            "Skipping prompt usage logging because prompt runs lack assembly metadata: %s",
+            missing_assembly_agents,
+            extra={"trace_id": trace_id, "session_id": session_id},
+        )
+        return 0
+
+    used_prompts = [
+        prompt
+        for run in used_prompt_runs
+        for prompt in run.prompts
+    ]
 
     # Add prompt version metadata to Langfuse span if provided
     # Note: Using span.update(metadata=...) since span.event() only exists on trace objects
@@ -518,7 +541,6 @@ def _log_used_prompts_to_db(
                     "layer_manifest": run.assembly.layer_manifest,
                 }
                 for run in used_prompt_runs
-                if run.assembly is not None
             ]
             span.update(
                 metadata={
@@ -537,32 +559,18 @@ def _log_used_prompts_to_db(
         try:
             service = PromptService(db)
             entries = []
-            if used_prompt_runs:
-                for run in used_prompt_runs:
-                    if not run.prompts:
-                        continue
-                    entries.extend(
-                        service.log_all_used_prompts(
-                            prompts=run.prompts,
-                            trace_id=trace_id,
-                            session_id=session_id,
-                            effective_prompt_hash=(
-                                run.assembly.effective_prompt_hash
-                                if run.assembly is not None
-                                else None
-                            ),
-                            layer_manifest=(
-                                run.assembly.layer_manifest
-                                if run.assembly is not None
-                                else None
-                            ),
-                        )
+            for run in used_prompt_runs:
+                if not run.prompts:
+                    continue
+                assert run.assembly is not None
+                entries.extend(
+                    service.log_all_used_prompts(
+                        prompts=run.prompts,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        effective_prompt_hash=run.assembly.effective_prompt_hash,
+                        layer_manifest=run.assembly.layer_manifest,
                     )
-            else:
-                entries = service.log_all_used_prompts(
-                    prompts=used_prompts,
-                    trace_id=trace_id,
-                    session_id=session_id,
                 )
             db.commit()
             logger.info(

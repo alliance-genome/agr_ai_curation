@@ -7,7 +7,7 @@ The supervisor eagerly creates all specialist agents before routing, so logging
 at creation would overcount (prompts logged for agents that never run). Instead:
 
 1. Agent factories store prompts via set_pending_prompts(agent.name, prompts)
-   and bind the returned run id to the created Agent object.
+   and bind the returned run id to the created Agent object's identity.
 2. Execution wrappers call commit_pending_prompts(agent) when agent runs
 3. After all execution, runner calls get_used_prompts() and logs them
 
@@ -63,8 +63,6 @@ class PromptRun:
     prompts: List[PromptTemplate]
     assembly: Optional[PromptAssemblyMetadata] = None
 
-
-_PROMPT_RUN_ID_ATTR = "_agr_prompt_run_id"
 
 _pending_prompt_runs: ContextVar[Optional[Dict[str, PromptRun]]] = ContextVar(
     "pending_prompt_runs", default=None
@@ -161,25 +159,18 @@ def _get_prompt_run_ids_by_object_id() -> Dict[int, str]:
 
 
 def bind_prompt_run(agent: Any, prompt_run_id: Optional[str]) -> Any:
-    """Bind a prompt run id to an Agent-like object and return the object."""
+    """Bind a prompt run id to an Agent-like object's identity and return it."""
 
     if prompt_run_id:
         object_ids = _get_prompt_run_ids_by_object_id().copy()
         object_ids[id(agent)] = prompt_run_id
         _prompt_run_ids_by_object_id.set(object_ids)
-        try:
-            setattr(agent, _PROMPT_RUN_ID_ATTR, prompt_run_id)
-        except (AttributeError, TypeError, ValueError):
-            pass
     return agent
 
 
 def _resolve_prompt_run_id(agent_or_name: Any) -> Optional[str]:
     """Resolve the unique pending prompt run id for an Agent-like object."""
 
-    prompt_run_id = getattr(agent_or_name, _PROMPT_RUN_ID_ATTR, None)
-    if prompt_run_id:
-        return str(prompt_run_id)
     if not isinstance(agent_or_name, str):
         prompt_run_id = _get_prompt_run_ids_by_object_id().get(id(agent_or_name))
         if prompt_run_id:

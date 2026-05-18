@@ -1692,92 +1692,14 @@ def _build_tool_execution_context(
     )
 
 
-def _inject_group_rules_with_overrides(
-    *,
-    base_prompt: str,
-    group_ids: List[str],
-    component_name: str,
-    group_overrides: Optional[Dict[str, str]] = None,
-    mod_overrides: Optional[Dict[str, str]] = None,
-    injection_marker: str = "## GROUP-SPECIFIC RULES",
-) -> str:
-    """Inject group rules using DB overrides first, then cached rule prompts."""
-    from src.lib.prompts.cache import get_prompt_optional
-
-    normalized_groups: List[str] = []
-    for raw_group in group_ids:
-        group_id = str(raw_group or "").strip().upper()
-        if group_id and group_id not in normalized_groups:
-            normalized_groups.append(group_id)
-    if not normalized_groups:
-        return base_prompt
-
-    normalized_overrides: Dict[str, str] = {}
-    raw_override_map = group_overrides if group_overrides is not None else mod_overrides
-    for raw_group, raw_content in (raw_override_map or {}).items():
-        group_id = str(raw_group or "").strip().upper()
-        content = str(raw_content or "").strip()
-        if group_id and content:
-            normalized_overrides[group_id] = content
-
-    collected_groups: List[str] = []
-    collected_content: List[str] = []
-
-    for group_id in normalized_groups:
-        override_content = normalized_overrides.get(group_id)
-        if override_content:
-            collected_groups.append(group_id)
-            collected_content.append(override_content)
-            continue
-
-        rule_prompt = get_prompt_optional(
-            component_name,
-            prompt_type="group_rules",
-            group_id=group_id,
-        ) or get_prompt_optional(
-            component_name,
-            prompt_type="mod_rules",
-            group_id=group_id,
-        )
-        if rule_prompt:
-            collected_groups.append(group_id)
-            collected_content.append(rule_prompt.content)
-
-    if not collected_content:
-        logger.warning(
-            "[CatalogService] No group rules found for %s/%s",
-            component_name,
-            normalized_groups,
-        )
-        return base_prompt
-
-    group_list = ", ".join(collected_groups)
-    formatted_rules = "\n".join(collected_content)
-    injection_block = f"""
-{injection_marker}
-
-The following rules are specific to the organization group(s) you are working with: {group_list}
-Apply these rules when searching for and interpreting results.
-
-{formatted_rules}
-
-## END GROUP-SPECIFIC RULES
-"""
-    if injection_marker in base_prompt:
-        return base_prompt.replace(injection_marker, injection_block)
-    return base_prompt + "\n" + injection_block
-
-
 def _build_runtime_instructions(
     db_agent: Any,
     runtime_kwargs: Dict[str, Any],
     *,
-    output_schema: Optional[Any],
     canonical_tool_ids: List[str],
 ) -> PromptLayerBundle:
     """Build final instructions through the shared prompt assembler."""
 
-    del output_schema
     active_groups = list(runtime_kwargs.get("active_groups", []) or [])
     group_ids = (
         active_groups
@@ -1814,11 +1736,7 @@ def _build_curator_overlay(db_agent: Any, active_groups: List[str]) -> str:
     """Build custom-agent overlay content without replacing locked layers."""
 
     parts = [str(getattr(db_agent, "instructions", "") or "").strip()]
-    group_overrides = dict(
-        getattr(db_agent, "group_prompt_overrides", None)
-        or getattr(db_agent, "mod_prompt_overrides", None)
-        or {}
-    )
+    group_overrides = dict(getattr(db_agent, "group_prompt_overrides", None) or {})
     for raw_group in active_groups:
         group_id = str(raw_group or "").strip().upper()
         override = str(group_overrides.get(group_id) or "").strip()
@@ -1886,7 +1804,9 @@ def _additional_runtime_contexts(runtime_kwargs: Dict[str, Any]) -> List[str]:
 
     contexts: List[str] = []
     for raw_context in raw_contexts:
-        text = str(raw_context or "").strip()
+        if not isinstance(raw_context, str):
+            raise TypeError("additional_runtime_context list items must be strings")
+        text = raw_context.strip()
         if text:
             contexts.append(text)
     return contexts
@@ -1999,7 +1919,6 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     prompt_bundle = _build_runtime_instructions(
         db_agent=db_agent,
         runtime_kwargs=runtime_kwargs,
-        output_schema=output_schema,
         canonical_tool_ids=canonical_tool_ids,
     )
     instructions = prompt_bundle.render()
