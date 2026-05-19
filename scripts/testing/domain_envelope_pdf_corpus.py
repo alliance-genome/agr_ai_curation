@@ -425,7 +425,8 @@ def run_trial(
             checks=trial_checks,
         )
         note["flow_summary"] = _summarize_flow_events(flow_result)
-        if int(flow_result.get("total_evidence_records") or 0) == 0:
+        zero_evidence_records = int(flow_result.get("total_evidence_records") or 0) == 0
+        if zero_evidence_records:
             note.setdefault("warnings", []).append("flow_completed_with_zero_persisted_evidence_records")
         if flow_result.get("flow_run_id"):
             try:
@@ -437,6 +438,10 @@ def run_trial(
                 )
             except Exception as exc:
                 note.setdefault("warnings", []).append(f"flow_evidence_export_failed: {exc}")
+        if zero_evidence_records:
+            raise smoke.SmokeFailure(
+                "Flow completed with zero persisted evidence records"
+            )
         note["status"] = "pass"
     except Exception as exc:
         note["status"] = "fail"
