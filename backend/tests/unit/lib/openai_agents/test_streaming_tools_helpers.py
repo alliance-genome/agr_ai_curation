@@ -19,6 +19,7 @@ from src.lib.prompts.context import (
     set_pending_prompts,
 )
 from src.models.sql.prompts import PromptTemplate
+from src.schemas.domain_envelope import DomainEnvelope
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -92,10 +93,13 @@ def test_non_domain_envelope_output_schema_keeps_default_sdk_strictness():
 def test_domain_envelope_reduction_prioritizes_materialized_fields_for_supervisor():
     envelope_output = json.dumps(
         {
+            "envelope_id": "env-test-gene",
             "domain_pack_id": "gene",
+            "domain_pack_version": "0.1.0",
             "objects": [
                 {
                     "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
                     "pending_ref_id": "gene-mention-evidence-1",
                     "status": "validated",
                     "payload": {
@@ -111,6 +115,7 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
             "validation_findings": [
                 {
                     "code": "domain_pack.validator_resolved",
+                    "severity": "info",
                     "status": "resolved",
                     "message": "Resolved Crumbs to crb.",
                 }
@@ -123,11 +128,15 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
         expected_output_type=GeneExtractionResultEnvelope,
     )
     result_payload = json.loads(result)
-    summary = result_payload["supervisor_summary"]
+    summary = result_payload["metadata"]["supervisor_summary"]
 
+    assert "supervisor_summary" not in result_payload
     assert result_payload["objects"][0]["payload"]["primary_external_id"] == (
         "FB:FBgn0259685"
     )
+    assert DomainEnvelope.model_validate(result_payload).metadata[
+        "supervisor_summary"
+    ] == summary
     assert "Use these validated/materialized values" in summary
     assert "primary_external_id=FB:FBgn0259685" in summary
     assert "gene_symbol=crb" in summary
