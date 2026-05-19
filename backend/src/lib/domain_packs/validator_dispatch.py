@@ -320,17 +320,17 @@ def _validated_result_from_agent_output(
         )
     ):
         LOGGER.info(
-            "Normalizing validator output identity for binding %s request %s",
+            "Rejecting validator output identity mismatch for binding %s request %s",
             request.validator_binding_id,
             request.request_id,
         )
-        return result.model_copy(
-            update={
-                "request_id": request.request_id,
-                "validator_binding_id": request.validator_binding_id,
-                "validator_agent": request.validator_agent,
-                "target": request.target,
-            },
+        return _unresolved_result_for_dispatch_problem(
+            request,
+            reason="invalid_schema",
+            explanation=(
+                "Validator agent returned output for a different request, "
+                "binding, validator agent, or target."
+            ),
         )
     return result
 

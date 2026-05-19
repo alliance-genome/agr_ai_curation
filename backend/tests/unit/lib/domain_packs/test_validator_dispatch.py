@@ -458,7 +458,7 @@ def test_concrete_validator_envelope_projects_to_shared_result_contract():
     assert not hasattr(result, "gene_candidates")
 
 
-def test_validator_result_identity_fields_are_normalized_to_request():
+def test_validator_result_identity_mismatch_becomes_invalid_schema_result():
     request = _validation_request()
     payload = _result_payload(request)
     payload.update(
@@ -478,12 +478,38 @@ def test_validator_result_identity_fields_are_normalized_to_request():
 
     result = validator_result_from_agent_output(payload, request=request)
 
-    assert result.status == "resolved"
+    assert result.status == "unresolved"
     assert result.request_id == request.request_id
     assert result.validator_binding_id == request.validator_binding_id
     assert result.validator_agent == request.validator_agent
     assert result.target == request.target
-    assert result.resolved_values["identifier"] == "AGR:0001"
+    assert result.resolved_values == {}
+    assert result.lookup_attempts[0].method == "invalid_schema"
+    assert "different request" in result.explanation
+
+
+def test_dispatch_rejects_identity_mismatch_without_materializing(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+
+    def _runner(request, *, binding):
+        payload = _result_payload(request)
+        payload["request_id"] = "domain-validation:stale"
+        return payload
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+    )
+
+    finding = _single_result_finding(result)
+    assert result.validator_results[0].status == "unresolved"
+    assert finding.details["failure_classification"] == "invalid_schema"
+    assert "different request" in result.validator_results[0].explanation
+    assert not any(
+        domain_object.object_type == "Gene"
+        for domain_object in result.envelope.objects
+    )
 
 
 def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
