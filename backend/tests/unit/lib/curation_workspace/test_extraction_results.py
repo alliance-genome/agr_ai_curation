@@ -373,6 +373,81 @@ def test_build_extraction_envelope_candidate_accepts_domain_envelope_curatable_o
     assert evidence_metadata["evidence_records"][0]["evidence_record_id"] == "evidence-notch"
 
 
+def test_gene_adapter_drops_zfin_compound_like_gene_objects():
+    payload = _sample_domain_envelope_payload()
+    payload["curatable_objects"] = [
+        {
+            "object_type": "gene_mention_evidence",
+            "pending_ref_id": "gene-mention-evidence-her1",
+            "payload": {
+                "mention": "her1",
+                "primary_external_id": "ZFIN:ZDB-GENE-980526-125",
+                "gene_symbol": "her1",
+                "taxon": "NCBITaxon:7955",
+                "species": "Danio rerio",
+                "data_provider_hint": "ZFIN",
+                "evidence_record_id": "evidence-her1",
+            },
+            "evidence_record_ids": ["evidence-her1"],
+        },
+        {
+            "object_type": "gene_mention_evidence",
+            "pending_ref_id": "gene-mention-evidence-SB225002",
+            "payload": {
+                "mention": "SB225002",
+                "species": "Danio rerio",
+                "taxon_hint": "NCBITaxon:7955",
+                "data_provider_hint": "ZFIN",
+                "evidence_record_id": "evidence-sb225002",
+            },
+            "evidence_record_ids": ["evidence-sb225002"],
+        },
+    ]
+    payload["metadata"]["evidence_records"] = [
+        {
+            "evidence_record_id": "evidence-her1",
+            "entity": "her1",
+            "verified_quote": "the her1 mutant background was analyzed.",
+            "page": 1,
+            "section": "Results",
+            "chunk_id": "chunk-her1",
+        },
+        {
+            "evidence_record_id": "evidence-sb225002",
+            "entity": "SB225002",
+            "verified_quote": "SB225002 caused boundary disruptions.",
+            "page": 1,
+            "section": "Results",
+            "chunk_id": "chunk-sb225002",
+        },
+    ]
+
+    candidate = build_extraction_envelope_candidate(
+        json.dumps(payload),
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        conversation_summary="Extract cross-domain gene evidence.",
+    )
+
+    assert candidate is not None
+    assert [obj["pending_ref_id"] for obj in candidate.payload_json["curatable_objects"]] == [
+        "gene-mention-evidence-her1"
+    ]
+    assert candidate.payload_json["metadata"]["exclusions"][-1] == {
+        "mention": "SB225002",
+        "reason_code": "unsupported_entity_type",
+        "evidence_record_ids": ["evidence-sb225002"],
+        "details": (
+            "Dropped from gene curatable_objects because ZFIN context plus "
+            "uppercase/digit notation indicates a compound or reagent without "
+            "a gene identity hint."
+        ),
+    }
+    assert "dropped_non_gene_zfin_candidate:SB225002" in candidate.payload_json[
+        "run_summary"
+    ]["warnings"]
+
+
 def test_build_extraction_envelope_candidate_accepts_persisted_domain_envelope_shape():
     candidate = build_extraction_envelope_candidate(
         json.dumps(_sample_persisted_domain_envelope_payload()),
