@@ -50,6 +50,9 @@ _MAX_LIMIT = 50
 _DEFAULT_LIMIT = 10
 _MAX_JSON_CHARS = 20_000
 _MAX_LOOKUP_ATTEMPTS = 25
+_MAX_VALIDATOR_SUMMARIES = 25
+_MAX_VALIDATOR_LOOKUP_ATTEMPTS = 10
+_MAX_SUMMARY_JSON_CHARS = 4_000
 _MAX_FIELD_PATHS = 150
 
 
@@ -198,6 +201,7 @@ def get_domain_envelope_state(
             envelope=envelope,
             projection_rows=projection_rows,
         )
+        validator_summaries = _validator_summary_payload(finding_rows)
 
         return {
             "success": True,
@@ -216,6 +220,7 @@ def get_domain_envelope_state(
             ],
             "history": [_history_row_payload(history_row) for history_row in history_rows],
             "lookup_attempts": lookup_attempts,
+            "validator_summaries": validator_summaries,
             "projections": [
                 _projection_row_payload(projection_row)
                 for projection_row in projection_rows
@@ -879,10 +884,13 @@ def _lookup_attempt_payload(attempt: Mapping[str, Any], path: str) -> dict[str, 
         "target_projection",
         "lookup_status",
         "status",
+        "outcome",
         "candidate_count",
+        "result_count",
         "resolved_id",
         "resolved_label",
         "explanation",
+        "message",
         "error",
     )
     payload = {
@@ -901,12 +909,172 @@ def _lookup_attempt_payload(attempt: Mapping[str, Any], path: str) -> dict[str, 
 
 
 def _lookup_attempt_status(attempt: Mapping[str, Any]) -> str:
-    for status_key in ("lookup_status", "status"):
+    for status_key in ("lookup_status", "status", "outcome"):
         status = _optional_text(attempt.get(status_key))
         if status is not None:
             return status
     path = _optional_text(attempt.get("path")) or "<unknown lookup_attempt path>"
-    raise ValueError(f"Lookup attempt at {path} is missing lookup_status/status.")
+    raise ValueError(f"Lookup attempt at {path} is missing lookup_status/status/outcome.")
+
+
+def _validator_summary_payload(
+    finding_rows: Sequence[DomainValidationFinding],
+) -> dict[str, Any]:
+    summaries = [
+        summary
+        for row in finding_rows
+        if (summary := _validator_summary_for_finding(row)) is not None
+    ]
+    statuses = Counter(
+        _optional_text(summary.get("result_status")) or "unknown"
+        for summary in summaries
+    )
+    return {
+        "summary_count": len(summaries),
+        "by_result_status": dict(sorted(statuses.items())),
+        "summaries": summaries[:_MAX_VALIDATOR_SUMMARIES],
+        "truncated": len(summaries) > _MAX_VALIDATOR_SUMMARIES,
+        "interpretation": (
+            "Each summary is reconstructed from persisted validation finding "
+            "details. selected_inputs came from domain-pack selectors; "
+            "materialization_paths map validator resolved_values keys to target "
+            "payload field paths declared in expected_result_fields."
+        ),
+    }
+
+
+def _validator_summary_for_finding(
+    row: DomainValidationFinding,
+) -> dict[str, Any] | None:
+    finding = _as_mapping(row.finding_json)
+    details = _as_mapping(finding.get("details"))
+    validation_request = _as_mapping(details.get("validation_request"))
+    validation_result = _as_mapping(details.get("validation_result"))
+    validation_metadata = _as_mapping(details.get("validation_metadata"))
+    if not (validation_request or validation_result or validation_metadata):
+        return None
+
+    binding_id = _optional_text(
+        validation_request.get("validator_binding_id")
+        or validation_result.get("validator_binding_id")
+        or validation_metadata.get("validator_binding_id")
+    )
+    validator_agent = _as_mapping(
+        validation_request.get("validator_agent")
+        or validation_result.get("validator_agent")
+        or validation_metadata.get("validator_agent")
+    )
+    target = _as_mapping(
+        validation_request.get("target")
+        or validation_result.get("target")
+        or validation_metadata.get("target")
+    )
+
+    selected_inputs = _as_mapping(validation_request.get("selected_inputs"))
+    input_selectors = _as_mapping(validation_request.get("input_selectors"))
+    expected_result_fields = _as_mapping(
+        validation_request.get("expected_result_fields")
+    )
+    resolved_values = _as_mapping(validation_result.get("resolved_values"))
+
+    lookup_attempts = details.get("lookup_attempts")
+    if not isinstance(lookup_attempts, list):
+        lookup_attempts = validation_result.get("lookup_attempts")
+    compact_attempts = _validator_lookup_attempts(lookup_attempts)
+
+    return {
+        "finding_id": row.finding_id,
+        "finding_index": row.finding_index,
+        "object_id": row.object_id,
+        "field_path": row.field_path,
+        "finding_status": _enum_value(row.status),
+        "finding_severity": _enum_value(row.severity),
+        "finding_code": row.code,
+        "validator_binding_id": binding_id,
+        "validator_agent": _bounded_summary_json(validator_agent),
+        "target": _bounded_summary_json(target),
+        "selected_inputs": _bounded_summary_json(selected_inputs),
+        "input_selectors": _bounded_summary_json(input_selectors),
+        "expected_result_fields": _bounded_summary_json(expected_result_fields),
+        "result_status": _optional_text(validation_result.get("status")),
+        "resolved_values": _bounded_summary_json(resolved_values),
+        "missing_expected_fields": _bounded_summary_json(
+            validation_result.get("missing_expected_fields") or []
+        ),
+        "materialization_paths": _bounded_summary_json(
+            _materialization_paths(
+                expected_result_fields=expected_result_fields,
+                resolved_values=resolved_values,
+            )
+        ),
+        "lookup_attempts": compact_attempts,
+        "lookup_attempt_count": len(lookup_attempts)
+        if isinstance(lookup_attempts, list)
+        else 0,
+        "lookup_attempts_truncated": (
+            isinstance(lookup_attempts, list)
+            and len(lookup_attempts) > _MAX_VALIDATOR_LOOKUP_ATTEMPTS
+        ),
+        "curator_message": (
+            _optional_text(validation_result.get("curator_message"))
+            or _optional_text(details.get("curator_message"))
+        ),
+        "explanation": _optional_text(validation_result.get("explanation")),
+        "failure_classification": _optional_text(
+            details.get("failure_classification")
+        ),
+    }
+
+
+def _validator_lookup_attempts(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    attempts = []
+    for index, attempt in enumerate(value[:_MAX_VALIDATOR_LOOKUP_ATTEMPTS]):
+        if not isinstance(attempt, Mapping):
+            continue
+        attempts.append(
+            _lookup_attempt_payload(
+                attempt,
+                f"validation.lookup_attempts[{index}]",
+            )
+        )
+    return attempts
+
+
+def _materialization_paths(
+    *,
+    expected_result_fields: Mapping[str, Any],
+    resolved_values: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    paths = []
+    for result_field, target_field_path in sorted(expected_result_fields.items()):
+        resolved_value = resolved_values.get(result_field)
+        paths.append(
+            {
+                "result_field": result_field,
+                "field_path": target_field_path,
+                "resolved": not _summary_value_missing(resolved_value),
+                **(
+                    {"resolved_value": resolved_value}
+                    if not _summary_value_missing(resolved_value)
+                    else {}
+                ),
+            }
+        )
+    return paths
+
+
+def _summary_value_missing(value: Any) -> bool:
+    return value is None or value == "" or value == [] or value == {}
+
+
+def _as_mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, Mapping) else {}
+
+
+def _bounded_summary_json(value: Any) -> Any:
+    return _bounded_json(value, max_chars=_MAX_SUMMARY_JSON_CHARS)
 
 
 def _stable_object_id(domain_object: CuratableObjectEnvelope) -> str:

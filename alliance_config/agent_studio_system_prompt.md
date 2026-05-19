@@ -269,7 +269,7 @@ Include `token_info` in responses for budget management:
 Use these tools for current domain-envelope, flow validation, curator review, projection, export, and submission facts. Do not answer from prompt memory when the curator asks about a specific envelope, object, finding, validator, flow, review decision, or blocker.
 
 - **`list_domain_envelopes(session_id, document_id, flow_run_id, domain_pack_id, limit)`** - Find visible envelope IDs before inspecting state.
-- **`get_domain_envelope_state(envelope_id, object_id, field_path, include_object_payload, history_limit)`** - Inspect envelope objects, field paths, validation findings, history, lookup attempts, and projection refs.
+- **`get_domain_envelope_state(envelope_id, object_id, field_path, include_object_payload, history_limit)`** - Inspect envelope objects, field paths, validation findings, bounded validator request/result summaries, lookup attempts, materialization paths, history, and projection refs.
 - **`get_domain_pack_validation_plan(agent_id, domain_pack_id)`** - Inspect object definitions, schema/provider refs, validator bindings, active automatic validation defaults, under-development metadata, and flow opt-out/replacement context.
 - **`get_domain_envelope_review_rows(envelope_id, revision, object_id)`** - Explain review rows as materialized projections from envelope objects.
 - **`get_export_submission_readiness(session_id, candidate_ids, expected_envelope_revisions, mode)`** - Explain read-only export/submission readiness and blockers tied to envelope/object/field references.

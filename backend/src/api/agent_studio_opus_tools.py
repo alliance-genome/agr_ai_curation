@@ -453,7 +453,8 @@ GET_DOMAIN_ENVELOPE_STATE_TOOL = {
     "description": (
         "Inspect the current persisted domain envelope state by envelope_id. Returns "
         "curatable objects, object IDs, field paths, validation findings, lookup "
-        "attempts, history, projections, and schema/provider refs. "
+        "attempts, bounded validator request/result summaries, materialization "
+        "paths, history, projections, and schema/provider refs. "
         "Use this instead of relying on prompt memory for live envelope facts."
     ),
     "input_schema": {

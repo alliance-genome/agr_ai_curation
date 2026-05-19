@@ -26,6 +26,9 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert tools_by_name["get_domain_envelope_state"]["input_schema"]["required"] == [
         "envelope_id"
     ]
+    assert "validator request/result summaries" in (
+        tools_by_name["get_domain_envelope_state"]["description"]
+    )
     assert tools_by_name["get_tool_details"]["input_schema"]["required"] == [
         "tool_id"
     ]

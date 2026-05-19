@@ -154,6 +154,8 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "domain envelopes are the semantic source of truth" in prompt
     assert "call the relevant tools" in prompt
     assert "get_domain_envelope_state" in prompt
+    assert "bounded validator request/result summaries" in prompt
+    assert "materialization paths" in prompt
     assert "get_domain_pack_validation_plan" in prompt
     assert "get_export_submission_readiness" in prompt
     assert "get_tool_inventory" in prompt

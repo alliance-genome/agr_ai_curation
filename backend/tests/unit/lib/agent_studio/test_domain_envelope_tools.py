@@ -566,6 +566,41 @@ def test_lookup_attempt_summary_preserves_transient_attempts_separate_from_final
     assert "final outcome" in summary["interpretation"]
 
 
+def test_lookup_attempt_summary_accepts_validator_result_outcome_attempts():
+    envelope = DomainEnvelope(
+        envelope_id="env-validator-outcome",
+        domain_pack_id="alliance_gene",
+        status=DomainEnvelopeStatus.VALIDATED,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="gene",
+                object_id="obj-1",
+                payload={
+                    "lookup_attempts": [
+                        {
+                            "provider": "agr_curation_query",
+                            "method": "search_genes",
+                            "query": {"gene_symbol": "unc-54"},
+                            "result_count": 1,
+                            "outcome": "success",
+                        },
+                    ],
+                },
+            )
+        ],
+    )
+
+    summary = domain_tools._lookup_attempt_summary(
+        envelope=envelope,
+        projection_rows=[],
+    )
+
+    assert summary["attempt_count"] == 1
+    assert summary["by_status"] == {"success": 1}
+    assert summary["attempts"][0]["outcome"] == "success"
+    assert summary["attempts"][0]["result_count"] == 1
+
+
 def test_lookup_attempt_summary_rejects_attempts_without_status():
     envelope = DomainEnvelope(
         envelope_id="env-lookup-missing-status",
@@ -589,13 +624,112 @@ def test_lookup_attempt_summary_rejects_attempts_without_status():
         match=(
             "Lookup attempt at "
             r"envelope.objects\[0\].payload.lookup_attempts\[0\] "
-            "is missing lookup_status/status"
+            "is missing lookup_status/status/outcome"
         ),
     ):
         domain_tools._lookup_attempt_summary(
             envelope=envelope,
             projection_rows=[],
         )
+
+
+def test_validator_summary_payload_exposes_request_result_and_materialization_paths():
+    row = SimpleNamespace(
+        finding_id="finding-1",
+        finding_index=0,
+        object_id="obj-1",
+        field_path="primary_external_id",
+        status="resolved",
+        severity="info",
+        code="domain_pack.validator_resolved",
+        finding_json={
+            "details": {
+                "validation_request": {
+                    "request_id": "request-1",
+                    "validator_binding_id": "alliance_gene_reference_lookup",
+                    "validator_agent": {
+                        "package_id": "agr.alliance",
+                        "agent_id": "gene_validation",
+                    },
+                    "target": {
+                        "domain_pack_id": "gene",
+                        "object_type": "gene_mention_evidence",
+                        "object_id": "obj-1",
+                        "field_path": "primary_external_id",
+                    },
+                    "selected_inputs": {
+                        "mention": "unc-54",
+                        "taxon_hint": "NCBITaxon:6239",
+                    },
+                    "input_selectors": {
+                        "mention": {"source": "payload", "path": "mention"},
+                    },
+                    "expected_result_fields": {
+                        "curie": "primary_external_id",
+                        "symbol": "gene_symbol",
+                    },
+                },
+                "validation_result": {
+                    "status": "resolved",
+                    "validator_binding_id": "alliance_gene_reference_lookup",
+                    "validator_agent": {
+                        "package_id": "agr.alliance",
+                        "agent_id": "gene_validation",
+                    },
+                    "resolved_values": {
+                        "curie": "WB:WBGene00006763",
+                        "symbol": "unc-54",
+                    },
+                    "missing_expected_fields": [],
+                    "lookup_attempts": [
+                        {
+                            "provider": "agr_curation_query",
+                            "method": "search_genes",
+                            "query": {"gene_symbol": "unc-54"},
+                            "result_count": 1,
+                            "outcome": "success",
+                            "message": "Resolved unc-54.",
+                        },
+                    ],
+                    "curator_message": "Resolved unc-54.",
+                    "explanation": "The gene lookup returned one match.",
+                },
+            },
+        },
+    )
+
+    payload = domain_tools._validator_summary_payload([row])
+
+    assert payload["summary_count"] == 1
+    assert payload["by_result_status"] == {"resolved": 1}
+    summary = payload["summaries"][0]
+    assert summary["validator_binding_id"] == "alliance_gene_reference_lookup"
+    assert summary["validator_agent"]["agent_id"] == "gene_validation"
+    assert summary["selected_inputs"] == {
+        "mention": "unc-54",
+        "taxon_hint": "NCBITaxon:6239",
+    }
+    assert summary["expected_result_fields"] == {
+        "curie": "primary_external_id",
+        "symbol": "gene_symbol",
+    }
+    assert summary["resolved_values"]["curie"] == "WB:WBGene00006763"
+    assert summary["lookup_attempts"][0]["outcome"] == "success"
+    assert summary["lookup_attempts"][0]["query"] == {"gene_symbol": "unc-54"}
+    assert summary["materialization_paths"] == [
+        {
+            "result_field": "curie",
+            "field_path": "primary_external_id",
+            "resolved": True,
+            "resolved_value": "WB:WBGene00006763",
+        },
+        {
+            "result_field": "symbol",
+            "field_path": "gene_symbol",
+            "resolved": True,
+            "resolved_value": "unc-54",
+        },
+    ]
 
 
 def test_group_by_string_key_rejects_missing_grouping_key():
