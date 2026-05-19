@@ -132,6 +132,183 @@ interface DisplayMessage {
   toolCalls?: ToolCallRecord[]  // Tool calls made during this message
 }
 
+const AGR_CURATION_METHOD_LABELS: Record<string, string> = {
+  get_gene_by_exact_symbol: 'Gene Lookup (exact)',
+  search_genes: 'Gene Search',
+  get_gene_by_id: 'Gene by ID',
+  get_allele_by_exact_symbol: 'Allele Lookup (exact)',
+  search_alleles: 'Allele Search',
+  get_allele_by_id: 'Allele by ID',
+  get_ontology_term: 'Ontology Term Lookup',
+  search_ontology_terms: 'Ontology Term Search',
+  get_vocabulary_term: 'Vocabulary Term Lookup',
+  search_vocabulary_terms: 'Vocabulary Term Search',
+  get_data_provider: 'Data Provider Lookup',
+  search_data_providers: 'Data Provider Search',
+  get_reference_by_curie: 'Reference Lookup',
+  search_references: 'Reference Search',
+  get_agm_by_id: 'AGM Lookup',
+  search_agms: 'AGM Search',
+  get_species: 'Species List',
+  get_data_providers: 'Data Providers',
+  search_anatomy_terms: 'Anatomy Terms Search',
+  search_life_stage_terms: 'Life Stage Terms Search',
+  search_go_terms: 'GO Terms Search',
+}
+
+const AGR_CURATION_FIELD_LABELS: Record<string, string> = {
+  allele_id: 'Allele ID',
+  allele_symbol: 'Allele Symbol',
+  abbreviation: 'Abbreviation',
+  curie: 'CURIE',
+  data_provider: 'Data Provider',
+  gene_id: 'Gene ID',
+  gene_symbol: 'Gene Symbol',
+  group_id: 'Group',
+  label: 'Label',
+  limit: 'Limit',
+  method: 'Method',
+  name: 'Name',
+  ontology_term_type: 'Ontology Term Type',
+  provider: 'Provider',
+  reference_curie: 'Reference CURIE',
+  search_term: 'Search Term',
+  subject_identifier: 'Subject Identifier',
+  subject_label: 'Subject Label',
+  subject_type: 'Subject Type',
+  synonym: 'Synonym',
+  taxon_id: 'Taxon',
+  term: 'Term',
+  term_curie: 'Term CURIE',
+  vocabulary: 'Vocabulary',
+  vocabulary_name: 'Vocabulary',
+}
+
+function titleCaseFieldName(fieldName: string): string {
+  return fieldName
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .replace(/\bid\b/gi, 'ID')
+    .replace(/\bcurie\b/gi, 'CURIE')
+    .replace(/\bagm\b/gi, 'AGM')
+    .replace(/\bgo\b/gi, 'GO')
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+}
+
+function displayValue(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') {
+    return null
+  }
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => displayValue(item))
+      .filter((item): item is string => Boolean(item))
+      .join(', ')
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value)
+  }
+  return String(value)
+}
+
+function formatAgrCurationInput(input: Record<string, unknown>): string {
+  const method = typeof input.method === 'string' ? input.method : undefined
+  const methodLabel = method
+    ? AGR_CURATION_METHOD_LABELS[method] || titleCaseFieldName(method)
+    : 'Query'
+  const lines = [`AGR Curation: ${methodLabel}`]
+  const displayedFields = new Set<string>()
+
+  if (method) {
+    lines.push(`Method: ${method}`)
+    displayedFields.add('method')
+  }
+
+  Object.entries(input).forEach(([fieldName, rawValue]) => {
+    if (displayedFields.has(fieldName)) {
+      return
+    }
+    const value = displayValue(rawValue)
+    if (!value) {
+      return
+    }
+    const label = AGR_CURATION_FIELD_LABELS[fieldName] || titleCaseFieldName(fieldName)
+    lines.push(`${label}: ${value}`)
+    displayedFields.add(fieldName)
+  })
+
+  return lines.join('\n')
+}
+
+function formatToolInput(toolName: string, input: Record<string, unknown>): string {
+  // Handle SQL query tools
+  if (input.query && typeof input.query === 'string') {
+    return input.query
+  }
+  if (toolName === 'agr_curation_query') {
+    return formatAgrCurationInput(input)
+  }
+  if (toolName === 'get_prompt') {
+    const parts: string[] = []
+    if (input.agent_id) parts.push(`Agent: ${input.agent_id}`)
+    if (input.group_id) parts.push(`Group: ${input.group_id}`)
+    return parts.length > 0 ? parts.join(', ') : JSON.stringify(input, null, 2)
+  }
+  if (toolName.includes('api_call')) {
+    const parts: string[] = []
+    Object.entries(input).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        parts.push(`${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+      }
+    })
+    return parts.join('\n')
+  }
+  return JSON.stringify(input, null, 2)
+}
+
+function numericResultCount(result: Record<string, unknown>): number | null {
+  if (typeof result.count === 'number') {
+    return result.count
+  }
+  if (typeof result.result_count === 'number') {
+    return result.result_count
+  }
+  if (Array.isArray(result.rows)) {
+    return result.rows.length
+  }
+  if (Array.isArray(result.results)) {
+    return result.results.length
+  }
+  return null
+}
+
+function formatToolResult(result: Record<string, unknown> | undefined): string | null {
+  if (!result) return null
+
+  if (result.status === 'ok' && Array.isArray(result.rows)) {
+    const count = numericResultCount(result) ?? result.rows.length
+    if (result.rows.length === 0) {
+      return '✓ No results'
+    }
+    return `✓ ${count} row${count !== 1 ? 's' : ''} returned`
+  }
+  if (result.status === 'error' || result.success === false) {
+    return `✗ Error: ${result.message || result.error || 'Unknown error'}`
+  }
+  if (result.success === true) {
+    const count = numericResultCount(result)
+    if (count !== null) {
+      return count === 0
+        ? '✓ No results'
+        : `✓ ${count} result${count !== 1 ? 's' : ''} returned`
+    }
+    return '✓ Success'
+  }
+
+  const str = JSON.stringify(result, null, 2)
+  return str.length > 200 ? `${str.slice(0, 200)}...` : str
+}
+
 function buildDisplayMessages(
   conversation: ToolIdeaConversationEntry[] | null | undefined,
 ): DisplayMessage[] {
@@ -1087,62 +1264,14 @@ OUTPUT:
                     <Collapse in={toolCallsExpanded[idx]}>
                       <ToolCallBox>
                         {msg.toolCalls.map((tc, tcIdx) => {
-                          // Format input nicely - special handling for tools with queries
-                          const formatInput = () => {
-                            const input = tc.tool_input
-                            // Handle SQL query tools
-                            if (input.query && typeof input.query === 'string') {
-                              return input.query
-                            }
-                            // Handle API tools with specific parameters - show key fields
-                            if (tc.tool_name === 'agr_curation_query') {
-                              const parts: string[] = []
-                              if (input.entity_type) parts.push(`Entity: ${input.entity_type}`)
-                              if (input.search_term) parts.push(`Search: "${input.search_term}"`)
-                              if (input.group_id) parts.push(`Group: ${input.group_id}`)
-                              if (input.limit) parts.push(`Limit: ${input.limit}`)
-                              return parts.length > 0 ? parts.join('\n') : JSON.stringify(input, null, 2)
-                            }
-                            if (tc.tool_name === 'get_prompt') {
-                              const parts: string[] = []
-                              if (input.agent_id) parts.push(`Agent: ${input.agent_id}`)
-                              if (input.group_id) parts.push(`Group: ${input.group_id}`)
-                              return parts.length > 0 ? parts.join(', ') : JSON.stringify(input, null, 2)
-                            }
-                            if (tc.tool_name.includes('api_call')) {
-                              // Format API calls nicely
-                              const parts: string[] = []
-                              Object.entries(input).forEach(([key, value]) => {
-                                if (value !== undefined && value !== null) {
-                                  parts.push(`${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
-                                }
-                              })
-                              return parts.join('\n')
-                            }
-                            return JSON.stringify(input, null, 2)
-                          }
-
-                          // Format result summary
-                          const formatResult = () => {
-                            if (!tc.result) return null
-                            const result = tc.result as Record<string, unknown>
-                            if (result.status === 'ok' && Array.isArray(result.rows)) {
-                              const count = result.count || result.rows.length
-                              if (result.rows.length === 0) {
-                                return '✓ No results'
-                              }
-                              return `✓ ${count} row${count !== 1 ? 's' : ''} returned`
-                            }
-                            if (result.status === 'error') {
-                              return `✗ Error: ${result.message || 'Unknown error'}`
-                            }
-                            // Truncate other results
-                            const str = JSON.stringify(result, null, 2)
-                            return str.length > 200 ? str.slice(0, 200) + '...' : str
-                          }
-
-                          const resultText = formatResult()
-                          const isError = tc.result && (tc.result as Record<string, unknown>).status === 'error'
+                          const resultText = formatToolResult(tc.result)
+                          const isError = Boolean(
+                            tc.result
+                            && (
+                              (tc.result as Record<string, unknown>).status === 'error'
+                              || (tc.result as Record<string, unknown>).success === false
+                            )
+                          )
 
                           return (
                             <Box
@@ -1190,7 +1319,7 @@ OUTPUT:
                                   color: 'grey.300',
                                 }}
                               >
-                                {formatInput()}
+                                {formatToolInput(tc.tool_name, tc.tool_input)}
                               </Box>
                             </Box>
                           )

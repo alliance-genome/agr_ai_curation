@@ -269,6 +269,55 @@ describe('OpusChat', () => {
     expect(serviceMocks.createAgentStudioSession).not.toHaveBeenCalled()
   })
 
+  it('renders agr_curation_query method arguments readably in tool calls', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    serviceMocks.streamOpusChat.mockImplementation(async function* () {
+      yield {
+        type: 'TOOL_USE',
+        tool_name: 'agr_curation_query',
+        tool_input: {
+          method: 'get_gene_by_id',
+          gene_id: 'FB:FBgn0259685',
+          data_provider: 'FB',
+          ontology_term_type: 'DOTerm',
+          curie: 'DOID:0050156',
+        },
+      }
+      yield {
+        type: 'TOOL_RESULT',
+        tool_name: 'agr_curation_query',
+        result: {
+          success: true,
+          result_count: 1,
+        },
+      }
+      yield { type: 'TEXT_DELTA', delta: 'I checked the curation lookup.' }
+      yield { type: 'DONE' }
+    })
+
+    render(<OpusChat context={{ active_tab: 'agents' }} />)
+
+    const input = screen.getByPlaceholderText('Ask about prompts...')
+    fireEvent.change(input, { target: { value: 'Check this lookup.' } })
+    fireEvent.keyDown(input, { key: 'Enter', code: 'Enter' })
+
+    const toolCallsToggle = await screen.findByText('Tool Calls (1)')
+    fireEvent.click(toolCallsToggle)
+
+    expect(await screen.findByText(/AGR Curation: Gene by ID/)).toBeInTheDocument()
+    expect(screen.getByText(/Method: get_gene_by_id/)).toBeInTheDocument()
+    expect(screen.getByText(/Gene ID: FB:FBgn0259685/)).toBeInTheDocument()
+    expect(screen.getByText(/Data Provider: FB/)).toBeInTheDocument()
+    expect(screen.getByText(/Ontology Term Type: DOTerm/)).toBeInTheDocument()
+    expect(screen.getByText(/CURIE: DOID:0050156/)).toBeInTheDocument()
+    expect(screen.queryByText(/"gene_id"/)).not.toBeInTheDocument()
+  })
+
   it('applies an approved workshop prompt update proposed by Claude tool call', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,
