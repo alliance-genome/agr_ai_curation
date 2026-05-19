@@ -19,7 +19,8 @@ from src.lib.prompts.context import (
     set_pending_prompts,
 )
 from src.models.sql.prompts import PromptTemplate
-from src.schemas.domain_envelope import DomainEnvelope
+from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
@@ -542,6 +543,200 @@ def _errored_gene_validator_payload(request):
     }
 
 
+def _generic_unresolved_validator_payload(request):
+    return {
+        "status": "unresolved",
+        "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id,
+        "validator_agent": request.validator_agent.model_dump(mode="json"),
+        "target": request.target.model_dump(mode="json"),
+        "resolved_values": {},
+        "resolved_objects": [],
+        "missing_expected_fields": list(request.target.expected_fields),
+        "candidates": [],
+        "lookup_attempts": [
+            {
+                "provider": "contract_fixture",
+                "method": "package_scoped_validator",
+                "query": dict(request.selected_inputs),
+                "result_count": 0,
+                "outcome": "not_found",
+            }
+        ],
+        "curator_message": None,
+        "explanation": "Contract fixture unresolved validator result.",
+    }
+
+
+def _chat_dispatch_probe_output() -> str:
+    return json.dumps(
+        {
+            "summary": "Retained one candidate.",
+            "curatable_objects": [{"object_type": "dispatch_probe"}],
+            "metadata": {},
+            "run_summary": {"candidate_count": 1},
+        }
+    )
+
+
+def _chat_dispatch_domain_cases():
+    return [
+        pytest.param(
+            "ask_allele_extractor_specialist",
+            "allele_extractor",
+            "allele",
+            DomainEnvelope(
+                envelope_id="chat-allele-env",
+                domain_pack_id="agr.alliance.allele",
+                objects=[
+                    CuratableObjectEnvelope(
+                        object_type="AlleleMention",
+                        pending_ref_id="allele-mention-1",
+                        payload={
+                            "mention": {"text": "crb 11A22"},
+                            "associated_gene": {"symbol": "crb"},
+                            "taxon": {"curie": "NCBITaxon:7227"},
+                        },
+                    )
+                ],
+            ),
+            {"allele_mention_reference_validation"},
+            id="allele",
+        ),
+        pytest.param(
+            "ask_disease_extractor_specialist",
+            "disease_extractor",
+            "disease",
+            DomainEnvelope(
+                envelope_id="chat-disease-env",
+                domain_pack_id="agr.alliance.disease",
+                objects=[
+                    CuratableObjectEnvelope(
+                        object_type="DiseaseAnnotation",
+                        pending_ref_id="disease-annotation-1",
+                        payload={
+                            "disease_annotation_object": {
+                                "curie": "DOID:0050434",
+                                "name": "Andersen-Tawil syndrome",
+                            },
+                            "disease_relation_name": "is_model_of",
+                            "condition_relations": [
+                                {
+                                    "condition_relation_type": {
+                                        "name": "has_condition",
+                                    }
+                                }
+                            ],
+                            "data_provider": {"abbreviation": "MGI"},
+                        },
+                    )
+                ],
+            ),
+            {
+                "disease_ontology_term_lookup",
+                "disease_relation_cv_lookup",
+                "disease_condition_relation_lookup",
+                "disease_data_provider_lookup",
+            },
+            id="disease",
+        ),
+        pytest.param(
+            "ask_chemical_extractor_specialist",
+            "chemical_extractor",
+            "chemical",
+            DomainEnvelope(
+                envelope_id="chat-chemical-env",
+                domain_pack_id="agr.alliance.chemical_condition",
+                objects=[
+                    CuratableObjectEnvelope(
+                        object_type="ChemicalCondition",
+                        pending_ref_id="chemical-condition-1",
+                        payload={
+                            "condition_chemical": {
+                                "curie": "CHEBI:23965",
+                                "name": "estradiol",
+                            },
+                            "condition_class": {
+                                "curie": "ZECO:0000101",
+                                "name": "chemical treatment",
+                            },
+                            "condition_relation_type": {
+                                "name": "has_condition",
+                            },
+                        },
+                    ),
+                    CuratableObjectEnvelope(
+                        object_type="ChemicalTerm",
+                        pending_ref_id="chemical-term-1",
+                        payload={
+                            "curie": "CHEBI:23965",
+                            "name": "estradiol",
+                        },
+                    ),
+                ],
+            ),
+            {
+                "chemical_condition.chebi_api_lookup",
+                "chemical_condition.term_chebi_api_lookup",
+                "chemical_condition.condition_ontology_lookup",
+                "chemical_condition.condition_relation_type_lookup",
+            },
+            id="chemical",
+        ),
+        pytest.param(
+            "ask_phenotype_extractor_specialist",
+            "phenotype_extractor",
+            "phenotype",
+            DomainEnvelope(
+                envelope_id="chat-phenotype-env",
+                domain_pack_id="agr.alliance.phenotype",
+                objects=[
+                    CuratableObjectEnvelope(
+                        object_type="PhenotypeTerm",
+                        object_role="validated_reference",
+                        pending_ref_id="phenotype-term-1",
+                        payload={
+                            "resolution_state": "pending_ontology_resolution",
+                            "curie": "WBPhenotype:0000886",
+                            "label": "reduced brood size",
+                            "ontology_lookup_hint": {
+                                "data_provider": "WB",
+                                "taxon_id": "NCBITaxon:6239",
+                            },
+                        },
+                    )
+                ],
+            ),
+            {"phenotype_term_ontology_validator"},
+            id="phenotype",
+        ),
+        pytest.param(
+            "ask_gene_expression_specialist",
+            "gene_expression",
+            "gene_expression",
+            DomainEnvelope(
+                envelope_id="chat-gene-expression-env",
+                domain_pack_id="agr.alliance.gene_expression",
+                objects=[
+                    CuratableObjectEnvelope(
+                        object_type="GeneExpressionAnnotation",
+                        pending_ref_id="gene-expression-annotation-1",
+                        payload={
+                            "relation": {"name": "is_expressed_in"},
+                            "data_provider": {"abbreviation": "ZFIN"},
+                        },
+                    )
+                ],
+            ),
+            {
+                "relation_vocabulary_validation",
+                "data_provider_validation",
+            },
+            id="gene-expression",
+        ),
+    ]
+
+
 @pytest.mark.asyncio
 async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(monkeypatch):
     emitted = []
@@ -699,6 +894,90 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch)
         "gene_symbol": "crumbs",
         "method": "search_genes",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name,agent_key,adapter_key,envelope,expected_binding_ids",
+    _chat_dispatch_domain_cases(),
+)
+async def test_chat_domain_envelope_dispatch_covers_launchable_active_validator_domains(
+    monkeypatch,
+    tool_name,
+    agent_key,
+    adapter_key,
+    envelope,
+    expected_binding_ids,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+
+    from src.lib.curation_workspace import (
+        adapter_registry,
+        curation_prep_service,
+        extraction_results,
+    )
+    from src.lib.domain_packs import validator_dispatch
+
+    adapter_registry.load_curation_adapter_registry.cache_clear()
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda requested_agent_key: {
+            "adapter_key": adapter_key,
+            "domain_pack_id": envelope.domain_pack_id,
+            "launchable": True,
+        }
+        if requested_agent_key == agent_key
+        else None,
+    )
+    monkeypatch.setattr(
+        curation_prep_service,
+        "_domain_envelope_from_extraction_result",
+        lambda _record: envelope,
+    )
+
+    captured_requests = []
+
+    def _fake_validator_agent(request, *, binding):
+        captured_requests.append(request)
+        return _generic_unresolved_validator_payload(request)
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "run_package_scoped_validator_agent",
+        _fake_validator_agent,
+    )
+
+    result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        _chat_dispatch_probe_output(),
+        expected_output_type=DomainEnvelopeExtractionResult,
+        specialist_name=f"{agent_key} chat extraction",
+        tool_name=tool_name,
+    )
+
+    payload = json.loads(result)
+    captured_binding_ids = {
+        request.validator_binding_id for request in captured_requests
+    }
+    assert captured_binding_ids == expected_binding_ids
+    assert payload["domain_pack_id"] == envelope.domain_pack_id
+    assert payload["validation_findings"]
+
+    dispatch_complete = [
+        event
+        for event in emitted
+        if event["details"]["toolName"] == "dispatch_active_validator_bindings"
+        and event["type"] == "TOOL_COMPLETE"
+    ][0]
+    assert len(captured_requests) >= len(expected_binding_ids)
+    assert dispatch_complete["details"]["matchedBindingCount"] == len(
+        captured_requests
+    )
+    assert dispatch_complete["details"]["validatorResultCount"] == len(
+        captured_requests
+    )
 
 
 @pytest.mark.asyncio
