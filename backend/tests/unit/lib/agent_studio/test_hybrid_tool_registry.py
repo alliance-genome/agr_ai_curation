@@ -42,6 +42,7 @@ def test_get_prompt_diagnostic_documents_current_extractor_and_validator_targets
     description = get_prompt_tool.description
 
     assert "Domain-envelope extractors" in description
+    assert "gene_expression_extraction" in description
     assert "Validator/resolver agents" in description
     assert "phenotype_extractor" in description
     assert "controlled_vocabulary_validation" in description

@@ -756,7 +756,8 @@ answering validator-agent inspection questions from domain-pack validation plans
   tsv_formatter, json_formatter.
 - Document/general extraction: pdf_extraction.
 - Domain-envelope extractors: gene_extractor, allele_extractor,
-  disease_extractor, chemical_extractor, phenotype_extractor, gene_expression.
+  disease_extractor, chemical_extractor, phenotype_extractor, gene_expression
+  (flow/prompt alias for the packaged gene_expression_extraction agent).
 - Validator/resolver agents: gene_validation (also available as gene),
   allele_validation (allele), disease_validation (disease),
   chemical_validation (chemical), ontology_term_validation,
@@ -778,6 +779,7 @@ Some agents have organism-specific rules. Use these group aliases:
 
 **Example usage:**
 - "Show me the worm gene expression prompt" → get_prompt(agent_id="gene_expression", group_id="WB")
+- "Show me the packaged gene expression extractor prompt" → get_prompt(agent_id="gene_expression_extraction")
 - "What are the fly-specific rules for the gene extractor?" → get_prompt(agent_id="gene_extractor", group_id="FB")
 - "Show the phenotype extractor prompt" → get_prompt(agent_id="phenotype_extractor", group_id="ZFIN")
 - "Inspect controlled vocabulary validation" → get_prompt(agent_id="controlled_vocabulary_validation")
@@ -788,7 +790,7 @@ Some agents have organism-specific rules. Use these group aliases:
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "description": "Agent identifier or validator-agent ID from a validation plan (e.g., 'supervisor', 'gene_extractor', 'gene_expression', 'phenotype_extractor', 'gene_validation')"
+                    "description": "Agent identifier or validator-agent ID from a validation plan (e.g., 'supervisor', 'gene_extractor', 'gene_expression', 'gene_expression_extraction', 'phenotype_extractor', 'gene_validation')"
                 },
                 "group_id": {
                     "type": "string",

@@ -112,6 +112,37 @@ def test_validate_flow_handler_only_mentions_installed_agent_ids(monkeypatch):
     assert not any("chat_output" in suggestion for suggestion in result["suggestions"])
 
 
+def test_validate_flow_handler_accepts_gene_expression_alias_pair(monkeypatch):
+    monkeypatch.setattr(
+        flow_tools,
+        "FLOW_AGENT_IDS",
+        ["gene_expression", "gene_expression_extraction", "gene"],
+    )
+    validate = flow_tools._validate_flow_handler()
+
+    flow_alias_result = validate(
+        steps=[{"agent_id": "gene_expression"}],
+        name="Expression Flow",
+    )
+    package_agent_result = validate(
+        steps=[{"agent_id": "gene_expression_extraction"}],
+        name="Expression Flow",
+    )
+
+    assert flow_alias_result["valid"] is True
+    assert package_agent_result["valid"] is True
+    assert flow_alias_result["errors"] == []
+    assert package_agent_result["errors"] == []
+    assert any(
+        "Consider adding 'gene' step after 'gene_expression'" in suggestion
+        for suggestion in flow_alias_result["suggestions"]
+    )
+    assert any(
+        "Consider adding 'gene' step after 'gene_expression'" in suggestion
+        for suggestion in package_agent_result["suggestions"]
+    )
+
+
 def test_get_flow_templates_handler_uses_registry(monkeypatch):
     monkeypatch.setattr(flow_tools, "FLOW_AGENT_IDS", ["pdf_extraction", "gene"])
     monkeypatch.setattr(

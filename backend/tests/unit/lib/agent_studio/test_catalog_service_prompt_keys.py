@@ -20,6 +20,15 @@ def test_get_prompt_key_for_agent_accepts_canonical_key():
     assert catalog_service.get_prompt_key_for_agent("gene") == "gene"
 
 
+def test_get_prompt_key_for_gene_expression_accepts_flow_alias_and_package_id():
+    """Gene-expression prompt lookup accepts the flow alias and package agent ID."""
+    assert catalog_service.get_prompt_key_for_agent("gene_expression") == "gene_expression"
+    assert (
+        catalog_service.get_prompt_key_for_agent("gene_expression_extraction")
+        == "gene_expression"
+    )
+
+
 def test_get_prompt_key_for_agent_uses_explicit_system_agent_key():
     """A bundle with an explicit public key resolves to that key."""
     assert (

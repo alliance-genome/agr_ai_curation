@@ -42,7 +42,7 @@ The system uses a multi-agent architecture:
 
 **Extraction Agents (work with uploaded papers):**
 - **General PDF Extraction Agent**: Answers broad questions about PDF documents.
-- **Domain-envelope extractors**: `gene_extractor`, `allele_extractor`, `disease_extractor`, `chemical_extractor`, `phenotype_extractor`, and `gene_expression` read papers and produce evidence-backed domain-envelope proposals.
+- **Domain-envelope extractors**: `gene_extractor`, `allele_extractor`, `disease_extractor`, `chemical_extractor`, `phenotype_extractor`, and `gene_expression` read papers and produce evidence-backed domain-envelope proposals. `gene_expression` is the flow/prompt alias for the packaged `gene_expression_extraction` agent.
 - **Formatter/display agents**: `chat_output`, `csv_formatter`, `tsv_formatter`, and `json_formatter` project curated state into chat or files.
 
 **Validator/Resolver Agents (validate proposed fields):**
@@ -282,8 +282,8 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.
-  - agent_id: supervisor, curation_prep, pdf_extraction, gene_extractor, allele_extractor, disease_extractor, chemical_extractor, phenotype_extractor, gene_expression, gene_validation, allele_validation, disease_validation, chemical_validation, ontology_term_validation, controlled_vocabulary_validation, data_provider_validation, subject_entity_validation, reference_validation, experimental_condition_validation, agm_validation, gene_ontology, go_annotations, orthologs, chat_output, csv_formatter, tsv_formatter, json_formatter
-  - Legacy aliases may still resolve for some validators: gene, allele, disease, chemical.
+  - agent_id: supervisor, curation_prep, pdf_extraction, gene_extractor, allele_extractor, disease_extractor, chemical_extractor, phenotype_extractor, gene_expression, gene_expression_extraction, gene_validation, allele_validation, disease_validation, chemical_validation, ontology_term_validation, controlled_vocabulary_validation, data_provider_validation, subject_entity_validation, reference_validation, experimental_condition_validation, agm_validation, gene_ontology, go_annotations, orthologs, chat_output, csv_formatter, tsv_formatter, json_formatter
+  - Legacy aliases may still resolve for some validators: gene, allele, disease, chemical. Gene-expression prompt and validation-plan inspection accepts both `gene_expression` and `gene_expression_extraction`.
   - group_id (optional): WB, FB, MGI, RGD, SGD, ZFIN. Legacy `mod_id` is also accepted.
   - Validator-agent inspection workflow: call `get_domain_pack_validation_plan`, read `validator_bindings[].validator_agent.agent_id` or `validation_attachments[].validator_agent_id`, then call `get_prompt(agent_id=<validator agent id>)` to inspect that validator's prompt, tools, and group-specific rules.
   - When a curator has an agent selected in the UI, the full prompt is already included in your context (in `<base_prompt>` tags). Reference it directly instead of calling `get_prompt`. Only call `get_prompt` for a DIFFERENT agent or group variant.

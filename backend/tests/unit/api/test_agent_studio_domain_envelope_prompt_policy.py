@@ -177,6 +177,8 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "Materialized/resolved fields belong to validator results" in prompt
     assert "Do not infer that an extractor called a validator directly" in prompt
     assert "Domain-envelope extractors" in prompt
+    assert "gene_expression_extraction" in prompt
+    assert "Gene-expression prompt and validation-plan inspection accepts both" in prompt
     assert "Validator/Resolver Agents" in prompt
     assert "phenotype_extractor" in prompt
     assert "controlled_vocabulary_validation" in prompt

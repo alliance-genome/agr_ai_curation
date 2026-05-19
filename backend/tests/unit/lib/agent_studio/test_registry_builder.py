@@ -146,6 +146,25 @@ class TestAgentDocumentationCoverage:
         assert registry.get("pdf") is None
         assert pdf_extraction_entry is not None
 
+    def test_gene_expression_exposes_flow_alias_and_package_agent_id(self):
+        """Gene-expression flows keep the UI alias and package agent ID equivalent."""
+        registry = build_agent_registry()
+
+        flow_alias_entry = registry.get("gene_expression")
+        package_agent_entry = registry.get("gene_expression_extraction")
+
+        assert flow_alias_entry is not None
+        assert package_agent_entry is not None
+        assert flow_alias_entry == package_agent_entry
+        assert flow_alias_entry["supervisor"]["tool_name"] == (
+            "ask_gene_expression_specialist"
+        )
+        assert flow_alias_entry["curation"] == {
+            "adapter_key": "gene_expression",
+            "domain_pack_id": "agr.alliance.gene_expression",
+            "launchable": True,
+        }
+
     def test_explicit_system_agent_key_suppresses_folder_alias(self):
         """The ontology resolver exposes only `ontology_term_validation` publicly."""
         registry = build_agent_registry()

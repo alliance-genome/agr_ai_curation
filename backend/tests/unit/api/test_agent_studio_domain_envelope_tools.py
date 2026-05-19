@@ -46,6 +46,7 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     assert "Validator-agent IDs returned by get_domain_pack_validation_plan" in (
         get_prompt_description
     )
+    assert "gene_expression_extraction" in get_prompt_description
     # Keep this split so the ticket guardrail grep reports only product strings.
     legacy_availability_phrase = "planned or blocked " + "validators"
     assert legacy_availability_phrase not in validation_plan_description

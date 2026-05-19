@@ -173,6 +173,29 @@ metadata:
     assert "repair" not in json.dumps(result).lower()
 
 
+def test_gene_expression_validation_plan_accepts_flow_alias_and_package_agent_id():
+    """Agent Studio can inspect the same domain pack through either public ID."""
+    flow_alias_result = domain_tools.get_domain_pack_validation_plan(
+        agent_id="gene_expression",
+    )
+    package_agent_result = domain_tools.get_domain_pack_validation_plan(
+        agent_id="gene_expression_extraction",
+    )
+
+    assert flow_alias_result["success"] is True
+    assert package_agent_result["success"] is True
+    assert flow_alias_result["domain_pack_id"] == "agr.alliance.gene_expression"
+    assert package_agent_result["domain_pack_id"] == "agr.alliance.gene_expression"
+    assert flow_alias_result["agent_id"] == "gene_expression"
+    assert package_agent_result["agent_id"] == "gene_expression_extraction"
+    assert flow_alias_result["validator_bindings"] == package_agent_result[
+        "validator_bindings"
+    ]
+    assert flow_alias_result["validation_dispatch_summary"] == package_agent_result[
+        "validation_dispatch_summary"
+    ]
+
+
 @pytest.fixture
 def db_session_factory():
     engine = create_engine(
