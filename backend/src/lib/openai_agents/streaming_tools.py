@@ -760,6 +760,139 @@ def _canonicalize_structured_output_text(
         return json.dumps(canonical_payload)
 
 
+def _json_object_text_from_text(text: str) -> Optional[str]:
+    """Extract the outermost JSON object text from a model text response."""
+
+    stripped = str(text or "").strip()
+    if not stripped:
+        return None
+
+    json_start = stripped.find("{")
+    json_end = stripped.rfind("}")
+    if json_start < 0 or json_end <= json_start:
+        return None
+    return stripped[json_start:json_end + 1]
+
+
+def _salvage_pending_ref_id_for_object(
+    domain_object: Dict[str, Any],
+    *,
+    object_index: int,
+) -> str:
+    """Build a deterministic pending ref for recoverable text-output objects."""
+
+    schema_ref = domain_object.get("schema_ref")
+    schema_id = (
+        schema_ref.get("schema_id")
+        if isinstance(schema_ref, dict)
+        else None
+    )
+    base = (
+        domain_object.get("object_type")
+        or domain_object.get("model_ref")
+        or schema_id
+        or "curatable_object"
+    )
+    slug = re.sub(r"[^a-zA-Z0-9_]+", "_", str(base).strip()).strip("_").lower()
+    return f"salvaged_{slug or 'curatable_object'}_{object_index + 1}"
+
+
+def _repair_salvaged_domain_envelope_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Apply minimal repairs needed for generic domain-envelope validation."""
+
+    repaired = copy.deepcopy(payload)
+    curatable_objects = repaired.get("curatable_objects")
+    if isinstance(curatable_objects, list):
+        for index, domain_object in enumerate(curatable_objects):
+            if not isinstance(domain_object, dict):
+                continue
+            if domain_object.get("object_id") or domain_object.get("pending_ref_id"):
+                continue
+            domain_object["pending_ref_id"] = _salvage_pending_ref_id_for_object(
+                domain_object,
+                object_index=index,
+            )
+    return repaired
+
+
+def _recover_domain_envelope_output_from_stream_text(
+    result: Any,
+    *,
+    expected_output_type: Any,
+    specialist_name: str,
+    error: Exception,
+) -> Optional[str]:
+    """Recover domain-envelope JSON emitted as text before SDK validation failed."""
+
+    if not _is_domain_envelope_extraction_output_type(expected_output_type):
+        return None
+
+    final_text = str(getattr(result, "_final_text_output", "") or "").strip()
+    accumulated_text = str(getattr(result, "_accumulated_text", "") or "").strip()
+    text = final_text or accumulated_text
+    json_candidate = _json_object_text_from_text(text)
+    if json_candidate is None:
+        logger.warning(
+            "%s stream recovery skipped: no JSON object text found after %s",
+            specialist_name,
+            type(error).__name__,
+        )
+        return None
+
+    try:
+        parsed_payload = json.loads(json_candidate)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "%s stream recovery skipped: generated text was not valid JSON after %s: %s",
+            specialist_name,
+            type(error).__name__,
+            exc,
+        )
+        return None
+
+    if not isinstance(parsed_payload, dict):
+        return None
+
+    repaired_payload = _repair_salvaged_domain_envelope_payload(parsed_payload)
+    canonical_payload = canonicalize_structured_result_payload(repaired_payload)
+    try:
+        recovered = DomainEnvelopeExtractionResult.model_validate(canonical_payload)
+    except Exception as exc:
+        logger.warning(
+            "%s stream recovery skipped: text JSON did not satisfy generic "
+            "DomainEnvelopeExtractionResult after %s: %s",
+            specialist_name,
+            type(error).__name__,
+            exc,
+        )
+        return None
+
+    final_output = json.dumps(recovered.model_dump())
+    logger.warning(
+        "%s recovered domain-envelope output from generated text after %s "
+        "(json_length=%s)",
+        specialist_name,
+        type(error).__name__,
+        len(final_output),
+        extra={"specialist_name": specialist_name},
+    )
+    add_specialist_event({
+        "type": "SPECIALIST_TEXT_FALLBACK_SUCCESS",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "details": {
+            "specialist": specialist_name,
+            "output_type": getattr(expected_output_type, "__name__", "response"),
+            "json_length": len(final_output),
+            "extraction_method": "stream_validation_recovery",
+            "message": (
+                f"{specialist_name} output recovered from streamed text after "
+                f"{type(error).__name__}"
+            ),
+        },
+    })
+    return final_output
+
+
 def _reduce_specialist_output_for_supervisor(
     final_output: str,
     *,
@@ -1602,6 +1735,7 @@ async def run_specialist_with_events(
     total_event_count = 0
     event_type_counts: dict = {}
     is_generating = False  # Track if we've emitted AGENT_GENERATING
+    stream_recovered_final_output = ""
 
     try:
         async for event in result.stream_events():
@@ -1709,6 +1843,7 @@ async def run_specialist_with_events(
                         # Log final text when text generation completes
                         full_text = getattr(data, "text", "")
                         if full_text:
+                            result._final_text_output = full_text
                             logger.warning(
                                 "%s GENERATED TEXT INSTEAD OF STRUCTURED OUTPUT! Length: %s chars. First 500: %s...",
                                 specialist_name,
@@ -2049,8 +2184,18 @@ async def run_specialist_with_events(
             total_event_count,
             event_type_counts,
         )
-        # Re-raise to propagate the error
-        raise
+        stream_recovered_final_output = (
+            _recover_domain_envelope_output_from_stream_text(
+                result,
+                expected_output_type=expected_output_type,
+                specialist_name=specialist_name,
+                error=e,
+            )
+            or ""
+        )
+        if not stream_recovered_final_output:
+            # Re-raise to propagate unrecoverable stream errors.
+            raise
 
     # Calculate total duration
     total_duration = datetime.now(timezone.utc) - start_time
@@ -2086,7 +2231,7 @@ async def run_specialist_with_events(
         )
 
     # Get final output - handle both structured and string outputs
-    final_output = ""
+    final_output = stream_recovered_final_output
     logger.info(
         "%s checking final_output: hasattr=%s, value=%s, type=%s",
         specialist_name,
@@ -2095,7 +2240,13 @@ async def run_specialist_with_events(
         type(getattr(result, "final_output", None)),
     )
 
-    if hasattr(result, "final_output") and result.final_output is not None:
+    if final_output:
+        logger.info(
+            "%s using recovered final_output from stream text: %s...",
+            specialist_name,
+            final_output[:200],
+        )
+    elif hasattr(result, "final_output") and result.final_output is not None:
         if hasattr(result.final_output, "model_dump"):
             # Structured output (Pydantic model)
             final_output = json.dumps(result.final_output.model_dump())

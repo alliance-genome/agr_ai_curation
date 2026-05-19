@@ -1,15 +1,21 @@
 """Coverage tests for streaming_tools retry and text-fallback paths."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
 from pydantic import BaseModel
 
 from src.lib.openai_agents import streaming_tools
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 
 class _Envelope(BaseModel):
     value: str
+
+
+class _DomainEnvelope(DomainEnvelopeExtractionResult):
+    pass
 
 
 class _FakeRunResult:
@@ -24,6 +30,17 @@ class _FakeRunResult:
 
     def to_input_list(self):
         return [{"role": "user", "content": "prior query"}]
+
+
+class _FailingStreamRunResult(_FakeRunResult):
+    def __init__(self, *, error, **kwargs):
+        super().__init__(**kwargs)
+        self._error = error
+
+    async def stream_events(self):
+        for event in self._events:
+            yield event
+        raise self._error
 
 
 @pytest.fixture(autouse=True)
@@ -80,6 +97,132 @@ async def test_run_specialist_uses_streaming_text_fallback_when_final_output_mis
         and e.get("details", {}).get("extraction_method") == "streaming_text_fallback"
         for e in captured_events
     )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_recovers_domain_envelope_text_after_stream_validation_error(monkeypatch):
+    class ResponseTextDoneEvent:
+        def __init__(self, text):
+            self.text = text
+
+    generated_payload = {
+        "summary": "Recovered extraction",
+        "curatable_objects": [
+            {
+                "object_type": "gene_expression_annotation",
+                "payload": {"gene_symbol": "wg", "assay": "in situ"},
+                "evidence_record_ids": ["evidence-record-1"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-record-1",
+                    "entity": "wg",
+                    "verified_quote": "wg is expressed in embryonic stripes.",
+                    "page": 3,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                }
+            ]
+        },
+        "run_summary": {"candidate_count": 1, "kept_count": 1},
+    }
+    raw_event = SimpleNamespace(
+        type="raw_response_event",
+        data=ResponseTextDoneEvent(json.dumps(generated_payload)),
+    )
+    stream_error = RuntimeError("Invalid JSON when parsing text for TypeAdapter")
+
+    async def _passthrough_dispatch(final_output, **_kwargs):
+        return final_output
+
+    captured_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _passthrough_dispatch,
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FailingStreamRunResult(
+            events=[raw_event],
+            final_output=None,
+            new_items=[],
+            error=stream_error,
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Gene Expression Extractor",
+        tools=[],
+        output_type=_DomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    result = await streaming_tools.run_specialist_with_events(
+        agent=agent,
+        input_text="extract gene expression evidence",
+        specialist_name="Gene Expression Extractor",
+        max_turns=3,
+        tool_name="ask_gene_expression_specialist",
+    )
+
+    parsed_result = json.loads(result)
+    assert parsed_result["curatable_objects"][0]["pending_ref_id"] == (
+        "salvaged_gene_expression_annotation_1"
+    )
+    assert parsed_result["curatable_objects"][0]["evidence_record_ids"] == [
+        "evidence-record-1"
+    ]
+    assert parsed_result["metadata"]["evidence_records"][0]["evidence_record_id"] == (
+        "evidence-record-1"
+    )
+    assert any(
+        e.get("type") == "SPECIALIST_TEXT_FALLBACK_SUCCESS"
+        and e.get("details", {}).get("extraction_method") == "stream_validation_recovery"
+        for e in captured_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_does_not_recover_non_domain_stream_errors(monkeypatch):
+    stream_error = RuntimeError("Invalid JSON when parsing text for TypeAdapter")
+
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FailingStreamRunResult(
+            events=[],
+            final_output=None,
+            new_items=[],
+            error=stream_error,
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Structured Specialist",
+        tools=[],
+        output_type=_Envelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(RuntimeError, match="Invalid JSON"):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract structured output",
+            specialist_name="Structured Specialist",
+            max_turns=3,
+            tool_name=None,
+        )
 
 
 @pytest.mark.asyncio
