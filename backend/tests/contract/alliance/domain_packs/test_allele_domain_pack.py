@@ -167,6 +167,18 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
     }
 
     validator_bindings = metadata.metadata["validator_bindings"]
+    validators = metadata.metadata["validators"]
+    assert tuple(validators) == ("active", "under_development")
+    assert {
+        validator["validator_id"] for validator in validators["active"]
+    } == {"allele_mention_reference_validation"}
+    assert {
+        validator["validator_id"] for validator in validators["under_development"]
+    } == {
+        "allele_pending_envelope_validator",
+        "source_reference_validation",
+    }
+
     under_development_bindings = {
         binding["binding_id"]: binding
         for binding in validator_bindings["under_development"]

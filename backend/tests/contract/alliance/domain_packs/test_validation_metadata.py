@@ -109,6 +109,13 @@ def test_alliance_domain_pack_validation_metadata_states_are_discoverable():
     }
     assert {
         entry.state
+        for entry in validation_registries["agr.alliance.allele"].validator_metadata
+    } == {
+        ValidationBindingState.ACTIVE,
+        ValidationBindingState.UNDER_DEVELOPMENT,
+    }
+    assert {
+        entry.state
         for entry in validation_registries[
             "agr.alliance.phenotype"
         ].validator_metadata
@@ -147,6 +154,7 @@ def test_alliance_active_validator_bindings_have_dispatch_contracts():
 def test_active_bindings_have_active_capability_metadata():
     alliance_registry = load_alliance_domain_pack_registry()
     pack_ids = {
+        "agr.alliance.allele",
         "agr.alliance.chemical_condition",
         "agr.alliance.disease",
         "agr.alliance.gene_expression",

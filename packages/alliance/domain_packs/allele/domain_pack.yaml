@@ -396,6 +396,18 @@ metadata:
       schema_dir: model/schema
       root_schema: model/schema/allianceModel.yaml
       cache_script: scripts/testing/cache_agr_curation_schema.sh
+  validators:
+    active:
+      - validator_id: allele_mention_reference_validation
+        display_name: Allele mention lookup
+        description: Validate extracted allele mention text against Alliance allele rows and materialize allele identifier, symbol, and taxon fields through the active package-scoped allele validator binding.
+    under_development:
+      - validator_id: allele_pending_envelope_validator
+        display_name: Data check
+        description: Pending allele envelope data checks are structural review metadata until concrete selector inputs and expected result fields are defined.
+      - validator_id: source_reference_validation
+        display_name: Source reference validation
+        description: Validate source paper reference identifiers through the API-backed reference validator after dependent reference materialization and export flows are activated.
   validator_bindings:
     active:
       - binding_id: allele_mention_reference_validation
