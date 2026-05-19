@@ -15,8 +15,8 @@ name: "Gene Extraction Agent"
 description: >
   Extracts Alliance gene mention evidence from uploaded PDFs as
   gene_mention_evidence validated-reference domain-envelope objects with
-  evidence-first inclusion/exclusion decisions and database-assisted
-  normalization.
+  evidence-first inclusion/exclusion decisions and validator-ready identity
+  hints.
 
 category: "Extraction"
 subcategory: "PDF Extraction"

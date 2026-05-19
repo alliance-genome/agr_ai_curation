@@ -31,6 +31,32 @@ EXTRACTOR_OUTPUT_SCHEMAS = {
     "packages/alliance/agents/phenotype_extractor/agent.yaml": "PhenotypeResultEnvelope",
 }
 
+EXTRACTION_SAFE_TOOLS = {
+    "search_document",
+    "read_section",
+    "read_subsection",
+    "record_evidence",
+    "get_agent_contract",
+    "agr_species_context_lookup",
+}
+
+FORBIDDEN_EXTRACTOR_METADATA_PHRASES = (
+    "database-assisted normalization",
+    "database assisted normalization",
+    "database normalization",
+    "curation database normalization",
+)
+
+FORBIDDEN_EXTRACTOR_TOOLS = {
+    "agr_curation_query",
+    "curation_db_sql",
+    "chebi_api_call",
+    "agr_literature_reference_lookup",
+    "quickgo_api_call",
+    "go_api_call",
+    "alliance_api_call",
+}
+
 FORBIDDEN_TARGET_REPAIR_FRAGMENTS = [
     "repair_action",
     "repair_hints",
@@ -181,6 +207,30 @@ def test_extractor_agents_use_plain_extraction_result_schemas():
             "__domain_envelope_extractor_repair_response__",
             False,
         )
+
+
+def test_extractor_agent_metadata_and_tools_stay_extraction_scoped():
+    for relative_path in EXTRACTOR_OUTPUT_SCHEMAS:
+        agent_payload = _yaml(relative_path)
+        tools = set(agent_payload.get("tools") or [])
+        assert tools <= EXTRACTION_SAFE_TOOLS
+        assert tools.isdisjoint(FORBIDDEN_EXTRACTOR_TOOLS)
+
+        supervisor_description = (
+            agent_payload.get("supervisor_routing", {}).get("description") or ""
+        )
+        metadata_text = " ".join(
+            [
+                str(agent_payload.get("description") or ""),
+                str(supervisor_description),
+            ]
+        )
+        normalized_metadata = re.sub(r"\s+", " ", metadata_text).lower()
+        for phrase in FORBIDDEN_EXTRACTOR_METADATA_PHRASES:
+            assert phrase not in normalized_metadata, (
+                f"{relative_path} exposes validator-owned normalization as "
+                "extractor metadata"
+            )
 
 
 def test_extractor_group_rules_do_not_expose_repair_surfaces():

@@ -14,7 +14,7 @@ name: "Allele/Variant Extraction Agent"
 
 description: >
   Extracts allele and variant assertions from uploaded PDFs with evidence-first
-  inclusion/exclusion decisions and optional database-assisted normalization.
+  inclusion/exclusion decisions and validator-ready identity hints.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
