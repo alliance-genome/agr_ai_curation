@@ -246,7 +246,7 @@ def test_evidence_reference_report_names_retained_items_missing_refs():
                     "payload": {
                         "mention": "crb",
                         "normalized_symbol": "crb",
-                        "normalized_id": "FB:FBgn0000368",
+                        "normalized_id": "FB:FBgn0259685",
                         "species": "Drosophila melanogaster",
                         "confidence": "high",
                     },
@@ -297,7 +297,7 @@ def test_domain_extraction_output_type_detects_curatable_object_evidence():
             {
                 "object_type": "gene",
                 "pending_ref_id": "gene-crb",
-                "payload": {"mention": "crb", "normalized_id": "FB:FBgn0000368"},
+                "payload": {"mention": "crb", "normalized_id": "FB:FBgn0259685"},
                 "evidence_record_ids": ["evidence-live-a"],
             }
         ],

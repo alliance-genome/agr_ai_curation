@@ -490,13 +490,13 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
         metadata,
         envelope,
         resolved_values={
-            "curie": "FB:FBgn0000368",
+            "curie": "FB:FBgn0259685",
             "symbol": "crb",
             "taxon": "NCBITaxon:7227",
         },
         resolved_objects=[
             {
-                "gene_id": "FB:FBgn0000368",
+                "gene_id": "FB:FBgn0259685",
                 "symbol": "crb",
                 "taxon": "NCBITaxon:7227",
                 "species": "Drosophila melanogaster",
@@ -512,7 +512,7 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
     assert patched.status is CuratableObjectStatus.VALIDATED
     assert patched.payload == {
         "mention": "crumbs",
-        "primary_external_id": "FB:FBgn0000368",
+        "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
         "taxon": "NCBITaxon:7227",
     }
@@ -522,7 +522,7 @@ def test_validator_result_materialization_patches_target_payload_from_resolved_v
     finding = result.appended_findings[0]
     assert finding.status is ValidationFindingStatus.RESOLVED
     assert finding.details["validation_result"]["resolved_values"]["curie"] == (
-        "FB:FBgn0000368"
+        "FB:FBgn0259685"
     )
 
 
@@ -604,7 +604,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
     first_item = _validator_item(
         metadata,
         envelope,
-        resolved_values={"curie": "FB:FBgn0000368"},
+        resolved_values={"curie": "FB:FBgn0259685"},
         resolved_objects=[],
     )
     second_item = _validator_item(
@@ -622,7 +622,7 @@ def test_validator_result_materialization_merges_multiple_target_payload_patches
 
     assert result.envelope.objects[0].payload == {
         "mention": "crumbs",
-        "primary_external_id": "FB:FBgn0000368",
+        "primary_external_id": "FB:FBgn0259685",
         "gene_symbol": "crb",
         "taxon": "NCBITaxon:7227",
     }

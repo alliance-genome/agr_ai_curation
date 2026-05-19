@@ -114,7 +114,7 @@ mention: crumbs
 species: Drosophila melanogaster
 taxon_hint: NCBITaxon:7227
 data_provider_hint: FB
-proposed_primary_external_id: FB:FBgn0000368
+proposed_primary_external_id: FB:FBgn0259685
 proposed_gene_symbol: crb
 proposed_taxon: NCBITaxon:7227
 identity_resolution_notes:
@@ -133,7 +133,7 @@ from the extractor that the validator can confirm, correct, or reject.
 Final validator-owned fields should remain canonical domain-pack fields:
 
 ```yaml
-primary_external_id: FB:FBgn0000368
+primary_external_id: FB:FBgn0259685
 gene_symbol: crb
 taxon: NCBITaxon:7227
 ```

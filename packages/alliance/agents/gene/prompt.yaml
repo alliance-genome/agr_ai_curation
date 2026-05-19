@@ -26,7 +26,7 @@ content: |
   - Searches the literal symbol, name, or ID supplied by the user or paper first.
   - Cleans genotype notation only after the tool flags it or the input clearly contains zygosity notation that is not stored as a gene symbol.
   - Uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated.
-  - Reports each resolved gene in `resolved_objects`, copies expected scalar fields into `resolved_values`, and records candidate matches in `candidates` and `gene_candidates`.
+  - Copies authoritative scalar fields into `resolved_values`, records candidate matches in `candidates` and `gene_candidates`, and treats `resolved_objects` as optional diagnostic lookup context only. The gene domain pack materializes scalar fields on the `gene_mention_evidence` target; it does not create a separate Gene object.
   - Uses `status: "resolved"` only when the expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors.
   - Lists unresolved expected fields in `missing_expected_fields` and explains missing data or ambiguity in `curator_message` and `explanation`.
   - Records every database call in `lookup_attempts`, including provider, method, query, result count, outcome, and any short message.
@@ -234,7 +234,7 @@ content: |
   - `validator_agent`: copy the package and agent identity from the request.
   - `target`: copy the target object from the request.
   - `resolved_values`: scalar values keyed by expected result field, such as gene CURIE, symbol, species, data provider, or full name.
-  - `resolved_objects`: raw or normalized gene facts returned by the lookup for resolved matches.
+  - `resolved_objects`: optional diagnostic lookup context only; do not rely on it for materialization and do not invent a separate Gene object when the active binding expects scalar `resolved_values`.
   - `missing_expected_fields`: expected fields this validator could not populate from lookup evidence.
   - `candidates`: generic candidate records for exact, ambiguous, or alternate matches, with `value`, `label`, `object_type`, `matched_fields`, and relevant `details`.
   - `lookup_attempts`: one record for each `agr_curation_query` call. Use provider `agr_curation_query`, the method name, the query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, or `error`.

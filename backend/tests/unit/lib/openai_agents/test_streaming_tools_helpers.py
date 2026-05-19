@@ -435,7 +435,7 @@ def _resolved_gene_validator_payload(request):
         "validator_agent": request.validator_agent.model_dump(mode="json"),
         "target": request.target.model_dump(mode="json"),
         "resolved_values": {
-            "curie": "FB:FBgn0000368",
+            "curie": "FB:FBgn0259685",
             "symbol": "crb",
             "taxon": "NCBITaxon:7227",
         },
@@ -526,7 +526,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
                     "object_type": "gene_mention_evidence",
                     "payload": {
                         "mention": "crumbs",
-                        "primary_external_id": "FB:FBgn0000368",
+                        "primary_external_id": "FB:FBgn0259685",
                         "gene_symbol": "crb",
                         "taxon": "NCBITaxon:7227",
                     },
@@ -572,7 +572,7 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
     payload = json.loads(result)
     assert payload["metadata"]["validated"] is True
-    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0000368"
+    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0259685"
     assert dispatched["envelope"] is source_envelope
     assert dispatched["domain_pack"].pack_id == "gene"
     assert dispatched["kwargs"]["source_envelope_revision"] == 1
@@ -624,7 +624,7 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch)
     assert request.selected_inputs["data_provider_hint"] == "FB"
     assert request.selected_inputs["taxon_hint"] == "NCBITaxon:7227"
     assert request.selected_inputs["evidence_quote"].startswith("Crumbs protein")
-    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0000368"
+    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0259685"
     assert payload["objects"][0]["payload"]["gene_symbol"] == "crb"
     assert payload["objects"][0]["payload"]["taxon"] == "NCBITaxon:7227"
     assert payload["validation_findings"]

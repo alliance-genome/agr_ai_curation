@@ -434,7 +434,7 @@ async def test_runner_emits_evidence_summary_from_structured_extraction_result(m
                     {
                         "mention": "crumbs",
                         "normalized_symbol": "crb",
-                        "normalized_id": "FB:FBgn0000368",
+                        "normalized_id": "FB:FBgn0259685",
                         "species": "Drosophila melanogaster",
                         "confidence": "high",
                         "evidence_record_ids": [crumbs_record["evidence_record_id"]],
@@ -442,7 +442,7 @@ async def test_runner_emits_evidence_summary_from_structured_extraction_result(m
                     {
                         "mention": "crb",
                         "normalized_symbol": "crb",
-                        "normalized_id": "FB:FBgn0000368",
+                        "normalized_id": "FB:FBgn0259685",
                         "species": "Drosophila melanogaster",
                         "confidence": "high",
                         "evidence_record_ids": [crb_record["evidence_record_id"]],
@@ -452,7 +452,7 @@ async def test_runner_emits_evidence_summary_from_structured_extraction_result(m
                     {
                         "label": "crumbs",
                         "entity_type": "gene",
-                        "normalized_id": "FB:FBgn0000368",
+                        "normalized_id": "FB:FBgn0259685",
                         "source_mentions": ["crumbs"],
                         "evidence_record_ids": [
                             crumbs_record["evidence_record_id"],
@@ -462,7 +462,7 @@ async def test_runner_emits_evidence_summary_from_structured_extraction_result(m
                     {
                         "label": "crb",
                         "entity_type": "gene",
-                        "normalized_id": "FB:FBgn0000368",
+                        "normalized_id": "FB:FBgn0259685",
                         "source_mentions": ["crb"],
                         "evidence_record_ids": [crb_record["evidence_record_id"]],
                     },
@@ -501,7 +501,7 @@ async def test_runner_emits_evidence_summary_from_structured_extraction_result(m
         {
             "label": "crb",
             "entity_type": "gene",
-            "normalized_id": "FB:FBgn0000368",
+            "normalized_id": "FB:FBgn0259685",
             "source_mentions": ["crumbs", "crb"],
             "evidence_record_ids": [
                 crumbs_record["evidence_record_id"],
@@ -651,7 +651,7 @@ async def test_runner_fails_fast_without_structured_evidence_even_when_live_ment
                     {
                         "label": "crb",
                         "entity_type": "gene",
-                        "normalized_id": "FB:FBgn0000368",
+                        "normalized_id": "FB:FBgn0259685",
                         "source_mentions": ["crumbs", "crb"],
                         "evidence": [],
                     }
@@ -1123,7 +1123,7 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
                         {
                             "mention": "crumbs",
                             "normalized_symbol": "crb",
-                            "normalized_id": "FB:FBgn0000368",
+                            "normalized_id": "FB:FBgn0259685",
                             "species": "Drosophila melanogaster",
                             "confidence": "high",
                             "evidence_record_ids": [crumbs_record["evidence_record_id"]],
@@ -1131,7 +1131,7 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
                         {
                             "mention": "crb",
                             "normalized_symbol": "crb",
-                            "normalized_id": "FB:FBgn0000368",
+                            "normalized_id": "FB:FBgn0259685",
                             "species": "Drosophila melanogaster",
                             "confidence": "high",
                             "evidence_record_ids": [crb_record["evidence_record_id"]],
@@ -1141,14 +1141,14 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
                         {
                             "label": "crumbs",
                             "entity_type": "gene",
-                            "normalized_id": "FB:FBgn0000368",
+                            "normalized_id": "FB:FBgn0259685",
                             "source_mentions": ["crumbs"],
                             "evidence_record_ids": [crumbs_record["evidence_record_id"]],
                         },
                         {
                             "label": "crb",
                             "entity_type": "gene",
-                            "normalized_id": "FB:FBgn0000368",
+                            "normalized_id": "FB:FBgn0259685",
                             "source_mentions": ["crb"],
                             "evidence_record_ids": [crb_record["evidence_record_id"]],
                         }
@@ -1181,7 +1181,7 @@ async def test_specialist_emits_evidence_summary_for_structured_extraction_outpu
         {
             "label": "crb",
             "entity_type": "gene",
-            "normalized_id": "FB:FBgn0000368",
+            "normalized_id": "FB:FBgn0259685",
             "source_mentions": ["crumbs", "crb"],
             "evidence_record_ids": [
                 crumbs_record["evidence_record_id"],
@@ -1268,7 +1268,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(
                         {
                             "mention": "crumbs",
                             "normalized_symbol": "crb",
-                            "normalized_id": "FB:FBgn0000368",
+                            "normalized_id": "FB:FBgn0259685",
                             "species": "Drosophila melanogaster",
                             "confidence": "high",
                             "evidence_record_ids": [crumbs_record["evidence_record_id"]],
@@ -1286,7 +1286,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_call_id(
                         {
                             "label": "crb",
                             "entity_type": "gene",
-                            "normalized_id": "FB:FBgn0000368",
+                            "normalized_id": "FB:FBgn0259685",
                             "source_mentions": ["crumbs"],
                             "evidence_record_ids": [crumbs_record["evidence_record_id"]],
                         },
@@ -1841,7 +1841,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity
                         {
                             "mention": "crumbs",
                             "normalized_symbol": "crb",
-                            "normalized_id": "FB:FBgn0000368",
+                            "normalized_id": "FB:FBgn0259685",
                             "species": "Drosophila melanogaster",
                             "confidence": "high",
                             "evidence_record_ids": [crumbs_record["evidence_record_id"]],
@@ -1859,7 +1859,7 @@ async def test_specialist_matches_concurrent_record_evidence_outputs_by_identity
                         {
                             "label": "crb",
                             "entity_type": "gene",
-                            "normalized_id": "FB:FBgn0000368",
+                            "normalized_id": "FB:FBgn0259685",
                             "source_mentions": ["crumbs"],
                             "evidence_record_ids": [crumbs_record["evidence_record_id"]],
                         },
