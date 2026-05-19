@@ -129,6 +129,35 @@ def test_disease_extractor_schema_accepts_label_backed_pending_disease_candidate
     }
 
 
+def test_disease_extractor_schema_canonicalizes_pending_scaffold_fields():
+    payload = _valid_disease_extractor_payload()
+    obj = payload["curatable_objects"][0]
+    del obj["definition_state"]
+    del obj["evidence_record_ids"]
+    del obj["metadata_refs"]
+    del obj["metadata"]["assertion_kind"]
+    del obj["metadata"]["write_behavior"]
+
+    envelope = _validate_disease_extractor_payload(payload)
+
+    normalized_obj = envelope.curatable_objects[0]
+    assert normalized_obj.definition_state.value == "in_development"
+    assert normalized_obj.evidence_record_ids == [
+        "ats-model-evidence-1",
+        "ats-cohort-evidence-1",
+    ]
+    assert normalized_obj.metadata["assertion_kind"] == "pending_disease_assertion"
+    assert normalized_obj.metadata["write_behavior"]["status"] == "blocked"
+    assert [
+        metadata_ref.model_dump(mode="json", exclude_none=True)
+        for metadata_ref in normalized_obj.metadata_refs
+    ] == [
+        {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
+        {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"},
+        {"metadata_path": "evidence_records[1]", "role": "supporting_evidence"},
+    ]
+
+
 @pytest.mark.parametrize("legacy_field", sorted(LEGACY_SEMANTIC_LIST_FIELDS))
 def test_disease_extractor_schema_rejects_top_level_legacy_semantic_lists(
     legacy_field: str,
