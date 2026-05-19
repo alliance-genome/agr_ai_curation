@@ -4,15 +4,15 @@
       "ok": true,
       "payload": {
         "chunk_count": null,
-        "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
+        "document_id": "e3da0e79-2080-4ce4-aa89-68eb7650e9c8",
         "error_message": null,
         "file_size_bytes": 4359435,
-        "filename": "gene_drosophila_crb_rhabdomere-4531fecd.pdf",
-        "job_id": "9cd9b2dd-2e83-4206-bcca-02939f64c74a",
+        "filename": "gene_drosophila_crb_rhabdomere-d80b02ce.pdf",
+        "job_id": "71e3c90b-4182-4e8a-bb32-4540d1a69595",
         "processing_completed_at": null,
         "processing_started_at": null,
         "status": "PENDING",
-        "upload_timestamp": "2026-05-19T04:39:27.427212Z",
+        "upload_timestamp": "2026-05-19T05:30:04.507758Z",
         "user_id": 1,
         "weaviate_tenant": "dev_user_123"
       },
@@ -24,20 +24,20 @@
       "payload": {
         "cancel_requested": false,
         "chunk_count": 96,
-        "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
+        "document_id": "e3da0e79-2080-4ce4-aa89-68eb7650e9c8",
         "embedding_status": "completed",
-        "job_id": "9cd9b2dd-2e83-4206-bcca-02939f64c74a",
+        "job_id": "71e3c90b-4182-4e8a-bb32-4540d1a69595",
         "job_status": "completed",
         "pipeline_status": {
-          "completed_at": "2026-05-19T04:39:41.151366+00:00",
+          "completed_at": "2026-05-19T05:30:17.753972+00:00",
           "current_stage": "completed",
-          "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
+          "document_id": "e3da0e79-2080-4ce4-aa89-68eb7650e9c8",
           "error_count": 0,
           "message": "Processing completed successfully",
           "progress_percentage": 100,
           "stage_results": [],
-          "started_at": "2026-05-19T04:39:27.429765+00:00",
-          "updated_at": "2026-05-19T04:39:41.151121+00:00"
+          "started_at": "2026-05-19T05:30:04.510248+00:00",
+          "updated_at": "2026-05-19T05:30:17.753693+00:00"
         },
         "processing_status": "completed",
         "vector_count": 96
@@ -48,7 +48,7 @@
     {
       "ok": true,
       "payload": {
-        "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
+        "document_id": "e3da0e79-2080-4ce4-aa89-68eb7650e9c8",
         "returned_chunks": 96,
         "total_items": 96
       },
@@ -58,7 +58,7 @@
     {
       "ok": true,
       "payload": {
-        "created_at": "2026-05-19T04:39:42.643078Z",
+        "created_at": "2026-05-19T05:30:19.794721Z",
         "description": "Real-PDF corpus trial for gene",
         "execution_count": 0,
         "flow_definition": {
@@ -192,17 +192,17 @@
           ],
           "version": "1.0"
         },
-        "id": "2a524b09-e8cf-449e-ba96-efbd38df26fb",
+        "id": "36cc32c9-d311-41de-a738-26dc364b5edf",
         "last_executed_at": null,
-        "name": "Corpus gene_drosophila_crb_rhabdomere 5d3dd2",
-        "updated_at": "2026-05-19T04:39:42.643078Z",
+        "name": "Corpus gene_drosophila_crb_rhabdomere 8275a3",
+        "updated_at": "2026-05-19T05:30:19.794721Z",
         "user_id": 1
       },
       "status_code": 201,
       "step": "gene_drosophila_crb_rhabdomere_flow_create"
     },
     {
-      "ok": false,
+      "ok": true,
       "payload": {
         "event_types": [
           "FLOW_STARTED",
@@ -210,8 +210,6 @@
           "SUPERVISOR_START",
           "AGENT_COMPLETE",
           "CREW_START",
-          "TOOL_CALL_ARGS",
-          "TOOL_CALL_ARGS",
           "TOOL_CALL_ARGS",
           "TOOL_CALL_ARGS",
           "TOOL_CALL_ARGS",
@@ -428,44 +426,6 @@
           "TEXT_MESSAGE_CONTENT",
           "TEXT_MESSAGE_CONTENT",
           "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
-          "TEXT_MESSAGE_CONTENT",
           "SUPERVISOR_COMPLETE",
           "evidence_summary",
           "RUN_FINISHED",
@@ -475,81 +435,164 @@
           "adapter_keys": [
             "gene"
           ],
-          "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
+          "document_id": "e3da0e79-2080-4ce4-aa89-68eb7650e9c8",
           "failure_reason": null,
-          "flow_id": "2a524b09-e8cf-449e-ba96-efbd38df26fb",
-          "flow_name": "Corpus gene_drosophila_crb_rhabdomere 5d3dd2",
-          "flow_run_id": "3d218e5a-9636-4865-8a5b-be79944407d7",
-          "origin_session_id": "corpus-flow-0296a191",
-          "session_id": "corpus-flow-0296a191",
+          "flow_id": "36cc32c9-d311-41de-a738-26dc364b5edf",
+          "flow_name": "Corpus gene_drosophila_crb_rhabdomere 8275a3",
+          "flow_run_id": "ceea9e6d-0f15-46db-88ae-3b10953cbf52",
+          "origin_session_id": "corpus-flow-445dd173",
+          "session_id": "corpus-flow-445dd173",
           "status": "completed",
           "step_evidence_counts": {
-            "1": 0
+            "1": 1
           },
-          "timestamp": "2026-05-19T04:40:17.066133+00:00",
-          "total_evidence_records": 0,
-          "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+          "timestamp": "2026-05-19T05:31:00.336856+00:00",
+          "total_evidence_records": 1,
+          "turn_id": "45a089bcbf834b9face5186c5636cf81",
           "type": "FLOW_FINISHED"
         },
         "flow_step_evidence_events": [
           {
             "agent_id": "gene_extractor",
             "agent_name": "Gene Extraction Agent",
-            "evidence_count": 0,
-            "evidence_preview": [],
-            "evidence_records": [],
-            "flow_id": "2a524b09-e8cf-449e-ba96-efbd38df26fb",
-            "flow_name": "Corpus gene_drosophila_crb_rhabdomere 5d3dd2",
-            "flow_run_id": "3d218e5a-9636-4865-8a5b-be79944407d7",
-            "session_id": "corpus-flow-0296a191",
+            "evidence_count": 1,
+            "evidence_preview": [
+              {
+                "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
+                "entity": "Crumbs",
+                "evidence_record_id": "evidence-087dea936d63ea3e",
+                "page": 9,
+                "section": "Results",
+                "subsection": "Crumbs regulates R8 cell fate through its FERM-binding motif",
+                "verified_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies."
+              }
+            ],
+            "evidence_records": [
+              {
+                "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
+                "entity": "Crumbs",
+                "evidence_record_id": "evidence-087dea936d63ea3e",
+                "page": 9,
+                "section": "Results",
+                "subsection": "Crumbs regulates R8 cell fate through its FERM-binding motif",
+                "verified_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies."
+              }
+            ],
+            "flow_id": "36cc32c9-d311-41de-a738-26dc364b5edf",
+            "flow_name": "Corpus gene_drosophila_crb_rhabdomere 8275a3",
+            "flow_run_id": "ceea9e6d-0f15-46db-88ae-3b10953cbf52",
+            "session_id": "corpus-flow-445dd173",
             "step": 1,
-            "timestamp": "2026-05-19T04:40:14.486775+00:00",
+            "timestamp": "2026-05-19T05:30:57.527369+00:00",
             "tool_name": "ask_gene_extractor_specialist",
-            "total_evidence_records": 0,
-            "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+            "total_evidence_records": 1,
+            "turn_id": "45a089bcbf834b9face5186c5636cf81",
             "type": "FLOW_STEP_EVIDENCE"
           }
         ],
         "run_finished": {
           "agents_used": [
-            "Flow Supervisor: Corpus gene_drosophila_crb_rhabdomere 5d3dd2"
+            "Flow Supervisor: Corpus gene_drosophila_crb_rhabdomere 8275a3"
           ],
-          "response": "The gene \"Crumbs\" (symbol: crb) was extracted from the paper in the context of rhabdomere or photoreceptor apical-domain morphogenesis in *Drosophila melanogaster*. \n\n### Supporting Evidence:\n- **Quote:** \"Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult *D. melanogaster* retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.\"\n- **Species:** *Drosophila melanogaster*\n- **Taxon Hint:** NCBITaxon:7227\n- **Data Provider Hint:** FB\n\nThe gene was resolved to \"crb\" with CURIE \"FB:FBgn0259685\". \n\nThis completes the task of extracting the gene candidate from the document.",
-          "response_length": 660,
-          "session_id": "corpus-flow-0296a191",
+          "response": "The gene candidate extracted from the paper is \"Crumbs\" (crb) in the context of Drosophila melanogaster, specifically related to rhabdomere or photoreceptor apical-domain morphogenesis. \n\n### Supporting Quote:\n\"Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.\"\n\n### Organism/Species:\n- **Species:** Drosophila melanogaster\n- **Taxon Hint:** NCBITaxon:7227\n\nThis concludes the task.",
+          "response_length": 542,
+          "session_id": "corpus-flow-445dd173",
           "tool_calls": 1,
-          "trace_id": "d4ac18f09a8722a585ac27febf99172f",
-          "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+          "trace_id": "97329486400793c3abfd65da27ab3277",
+          "turn_id": "45a089bcbf834b9face5186c5636cf81",
           "type": "RUN_FINISHED"
         },
         "run_started": {
-          "agent": "Flow Supervisor: Corpus gene_drosophila_crb_rhabdomere 5d3dd2",
-          "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
+          "agent": "Flow Supervisor: Corpus gene_drosophila_crb_rhabdomere 8275a3",
+          "document_id": "e3da0e79-2080-4ce4-aa89-68eb7650e9c8",
           "model": "gpt-4o",
-          "session_id": "corpus-flow-0296a191",
-          "trace_id": "d4ac18f09a8722a585ac27febf99172f",
-          "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+          "session_id": "corpus-flow-445dd173",
+          "trace_id": "97329486400793c3abfd65da27ab3277",
+          "turn_id": "45a089bcbf834b9face5186c5636cf81",
           "type": "RUN_STARTED"
         },
-        "zero_evidence_warning": true
+        "zero_evidence_warning": false
       },
       "status_code": 200,
       "step": "execute_flow_permissive"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "flow_run_id": "ceea9e6d-0f15-46db-88ae-3b10953cbf52",
+        "step_count": 1,
+        "total_evidence_records": 1
+      },
+      "status_code": 200,
+      "step": "flow_evidence_export_json"
     }
   ],
   "created_document": true,
-  "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
-  "finished_at": "2026-05-19T04:40:17.085481+00:00",
-  "flow_id": "2a524b09-e8cf-449e-ba96-efbd38df26fb",
+  "document_id": "e3da0e79-2080-4ce4-aa89-68eb7650e9c8",
+  "finished_at": "2026-05-19T05:31:00.364652+00:00",
+  "flow_evidence_export": {
+    "flow_name": "Corpus gene_drosophila_crb_rhabdomere 8275a3",
+    "flow_run_id": "ceea9e6d-0f15-46db-88ae-3b10953cbf52",
+    "steps": [
+      {
+        "agent_id": "gene_extractor",
+        "agent_name": "Gene Extraction Agent",
+        "evidence_count": 1,
+        "evidence_records": [
+          {
+            "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
+            "entity": "Crumbs",
+            "evidence_record_id": "evidence-087dea936d63ea3e",
+            "page": 9,
+            "section": "Results",
+            "subsection": "Crumbs regulates R8 cell fate through its FERM-binding motif",
+            "verified_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies."
+          }
+        ],
+        "step": 1,
+        "tool_name": "ask_gene_extractor_specialist"
+      }
+    ],
+    "total_evidence_records": 1
+  },
+  "flow_id": "36cc32c9-d311-41de-a738-26dc364b5edf",
   "flow_summary": {
     "domain_events": [
+      {
+        "details": {
+          "agent": "Gene Extraction Agent",
+          "friendlyName": "Gene Extraction Agent: AGR Species Context Lookup",
+          "isSpecialistInternal": true,
+          "toolArgs": {
+            "species": "Drosophila melanogaster"
+          },
+          "toolName": "agr_species_context_lookup"
+        },
+        "session_id": "corpus-flow-445dd173",
+        "timestamp": "2026-05-19T05:30:24.514812+00:00",
+        "turn_id": "45a089bcbf834b9face5186c5636cf81",
+        "type": "TOOL_START"
+      },
+      {
+        "details": {
+          "durationMs": 2251,
+          "friendlyName": "Gene Extraction Agent: AGR Species Context Lookup complete",
+          "isSpecialistInternal": true,
+          "success": true,
+          "toolName": "agr_species_context_lookup"
+        },
+        "session_id": "corpus-flow-445dd173",
+        "timestamp": "2026-05-19T05:30:26.766755+00:00",
+        "turn_id": "45a089bcbf834b9face5186c5636cf81",
+        "type": "TOOL_COMPLETE"
+      },
       {
         "details": {
           "agent": "Gene Extraction Agent",
           "friendlyName": "Gene Extraction Agent: Record Evidence",
           "isSpecialistInternal": true,
           "toolArgs": {
-            "chunk_id": "240fb5d4-71d9-3590-cd02-a03821253bd6",
+            "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
             "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies. GFP-negative clones harboured the following alleles: crb 11A22 (A), FRT82B (negative control) (B) or crb \u0394 FBM. HA (C). Panel (A) is a maximum projection as rhodopsins localised to different focal planes in wild type and mutant clones. Scale bars are 20\u03bcm.",
             "entity": "Crumbs",
             "field_path": null,
@@ -560,10 +603,23 @@
           },
           "toolName": "record_evidence"
         },
-        "session_id": "corpus-flow-0296a191",
-        "timestamp": "2026-05-19T04:39:52.611656+00:00",
-        "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+        "session_id": "corpus-flow-445dd173",
+        "timestamp": "2026-05-19T05:30:29.649442+00:00",
+        "turn_id": "45a089bcbf834b9face5186c5636cf81",
         "type": "TOOL_START"
+      },
+      {
+        "details": {
+          "durationMs": 1322,
+          "friendlyName": "Gene Extraction Agent: Record Evidence complete",
+          "isSpecialistInternal": true,
+          "success": true,
+          "toolName": "record_evidence"
+        },
+        "session_id": "corpus-flow-445dd173",
+        "timestamp": "2026-05-19T05:30:30.972237+00:00",
+        "turn_id": "45a089bcbf834b9face5186c5636cf81",
+        "type": "TOOL_COMPLETE"
       },
       {
         "details": {
@@ -571,7 +627,7 @@
           "friendlyName": "Gene Extraction Agent: Record Evidence",
           "isSpecialistInternal": true,
           "toolArgs": {
-            "chunk_id": "240fb5d4-71d9-3590-cd02-a03821253bd6",
+            "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
             "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.",
             "entity": "Crumbs",
             "field_path": null,
@@ -582,10 +638,23 @@
           },
           "toolName": "record_evidence"
         },
-        "session_id": "corpus-flow-0296a191",
-        "timestamp": "2026-05-19T04:39:55.867212+00:00",
-        "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+        "session_id": "corpus-flow-445dd173",
+        "timestamp": "2026-05-19T05:30:33.123357+00:00",
+        "turn_id": "45a089bcbf834b9face5186c5636cf81",
         "type": "TOOL_START"
+      },
+      {
+        "details": {
+          "durationMs": 1705,
+          "friendlyName": "Gene Extraction Agent: Record Evidence complete",
+          "isSpecialistInternal": true,
+          "success": true,
+          "toolName": "record_evidence"
+        },
+        "session_id": "corpus-flow-445dd173",
+        "timestamp": "2026-05-19T05:30:34.828760+00:00",
+        "turn_id": "45a089bcbf834b9face5186c5636cf81",
+        "type": "TOOL_COMPLETE"
       },
       {
         "details": {
@@ -601,19 +670,19 @@
                   "Discussion"
                 ]
               },
-              "durationMs": 2211,
+              "durationMs": 2342,
               "name": "search_document"
             },
             {
               "args": {
                 "species": "Drosophila melanogaster"
               },
-              "durationMs": 2149,
+              "durationMs": 2251,
               "name": "agr_species_context_lookup"
             },
             {
               "args": {
-                "chunk_id": "240fb5d4-71d9-3590-cd02-a03821253bd6",
+                "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
                 "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies. GFP-negative clones harboured the following alleles: crb 11A22 (A), FRT82B (negative control) (B) or crb \u0394 FBM. HA (C). Panel (A) is a maximum projection as rhodopsins localised to different focal planes in wild type and mutant clones. Scale bars are 20\u03bcm.",
                 "entity": "Crumbs",
                 "field_path": null,
@@ -622,12 +691,12 @@
                 "pending_ref_id": null,
                 "validation_finding_id": null
               },
-              "durationMs": 1412,
+              "durationMs": 1322,
               "name": "record_evidence"
             },
             {
               "args": {
-                "chunk_id": "240fb5d4-71d9-3590-cd02-a03821253bd6",
+                "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
                 "claimed_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.",
                 "entity": "Crumbs",
                 "field_path": null,
@@ -636,15 +705,15 @@
                 "pending_ref_id": null,
                 "validation_finding_id": null
               },
-              "durationMs": 1215,
+              "durationMs": 1705,
               "name": "record_evidence"
             }
           ],
-          "totalDurationMs": 19832
+          "totalDurationMs": 19139
         },
-        "session_id": "corpus-flow-0296a191",
-        "timestamp": "2026-05-19T04:40:14.409099+00:00",
-        "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+        "session_id": "corpus-flow-445dd173",
+        "timestamp": "2026-05-19T05:30:57.444493+00:00",
+        "turn_id": "45a089bcbf834b9face5186c5636cf81",
         "type": "SPECIALIST_SUMMARY"
       }
     ],
@@ -654,8 +723,6 @@
       "SUPERVISOR_START",
       "AGENT_COMPLETE",
       "CREW_START",
-      "TOOL_CALL_ARGS",
-      "TOOL_CALL_ARGS",
       "TOOL_CALL_ARGS",
       "TOOL_CALL_ARGS",
       "TOOL_CALL_ARGS",
@@ -872,44 +939,6 @@
       "TEXT_MESSAGE_CONTENT",
       "TEXT_MESSAGE_CONTENT",
       "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
-      "TEXT_MESSAGE_CONTENT",
       "SUPERVISOR_COMPLETE",
       "evidence_summary",
       "RUN_FINISHED",
@@ -919,39 +948,59 @@
       "adapter_keys": [
         "gene"
       ],
-      "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
+      "document_id": "e3da0e79-2080-4ce4-aa89-68eb7650e9c8",
       "failure_reason": null,
-      "flow_id": "2a524b09-e8cf-449e-ba96-efbd38df26fb",
-      "flow_name": "Corpus gene_drosophila_crb_rhabdomere 5d3dd2",
-      "flow_run_id": "3d218e5a-9636-4865-8a5b-be79944407d7",
-      "origin_session_id": "corpus-flow-0296a191",
-      "session_id": "corpus-flow-0296a191",
+      "flow_id": "36cc32c9-d311-41de-a738-26dc364b5edf",
+      "flow_name": "Corpus gene_drosophila_crb_rhabdomere 8275a3",
+      "flow_run_id": "ceea9e6d-0f15-46db-88ae-3b10953cbf52",
+      "origin_session_id": "corpus-flow-445dd173",
+      "session_id": "corpus-flow-445dd173",
       "status": "completed",
       "step_evidence_counts": {
-        "1": 0
+        "1": 1
       },
-      "timestamp": "2026-05-19T04:40:17.066133+00:00",
-      "total_evidence_records": 0,
-      "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+      "timestamp": "2026-05-19T05:31:00.336856+00:00",
+      "total_evidence_records": 1,
+      "turn_id": "45a089bcbf834b9face5186c5636cf81",
       "type": "FLOW_FINISHED"
     },
-    "flow_run_id": "3d218e5a-9636-4865-8a5b-be79944407d7",
+    "flow_run_id": "ceea9e6d-0f15-46db-88ae-3b10953cbf52",
     "flow_step_evidence_events": [
       {
         "agent_id": "gene_extractor",
         "agent_name": "Gene Extraction Agent",
-        "evidence_count": 0,
-        "evidence_preview": [],
-        "evidence_records": [],
-        "flow_id": "2a524b09-e8cf-449e-ba96-efbd38df26fb",
-        "flow_name": "Corpus gene_drosophila_crb_rhabdomere 5d3dd2",
-        "flow_run_id": "3d218e5a-9636-4865-8a5b-be79944407d7",
-        "session_id": "corpus-flow-0296a191",
+        "evidence_count": 1,
+        "evidence_preview": [
+          {
+            "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
+            "entity": "Crumbs",
+            "evidence_record_id": "evidence-087dea936d63ea3e",
+            "page": 9,
+            "section": "Results",
+            "subsection": "Crumbs regulates R8 cell fate through its FERM-binding motif",
+            "verified_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies."
+          }
+        ],
+        "evidence_records": [
+          {
+            "chunk_id": "b8c1a306-1f46-048a-17a8-c11da7bc38b3",
+            "entity": "Crumbs",
+            "evidence_record_id": "evidence-087dea936d63ea3e",
+            "page": 9,
+            "section": "Results",
+            "subsection": "Crumbs regulates R8 cell fate through its FERM-binding motif",
+            "verified_quote": "Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies."
+          }
+        ],
+        "flow_id": "36cc32c9-d311-41de-a738-26dc364b5edf",
+        "flow_name": "Corpus gene_drosophila_crb_rhabdomere 8275a3",
+        "flow_run_id": "ceea9e6d-0f15-46db-88ae-3b10953cbf52",
+        "session_id": "corpus-flow-445dd173",
         "step": 1,
-        "timestamp": "2026-05-19T04:40:14.486775+00:00",
+        "timestamp": "2026-05-19T05:30:57.527369+00:00",
         "tool_name": "ask_gene_extractor_specialist",
-        "total_evidence_records": 0,
-        "turn_id": "488c9a0e147f45c7a65ad454b3e4dd1c",
+        "total_evidence_records": 1,
+        "turn_id": "45a089bcbf834b9face5186c5636cf81",
         "type": "FLOW_STEP_EVIDENCE"
       }
     ],
@@ -965,12 +1014,12 @@
       "turn_id",
       "type"
     ],
-    "run_finished_preview": "The gene \"Crumbs\" (symbol: crb) was extracted from the paper in the context of rhabdomere or photoreceptor apical-domain morphogenesis in *Drosophila melanogaster*. \n\n### Supporting Evidence:\n- **Quote:** \"Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult *D. melanogaster* retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.\"\n- **Species:** *Drosophila melanogaster*\n- **Taxon Hint:** NCBITaxon:7227\n- **Data Provider Hint:** FB\n\nThe gene was resolved to \"crb\" with CURIE \"FB:FBgn0259685\". \n\nThis completes the task of extracting the gene candidate from the document.",
-    "total_evidence_records": 0
+    "run_finished_preview": "The gene candidate extracted from the paper is \"Crumbs\" (crb) in the context of Drosophila melanogaster, specifically related to rhabdomere or photoreceptor apical-domain morphogenesis. \n\n### Supporting Quote:\n\"Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult D. melanogaster retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.\"\n\n### Organism/Species:\n- **Species:** Drosophila melanogaster\n- **Taxon Hint:** NCBITaxon:7227\n\nThis concludes the task.",
+    "total_evidence_records": 1
   },
   "pdf_path": "/tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere.pdf",
   "pdf_size_bytes": 4359435,
-  "started_at": "2026-05-19T04:39:27.381359+00:00",
+  "started_at": "2026-05-19T05:30:04.464013+00:00",
   "status": "pass",
   "trial": {
     "agent_ids": [
@@ -986,9 +1035,5 @@
     "title": "Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye",
     "trial_id": "gene_drosophila_crb_rhabdomere"
   },
-  "upload_pdf_path": "/tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere-4531fecd.pdf",
-  "warnings": [
-    "flow_completed_with_zero_persisted_evidence_records",
-    "flow_evidence_export_failed: Flow evidence export was empty: {'flow_name': 'Corpus gene_drosophila_crb_rhabdomere 5d3dd2', 'flow_run_id': '3d218e5a-9636-4865-8a5b-be79944407d7', 'steps': [{'agent_id': 'gene_extractor', 'agent_name': 'Gene Extraction Agent', 'evidence_count': 0, 'evidence_records': [], 'step': 1, 'tool_name': 'ask_gene_extractor_specialist'}], 'total_evidence_records': 0}"
-  ]
+  "upload_pdf_path": "/tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere-d80b02ce.pdf"
 }

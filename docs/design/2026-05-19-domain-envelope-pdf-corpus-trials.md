@@ -7,12 +7,27 @@ Runner: `scripts/testing/domain_envelope_pdf_corpus.py`
 
 These trials exercised real uploaded PDFs through the live document upload, PDFX processing, Agent Studio flow execution, domain-envelope extraction, and automatic validator attachment metadata.
 
+## 2026-05-19 Focused Rerun After Evidence Propagation Fixes
+
+After `1501e3bb` and `e8fe5137`, I reran the gene and allele trials against the rebuilt main sandbox at backend port `8900`.
+
+| Domain | Document ID | Flow ID | Flow run ID | Outcome |
+| --- | --- | --- | --- | --- |
+| Gene | `e3da0e79-2080-4ce4-aa89-68eb7650e9c8` | `36cc32c9-d311-41de-a738-26dc364b5edf` | `ceea9e6d-0f15-46db-88ae-3b10953cbf52` | Passed with `total_evidence_records: 1`, step evidence count `1`, and JSON evidence export count `1`. |
+| Allele | `f4a51a32-9b1d-4b32-8188-0633ae45dc78` | `2d123857-6fcd-4d0f-b9f7-3576af5dfea4` | `6855dca2-530c-4e37-9723-c6952d81f20d` | Passed with `total_evidence_records: 1`, step evidence count `1`, and JSON evidence export count `1`. Allele validator lookup events still ended as unresolved `validator_agent_error`, which is separate from evidence propagation. |
+
+The focused rerun wrote the latest raw artifacts to:
+
+- `docs/design/pdf-corpus-trials/gene_drosophila_crb_rhabdomere.json`
+- `docs/design/pdf-corpus-trials/allele_drosophila_notch_facet_glossy.json`
+- `docs/design/pdf-corpus-trials/summary.json`
+
 ## Corpus
 
 | Domain | Paper | Source | Organism | Document ID | Flow ID | Outcome |
 | --- | --- | --- | --- | --- | --- | --- |
-| Gene | Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye | PMID 34097697, PMCID PMC8211197, DOI 10.1371/journal.pgen.1009146 | Drosophila melanogaster | `6b2958cb-0cdf-41b0-98f6-51d076375bd9` | `2a524b09-e8cf-449e-ba96-efbd38df26fb` | Completed; final answer resolved `crb` to `FB:FBgn0259685`, but no persisted evidence records were exported. |
-| Allele | Notch Controls Cell Adhesion in the Drosophila Eye | PMID 24415930, PMCID PMC3886913, DOI 10.1371/journal.pgen.1004087 | Drosophila melanogaster | `505f6ec6-fe61-4c3d-8c2b-254231948ac2` | `f369b4c2-1ef3-4bde-a07f-ad33a43195c3` | Failed in specialist gating: live evidence existed, but retained envelope objects lacked required evidence record references. |
+| Gene | Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye | PMID 34097697, PMCID PMC8211197, DOI 10.1371/journal.pgen.1009146 | Drosophila melanogaster | `e3da0e79-2080-4ce4-aa89-68eb7650e9c8` | `36cc32c9-d311-41de-a738-26dc364b5edf` | Focused rerun passed; final answer resolved `crb` to `FB:FBgn0259685`, flow step evidence count was `1`, and evidence export count was `1`. |
+| Allele | Notch Controls Cell Adhesion in the Drosophila Eye | PMID 24415930, PMCID PMC3886913, DOI 10.1371/journal.pgen.1004087 | Drosophila melanogaster | `f4a51a32-9b1d-4b32-8188-0633ae45dc78` | `2d123857-6fcd-4d0f-b9f7-3576af5dfea4` | Focused rerun passed evidence gating and export with one persisted evidence record; allele validator lookup still reported unresolved `validator_agent_error`. |
 | Disease | Network Analysis of a Pkd1-Mouse Model of Autosomal Dominant Polycystic Kidney Disease Identifies HNF4alpha as a Disease Modifier | PMID 23209420, PMCID PMC3516559, DOI 10.1371/journal.pgen.1003053 | Mus musculus | `b0e7ce22-0d9f-4f93-be99-4ef901a96968` | `b52f9920-7529-43a4-8e0a-609dbfe44451` | Flow completed, but supervisor reported persistent extraction-tool failure and zero evidence records. |
 | Chemical condition | Small molecule screen in embryonic zebrafish using modular variations to target segmentation | PMID 29196643, PMCID PMC5711842, DOI 10.1038/s41467-017-01469-5 | Danio rerio | `a0bb1a47-1e69-42eb-9cf2-26b9caef2c66` | `5de0c792-eb69-4047-a131-00a28ba7ce16` | Flow completed, but supervisor reported extraction-tool failure and zero evidence records. |
 | Phenotype | Joint Molecule Resolution Requires the Redundant Activities of MUS-81 and XPF-1 during Caenorhabditis elegans Meiosis | PMID 23874212, PMCID PMC3715453, DOI 10.1371/journal.pgen.1003582 | Caenorhabditis elegans | `1aae256e-dabb-4c87-91cc-96555787364d` | `49e95baf-1c22-4486-8b43-dc4c29932529` | Flow completed, but supervisor reported extraction-tool failure and zero evidence records. |
@@ -26,13 +41,14 @@ Raw per-trial JSON evidence is in `docs/design/pdf-corpus-trials/`.
 1. The PDF upload and PDFX processing path worked for all selected real PDFs once the PDF worker woke up.
 2. The first gene corpus run revealed a sandbox cleanup problem: deleting an uploaded document with `domain_envelopes` dependents left a SQL row that later blocked duplicate-content upload with a foreign-key violation. I removed only that orphaned dev-sandbox corpus row set before continuing.
 3. Active validator attachment metadata was present in created flow definitions, including `alliance_gene_reference_lookup` for gene, allele validator bindings for allele, chemical validator bindings for chemical condition, phenotype ontology validator metadata, and gene-expression data-provider/relation vocabulary bindings.
-4. The gene trial produced the intended final materialized identity (`FB:FBgn0259685`) in the supervisor answer, but the flow evidence export reported zero persisted evidence records.
-5. The non-gene trials mostly failed before validator result materialization because extractor outputs did not preserve evidence record references in the required envelope shape, or the supervisor summarized the specialist tool failure.
-6. Gene-expression required the Agent Studio flow agent ID `gene_expression`, not `gene_expression_extraction`, even though package metadata and runtime inventory still expose `gene_expression_extraction`.
+4. The original gene trial produced the intended final materialized identity (`FB:FBgn0259685`) in the supervisor answer, but the flow evidence export reported zero persisted evidence records. The focused rerun after the evidence propagation fix exported one evidence record.
+5. The original allele trial failed before validator result materialization because supporting envelope objects were treated as missing evidence refs. The focused rerun after role-aware evidence guarding passed evidence gating and exported one evidence record.
+6. The remaining non-gene trials mostly failed before validator result materialization because extractor outputs did not preserve evidence record references in the required envelope shape, or the supervisor summarized the specialist tool failure.
+7. Gene-expression required the Agent Studio flow agent ID `gene_expression`, not `gene_expression_extraction`, even though package metadata and runtime inventory still expose `gene_expression_extraction`.
 
 ## Remaining Work
 
-- Fix evidence-record propagation from extraction envelopes into flow evidence export.
-- Re-run the corpus after the evidence propagation fix and require nonzero persisted evidence for every trial.
-- Capture actual validator request/result payloads and `lookup_attempts` after extractor outputs survive evidence gating.
+- Re-run disease, chemical condition, phenotype, gene expression, and cross-domain trials after applying the same evidence-envelope cleanup to any remaining domain-specific extractor shapes.
+- Investigate allele `allele_pending_envelope_validator` unresolved `validator_agent_error` lookup attempts; the evidence path now survives, but validator request selection is still empty in the rerun artifacts.
+- Capture actual validator request/result payloads and `lookup_attempts` for every domain after extractor outputs survive evidence gating.
 - Decide whether the sandbox document delete endpoint should cascade or block cleanly when domain envelopes reference the document.
