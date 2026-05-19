@@ -121,6 +121,9 @@ def test_get_gene_by_exact_symbol_filters_obsolete_internal_gene_rows(monkeypatc
         def __init__(self, text):
             self.displayText = text
 
+    # Keep the retired/internal Crumbs row in the fixture to mirror live FlyBase
+    # history. The resolver must ignore it and return the current corpus-backed
+    # crb identity, FB:FBgn0259685.
     old_gene = SimpleNamespace(
         primaryExternalId="FB:FBgn0000368",
         geneSymbol=_Display("crb"),
@@ -241,6 +244,9 @@ def test_search_genes_filters_obsolete_internal_gene_rows(monkeypatch):
         def __init__(self, text):
             self.displayText = text
 
+    # Keep the retired/internal Crumbs row in the fixture to mirror live FlyBase
+    # history. The resolver must ignore it and return the current corpus-backed
+    # crb identity, FB:FBgn0259685.
     old_gene = SimpleNamespace(
         primaryExternalId="FB:FBgn0000368",
         geneSymbol=_Display("crb"),
