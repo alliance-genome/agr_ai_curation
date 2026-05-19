@@ -736,6 +736,70 @@ def test_search_alleles_detail_fetch_failure_is_transient(monkeypatch):
     assert detail_attempt["error"]["type"] == "TimeoutError"
 
 
+def test_search_alleles_retries_flattened_flybase_superscript_notation(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+    captured = {"patterns": []}
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = include_synonyms, limit
+            captured["patterns"].append(search_pattern)
+            if (
+                entity_type == "allele"
+                and taxon_curie == "NCBITaxon:7227"
+                and search_pattern == "N[fa-g]"
+            ):
+                return [
+                    {
+                        "entity_curie": "FB:FBal0012868",
+                        "entity": "N[fa-g]",
+                        "match_type": "exact",
+                    }
+                ]
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def _fake_batch_fetch(_db, curies):
+        assert curies == ["FB:FBal0012868"]
+        return {
+            "FB:FBal0012868": {
+                "curie": "FB:FBal0012868",
+                "symbol": "N<sup>fa-g</sup>",
+                "name": "Notch facet-glossy",
+                "taxon": "NCBITaxon:7227",
+            }
+        }, {}
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:7227": "FB"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_allele_details_bulk", _fake_batch_fetch)
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = query_fn(
+        method="search_alleles",
+        allele_symbol="N fa-g",
+        data_provider="FB",
+        limit=5,
+    )
+
+    assert result.status == "ok"
+    assert result.count == 1
+    assert "N[fa-g]" in captured["patterns"]
+    assert result.data[0]["curie"] == "FB:FBal0012868"
+    assert result.data[0]["symbol"] == "N<sup>fa-g</sup>"
+    assert any(
+        warning.startswith("normalized_allele_symbol_variants:")
+        for warning in result.warnings or []
+    )
+
+
 def test_search_alleles_records_batch_fetch_failure_when_retry_succeeds(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
     closed = {"value": False}

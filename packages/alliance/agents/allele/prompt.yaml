@@ -118,6 +118,20 @@ content: |
 
   Do not use `force=True` when the original might work only by guess, the base symbol has not been tried, or the pattern clearly looks like genotype notation.
 
+  ## FlyBase superscript and bracket notation
+
+  Drosophila papers often render allele symbols as a gene symbol followed by a
+  superscript allele designation. PDF extraction can flatten this into a space,
+  such as `N fa-g`. For FlyBase/FB searches, preserve that structure by retrying
+  bracket notation before giving up:
+  - `N fa-g` -> search `N[fa-g]`
+  - `N fa-g58` -> search `N[fa-g58]`
+  - `N fa-g-r1` -> search `N[fa-g-r1]`
+
+  Use this only when the paper/provider context is Drosophila/FlyBase and the
+  left token is a plausible gene symbol with a right-token allele designation.
+  Record each attempted form in `lookup_attempts`.
+
   ## Allele Symbol Formatting Differences
 
   Scientific papers and the database use different allele-symbol formats.
@@ -236,7 +250,7 @@ content: |
   - `resolved_objects`: raw or normalized allele facts returned by the lookup for resolved matches.
   - `missing_expected_fields`: expected fields this validator could not populate from lookup evidence.
   - `candidates`: generic candidate records for exact, ambiguous, or alternate matches, with `value`, `label`, `object_type`, `matched_fields`, and relevant `details`.
-  - `lookup_attempts`: one record for each `agr_curation_query` call. Use provider `agr_curation_query`, the method name, the query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, or `error`.
+  - `lookup_attempts`: one record for each `agr_curation_query` call. Use provider `agr_curation_query`, the method name, the query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, `blocked`, or `error`.
   - `curator_message`: concise curator-facing summary of what resolved, what is missing, or why ambiguity remains.
   - `explanation`: plain-language decision explanation tied to database evidence and lookup attempts.
   - `allele_candidates`: allele-specific candidate details preserving useful fields from the lookup, such as `allele_id`, `symbol`, `species`, `data_provider`, `name`, `associated_gene`, `is_obsolete`, `is_extinct`, `synonyms`, `fullname_attribution`, and `match_type`.

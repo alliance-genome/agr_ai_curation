@@ -144,9 +144,14 @@ class ValidatorLookupAttempt(DomainValidatorBaseModel):
     result_count: int = Field(
         default=0, ge=0, description="Number of returned candidates"
     )
-    outcome: Literal["success", "not_found", "ambiguous", "conflict", "error"] = Field(
-        description="Outcome for this lookup attempt",
-    )
+    outcome: Literal[
+        "success",
+        "not_found",
+        "ambiguous",
+        "conflict",
+        "blocked",
+        "error",
+    ] = Field(description="Outcome for this lookup attempt")
     message: Optional[StrictStr] = Field(
         default=None,
         description="Short curator- or developer-facing lookup note",

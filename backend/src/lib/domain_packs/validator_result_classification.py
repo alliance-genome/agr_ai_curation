@@ -19,6 +19,7 @@ LOOKUP_OUTCOME_TO_STATUS = {
     "not_found": LOOKUP_STATUS_NOT_FOUND,
     "ambiguous": LOOKUP_STATUS_AMBIGUOUS,
     "conflict": LOOKUP_STATUS_BLOCKED,
+    "blocked": LOOKUP_STATUS_BLOCKED,
     "error": LOOKUP_STATUS_TRANSIENT,
 }
 
@@ -57,6 +58,8 @@ def validator_failure_classification(
         return "not_found"
     if "conflict" in outcomes:
         return "conflict"
+    if "blocked" in outcomes:
+        return "blocked"
     if "error" in outcomes:
         return "transient"
     raise error_type(

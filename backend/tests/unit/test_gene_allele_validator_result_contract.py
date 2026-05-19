@@ -261,3 +261,13 @@ def test_gene_and_allele_prompts_describe_shared_validator_policy():
         ]
         for forbidden in forbidden_fragments:
             assert forbidden not in prompt
+
+
+def test_allele_prompt_describes_flybase_bracket_retry_policy():
+    prompt = yaml.safe_load(
+        (ALLIANCE_AGENTS_PATH / "allele" / "prompt.yaml").read_text(encoding="utf-8")
+    )["content"]
+
+    assert "`blocked`" in prompt
+    assert "`N fa-g` -> search `N[fa-g]`" in prompt
+    assert "Drosophila/FlyBase" in prompt

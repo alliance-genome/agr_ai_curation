@@ -520,6 +520,28 @@ def test_conflict_lookup_outcome_uses_explicit_blocked_status(tmp_path: Path):
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "blocked"
 
 
+def test_blocked_lookup_outcome_uses_explicit_blocked_status(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+
+    def _runner(request, *, binding):
+        return _result_payload(
+            request,
+            status="unresolved",
+            resolved_values={},
+            outcome="blocked",
+        )
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+    )
+
+    finding = _single_result_finding(result)
+    assert finding.details["failure_classification"] == "blocked"
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == "blocked"
+
+
 def test_unclassifiable_unresolved_output_becomes_invalid_schema_result(
     tmp_path: Path,
 ):

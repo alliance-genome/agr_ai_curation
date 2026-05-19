@@ -82,6 +82,25 @@ def test_domain_validator_normalizes_lookup_query_strings_and_raw_scores():
     assert result.lookup_attempts[1].query == {"value": "64153"}
 
 
+def test_domain_validator_accepts_blocked_lookup_attempt_outcome():
+    payload = _base_payload("unresolved")
+    payload["resolved_values"] = {}
+    payload["missing_expected_fields"] = ["entity_id"]
+    payload["lookup_attempts"] = [
+        {
+            "provider": "agr_curation_query",
+            "method": "search_alleles",
+            "query": {"allele_symbol": "N fa-g"},
+            "result_count": 0,
+            "outcome": "blocked",
+        }
+    ]
+
+    result = DomainValidatorResultBase.model_validate(payload)
+
+    assert result.lookup_attempts[0].outcome == "blocked"
+
+
 def test_domain_validator_infers_missing_status_from_resolved_lookup_output():
     payload = _base_payload()
     del payload["status"]
