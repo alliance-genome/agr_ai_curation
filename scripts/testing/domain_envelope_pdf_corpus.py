@@ -154,7 +154,9 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract at "
             "most one chemical condition, one phenotype statement, and one central gene if the "
             "paper supports it. Each extractor must use record_evidence for one exact supporting "
-            "quote and must leave identity/ontology resolution to validators."
+            "quote and must leave identity/ontology resolution to validators. Preserve the "
+            "explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene "
+            "or phenotype candidates; those hints are not final identity resolution."
         ),
     ),
 )

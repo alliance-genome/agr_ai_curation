@@ -727,6 +727,9 @@ metadata:
             source: literal
             value:
               - ZECO
+          exact_match:
+            source: literal
+            value: true
         expected_result_fields:
           condition_class_curie: condition_class.curie
         required: true

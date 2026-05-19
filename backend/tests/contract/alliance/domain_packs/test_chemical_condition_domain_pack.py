@@ -270,6 +270,11 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
     assert condition_class_binding["input_fields"]["accepted_prefixes"]["value"] == [
         "ZECO"
     ]
+    assert condition_class_binding["input_fields"]["exact_match"] == {
+        "required": True,
+        "source": "literal",
+        "value": True,
+    }
     assert condition_class_binding["expected_result_fields"] == {
         "condition_class_curie": "condition_class.curie",
     }

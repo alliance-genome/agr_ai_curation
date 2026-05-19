@@ -566,6 +566,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert chemical_condition_ontology_binding.input_fields[
         "accepted_prefixes"
     ].value == ["ZECO"]
+    assert chemical_condition_ontology_binding.input_fields["exact_match"].value is True
     assert chemical_condition_ontology_binding.expected_result_fields == {
         "condition_class_curie": "condition_class.curie",
     }
