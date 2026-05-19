@@ -31,6 +31,7 @@ from agr_ai_curation_alliance.domain_packs.gene_expression import (  # noqa: E40
     GENE_EXPRESSION_FIXTURE_PACK_ID,
     GENE_EXPRESSION_MODEL_ID,
     GENE_EXPRESSION_OBJECT_TYPE,
+    GENE_EXPRESSION_RELATION_NAME,
     GENE_EXPRESSION_VALIDATOR_STATES,
     gene_expression_extraction_output_to_pending_envelope,
     get_gene_expression_domain_pack_metadata_path,
@@ -312,6 +313,24 @@ def test_tmem67_extractor_output_converts_to_pending_gene_expression_envelope():
         "verified_quote"
     ].startswith("Tmem67 expression was detected")
     _assert_metadata_refs_resolve(converted)
+    assert validate_pending_gene_expression_envelope(converted) == ()
+
+
+def test_gene_expression_conversion_restores_class_relation_default():
+    raw_fixture = yaml.safe_load(
+        GENE_EXPRESSION_OUTPUT_FIXTURE_PATH.read_text(encoding="utf-8")
+    )
+    output = raw_fixture["output"]
+    output["curatable_objects"][0]["payload"]["relation"]["name"] = None
+
+    converted = gene_expression_extraction_output_to_pending_envelope(
+        output,
+        envelope_id="gene-expression-relation-default",
+    )
+
+    assert converted.objects[0].payload["relation"]["name"] == (
+        GENE_EXPRESSION_RELATION_NAME
+    )
     assert validate_pending_gene_expression_envelope(converted) == ()
 
 

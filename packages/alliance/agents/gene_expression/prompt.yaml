@@ -279,6 +279,9 @@ content: |
     paper or tools, keep the field path present with null or the best literal label,
     and add a `metadata.ambiguities[]` or `metadata.notes[]` entry describing what a
     curator must resolve.
+  - For `GeneExpressionAnnotation`, set `relation.name` to `is_expressed_in`.
+    This is the LinkML-required relation for gene-expression annotations and
+    does not require an extraction-time database lookup.
   - Put spatial context under `expression_pattern.where_expressed`, using
     `anatomical_structure.name` / `cellular_component.name` labels when CURIEs are not
     resolved. At least one of `anatomical_structure` or `cellular_component` should be present.

@@ -430,6 +430,9 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert disease_condition_binding.input_fields["vocabulary"].value == (
         "Condition Relation Type"
     )
+    assert (
+        disease_condition_binding.input_fields["term_name"].required is False
+    )
 
     disease_provider_binding = disease_bindings["disease_data_provider_lookup"]
     assert disease_provider_binding.validator_agent is not None

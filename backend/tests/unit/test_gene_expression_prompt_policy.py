@@ -87,6 +87,7 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "Do not emit top-level `items[]`" in content
     assert "agr_species_context_lookup" in content
     assert "Do not perform extraction-time relation vocabulary lookup" in content
+    assert "`relation.name` to `is_expressed_in`" in content
     assert "expression ontology lookup" in content
     assert "agr_curation_query" not in content
 
@@ -154,6 +155,17 @@ def test_gene_expression_schema_rejects_legacy_payload_evidence_fields():
         schema.model_validate(payload)
 
     assert "metadata.evidence_records[]" in str(exc_info.value)
+
+
+def test_gene_expression_schema_rejects_null_relation_name():
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    payload["curatable_objects"][0]["payload"]["relation"]["name"] = None
+
+    with pytest.raises(ValidationError) as exc_info:
+        schema.model_validate(payload)
+
+    assert "relation.name must be is_expressed_in" in str(exc_info.value)
 
 
 def test_gene_expression_schema_rejects_non_annotation_curatable_objects():

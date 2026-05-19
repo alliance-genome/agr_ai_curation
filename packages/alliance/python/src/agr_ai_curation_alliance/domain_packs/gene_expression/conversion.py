@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Any
@@ -45,6 +46,7 @@ from .constants import (
 )
 
 
+GENE_EXPRESSION_RELATION_NAME = "is_expressed_in"
 REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS = frozenset(
     {
         "date_created",
@@ -151,6 +153,15 @@ def validate_gene_expression_extraction_objects(
                 f"{location}.payload is missing required fields: "
                 + ", ".join(missing_payload_fields)
             )
+        relation = obj.payload.get("relation")
+        relation_name = (
+            relation.get("name") if isinstance(relation, Mapping) else None
+        )
+        if not isinstance(relation_name, str) or not relation_name.strip():
+            errors.append(
+                f"{location}.payload relation.name must be "
+                f"{GENE_EXPRESSION_RELATION_NAME}"
+            )
 
         if not obj.evidence_record_ids:
             errors.append(f"{location}.evidence_record_ids must not be empty")
@@ -217,6 +228,39 @@ def _object_ref(obj: CuratableObjectEnvelope) -> ObjectRef:
     raise ValueError("GeneExpressionAnnotation object is missing an object ref")
 
 
+def _payload_with_gene_expression_defaults(payload: Mapping[str, Any]) -> dict[str, Any]:
+    normalized = copy.deepcopy(dict(payload))
+    relation = normalized.get("relation")
+    if not isinstance(relation, Mapping):
+        relation = {}
+    else:
+        relation = dict(relation)
+    relation_name = relation.get("name")
+    if not isinstance(relation_name, str) or not relation_name.strip():
+        relation["name"] = GENE_EXPRESSION_RELATION_NAME
+    normalized["relation"] = relation
+    return normalized
+
+
+def _output_payload_with_gene_expression_defaults(
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    normalized = copy.deepcopy(dict(payload))
+    curatable_objects = normalized.get("curatable_objects")
+    if isinstance(curatable_objects, list):
+        for item in curatable_objects:
+            if not isinstance(item, dict):
+                continue
+            if item.get("object_type") != GENE_EXPRESSION_OBJECT_TYPE:
+                continue
+            object_payload = item.get("payload")
+            if isinstance(object_payload, Mapping):
+                item["payload"] = _payload_with_gene_expression_defaults(
+                    object_payload
+                )
+    return normalized
+
+
 def _pending_object_from_extraction_object(
     obj: CuratableObjectEnvelope,
 ) -> CuratableObjectEnvelope:
@@ -229,7 +273,7 @@ def _pending_object_from_extraction_object(
     return CuratableObjectEnvelope(
         object_type=GENE_EXPRESSION_OBJECT_TYPE,
         object_role=GENE_EXPRESSION_OBJECT_ROLE,
-        payload=dict(obj.payload),
+        payload=_payload_with_gene_expression_defaults(obj.payload),
         object_id=obj.object_id,
         pending_ref_id=obj.pending_ref_id,
         schema_ref=obj.schema_ref,
@@ -276,7 +320,9 @@ def gene_expression_extraction_output_to_pending_envelope(
     source = (
         payload
         if isinstance(payload, GeneExpressionExtractionOutput)
-        else GeneExpressionExtractionOutput.model_validate(payload)
+        else GeneExpressionExtractionOutput.model_validate(
+            _output_payload_with_gene_expression_defaults(payload)
+        )
     )
     timestamp = produced_at or datetime.now(timezone.utc)
 
@@ -441,6 +487,23 @@ def validate_pending_gene_expression_envelope(
                     details={"missing_fields": missing_fields},
                 )
             )
+        relation = expression_object.payload.get("relation")
+        relation_name = (
+            relation.get("name") if isinstance(relation, Mapping) else None
+        )
+        if not isinstance(relation_name, str) or not relation_name.strip():
+            findings.append(
+                ValidationFinding(
+                    severity=ValidationFindingSeverity.ERROR,
+                    code="alliance.gene_expression.relation_name_missing",
+                    message=(
+                        "GeneExpressionAnnotation requires relation.name "
+                        f"{GENE_EXPRESSION_RELATION_NAME}."
+                    ),
+                    object_ref=object_ref,
+                    details={"expected_relation_name": GENE_EXPRESSION_RELATION_NAME},
+                )
+            )
 
         forbidden_payload_fields = sorted(
             FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS.intersection(expression_object.payload)
@@ -539,6 +602,7 @@ def validate_pending_gene_expression_envelope(
 __all__ = [
     "FORBIDDEN_LEGACY_COLLECTIONS",
     "FORBIDDEN_PAYLOAD_EVIDENCE_FIELDS",
+    "GENE_EXPRESSION_RELATION_NAME",
     "GeneExpressionExtractionOutput",
     "REQUIRED_GENE_EXPRESSION_PAYLOAD_FIELDS",
     "gene_expression_extraction_output_to_pending_envelope",

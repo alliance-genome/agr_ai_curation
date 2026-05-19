@@ -445,6 +445,7 @@ metadata:
           taxon:
             source: payload
             path: taxon.curie
+            required: false
           evidence_quote:
             source: evidence_record
             path: verified_quote

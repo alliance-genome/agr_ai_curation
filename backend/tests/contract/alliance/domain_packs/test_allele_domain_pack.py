@@ -233,7 +233,7 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
         "taxon": {
             "source": "payload",
             "path": "taxon.curie",
-            "required": True,
+            "required": False,
         },
         "evidence_quote": {
             "source": "evidence_record",

@@ -269,6 +269,9 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
     assert "`object_role`: `curatable_unit`" in prompt_content
     assert "`model_ref`: `PendingDiseaseAssertionPayload`" in prompt_content
     assert "`disease_annotation_object.name`" in prompt_content
+    assert "`data_provider.abbreviation`" in prompt_content
+    assert "`is_model_of`" in prompt_content
+    assert "LinkML requires disease relation and data-provider context" in prompt_content
     assert "Do not use legacy flat payload fields" in prompt_content
     assert "Active validator bindings own final disease identity" in prompt_content
     assert "agr_species_context_lookup" in prompt_content

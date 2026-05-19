@@ -946,6 +946,7 @@ metadata:
           term_name:
             source: payload
             path: condition_relations[0].condition_relation_type.name
+            required: false
         expected_result_fields:
           term_name: condition_relations[0].condition_relation_type.name
           vocabulary: condition_relations[0].condition_relation_type.vocabulary
