@@ -38,11 +38,13 @@ def test_cleanup_document_curation_dependencies_removes_workspace_chain_before_d
     session_id = uuid4()
     candidate_id = uuid4()
     extraction_result_id = uuid4()
+    envelope_id = "env-cleanup-1"
     session = _FakeSession(
         [
             _ExecuteResult(scalar_values=[session_id]),
             _ExecuteResult(scalar_values=[candidate_id]),
             _ExecuteResult(scalar_values=[extraction_result_id]),
+            _ExecuteResult(scalar_values=[envelope_id]),
             _ExecuteResult(rowcount=1),
             _ExecuteResult(rowcount=3),
             _ExecuteResult(rowcount=4),
@@ -51,6 +53,12 @@ def test_cleanup_document_curation_dependencies_removes_workspace_chain_before_d
             _ExecuteResult(rowcount=7),
             _ExecuteResult(rowcount=2),
             _ExecuteResult(rowcount=8),
+            _ExecuteResult(rowcount=10),
+            _ExecuteResult(rowcount=11),
+            _ExecuteResult(rowcount=12),
+            _ExecuteResult(rowcount=13),
+            _ExecuteResult(rowcount=14),
+            _ExecuteResult(rowcount=15),
             _ExecuteResult(rowcount=1),
             _ExecuteResult(rowcount=9),
         ]
@@ -69,12 +77,19 @@ def test_cleanup_document_curation_dependencies_removes_workspace_chain_before_d
         "candidates_deleted": 8,
         "sessions_deleted": 1,
         "extraction_results_deleted": 9,
+        "candidate_envelope_refs_cleared": 10,
+        "domain_projection_index_deleted": 11,
+        "domain_history_deleted": 12,
+        "domain_validation_findings_deleted": 13,
+        "domain_objects_deleted": 14,
+        "domain_envelopes_deleted": 15,
     }
     assert session._results == []
     expected_sql_fragments = [
         "FROM curation_review_sessions",
         "FROM curation_candidates",
         "FROM extraction_results",
+        "FROM domain_envelopes",
         "UPDATE curation_review_sessions",
         "DELETE FROM curation_action_log",
         "DELETE FROM validation_snapshots",
@@ -83,6 +98,12 @@ def test_cleanup_document_curation_dependencies_removes_workspace_chain_before_d
         "DELETE FROM annotation_drafts",
         "UPDATE curation_candidates",
         "DELETE FROM curation_candidates",
+        "UPDATE curation_candidates",
+        "DELETE FROM domain_envelope_projection_index",
+        "DELETE FROM domain_envelope_history",
+        "DELETE FROM domain_validation_findings",
+        "DELETE FROM domain_envelope_objects",
+        "DELETE FROM domain_envelopes",
         "DELETE FROM curation_review_sessions",
         "DELETE FROM extraction_results",
     ]
@@ -94,6 +115,7 @@ def test_cleanup_document_curation_dependencies_removes_workspace_chain_before_d
 def test_cleanup_document_curation_dependencies_noops_when_document_has_no_workspace_rows():
     session = _FakeSession(
         [
+            _ExecuteResult(scalar_values=[]),
             _ExecuteResult(scalar_values=[]),
             _ExecuteResult(scalar_values=[]),
         ]
@@ -112,11 +134,18 @@ def test_cleanup_document_curation_dependencies_noops_when_document_has_no_works
         "candidates_deleted": 0,
         "sessions_deleted": 0,
         "extraction_results_deleted": 0,
+        "candidate_envelope_refs_cleared": 0,
+        "domain_projection_index_deleted": 0,
+        "domain_history_deleted": 0,
+        "domain_validation_findings_deleted": 0,
+        "domain_objects_deleted": 0,
+        "domain_envelopes_deleted": 0,
     }
     assert session._results == []
-    assert len(session.executed) == 2
+    assert len(session.executed) == 3
     assert "FROM curation_review_sessions" in session.executed[0]
     assert "FROM extraction_results" in session.executed[1]
+    assert "FROM domain_envelopes" in session.executed[2]
 
 
 def test_cleanup_document_curation_dependencies_handles_extraction_results_without_sessions():
@@ -125,6 +154,7 @@ def test_cleanup_document_curation_dependencies_handles_extraction_results_witho
         [
             _ExecuteResult(scalar_values=[]),
             _ExecuteResult(scalar_values=[extraction_result_id]),
+            _ExecuteResult(scalar_values=[]),
             _ExecuteResult(rowcount=2),
             _ExecuteResult(rowcount=3),
         ]
@@ -143,13 +173,72 @@ def test_cleanup_document_curation_dependencies_handles_extraction_results_witho
         "candidates_deleted": 0,
         "sessions_deleted": 0,
         "extraction_results_deleted": 3,
+        "candidate_envelope_refs_cleared": 0,
+        "domain_projection_index_deleted": 0,
+        "domain_history_deleted": 0,
+        "domain_validation_findings_deleted": 0,
+        "domain_objects_deleted": 0,
+        "domain_envelopes_deleted": 0,
     }
     assert session._results == []
     expected_sql_fragments = [
         "FROM curation_review_sessions",
         "FROM extraction_results",
+        "FROM domain_envelopes",
         "UPDATE curation_candidates",
         "DELETE FROM extraction_results",
+    ]
+    assert len(session.executed) == len(expected_sql_fragments)
+    for statement, fragment in zip(session.executed, expected_sql_fragments):
+        assert fragment in statement
+
+
+def test_cleanup_document_curation_dependencies_removes_domain_envelope_indexes():
+    envelope_id = "env-cleanup-standalone"
+    session = _FakeSession(
+        [
+            _ExecuteResult(scalar_values=[]),
+            _ExecuteResult(scalar_values=[]),
+            _ExecuteResult(scalar_values=[envelope_id]),
+            _ExecuteResult(rowcount=1),
+            _ExecuteResult(rowcount=2),
+            _ExecuteResult(rowcount=3),
+            _ExecuteResult(rowcount=4),
+            _ExecuteResult(rowcount=5),
+            _ExecuteResult(rowcount=6),
+        ]
+    )
+
+    summary = cleanup_document_curation_dependencies(session, uuid4())
+
+    assert summary == {
+        "current_candidate_refs_cleared": 0,
+        "candidate_refs_cleared": 0,
+        "action_logs_deleted": 0,
+        "validation_snapshots_deleted": 0,
+        "submissions_deleted": 0,
+        "evidence_anchors_deleted": 0,
+        "drafts_deleted": 0,
+        "candidates_deleted": 0,
+        "sessions_deleted": 0,
+        "extraction_results_deleted": 0,
+        "candidate_envelope_refs_cleared": 1,
+        "domain_projection_index_deleted": 2,
+        "domain_history_deleted": 3,
+        "domain_validation_findings_deleted": 4,
+        "domain_objects_deleted": 5,
+        "domain_envelopes_deleted": 6,
+    }
+    expected_sql_fragments = [
+        "FROM curation_review_sessions",
+        "FROM extraction_results",
+        "FROM domain_envelopes",
+        "UPDATE curation_candidates",
+        "DELETE FROM domain_envelope_projection_index",
+        "DELETE FROM domain_envelope_history",
+        "DELETE FROM domain_validation_findings",
+        "DELETE FROM domain_envelope_objects",
+        "DELETE FROM domain_envelopes",
     ]
     assert len(session.executed) == len(expected_sql_fragments)
     for statement, fragment in zip(session.executed, expected_sql_fragments):
