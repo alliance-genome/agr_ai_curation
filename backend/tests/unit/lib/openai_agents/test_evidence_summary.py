@@ -12,6 +12,9 @@ from src.lib.openai_agents.models import (
     AlleleExtractionResultEnvelope,
     GeneExtractionResultEnvelope,
 )
+from packages.alliance.agents.allele_extractor.schema import (
+    AlleleExtractionResultEnvelope as AllianceAlleleExtractionResultEnvelope,
+)
 
 
 def _record(
@@ -491,9 +494,21 @@ def test_canonicalize_copies_payload_evidence_ids_to_curatable_objects():
 
     canonical = canonicalize_structured_result_payload(payload)
     report = structured_result_evidence_reference_report(canonical)
+    schema_report = structured_result_evidence_reference_report(
+        canonical,
+        expected_output_type=AllianceAlleleExtractionResultEnvelope,
+    )
 
     assert canonical["curatable_objects"][0]["evidence_record_ids"] == [
         "evidence-quote-1"
     ]
     assert report["missing_record_refs"] == []
+    assert schema_report["missing_record_refs"] == []
     assert structured_result_missing_evidence_record_refs(canonical) is False
+    assert (
+        structured_result_missing_evidence_record_refs(
+            canonical,
+            expected_output_type=AllianceAlleleExtractionResultEnvelope,
+        )
+        is False
+    )

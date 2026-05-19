@@ -936,6 +936,12 @@ def _structured_result_retained_collections(
                 continue
 
             field_records = _coerce_dict_list(payload.get(field_name))
+            if field_name == "curatable_objects":
+                field_records = [
+                    record
+                    for record in field_records
+                    if _curatable_object_requires_evidence_refs(record)
+                ]
             if field_records:
                 retained_collections.append((field_name, field_records))
 
