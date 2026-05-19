@@ -368,7 +368,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         ],
     },
     "disease_validation": {
-        "summary": "Maps disease terms to Disease Ontology (DOID) identifiers by querying the Alliance Curation Database's ontologyterm tables.",
+        "summary": "Maps disease terms to Disease Ontology (DOID) identifiers through package-owned AGR curation lookup helpers.",
         "capabilities": [
             {
                 "name": "Disease name lookup",
@@ -389,25 +389,26 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "example_result": "Finds DOID:10652 via synonym match",
             },
             {
-                "name": "Hierarchy exploration",
-                "description": "Find parent (ancestor) or child (descendant) terms in the disease ontology",
+                "name": "Hierarchy boundary",
+                "description": "Reports that direct hierarchy traversal is outside the package lookup contract for this validator path",
                 "example_query": "What are the parent terms of Alzheimer's disease?",
-                "example_result": "Returns tauopathy, neurodegenerative disease, CNS disease, etc. with distance",
+                "example_result": "Returns an unresolved, curator-facing explanation instead of using direct SQL",
             },
         ],
         "data_sources": [
             {
-                "name": "Alliance Curation Database (Disease Ontology)",
-                "description": "Contains 14,500+ disease terms from the Disease Ontology (DOID) with full hierarchy and synonym support",
+                "name": "AGR curation lookup helpers",
+                "description": "Structured package helper methods for exact DOID lookup and typed Disease Ontology label or synonym search",
                 "species_supported": None,  # Species-independent ontology
-                "data_types": ["disease terms", "DOIDs", "definitions", "synonyms", "hierarchical relationships"],
+                "data_types": ["disease terms", "DOIDs", "definitions", "synonyms"],
             },
         ],
         "limitations": [
             "Only queries Disease Ontology (DOID) terms - does not include other disease vocabularies",
             "Does not provide gene-disease associations (use Gene Specialist for that)",
-            "Disease prevalence and statistics are not available in this database",
-            "All responses must come from database queries - cannot answer from general knowledge",
+            "Disease prevalence and statistics are not available from this validator path",
+            "Direct hierarchy traversal and obsolete-history analysis are not exposed by the package lookup contract",
+            "All responses must come from package lookup evidence - cannot answer from general knowledge",
         ],
     },
     "chemical_validation": {

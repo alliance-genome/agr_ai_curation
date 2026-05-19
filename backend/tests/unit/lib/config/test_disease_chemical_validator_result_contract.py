@@ -33,9 +33,14 @@ VALIDATOR_CASES = {
     "disease": {
         "agent_id": "disease_validation",
         "schema_name": "DiseaseValidationResult",
-        "tool": "curation_db_sql",
-        "provider": "alliance_curation_db",
+        "tool": "agr_curation_query",
+        "provider": "agr_curation_query",
         "domain_pack": "packages/alliance/domain_packs/disease/domain_pack.yaml",
+        "active_binding_agent_ids": {
+            "ontology_term_validation",
+            "controlled_vocabulary_validation",
+            "data_provider_validation",
+        },
     },
     "chemical": {
         "agent_id": "chemical_validation",
@@ -43,6 +48,7 @@ VALIDATOR_CASES = {
         "tool": "chebi_api_call",
         "provider": "ebi_chebi",
         "domain_pack": "packages/alliance/domain_packs/chemical_condition/domain_pack.yaml",
+        "active_binding_agent_ids": {"chemical_validation"},
     },
 }
 
@@ -164,9 +170,11 @@ def test_disease_and_chemical_prompt_contracts_use_shared_fields():
         assert "results: List" not in content
         assert "query_summary:" not in content
         assert "not_found:" not in content
+        if folder == "disease":
+            assert "curation_db_sql" not in content
 
 
-def test_active_disease_and_chemical_bindings_resolve_to_migrated_agents(monkeypatch):
+def test_active_disease_and_chemical_bindings_resolve_to_package_validators(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 
     agents = agent_loader.load_agent_definitions(force_reload=True)
@@ -175,16 +183,28 @@ def test_active_disease_and_chemical_bindings_resolve_to_migrated_agents(monkeyp
     for case in VALIDATOR_CASES.values():
         domain_pack = _load_yaml(case["domain_pack"])
         active_bindings = domain_pack["metadata"]["validator_bindings"]["active"]
-        matching_bindings = [
-            binding
+        active_agent_ids = {
+            binding.get("validator_agent", {}).get("agent_id")
             for binding in active_bindings
-            if binding.get("validator_agent", {}).get("agent_id") == case["agent_id"]
-        ]
+        }
 
-        assert matching_bindings
-        agent = agents[case["agent_id"]]
-        schema = schemas[agent.output_schema]
-        assert issubclass(schema, DomainValidatorResultBase)
-        for binding in matching_bindings:
+        assert case["active_binding_agent_ids"] <= active_agent_ids
+        for binding in active_bindings:
+            agent_id = binding["validator_agent"]["agent_id"]
+            agent = agents[agent_id]
+            schema = schemas[agent.output_schema]
+            assert issubclass(schema, DomainValidatorResultBase)
             assert binding["validator_agent"]["package_id"] == "agr.alliance"
             assert isinstance(binding.get("expected_result_fields"), dict)
+
+
+def test_active_disease_bindings_do_not_use_direct_sql_specialist():
+    domain_pack = _load_yaml("packages/alliance/domain_packs/disease/domain_pack.yaml")
+    active_bindings = domain_pack["metadata"]["validator_bindings"]["active"]
+    active_agent_ids = {
+        binding.get("validator_agent", {}).get("agent_id")
+        for binding in active_bindings
+    }
+
+    assert "disease_validation" not in active_agent_ids
+    assert "ontology_term_validation" in active_agent_ids
