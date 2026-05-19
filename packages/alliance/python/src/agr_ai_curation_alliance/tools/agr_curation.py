@@ -1059,7 +1059,10 @@ def agr_curation_query(
                         )
                         try:
                             gene = db.get_gene(curie)
-                            if gene:
+                            if gene and not (
+                                getattr(gene, "obsolete", False)
+                                or getattr(gene, "internal", False)
+                            ):
                                 genes_data.append({
                                     "curie": gene.primaryExternalId,
                                     "symbol": gene.geneSymbol.displayText if gene.geneSymbol else result['entity'],

@@ -114,6 +114,70 @@ def test_get_gene_by_exact_symbol_detail_fetch_failure_is_transient(monkeypatch)
     assert detail_attempt["error"]["type"] == "TimeoutError"
 
 
+def test_get_gene_by_exact_symbol_filters_obsolete_internal_gene_rows(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class _Display:
+        def __init__(self, text):
+            self.displayText = text
+
+    old_gene = SimpleNamespace(
+        primaryExternalId="FB:FBgn0000368",
+        geneSymbol=_Display("crb"),
+        geneFullName=_Display("crumbs"),
+        geneType={"name": "gene"},
+        obsolete=True,
+        internal=True,
+    )
+    current_gene = SimpleNamespace(
+        primaryExternalId="FB:FBgn0259685",
+        geneSymbol=_Display("crb"),
+        geneFullName=_Display("crumbs"),
+        geneType={"name": "protein_coding_gene"},
+        obsolete=False,
+        internal=False,
+    )
+
+    class FakeDb:
+        @staticmethod
+        def map_entity_names_to_curies(entity_type, entity_names, taxon_curie):
+            _ = entity_names
+            if entity_type == "gene" and taxon_curie == "NCBITaxon:7227":
+                return [
+                    {"entity_curie": "FB:FBgn0000368", "entity": "crb"},
+                    {"entity_curie": "FB:FBgn0259685", "entity": "crb"},
+                ]
+            return []
+
+        @staticmethod
+        def get_gene(curie):
+            return {
+                "FB:FBgn0000368": old_gene,
+                "FB:FBgn0259685": current_gene,
+            }.get(curie)
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:7227": "FB"})
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = query_fn(
+        method="get_gene_by_exact_symbol",
+        gene_symbol="crb",
+        data_provider="FB",
+    )
+
+    assert result.status == "ok"
+    assert result.count == 1
+    assert result.lookup_status == "success"
+    assert result.data[0]["curie"] == "FB:FBgn0259685"
+
+
 def test_search_genes_detail_fetch_failure_is_transient(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
 
@@ -168,6 +232,85 @@ def test_search_genes_detail_fetch_failure_is_transient(monkeypatch):
     assert detail_attempt["target_projection"]["resolved_id"] == "WB:WBGene00000001"
     assert detail_attempt["target_projection"]["resolved_label"] == "unc-54"
     assert detail_attempt["error"]["type"] == "TimeoutError"
+
+
+def test_search_genes_filters_obsolete_internal_gene_rows(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+
+    class _Display:
+        def __init__(self, text):
+            self.displayText = text
+
+    old_gene = SimpleNamespace(
+        primaryExternalId="FB:FBgn0000368",
+        geneSymbol=_Display("crb"),
+        geneFullName=_Display("crumbs"),
+        taxon="NCBITaxon:7227",
+        geneType={"name": "gene"},
+        obsolete=True,
+        internal=True,
+    )
+    current_gene = SimpleNamespace(
+        primaryExternalId="FB:FBgn0259685",
+        geneSymbol=_Display("crb"),
+        geneFullName=_Display("crumbs"),
+        taxon="NCBITaxon:7227",
+        geneType={"name": "protein_coding_gene"},
+        obsolete=False,
+        internal=False,
+    )
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = search_pattern, include_synonyms, limit
+            if entity_type == "gene" and taxon_curie == "NCBITaxon:7227":
+                return [
+                    {
+                        "entity_curie": "FB:FBgn0000368",
+                        "entity": "crumbs",
+                        "match_type": "exact",
+                    },
+                    {
+                        "entity_curie": "FB:FBgn0259685",
+                        "entity": "crumbs",
+                        "match_type": "exact",
+                    },
+                ]
+            return []
+
+        @staticmethod
+        def get_gene(curie):
+            return {
+                "FB:FBgn0000368": old_gene,
+                "FB:FBgn0259685": current_gene,
+            }.get(curie)
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:7227": "FB"})
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+    monkeypatch.setattr(
+        agr_curation,
+        "validate_search_symbol",
+        lambda *_args, **_kwargs: _valid_validation(),
+    )
+
+    result = query_fn(
+        method="search_genes",
+        gene_symbol="Crumbs",
+        data_provider="FB",
+    )
+
+    assert result.status == "ok"
+    assert result.count == 1
+    assert result.lookup_status == "success"
+    assert result.data[0]["curie"] == "FB:FBgn0259685"
 
 
 def test_search_genes_records_batch_setup_failure_when_retry_succeeds(monkeypatch):

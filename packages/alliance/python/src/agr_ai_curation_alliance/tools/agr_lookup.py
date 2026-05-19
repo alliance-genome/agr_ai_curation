@@ -333,6 +333,8 @@ def fetch_gene_details_bulk(
                     AND fullname.slotannotationtype = 'GeneFullNameSlotAnnotation'
                     AND fullname.obsolete = false
                 WHERE be.primaryexternalid IN :gene_ids
+                    AND be.obsolete = false
+                    AND be.internal = false
                 """
                 )
                 for chunk in chunk_values(unique_curies):
@@ -351,15 +353,14 @@ def fetch_gene_details_bulk(
             finally:
                 session.close()
 
-            if details:
-                for curie in unique_curies:
-                    if curie not in details:
-                        _append_detail_failure(
-                            detail_failures,
-                            curie,
-                            detail_fetch_failure(LOOKUP_STATUS_NOT_FOUND),
-                        )
-                return details, detail_failures
+            for curie in unique_curies:
+                if curie not in details:
+                    _append_detail_failure(
+                        detail_failures,
+                        curie,
+                        detail_fetch_failure(LOOKUP_STATUS_NOT_FOUND),
+                    )
+            return details, detail_failures
         except Exception as exc:
             logger.warning(
                 "Batch gene detail fetch failed; retrying per-CURIE: %s",
@@ -389,6 +390,13 @@ def fetch_gene_details_bulk(
             )
             continue
         if not gene:
+            _append_detail_failure(
+                detail_failures,
+                curie,
+                detail_fetch_failure(LOOKUP_STATUS_NOT_FOUND),
+            )
+            continue
+        if getattr(gene, "obsolete", False) or getattr(gene, "internal", False):
             _append_detail_failure(
                 detail_failures,
                 curie,
