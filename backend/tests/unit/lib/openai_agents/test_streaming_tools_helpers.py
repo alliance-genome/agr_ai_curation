@@ -122,14 +122,19 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
         envelope_output,
         expected_output_type=GeneExtractionResultEnvelope,
     )
+    result_payload = json.loads(result)
+    summary = result_payload["supervisor_summary"]
 
-    assert "Use these validated/materialized values" in result
-    assert "primary_external_id=FB:FBgn0259685" in result
-    assert "gene_symbol=crb" in result
-    assert "taxon=NCBITaxon:7227" in result
-    assert "proposed_primary_external_id" not in result
-    assert "verified_quote" not in result
-    assert "Validation findings: resolved=1." in result
+    assert result_payload["objects"][0]["payload"]["primary_external_id"] == (
+        "FB:FBgn0259685"
+    )
+    assert "Use these validated/materialized values" in summary
+    assert "primary_external_id=FB:FBgn0259685" in summary
+    assert "gene_symbol=crb" in summary
+    assert "taxon=NCBITaxon:7227" in summary
+    assert "proposed_primary_external_id" not in summary
+    assert "verified_quote" not in summary
+    assert "Validation findings: resolved=1." in summary
 
 
 def test_runtime_instruction_append_updates_pending_prompt_assembly():
