@@ -133,14 +133,17 @@ def test_disease_extractor_schema_canonicalizes_pending_scaffold_fields():
     payload = _valid_disease_extractor_payload()
     obj = payload["curatable_objects"][0]
     del obj["definition_state"]
+    del obj["schema_ref"]["definition_state"]
     del obj["evidence_record_ids"]
     del obj["metadata_refs"]
     del obj["metadata"]["assertion_kind"]
     del obj["metadata"]["write_behavior"]
+    payload["metadata"]["raw_mentions"] = []
 
     envelope = _validate_disease_extractor_payload(payload)
 
     normalized_obj = envelope.curatable_objects[0]
+    assert normalized_obj.schema_ref.definition_state.value == "in_development"
     assert normalized_obj.definition_state.value == "in_development"
     assert normalized_obj.evidence_record_ids == [
         "ats-model-evidence-1",
@@ -155,6 +158,12 @@ def test_disease_extractor_schema_canonicalizes_pending_scaffold_fields():
         {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
         {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"},
         {"metadata_path": "evidence_records[1]", "role": "supporting_evidence"},
+    ]
+    assert envelope.metadata.raw_mentions[0].mention == "Andersen-Tawil syndrome"
+    assert envelope.metadata.raw_mentions[0].entity_type == "disease"
+    assert envelope.metadata.raw_mentions[0].evidence_record_ids == [
+        "ats-model-evidence-1",
+        "ats-cohort-evidence-1",
     ]
 
 

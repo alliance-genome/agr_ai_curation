@@ -61,6 +61,39 @@ def _metadata_ref_paths_for_evidence_ids(
     return refs
 
 
+def _raw_mentions_from_curatable_objects(objects: list[Any]) -> list[dict[str, Any]]:
+    raw_mentions: list[dict[str, Any]] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for raw_obj in objects:
+        if not isinstance(raw_obj, dict) or raw_obj.get("object_type") != "DiseaseAnnotation":
+            continue
+        payload = raw_obj.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        mention = str(payload.get("mention") or "").strip()
+        if not mention:
+            disease_object = payload.get("disease_annotation_object")
+            if isinstance(disease_object, dict):
+                mention = str(disease_object.get("name") or "").strip()
+        evidence_record_ids = _string_list(
+            raw_obj.get("evidence_record_ids")
+        ) or _string_list(payload.get("evidence_record_ids"))
+        if not mention:
+            continue
+        key = (mention, tuple(evidence_record_ids))
+        if key in seen:
+            continue
+        seen.add(key)
+        raw_mentions.append(
+            {
+                "mention": mention,
+                "entity_type": "disease",
+                "evidence_record_ids": evidence_record_ids,
+            }
+        )
+    return raw_mentions
+
+
 class DiseaseExtractionResultEnvelope(RuntimeDiseaseExtractionResultEnvelope):
     """Config-discovered Alliance disease extraction envelope."""
 
@@ -76,10 +109,17 @@ class DiseaseExtractionResultEnvelope(RuntimeDiseaseExtractionResultEnvelope):
 
         normalized = dict(value)
         metadata = normalized.get("metadata")
-        metadata_payload = metadata if isinstance(metadata, dict) else {}
+        metadata_payload = dict(metadata) if isinstance(metadata, dict) else {}
         objects = normalized.get("curatable_objects")
         if not isinstance(objects, list):
             return normalized
+
+        raw_mentions = metadata_payload.get("raw_mentions")
+        if not raw_mentions:
+            inferred_raw_mentions = _raw_mentions_from_curatable_objects(objects)
+            if inferred_raw_mentions:
+                metadata_payload["raw_mentions"] = inferred_raw_mentions
+                normalized["metadata"] = metadata_payload
 
         canonical_objects: list[Any] = []
         for raw_obj in objects:
@@ -98,6 +138,10 @@ class DiseaseExtractionResultEnvelope(RuntimeDiseaseExtractionResultEnvelope):
                 obj["evidence_record_ids"] = payload_evidence_record_ids
 
             schema_ref = obj.get("schema_ref")
+            if isinstance(schema_ref, dict) and not schema_ref.get("definition_state"):
+                schema_ref = dict(schema_ref)
+                schema_ref["definition_state"] = "in_development"
+                obj["schema_ref"] = schema_ref
             if (
                 not obj.get("definition_state")
                 and isinstance(schema_ref, dict)
