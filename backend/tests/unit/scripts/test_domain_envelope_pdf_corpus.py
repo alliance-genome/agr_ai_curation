@@ -102,7 +102,7 @@ def test_tightened_trial_gate_fails_on_specialist_text_fallback():
     assert checks[-1]["payload"]["specialist_text_fallback_event_count"] == 1
 
 
-def test_tightened_trial_gate_honors_cross_domain_minimum_expected_bindings():
+def test_tightened_trial_gate_requires_all_cross_domain_expected_bindings():
     corpus = _load_corpus_module()
     checks: list[dict] = []
     trial = next(
@@ -111,23 +111,51 @@ def test_tightened_trial_gate_honors_cross_domain_minimum_expected_bindings():
         if trial.trial_id == "cross_domain_zebrafish_segmentation_screen"
     )
 
-    payload = corpus.validate_tightened_trial_gate(
-        trial=trial,
-        flow_result={
-            "events": [
-                _validator_lookup_event("chemical_condition.chebi_api_lookup"),
-                _validator_lookup_event("phenotype_term_ontology_validator"),
-            ]
-        },
-        checks=checks,
-        allow_specialist_text_fallback=False,
-    )
+    with pytest.raises(corpus.smoke.SmokeFailure, match="missing validator audit"):
+        corpus.validate_tightened_trial_gate(
+            trial=trial,
+            flow_result={
+                "events": [
+                    _validator_lookup_event("chemical_condition.chebi_api_lookup"),
+                    _validator_lookup_event("phenotype_term_ontology_validator"),
+                ]
+            },
+            checks=checks,
+            allow_specialist_text_fallback=False,
+        )
 
-    assert payload["minimum_expected_validator_bindings"] == 2
-    assert payload["missing_expected_validator_bindings"] == [
+    assert checks[-1]["payload"]["minimum_expected_validator_bindings"] == 3
+    assert checks[-1]["payload"]["missing_expected_validator_bindings"] == [
         "alliance_gene_reference_lookup"
     ]
-    assert checks[-1]["ok"] is True
+    assert checks[-1]["ok"] is False
+
+
+def test_build_trial_flow_uses_agent_specific_cross_domain_prompts():
+    corpus = _load_corpus_module()
+    trial = next(
+        trial
+        for trial in corpus.TRIALS
+        if trial.trial_id == "cross_domain_zebrafish_segmentation_screen"
+    )
+
+    flow = corpus.build_trial_flow(trial)
+    agent_nodes = [
+        node for node in flow["nodes"] if node["type"] == "agent"
+    ]
+
+    assert [node["data"]["agent_id"] for node in agent_nodes] == [
+        "chemical_extractor",
+        "phenotype_extractor",
+        "gene_extractor",
+    ]
+    assert all(node["data"]["input_source"] == "custom" for node in agent_nodes)
+    assert "SB225002 treatment" in agent_nodes[0]["data"]["custom_input"]
+    assert "mid-trunk myotome boundary" in agent_nodes[1]["data"]["custom_input"]
+    assert "zebrafish her1" in agent_nodes[2]["data"]["custom_input"]
+    assert "Do not extract phenotype statements or genes" in agent_nodes[0]["data"]["step_goal"]
+    assert "Do not extract chemicals or genes" in agent_nodes[1]["data"]["step_goal"]
+    assert "Do not extract chemicals or phenotype statements" in agent_nodes[2]["data"]["step_goal"]
 
 
 def test_flow_summary_keeps_domain_validator_lookup_events():

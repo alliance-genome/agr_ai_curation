@@ -295,13 +295,23 @@ def _recording_persist_extraction_results(persisted_requests=None):
     return _persist
 
 
-def _make_flow_execution_state(*completed_steps):
+def _make_flow_execution_state(*completed_steps, ordered_tool_names=None):
     """Build executor flow state with evidence registry populated from steps."""
 
     registry = _executor_module()._EvidenceRegistry()
     for step in completed_steps:
         registry.add_many(step.get("evidence_records") or [])
+    ordered = list(
+        ordered_tool_names
+        if ordered_tool_names is not None
+        else [
+            str(step.get("tool_name") or "").strip()
+            for step in completed_steps
+            if str(step.get("tool_name") or "").strip()
+        ]
+    )
     return {
+        "ordered_tool_names": ordered,
         "completed_steps": list(completed_steps),
         "evidence_registry": registry,
     }
@@ -2309,8 +2319,8 @@ class TestBuildSupervisorCustomInstructions:
         assert "do not ask extractor prompts to call validators directly" in result
 
 
-class TestBuildSupervisorDuplicateAgentRefs:
-    """Tests that duplicate agents get tool name references in supervisor instructions."""
+class TestBuildSupervisorToolRefs:
+    """Tests that supervisor instructions name exact tools for every step."""
 
     def test_duplicate_agents_include_tool_refs(self):
         flow = _make_flow([
@@ -2322,17 +2332,20 @@ class TestBuildSupervisorDuplicateAgentRefs:
         result = build_supervisor_instructions(flow)
         assert "ask_gene_step1_specialist" in result
         assert "ask_gene_step3_specialist" in result
-        # Disease is not duplicated, should NOT have tool ref
-        assert "ask_disease" not in result
+        assert "ask_disease_specialist" in result
 
-    def test_single_agents_no_tool_refs(self):
+    def test_single_agents_include_tool_refs(self):
         flow = _make_flow([
             _task_input_node(),
             _agent_node("n1", "gene", step_goal="Extract genes"),
             _agent_node("n2", "disease", step_goal="Extract diseases"),
         ])
         result = build_supervisor_instructions(flow)
-        assert "use tool:" not in result
+        assert "Step 1: Gene - Extract genes (use tool: ask_gene_specialist)" in result
+        assert (
+            "Step 2: Disease - Extract diseases "
+            "(use tool: ask_disease_specialist)"
+        ) in result
 
 
 # ===========================================================================
@@ -2760,9 +2773,11 @@ class TestBackwardCompatibility:
         result = build_supervisor_instructions(flow)
 
         assert "[has custom instructions]" not in result
-        assert "use tool:" not in result
-        assert "Step 1: Gene - Extract genes" in result
-        assert "Step 2: Disease - Extract diseases" in result
+        assert "Step 1: Gene - Extract genes (use tool: ask_gene_specialist)" in result
+        assert (
+            "Step 2: Disease - Extract diseases "
+            "(use tool: ask_disease_specialist)"
+        ) in result
 
 
 # ===========================================================================
@@ -2918,6 +2933,80 @@ class TestExecuteFlowTermination:
         assert events[0]["type"] == "FLOW_STARTED"
         assert captured["context_messages"] == [{"role": "user", "content": "run flow"}]
         assert captured["trace_context"] is None
+
+    @pytest.mark.asyncio
+    async def test_marks_flow_failed_when_supervisor_stops_before_all_steps(
+        self, monkeypatch
+    ):
+        """A multi-step flow must not complete when the supervisor skips later tools."""
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "chemical_extractor", step_goal="Extract chemical"),
+            _agent_node("n2", "phenotype_extractor", step_goal="Extract phenotype"),
+        ])
+        completed_step = _make_completed_step(
+            agent_id="chemical_extractor",
+            agent_name="Chemical Extractor",
+            tool_name="ask_chemical_extractor_specialist",
+            step=1,
+            adapter_key="chemical",
+            payload=_structured_step_output(
+                "SB225002",
+                actor="chemical_extractor",
+                destination="chemical_condition",
+            ),
+        )
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(
+            completed_step,
+            ordered_tool_names=[
+                "ask_chemical_extractor_specialist",
+                "ask_phenotype_extractor_specialist",
+            ],
+        )
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            lambda *_args, **_kwargs: pytest.fail(
+                "incomplete flows must not persist final extraction results"
+            ),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_chemical_extractor_specialist"},
+            }
+            yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [event async for event in execute_flow(flow, user_id="u1", session_id="s1")]
+        event_types = [event.get("type") for event in events]
+
+        assert "FLOW_ERROR" in event_types
+        flow_error = next(event for event in events if event.get("type") == "FLOW_ERROR")
+        assert flow_error["details"]["reason"] == "incomplete_flow_steps"
+        assert flow_error["details"]["missing_steps"] == [
+            {"step": 2, "tool_name": "ask_phenotype_extractor_specialist"}
+        ]
+        flow_finished = next(e for e in events if e.get("type") == "FLOW_FINISHED")
+        assert flow_finished["data"]["status"] == "failed"
+        assert "step 2" in (flow_finished["data"]["failure_reason"] or "")
 
     @pytest.mark.asyncio
     async def test_converts_run_error_into_flow_error(self, monkeypatch):

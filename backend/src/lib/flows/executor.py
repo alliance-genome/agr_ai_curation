@@ -1626,6 +1626,7 @@ def get_all_agent_tools(
     ordered_tool_names: List[str] = []
     execution_state = {
         "next_tool_index": 0,
+        "ordered_tool_names": ordered_tool_names,
         "completed_steps": [],
         "evidence_registry": _EvidenceRegistry(),
         "template_variables": _build_initial_flow_template_variables(flow),
@@ -2011,13 +2012,12 @@ def build_supervisor_instructions(
             step_descriptions.append(step_desc)
             continue
 
-        # Include tool name reference when agent appears in multiple steps
-        if is_duplicate:
-            step_desc = f"Step {step_num}: {agent_name} (use tool: {tool_ref})"
-        else:
-            step_desc = f"Step {step_num}: {agent_name}"
+        # Name the exact tool for every step so the supervisor cannot treat one
+        # specialist's broad answer as a substitute for later configured steps.
+        step_desc = f"Step {step_num}: {agent_name}"
         if step_goal:
             step_desc += f" - {step_goal}"
+        step_desc += f" (use tool: {tool_ref})"
         custom_instr = data.get("custom_instructions")
         if custom_instr and custom_instr.strip():
             step_desc += " [has custom instructions]"
@@ -2073,6 +2073,9 @@ Execute these steps in order:
 Guidelines:
 - Step execution order is STRICTLY enforced by runtime tool gating
 - Call each available step exactly once, in order
+- A step is complete only when its named step tool has been called
+- If an earlier specialist discusses later-step topics, still call the later
+  step tools; narrative coverage is not a substitute for configured flow steps
 - If a step is unavailable, skip it and continue to the next available step
 - Pass relevant context from previous steps to subsequent steps
 - Treat validation schedules attached to extraction steps as runtime metadata;
@@ -2399,6 +2402,61 @@ def _persist_flow_extraction_candidates_or_build_error(
     return True, None, None
 
 
+def _missing_required_flow_steps(
+    execution_state: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return required step tools that the supervisor did not call."""
+
+    if not isinstance(execution_state, Mapping):
+        return []
+
+    ordered_tool_names = execution_state.get("ordered_tool_names")
+    if not isinstance(ordered_tool_names, list):
+        return []
+
+    completed_tool_names = {
+        str(step.get("tool_name") or "").strip()
+        for step in execution_state.get("completed_steps") or []
+        if isinstance(step, Mapping)
+    }
+
+    missing: list[dict[str, Any]] = []
+    for index, tool_name in enumerate(ordered_tool_names, start=1):
+        normalized_tool_name = str(tool_name or "").strip()
+        if normalized_tool_name and normalized_tool_name not in completed_tool_names:
+            missing.append({"step": index, "tool_name": normalized_tool_name})
+    return missing
+
+
+def _flow_incomplete_error_event(
+    *,
+    flow_name: str,
+    missing_steps: list[dict[str, Any]],
+) -> tuple[str, dict[str, Any]]:
+    """Build the failure reason and SSE event for an incomplete flow."""
+
+    missing_text = ", ".join(
+        f"step {step['step']} ({step['tool_name']})"
+        for step in missing_steps
+    )
+    failure_reason = (
+        f"Flow '{flow_name}' ended before all required steps ran. "
+        f"Missing: {missing_text}."
+    )
+    return (
+        failure_reason,
+        {
+            "type": "FLOW_ERROR",
+            "timestamp": _now_iso(),
+            "details": {
+                "reason": "incomplete_flow_steps",
+                "message": failure_reason,
+                "missing_steps": missing_steps,
+            },
+        },
+    )
+
+
 async def execute_flow(
     flow: CurationFlow,
     user_id: str,
@@ -2627,6 +2685,16 @@ async def execute_flow(
             }
             break
         if event_type in {"FILE_READY", "CHAT_OUTPUT_READY"}:
+            missing_steps = _missing_required_flow_steps(flow_execution_state)
+            if missing_steps:
+                failure_reason, flow_error_event = _flow_incomplete_error_event(
+                    flow_name=flow.name,
+                    missing_steps=missing_steps,
+                )
+                flow_status = "failed"
+                yield flow_error_event
+                break
+
             persisted, failure_reason, flow_error_event = (
                 _persist_flow_extraction_candidates_or_build_error(
                     flow_name=flow.name,
@@ -2657,6 +2725,16 @@ async def execute_flow(
             yield flow_validator_audit_event
         if flow_step_evidence_event is not None:
             yield flow_step_evidence_event
+
+    if flow_status != "failed":
+        missing_steps = _missing_required_flow_steps(flow_execution_state)
+        if missing_steps:
+            failure_reason, flow_error_event = _flow_incomplete_error_event(
+                flow_name=flow.name,
+                missing_steps=missing_steps,
+            )
+            flow_status = "failed"
+            yield flow_error_event
 
     if flow_status != "failed" and not extraction_persisted:
         persisted, failure_reason, flow_error_event = (

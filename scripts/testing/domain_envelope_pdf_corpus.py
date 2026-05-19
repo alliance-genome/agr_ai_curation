@@ -11,7 +11,7 @@ from collections import Counter
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from uuid import uuid4
 
 import dev_release_smoke as smoke
@@ -36,6 +36,7 @@ class CorpusTrial:
     prompt: str
     expected_validator_bindings: tuple[str, ...]
     minimum_expected_validator_bindings: int | None = None
+    agent_prompts: Mapping[str, str] | None = None
 
 
 TRIALS: tuple[CorpusTrial, ...] = (
@@ -170,19 +171,42 @@ TRIALS: tuple[CorpusTrial, ...] = (
         doi="10.1038/s41467-017-01469-5",
         pdf_url="https://www.nature.com/articles/s41467-017-01469-5.pdf",
         prompt=(
-            "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract at "
-            "most one chemical condition, one phenotype statement, and one central gene if the "
-            "paper supports it. Each extractor must use record_evidence for one exact supporting "
-            "quote and must leave identity/ontology resolution to validators. Preserve the "
-            "explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene "
-            "or phenotype candidates; those hints are not final identity resolution."
+            "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract "
+            "one chemical condition, one phenotype statement, and one central gene supported by "
+            "the paper. Each extractor must use record_evidence for one exact supporting quote "
+            "and must leave identity/ontology resolution to validators. Preserve the explicit "
+            "zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene or "
+            "phenotype candidates; those hints are not final identity resolution."
         ),
         expected_validator_bindings=(
             "chemical_condition.chebi_api_lookup",
             "phenotype_term_ontology_validator",
             "alliance_gene_reference_lookup",
         ),
-        minimum_expected_validator_bindings=2,
+        agent_prompts={
+            "chemical_extractor": (
+                "Read the loaded paper and extract exactly one chemical or experimental-condition "
+                "candidate: SB225002 treatment in embryonic zebrafish segmentation experiments. "
+                "Preserve dose/timing/context when present and use record_evidence for one exact "
+                "supporting quote. Do not extract phenotype statements or genes in this step, and "
+                "do not resolve ChEBI or condition ontology IDs in the extractor."
+            ),
+            "phenotype_extractor": (
+                "Read the loaded paper and extract exactly one phenotype assertion candidate: "
+                "mid-trunk myotome boundary or segmentation defects in embryonic zebrafish after "
+                "SB225002 treatment. Preserve the Danio rerio/ZFIN/NCBITaxon:7955 organism context "
+                "as selector hints and use record_evidence for one exact supporting quote. Do not "
+                "extract chemicals or genes in this step, and do not resolve phenotype ontology IDs "
+                "in the extractor."
+            ),
+            "gene_extractor": (
+                "Read the loaded paper and extract exactly one central gene candidate: zebrafish "
+                "her1 in the segmentation/small-molecule-screen context. Preserve Danio rerio, "
+                "ZFIN, and NCBITaxon:7955 hints and use record_evidence for one exact supporting "
+                "quote. Do not extract chemicals or phenotype statements in this step, and do not "
+                "resolve gene IDs in the extractor."
+            ),
+        },
     ),
 )
 
@@ -216,6 +240,14 @@ def ensure_trial_pdf(trial: CorpusTrial, download_dir: Path) -> Path:
     return _download_pdf(trial, download_dir)
 
 
+def _agent_step_prompt(trial: CorpusTrial, agent_id: str) -> str:
+    if trial.agent_prompts:
+        prompt = str(trial.agent_prompts.get(agent_id) or "").strip()
+        if prompt:
+            return prompt
+    return trial.prompt
+
+
 def build_trial_flow(trial: CorpusTrial) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = [
         {
@@ -235,6 +267,7 @@ def build_trial_flow(trial: CorpusTrial) -> dict[str, Any]:
     previous_node = "task_input_1"
     for index, agent_id in enumerate(trial.agent_ids, start=1):
         node_id = f"agent_{index}"
+        step_prompt = _agent_step_prompt(trial, agent_id)
         nodes.append(
             {
                 "id": node_id,
@@ -244,8 +277,9 @@ def build_trial_flow(trial: CorpusTrial) -> dict[str, Any]:
                     "agent_id": agent_id,
                     "agent_display_name": agent_id.replace("_", " ").title(),
                     "output_key": f"{agent_id}_output",
-                    "input_source": "previous_output",
-                    "step_goal": trial.prompt,
+                    "input_source": "custom",
+                    "custom_input": step_prompt,
+                    "step_goal": step_prompt,
                 },
             }
         )
