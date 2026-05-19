@@ -294,6 +294,7 @@ def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
             or "VALIDATOR" in str(event.get("type", ""))
             or "validation" in json.dumps(event, sort_keys=True).lower()
             or "lookup_attempt" in json.dumps(event, sort_keys=True).lower()
+            or str(((event.get("details") or {}).get("toolName") or "")) == "domain_validator_lookup"
             or str(((event.get("details") or {}).get("toolName") or "")) == "record_evidence"
             or str(((event.get("details") or {}).get("toolName") or "")) == "agr_species_context_lookup"
         ],
@@ -577,12 +578,26 @@ def run_trial(
                 )
             except Exception as exc:
                 note.setdefault("warnings", []).append(f"flow_evidence_export_failed: {exc}")
-        note["tightened_validator_audit_gate"] = validate_tightened_trial_gate(
-            trial=trial,
-            flow_result=flow_result,
-            checks=trial_checks,
-            allow_specialist_text_fallback=args.allow_specialist_text_fallback,
-        )
+        try:
+            note["tightened_validator_audit_gate"] = validate_tightened_trial_gate(
+                trial=trial,
+                flow_result=flow_result,
+                checks=trial_checks,
+                allow_specialist_text_fallback=args.allow_specialist_text_fallback,
+            )
+        except smoke.SmokeFailure:
+            gate_step = f"{trial.trial_id}_tightened_validator_audit_gate"
+            gate_check = next(
+                (
+                    check
+                    for check in reversed(trial_checks)
+                    if check.get("step") == gate_step
+                ),
+                None,
+            )
+            if gate_check is not None:
+                note["tightened_validator_audit_gate"] = gate_check.get("payload")
+            raise
         if zero_evidence_records:
             raise smoke.SmokeFailure(
                 "Flow completed with zero persisted evidence records"

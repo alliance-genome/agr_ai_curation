@@ -128,3 +128,23 @@ def test_tightened_trial_gate_honors_cross_domain_minimum_expected_bindings():
         "alliance_gene_reference_lookup"
     ]
     assert checks[-1]["ok"] is True
+
+
+def test_flow_summary_keeps_domain_validator_lookup_events():
+    corpus = _load_corpus_module()
+
+    summary = corpus._summarize_flow_events(
+        {
+            "events": [
+                _validator_lookup_event("alliance_gene_reference_lookup"),
+                {"type": "TEXT_MESSAGE_CONTENT", "content": "done"},
+            ],
+            "event_types": ["TOOL_START", "TEXT_MESSAGE_CONTENT"],
+            "flow_run_id": "flow-1",
+            "total_evidence_records": 1,
+        }
+    )
+
+    assert summary["domain_events"] == [
+        _validator_lookup_event("alliance_gene_reference_lookup")
+    ]
