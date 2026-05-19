@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import copy
 from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
@@ -77,6 +78,145 @@ def _strip_optional_string(value: object) -> object:
         return value
     normalized = value.strip()
     return normalized or None
+
+
+def _optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _slug(value: object, *, fallback: str) -> str:
+    text = _optional_text(value) or fallback
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
+    return slug or fallback
+
+
+def _next_pending_ref(base: str, used_refs: set[str]) -> str:
+    candidate = base
+    suffix = 2
+    while candidate in used_refs:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    used_refs.add(candidate)
+    return candidate
+
+
+def _object_ref_value(obj: Mapping[str, Any]) -> str | None:
+    return _optional_text(obj.get("pending_ref_id")) or _optional_text(
+        obj.get("object_id")
+    )
+
+
+def _ensure_pending_ref(
+    obj: dict[str, Any],
+    *,
+    fallback_base: str,
+    used_refs: set[str],
+) -> str:
+    existing_ref = _optional_text(obj.get("pending_ref_id")) or _optional_text(
+        obj.get("object_id")
+    )
+    if existing_ref:
+        used_refs.add(existing_ref)
+        return existing_ref
+    pending_ref_id = _next_pending_ref(fallback_base, used_refs)
+    obj["pending_ref_id"] = pending_ref_id
+    return pending_ref_id
+
+
+def _schema_ref_payload(
+    *,
+    schema_id: str,
+    name: str,
+    uri: str,
+    definition_state: DefinitionState = DefinitionState.STABLE,
+) -> dict[str, Any]:
+    return {
+        "schema_id": schema_id,
+        "provider": ALLIANCE_LINKML_SCHEMA_PROVIDER,
+        "name": name,
+        "version": ALLIANCE_LINKML_COMMIT,
+        "uri": uri,
+        "definition_state": definition_state.value,
+    }
+
+
+def _chemical_term_payload_from_condition(
+    condition_payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    term = condition_payload.get("condition_chemical")
+    if not isinstance(term, Mapping):
+        return None
+    curie = _optional_text(term.get("curie"))
+    name = _optional_text(term.get("name"))
+    if curie is None and name is None:
+        return None
+    source_mentions = condition_payload.get("source_mentions")
+    mentions = [
+        str(item).strip()
+        for item in source_mentions
+        if isinstance(item, str) and item.strip()
+    ] if isinstance(source_mentions, list) else []
+    source_mention = _optional_text(condition_payload.get("source_chemical_mention"))
+    if source_mention and source_mention not in mentions:
+        mentions.append(source_mention)
+    return {
+        "curie": curie,
+        "name": name or curie,
+        "source_mentions": mentions,
+    }
+
+
+def _evidence_payload_from_metadata(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    evidence_record_id = _optional_text(record.get("evidence_record_id"))
+    verified_quote = _optional_text(record.get("verified_quote"))
+    section = _optional_text(record.get("section"))
+    chunk_id = _optional_text(record.get("chunk_id"))
+    page = record.get("page")
+    if (
+        evidence_record_id is None
+        or verified_quote is None
+        or section is None
+        or chunk_id is None
+        or isinstance(page, bool)
+        or not isinstance(page, int)
+    ):
+        return None
+    return {
+        "evidence_record_id": evidence_record_id,
+        "entity": _optional_text(record.get("entity")),
+        "verified_quote": verified_quote,
+        "page": page,
+        "section": section,
+        "subsection": _optional_text(record.get("subsection")),
+        "chunk_id": chunk_id,
+        "figure_reference": _optional_text(record.get("figure_reference")),
+    }
+
+
+def _append_object_ref(
+    obj: dict[str, Any],
+    *,
+    pending_ref_id: str,
+    object_type: str,
+) -> None:
+    refs = obj.setdefault("object_refs", [])
+    if not isinstance(refs, list):
+        refs = []
+        obj["object_refs"] = refs
+    for existing in refs:
+        if not isinstance(existing, Mapping):
+            continue
+        if (
+            existing.get("pending_ref_id") == pending_ref_id
+            and existing.get("object_type") in {None, object_type}
+        ):
+            if existing.get("object_type") is None:
+                existing["object_type"] = object_type
+            return
+    refs.append({"pending_ref_id": pending_ref_id, "object_type": object_type})
 
 
 def _validate_string_list(value: list[StrictStr], field_name: str) -> list[str]:
@@ -167,14 +307,6 @@ class ReferencePayload(ChemicalExtractorPayloadModel):
     @classmethod
     def _validate_optional_strings(cls, value: object) -> object:
         return _strip_optional_string(value)
-
-    @model_validator(mode="after")
-    def _validate_reference_identity(self) -> "ReferencePayload":
-        if self.reference_id is None and self.title is None and self.filename is None:
-            raise ValueError(
-                "Reference payload must include title, filename, or reference_id"
-            )
-        return self
 
 
 class EvidenceQuotePayload(ChemicalExtractorPayloadModel):
@@ -386,6 +518,219 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
             "EvidenceQuote domain-pack envelopes."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _canonicalize_chemical_scaffold(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+
+        normalized = copy.deepcopy(dict(value))
+        curatable_objects = normalized.get("curatable_objects")
+        if not isinstance(curatable_objects, list):
+            return normalized
+
+        metadata = normalized.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            normalized["metadata"] = metadata
+        evidence_records = metadata.get("evidence_records")
+        if not isinstance(evidence_records, list):
+            evidence_records = []
+        evidence_by_id = {
+            evidence_id: record
+            for record in evidence_records
+            if isinstance(record, Mapping)
+            for evidence_id in [_optional_text(record.get("evidence_record_id"))]
+            if evidence_id
+        }
+
+        used_refs = {
+            ref
+            for obj in curatable_objects
+            if isinstance(obj, Mapping)
+            for ref in [_object_ref_value(obj)]
+            if ref
+        }
+
+        for index, obj in enumerate(curatable_objects):
+            if not isinstance(obj, dict):
+                continue
+            object_type = _optional_text(obj.get("object_type")) or "object"
+            base = f"{_slug(object_type, fallback='object')}-{index + 1}"
+            _ensure_pending_ref(obj, fallback_base=base, used_refs=used_refs)
+            if obj.get("object_type") == EVIDENCE_QUOTE_OBJECT_TYPE:
+                obj.setdefault("model_ref", EVIDENCE_QUOTE_MODEL_REF)
+                obj.setdefault("object_role", "metadata_only")
+                obj.setdefault("definition_state", DefinitionState.IN_DEVELOPMENT.value)
+
+        existing_by_type: dict[str, list[dict[str, Any]]] = {}
+        for obj in curatable_objects:
+            if isinstance(obj, dict) and isinstance(obj.get("object_type"), str):
+                existing_by_type.setdefault(str(obj["object_type"]), []).append(obj)
+
+        has_condition_object = any(
+            obj.get("object_type") == CHEMICAL_CONDITION_OBJECT_TYPE
+            for obj in curatable_objects
+            if isinstance(obj, Mapping)
+        )
+        reference_ref = None
+        reference_objects = existing_by_type.get(REFERENCE_OBJECT_TYPE, [])
+        if reference_objects:
+            reference_ref = _object_ref_value(reference_objects[0])
+        elif has_condition_object:
+            reference_ref = _next_pending_ref("source-reference-1", used_refs)
+            curatable_objects.insert(
+                0,
+                {
+                    "object_type": REFERENCE_OBJECT_TYPE,
+                    "object_role": "validated_reference",
+                    "pending_ref_id": reference_ref,
+                    "model_ref": REFERENCE_MODEL_REF,
+                    "schema_ref": _schema_ref_payload(
+                        schema_id=REFERENCE_SCHEMA_ID,
+                        name=REFERENCE_SCHEMA_NAME,
+                        uri=REFERENCE_SCHEMA_URI,
+                    ),
+                    "definition_state": DefinitionState.IN_DEVELOPMENT.value,
+                    "payload": {},
+                    "metadata": {
+                        "validation_state": "pending_reference_materialization"
+                    },
+                },
+            )
+
+        chemical_ref_by_key: dict[tuple[str | None, str | None], str] = {}
+        for obj in existing_by_type.get(CHEMICAL_TERM_OBJECT_TYPE, []):
+            payload = obj.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            key = (_optional_text(payload.get("curie")), _optional_text(payload.get("name")))
+            ref = _object_ref_value(obj)
+            if ref:
+                chemical_ref_by_key[key] = ref
+
+        evidence_ref_by_id: dict[str, str] = {}
+        for obj in existing_by_type.get(EVIDENCE_QUOTE_OBJECT_TYPE, []):
+            payload = obj.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            evidence_id = _optional_text(payload.get("evidence_record_id"))
+            ref = _object_ref_value(obj)
+            if evidence_id and ref:
+                evidence_ref_by_id[evidence_id] = ref
+
+        for condition_index, obj in enumerate(list(curatable_objects), start=1):
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("object_type") != CHEMICAL_CONDITION_OBJECT_TYPE:
+                continue
+
+            payload = obj.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            obj.setdefault("model_ref", CHEMICAL_CONDITION_MODEL_REF)
+            obj.setdefault("definition_state", DefinitionState.IN_DEVELOPMENT.value)
+            if not obj.get("definition_notes"):
+                obj["definition_notes"] = [
+                    "Pending only; export is blocked until host annotation context "
+                    "and reference materialization are supplied."
+                ]
+            if not obj.get("schema_ref"):
+                obj["schema_ref"] = _schema_ref_payload(
+                    schema_id=CHEMICAL_CONDITION_SCHEMA_ID,
+                    name=CHEMICAL_CONDITION_SCHEMA_NAME,
+                    uri=CHEMICAL_CONDITION_SCHEMA_URI,
+                    definition_state=DefinitionState.IN_DEVELOPMENT,
+                )
+            obj.setdefault(
+                "evidence_record_ids",
+                list(payload.get("evidence_record_ids") or []),
+            )
+            metadata_payload = obj.setdefault("metadata", {})
+            if isinstance(metadata_payload, dict):
+                metadata_payload.setdefault(
+                    "export_behavior",
+                    {
+                        "status": "blocked",
+                        "exportable": False,
+                        "submit": False,
+                        "reason": (
+                            "Chemical condition export requires a host annotation, "
+                            "materialized reference, and downstream submission adapter."
+                        ),
+                    },
+                )
+
+            term_payload = _chemical_term_payload_from_condition(payload)
+            if term_payload is not None:
+                term_key = (
+                    _optional_text(term_payload.get("curie")),
+                    _optional_text(term_payload.get("name")),
+                )
+                chemical_ref = chemical_ref_by_key.get(term_key)
+                if chemical_ref is None:
+                    chemical_ref = _next_pending_ref(
+                        f"chemical-reference-{condition_index}", used_refs
+                    )
+                    chemical_ref_by_key[term_key] = chemical_ref
+                    curatable_objects.append(
+                        {
+                            "object_type": CHEMICAL_TERM_OBJECT_TYPE,
+                            "object_role": "validated_reference",
+                            "pending_ref_id": chemical_ref,
+                            "model_ref": CHEMICAL_TERM_MODEL_REF,
+                            "schema_ref": _schema_ref_payload(
+                                schema_id=CHEMICAL_TERM_SCHEMA_ID,
+                                name=CHEMICAL_TERM_SCHEMA_NAME,
+                                uri=CHEMICAL_TERM_SCHEMA_URI,
+                            ),
+                            "definition_state": DefinitionState.IN_DEVELOPMENT.value,
+                            "payload": term_payload,
+                        }
+                    )
+                _append_object_ref(
+                    obj,
+                    pending_ref_id=chemical_ref,
+                    object_type=CHEMICAL_TERM_OBJECT_TYPE,
+                )
+
+            if reference_ref:
+                _append_object_ref(
+                    obj,
+                    pending_ref_id=reference_ref,
+                    object_type=REFERENCE_OBJECT_TYPE,
+                )
+
+            for evidence_record_id in list(payload.get("evidence_record_ids") or []):
+                evidence_ref = evidence_ref_by_id.get(evidence_record_id)
+                if evidence_ref is None:
+                    evidence_payload = _evidence_payload_from_metadata(
+                        evidence_by_id.get(evidence_record_id, {})
+                    )
+                    if evidence_payload is None:
+                        continue
+                    evidence_ref = _next_pending_ref(
+                        f"evidence-quote-{len(evidence_ref_by_id) + 1}", used_refs
+                    )
+                    evidence_ref_by_id[evidence_record_id] = evidence_ref
+                    curatable_objects.append(
+                        {
+                            "object_type": EVIDENCE_QUOTE_OBJECT_TYPE,
+                            "object_role": "metadata_only",
+                            "pending_ref_id": evidence_ref,
+                            "model_ref": EVIDENCE_QUOTE_MODEL_REF,
+                            "definition_state": DefinitionState.IN_DEVELOPMENT.value,
+                            "payload": evidence_payload,
+                        }
+                    )
+                _append_object_ref(
+                    obj,
+                    pending_ref_id=evidence_ref,
+                    object_type=EVIDENCE_QUOTE_OBJECT_TYPE,
+                )
+
+        return normalized
 
     @model_validator(mode="after")
     def _validate_chemical_condition_output(self) -> "ChemicalExtractionResultEnvelope":

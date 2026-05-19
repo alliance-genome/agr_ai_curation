@@ -315,6 +315,47 @@ def test_phenotype_extractor_schema_accepts_pending_term_without_curie():
     )
 
 
+def test_phenotype_extractor_schema_canonicalizes_runtime_scaffold_objects():
+    payload = _valid_phenotype_payload()
+    annotation = copy.deepcopy(payload["curatable_objects"][-1])
+    annotation["object_refs"] = []
+    annotation["definition_notes"] = []
+    annotation["metadata"] = {}
+    annotation["schema_ref"] = {
+        "schema_id": "PhenotypeAnnotation",
+        "provider": "alliance_linkml",
+        "name": "PhenotypeAnnotation",
+        "version": "1b11d0888f19",
+    }
+    annotation_subject = annotation["payload"]["phenotype_annotation_subject"]
+    annotation_subject["subject_identifier"] = None
+    annotation_term = annotation["payload"]["phenotype_terms"][0]
+    annotation_term["curie"] = None
+    annotation["payload"]["single_reference"] = {
+        "reference_id": None,
+        "title": None,
+        "filename": None,
+    }
+    payload["curatable_objects"] = [annotation]
+
+    envelope = _validate_phenotype_extractor_payload(payload)
+
+    annotation_object = next(
+        obj for obj in envelope.curatable_objects if obj.object_type == PHENOTYPE_OBJECT_TYPE
+    )
+    ref_types = {ref.object_type for ref in annotation_object.object_refs}
+    assert ref_types == {
+        "EvidenceQuote",
+        "PhenotypeSubject",
+        "PhenotypeTerm",
+        "Reference",
+    }
+    assert annotation_object.schema_ref.schema_id == "alliance.linkml.PhenotypeAnnotation"
+    assert annotation_object.schema_ref.version == LINKML_COMMIT
+    assert annotation_object.metadata["export_behavior"]["status"] == "blocked"
+    assert annotation_object.metadata["write_behavior"]["status"] == "blocked"
+
+
 def test_phenotype_extractor_schema_requires_taxon_for_resolved_subjects():
     payload = copy.deepcopy(_valid_phenotype_payload())
     subject_payload = payload["curatable_objects"][1]["payload"]

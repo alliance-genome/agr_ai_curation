@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import copy
+import re
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import (
@@ -72,6 +75,151 @@ _SUBJECT_RESOLUTION_STATES = frozenset(
 _TERM_RESOLUTION_STATES = frozenset(
     {"resolved", "pending_ontology_resolution"}
 )
+
+
+def _optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _slug(value: object, *, fallback: str) -> str:
+    text = _optional_text(value) or fallback
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
+    return slug or fallback
+
+
+def _next_pending_ref(base: str, used_refs: set[str]) -> str:
+    candidate = base
+    suffix = 2
+    while candidate in used_refs:
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+    used_refs.add(candidate)
+    return candidate
+
+
+def _object_ref_value(obj: Mapping[str, Any]) -> str | None:
+    return _optional_text(obj.get("pending_ref_id")) or _optional_text(
+        obj.get("object_id")
+    )
+
+
+def _ensure_pending_ref(
+    obj: dict[str, Any],
+    *,
+    fallback_base: str,
+    used_refs: set[str],
+) -> str:
+    existing_ref = _optional_text(obj.get("pending_ref_id")) or _optional_text(
+        obj.get("object_id")
+    )
+    if existing_ref:
+        used_refs.add(existing_ref)
+        return existing_ref
+    pending_ref_id = _next_pending_ref(fallback_base, used_refs)
+    obj["pending_ref_id"] = pending_ref_id
+    return pending_ref_id
+
+
+def _schema_ref_payload(
+    *,
+    schema_id: str,
+    name: str,
+    uri: str,
+    definition_state: DefinitionState = DefinitionState.STABLE,
+) -> dict[str, Any]:
+    return {
+        "schema_id": schema_id,
+        "provider": ALLIANCE_LINKML_PROVIDER,
+        "name": name,
+        "version": ALLIANCE_LINKML_COMMIT,
+        "uri": uri,
+        "definition_state": definition_state.value,
+    }
+
+
+def _append_object_ref(
+    obj: dict[str, Any],
+    *,
+    pending_ref_id: str,
+    object_type: str,
+) -> None:
+    refs = obj.setdefault("object_refs", [])
+    if not isinstance(refs, list):
+        refs = []
+        obj["object_refs"] = refs
+    for existing in refs:
+        if not isinstance(existing, dict):
+            continue
+        if (
+            existing.get("pending_ref_id") == pending_ref_id
+            and existing.get("object_type") in {None, object_type}
+        ):
+            if existing.get("object_type") is None:
+                existing["object_type"] = object_type
+            return
+    refs.append({"pending_ref_id": pending_ref_id, "object_type": object_type})
+
+
+def _has_object_ref_type(obj: Mapping[str, Any], object_type: str) -> bool:
+    refs = obj.get("object_refs")
+    if not isinstance(refs, list):
+        return False
+    return any(
+        isinstance(ref, Mapping) and ref.get("object_type") == object_type
+        for ref in refs
+    )
+
+
+def _evidence_payload_from_metadata(record: Mapping[str, Any]) -> dict[str, Any] | None:
+    evidence_record_id = _optional_text(record.get("evidence_record_id"))
+    verified_quote = _optional_text(record.get("verified_quote"))
+    section = _optional_text(record.get("section"))
+    chunk_id = _optional_text(record.get("chunk_id"))
+    page = record.get("page")
+    if (
+        evidence_record_id is None
+        or verified_quote is None
+        or section is None
+        or chunk_id is None
+        or isinstance(page, bool)
+        or not isinstance(page, int)
+    ):
+        return None
+    return {
+        "evidence_record_id": evidence_record_id,
+        "entity": _optional_text(record.get("entity")),
+        "verified_quote": verified_quote,
+        "page": page,
+        "section": section,
+        "subsection": _optional_text(record.get("subsection")),
+        "chunk_id": chunk_id,
+        "figure_reference": _optional_text(record.get("figure_reference")),
+    }
+
+
+def _blocked_export_behavior() -> dict[str, Any]:
+    return {
+        "status": "blocked",
+        "exportable": False,
+        "submit": False,
+        "reason": (
+            "Phenotype export is blocked until subject subtype, reference "
+            "materialization, ontology term resolution, and write targets are verified."
+        ),
+    }
+
+
+def _blocked_write_behavior() -> dict[str, Any]:
+    return {
+        "status": "blocked",
+        "reason": (
+            "Pending phenotype assertions cannot be written until subject, "
+            "reference, ontology, and adapter targets are verified."
+        ),
+    }
 
 
 class PhenotypeSubjectPayload(BaseModel):
@@ -421,6 +569,297 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
             "subject, phenotype term, reference, and evidence quote objects."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _canonicalize_phenotype_scaffold(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+
+        normalized = copy.deepcopy(dict(value))
+        curatable_objects = normalized.get("curatable_objects")
+        if not isinstance(curatable_objects, list):
+            return normalized
+
+        metadata = normalized.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            normalized["metadata"] = metadata
+        evidence_records = metadata.get("evidence_records")
+        if not isinstance(evidence_records, list):
+            evidence_records = []
+        evidence_by_id = {
+            evidence_id: record
+            for record in evidence_records
+            if isinstance(record, Mapping)
+            for evidence_id in [_optional_text(record.get("evidence_record_id"))]
+            if evidence_id
+        }
+
+        used_refs = {
+            ref
+            for obj in curatable_objects
+            if isinstance(obj, Mapping)
+            for ref in [_object_ref_value(obj)]
+            if ref
+        }
+
+        for index, obj in enumerate(curatable_objects):
+            if not isinstance(obj, dict):
+                continue
+            object_type = _optional_text(obj.get("object_type")) or "object"
+            base = f"{_slug(object_type, fallback='object')}-{index + 1}"
+            _ensure_pending_ref(obj, fallback_base=base, used_refs=used_refs)
+            if obj.get("object_type") == PHENOTYPE_OBJECT_TYPE:
+                obj["schema_ref"] = _schema_ref_payload(
+                    schema_id=PHENOTYPE_SCHEMA_ID,
+                    name="PhenotypeAnnotation",
+                    uri=PHENOTYPE_SCHEMA_URI,
+                    definition_state=DefinitionState.IN_DEVELOPMENT,
+                )
+            elif obj.get("object_type") == PHENOTYPE_SUBJECT_OBJECT_TYPE:
+                obj.setdefault(
+                    "schema_ref",
+                    _schema_ref_payload(
+                        schema_id=PHENOTYPE_SUBJECT_SCHEMA_ID,
+                        name="BiologicalEntity",
+                        uri=PHENOTYPE_SUBJECT_SCHEMA_URI,
+                        definition_state=DefinitionState.IN_DEVELOPMENT,
+                    ),
+                )
+            elif obj.get("object_type") == PHENOTYPE_TERM_OBJECT_TYPE:
+                obj.setdefault(
+                    "schema_ref",
+                    _schema_ref_payload(
+                        schema_id=PHENOTYPE_TERM_SCHEMA_ID,
+                        name="PhenotypeTerm",
+                        uri=PHENOTYPE_TERM_SCHEMA_URI,
+                    ),
+                )
+            elif obj.get("object_type") == REFERENCE_OBJECT_TYPE:
+                obj.setdefault(
+                    "schema_ref",
+                    _schema_ref_payload(
+                        schema_id=REFERENCE_SCHEMA_ID,
+                        name="Reference",
+                        uri=REFERENCE_SCHEMA_URI,
+                    ),
+                )
+
+        existing_by_type: dict[str, list[dict[str, Any]]] = {}
+        for obj in curatable_objects:
+            if isinstance(obj, dict) and isinstance(obj.get("object_type"), str):
+                existing_by_type.setdefault(str(obj["object_type"]), []).append(obj)
+
+        has_annotation_object = any(
+            obj.get("object_type") == PHENOTYPE_OBJECT_TYPE
+            for obj in curatable_objects
+            if isinstance(obj, Mapping)
+        )
+        reference_ref = None
+        reference_objects = existing_by_type.get(REFERENCE_OBJECT_TYPE, [])
+        if reference_objects:
+            reference_ref = _object_ref_value(reference_objects[0])
+        elif has_annotation_object:
+            reference_ref = _next_pending_ref("paper-reference-1", used_refs)
+            curatable_objects.insert(
+                0,
+                {
+                    "object_type": REFERENCE_OBJECT_TYPE,
+                    "object_role": "validated_reference",
+                    "pending_ref_id": reference_ref,
+                    "model_ref": REFERENCE_MODEL_REF,
+                    "schema_ref": _schema_ref_payload(
+                        schema_id=REFERENCE_SCHEMA_ID,
+                        name="Reference",
+                        uri=REFERENCE_SCHEMA_URI,
+                    ),
+                    "definition_state": DefinitionState.IN_DEVELOPMENT.value,
+                    "payload": {},
+                    "metadata": {
+                        "validation_state": "pending_reference_resolution",
+                        "validator_binding_id": "phenotype_reference_validator",
+                    },
+                },
+            )
+
+        evidence_ref_by_id: dict[str, str] = {}
+        for obj in existing_by_type.get(EVIDENCE_QUOTE_OBJECT_TYPE, []):
+            payload = obj.get("payload")
+            if not isinstance(payload, Mapping):
+                continue
+            evidence_id = _optional_text(payload.get("evidence_record_id"))
+            ref = _object_ref_value(obj)
+            if evidence_id and ref:
+                evidence_ref_by_id[evidence_id] = ref
+
+        for annotation_index, obj in enumerate(list(curatable_objects), start=1):
+            if not isinstance(obj, dict):
+                continue
+            if obj.get("object_type") != PHENOTYPE_OBJECT_TYPE:
+                continue
+
+            payload = obj.get("payload")
+            if not isinstance(payload, dict):
+                continue
+
+            obj.setdefault("model_ref", PHENOTYPE_MODEL_REF)
+            obj.setdefault("definition_state", DefinitionState.IN_DEVELOPMENT.value)
+            if not obj.get("definition_notes"):
+                obj["definition_notes"] = [
+                    "Pending only; export is blocked until subject, reference, "
+                    "ontology, and write targets are resolved."
+                ]
+            obj.setdefault(
+                "evidence_record_ids",
+                list(payload.get("evidence_record_ids") or []),
+            )
+            metadata_payload = obj.setdefault("metadata", {})
+            if isinstance(metadata_payload, dict):
+                subject_payload = payload.get("phenotype_annotation_subject")
+                subject_state = (
+                    subject_payload.get("resolution_state")
+                    if isinstance(subject_payload, Mapping)
+                    else None
+                )
+                if isinstance(subject_state, str) and subject_state.strip():
+                    metadata_payload.setdefault("validation_state", subject_state)
+                metadata_payload.setdefault("export_behavior", _blocked_export_behavior())
+                metadata_payload.setdefault("write_behavior", _blocked_write_behavior())
+
+            subject_payload = payload.get("phenotype_annotation_subject")
+            if (
+                isinstance(subject_payload, Mapping)
+                and not _has_object_ref_type(obj, PHENOTYPE_SUBJECT_OBJECT_TYPE)
+            ):
+                subject_ref = _next_pending_ref(
+                    f"phenotype-subject-{annotation_index}", used_refs
+                )
+                curatable_objects.append(
+                    {
+                        "object_type": PHENOTYPE_SUBJECT_OBJECT_TYPE,
+                        "object_role": "validated_reference",
+                        "pending_ref_id": subject_ref,
+                        "model_ref": PHENOTYPE_SUBJECT_MODEL_REF,
+                        "schema_ref": _schema_ref_payload(
+                            schema_id=PHENOTYPE_SUBJECT_SCHEMA_ID,
+                            name="BiologicalEntity",
+                            uri=PHENOTYPE_SUBJECT_SCHEMA_URI,
+                            definition_state=DefinitionState.IN_DEVELOPMENT,
+                        ),
+                        "definition_state": DefinitionState.IN_DEVELOPMENT.value,
+                        "payload": dict(subject_payload),
+                        "metadata": {
+                            "validation_state": subject_payload.get(
+                                "resolution_state"
+                            ),
+                            "validator_binding_id": "phenotype_subject_entity_validator",
+                        },
+                    }
+                )
+                _append_object_ref(
+                    obj,
+                    pending_ref_id=subject_ref,
+                    object_type=PHENOTYPE_SUBJECT_OBJECT_TYPE,
+                )
+
+            phenotype_terms = payload.get("phenotype_terms")
+            if (
+                isinstance(phenotype_terms, list)
+                and not _has_object_ref_type(obj, PHENOTYPE_TERM_OBJECT_TYPE)
+            ):
+                for term_index, term_payload in enumerate(phenotype_terms, start=1):
+                    if not isinstance(term_payload, Mapping):
+                        continue
+                    term_ref = _next_pending_ref(
+                        f"phenotype-term-{annotation_index}-{term_index}",
+                        used_refs,
+                    )
+                    term_evidence_ids: list[str] = []
+                    lookup_hint = term_payload.get("ontology_lookup_hint")
+                    if isinstance(lookup_hint, Mapping):
+                        hint_evidence_id = _optional_text(
+                            lookup_hint.get("evidence_record_id")
+                        )
+                        if hint_evidence_id:
+                            term_evidence_ids.append(hint_evidence_id)
+                    curatable_objects.append(
+                        {
+                            "object_type": PHENOTYPE_TERM_OBJECT_TYPE,
+                            "object_role": "validated_reference",
+                            "pending_ref_id": term_ref,
+                            "model_ref": PHENOTYPE_TERM_MODEL_REF,
+                            "schema_ref": _schema_ref_payload(
+                                schema_id=PHENOTYPE_TERM_SCHEMA_ID,
+                                name="PhenotypeTerm",
+                                uri=PHENOTYPE_TERM_SCHEMA_URI,
+                            ),
+                            "definition_state": DefinitionState.IN_DEVELOPMENT.value,
+                            "payload": dict(term_payload),
+                            "evidence_record_ids": term_evidence_ids,
+                            "metadata": {
+                                "validation_state": term_payload.get(
+                                    "resolution_state",
+                                    "pending_ontology_resolution",
+                                ),
+                                "validator_binding_id": (
+                                    "phenotype_term_ontology_validator"
+                                ),
+                                "export_state": term_payload.get(
+                                    "export_state",
+                                    "blocked_pending_ontology_resolution",
+                                ),
+                                "write_blocked_reason": term_payload.get(
+                                    "write_blocked_reason",
+                                    "phenotype term CURIE unresolved",
+                                ),
+                            },
+                        }
+                    )
+                    _append_object_ref(
+                        obj,
+                        pending_ref_id=term_ref,
+                        object_type=PHENOTYPE_TERM_OBJECT_TYPE,
+                    )
+
+            if reference_ref and not _has_object_ref_type(obj, REFERENCE_OBJECT_TYPE):
+                _append_object_ref(
+                    obj,
+                    pending_ref_id=reference_ref,
+                    object_type=REFERENCE_OBJECT_TYPE,
+                )
+
+            for evidence_record_id in list(payload.get("evidence_record_ids") or []):
+                if _has_object_ref_type(obj, EVIDENCE_QUOTE_OBJECT_TYPE):
+                    break
+                evidence_ref = evidence_ref_by_id.get(evidence_record_id)
+                if evidence_ref is None:
+                    evidence_payload = _evidence_payload_from_metadata(
+                        evidence_by_id.get(evidence_record_id, {})
+                    )
+                    if evidence_payload is None:
+                        continue
+                    evidence_ref = _next_pending_ref(
+                        f"evidence-quote-{len(evidence_ref_by_id) + 1}", used_refs
+                    )
+                    evidence_ref_by_id[evidence_record_id] = evidence_ref
+                    curatable_objects.append(
+                        {
+                            "object_type": EVIDENCE_QUOTE_OBJECT_TYPE,
+                            "object_role": "metadata_only",
+                            "pending_ref_id": evidence_ref,
+                            "model_ref": EVIDENCE_QUOTE_MODEL_REF,
+                            "definition_state": DefinitionState.IN_DEVELOPMENT.value,
+                            "payload": evidence_payload,
+                        }
+                    )
+                _append_object_ref(
+                    obj,
+                    pending_ref_id=evidence_ref,
+                    object_type=EVIDENCE_QUOTE_OBJECT_TYPE,
+                )
+
+        return normalized
 
     @model_validator(mode="after")
     def _validate_phenotype_domain_contract(self) -> "PhenotypeResultEnvelope":

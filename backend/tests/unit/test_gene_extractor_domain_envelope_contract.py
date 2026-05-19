@@ -225,7 +225,7 @@ def test_gene_extractor_schema_requires_payload_metadata_evidence_alignment():
         _gene_extractor_schema().model_validate(payload)
 
 
-def test_gene_extractor_schema_rejects_unresolved_zfin_drug_like_mentions():
+def test_gene_extractor_schema_excludes_unresolved_zfin_drug_like_mentions():
     payload = _valid_gene_extractor_payload()
     obj = payload["curatable_objects"][0]
     obj["pending_ref_id"] = "gene-mention-evidence-sb225002"
@@ -263,8 +263,12 @@ def test_gene_extractor_schema_rejects_unresolved_zfin_drug_like_mentions():
         }
     )
 
-    with pytest.raises(ValidationError, match="drug-like compound codes"):
-        _gene_extractor_schema().model_validate(payload)
+    envelope = _gene_extractor_schema().model_validate(payload)
+
+    assert envelope.curatable_objects == []
+    assert envelope.metadata.exclusions[-1].mention == "SB225002"
+    assert envelope.metadata.exclusions[-1].reason_code == "unsupported_entity_type"
+    assert envelope.metadata.exclusions[-1].evidence_record_ids == ["ev-sb225002"]
 
 
 def test_gene_extractor_schema_accepts_uppercase_zfin_mention_with_gene_hint():

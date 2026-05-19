@@ -303,6 +303,36 @@ def test_chemical_extractor_schema_accepts_label_backed_pending_ontology_candida
     assert condition.payload.condition_chemical.name == "sirolimus"
 
 
+def test_chemical_extractor_schema_canonicalizes_runtime_scaffold_objects():
+    payload = _valid_chemical_extractor_payload()
+    condition = copy.deepcopy(payload["curatable_objects"][-1])
+    evidence = copy.deepcopy(payload["curatable_objects"][2])
+    condition["object_refs"] = []
+    condition["metadata"] = {}
+    evidence["pending_ref_id"] = None
+    payload["curatable_objects"] = [condition, evidence]
+
+    envelope = _validate_chemical_extractor_payload(payload)
+
+    condition_object = next(
+        obj
+        for obj in envelope.curatable_objects
+        if obj.object_type == CHEMICAL_CONDITION_OBJECT_TYPE
+    )
+    ref_types = {ref.object_type for ref in condition_object.object_refs}
+    assert ref_types == {
+        CHEMICAL_TERM_OBJECT_TYPE,
+        REFERENCE_OBJECT_TYPE,
+        EVIDENCE_QUOTE_OBJECT_TYPE,
+    }
+    assert condition_object.metadata["export_behavior"]["status"] == "blocked"
+    assert any(
+        obj.object_type == REFERENCE_OBJECT_TYPE
+        for obj in envelope.curatable_objects
+    )
+    assert all(obj.pending_ref_id for obj in envelope.curatable_objects)
+
+
 def test_chemical_extractor_schema_rejects_ambiguous_label_backed_chemical_refs():
     payload = _valid_chemical_extractor_payload()
     ambiguous_chemical_ref = "chemical-reference-ambiguous"

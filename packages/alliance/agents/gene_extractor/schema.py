@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import re
-from typing import Literal
+from collections.abc import Mapping
+from typing import Any, Literal
 
 from src.lib.openai_agents.models import (
     GeneExtractionResultEnvelope as RuntimeGeneExtractionResultEnvelope,
@@ -50,6 +52,36 @@ def _strip_optional_string(value: object) -> object:
         return value
     normalized = value.strip()
     return normalized or None
+
+
+def _optional_text(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
+def _is_unsupported_zfin_drug_like_payload(payload: Mapping[str, Any]) -> bool:
+    zfin_context = (
+        payload.get("data_provider_hint") == "ZFIN"
+        or payload.get("taxon_hint") == ZFIN_TAXON_CURIE
+        or payload.get("proposed_taxon") == ZFIN_TAXON_CURIE
+        or (_optional_text(payload.get("species")) or "").lower()
+        in {"danio rerio", "zebrafish"}
+    )
+    if not zfin_context:
+        return False
+
+    proposed_symbol = _optional_text(payload.get("proposed_gene_symbol"))
+    has_gene_identity_hint = bool(
+        _optional_text(payload.get("proposed_primary_external_id"))
+        or (proposed_symbol and proposed_symbol == proposed_symbol.lower())
+    )
+    if has_gene_identity_hint:
+        return False
+
+    mention = _optional_text(payload.get("mention")) or ""
+    return bool(re.search(r"[A-Z]", mention) and re.search(r"\d", mention))
 
 
 class GeneMentionEvidencePayload(BaseModel):
@@ -226,6 +258,61 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
             "is one verified gene mention/evidence reference, not a paper-gene write target."
         ),
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _exclude_unsupported_gene_like_compounds(cls, value: object) -> object:
+        if not isinstance(value, Mapping):
+            return value
+
+        normalized = copy.deepcopy(dict(value))
+        curatable_objects = normalized.get("curatable_objects")
+        if not isinstance(curatable_objects, list):
+            return normalized
+
+        kept_objects: list[object] = []
+        exclusions: list[dict[str, Any]] = []
+        for obj in curatable_objects:
+            if not isinstance(obj, Mapping):
+                kept_objects.append(obj)
+                continue
+            payload = obj.get("payload")
+            if (
+                obj.get("object_type") == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+                and isinstance(payload, Mapping)
+                and _is_unsupported_zfin_drug_like_payload(payload)
+            ):
+                evidence_record_id = _optional_text(payload.get("evidence_record_id"))
+                exclusions.append(
+                    {
+                        "mention": _optional_text(payload.get("mention"))
+                        or "unsupported ZFIN-like code",
+                        "reason_code": "unsupported_entity_type",
+                        "evidence_record_ids": (
+                            [evidence_record_id] if evidence_record_id else []
+                        ),
+                        "details": (
+                            "Dropped uppercase/digit ZFIN-context mention before "
+                            "schema validation because no lowercase gene symbol or "
+                            "primary external ID was present."
+                        ),
+                    }
+                )
+                continue
+            kept_objects.append(obj)
+
+        if exclusions:
+            normalized["curatable_objects"] = kept_objects
+            metadata = normalized.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+                normalized["metadata"] = metadata
+            existing_exclusions = metadata.get("exclusions")
+            if not isinstance(existing_exclusions, list):
+                existing_exclusions = []
+            metadata["exclusions"] = [*existing_exclusions, *exclusions]
+
+        return normalized
 
     @model_validator(mode="after")
     def _validate_gene_evidence_metadata(self) -> "GeneExtractionResultEnvelope":

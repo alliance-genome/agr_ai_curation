@@ -149,6 +149,21 @@ def test_gene_expression_schema_accepts_tmem67_domain_envelope_output():
     )
 
 
+def test_gene_expression_schema_canonicalizes_missing_pending_ref_id():
+    schema = _load_gene_expression_schema()
+    payload = deepcopy(_load_tmem67_output())
+    payload["curatable_objects"][0].pop("pending_ref_id", None)
+
+    envelope = schema.model_validate(payload)
+
+    assert envelope.curatable_objects[0].pending_ref_id.startswith(
+        "gene-expression-annotation-"
+    )
+    assert envelope.curatable_objects[0].schema_ref.version == (
+        "1b11d0888f19eba4ca72022200bb7d96b30d4a52"
+    )
+
+
 def test_gene_expression_schema_rejects_legacy_payload_evidence_fields():
     schema = _load_gene_expression_schema()
     payload = deepcopy(_load_tmem67_output())
