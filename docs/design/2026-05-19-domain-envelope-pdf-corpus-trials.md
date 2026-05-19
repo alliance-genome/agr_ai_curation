@@ -7,6 +7,29 @@ Runner: `scripts/testing/domain_envelope_pdf_corpus.py`
 
 These trials exercised real uploaded PDFs through the live document upload, PDFX processing, Agent Studio flow execution, domain-envelope extraction, and automatic validator attachment metadata.
 
+## 2026-05-19 Focused Gene Rerun After Flow Envelope Materialization Cleanup
+
+After `dcea1de3`, `9cb9d6ab`, `178016d4`, and `1acbec60`, I rebuilt the main sandbox and reran the focused gene trial against backend port `8900`.
+
+| Domain | Document ID | Flow ID | Flow run ID | Envelope ID | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| Gene | `98b05c40-8adc-4b1b-ace2-ad4248313b58` | `f2b8c4cc-c54e-4524-be31-6b3ec83a4c3d` | `5586542d-3f68-4845-855d-afdc853ef32a` | `extraction-result:chat-runtime:a7e1fc97-5167-4731-a4f4-a9406ecc7061` | Passed with `total_evidence_records: 1` and JSON evidence export count `1`. The supervisor answer included `FB:FBgn0259685`. The persisted envelope materialized `primary_external_id: FB:FBgn0259685`, `gene_symbol: crb`, and `taxon: NCBITaxon:7227`. |
+
+Persisted envelope validation findings:
+
+- The envelope row was present in `domain_envelopes` at revision `1`, with exactly one resolved `domain_pack.validator_resolved` finding for `alliance_gene_reference_lookup`.
+- The `domain_envelope_objects` projection had one `gene_mention_evidence` object with validation state `clear`, `primary_external_id: FB:FBgn0259685`, and `gene_symbol: crb`.
+- The envelope metadata carried the supervisor-facing materialized summary; no top-level `supervisor_summary` field was present in the persisted extraction payload.
+- Backend logs for the final rerun contained no `validator_agent_error`, `run_sync`, `invalid_schema`, `Package-scoped validator agent failed`, `AgentRunner.run_sync`, `Domain-envelope chat validation failed`, or `extraction_persistence_failed` messages.
+
+Intermediate focused reruns exposed and fixed three live-only gaps:
+
+- Returning plain text to the supervisor restored materialized-field visibility but broke downstream structured evidence export. The final implementation keeps JSON as JSON and adds the supervisor summary inside envelope metadata.
+- Flow extraction-result persistence did not itself materialize `domain_envelopes`; `9cb9d6ab` added materialization for domain-envelope flow records.
+- Chat-runtime validator dispatch and flow automatic validator groups both appended the same resolved finding; `1acbec60` reuses an existing resolved finding for the same automatic binding/target.
+
+The focused rerun updated `docs/design/pdf-corpus-trials/gene_drosophila_crb_rhabdomere.json`. The generated `summary.json` remains a one-trial focused summary and should not replace the broader corpus summary unless intentionally regenerated.
+
 ## 2026-05-19 Focused Gene Rerun After Validator Dispatch Fix
 
 After `950fbcec`, I rebuilt the main sandbox and reran the focused gene trial against backend port `8900`.
@@ -20,7 +43,7 @@ Persisted envelope validation findings:
 - The envelope had two resolved `domain_pack.validator_resolved` findings for `alliance_gene_reference_lookup`. Both used `alliance_curation_db` / `search_genes`, reported successful lookup attempts, and resolved Crumbs to `FB:FBgn0259685`.
 - The envelope contained no `validator_agent_error`, no `invalid_schema`, and no unresolved finding for this run.
 - Backend logs for the rerun contained no `validator_agent_error`, `run_sync`, `invalid_schema`, `Package-scoped validator agent failed`, or `AgentRunner.run_sync` messages.
-- The duplicate resolved finding is still visible and should be cleaned up separately if the flow-level automatic validation pass should not re-run after chat-runtime validation already materialized the same binding.
+- This run still showed a duplicate resolved finding; the later `1acbec60` focused rerun cleaned this up by reusing upstream resolved findings for the same automatic binding/target.
 
 The focused rerun updated `docs/design/pdf-corpus-trials/gene_drosophila_crb_rhabdomere.json`. The generated `summary.json` was not retained because the focused run overwrote the prior multi-trial summary with a one-trial summary.
 
@@ -34,7 +57,7 @@ After `872371ce`, I rebuilt the main sandbox and reran the focused gene trial ag
 
 Persisted envelope validation findings:
 
-- The envelope had two resolved `domain_pack.validator_resolved` findings for `alliance_gene_reference_lookup`. Both used `alliance_curation_db` / `search_genes`, reported successful lookup attempts, and resolved Crumbs to `FB:FBgn0259685`.
+- The envelope had two resolved `domain_pack.validator_resolved` findings for `alliance_gene_reference_lookup`. Both used `alliance_curation_db` / `search_genes`, reported successful lookup attempts, and resolved Crumbs to `FB:FBgn0259685`. The later `1acbec60` focused rerun cleaned this up by reusing upstream resolved findings for the same automatic binding/target.
 - The envelope contained no `validator_agent_error`, no `invalid_schema`, and no unresolved finding for this run.
 - Backend logs for the rerun contained no `validator_agent_error`, `run_sync`, `invalid_schema`, `Package-scoped validator agent failed`, or `AgentRunner.run_sync` messages.
 - The final supervisor prose still omitted `FB:FBgn0259685`, even though the persisted envelope materialized it. Final-answer synthesis remains a separate follow-up gap from validator dispatch/materialization.
@@ -84,7 +107,7 @@ The cross-domain trial reused the chemical trial document because both use the s
 
 | Domain | Paper | Source | Organism | Document ID | Flow ID | Outcome |
 | --- | --- | --- | --- | --- | --- | --- |
-| Gene | Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye | PMID 34097697, PMCID PMC8211197, DOI 10.1371/journal.pgen.1009146 | Drosophila melanogaster | `e3da0e79-2080-4ce4-aa89-68eb7650e9c8` | `36cc32c9-d311-41de-a738-26dc364b5edf` | Focused rerun passed; final answer resolved `crb` to `FB:FBgn0259685`, flow step evidence count was `1`, and evidence export count was `1`. |
+| Gene | Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye | PMID 34097697, PMCID PMC8211197, DOI 10.1371/journal.pgen.1009146 | Drosophila melanogaster | `98b05c40-8adc-4b1b-ace2-ad4248313b58` | `f2b8c4cc-c54e-4524-be31-6b3ec83a4c3d` | Focused rerun passed with one persisted/exported evidence record, a persisted domain envelope, one resolved validator finding, and final answer ID `FB:FBgn0259685`. |
 | Allele | Notch Controls Cell Adhesion in the Drosophila Eye | PMID 24415930, PMCID PMC3886913, DOI 10.1371/journal.pgen.1004087 | Drosophila melanogaster | `f4a51a32-9b1d-4b32-8188-0633ae45dc78` | `2d123857-6fcd-4d0f-b9f7-3576af5dfea4` | Focused rerun passed evidence gating and export with one persisted evidence record; allele validator lookup still reported unresolved `validator_agent_error`. |
 | Disease | Network Analysis of a Pkd1-Mouse Model of Autosomal Dominant Polycystic Kidney Disease Identifies HNF4alpha as a Disease Modifier | PMID 23209420, PMCID PMC3516559, DOI 10.1371/journal.pgen.1003053 | Mus musculus | `39600ef7-4c7d-49b5-bc0e-9fd9961edf9f` | `c6ac9403-298d-4fbe-97c6-3dfd11bfae44` | Stream-recovery rerun passed with one persisted and exported evidence record. |
 | Chemical condition | Small molecule screen in embryonic zebrafish using modular variations to target segmentation | PMID 29196643, PMCID PMC5711842, DOI 10.1038/s41467-017-01469-5 | Danio rerio | `4a43a985-91bd-477f-a40a-dd560cbeebd2` | `b0b3d8d9-aec7-4d3e-a5ba-6d3e61d37198` | Stream-recovery rerun passed with one persisted and exported evidence record. |
