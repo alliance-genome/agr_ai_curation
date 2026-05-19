@@ -1,6 +1,8 @@
 """Focused helper tests for streaming_tools core runtime behavior."""
 
+import json
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -17,6 +19,10 @@ from src.lib.prompts.context import (
     set_pending_prompts,
 )
 from src.models.sql.prompts import PromptTemplate
+
+
+REPO_ROOT = Path(__file__).resolve().parents[5]
+REPO_PACKAGES_DIR = REPO_ROOT / "packages"
 
 
 class _Envelope(BaseModel):
@@ -341,3 +347,288 @@ def test_required_tool_failure_message_for_document_tools():
     )
     assert msg is not None
     assert "required document tools" in msg
+
+
+def _gene_extractor_domain_output() -> str:
+    return json.dumps(
+        {
+            "summary": "Retained one crumbs gene mention.",
+            "curatable_objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
+                    "pending_ref_id": "gene-mention-evidence-crumbs-1",
+                    "model_ref": "GeneMentionEvidencePayload",
+                    "schema_ref": {
+                        "schema_id": "alliance.linkml.Gene",
+                        "provider": "alliance_linkml",
+                        "name": "Gene",
+                        "version": "1b11d0888f19eba4ca72022200bb7d96b30d4a52",
+                    },
+                    "definition_state": "in_development",
+                    "definition_notes": [
+                        "Envelope-only validated reference evidence; this object does not create or mutate Alliance Gene rows."
+                    ],
+                    "payload": {
+                        "mention": "crumbs",
+                        "species": "Drosophila melanogaster",
+                        "taxon_hint": "NCBITaxon:7227",
+                        "data_provider_hint": "FB",
+                        "proposed_primary_external_id": None,
+                        "proposed_gene_symbol": "crb",
+                        "proposed_taxon": None,
+                        "identity_resolution_notes": [],
+                        "confidence": "high",
+                        "evidence_record_id": "evidence-crumbs-1",
+                        "verified_quote": "Crumbs protein acts as a positional cue for rhabdomere morphogenesis.",
+                        "page": 1,
+                        "section": "Results",
+                        "chunk_id": "chunk-crumbs-1",
+                    },
+                    "evidence_record_ids": ["evidence-crumbs-1"],
+                    "metadata_refs": [
+                        {"metadata_path": "raw_mentions[0]", "role": "source_mention"},
+                        {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"},
+                    ],
+                }
+            ],
+            "metadata": {
+                "raw_mentions": [
+                    {
+                        "mention": "crumbs",
+                        "entity_type": "gene",
+                        "evidence_record_ids": ["evidence-crumbs-1"],
+                    }
+                ],
+                "evidence_records": [
+                    {
+                        "evidence_record_id": "evidence-crumbs-1",
+                        "entity": "crumbs",
+                        "verified_quote": "Crumbs protein acts as a positional cue for rhabdomere morphogenesis.",
+                        "page": 1,
+                        "section": "Results",
+                        "chunk_id": "chunk-crumbs-1",
+                    }
+                ],
+                "normalization_notes": [],
+                "exclusions": [],
+                "ambiguities": [],
+                "notes": [],
+                "provenance": {},
+            },
+            "run_summary": {
+                "candidate_count": 1,
+                "kept_count": 1,
+                "excluded_count": 0,
+                "ambiguous_count": 0,
+                "warnings": [],
+            },
+        }
+    )
+
+
+def _resolved_gene_validator_payload(request):
+    return {
+        "status": "resolved",
+        "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id,
+        "validator_agent": request.validator_agent.model_dump(mode="json"),
+        "target": request.target.model_dump(mode="json"),
+        "resolved_values": {
+            "curie": "FB:FBgn0000368",
+            "symbol": "crb",
+            "taxon": "NCBITaxon:7227",
+        },
+        "resolved_objects": [],
+        "missing_expected_fields": [],
+        "candidates": [],
+        "lookup_attempts": [
+            {
+                "provider": "agr_curation_query",
+                "method": "search_genes",
+                "query": {"gene_symbol": request.selected_inputs["mention"]},
+                "result_count": 1,
+                "outcome": "success",
+            }
+        ],
+        "curator_message": None,
+        "explanation": "Resolved crumbs against FlyBase.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(monkeypatch):
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+
+    from src.lib.curation_workspace import adapter_registry
+    from src.lib.curation_workspace import curation_prep_service, extraction_results
+    from src.lib.domain_packs import validator_dispatch
+
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+
+    source_envelope = SimpleNamespace(
+        domain_pack_id="gene",
+        objects=[SimpleNamespace()],
+    )
+    monkeypatch.setattr(
+        curation_prep_service,
+        "_domain_envelope_from_extraction_result",
+        lambda _record: source_envelope,
+    )
+    monkeypatch.setattr(
+        adapter_registry,
+        "resolve_curation_domain_pack_by_id",
+        lambda domain_pack_id: SimpleNamespace(pack_id=domain_pack_id),
+    )
+
+    dispatched = {}
+
+    validated_envelope = SimpleNamespace(
+        model_dump=lambda mode="json": {
+            "envelope_id": "chat-runtime",
+            "domain_pack_id": "gene",
+            "objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "payload": {
+                        "mention": "crumbs",
+                        "primary_external_id": "FB:FBgn0000368",
+                        "gene_symbol": "crb",
+                        "taxon": "NCBITaxon:7227",
+                    },
+                }
+            ],
+            "validation_findings": [],
+            "metadata": {"validated": True},
+        }
+    )
+
+    def _fake_dispatch(envelope, domain_pack, **kwargs):
+        dispatched["envelope"] = envelope
+        dispatched["domain_pack"] = domain_pack
+        dispatched["kwargs"] = kwargs
+        return SimpleNamespace(
+            envelope=validated_envelope,
+            matched_bindings=(SimpleNamespace(),),
+            validator_results=(SimpleNamespace(),),
+            appended_findings=(),
+        )
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "dispatch_active_validator_bindings",
+        _fake_dispatch,
+    )
+
+    extractor_output = json.dumps(
+        {
+            "summary": "Retained crumbs.",
+            "curatable_objects": [{"object_type": "gene_mention_evidence"}],
+            "metadata": {},
+            "run_summary": {"candidate_count": 1},
+        }
+    )
+
+    result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        extractor_output,
+        expected_output_type=GeneExtractionResultEnvelope,
+        specialist_name="Gene Extraction",
+        tool_name="ask_gene_extractor_specialist",
+    )
+
+    payload = json.loads(result)
+    assert payload["metadata"]["validated"] is True
+    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0000368"
+    assert dispatched["envelope"] is source_envelope
+    assert dispatched["domain_pack"].pack_id == "gene"
+    assert dispatched["kwargs"]["source_envelope_revision"] == 1
+    assert [event["type"] for event in emitted] == ["TOOL_START", "TOOL_COMPLETE"]
+    assert emitted[0]["details"]["toolName"] == "dispatch_active_validator_bindings"
+
+
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+
+    from src.lib.curation_workspace import adapter_registry, extraction_results
+    from src.lib.domain_packs import validator_dispatch
+
+    adapter_registry.load_curation_adapter_registry.cache_clear()
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+
+    captured_requests = []
+
+    def _fake_validator_agent(request, *, binding):
+        captured_requests.append(request)
+        return _resolved_gene_validator_payload(request)
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "run_package_scoped_validator_agent",
+        _fake_validator_agent,
+    )
+
+    result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        _gene_extractor_domain_output(),
+        expected_output_type=GeneExtractionResultEnvelope,
+        specialist_name="Gene Extraction",
+        tool_name="ask_gene_extractor_specialist",
+    )
+
+    payload = json.loads(result)
+    assert captured_requests
+    request = captured_requests[0]
+    assert request.validator_binding_id == "alliance_gene_reference_lookup"
+    assert request.validator_agent.agent_id == "gene_validation"
+    assert request.selected_inputs["mention"] == "crumbs"
+    assert request.selected_inputs["data_provider_hint"] == "FB"
+    assert request.selected_inputs["taxon_hint"] == "NCBITaxon:7227"
+    assert request.selected_inputs["evidence_quote"].startswith("Crumbs protein")
+    assert payload["objects"][0]["payload"]["primary_external_id"] == "FB:FBgn0000368"
+    assert payload["objects"][0]["payload"]["gene_symbol"] == "crb"
+    assert payload["objects"][0]["payload"]["taxon"] == "NCBITaxon:7227"
+    assert payload["validation_findings"]
+    assert emitted[0]["details"]["toolArgs"]["domain_pack_id"] == "gene"
+
+
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_fails_closed_without_tool_agent_key():
+    with pytest.raises(streaming_tools.SpecialistOutputError, match="source agent"):
+        await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            _gene_extractor_domain_output(),
+            expected_output_type=GeneExtractionResultEnvelope,
+            specialist_name="Gene Extraction",
+            tool_name=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_fails_closed_without_curation_adapter(
+    monkeypatch,
+):
+    from src.lib.curation_workspace import extraction_results
+
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: None,
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError, match="adapter ownership"):
+        await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            _gene_extractor_domain_output(),
+            expected_output_type=GeneExtractionResultEnvelope,
+            specialist_name="Gene Extraction",
+            tool_name="ask_gene_extractor_specialist",
+        )

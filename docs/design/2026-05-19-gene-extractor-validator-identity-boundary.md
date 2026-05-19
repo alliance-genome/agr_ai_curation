@@ -75,6 +75,34 @@ Runtime responsibilities:
 - Materialize validator `resolved_values` into final payload fields.
 - Preserve lookup attempts, candidates, findings, and curator messages.
 
+## Chat-Time Dispatch Boundary
+
+Direct chat extraction must use the same ownership boundary as curation prep and
+flow execution. The extractor should not call the validator agent directly, and
+the supervisor should not decide how to validate extractor-owned proposals.
+Instead, the specialist tool/runtime wrapper should intercept domain-envelope
+extractor output before returning it to the supervisor:
+
+1. Supervisor routes a paper gene question to `gene_extractor`.
+2. `gene_extractor` emits a `GeneExtractionResultEnvelope` with
+   `gene_mention_evidence` objects and proposal/context fields.
+3. The runtime converts that extraction result into an in-memory
+   `DomainEnvelope`.
+4. The runtime calls `dispatch_active_validator_bindings(...)` for active
+   domain-pack bindings.
+5. The package-scoped `gene_validation` agent receives a
+   `DomainValidationRequest` built from the binding selectors.
+6. Validator `resolved_values`, lookup attempts, candidates, and findings are
+   materialized back into the envelope.
+7. The supervisor receives the validated/materialized envelope summary and then
+   writes the chat answer.
+
+This keeps validation deterministic and metadata-owned while still making
+direct chat answers reflect the same active validator behavior users will see
+in the workspace. Curation prep and workspace refresh continue to run their
+persisted-envelope dispatch path; the chat bridge is a pre-supervisor
+materialization of the same active bindings, not an extractor-side tool call.
+
 ## Extractor Output Contract
 
 Extractor payloads should distinguish proposed identity from validated identity.

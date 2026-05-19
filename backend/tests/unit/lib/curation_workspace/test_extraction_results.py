@@ -81,6 +81,29 @@ def _sample_domain_envelope_payload() -> dict:
     }
 
 
+def _sample_persisted_domain_envelope_payload() -> dict:
+    return {
+        "envelope_id": "envelope-gene-notch",
+        "domain_pack_id": "gene",
+        "domain_pack_version": "0.1.0",
+        "status": "extracted",
+        "objects": [
+            {
+                "object_type": "gene_mention_evidence",
+                "pending_ref_id": "gene-notch",
+                "payload": {
+                    "mention": "notch",
+                    "primary_external_id": "FB:FBgn0004647",
+                },
+                "evidence_record_ids": ["evidence-notch"],
+            }
+        ],
+        "validation_findings": [],
+        "history": [],
+        "metadata": {},
+    }
+
+
 class _FakeSession:
     def __init__(self, *, fail_commit: bool = False, fail_flush: bool = False):
         self.fail_commit = fail_commit
@@ -348,6 +371,24 @@ def test_build_extraction_envelope_candidate_accepts_domain_envelope_curatable_o
     assert candidate.payload_json["curatable_objects"][0]["pending_ref_id"] == "gene-notch"
     assert evidence_metadata["evidence_count"] == 1
     assert evidence_metadata["evidence_records"][0]["evidence_record_id"] == "evidence-notch"
+
+
+def test_build_extraction_envelope_candidate_accepts_persisted_domain_envelope_shape():
+    candidate = build_extraction_envelope_candidate(
+        json.dumps(_sample_persisted_domain_envelope_payload()),
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        conversation_summary="Validated chat-time gene envelope",
+    )
+
+    assert candidate is not None
+    assert candidate.agent_key == "gene_extractor"
+    assert candidate.adapter_key == "gene"
+    assert candidate.candidate_count == 1
+    assert candidate.payload_json["envelope_id"] == "envelope-gene-notch"
+    assert candidate.payload_json["objects"][0]["payload"]["primary_external_id"] == (
+        "FB:FBgn0004647"
+    )
 
 
 def test_build_extraction_envelope_candidate_preserves_caller_adapter_when_envelope_omits_one(

@@ -34,6 +34,7 @@ _EXTRACTION_TOOL_NAME_PATTERN = re.compile(
 _ENVELOPE_EXTRACTION_KEYS = frozenset(
     {"curatable_objects", "items", "raw_mentions", "exclusions", "ambiguities"}
 )
+_DOMAIN_ENVELOPE_KEYS = frozenset({"envelope_id", "domain_pack_id", "objects"})
 _NUL_CHARACTER = "\x00"
 
 
@@ -93,9 +94,13 @@ def build_extraction_envelope_candidate(
         return None
 
     envelope_metadata = dict(metadata or {})
-    run_summary = payload.get("run_summary", {}) if isinstance(payload, dict) else {}
-    candidate_count_raw = run_summary.get("candidate_count", 0)
-    candidate_count = candidate_count_raw if isinstance(candidate_count_raw, int) else 0
+    if _is_domain_envelope_payload(payload):
+        objects = payload.get("objects", []) if isinstance(payload, dict) else []
+        candidate_count = len(objects) if isinstance(objects, list) else 0
+    else:
+        run_summary = payload.get("run_summary", {}) if isinstance(payload, dict) else {}
+        candidate_count_raw = run_summary.get("candidate_count", 0)
+        candidate_count = candidate_count_raw if isinstance(candidate_count_raw, int) else 0
     resolved_adapter_key = str(adapter_key or "").strip() or None
     agent_curation = None
     if resolved_adapter_key is None:
@@ -314,6 +319,9 @@ def _is_extraction_envelope_payload(payload: Any) -> bool:
     if not isinstance(payload, dict):
         return False
 
+    if _is_domain_envelope_payload(payload):
+        return True
+
     run_summary = payload.get("run_summary")
     if not isinstance(run_summary, dict):
         return False
@@ -323,6 +331,16 @@ def _is_extraction_envelope_payload(payload: Any) -> bool:
         return False
 
     return any(key in payload for key in _ENVELOPE_EXTRACTION_KEYS)
+
+
+def _is_domain_envelope_payload(payload: Any) -> bool:
+    """Return True when the payload already uses the persisted domain-envelope shape."""
+
+    if not isinstance(payload, dict):
+        return False
+    if not _DOMAIN_ENVELOPE_KEYS.issubset(payload):
+        return False
+    return isinstance(payload.get("objects"), list)
 
 
 def get_agent_curation_metadata(agent_key: str) -> dict[str, Any] | None:

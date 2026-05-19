@@ -14,6 +14,7 @@ immediately, allowing real-time visibility into specialist agent activity.
 """
 
 import copy
+import asyncio
 import importlib
 import json
 import logging
@@ -782,6 +783,204 @@ def _reduce_specialist_output_for_supervisor(
         return answer_text
 
     return final_output
+
+
+def _agent_key_from_specialist_tool_name(tool_name: Optional[str]) -> Optional[str]:
+    """Resolve the canonical agent key segment from an ask_*_specialist tool name."""
+
+    match = re.match(
+        r"^ask_(?P<agent_key>.+?)(?:_step\d+)?_specialist$",
+        str(tool_name or "").strip(),
+    )
+    if match is None:
+        return None
+    return match.group("agent_key")
+
+
+def _is_domain_envelope_output_json(
+    final_output: str,
+    *,
+    expected_output_type: Any,
+) -> bool:
+    if not final_output or not _is_domain_envelope_extraction_output_type(expected_output_type):
+        return False
+    try:
+        payload = json.loads(final_output)
+    except Exception:
+        return False
+    return isinstance(payload, dict)
+
+
+async def _dispatch_domain_envelope_validators_for_chat(
+    final_output: str,
+    *,
+    expected_output_type: Any,
+    specialist_name: str,
+    tool_name: Optional[str],
+) -> str:
+    """Run active domain-pack validators before extractor output reaches supervisor."""
+
+    if not _is_domain_envelope_output_json(
+        final_output,
+        expected_output_type=expected_output_type,
+    ):
+        return final_output
+
+    agent_key = _agent_key_from_specialist_tool_name(tool_name)
+    if agent_key is None:
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=getattr(expected_output_type, "__name__", "response"),
+            message=(
+                "Domain-envelope validator dispatch could not resolve the "
+                f"source agent from tool name {tool_name!r}."
+            ),
+        )
+
+    try:
+        from src.lib.curation_workspace.curation_prep_service import (
+            _domain_envelope_from_extraction_result,
+        )
+        from src.lib.curation_workspace.extraction_results import (
+            build_extraction_envelope_candidate,
+        )
+        from src.lib.curation_workspace.adapter_registry import (
+            resolve_curation_domain_pack_by_id,
+        )
+        from src.lib.domain_packs.validator_dispatch import (
+            dispatch_active_validator_bindings,
+        )
+        from src.schemas.curation_workspace import (
+            CurationExtractionResultRecord,
+            CurationExtractionSourceKind,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Domain-envelope chat validation unavailable for %s: %s",
+            specialist_name,
+            exc,
+        )
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=getattr(expected_output_type, "__name__", "response"),
+            message=f"Domain-envelope validator dispatch is unavailable: {exc}",
+        ) from exc
+
+    candidate = build_extraction_envelope_candidate(
+        final_output,
+        agent_key=agent_key,
+        conversation_summary=f"{specialist_name} chat extraction",
+    )
+    if candidate is None:
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=getattr(expected_output_type, "__name__", "response"),
+            message=(
+                "Domain-envelope validator dispatch could not resolve curation "
+                f"adapter ownership for agent {agent_key!r}."
+            ),
+        )
+
+    try:
+        extraction_record = CurationExtractionResultRecord(
+            extraction_result_id=f"chat-runtime:{uuid.uuid4()}",
+            document_id="chat-runtime",
+            adapter_key=candidate.adapter_key,
+            agent_key=candidate.agent_key,
+            source_kind=CurationExtractionSourceKind.CHAT,
+            candidate_count=candidate.candidate_count,
+            conversation_summary=candidate.conversation_summary,
+            payload_json=candidate.payload_json,
+            created_at=datetime.now(timezone.utc),
+            metadata=dict(candidate.metadata),
+        )
+        envelope = _domain_envelope_from_extraction_result(extraction_record)
+        domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+        if domain_pack is None:
+            error_message = (
+                "Domain-envelope validator dispatch could not resolve domain pack "
+                f"{envelope.domain_pack_id!r}."
+            )
+            logger.warning("%s %s", specialist_name, error_message)
+            raise SpecialistOutputError(
+                specialist_name=specialist_name,
+                output_type_name=getattr(expected_output_type, "__name__", "response"),
+                message=error_message,
+            )
+
+        add_specialist_event({
+            "type": "TOOL_START",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "toolName": "dispatch_active_validator_bindings",
+                "friendlyName": f"{specialist_name}: Active Validator Dispatch",
+                "agent": specialist_name,
+                "toolArgs": {
+                    "domain_pack_id": envelope.domain_pack_id,
+                    "object_count": len(envelope.objects),
+                },
+                "isSpecialistInternal": True,
+            },
+        })
+
+        dispatch_result = await asyncio.to_thread(
+            dispatch_active_validator_bindings,
+            envelope,
+            domain_pack,
+            source_envelope_revision=1,
+        )
+
+        add_specialist_event({
+            "type": "TOOL_COMPLETE",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "toolName": "dispatch_active_validator_bindings",
+                "friendlyName": f"{specialist_name}: Active Validator Dispatch complete",
+                "success": True,
+                "isSpecialistInternal": True,
+                "matchedBindingCount": len(dispatch_result.matched_bindings),
+                "validatorResultCount": len(dispatch_result.validator_results),
+                "appendedFindingCount": len(dispatch_result.appended_findings),
+            },
+        })
+
+        logger.info(
+            "%s chat domain-envelope validation dispatched %s binding(s), "
+            "%s validator result(s), %s finding(s)",
+            specialist_name,
+            len(dispatch_result.matched_bindings),
+            len(dispatch_result.validator_results),
+            len(dispatch_result.appended_findings),
+            extra={
+                "specialist_name": specialist_name,
+                "tool_name": tool_name,
+                "domain_pack_id": envelope.domain_pack_id,
+                "operation": "chat_domain_envelope_validation",
+            },
+        )
+        return json.dumps(dispatch_result.envelope.model_dump(mode="json"))
+    except Exception as exc:
+        logger.warning(
+            "Domain-envelope chat validation failed for %s: %s",
+            specialist_name,
+            exc,
+            exc_info=exc,
+        )
+        add_specialist_event({
+            "type": "SPECIALIST_ERROR",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "specialist": specialist_name,
+                "error": f"Domain-envelope validator dispatch failed: {exc}",
+                "reason": "domain_validator_dispatch_failed",
+                "severity": "error",
+            },
+        })
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=getattr(expected_output_type, "__name__", "response"),
+            message=f"Domain-envelope validator dispatch failed: {exc}",
+        ) from exc
 
 
 # =============================================================================
@@ -2195,6 +2394,13 @@ async def run_specialist_with_events(
         expected_output_type=expected_output_type,
         final_output=final_output,
         live_evidence_records=live_evidence_records,
+    )
+
+    final_output = await _dispatch_domain_envelope_validators_for_chat(
+        final_output,
+        expected_output_type=expected_output_type,
+        specialist_name=specialist_name,
+        tool_name=tool_name,
     )
 
     final_output = _reduce_specialist_output_for_supervisor(
