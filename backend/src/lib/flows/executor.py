@@ -740,6 +740,10 @@ def _validation_matches_by_binding(
     return by_binding
 
 
+def _validation_binding_has_dispatch_contract(match: ValidatorBindingMatch) -> bool:
+    return bool(match.binding.input_fields or match.binding.expected_result_fields)
+
+
 async def _run_custom_flow_validator_agent(
     request: DomainValidationRequest,
     *,
@@ -888,6 +892,19 @@ async def _collect_flow_validator_materialization_inputs(
             validator_node = nodes_by_id.get(validator_node_id)
 
         for match in binding_matches:
+            if state == "automatic" and not _validation_binding_has_dispatch_contract(
+                match
+            ):
+                result_metadata.append(
+                    {
+                        "group_id": group.get("group_id"),
+                        "state": state,
+                        "validator_binding_id": binding_id,
+                        "status": "non_dispatch_binding",
+                    }
+                )
+                continue
+
             if state == "automatic" and _source_envelope_has_resolved_validator_finding(
                 source_envelope,
                 binding_id=binding_id,

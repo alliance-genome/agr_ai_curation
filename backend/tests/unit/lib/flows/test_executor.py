@@ -1356,6 +1356,90 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
         ]
 
+    def test_automatic_validation_group_skips_non_dispatch_binding(
+        self, monkeypatch
+    ):
+        executor = _executor_module()
+        from src.lib.domain_packs.validation_registry import (
+            ValidationBindingState,
+            ValidatorAgentRef as RegistryValidatorAgentRef,
+            ValidatorBinding,
+            ValidatorBindingMatch,
+        )
+        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+
+        envelope = DomainEnvelope(
+            envelope_id="env-non-dispatch",
+            domain_pack_id="fixture.validation",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="GeneAssertion",
+                    pending_ref_id="object-1",
+                    payload={"gene": {"identifier": "AGR:0001"}},
+                )
+            ],
+        )
+        binding = ValidatorBinding(
+            binding_id="fixture.pending_envelope_validator",
+            state=ValidationBindingState.ACTIVE,
+            source_scope="object",
+            source_object_type="GeneAssertion",
+            validator_agent=RegistryValidatorAgentRef(
+                package_id="fixture.validators",
+                agent_id="package_agent",
+            ),
+            object_types=("GeneAssertion",),
+            input_fields={},
+            expected_result_fields={},
+        )
+        match = ValidatorBindingMatch(
+            binding=binding,
+            envelope=envelope,
+            object_envelope=envelope.objects[0],
+        )
+
+        class _Registry:
+            def match_bindings(self, _envelope, *, states):
+                assert states == [ValidationBindingState.ACTIVE]
+                return (match,)
+
+        def _fake_package_validator(request, *, binding):  # pragma: no cover
+            raise AssertionError("non-dispatch automatic binding should not run")
+
+        monkeypatch.setattr(
+            executor,
+            "run_package_scoped_validator_agent",
+            _fake_package_validator,
+        )
+
+        materialization_inputs, selector_findings, metadata = asyncio.run(
+            executor._collect_flow_validator_materialization_inputs(
+                source_envelope=envelope,
+                source_envelope_revision=7,
+                registry=_Registry(),
+                groups=[
+                    {
+                        "group_id": "automatic-data-check",
+                        "state": "automatic",
+                        "binding_id": "fixture.pending_envelope_validator",
+                    }
+                ],
+                flow=_make_flow([]),
+                agent_context={"user_id": "curator-1"},
+            )
+        )
+
+        assert materialization_inputs == []
+        assert selector_findings == []
+        assert metadata == [
+            {
+                "group_id": "automatic-data-check",
+                "state": "automatic",
+                "validator_binding_id": "fixture.pending_envelope_validator",
+                "status": "non_dispatch_binding",
+            }
+        ]
+
     def test_automatic_validation_group_reuses_existing_resolved_finding(
         self, monkeypatch
     ):
