@@ -14,6 +14,7 @@ from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
     dispatch_active_validator_bindings,
     run_package_scoped_validator_agent,
+    validator_result_from_agent_output,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
 from src.schemas.domain_validator import (
@@ -306,6 +307,33 @@ def test_invalid_validator_schema_becomes_controlled_unresolved_result(
     assert finding.code == "domain_pack.validator_unresolved"
     assert finding.details["failure_classification"] == "invalid_schema"
     assert "incompatible output" in result.validator_results[0].explanation
+
+
+def test_concrete_validator_envelope_projects_to_shared_result_contract():
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    request = _validation_request()
+    payload = _result_payload(request)
+    payload["gene_candidates"] = [
+        {
+            "gene_id": "AGR:0001",
+            "symbol": "ABC-1",
+            "data_provider": "FIXTURE",
+        }
+    ]
+    concrete_result = GeneResultEnvelope.model_validate(payload)
+
+    result = validator_result_from_agent_output(
+        SimpleNamespace(final_output=concrete_result),
+        request=request,
+    )
+
+    assert result.status == "resolved"
+    assert result.resolved_values == {
+        "identifier": "AGR:0001",
+        "symbol": "ABC-1",
+    }
+    assert not hasattr(result, "gene_candidates")
 
 
 def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):

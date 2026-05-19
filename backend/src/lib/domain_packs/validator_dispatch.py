@@ -291,6 +291,11 @@ def _extract_structured_output(raw_output: Any) -> Any:
     # Support OpenAI SDK run results, Pydantic models, and lightweight fake runners.
     if hasattr(output, "final_output"):
         output = output.final_output
+    if isinstance(output, DomainValidatorResultBase):
+        return output.model_dump(
+            mode="json",
+            include=set(DomainValidatorResultBase.model_fields),
+        )
     if hasattr(output, "model_dump"):
         return output.model_dump(mode="json")
     return output
