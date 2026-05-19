@@ -619,26 +619,6 @@ metadata:
         description: Export/submission adapter validation waits for the disease, phenotype, and chemical export/submission adapters.
   validator_bindings:
     active:
-      - binding_id: chemical_condition.pending_envelope_validator
-        display_name: Data check
-        validator_agent:
-          package_id: agr.alliance
-          agent_id: chemical_validation
-        applies_to:
-          domain_pack_id: agr.alliance.chemical_condition
-          object_types:
-            - ChemicalCondition
-            - ChemicalTerm
-            - Reference
-            - EvidenceQuote
-        input_fields: {}
-        expected_result_fields: {}
-        required: true
-        blocking: false
-        allow_opt_out: true
-        curator_override:
-          allowed: false
-        definition_state: in_development
       - binding_id: chemical_condition.chebi_api_lookup
         display_name: ChEBI lookup
         validator_agent:
@@ -765,6 +745,22 @@ metadata:
         curator_override:
           allowed: false
     under_development:
+      - binding_id: chemical_condition.pending_envelope_validator
+        display_name: Data check
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: chemical_validation
+        state_explanation: Pending chemical-condition envelope data checks are structural review metadata and must not dispatch until concrete selector inputs and expected result fields are defined.
+        applies_to:
+          domain_pack_id: agr.alliance.chemical_condition
+          object_types:
+            - ChemicalCondition
+            - ChemicalTerm
+            - Reference
+            - EvidenceQuote
+        input_fields: {}
+        expected_result_fields: {}
+        definition_state: in_development
       - binding_id: source_reference_validation
         display_name: Source reference validation
         validator_agent:

@@ -175,19 +175,21 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
 
     validator_bindings = metadata.metadata["validator_bindings"]
     assert tuple(validator_bindings) == ("active", "under_development")
-    active_binding = validator_bindings["active"][0]
-    assert (
-        active_binding["binding_id"] == "chemical_condition.pending_envelope_validator"
-    )
-    assert active_binding["validator_agent"] == {
+    pending_binding = {
+        binding["binding_id"]: binding
+        for binding in validator_bindings["under_development"]
+    }["chemical_condition.pending_envelope_validator"]
+    assert pending_binding["validator_agent"] == {
         "package_id": CHEMICAL_CONDITION_DOMAIN_PACK_ID.rsplit(".", 1)[0],
         "agent_id": "chemical_validation",
     }
+    assert "must not dispatch" in pending_binding["state_explanation"]
+    assert pending_binding["input_fields"] == {}
+    assert pending_binding["expected_result_fields"] == {}
     active_binding_ids = {
         binding["binding_id"] for binding in validator_bindings["active"]
     }
     assert active_binding_ids == {
-        "chemical_condition.pending_envelope_validator",
         "chemical_condition.chebi_api_lookup",
         "chemical_condition.term_chebi_api_lookup",
         "chemical_condition.condition_ontology_lookup",

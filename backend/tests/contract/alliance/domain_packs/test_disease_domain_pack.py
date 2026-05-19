@@ -168,7 +168,10 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_data_provider_lookup",
     } == binding_ids
 
-    pending_validator = validator_bindings["active"][0]
+    pending_validator = {
+        binding["binding_id"]: binding
+        for binding in validator_bindings["under_development"]
+    }[DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID]
     assert (
         pending_validator["binding_id"] == DISEASE_PENDING_ENVELOPE_VALIDATOR_BINDING_ID
     )
@@ -177,15 +180,16 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "package_id": "agr.alliance",
         "agent_id": "disease_validation",
     }
+    assert "must not dispatch" in pending_validator["state_explanation"]
+    assert pending_validator["input_fields"] == {}
+    assert pending_validator["expected_result_fields"] == {}
     assert pending_validator["applies_to"]["domain_pack_id"] == DISEASE_DOMAIN_PACK_ID
     assert pending_validator["applies_to"]["object_types"] == [DISEASE_OBJECT_TYPE]
-    assert pending_validator["required"] is True
-    assert pending_validator["blocking"] is False
-    assert pending_validator["allow_opt_out"] is True
-    assert pending_validator["curator_override"] == {"allowed": False}
     assert pending_validator["definition_state"] == "in_development"
 
-    active_binding_ids = {binding["binding_id"] for binding in validator_bindings["active"]}
+    active_binding_ids = {
+        binding["binding_id"] for binding in validator_bindings["active"]
+    }
     assert {
         "disease_ontology_term_lookup",
         "disease_relation_cv_lookup",
@@ -193,6 +197,7 @@ def test_disease_pack_declares_pending_assertion_metadata_and_validator_states()
         "disease_data_provider_lookup",
     }.issubset(active_binding_ids)
     assert {
+        "disease_pending_envelope_validator",
         "experimental_condition_validation",
         "disease_subject_materialization",
         "disease_reference_materialization",

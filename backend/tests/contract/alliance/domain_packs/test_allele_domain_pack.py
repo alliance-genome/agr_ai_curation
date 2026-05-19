@@ -171,7 +171,28 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
         binding["binding_id"]: binding
         for binding in validator_bindings["under_development"]
     }
-    assert set(under_development_bindings) == {"source_reference_validation"}
+    assert set(under_development_bindings) == {
+        "allele_pending_envelope_validator",
+        "source_reference_validation",
+    }
+    pending_binding = under_development_bindings["allele_pending_envelope_validator"]
+    assert pending_binding["display_name"] == "Data check"
+    assert "must not dispatch" in pending_binding["state_explanation"]
+    assert pending_binding["validator_agent"] == {
+        "package_id": "agr.alliance",
+        "agent_id": "allele_validation",
+    }
+    assert pending_binding["applies_to"]["domain_pack_id"] == ALLELE_DOMAIN_PACK_ID
+    assert pending_binding["applies_to"]["object_types"] == [
+        "AllelePaperEvidenceAssociation",
+        "Allele",
+        "Reference",
+        "AlleleMention",
+        "EvidenceQuote",
+    ]
+    assert pending_binding["input_fields"] == {}
+    assert pending_binding["expected_result_fields"] == {}
+    assert pending_binding["definition_state"] == "in_development"
     reference_binding = under_development_bindings["source_reference_validation"]
     assert reference_binding["validator_agent"] == {
         "package_id": "agr.alliance",
@@ -182,26 +203,6 @@ def test_allele_pack_declares_object_roles_and_validator_bindings():
         "curie": "Reference.curie",
         "title": "Reference.title",
     }
-    active_binding = validator_bindings["active"][0]
-    assert active_binding["binding_id"] == "allele_pending_envelope_validator"
-    assert active_binding["display_name"] == "Data check"
-    assert active_binding["validator_agent"] == {
-        "package_id": "agr.alliance",
-        "agent_id": "allele_validation",
-    }
-    assert active_binding["applies_to"]["domain_pack_id"] == ALLELE_DOMAIN_PACK_ID
-    assert active_binding["applies_to"]["object_types"] == [
-        "AllelePaperEvidenceAssociation",
-        "Allele",
-        "Reference",
-        "AlleleMention",
-        "EvidenceQuote",
-    ]
-    assert active_binding["required"] is True
-    assert active_binding["blocking"] is False
-    assert active_binding["allow_opt_out"] is True
-    assert active_binding["curator_override"] == {"allowed": False}
-    assert active_binding["definition_state"] == "in_development"
 
     allele_lookup = {
         binding["binding_id"]: binding for binding in validator_bindings["active"]
