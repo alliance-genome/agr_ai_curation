@@ -46,6 +46,9 @@ from agr_ai_curation_alliance.domain_packs.gene import (  # noqa: E402
 
 GENE_PACK_DIR = get_alliance_domain_packs_dir() / GENE_DOMAIN_PACK_ID
 GENE_PACK_METADATA_PATH = GENE_PACK_DIR / "domain_pack.yaml"
+GENE_VALIDATOR_PROMPT_PATH = (
+    REPO_ROOT / "packages" / "alliance" / "agents" / "gene" / "prompt.yaml"
+)
 GENE_RAW_FIXTURE_PATH = (
     REPO_ROOT
     / "backend"
@@ -127,6 +130,28 @@ def test_gene_mention_evidence_is_exporting_validated_reference():
     assert workspace_display["primary_label_field"] == "mention"
     assert workspace_display["secondary_label_field"] == "gene_symbol"
     assert workspace_display["evidence_quote_field"] == "verified_quote"
+
+
+def test_gene_validator_prompt_matches_scalar_materialization_contract():
+    metadata = load_domain_pack_metadata(GENE_PACK_METADATA_PATH)
+    prompt = yaml.safe_load(GENE_VALIDATOR_PROMPT_PATH.read_text(encoding="utf-8"))
+    prompt_content = prompt["content"]
+    object_definition = _gene_object_definition()
+    binding = object_definition.metadata["validator_bindings"]["active"][0]
+
+    assert binding["binding_id"] == GENE_REFERENCE_VALIDATOR_BINDING_ID
+    assert binding["expected_result_fields"] == {
+        "curie": "primary_external_id",
+        "symbol": "gene_symbol",
+        "taxon": "taxon",
+    }
+    assert "resolved_values" in prompt_content
+    assert "optional diagnostic lookup context only" in prompt_content
+    assert "does not create a separate Gene object" in prompt_content
+    assert not any(
+        item.object_type == "Gene"
+        for item in metadata.object_definitions
+    )
 
 
 def test_gene_pack_declares_validatable_linkml_grounded_gene_fields():
