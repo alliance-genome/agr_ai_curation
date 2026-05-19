@@ -888,6 +888,21 @@ async def _collect_flow_validator_materialization_inputs(
             validator_node = nodes_by_id.get(validator_node_id)
 
         for match in binding_matches:
+            if state == "automatic" and _source_envelope_has_resolved_validator_finding(
+                source_envelope,
+                binding_id=binding_id,
+                match=match,
+            ):
+                result_metadata.append(
+                    {
+                        "group_id": group.get("group_id"),
+                        "state": state,
+                        "validator_binding_id": binding_id,
+                        "status": "already_validated",
+                    }
+                )
+                continue
+
             selector_result = build_domain_validation_request(match)
             if selector_result.findings:
                 selector_findings.extend(selector_result.findings)
@@ -973,6 +988,48 @@ async def _collect_flow_validator_materialization_inputs(
             )
 
     return materialization_inputs, selector_findings, result_metadata
+
+
+def _source_envelope_has_resolved_validator_finding(
+    source_envelope: DomainEnvelope,
+    *,
+    binding_id: str,
+    match: ValidatorBindingMatch,
+) -> bool:
+    """Return whether an automatic flow validator was already satisfied upstream."""
+
+    for finding in source_envelope.validation_findings:
+        status = getattr(finding.status, "value", finding.status)
+        if str(status) != "resolved":
+            continue
+        details = finding.details if isinstance(finding.details, Mapping) else {}
+        validation_metadata = details.get("validation_metadata")
+        if not isinstance(validation_metadata, Mapping):
+            continue
+        if str(validation_metadata.get("validator_binding_id") or "") != binding_id:
+            continue
+        target = validation_metadata.get("target")
+        if _validator_finding_target_matches(target, match):
+            return True
+    return False
+
+
+def _validator_finding_target_matches(
+    target: Any,
+    match: ValidatorBindingMatch,
+) -> bool:
+    if not isinstance(target, Mapping):
+        return False
+
+    match_target = match.target_details()
+    for key in ("object_id", "pending_ref_id", "field_path"):
+        expected = match_target.get(key)
+        if expected is not None and target.get(key) != expected:
+            return False
+    expected_object_type = match_target.get("object_type")
+    if expected_object_type is not None and target.get("object_type") != expected_object_type:
+        return False
+    return True
 
 
 async def _execute_validation_groups_for_step(
