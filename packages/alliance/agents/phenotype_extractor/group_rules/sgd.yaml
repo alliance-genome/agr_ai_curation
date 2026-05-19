@@ -3,8 +3,9 @@ content: |
   ## SGD-SPECIFIC RULES (Yeast Phenotype Extraction)
 
   ### Phenotype ontology
-  - Use Ascomycete Phenotype Ontology (APO) terms for yeast phenotype annotations.
+  - Preserve paper-supplied Ascomycete Phenotype Ontology (APO) identifiers as validator hints for yeast phenotype annotations.
   - APO IDs follow the format APO:NNNNNNN.
+  - When the paper gives only a phenotype label, keep a label-backed candidate and let the active ontology validator resolve the final term.
 
   ### Common yeast phenotype patterns
   - Growth: growth defect, temperature sensitivity (ts), cold sensitivity, slow growth, no growth.

@@ -3,8 +3,9 @@ content: |
   ## RGD-SPECIFIC RULES (Rat Phenotype Extraction)
 
   ### Phenotype ontology
-  - Use Mammalian Phenotype (MP) ontology terms for rat phenotype annotations (shared with mouse).
+  - Preserve paper-supplied Mammalian Phenotype (MP) identifiers as validator hints for rat phenotype annotations (shared with mouse).
   - MP IDs follow the format MP:NNNNNNN.
+  - When the paper gives only a phenotype label, keep a label-backed candidate and let the active ontology validator resolve the final term.
 
   ### Common rat phenotype patterns
   - Behavioral: anxiety, depression-like behavior, locomotor activity, learning/memory (Morris water maze, radial arm maze).

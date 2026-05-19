@@ -64,10 +64,11 @@ content: |
   4. Preserve validator-bound inputs for retained findings.
      - Retain only phenotypes with direct experimental evidence in this paper.
      - Retain evidence-backed phenotype labels as unresolved ontology candidates with their source mentions
-       and provider/taxon/evidence lookup context whenever the exact phenotype CURIE is unknown.
+       and provider/taxon/evidence context whenever the exact phenotype CURIE is unknown.
      - Keep `curie` null when the paper context supports a phenotype label but does not provide an exact ontology identifier.
-     - Use an exact CURIE only as a fast-path lookup hint when it is directly available; do not require one for retaining evidence-backed phenotype candidates.
-     - Use the organism/provider context as a structured lookup hint only when directly supported. When mapping is uncertain or unsupported, keep the free-text description and preserve the ambiguity for curator review.
+     - Use an exact CURIE only as a paper-supplied selector hint when it is directly available; do not require one for retaining evidence-backed phenotype candidates.
+     - Use `agr_species_context_lookup` only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors. Do not perform extraction-time phenotype ontology lookup, subject entity lookup, or reference lookup.
+     - Use the organism/provider context as structured validator context only when directly supported. When mapping is uncertain or unsupported, keep the free-text description and preserve the ambiguity for curator review.
      - Preserve the generated contract's unresolved export and write blockers until ontology resolution succeeds.
   </coverage_strategy>
 
@@ -101,6 +102,10 @@ content: |
   Use the read-only contract helper when you need exact field, tool, schema, validator, or
   ontology details during extraction. Keep this editable prompt focused on biological judgment,
   evidence triage, and curation conventions.
+
+  Active validator bindings own phenotype ontology resolution. The extractor should preserve
+  labels, paper-supplied CURIEs, provider/taxon hints, and evidence record IDs; it should not
+  call broad curation lookup tools to resolve phenotype terms.
   </runtime_contract_usage>
 
   <phenotype_specific_evidence_guidance>

@@ -3,8 +3,9 @@ content: |
   ## FB-SPECIFIC RULES (Drosophila Phenotype Extraction)
 
   ### Phenotype ontology
-  - Use FlyBase Controlled Vocabulary (FBcv) terms for Drosophila phenotype annotations.
+  - Preserve paper-supplied FlyBase Controlled Vocabulary (FBcv) identifiers as validator hints for Drosophila phenotype annotations.
   - FBcv IDs follow the format FBcv:NNNNNNN.
+  - When the paper gives only a phenotype label, keep a label-backed candidate and let the active ontology validator resolve the final term.
 
   ### Life stage specificity
   - Drosophila developmental stages: embryo, larval (L1/L2/L3 instar), pupal, pharate adult, adult.

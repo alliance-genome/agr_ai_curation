@@ -3,8 +3,9 @@ content: |
   ## WB-SPECIFIC RULES (C. elegans Phenotype Extraction)
 
   ### Phenotype ontology
-  - Use WBPhenotype ontology terms for C. elegans phenotype annotations.
+  - Preserve paper-supplied WBPhenotype ontology identifiers as validator hints for C. elegans phenotype annotations.
   - WBPhenotype IDs follow the format WBPhenotype:NNNNNNN.
+  - When the paper gives only a phenotype label, keep a label-backed candidate and let the active ontology validator resolve the final term.
 
   ### Life stage specificity
   - C. elegans has well-defined developmental stages: embryo, L1, L2, L3, L4, young adult, adult, dauer.

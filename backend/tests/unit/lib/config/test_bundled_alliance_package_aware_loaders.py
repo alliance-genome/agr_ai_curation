@@ -116,6 +116,22 @@ def test_bundled_alliance_chemical_extractor_uses_narrow_context_tool(monkeypatc
     ]
 
 
+def test_bundled_alliance_phenotype_extractor_uses_narrow_context_tool(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    phenotype_extractor = agents["phenotype_extractor"]
+
+    assert phenotype_extractor.tools == [
+        "search_document",
+        "read_section",
+        "read_subsection",
+        "record_evidence",
+        "get_agent_contract",
+        "agr_species_context_lookup",
+    ]
+
+
 def test_bundled_alliance_owns_agr_curation_tool_policy(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 

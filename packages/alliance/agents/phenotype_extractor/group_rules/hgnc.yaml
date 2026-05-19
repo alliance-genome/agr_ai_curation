@@ -3,12 +3,13 @@ content: |
   ## HGNC-SPECIFIC RULES (Human Phenotype Extraction)
 
   ### Phenotype ontology
-  - Use Human Phenotype Ontology (HPO) terms for human phenotype annotations.
+  - Preserve paper-supplied Human Phenotype Ontology (HPO) identifiers as validator hints for human phenotype annotations.
   - HPO IDs follow the format HP:NNNNNNN.
+  - When the paper gives only a clinical phenotype label, keep a label-backed candidate and let the active ontology validator resolve the final term.
 
   ### Clinical phenotype conventions
   - Human phenotypes are often described in clinical terminology.
-  - Map clinical descriptions to HPO terms when possible: "intellectual disability" → HP:0001249.
+  - Preserve clinical descriptions as labels for validator resolution; do not invent HPO IDs during extraction.
   - Distinguish between findings in individual patients/families and population-level associations.
 
   ### Common human phenotype categories

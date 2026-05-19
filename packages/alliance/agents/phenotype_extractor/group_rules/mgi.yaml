@@ -3,8 +3,9 @@ content: |
   ## MGI-SPECIFIC RULES (Mouse Phenotype Extraction)
 
   ### Phenotype ontology
-  - Use Mammalian Phenotype (MP) ontology terms for mouse phenotype annotations.
+  - Preserve paper-supplied Mammalian Phenotype (MP) identifiers as validator hints for mouse phenotype annotations.
   - MP IDs follow the format MP:NNNNNNN.
+  - When the paper gives only a phenotype label, keep a label-backed candidate and let the active ontology validator resolve the final term.
 
   ### Life stage specificity
   - Mouse developmental stages: embryonic (E0.5-E18.5), neonatal (P0-P7), postnatal, juvenile, adult, aged.

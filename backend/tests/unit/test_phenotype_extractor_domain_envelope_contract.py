@@ -402,10 +402,14 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
         "read_subsection",
         "record_evidence",
         "get_agent_contract",
-        "agr_curation_query",
+        "agr_species_context_lookup",
     ]
     assert "curatable_objects[]" in agent_data["supervisor_routing"]["description"]
     assert "locked generated runtime contract owns deterministic tool inventory" in prompt_content
+    assert "agr_species_context_lookup" in prompt_content
+    assert "Do not perform extraction-time phenotype ontology lookup" in prompt_content
+    assert "agr_curation_query" not in agent_data["tools"]
+    assert "broad curation lookup tools" in prompt_content
     assert "PhenotypeAnnotation(PhenotypeAnnotationPayload role=curatable_unit" in generated_content
     assert "Schema/provider refs: alliance_linkml." in generated_content
     assert "PhenotypeSubject" in generated_content
@@ -423,6 +427,7 @@ def test_phenotype_extractor_prompt_agent_and_group_rules_name_domain_contract()
         content = str(yaml.safe_load(group_rule_file.read_text(encoding="utf-8"))["content"])
         assert "PhenotypeAnnotation" not in content
         assert "PhenotypeSubject" not in content
+        assert "validator resolve the final term" in content
         assert "PhenotypeTerm" not in content
         assert "metadata.ambiguities[]" not in content
 

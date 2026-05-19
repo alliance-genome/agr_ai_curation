@@ -279,7 +279,12 @@ def test_sync_skips_agent_with_missing_prompt(monkeypatch):
             "phenotype_extractor",
             "phenotype_extractor",
             "PhenotypeResultEnvelope",
-            ["search_document", "read_section", "read_subsection"],
+            [
+                "search_document",
+                "read_section",
+                "read_subsection",
+                "agr_species_context_lookup",
+            ],
         ),
         (
             "gene_expression",
