@@ -18,6 +18,7 @@ Architecture:
     to capture internal tool calls (read_section, search_document, etc.) and emit
     events for the audit panel and PDF highlighting.
 """
+import asyncio
 import csv
 import json
 import logging
@@ -929,7 +930,8 @@ async def _collect_flow_validator_materialization_inputs(
                         source_envelope_revision=source_envelope_revision,
                     )
                 else:
-                    raw_output = run_package_scoped_validator_agent(
+                    raw_output = await asyncio.to_thread(
+                        run_package_scoped_validator_agent,
                         request,
                         binding=match.binding,
                     )

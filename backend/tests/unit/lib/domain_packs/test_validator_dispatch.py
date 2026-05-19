@@ -387,6 +387,32 @@ def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
     assert "incompatible output" in result.validator_results[0].explanation
 
 
+def test_resolved_validator_without_lookup_evidence_becomes_invalid_schema_result(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+
+    def _runner(request, *, binding):
+        payload = _result_payload(request)
+        payload["lookup_attempts"] = []
+        return payload
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+    )
+
+    finding = _single_result_finding(result)
+    assert result.validator_results[0].status == "unresolved"
+    assert finding.details["failure_classification"] == "invalid_schema"
+    assert "successful lookup_attempt" in result.validator_results[0].explanation
+    assert not any(
+        domain_object.object_type == "Gene"
+        for domain_object in result.envelope.objects
+    )
+
+
 def test_conflict_lookup_outcome_uses_explicit_blocked_status(tmp_path: Path):
     pack = _loaded_pack(tmp_path)
 

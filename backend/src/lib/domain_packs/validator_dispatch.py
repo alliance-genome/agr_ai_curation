@@ -380,6 +380,13 @@ def _ensure_classifiable_validator_result(
     try:
         for attempt in result.lookup_attempts:
             lookup_status_for_validator_outcome(attempt.outcome)
+        if result.status == "resolved" and not any(
+            attempt.outcome == "success" for attempt in result.lookup_attempts
+        ):
+            raise ValueError(
+                "Resolved validator result must include at least one successful "
+                "lookup_attempt or explicit non-lookup validation attempt"
+            )
         if result.status == "unresolved":
             validator_failure_classification(result)
     except ValueError as exc:

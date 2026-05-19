@@ -1138,6 +1138,131 @@ class TestGetAllAgentToolsStepOrderRuntime:
             "future-lookup"
         ]
 
+    def test_automatic_validation_group_runs_package_validator_off_event_loop(
+        self, monkeypatch
+    ):
+        """Automatic package validators should not call Runner.run_sync in the loop."""
+        executor = _executor_module()
+        from src.lib.domain_packs.validation_registry import (
+            ValidationBindingState,
+            ValidatorAgentRef as RegistryValidatorAgentRef,
+            ValidatorBinding,
+            ValidatorBindingMatch,
+        )
+        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+        from src.schemas.domain_pack_metadata import DomainPackInputSelector
+
+        envelope = DomainEnvelope(
+            envelope_id="env-automatic",
+            domain_pack_id="fixture.validation",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="GeneAssertion",
+                    pending_ref_id="object-1",
+                    payload={"gene": {"identifier": "AGR:0001"}},
+                )
+            ],
+        )
+        binding = ValidatorBinding(
+            binding_id="fixture.identifier_lookup",
+            state=ValidationBindingState.ACTIVE,
+            source_scope="field",
+            source_object_type="GeneAssertion",
+            source_field_path="gene.identifier",
+            validator_agent=RegistryValidatorAgentRef(
+                package_id="fixture.validators",
+                agent_id="package_agent",
+            ),
+            object_types=("GeneAssertion",),
+            field_paths=("gene.identifier",),
+            input_fields={
+                "identifier": DomainPackInputSelector(
+                    source="payload",
+                    path="gene.identifier",
+                )
+            },
+            expected_result_fields={"identifier": "gene.identifier"},
+        )
+        match = ValidatorBindingMatch(
+            binding=binding,
+            envelope=envelope,
+            object_envelope=envelope.objects[0],
+        )
+
+        class _Registry:
+            def match_bindings(self, _envelope, *, states):
+                assert states == [ValidationBindingState.ACTIVE]
+                return (match,)
+
+        calls = []
+
+        def _fake_package_validator(request, *, binding):
+            with pytest.raises(RuntimeError):
+                asyncio.get_running_loop()
+            calls.append({"request": request, "binding": binding})
+            return {
+                "status": "resolved",
+                "request_id": request.request_id,
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": request.validator_agent.model_dump(mode="json"),
+                "target": request.target.model_dump(mode="json"),
+                "resolved_values": {"identifier": "AGR:0001"},
+                "resolved_objects": [],
+                "missing_expected_fields": [],
+                "candidates": [],
+                "lookup_attempts": [
+                    {
+                        "provider": "fixture",
+                        "method": "identifier_lookup",
+                        "query": dict(request.selected_inputs),
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
+                "curator_message": None,
+                "explanation": "Package validator passed.",
+            }
+
+        monkeypatch.setattr(
+            executor,
+            "run_package_scoped_validator_agent",
+            _fake_package_validator,
+        )
+
+        materialization_inputs, selector_findings, metadata = asyncio.run(
+            executor._collect_flow_validator_materialization_inputs(
+                source_envelope=envelope,
+                source_envelope_revision=7,
+                registry=_Registry(),
+                groups=[
+                    {
+                        "group_id": "automatic-lookup",
+                        "state": "automatic",
+                        "binding_id": "fixture.identifier_lookup",
+                    }
+                ],
+                flow=_make_flow([]),
+                agent_context={"user_id": "curator-1"},
+            )
+        )
+
+        assert selector_findings == []
+        assert len(calls) == 1
+        assert calls[0]["binding"] is binding
+        assert calls[0]["request"].validator_binding_id == "fixture.identifier_lookup"
+        assert len(materialization_inputs) == 1
+        assert materialization_inputs[0].match is match
+        assert metadata == [
+            {
+                "group_id": "automatic-lookup",
+                "state": "automatic",
+                "validator_binding_id": "fixture.identifier_lookup",
+                "status": "resolved",
+                "request_id": calls[0]["request"].request_id,
+                "missing_expected_fields": [],
+            }
+        ]
+
     def test_supplemental_validation_group_runs_custom_validator_node(self, monkeypatch):
         """Supplemental validator attachments should execute against the source revision."""
         executor = _executor_module()
@@ -1223,7 +1348,15 @@ class TestGetAllAgentToolsStepOrderRuntime:
                 "resolved_objects": [],
                 "missing_expected_fields": [],
                 "candidates": [],
-                "lookup_attempts": [],
+                "lookup_attempts": [
+                    {
+                        "provider": "flow_validator",
+                        "method": "non_lookup_validation",
+                        "query": {"source_envelope_revision": source_envelope_revision},
+                        "result_count": 1,
+                        "outcome": "success",
+                    }
+                ],
                 "curator_message": None,
                 "explanation": "Supplemental validator passed.",
             }
