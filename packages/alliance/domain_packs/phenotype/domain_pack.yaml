@@ -809,13 +809,16 @@ metadata:
       - validator_id: phenotype.no_legacy_semantic_lists
         display_name: Current extraction format
         description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
+      - validator_id: phenotype_term_ontology_validator
+        display_name: Phenotype ontology term lookup
+        description: Validate WB and MGI phenotype term CURIEs or labels through the active ontology-term package validator binding. Unsupported provider/taxon mappings remain blocked before lookup until their live ontologyterm grounding is verified.
     under_development:
       - validator_id: phenotype.subject_entity_resolution
         display_name: Phenotype subject resolution
         description: Resolve phenotype_annotation_subject to Gene, Allele, or AGM DB rows before export.
-      - validator_id: phenotype.ontology_term_resolution
-        display_name: Phenotype ontology term resolution
-        description: Validate phenotype term CURIEs against ontologyterm rows and configured Alliance ontology sources.
+      - validator_id: phenotype.additional_provider_ontology_mappings
+        display_name: Additional phenotype ontology mappings
+        description: Verify live ontologyterm grounding for RGD, HGNC, ZFIN, FB, and SGD provider/taxon phenotype mappings before allowing label lookup outside the active WB/MGI policy.
       - validator_id: phenotype.export_submission_projection
         display_name: Phenotype ready for export
         blocked_by: ALL-425

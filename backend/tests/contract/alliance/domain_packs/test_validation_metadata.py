@@ -144,11 +144,13 @@ def test_alliance_active_validator_bindings_have_dispatch_contracts():
     assert empty_active_bindings == []
 
 
-def test_chemical_and_disease_active_bindings_have_active_capability_metadata():
+def test_active_bindings_have_active_capability_metadata():
     alliance_registry = load_alliance_domain_pack_registry()
     pack_ids = {
         "agr.alliance.chemical_condition",
         "agr.alliance.disease",
+        "agr.alliance.gene_expression",
+        "agr.alliance.phenotype",
     }
 
     missing_active_metadata: list[str] = []

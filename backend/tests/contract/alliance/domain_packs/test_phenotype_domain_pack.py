@@ -269,6 +269,20 @@ def test_phenotype_pack_declares_roles_and_validator_bindings():
     assert term_binding["allow_opt_out"] is True
     assert term_binding["curator_override"] == {"allowed": False}
 
+    validators = metadata.metadata["validators"]
+    active_validator_ids = {
+        validator["validator_id"] for validator in validators["active"]
+    }
+    under_development_validator_ids = {
+        validator["validator_id"] for validator in validators["under_development"]
+    }
+    assert PHENOTYPE_TERM_VALIDATOR_BINDING_ID in active_validator_ids
+    assert "phenotype.ontology_term_resolution" not in under_development_validator_ids
+    assert (
+        "phenotype.additional_provider_ontology_mappings"
+        in under_development_validator_ids
+    )
+
     under_development_bindings = validator_bindings["under_development"]
     binding_ids = [binding["binding_id"] for binding in under_development_bindings]
     assert binding_ids == [
