@@ -20,6 +20,17 @@ from ..packages import find_repo_root
 REPO_ROOT = find_repo_root(Path(__file__))
 
 
+def _flatten_strings(value):
+    if isinstance(value, dict):
+        for child in value.values():
+            yield from _flatten_strings(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _flatten_strings(child)
+    elif isinstance(value, str):
+        yield value
+
+
 class TestBuildConfigDefaults:
     """Tests for _build_config_defaults function."""
 
@@ -164,6 +175,41 @@ class TestAgentDocumentationCoverage:
             "domain_pack_id": "agr.alliance.gene_expression",
             "launchable": True,
         }
+
+    def test_static_extractor_documentation_keeps_validator_boundary_clear(self):
+        """Fallback Agent Studio docs must not say extractors own DB resolution."""
+        extractor_ids = {
+            "allele_extractor",
+            "chemical_extractor",
+            "disease_extractor",
+            "gene_expression_extraction",
+            "gene_extractor",
+            "phenotype_extractor",
+        }
+        forbidden_fragments = {
+            "database-assisted normalization",
+            "database assisted normalization",
+            "database normalization",
+            "alliance database normalization",
+            "disease ontology normalization",
+            "chebi normalization",
+            "using agr_curation_query",
+            "validates gene symbols found in papers",
+            "validates and normalizes",
+            "resolves retained",
+        }
+
+        for agent_id in extractor_ids:
+            documentation = AGENT_DOCUMENTATION[agent_id]
+            text = " ".join(_flatten_strings(documentation)).lower()
+
+            assert "validator" in text
+            assert "does not perform" in text or "validator-owned" in text
+            for fragment in forbidden_fragments:
+                assert fragment not in text, (
+                    f"{agent_id} static documentation exposes "
+                    f"validator-owned lookup wording: {fragment}"
+                )
 
     def test_explicit_system_agent_key_suppresses_folder_alias(self):
         """The ontology resolver exposes only `ontology_term_validation` publicly."""

@@ -456,7 +456,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         ],
     },
     "gene_expression_extraction": {
-        "summary": "Extracts structured gene expression data from research PDFs, capturing anatomical locations, developmental stages, sub-cellular localization, reagent details, and evidence supporting expression patterns.",
+        "summary": "Extracts structured gene expression observations from uploaded PDFs, preserving relation and data-provider selector inputs for validator-owned verification.",
         "capabilities": [
             {
                 "name": "Expression Pattern Extraction",
@@ -477,10 +477,10 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "example_result": "Returns annotations with is_negative=true for statements like 'not detected in neurons'",
             },
             {
-                "name": "Gene ID Validation",
-                "description": "Validates gene symbols found in papers against the Alliance Curation Database using exact symbol matching.",
-                "example_query": "Validate gene daf-16 for C. elegans",
-                "example_result": "Returns validated gene ID 'WB:WBGene00000912' or 'not validated' if gene symbol cannot be matched",
+                "name": "Validator-ready selector capture",
+                "description": "Preserves expression relation, provider, taxon, gene, anatomy, stage, and reagent context as evidence-backed selector inputs while active validators own final controlled-vocabulary and provider verification.",
+                "example_query": "Extract expression observations with validator-ready context",
+                "example_result": "Returns expression annotations with relation/provider hints and verified evidence; final normalized fields are materialized by validators when active",
             },
         ],
         "data_sources": [
@@ -491,10 +491,10 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
             {
-                "name": "Alliance Curation Database",
-                "description": "Validates gene symbols and retrieves gene CURIEs from the Alliance of Genome Resources curation database.",
+                "name": "Domain-pack validators",
+                "description": "Active validator bindings verify expression relation vocabulary and data-provider selectors after extraction. Planned gene/anatomy/stage/reference validation remains under-development metadata.",
                 "species_supported": ["C. elegans (WB)", "D. melanogaster (FB)", "M. musculus (MGI)", "D. rerio (ZFIN)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)", "H. sapiens (HGNC)"],
-                "data_types": ["Gene symbols", "Gene CURIEs", "Gene synonyms"],
+                "data_types": ["Relation selector hints", "Data-provider selector hints", "Evidence-backed expression context"],
             },
         ],
         "limitations": [
@@ -506,7 +506,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
         ],
     },
     "gene_extractor": {
-        "summary": "Extracts experimentally supported gene mentions from uploaded PDFs with evidence-first filtering, disambiguation, and database-assisted normalization.",
+        "summary": "Extracts experimentally supported gene mentions from uploaded PDFs with evidence-first filtering, disambiguation, and validator-ready identity hints.",
         "capabilities": [
             {
                 "name": "Gene candidate harvesting",
@@ -527,10 +527,10 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "example_result": "Returns retained genes with evidence text and page numbers, plus explicit exclusions with reason codes",
             },
             {
-                "name": "Alliance database normalization",
-                "description": "Resolves retained gene symbols to Alliance identifiers (e.g., WB:WBGene00000912) using batch agr_curation_query calls",
-                "example_query": "Normalize extracted genes to Alliance IDs",
-                "example_result": "Returns normalized_id, normalized_symbol, and species for each retained gene",
+                "name": "Validator-ready identity hints",
+                "description": "Preserves paper-backed mention text, species/taxon/provider context, and optional proposed identifiers for active gene validator bindings; the extractor does not search gene symbols or materialize final IDs.",
+                "example_query": "Extract genes with validator-ready context",
+                "example_result": "Returns retained gene mention envelopes with proposed/hint fields and verified evidence for downstream validator materialization",
             },
         ],
         "data_sources": [
@@ -541,17 +541,17 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
             {
-                "name": "Alliance Curation Database",
-                "description": "Validates and normalizes gene symbols to Alliance CURIEs",
+                "name": "Gene validator binding",
+                "description": "The active gene validator resolves or rejects proposed identity hints with Alliance lookup tooling after extraction.",
                 "species_supported": ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"],
-                "data_types": ["Gene symbols", "Gene CURIEs", "Gene synonyms", "Cross-references"],
+                "data_types": ["Proposed gene IDs", "Proposed symbols", "Taxon/provider hints", "Validator lookup results"],
             },
         ],
         "limitations": [
             "Requires an uploaded PDF document — cannot extract genes from chat text alone",
             "Genes mentioned only in references without experimental data in this paper are excluded",
             "Multi-species disambiguation relies on context clues; ambiguous cases go to ambiguities[]",
-            "Cannot resolve genes not present in the Alliance database",
+            "Does not perform gene identity lookup itself; unresolved or conflicting identity remains visible as validator findings",
         ],
     },
     "allele_extractor": {
@@ -576,10 +576,10 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "example_result": "Returns individual alleles with gene associations and allele type classification",
             },
             {
-                "name": "Alliance database normalization",
-                "description": "Resolves retained alleles to Alliance identifiers using batch agr_curation_query calls",
-                "example_query": "Normalize extracted alleles to Alliance IDs",
-                "example_result": "Returns normalized_id, normalized_symbol, and associated gene for each retained allele",
+                "name": "Validator-ready allele hints",
+                "description": "Preserves exact allele notation, associated-gene hints, organism context, and evidence records for the active allele validator; the extractor does not materialize final allele IDs.",
+                "example_query": "Extract alleles with validator-ready context",
+                "example_result": "Returns allele mention envelopes with exact notation and evidence for downstream validator materialization",
             },
         ],
         "data_sources": [
@@ -590,17 +590,17 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
             {
-                "name": "Alliance Curation Database",
-                "description": "Validates and normalizes allele/variant identifiers to Alliance CURIEs",
+                "name": "Allele validator binding",
+                "description": "The active allele validator checks retained mentions against Alliance allele rows after extraction and materializes allele identifier, symbol, and taxon fields when resolved.",
                 "species_supported": ["C. elegans (WB)", "D. melanogaster (FB)", "D. rerio (ZFIN)", "H. sapiens (HGNC)", "M. musculus (MGI)", "R. norvegicus (RGD)", "S. cerevisiae (SGD)"],
-                "data_types": ["Allele symbols", "Allele CURIEs", "Gene associations"],
+                "data_types": ["Allele mention hints", "Associated-gene hints", "Taxon hints", "Validator lookup results"],
             },
         ],
         "limitations": [
             "Requires an uploaded PDF document — cannot extract alleles from chat text alone",
             "Transgene constructs (e.g., GFP reporters, Cre drivers) are excluded unless they are the experimental variable",
             "Balancer chromosomes and chromosomal deficiencies are classified as tools, not alleles",
-            "Cannot resolve alleles not present in the Alliance database",
+            "Does not perform allele identity lookup itself; unresolved or conflicting identity remains visible as validator findings",
         ],
     },
     "disease_extractor": {
@@ -625,10 +625,10 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "example_result": "Returns association types with evidence (e.g., LRRK2 is_implicated_in Parkinson's disease)",
             },
             {
-                "name": "Disease ontology normalization",
-                "description": "Resolves retained diseases to DOID, MONDO, or OMIM identifiers using agr_curation_query",
-                "example_query": "Normalize extracted diseases to ontology IDs",
-                "example_result": "Returns DOID identifiers (e.g., DOID:10652 for Alzheimer's disease)",
+                "name": "Validator-ready disease selectors",
+                "description": "Preserves disease label/CURIE hints, relation names, data-provider selectors, subject context, and evidence records for active disease validators; ontology and vocabulary lookup remain validator-owned.",
+                "example_query": "Extract disease assertions with validator-ready context",
+                "example_result": "Returns pending disease annotation envelopes with disease, relation, provider, subject, and evidence selector inputs",
             },
         ],
         "data_sources": [
@@ -639,17 +639,17 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
             {
-                "name": "Alliance Curation Database",
-                "description": "Resolves disease terms to Disease Ontology (DOID) identifiers",
+                "name": "Disease validator bindings",
+                "description": "Active disease validators resolve Disease Ontology terms, relation vocabulary, condition relation vocabulary, and data-provider selectors after extraction.",
                 "species_supported": None,
-                "data_types": ["Disease terms", "DOIDs", "MONDO IDs", "Synonyms"],
+                "data_types": ["Disease labels/CURIE hints", "Relation names", "Data-provider abbreviations", "Validator lookup results"],
             },
         ],
         "limitations": [
             "Requires an uploaded PDF document — cannot extract diseases from chat text alone",
             "Distinguishes diseases from phenotypes — observable traits in model organisms are phenotypes, not diseases",
             "Diseases mentioned only in introduction/background without new experimental findings are excluded",
-            "Cannot resolve diseases not present in the Alliance disease ontology",
+            "Does not perform disease ontology or provider lookup itself; unresolved or conflicting identity remains visible as validator findings",
         ],
     },
     "chemical_extractor": {
@@ -674,10 +674,10 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "example_result": "Returns concentration (e.g., '10 μM'), timing (e.g., '24 hours'), and route (e.g., 'i.p. injection')",
             },
             {
-                "name": "ChEBI normalization",
-                "description": "Resolves retained chemicals to ChEBI identifiers using agr_curation_query",
-                "example_query": "Normalize extracted chemicals to ChEBI IDs",
-                "example_result": "Returns ChEBI identifiers (e.g., CHEBI:9168 for rapamycin)",
+                "name": "Validator-ready chemical selectors",
+                "description": "Preserves chemical names/CURIE hints, condition class labels, relation names, quantities, timing, and evidence records for active chemical-condition validators; ChEBI and vocabulary lookup remain validator-owned.",
+                "example_query": "Extract chemicals with validator-ready context",
+                "example_result": "Returns chemical-condition envelopes with ChEBI, condition ontology, and relation selector inputs for validator materialization",
             },
         ],
         "data_sources": [
@@ -688,10 +688,10 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "data_types": ["PDF text chunks", "Section content", "Subsection content"],
             },
             {
-                "name": "Alliance Curation Database (ChEBI)",
-                "description": "Resolves chemical compound names to ChEBI ontology identifiers",
+                "name": "Chemical-condition validator bindings",
+                "description": "Active validators resolve ChEBI identity, condition ontology terms, and condition-relation vocabulary values after extraction.",
                 "species_supported": None,
-                "data_types": ["Chemical identifiers (ChEBI IDs)", "Compound names", "Synonyms"],
+                "data_types": ["Chemical name/CURIE hints", "Condition labels", "Relation names", "Validator lookup results"],
             },
         ],
         "limitations": [
@@ -699,6 +699,7 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
             "Standard lab buffers and media (PBS, DMEM, etc.) are excluded unless they are the experimental variable",
             "Trade names may be ambiguous if they map to multiple compounds — these go to ambiguities[]",
             "Cannot provide chemical-gene interaction data — only extracts chemical mentions and their experimental context",
+            "Does not perform ChEBI, ontology, or vocabulary lookup itself; unresolved or conflicting identity remains visible as validator findings",
         ],
     },
     "phenotype_extractor": {
@@ -723,10 +724,10 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "example_result": "Returns phenotype-genotype pairs with experimental context (e.g., daf-2(e1370) → extended lifespan)",
             },
             {
-                "name": "Ontology term hinting",
-                "description": "Provides best-candidate phenotype ontology terms when confidence is high, using organism-appropriate ontologies (MP, HPO, WBPhenotype, FBcv, ZP, APO)",
-                "example_query": "Map extracted phenotypes to ontology terms",
-                "example_result": "Returns suggested ontology terms with confidence scores, or places uncertain mappings in ambiguities[]",
+                "name": "Validator-ready phenotype term context",
+                "description": "Preserves phenotype labels, organism/provider/taxon context, subject hints, and evidence for the active ontology validator; final ontology CURIEs are validator-owned.",
+                "example_query": "Extract phenotypes with validator-ready context",
+                "example_result": "Returns phenotype assertion envelopes with label-backed term candidates and verified evidence for downstream validator materialization",
             },
         ],
         "data_sources": [
@@ -736,12 +737,18 @@ AGENT_DOCUMENTATION: Dict[str, Dict[str, Any]] = {
                 "species_supported": None,
                 "data_types": ["PDF text chunks", "Section content", "Subsection content", "Figure legends"],
             },
+            {
+                "name": "Phenotype validator binding",
+                "description": "The active phenotype validator resolves supported WB/MGI phenotype term labels or CURIEs after extraction and explicitly blocks unsupported provider/taxon mappings before lookup.",
+                "species_supported": ["C. elegans (WB)", "M. musculus (MGI)"],
+                "data_types": ["Phenotype labels", "Provider/taxon hints", "Validator lookup results"],
+            },
         ],
         "limitations": [
             "Requires an uploaded PDF document — cannot extract phenotypes from chat text alone",
             "Distinguishes phenotypes from diseases — clinical conditions are handled by the Disease Extraction Agent",
             "Wild-type/control observations are baselines, not phenotype assertions",
-            "Ontology term hints are suggestive only; typed ontology validation is handled by domain-pack attachments or the Ontology Term Resolver Agent",
+            "Ontology term labels and hints are selector inputs only; typed ontology validation is handled by active domain-pack validator bindings",
             "Does not use agr_curation_query directly; phenotype ontology validation is deferred to typed ontology term resolution",
         ],
     },
