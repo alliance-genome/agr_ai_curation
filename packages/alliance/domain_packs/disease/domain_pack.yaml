@@ -818,16 +818,19 @@ metadata:
       - validator_id: disease.no_legacy_semantic_lists
         display_name: Current extraction format
         description: Reject legacy semantic collections such as items, annotations, genes, alleles, diseases, chemicals, and phenotypes in new domain-envelope fixtures.
-    under_development:
-      - validator_id: disease.disease_ontology_term_lookup
+      - validator_id: disease_ontology_term_lookup
         display_name: Disease ontology lookup
-        description: Validate Disease Ontology curies and labels against public.ontologyterm rows with ontology_term_type DOTerm.
-      - validator_id: disease.disease_relation_cv_lookup
+        description: Validate Disease Ontology curies and labels through the active ontology-term package validator binding.
+      - validator_id: disease_relation_cv_lookup
         display_name: Disease relation vocabulary lookup
-        description: Validate disease_relation_name against the Disease Relation vocabulary.
-      - validator_id: disease.condition_relation_lookup
+        description: Validate disease_relation_name against the Disease Relation vocabulary through the active controlled-vocabulary package validator binding.
+      - validator_id: disease_condition_relation_lookup
         display_name: Condition relation lookup
-        description: Validate condition relation names and condition ontology curies against public.conditionrelation and public.experimentalcondition projections.
+        description: Validate condition relation names through the active controlled-vocabulary package validator binding.
+      - validator_id: disease_data_provider_lookup
+        display_name: Data provider lookup
+        description: Validate disease data-provider abbreviations through the active data-provider package validator binding.
+    under_development:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
         description: Compose disease condition relation, experimental condition ontology, chemical, taxon, and data-provider component checks into one auditable condition decision.

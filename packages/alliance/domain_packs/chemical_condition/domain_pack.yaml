@@ -599,17 +599,21 @@ metadata:
       - validator_id: chemical_condition.export_context_blocker
         display_name: Required export context
         description: Emit blocker findings when host annotation or source reference materialization is missing.
-    under_development:
       - validator_id: chemical_condition.chebi_api_lookup
         display_name: ChEBI lookup
         tool_name: chebi_api_call
-        description: Validate ChEBI identity and label against ChEBI once domain-pack validator runtime can call tool bindings.
+        description: Validate ChemicalCondition ChEBI identity and label through the active package-scoped ChEBI API lookup binding.
+      - validator_id: chemical_condition.term_chebi_api_lookup
+        display_name: Chemical term ChEBI lookup
+        tool_name: chebi_api_call
+        description: Validate ChemicalTerm ChEBI identity and label through the active package-scoped ChEBI API lookup binding.
       - validator_id: chemical_condition.condition_ontology_lookup
         display_name: Condition ontology lookup
-        description: Validate ZECO/XCO condition class and condition ID terms against configured ontology sources once condition validators are wired.
+        description: Validate ZECO/XCO condition class terms through the active ontology-term package validator binding.
       - validator_id: chemical_condition.condition_relation_type_lookup
         display_name: Condition relation type lookup
         description: Validate condition relation type names against controlled vocabulary rows without treating them as ontology terms.
+    under_development:
       - validator_id: experimental_condition_validation
         display_name: Experimental condition validation
         description: Compose condition relation, condition class/id, chemical, taxon, quantity/unit, and evidence context checks into one auditable ExperimentalCondition decision.
