@@ -89,6 +89,49 @@ def test_non_domain_envelope_output_schema_keeps_default_sdk_strictness():
     assert runtime_agent is source_agent
 
 
+def test_domain_envelope_reduction_prioritizes_materialized_fields_for_supervisor():
+    envelope_output = json.dumps(
+        {
+            "domain_pack_id": "gene",
+            "objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "pending_ref_id": "gene-mention-evidence-1",
+                    "status": "validated",
+                    "payload": {
+                        "mention": "Crumbs",
+                        "proposed_primary_external_id": "FB:stale",
+                        "primary_external_id": "FB:FBgn0259685",
+                        "gene_symbol": "crb",
+                        "taxon": "NCBITaxon:7227",
+                        "verified_quote": "Crumbs regulates R8 cell fate.",
+                    },
+                }
+            ],
+            "validation_findings": [
+                {
+                    "code": "domain_pack.validator_resolved",
+                    "status": "resolved",
+                    "message": "Resolved Crumbs to crb.",
+                }
+            ],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        envelope_output,
+        expected_output_type=GeneExtractionResultEnvelope,
+    )
+
+    assert "Use these validated/materialized values" in result
+    assert "primary_external_id=FB:FBgn0259685" in result
+    assert "gene_symbol=crb" in result
+    assert "taxon=NCBITaxon:7227" in result
+    assert "proposed_primary_external_id" not in result
+    assert "verified_quote" not in result
+    assert "Validation findings: resolved=1." in result
+
+
 def test_runtime_instruction_append_updates_pending_prompt_assembly():
     clear_prompt_context()
     prompt = PromptTemplate(

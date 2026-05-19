@@ -57,6 +57,43 @@ logger = logging.getLogger(__name__)
 
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
 _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
+_DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY = (
+    "mention",
+    "label",
+    "name",
+    "primary_external_id",
+    "curie",
+    "gene_symbol",
+    "symbol",
+    "taxon",
+    "taxon_id",
+    "species",
+    "data_provider",
+    "term_id",
+    "term_label",
+    "ontology_id",
+    "ontology_term_id",
+    "chebi_id",
+    "disease_id",
+)
+_DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP = {
+    "chunk_id",
+    "confidence",
+    "data_provider_hint",
+    "evidence_record_id",
+    "evidence_record_ids",
+    "figure_reference",
+    "identity_resolution_notes",
+    "page",
+    "proposed_primary_external_id",
+    "proposed_gene_symbol",
+    "proposed_symbol",
+    "proposed_taxon",
+    "section",
+    "subsection",
+    "taxon_hint",
+    "verified_quote",
+}
 
 
 def _is_domain_envelope_extraction_output_type(output_type: Any) -> bool:
@@ -915,7 +952,135 @@ def _reduce_specialist_output_for_supervisor(
     if answer_text:
         return answer_text
 
+    if _is_domain_envelope_extraction_output_type(expected_output_type):
+        summary_text = _domain_envelope_supervisor_summary(payload)
+        if summary_text:
+            return summary_text
+
     return final_output
+
+
+def _domain_envelope_supervisor_summary(payload: Dict[str, Any]) -> str:
+    """Build a compact supervisor-facing summary from a materialized envelope."""
+
+    objects = payload.get("objects")
+    if not isinstance(objects, list) or not objects:
+        return ""
+
+    domain_pack_id = str(payload.get("domain_pack_id") or "domain envelope")
+    lines = [
+        (
+            f"Validated domain envelope result for {domain_pack_id}. "
+            "Use these validated/materialized values in the final answer."
+        )
+    ]
+
+    for index, item in enumerate(objects[:5], start=1):
+        if not isinstance(item, dict):
+            continue
+        object_type = str(item.get("object_type") or "object").strip()
+        status = str(item.get("status") or "unknown").strip()
+        pending_ref = str(
+            item.get("pending_ref_id") or item.get("object_id") or ""
+        ).strip()
+        payload_fields = _domain_envelope_supervisor_payload_fields(
+            item.get("payload")
+        )
+        if not payload_fields:
+            continue
+        label_parts = [f"{index}.", object_type]
+        if pending_ref:
+            label_parts.append(pending_ref)
+        label_parts.append(f"({status})")
+        lines.append(f"{' '.join(label_parts)}: {payload_fields}")
+
+    if len(lines) == 1:
+        return ""
+
+    findings = payload.get("validation_findings")
+    if isinstance(findings, list):
+        status_counts: Dict[str, int] = {}
+        unresolved_messages: List[str] = []
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            status = str(finding.get("status") or "unknown").strip() or "unknown"
+            status_counts[status] = status_counts.get(status, 0) + 1
+            if status != "resolved" and len(unresolved_messages) < 3:
+                code = str(finding.get("code") or "validation finding").strip()
+                message = str(finding.get("message") or "").strip()
+                unresolved_messages.append(
+                    f"{code}: {_truncate_for_supervisor_summary(message, limit=180)}"
+                )
+        if status_counts:
+            counts = ", ".join(
+                f"{status}={count}" for status, count in sorted(status_counts.items())
+            )
+            lines.append(f"Validation findings: {counts}.")
+        for message in unresolved_messages:
+            lines.append(f"Unresolved validator finding: {message}")
+
+    return "\n".join(lines)
+
+
+def _domain_envelope_supervisor_payload_fields(payload: Any) -> str:
+    if not isinstance(payload, dict):
+        return ""
+
+    selected: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add_field(key: str) -> None:
+        if key in seen or key in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP:
+            return
+        value = payload.get(key)
+        if not _is_supervisor_summary_scalar(value):
+            return
+        text = _truncate_for_supervisor_summary(str(value).strip())
+        if not text:
+            return
+        seen.add(key)
+        selected.append((key, text))
+
+    for key in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_PRIORITY:
+        add_field(key)
+
+    for key in sorted(payload):
+        if len(selected) >= 10:
+            break
+        if not _looks_like_materialized_identity_field(key):
+            continue
+        add_field(key)
+
+    return "; ".join(f"{key}={value}" for key, value in selected)
+
+
+def _is_supervisor_summary_scalar(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return isinstance(value, (int, float, bool))
+
+
+def _looks_like_materialized_identity_field(key: str) -> bool:
+    normalized = key.lower()
+    if normalized in _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP:
+        return False
+    return (
+        normalized.endswith("_id")
+        or normalized.endswith("_curie")
+        or normalized.endswith("_symbol")
+        or normalized.endswith("_label")
+        or normalized in {"id", "curie", "symbol", "label", "name", "taxon"}
+    )
+
+
+def _truncate_for_supervisor_summary(value: str, *, limit: int = 120) -> str:
+    text = " ".join(value.split())
+    if len(text) <= limit:
+        return text
+    return f"{text[: limit - 1].rstrip()}..."
 
 
 def _agent_key_from_specialist_tool_name(tool_name: Optional[str]) -> Optional[str]:
