@@ -785,7 +785,7 @@ def test_check_workspace_bootstrap_availability_requires_eligibility(monkeypatch
         )
 
 
-def test_fetch_workspace_payload_requires_candidates_and_entity_tags(monkeypatch):
+def test_fetch_workspace_payload_accepts_entity_tags(monkeypatch):
     smoke = _load_smoke_module()
     checks: list[dict] = []
 
@@ -823,3 +823,57 @@ def test_fetch_workspace_payload_requires_candidates_and_entity_tags(monkeypatch
     assert checks[-1]["step"] == "workspace_fetch"
     assert checks[-1]["payload"]["candidate_count"] == 1
     assert checks[-1]["payload"]["entity_tag_count"] == 1
+    assert checks[-1]["payload"]["domain_envelope_projection_backed"] is False
+
+
+def test_fetch_workspace_payload_accepts_domain_envelope_projection_without_entity_tags(monkeypatch):
+    smoke = _load_smoke_module()
+    checks: list[dict] = []
+
+    def _fake_http_request(method, url, **kwargs):
+        del method, url, kwargs
+        payload = {
+            "workspace": {
+                "session": {"session_id": "session-1"},
+                "candidates": [
+                    {
+                        "candidate_id": "cand-1",
+                        "adapter_key": "gene",
+                        "projection_ref": {
+                            "envelope_id": "env-1",
+                            "object_id": "gene-1",
+                        },
+                    },
+                ],
+                "entity_tags": [],
+                "validation_summary_projections": [
+                    {
+                        "envelope_id": "env-1",
+                        "object_id": "gene-1",
+                        "status": "resolved",
+                    }
+                ],
+                "active_candidate_id": "cand-1",
+            }
+        }
+        return smoke.Response(
+            status_code=200,
+            body=b"{}",
+            text="{}",
+            json_body=payload,
+        )
+
+    monkeypatch.setattr(smoke, "http_request", _fake_http_request)
+
+    payload = smoke.fetch_workspace_payload(
+        base_url="http://example.test",
+        headers={"X-API-Key": "test-key"},
+        session_id="session-1",
+        checks=checks,
+    )
+
+    assert payload["workspace"]["session"]["session_id"] == "session-1"
+    assert checks[-1]["step"] == "workspace_fetch"
+    assert checks[-1]["payload"]["candidate_count"] == 1
+    assert checks[-1]["payload"]["entity_tag_count"] == 0
+    assert checks[-1]["payload"]["domain_envelope_projection_backed"] is True

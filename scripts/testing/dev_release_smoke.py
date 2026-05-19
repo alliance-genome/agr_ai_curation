@@ -1856,6 +1856,13 @@ def fetch_workspace_payload(
     session = workspace.get("session") or {}
     candidates = workspace.get("candidates") or []
     entity_tags = workspace.get("entity_tags") or []
+    has_domain_envelope_projection = any(
+        isinstance(candidate, dict) and candidate.get("projection_ref")
+        for candidate in candidates
+    ) or bool(
+        workspace.get("validation_summary_projections")
+        or workspace.get("evidence_anchor_projections")
+    )
     require(
         str(session.get("session_id", "")).strip() == session_id,
         f"Workspace payload session_id mismatch: {response.text}",
@@ -1865,8 +1872,12 @@ def fetch_workspace_payload(
         f"Workspace payload contained no candidates: {response.text}",
     )
     require(
-        isinstance(entity_tags, list) and entity_tags,
-        f"Workspace payload contained no entity tags: {response.text}",
+        (isinstance(entity_tags, list) and entity_tags)
+        or has_domain_envelope_projection,
+        (
+            "Workspace payload contained neither entity tags nor "
+            f"domain-envelope projections: {response.text}"
+        ),
     )
     first_candidate = candidates[0] if isinstance(candidates[0], dict) else {}
     require(
@@ -1882,6 +1893,7 @@ def fetch_workspace_payload(
             "session_id": session_id,
             "candidate_count": len(candidates),
             "entity_tag_count": len(entity_tags),
+            "domain_envelope_projection_backed": has_domain_envelope_projection,
             "active_candidate_id": workspace.get("active_candidate_id"),
         },
     )
