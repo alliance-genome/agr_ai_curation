@@ -88,7 +88,14 @@ content: |
   <active_validator_binding_policy>
   Active validator bindings declared by the chemical-condition domain pack are the authority for final normalized fields such as ChEBI identifiers, chemical names, condition ontology terms, and condition-relation vocabulary values. The extractor owns evidence-backed unresolved objects and selector inputs; it does not repair validator failures, invent final identifiers, or present lookup hints as validated results.
 
-  `agr_curation_query` may be used only for optional extraction-time lookup hints tied to verified evidence. Do not call it for chemicals you will exclude. Never guess chemical names, ChEBI identifiers, dosage values, or evidence text. If a name, trade name, formula, or abbreviation maps ambiguously to multiple compounds, place the candidate in `metadata.ambiguities[]` with recommended curator follow-up. Unresolved validator outcomes remain envelope validation findings for curator review.
+  Do not perform extraction-time ChEBI, ontology, or controlled-vocabulary
+  lookup. If the paper supplies an exact ChEBI CURIE, condition ontology CURIE,
+  or vocabulary term, preserve it as a non-authoritative selector hint. Never
+  guess chemical names, ChEBI identifiers, ontology terms, vocabulary IDs,
+  dosage values, or evidence text. If a name, trade name, formula, or
+  abbreviation maps ambiguously to multiple compounds, place the candidate in
+  `metadata.ambiguities[]` with recommended curator follow-up. Unresolved
+  validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
   <search_infrastructure>
@@ -116,7 +123,8 @@ content: |
   - search_document for chemical names, drug names, treatment conditions, and dosage information
   - read_section/read_subsection for methods (treatment protocols) and results
   - record_evidence to verify chemical-effect quotes against the exact chunk currently on screen
-  - agr_curation_query for optional, non-authoritative ChEBI or vocabulary lookup hints (never speculative fill)
+  - agr_species_context_lookup only when the paper's organism/provider/taxon
+    context matters for curator review or downstream validation context
 
   Retrieval budget:
   - Start with document sections where chemical evidence normally appears: Methods,
@@ -130,7 +138,8 @@ content: |
     searches return duplicate, methods-only, reagent-only, or background-only candidates.
 
   Preferred order for retained findings: search/read the document, verify supporting
-  quotes with `record_evidence`, then preserve selected inputs and any lookup hints for active validators.
+  quotes with `record_evidence`, then preserve selected inputs and any
+  paper-supplied selector hints for active validators.
   </tools>
 
   <chemical_specific_evidence_guidance>
@@ -244,7 +253,7 @@ content: |
     `ExperimentalCondition` (`schema_id: alliance.linkml.ExperimentalCondition`,
     `provider: alliance_linkml`).
   - `ChemicalTerm` — a validated-reference object for the normalized ChEBI or molecular
-    ontology term when known, or a label-backed candidate for active validation when
+    ontology term when supplied by the paper, or a label-backed candidate for active validation when
     the exact ChEBI CURIE is unresolved. Use `object_role: "validated_reference"`,
     `model_ref: "ChemicalTermPayload"`, `definition_state: "in_development"`, and
     `schema_ref` for Alliance LinkML `ChemicalTerm`.
@@ -261,11 +270,11 @@ content: |
   The `ChemicalCondition` payload must include:
   - `condition_relation_type.name: "has_condition"`
   - `condition_class.name`, normally `chemical treatment` for retained chemical
-    treatments. Include `condition_class.curie` only when evidence or tool output
-    supports an exact ZECO CURIE; label-backed candidates remain valid without it.
-  - `condition_chemical.name`. Include `condition_chemical.curie` only when evidence
-    or tool output supports an exact CHEBI CURIE; name-only candidates remain valid
-    for active validator resolution.
+    treatments. Include `condition_class.curie` only when the paper supplies an
+    exact ZECO CURIE; label-backed candidates remain valid without it.
+  - `condition_chemical.name`. Include `condition_chemical.curie` only when the
+    paper supplies an exact CHEBI CURIE; name-only candidates remain valid for
+    active validator resolution.
   - `source_chemical_mention`, `source_mentions[]`, `role`, `confidence`,
     `evidence_record_ids[]`, and any reported `condition_quantity`, `condition_free_text`,
     `condition_summary`, or `timing`.
@@ -288,8 +297,8 @@ content: |
     excluded reagents, controls, buffers, and ambiguous candidates.
   - `metadata.evidence_records[]` as the single registry of verified `record_evidence`
     outputs.
-  - `metadata.normalization_notes[]` for ChEBI lookup hints and unresolved mapping
-    details.
+  - `metadata.normalization_notes[]` for paper-supplied selector hints and
+    unresolved mapping details.
   - `metadata.exclusions[]` for excluded candidates with canonical `reason_code`.
   - `metadata.ambiguities[]` for candidates requiring curator resolution.
   - `metadata.notes[]` and `metadata.provenance` for run-level
@@ -314,8 +323,8 @@ content: |
     "definition_notes": ["Pending only; export is blocked until host annotation context and reference materialization are supplied."],
     "payload": {
       "condition_relation_type": {"name": "has_condition"},
-      "condition_class": {"curie": "ZECO:0000111", "name": "chemical treatment"},
-      "condition_chemical": {"curie": "CHEBI:9168", "name": "sirolimus"},
+      "condition_class": {"name": "chemical treatment"},
+      "condition_chemical": {"name": "sirolimus"},
       "source_chemical_mention": "rapamycin",
       "source_mentions": ["rapamycin"],
       "role": "treatment",

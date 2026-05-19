@@ -414,6 +414,8 @@ def test_chemical_extractor_prompt_agent_and_group_rules_name_domain_contract():
     agent_data = yaml.safe_load(source.agent_yaml.read_text(encoding="utf-8"))
 
     assert "record_evidence" in agent_data["tools"]
+    assert "agr_species_context_lookup" in agent_data["tools"]
+    assert "agr_curation_query" not in agent_data["tools"]
     assert "ChemicalCondition" in agent_data["description"]
     assert "curatable_objects[]" in agent_data["supervisor_routing"]["description"]
     assert '"object_type": "ChemicalCondition"' in prompt_content
@@ -424,6 +426,9 @@ def test_chemical_extractor_prompt_agent_and_group_rules_name_domain_contract():
     assert '`definition_state: "in_development"`' in prompt_content
     assert 'metadata.export_behavior.status: "blocked"' in prompt_content
     assert "Active validator bindings own final ChEBI" in prompt_content
+    assert "Do not perform extraction-time ChEBI" in prompt_content
+    assert "agr_species_context_lookup" in prompt_content
+    assert "agr_curation_query" not in prompt_content
     assert "repair_mode" not in prompt_content
     assert "repair_notes" not in prompt_content
     assert "repair_hints" not in prompt_content
@@ -433,6 +438,7 @@ def test_chemical_extractor_prompt_agent_and_group_rules_name_domain_contract():
     for group_rule_file in source.group_rule_files:
         content = str(yaml.safe_load(group_rule_file.read_text(encoding="utf-8"))["content"])
         assert "ChemicalCondition" in content
+        assert "paper-supplied exact-CURIE hints" in content
         assert "ChemicalConditionPayload" in content
         assert "ChemicalTermPayload" in content
         assert "metadata.export_behavior.status: blocked" in content
