@@ -307,6 +307,99 @@ def _make_flow_execution_state(*completed_steps):
     }
 
 
+def test_flow_candidate_persistence_materializes_domain_envelope_records(monkeypatch):
+    """Flow-persisted domain envelopes should become reviewable without prep sidecars."""
+
+    executor = _executor_module()
+    persisted_requests = []
+    materialized = []
+
+    monkeypatch.setattr(
+        executor,
+        "persist_extraction_results",
+        _recording_persist_extraction_results(persisted_requests),
+    )
+    monkeypatch.setattr(
+        executor,
+        "ensure_domain_envelope_materialization",
+        lambda record, *, persist: materialized.append((record, persist)),
+    )
+
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="gene_extractor",
+        adapter_key="gene",
+        candidate_count=1,
+        conversation_summary="Extract Crumbs.",
+        payload_json={
+            "envelope_id": "env-flow-1",
+            "domain_pack_id": "gene",
+            "domain_pack_version": "0.1.0",
+            "status": "validated",
+            "objects": [
+                {
+                    "object_type": "gene_mention_evidence",
+                    "object_role": "validated_reference",
+                    "status": "validated",
+                    "payload": {"primary_external_id": "FB:FBgn0259685"},
+                }
+            ],
+            "validation_findings": [],
+            "history": [],
+        },
+        metadata={"tool_name": "ask_gene_extractor_specialist", "step": 1},
+    )
+
+    records = executor._persist_flow_extraction_candidates(
+        candidates=[candidate],
+        document_id="11111111-1111-1111-1111-111111111111",
+        user_id="curator-1",
+        session_id="session-1",
+        trace_id="trace-1",
+        flow_run_id=None,
+    )
+
+    assert len(records) == 1
+    assert len(persisted_requests) == 1
+    assert materialized == [(records[0], True)]
+
+
+def test_flow_candidate_persistence_skips_legacy_non_domain_payloads(monkeypatch):
+    """Legacy extraction payloads remain persisted without domain-envelope review rows."""
+
+    executor = _executor_module()
+    materialized = []
+
+    monkeypatch.setattr(
+        executor,
+        "persist_extraction_results",
+        _recording_persist_extraction_results(),
+    )
+    monkeypatch.setattr(
+        executor,
+        "ensure_domain_envelope_materialization",
+        lambda record, *, persist: materialized.append((record, persist)),
+    )
+
+    candidate = executor.ExtractionEnvelopeCandidate(
+        agent_key="legacy_extractor",
+        adapter_key="legacy",
+        candidate_count=1,
+        payload_json=_structured_step_output("legacy-item"),
+        metadata={"tool_name": "ask_legacy_extractor_specialist", "step": 1},
+    )
+
+    executor._persist_flow_extraction_candidates(
+        candidates=[candidate],
+        document_id="11111111-1111-1111-1111-111111111111",
+        user_id="curator-1",
+        session_id="session-1",
+        trace_id="trace-1",
+        flow_run_id=None,
+    )
+
+    assert materialized == []
+
+
 # ===========================================================================
 # _count_agent_ids
 # ===========================================================================

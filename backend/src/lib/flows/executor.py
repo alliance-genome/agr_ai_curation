@@ -2145,7 +2145,27 @@ def _persist_flow_extraction_candidates(
             if persisted is not None:
                 ordered_records.append(persisted)
 
+    _materialize_flow_domain_envelope_records(ordered_records)
     return ordered_records
+
+
+def _materialize_flow_domain_envelope_records(
+    records: list[CurationExtractionResultRecord],
+) -> None:
+    """Ensure flow-persisted domain-envelope extraction records get review rows."""
+
+    for record in records:
+        if not _is_flow_domain_envelope_payload(record.payload_json):
+            continue
+        ensure_domain_envelope_materialization(record, persist=True)
+
+
+def _is_flow_domain_envelope_payload(payload: Any) -> bool:
+    if not isinstance(payload, Mapping):
+        return False
+    if {"envelope_id", "domain_pack_id", "objects"}.issubset(payload):
+        return isinstance(payload.get("objects"), list)
+    return isinstance(payload.get("curatable_objects"), list)
 
 
 def _persist_flow_extraction_candidates_or_build_error(
