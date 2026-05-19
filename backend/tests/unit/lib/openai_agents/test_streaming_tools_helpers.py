@@ -4,9 +4,11 @@ import uuid
 from types import SimpleNamespace
 
 import pytest
+from agents import AgentOutputSchema
 from pydantic import BaseModel
 
 from src.lib.openai_agents import streaming_tools
+from src.lib.openai_agents.models import GeneExtractionResultEnvelope
 from src.lib.prompts.context import (
     bind_prompt_run,
     clear_prompt_context,
@@ -51,6 +53,34 @@ def test_build_json_only_instruction_without_schema():
     text = streaming_tools._build_json_only_instruction(None)
     assert "IMPORTANT OUTPUT FORMAT REQUIREMENT" in text
     assert "schema exactly" not in text.lower()
+
+
+def test_domain_envelope_output_schema_uses_relaxed_sdk_strictness():
+    source_agent = SimpleNamespace(
+        name="Gene Extraction",
+        output_type=GeneExtractionResultEnvelope,
+    )
+
+    runtime_agent = streaming_tools._apply_relaxed_output_schema_if_needed(
+        source_agent,
+        GeneExtractionResultEnvelope,
+    )
+
+    assert runtime_agent is not source_agent
+    assert isinstance(runtime_agent.output_type, AgentOutputSchema)
+    assert runtime_agent.output_type.output_type is GeneExtractionResultEnvelope
+    assert runtime_agent.output_type.is_strict_json_schema() is False
+
+
+def test_non_domain_envelope_output_schema_keeps_default_sdk_strictness():
+    source_agent = SimpleNamespace(name="Simple Agent", output_type=_Envelope)
+
+    runtime_agent = streaming_tools._apply_relaxed_output_schema_if_needed(
+        source_agent,
+        _Envelope,
+    )
+
+    assert runtime_agent is source_agent
 
 
 def test_runtime_instruction_append_updates_pending_prompt_assembly():

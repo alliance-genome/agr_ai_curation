@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from functools import lru_cache
 from typing import List, Dict, Any, Optional
 
-from agents import Agent, Runner, RunConfig
+from agents import Agent, AgentOutputSchema, Runner, RunConfig
 
 from .audit_labels import build_specialist_internal_friendly_name
 from .config import get_max_turns
@@ -50,11 +50,37 @@ from src.lib.prompts.context import (
     append_pending_prompt_runtime_context,
     commit_pending_prompts,
 )
+from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
 
 logger = logging.getLogger(__name__)
 
 _DOCUMENT_REQUIRED_TOOL_NAMES = set(DOCUMENT_REQUIRED_TOOL_NAMES)
 _GROQ_SCHEMA_CONSTRAINTS_ADAPTER_KEY = "groq_schema_constraints"
+
+
+def _is_domain_envelope_extraction_output_type(output_type: Any) -> bool:
+    """Return whether an output type uses the shared domain-envelope contract."""
+
+    if output_type is None:
+        return False
+    try:
+        return issubclass(output_type, DomainEnvelopeExtractionResult)
+    except TypeError:
+        return False
+
+
+def _apply_relaxed_output_schema_if_needed(agent: Agent, output_type: Any) -> Agent:
+    """Relax SDK strict-schema conversion for domain-envelope outputs."""
+
+    if not _is_domain_envelope_extraction_output_type(output_type):
+        return agent
+
+    runtime_agent = copy.copy(agent)
+    runtime_agent.output_type = AgentOutputSchema(
+        output_type,
+        strict_json_schema=False,
+    )
+    return runtime_agent
 
 
 def _extract_stream_tool_call_tracking_id(item: Any) -> Optional[str]:
@@ -1184,6 +1210,18 @@ async def run_specialist_with_events(
             specialist_name,
             extra={"specialist_name": specialist_name, "tool_name": tool_name},
         )
+    else:
+        relaxed_agent = _apply_relaxed_output_schema_if_needed(
+            runtime_agent,
+            expected_output_type,
+        )
+        if relaxed_agent is not runtime_agent:
+            runtime_agent = relaxed_agent
+            logger.info(
+                "%s using relaxed output schema for domain-envelope structured output",
+                specialist_name,
+                extra={"specialist_name": specialist_name, "tool_name": tool_name},
+            )
 
     efficiency_instruction = _build_tool_efficiency_instruction(agent, input_text)
     if efficiency_instruction:
