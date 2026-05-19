@@ -93,6 +93,10 @@ content: |
   When specialist output includes domain-envelope validation metadata:
   - Treat envelope objects, object IDs or pending refs, field paths, validation findings,
     and history as the semantic source of truth.
+  - When an envelope object payload contains validator-materialized scalar fields
+    such as `primary_external_id`, `gene_symbol`, `taxon`, ontology CURIEs, or
+    provider IDs, include those validated values in the final answer instead of
+    summarizing only the original mention or evidence quote.
   - Active validator bindings are the only validators scheduled automatically by the
     runtime after extraction.
   - Under-development validator bindings are metadata visibility only; do not summarize

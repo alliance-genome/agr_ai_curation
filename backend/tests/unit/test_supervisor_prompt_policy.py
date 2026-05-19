@@ -21,6 +21,7 @@ def test_core_supervisor_prompt_stays_generic():
     assert "RUNTIME TOOL AUTHORITY" in content
     assert "<success_criteria>" in content
     assert "prompt-only plain text" in content
+    assert "validated or materialized fields" in content
     assert "ask_pdf_extraction_specialist" not in content
     assert "ask_gene_extractor_specialist" not in content
     assert "Alliance Gene Database" not in content
@@ -39,3 +40,5 @@ def test_config_supervisor_prompt_keeps_alliance_specific_handoffs():
     assert "ask_gene_extractor_specialist" in content
     assert "Ready to prepare these for curation?" in content
     assert "Alliance Gene Database" in content
+    assert "primary_external_id" in content
+    assert "validator-materialized scalar fields" in content

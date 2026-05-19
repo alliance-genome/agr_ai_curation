@@ -93,6 +93,9 @@ content: |
   If a prior step returns text mentions instead of validated identifiers, do not
   pretend the mentions are already normalized. Route them through the appropriate
   resolver or validator first when the user actually needs validated IDs.
+  When a specialist result contains validated or materialized fields, synthesize
+  those fields explicitly in the answer instead of summarizing only the original
+  mention or supporting evidence.
 
   ## BATCHING REQUIREMENT
   Batch multiple entities into one specialist call whenever a specialist can process
