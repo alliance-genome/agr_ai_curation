@@ -751,18 +751,21 @@ effective prompt hash any specialist or validator agent receives.
 Useful for understanding agent behavior, troubleshooting routing issues, and
 answering validator-agent inspection questions from domain-pack validation plans.
 
-**Available agents:**
-- supervisor: Routes queries to specialists
-- pdf_extraction: Answers questions about PDF documents
-- gene_expression: Extracts gene expression patterns from papers
-- chat_output: Displays results in chat; csv_formatter, tsv_formatter, json_formatter: File exports
-- gene, allele, disease, chemical: Database query agents
-- gene_ontology, go_annotations, orthologs: GO and orthology agents
+**Common prompt targets:**
+- Routing/display/export: supervisor, curation_prep, chat_output, csv_formatter,
+  tsv_formatter, json_formatter.
+- Document/general extraction: pdf_extraction.
+- Domain-envelope extractors: gene_extractor, allele_extractor,
+  disease_extractor, chemical_extractor, phenotype_extractor, gene_expression.
+- Validator/resolver agents: gene_validation (also available as gene),
+  allele_validation (allele), disease_validation (disease),
+  chemical_validation (chemical), ontology_term_validation,
+  controlled_vocabulary_validation, data_provider_validation,
+  subject_entity_validation, reference_validation,
+  experimental_condition_validation, agm_validation.
+- Other lookup specialists: gene_ontology, go_annotations, orthologs.
 - Validator-agent IDs returned by get_domain_pack_validation_plan are valid prompt
-  inspection targets, for example gene_validation, allele_validation,
-  disease_validation, ontology_term_validation, controlled_vocabulary_validation,
-  data_provider_validation, subject_entity_validation, reference_validation,
-  chemical_validation, and experimental_condition_validation.
+  inspection targets. Prefer those exact IDs when explaining active bindings.
 
 **Group-specific rules (pass group_id to see combined prompt):**
 Some agents have organism-specific rules. Use these group aliases:
@@ -775,7 +778,9 @@ Some agents have organism-specific rules. Use these group aliases:
 
 **Example usage:**
 - "Show me the worm gene expression prompt" → get_prompt(agent_id="gene_expression", group_id="WB")
-- "What are the fly-specific rules for gene agent?" → get_prompt(agent_id="gene", group_id="FB")
+- "What are the fly-specific rules for the gene extractor?" → get_prompt(agent_id="gene_extractor", group_id="FB")
+- "Show the phenotype extractor prompt" → get_prompt(agent_id="phenotype_extractor", group_id="ZFIN")
+- "Inspect controlled vocabulary validation" → get_prompt(agent_id="controlled_vocabulary_validation")
 - "How does this validator work?" → read validator_bindings[].validator_agent.agent_id or validation_attachments[].validator_agent_id from get_domain_pack_validation_plan, then call get_prompt(agent_id="gene_validation")
 - "Show the supervisor base prompt" → get_prompt(agent_id="supervisor")""",
         input_schema={
@@ -783,7 +788,7 @@ Some agents have organism-specific rules. Use these group aliases:
             "properties": {
                 "agent_id": {
                     "type": "string",
-                    "description": "Agent identifier or validator-agent ID from a validation plan (e.g., 'supervisor', 'gene', 'gene_expression', 'pdf_extraction', 'gene_validation')"
+                    "description": "Agent identifier or validator-agent ID from a validation plan (e.g., 'supervisor', 'gene_extractor', 'gene_expression', 'phenotype_extractor', 'gene_validation')"
                 },
                 "group_id": {
                     "type": "string",

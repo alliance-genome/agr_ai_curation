@@ -31,6 +31,25 @@ def test_get_diagnostic_registry_includes_codebase_tools():
     assert registry.has_tool("get_tool_details")
 
 
+def test_get_prompt_diagnostic_documents_current_extractor_and_validator_targets():
+    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry, reset_registry
+
+    reset_registry()
+    registry = get_diagnostic_tools_registry()
+
+    get_prompt_tool = registry.get_tool("get_prompt")
+    assert get_prompt_tool is not None
+    description = get_prompt_tool.description
+
+    assert "Domain-envelope extractors" in description
+    assert "Validator/resolver agents" in description
+    assert "phenotype_extractor" in description
+    assert "controlled_vocabulary_validation" in description
+    assert "data_provider_validation" in description
+    assert "reference_validation" in description
+    assert "experimental_condition_validation" in description
+
+
 def test_tool_inventory_diagnostic_reports_agent_attached_tools():
     from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry, reset_registry
 

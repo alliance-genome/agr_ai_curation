@@ -41,21 +41,19 @@ The system uses a multi-agent architecture:
 - **Supervisor**: Orchestrator that routes curator queries to appropriate specialists.
 
 **Extraction Agents (work with uploaded papers):**
-- **Gene Expression Specialist**: Extracts where, when, and how genes are expressed.
 - **General PDF Extraction Agent**: Answers broad questions about PDF documents.
-- **Formatter**: Converts natural language into structured JSON matching the Alliance data model.
+- **Domain-envelope extractors**: `gene_extractor`, `allele_extractor`, `disease_extractor`, `chemical_extractor`, `phenotype_extractor`, and `gene_expression` read papers and produce evidence-backed domain-envelope proposals.
+- **Formatter/display agents**: `chat_output`, `csv_formatter`, `tsv_formatter`, and `json_formatter` project curated state into chat or files.
 
-**Database Query Agents (query external sources):**
-- **Gene Agent**: Queries Alliance Curation Database for gene information
-- **Allele Agent**: Queries for allele/variant information
-- **Disease Agent**: Queries Disease Ontology (DOID)
-- **Chemical Agent**: Queries ChEBI chemical ontology
+**Validator/Resolver Agents (validate proposed fields):**
+- **Gene, Allele, Disease, and Chemical validators**: `gene_validation`, `allele_validation`, `disease_validation`, and `chemical_validation` resolve proposed identities with package lookup tools. Legacy prompt aliases `gene`, `allele`, `disease`, and `chemical` may still be accepted, but current domain-pack bindings use the validator IDs.
+- **Ontology and controlled vocabulary validators**: `ontology_term_validation` resolves typed ontology CURIEs/labels, while `controlled_vocabulary_validation` resolves Alliance vocabulary terms such as relations and condition relation types.
+- **Reference, data-provider, subject, condition, and AGM validators**: `reference_validation`, `data_provider_validation`, `subject_entity_validation`, `experimental_condition_validation`, and `agm_validation` validate supporting model fields.
+
+**Lookup Specialists (query external sources for curator questions):**
 - **GO Term Agent**: Queries Gene Ontology terms and hierarchy
 - **GO Annotations Agent**: Retrieves existing GO annotations for genes
 - **Orthologs Agent**: Queries orthology relationships across species
-
-**Validation Agents:**
-- **Ontology Term Resolver**: Resolves exact CURIEs and typed ontology labels/synonyms to ontology terms.
 
 ## Group-Specific Rules
 
@@ -284,7 +282,8 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.
-  - agent_id: supervisor, pdf_extraction, gene, gene_extractor, allele, allele_extractor, disease, disease_extractor, chemical, chemical_extractor, gene_ontology, go_annotations, orthologs, gene_expression, phenotype, ontology_term_validation, chat_output, csv_formatter, tsv_formatter, json_formatter
+  - agent_id: supervisor, curation_prep, pdf_extraction, gene_extractor, allele_extractor, disease_extractor, chemical_extractor, phenotype_extractor, gene_expression, gene_validation, allele_validation, disease_validation, chemical_validation, ontology_term_validation, controlled_vocabulary_validation, data_provider_validation, subject_entity_validation, reference_validation, experimental_condition_validation, agm_validation, gene_ontology, go_annotations, orthologs, chat_output, csv_formatter, tsv_formatter, json_formatter
+  - Legacy aliases may still resolve for some validators: gene, allele, disease, chemical.
   - group_id (optional): WB, FB, MGI, RGD, SGD, ZFIN. Legacy `mod_id` is also accepted.
   - Validator-agent inspection workflow: call `get_domain_pack_validation_plan`, read `validator_bindings[].validator_agent.agent_id` or `validation_attachments[].validator_agent_id`, then call `get_prompt(agent_id=<validator agent id>)` to inspect that validator's prompt, tools, and group-specific rules.
   - When a curator has an agent selected in the UI, the full prompt is already included in your context (in `<base_prompt>` tags). Reference it directly instead of calling `get_prompt`. Only call `get_prompt` for a DIFFERENT agent or group variant.

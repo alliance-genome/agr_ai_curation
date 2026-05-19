@@ -176,6 +176,13 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "Validators receive `DomainValidationRequest` payloads" in prompt
     assert "Materialized/resolved fields belong to validator results" in prompt
     assert "Do not infer that an extractor called a validator directly" in prompt
+    assert "Domain-envelope extractors" in prompt
+    assert "Validator/Resolver Agents" in prompt
+    assert "phenotype_extractor" in prompt
+    assert "controlled_vocabulary_validation" in prompt
+    assert "data_provider_validation" in prompt
+    assert "reference_validation" in prompt
+    assert "experimental_condition_validation" in prompt
     assert "tools deliberately unavailable" in prompt
     assert "what fields it proposes or preserves as hints" in prompt
     assert "what fields it materializes or validates authoritatively" in prompt
