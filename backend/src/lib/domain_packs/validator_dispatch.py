@@ -110,24 +110,26 @@ def dispatch_active_validator_bindings(
             continue
 
         request = selector_result.request
-        try:
-            raw_output = agent_runner(request, binding=match.binding)
-            validator_result = _validated_result_from_agent_output(
-                raw_output,
-                request=request,
-            )
-        except Exception as exc:
-            LOGGER.warning(
-                "Package-scoped validator agent failed for binding %s request %s",
-                request.validator_binding_id,
-                request.request_id,
-                exc_info=exc,
-            )
-            validator_result = _unresolved_result_for_dispatch_problem(
-                request,
-                reason="validator_agent_error",
-                explanation=f"Validator agent execution failed: {exc}",
-            )
+        validator_result = preflight_unresolved_validator_result(request)
+        if validator_result is None:
+            try:
+                raw_output = agent_runner(request, binding=match.binding)
+                validator_result = _validated_result_from_agent_output(
+                    raw_output,
+                    request=request,
+                )
+            except Exception as exc:
+                LOGGER.warning(
+                    "Package-scoped validator agent failed for binding %s request %s",
+                    request.validator_binding_id,
+                    request.request_id,
+                    exc_info=exc,
+                )
+                validator_result = _unresolved_result_for_dispatch_problem(
+                    request,
+                    reason="validator_agent_error",
+                    explanation=f"Validator agent execution failed: {exc}",
+                )
 
         validator_result = _enforce_expected_result_fields(
             validator_result,
@@ -414,6 +416,163 @@ def _unresolved_result_for_dispatch_problem(
     )
 
 
+def preflight_unresolved_validator_result(
+    request: DomainValidationRequest,
+) -> DomainValidatorResultBase | None:
+    """Return deterministic unresolved results for requests that should not run."""
+
+    explanation = _unsupported_phenotype_provider_taxon_explanation(request)
+    if explanation is None:
+        return None
+
+    query = {
+        "ontology_family": request.selected_inputs.get("ontology_family"),
+        "label": request.selected_inputs.get("label"),
+        "name": request.selected_inputs.get("name"),
+        "data_provider": request.selected_inputs.get("data_provider"),
+        "taxon_id": request.selected_inputs.get("taxon_id"),
+        "accepted_prefixes": request.selected_inputs.get("accepted_prefixes"),
+        "active_provider_taxon_ontology_mappings": _mapping_summaries(
+            request.selected_inputs.get("provider_taxon_ontology_mappings")
+        ),
+    }
+    return DomainValidatorResultBase(
+        status="unresolved",
+        request_id=request.request_id,
+        validator_binding_id=request.validator_binding_id,
+        validator_agent=request.validator_agent,
+        target=request.target,
+        resolved_values={},
+        resolved_objects=[],
+        missing_expected_fields=[],
+        candidates=[],
+        lookup_attempts=[
+            {
+                "provider": "domain_validator_dispatch",
+                "method": "unsupported_provider_taxon_mapping",
+                "query": query,
+                "result_count": 0,
+                "outcome": "blocked",
+                "message": explanation,
+            }
+        ],
+        curator_message=explanation,
+        explanation=explanation,
+    )
+
+
+def _unsupported_phenotype_provider_taxon_explanation(
+    request: DomainValidationRequest,
+) -> str | None:
+    selected_inputs = request.selected_inputs
+    if selected_inputs.get("ontology_family") != "phenotype":
+        return None
+    if _present(selected_inputs.get("curie")) or _present(
+        selected_inputs.get("ontology_term_type")
+    ):
+        return None
+    if not (
+        _present(selected_inputs.get("label"))
+        or _present(selected_inputs.get("name"))
+    ):
+        return None
+
+    mappings = selected_inputs.get("provider_taxon_ontology_mappings")
+    if not isinstance(mappings, list) or not mappings:
+        return None
+
+    data_provider = _optional_string(selected_inputs.get("data_provider"))
+    taxon_id = _optional_string(selected_inputs.get("taxon_id"))
+    if _provider_taxon_mapping_matches(
+        mappings,
+        data_provider=data_provider,
+        taxon_id=taxon_id,
+    ):
+        return None
+
+    mapping_summary = _active_mapping_summary_text(mappings)
+    context = (
+        f"data_provider={data_provider or '<missing>'}, "
+        f"taxon_id={taxon_id or '<missing>'}"
+    )
+    return (
+        "Phenotype ontology label lookup is blocked because no active "
+        f"provider/taxon ontology mapping matched {context}. "
+        "The dispatcher will not infer a phenotype ontology term type from "
+        f"accepted prefixes or free text. Active mappings: {mapping_summary}."
+    )
+
+
+def _provider_taxon_mapping_matches(
+    mappings: list[Any],
+    *,
+    data_provider: str | None,
+    taxon_id: str | None,
+) -> bool:
+    if data_provider is None or taxon_id is None:
+        return False
+    expected_provider = data_provider.upper()
+    for mapping in mappings:
+        if not isinstance(mapping, dict):
+            continue
+        mapping_provider = _optional_string(mapping.get("data_provider"))
+        mapping_taxon = _optional_string(mapping.get("taxon_id"))
+        if (
+            mapping_provider is not None
+            and mapping_provider.upper() == expected_provider
+            and mapping_taxon == taxon_id
+        ):
+            return True
+    return False
+
+
+def _mapping_summaries(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    summaries: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        summary = {
+            key: item.get(key)
+            for key in (
+                "data_provider",
+                "taxon_id",
+                "ontology_term_type",
+                "accepted_prefixes",
+            )
+            if item.get(key) is not None
+        }
+        if summary:
+            summaries.append(summary)
+    return summaries
+
+
+def _active_mapping_summary_text(mappings: list[Any]) -> str:
+    summaries = []
+    for mapping in _mapping_summaries(mappings):
+        provider = mapping.get("data_provider") or "<unknown-provider>"
+        taxon = mapping.get("taxon_id") or "<unknown-taxon>"
+        term_type = mapping.get("ontology_term_type") or "<unknown-term-type>"
+        summaries.append(f"{provider}/{taxon}->{term_type}")
+    return ", ".join(summaries) if summaries else "<none>"
+
+
+def _present(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value not in ({}, [])
+
+
+def _optional_string(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    return text or None
+
+
 def _ensure_classifiable_validator_result(
     result: DomainValidatorResultBase,
     *,
@@ -462,6 +621,7 @@ __all__ = [
     "ActiveValidatorDispatchResult",
     "DomainValidatorAgentRunner",
     "dispatch_active_validator_bindings",
+    "preflight_unresolved_validator_result",
     "run_package_scoped_validator_agent_in_worker_thread",
     "run_package_scoped_validator_agent",
     "unresolved_validator_result_for_dispatch_problem",

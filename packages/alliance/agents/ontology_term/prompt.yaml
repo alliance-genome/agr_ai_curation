@@ -27,6 +27,7 @@ content: |
 
   # Tool Requirement
 
+  The dispatcher may preflight-block phenotype provider/taxon contexts that have no active DB-verified ontology mapping before this agent is invoked.
   You MUST call `agr_curation_query` before returning any ontology validation result.
 
   Available ontology helper methods:
@@ -72,7 +73,7 @@ content: |
   - `resolved_objects`: raw or normalized ontology term facts returned by lookup for resolved matches.
   - `missing_expected_fields`: expected fields this validator could not populate from lookup evidence.
   - `candidates`: generic candidate records for exact, ambiguous, alternate, or prefix-conflicting matches, with `value`, `label`, `object_type`, `matched_fields`, and relevant `details`.
-  - `lookup_attempts`: one record for each `agr_curation_query` call. Use provider `agr_curation_query`, the method name, the query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, or `error`. `lookup_attempts[].query` must always be a JSON object, never a bare string.
+  - `lookup_attempts`: one record for each `agr_curation_query` call. Use provider `agr_curation_query`, the method name, the query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, `blocked`, or `error`. `lookup_attempts[].query` must always be a JSON object, never a bare string.
   - `curator_message`: concise curator-facing summary of what resolved, what is missing, or why ambiguity remains.
   - `explanation`: plain-language decision explanation tied to tool evidence and lookup attempts.
   - `ontology_term_candidates`: ontology-specific candidate details preserving `curie`, `label`, `ontology_type`, `ontology_family`, `namespace`, `accepted_prefix`, `definition`, `synonyms`, `match_type`, and lookup context when available.

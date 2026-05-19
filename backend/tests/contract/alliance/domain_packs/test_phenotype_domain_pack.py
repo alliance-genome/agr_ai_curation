@@ -19,11 +19,17 @@ from src.lib.domain_packs.materialization import (
     ValidatorResultMaterializationInput,
     materialize_validator_results_into_envelope,
 )
+from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
 from src.lib.domain_packs.validation_registry import (
     DomainPackValidationRegistry,
     ValidationBindingState,
 )
-from src.schemas.domain_envelope import CuratableObjectStatus, field_path_exists
+from src.schemas.domain_envelope import (
+    CuratableObjectEnvelope,
+    CuratableObjectStatus,
+    DomainEnvelope,
+    field_path_exists,
+)
 from src.schemas.domain_pack_metadata import DomainPackFieldType
 from src.schemas.domain_validator import DomainValidatorResultBase
 
@@ -586,6 +592,77 @@ def test_pending_phenotype_term_without_curie_dispatches_with_context():
             "representative_terms": ["MP:0001569", "MP:0003733"],
         },
     }
+
+
+def test_unsupported_phenotype_provider_taxon_label_lookup_is_blocked_preflight():
+    envelope = DomainEnvelope(
+        envelope_id="phenotype-zfin-env",
+        domain_pack_id=PHENOTYPE_DOMAIN_PACK_ID,
+        objects=[
+            CuratableObjectEnvelope(
+                object_type=PHENOTYPE_TERM_OBJECT_TYPE,
+                object_role="validated_reference",
+                pending_ref_id="phenotype-term-zfin",
+                payload={
+                    "resolution_state": "pending_ontology_resolution",
+                    "curie": None,
+                    "label": "boundary disruptions",
+                    "source_mentions": ["boundary disruptions"],
+                    "ontology_lookup_hint": {
+                        "taxon_id": "NCBITaxon:7955",
+                    },
+                    "export_state": "blocked_pending_ontology_resolution",
+                    "write_blocked_reason": "phenotype term CURIE unresolved",
+                },
+            )
+        ],
+    )
+
+    def _runner(request, *, binding):  # pragma: no cover - must not be called
+        raise AssertionError("unsupported phenotype mapping should preflight-block")
+
+    result = dispatch_active_validator_bindings(
+        envelope,
+        _phenotype_pack(),
+        runner=_runner,
+    )
+
+    assert len(result.validator_results) == 1
+    validator_result = result.validator_results[0]
+    assert validator_result.status == "unresolved"
+    assert validator_result.missing_expected_fields == []
+    assert validator_result.lookup_attempts[0].outcome == "blocked"
+    assert (
+        validator_result.lookup_attempts[0].method
+        == "unsupported_provider_taxon_mapping"
+    )
+    assert validator_result.lookup_attempts[0].query["taxon_id"] == (
+        "NCBITaxon:7955"
+    )
+    assert validator_result.lookup_attempts[0].query[
+        "active_provider_taxon_ontology_mappings"
+    ] == [
+        {
+            "data_provider": "WB",
+            "taxon_id": "NCBITaxon:6239",
+            "ontology_term_type": "WBPhenotypeTerm",
+            "accepted_prefixes": ["WBPhenotype"],
+        },
+        {
+            "data_provider": "MGI",
+            "taxon_id": "NCBITaxon:10090",
+            "ontology_term_type": "MPTerm",
+            "accepted_prefixes": ["MP"],
+        },
+    ]
+    assert "no active provider/taxon ontology mapping matched" in (
+        validator_result.explanation
+    )
+
+    finding = result.envelope.validation_findings[0]
+    assert finding.code == "domain_pack.validator_unresolved"
+    assert finding.details["failure_classification"] == "blocked"
+    assert finding.details["lookup_attempts"][0]["lookup_status"] == "blocked"
 
 
 def test_phenotype_term_curie_remains_optional_fast_path_for_dispatch():

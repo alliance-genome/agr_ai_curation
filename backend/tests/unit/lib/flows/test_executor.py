@@ -1356,6 +1356,146 @@ class TestGetAllAgentToolsStepOrderRuntime:
             }
         ]
 
+    def test_automatic_validation_group_preflight_blocks_unsupported_context(
+        self, monkeypatch
+    ):
+        executor = _executor_module()
+        from src.lib.domain_packs.validation_registry import (
+            ValidationBindingState,
+            ValidatorAgentRef as RegistryValidatorAgentRef,
+            ValidatorBinding,
+            ValidatorBindingMatch,
+        )
+        from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+        from src.schemas.domain_pack_metadata import DomainPackInputSelector
+
+        envelope = DomainEnvelope(
+            envelope_id="env-unsupported-phenotype",
+            domain_pack_id="agr.alliance.phenotype",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="PhenotypeTerm",
+                    pending_ref_id="phenotype-term-1",
+                    payload={
+                        "label": "boundary disruptions",
+                        "ontology_lookup_hint": {
+                            "taxon_id": "NCBITaxon:7955",
+                        },
+                    },
+                )
+            ],
+        )
+        binding = ValidatorBinding(
+            binding_id="phenotype_term_ontology_validator",
+            state=ValidationBindingState.ACTIVE,
+            source_scope="object",
+            source_object_type="PhenotypeTerm",
+            validator_agent=RegistryValidatorAgentRef(
+                package_id="agr.alliance",
+                agent_id="ontology_term_validation",
+            ),
+            object_types=("PhenotypeTerm",),
+            input_fields={
+                "label": DomainPackInputSelector(
+                    source="payload",
+                    path="label",
+                    required=False,
+                ),
+                "data_provider": DomainPackInputSelector(
+                    source="payload",
+                    path="ontology_lookup_hint.data_provider",
+                    required=False,
+                ),
+                "taxon_id": DomainPackInputSelector(
+                    source="payload",
+                    path="ontology_lookup_hint.taxon_id",
+                    required=False,
+                ),
+                "ontology_family": DomainPackInputSelector(
+                    source="literal",
+                    value="phenotype",
+                ),
+                "accepted_prefixes": DomainPackInputSelector(
+                    source="literal",
+                    value=["MP", "WBPhenotype"],
+                ),
+                "provider_taxon_ontology_mappings": DomainPackInputSelector(
+                    source="literal",
+                    value=[
+                        {
+                            "data_provider": "WB",
+                            "taxon_id": "NCBITaxon:6239",
+                            "ontology_term_type": "WBPhenotypeTerm",
+                            "accepted_prefixes": ["WBPhenotype"],
+                        },
+                        {
+                            "data_provider": "MGI",
+                            "taxon_id": "NCBITaxon:10090",
+                            "ontology_term_type": "MPTerm",
+                            "accepted_prefixes": ["MP"],
+                        },
+                    ],
+                ),
+            },
+            expected_result_fields={"curie": "curie", "label": "label"},
+        )
+        match = ValidatorBindingMatch(
+            binding=binding,
+            envelope=envelope,
+            object_envelope=envelope.objects[0],
+        )
+
+        class _Registry:
+            def match_bindings(self, _envelope, *, states):
+                assert states == [ValidationBindingState.ACTIVE]
+                return (match,)
+
+        def _unexpected_package_validator(*_args, **_kwargs):  # pragma: no cover
+            raise AssertionError("unsupported phenotype context should preflight-block")
+
+        monkeypatch.setattr(
+            executor,
+            "run_package_scoped_validator_agent",
+            _unexpected_package_validator,
+        )
+
+        materialization_inputs, selector_findings, metadata = asyncio.run(
+            executor._collect_flow_validator_materialization_inputs(
+                source_envelope=envelope,
+                source_envelope_revision=2,
+                registry=_Registry(),
+                groups=[
+                    {
+                        "group_id": "automatic-phenotype-lookup",
+                        "state": "automatic",
+                        "binding_id": "phenotype_term_ontology_validator",
+                    }
+                ],
+                flow=_make_flow([]),
+                agent_context={"user_id": "curator-1"},
+            )
+        )
+
+        assert selector_findings == []
+        assert len(materialization_inputs) == 1
+        validator_result = materialization_inputs[0].result
+        assert validator_result.status == "unresolved"
+        assert validator_result.lookup_attempts[0].outcome == "blocked"
+        assert (
+            validator_result.lookup_attempts[0].method
+            == "unsupported_provider_taxon_mapping"
+        )
+        assert metadata == [
+            {
+                "group_id": "automatic-phenotype-lookup",
+                "state": "automatic",
+                "validator_binding_id": "phenotype_term_ontology_validator",
+                "status": "unresolved",
+                "request_id": validator_result.request_id,
+                "missing_expected_fields": [],
+            }
+        ]
+
     def test_automatic_validation_group_skips_non_dispatch_binding(
         self, monkeypatch
     ):

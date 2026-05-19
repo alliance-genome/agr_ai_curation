@@ -896,7 +896,7 @@ metadata:
         - data_provider: HGNC
           reason: Human phenotype mapping to HPO is not enabled because HPO term type/tool coverage is not verified in this release.
         - data_provider: ZFIN
-          reason: Zebrafish ZP mapping is not enabled until ZP ontology term type and fixture coverage are verified.
+          reason: Zebrafish ZP mapping is not enabled until ZP ontology term type and fixture coverage are verified; 2026-05-19 live curation DB inspection found no ZP CURIE rows or ZP ontologytermtype rows.
         - data_provider: FB
           reason: Fly FBcv phenotype mapping is not enabled until DB/tool/test grounding is verified.
         - data_provider: SGD

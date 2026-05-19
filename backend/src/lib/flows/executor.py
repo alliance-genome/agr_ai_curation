@@ -68,6 +68,7 @@ from src.lib.domain_packs.validation_registry import (
 )
 from src.lib.domain_packs.validation_findings import append_validation_findings_to_envelope
 from src.lib.domain_packs.validator_dispatch import (
+    preflight_unresolved_validator_result,
     run_package_scoped_validator_agent,
     unresolved_validator_result_for_dispatch_problem,
     validator_result_from_agent_output,
@@ -947,42 +948,48 @@ async def _collect_flow_validator_materialization_inputs(
             request = selector_result.request
             if state in {"replaced", "supplemental"} and validator_node is not None:
                 request = _request_for_flow_validator_node(request, validator_node)
-            try:
-                if state in {"replaced", "supplemental"}:
-                    if validator_node is None:
-                        raise ValueError(
-                            "custom validator node is missing from the flow definition"
+            validator_result = (
+                None
+                if state in {"replaced", "supplemental"}
+                else preflight_unresolved_validator_result(request)
+            )
+            if validator_result is None:
+                try:
+                    if state in {"replaced", "supplemental"}:
+                        if validator_node is None:
+                            raise ValueError(
+                                "custom validator node is missing from the flow definition"
+                            )
+                        raw_output = await _run_custom_flow_validator_agent(
+                            request,
+                            binding_match=match,
+                            validator_node=validator_node,
+                            agent_context=agent_context,
+                            source_envelope_id=source_envelope.envelope_id,
+                            source_envelope_revision=source_envelope_revision,
                         )
-                    raw_output = await _run_custom_flow_validator_agent(
-                        request,
-                        binding_match=match,
-                        validator_node=validator_node,
-                        agent_context=agent_context,
-                        source_envelope_id=source_envelope.envelope_id,
-                        source_envelope_revision=source_envelope_revision,
+                    else:
+                        raw_output = await asyncio.to_thread(
+                            run_package_scoped_validator_agent,
+                            request,
+                            binding=match.binding,
+                        )
+                    validator_result = validator_result_from_agent_output(
+                        raw_output,
+                        request=request,
                     )
-                else:
-                    raw_output = await asyncio.to_thread(
-                        run_package_scoped_validator_agent,
-                        request,
-                        binding=match.binding,
+                except Exception as exc:
+                    logger.warning(
+                        "[Flow Executor] Validator group '%s' failed for binding %s",
+                        group.get("group_id"),
+                        binding_id,
+                        exc_info=exc,
                     )
-                validator_result = validator_result_from_agent_output(
-                    raw_output,
-                    request=request,
-                )
-            except Exception as exc:
-                logger.warning(
-                    "[Flow Executor] Validator group '%s' failed for binding %s",
-                    group.get("group_id"),
-                    binding_id,
-                    exc_info=exc,
-                )
-                validator_result = unresolved_validator_result_for_dispatch_problem(
-                    request,
-                    reason="validator_agent_error",
-                    explanation=f"Validator agent execution failed: {exc}",
-                )
+                    validator_result = unresolved_validator_result_for_dispatch_problem(
+                        request,
+                        reason="validator_agent_error",
+                        explanation=f"Validator agent execution failed: {exc}",
+                    )
 
             materialization_inputs.append(
                 ValidatorResultMaterializationInput(
