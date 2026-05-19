@@ -7,6 +7,23 @@ Runner: `scripts/testing/domain_envelope_pdf_corpus.py`
 
 These trials exercised real uploaded PDFs through the live document upload, PDFX processing, Agent Studio flow execution, domain-envelope extraction, and automatic validator attachment metadata.
 
+## 2026-05-19 Focused Gene Rerun After Validator Dispatch Fix
+
+After `950fbcec`, I rebuilt the main sandbox and reran the focused gene trial against backend port `8900`.
+
+| Domain | Document ID | Flow ID | Flow run ID | Envelope ID | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| Gene | `9e7328dc-120a-49c7-bb6f-21d3a4ace3c0` | `915ffce1-7dcf-4693-9e01-f7e18ef8d6be` | `49e7bdbe-c2dc-4b2c-b018-3dfd3fedad78` | `extraction-result:chat-runtime:52d10ced-31c7-42a7-b6d0-30e5700ce2ef` | Passed with `total_evidence_records: 1`. The supervisor answer included `FB:FBgn0259685`, and the persisted envelope materialized `primary_external_id: FB:FBgn0259685`, `gene_symbol: crb`, and `taxon: NCBITaxon:7227`. |
+
+Persisted envelope validation findings:
+
+- The envelope had two resolved `domain_pack.validator_resolved` findings for `alliance_gene_reference_lookup`. Both used `alliance_curation_db` / `search_genes`, reported successful lookup attempts, and resolved Crumbs to `FB:FBgn0259685`.
+- The envelope contained no `validator_agent_error`, no `invalid_schema`, and no unresolved finding for this run.
+- Backend logs for the rerun contained no `validator_agent_error`, `run_sync`, `invalid_schema`, `Package-scoped validator agent failed`, or `AgentRunner.run_sync` messages.
+- The duplicate resolved finding is still visible and should be cleaned up separately if the flow-level automatic validation pass should not re-run after chat-runtime validation already materialized the same binding.
+
+The focused rerun updated `docs/design/pdf-corpus-trials/gene_drosophila_crb_rhabdomere.json`. The generated `summary.json` was not retained because the focused run overwrote the prior multi-trial summary with a one-trial summary.
+
 ## 2026-05-19 Focused Rerun After Evidence Propagation Fixes
 
 After `1501e3bb` and `e8fe5137`, I reran the gene and allele trials against the rebuilt main sandbox at backend port `8900`.
