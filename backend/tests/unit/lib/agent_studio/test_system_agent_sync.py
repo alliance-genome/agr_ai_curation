@@ -290,7 +290,12 @@ def test_sync_skips_agent_with_missing_prompt(monkeypatch):
             "gene_expression",
             "gene_expression_extraction",
             "GeneExpressionEnvelope",
-            ["search_document", "read_section", "read_subsection", "agr_curation_query"],
+            [
+                "search_document",
+                "read_section",
+                "read_subsection",
+                "agr_species_context_lookup",
+            ],
         ),
     ],
 )

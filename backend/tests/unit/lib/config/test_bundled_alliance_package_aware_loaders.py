@@ -80,7 +80,7 @@ def test_bundled_alliance_gene_expression_declares_record_evidence(monkeypatch):
         "read_subsection",
         "record_evidence",
         "get_agent_contract",
-        "agr_curation_query",
+        "agr_species_context_lookup",
     ]
 
 

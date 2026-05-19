@@ -47,10 +47,21 @@ def _load_gene_expression_schema():
 
 
 def test_gene_expression_prompt_includes_daniela_policy_gates():
-    prompt_path = _load_gene_expression_source().prompt_yaml
+    source = _load_gene_expression_source()
+    prompt_path = source.prompt_yaml
     assert prompt_path is not None
     data = yaml.safe_load(prompt_path.read_text(encoding="utf-8"))
     content = str(data.get("content") or "")
+    agent_data = yaml.safe_load(source.agent_yaml.read_text(encoding="utf-8"))
+
+    assert agent_data["tools"] == [
+        "search_document",
+        "read_section",
+        "read_subsection",
+        "record_evidence",
+        "get_agent_contract",
+        "agr_species_context_lookup",
+    ]
 
     assert "Return JSON only, matching GeneExpressionEnvelope." in content
     assert "previously_reported" in content
@@ -74,6 +85,10 @@ def test_gene_expression_prompt_includes_daniela_policy_gates():
     assert "repair_mode" not in content
     assert "metadata.repair_notes" not in content
     assert "Do not emit top-level `items[]`" in content
+    assert "agr_species_context_lookup" in content
+    assert "Do not perform extraction-time relation vocabulary lookup" in content
+    assert "expression ontology lookup" in content
+    assert "agr_curation_query" not in content
 
 
 def test_gene_expression_wb_overlay_includes_wormbase_examples():
@@ -96,6 +111,7 @@ def test_gene_expression_wb_overlay_includes_wormbase_examples():
     assert "life_stage_label" not in content
     assert "is_negative" not in content
     assert "negated: true" in content
+    assert "agr_curation_query" not in content
 
 
 def test_gene_expression_zfin_overlay_includes_zebrafish_curation_rules():

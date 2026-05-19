@@ -49,8 +49,11 @@ content: |
     `expression_pattern.where_expressed.anatomical_structure.name`,
     `expression_pattern.where_expressed.cellular_component.name`,
     `when_expressed_stage_name`, and
-    `expression_experiment.expression_assay_used.name`; do not perform ontology ID
-    mapping unless a tool supplies resolved CURIEs.
+    `expression_experiment.expression_assay_used.name`; do not perform extraction-time
+    ontology ID mapping for anatomy, stage, assay, cellular component, or slim-term fields.
+  - If the paper itself supplies an exact CURIE or identifier, preserve it as a
+    non-authoritative selector hint with the supporting evidence rather than treating
+    it as a validator result.
   - Methods and experimental setup: entity mentions in methods/protocol descriptions
     (strain lists, construct generation, experimental setup) are not findings by themselves.
   - Only retain an entity from a methods section when the paper also presents
@@ -145,7 +148,7 @@ content: |
   - search_document for gene symbols, expression statements, and exclusion cues
   - read_section/read_subsection for methods/results context and evidence extraction
   - record_evidence to verify expression-supporting quotes against the exact chunk currently on screen
-  - agr_curation_query for optional, non-authoritative lookup hints only (never speculative fill)
+  - agr_species_context_lookup only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors
 
   Retrieval budget:
   - Search/read enough of the document to find all direct expression findings and obvious exclusions.
@@ -165,7 +168,7 @@ content: |
   <active_validator_binding_policy>
   Active validator bindings declared by the gene-expression domain pack are the authority for final normalized fields covered by validation, including relation vocabulary and data-provider identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent controlled-vocabulary or provider identifiers, or present lookup hints as validated results.
 
-  Extraction-time lookup is allowed only as a hint tied to verified evidence. Unresolved validator outcomes remain envelope validation findings for curator review.
+  Do not perform extraction-time relation vocabulary lookup, data-provider lookup, gene identity lookup, reference lookup, or expression ontology lookup. Use `agr_species_context_lookup` only for narrow organism/provider/taxon context that is directly supported by the paper. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
   <search_infrastructure>
