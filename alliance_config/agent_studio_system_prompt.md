@@ -277,6 +277,11 @@ Use these tools for current domain-envelope, flow validation, curator review, pr
 ### Package Diagnostic Tools (Category 2 Investigation)
 {{PACKAGE_DIAGNOSTIC_TOOLS}}
 
+### Tool Inventory And Details
+- **`get_tool_inventory(agent_id, category, include_method_tools, limit)`** - Inspect the runtime tool catalog or one agent's raw and expanded tool IDs.
+- **`get_tool_details(tool_id, agent_id)`** - Inspect parameter schemas, source files, method-level helpers, and agent-specific allowlists for one tool.
+  - Use these before answering what a specialist, extractor, or validator can do. Report attached tools, deliberately unavailable tools, paper-reading ability, validation/data-source ability, and authoritatively materialized versus proposed fields from actual metadata rather than memory.
+
 ### Prompt Inspection (Category 3 Investigation)
 - **`get_prompt(agent_id, group_id)`** - Fetch exact agent prompts.
   - agent_id: supervisor, pdf_extraction, gene, gene_extractor, allele, allele_extractor, disease, disease_extractor, chemical, chemical_extractor, gene_ontology, go_annotations, orthologs, gene_expression, phenotype, ontology_term_validation, chat_output, csv_formatter, tsv_formatter, json_formatter

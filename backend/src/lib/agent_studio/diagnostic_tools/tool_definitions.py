@@ -351,6 +351,196 @@ def _create_read_source_file_handler():
     return handler
 
 
+def _bounded_inventory_limit(value: Any, *, default: int = 100, maximum: int = 250) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(parsed, maximum))
+
+
+def _tool_inventory_item(tool_id: str, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    methods = metadata.get("methods")
+    agent_methods = metadata.get("agent_methods")
+    return {
+        "tool_id": tool_id,
+        "name": metadata.get("name") or tool_id,
+        "description": metadata.get("description"),
+        "category": metadata.get("category"),
+        "source_file": metadata.get("source_file"),
+        "parent_tool": metadata.get("parent_tool"),
+        "method_count": len(methods) if isinstance(methods, dict) else 0,
+        "agent_method_agents": sorted(agent_methods)
+        if isinstance(agent_methods, dict)
+        else [],
+    }
+
+
+def _category_counts(tools: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for metadata in tools.values():
+        category = str(metadata.get("category") or "uncategorized")
+        counts[category] = counts.get(category, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _create_get_tool_inventory_handler():
+    """Create handler for read-only tool inventory inspection."""
+    from src.lib.agent_studio import catalog_service
+
+    def handler(
+        agent_id: Optional[str] = None,
+        category: Optional[str] = None,
+        include_method_tools: bool = False,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        normalized_agent_id = str(agent_id).strip() if agent_id else None
+        normalized_category = str(category).strip() if category else None
+        bounded_limit = _bounded_inventory_limit(limit)
+
+        if normalized_agent_id:
+            agent_entry = catalog_service.AGENT_REGISTRY.get(normalized_agent_id)
+            if agent_entry is None:
+                return {
+                    "success": False,
+                    "error": f"Agent {normalized_agent_id} was not found.",
+                }
+
+            raw_tool_ids = [
+                str(tool_id)
+                for tool_id in agent_entry.get("tools", [])
+                if str(tool_id).strip()
+            ]
+            expanded_tool_ids = catalog_service.expand_tools_for_agent(
+                normalized_agent_id,
+                raw_tool_ids,
+            )
+            tool_items = []
+            for tool_id in expanded_tool_ids:
+                metadata = catalog_service.get_tool_for_agent(
+                    tool_id,
+                    normalized_agent_id,
+                )
+                if metadata is None:
+                    tool_items.append(
+                        {
+                            "tool_id": tool_id,
+                            "name": tool_id,
+                            "description": None,
+                            "category": None,
+                            "source_file": None,
+                            "parent_tool": None,
+                            "method_count": 0,
+                            "agent_method_agents": [],
+                        }
+                    )
+                    continue
+                if normalized_category and metadata.get("category") != normalized_category:
+                    continue
+                tool_items.append(_tool_inventory_item(tool_id, metadata))
+
+            return {
+                "success": True,
+                "agent_id": normalized_agent_id,
+                "agent_name": agent_entry.get("name"),
+                "raw_tool_ids": raw_tool_ids,
+                "expanded_tool_ids": expanded_tool_ids,
+                "total_tools": len(tool_items),
+                "tools": tool_items[:bounded_limit],
+                "truncated": len(tool_items) > bounded_limit,
+                "filters": {
+                    "category": normalized_category,
+                    "include_method_tools": include_method_tools,
+                    "limit": bounded_limit,
+                },
+                "instruction": (
+                    "Use get_tool_details(tool_id, agent_id) for parameter schemas, "
+                    "method details, and agent-specific multi-method context."
+                ),
+            }
+
+        all_tools = (
+            catalog_service.get_all_tools()
+            if include_method_tools
+            else catalog_service.get_tool_registry()
+        )
+        filtered_tools = {
+            tool_id: metadata
+            for tool_id, metadata in sorted(all_tools.items())
+            if not normalized_category or metadata.get("category") == normalized_category
+        }
+        tool_items = [
+            _tool_inventory_item(tool_id, metadata)
+            for tool_id, metadata in filtered_tools.items()
+        ]
+        return {
+            "success": True,
+            "agent_id": None,
+            "total_tools": len(tool_items),
+            "categories": _category_counts(filtered_tools),
+            "tools": tool_items[:bounded_limit],
+            "truncated": len(tool_items) > bounded_limit,
+            "filters": {
+                "category": normalized_category,
+                "include_method_tools": include_method_tools,
+                "limit": bounded_limit,
+            },
+            "instruction": (
+                "Use agent_id to inspect one agent's attached tools, or "
+                "get_tool_details(tool_id, agent_id) for full metadata."
+            ),
+        }
+
+    return handler
+
+
+def _create_get_tool_details_handler():
+    """Create handler for read-only tool detail inspection."""
+    from src.lib.agent_studio import catalog_service
+
+    def handler(
+        tool_id: str,
+        agent_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized_tool_id = str(tool_id).strip()
+        normalized_agent_id = str(agent_id).strip() if agent_id else None
+        if not normalized_tool_id:
+            return {"success": False, "error": "tool_id is required."}
+
+        if normalized_agent_id:
+            metadata = catalog_service.get_tool_for_agent(
+                normalized_tool_id,
+                normalized_agent_id,
+            )
+        else:
+            metadata = catalog_service.get_tool_details(normalized_tool_id)
+
+        if metadata is None:
+            agent_suffix = (
+                f" for agent {normalized_agent_id}"
+                if normalized_agent_id
+                else ""
+            )
+            return {
+                "success": False,
+                "error": f"Tool {normalized_tool_id}{agent_suffix} was not found.",
+            }
+
+        return {
+            "success": True,
+            "tool_id": normalized_tool_id,
+            "agent_id": normalized_agent_id,
+            "tool": metadata,
+            "instruction": (
+                "Use tool.documentation.parameters for call shape, methods or "
+                "relevant_methods for multi-method tools, and agent_context for "
+                "agent-specific allowlists."
+            ),
+        }
+
+    return handler
+
+
 def register_all_tools(registry: DiagnosticToolRegistry) -> None:
     """
     Register all diagnostic tools with the registry.
@@ -611,6 +801,77 @@ Some agents have organism-specific rules. Use these group aliases:
         tags=["prompt", "agent", "debugging", "mod"]
     )
     logger.debug("Registered: get_prompt")
+
+    # -------------------------------------------------------------------------
+    # 6.5. Tool Inventory / Details
+    # -------------------------------------------------------------------------
+    registry.register(
+        name="get_tool_inventory",
+        description="""Inspect the runtime tool catalog in read-only mode.
+
+Use this when a curator asks what an agent can do, what tools are attached to a
+specialist or validator, or which package tools/method-level helpers exist.
+Pass agent_id to see one agent's raw and expanded tool IDs; omit it to list the
+global catalog. Use get_tool_details for full schemas and method metadata.""",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "agent_id": {
+                    "type": "string",
+                    "description": "Optional agent or validator-agent ID, for example gene_extractor, gene_validation, disease_validation, or ontology_term_validation.",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Optional exact category filter from the tool catalog.",
+                },
+                "include_method_tools": {
+                    "type": "boolean",
+                    "description": "Include method-level tool entries such as search_genes in addition to concrete runtime tool IDs.",
+                    "default": False,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum tools to return (default: 100, max: 250).",
+                    "default": 100,
+                    "minimum": 1,
+                    "maximum": 250,
+                },
+            },
+            "required": [],
+        },
+        handler=_create_get_tool_inventory_handler(),
+        category="tooling",
+        tags=["tools", "inventory", "agent", "debugging"],
+    )
+    logger.debug("Registered: get_tool_inventory")
+
+    registry.register(
+        name="get_tool_details",
+        description="""Inspect full runtime metadata for one tool or method-level helper.
+
+Use this after get_tool_inventory when you need parameters, source file,
+documentation, available methods, or agent-specific method allowlists. Pass
+agent_id to show relevant_methods and agent_context for multi-method package
+tools.""",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tool_id": {
+                    "type": "string",
+                    "description": "Runtime tool ID or method-level helper ID, for example agr_curation_query, search_genes, record_evidence, or chebi_api_call.",
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "Optional agent or validator-agent ID used to include agent-specific method context.",
+                },
+            },
+            "required": ["tool_id"],
+        },
+        handler=_create_get_tool_details_handler(),
+        category="tooling",
+        tags=["tools", "details", "agent", "debugging"],
+    )
+    logger.debug("Registered: get_tool_details")
 
     # -------------------------------------------------------------------------
     # 7. Codebase Search Tool

@@ -590,6 +590,10 @@ DOMAIN_ENVELOPE_TOOLS = {
     "get_domain_envelope_review_rows",
     "get_export_submission_readiness",
 }
+TOOL_METADATA_TOOLS = {
+    "get_tool_inventory",
+    "get_tool_details",
+}
 WORKSHOP_TOOLS = {
     "refresh_workshop_prompt",
     "update_workshop_prompt_draft",
@@ -676,7 +680,7 @@ def is_tool_allowed_for_context(tool_name: str, context: Optional[ChatContext]) 
     if tool_name in AGENTS_ONLY_DIAGNOSTIC_TOOLS or tool_name in _package_agent_only_diagnostic_tools():
         return active_tab == "agents"
 
-    if tool_name == "get_prompt":
+    if tool_name == "get_prompt" or tool_name in TOOL_METADATA_TOOLS:
         return active_tab in {"agents", "flows", "agent_workshop"}
 
     if tool_name in TRACE_TOOLS:

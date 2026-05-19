@@ -22,8 +22,12 @@ def test_get_all_opus_tools_includes_domain_envelope_inspection_tools():
     tools_by_name = {tool.get("name"): tool for tool in tools}
 
     assert DOMAIN_TOOL_NAMES.issubset(tools_by_name)
+    assert {"get_tool_inventory", "get_tool_details"}.issubset(tools_by_name)
     assert tools_by_name["get_domain_envelope_state"]["input_schema"]["required"] == [
         "envelope_id"
+    ]
+    assert tools_by_name["get_tool_details"]["input_schema"]["required"] == [
+        "tool_id"
     ]
     assert tools_by_name["get_export_submission_readiness"]["input_schema"]["required"] == [
         "session_id"

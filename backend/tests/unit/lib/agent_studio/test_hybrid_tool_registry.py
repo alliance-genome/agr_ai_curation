@@ -27,6 +27,46 @@ def test_get_diagnostic_registry_includes_codebase_tools():
 
     assert registry.has_tool("search_codebase")
     assert registry.has_tool("read_source_file")
+    assert registry.has_tool("get_tool_inventory")
+    assert registry.has_tool("get_tool_details")
+
+
+def test_tool_inventory_diagnostic_reports_agent_attached_tools():
+    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry, reset_registry
+
+    reset_registry()
+    registry = get_diagnostic_tools_registry()
+
+    inventory_tool = registry.get_tool("get_tool_inventory")
+    assert inventory_tool is not None
+    inventory = inventory_tool.handler(agent_id="disease_validation")
+
+    assert inventory["success"] is True
+    assert inventory["agent_id"] == "disease_validation"
+    assert inventory["raw_tool_ids"] == ["get_agent_contract", "agr_curation_query"]
+    assert "curation_db_sql" not in inventory["expanded_tool_ids"]
+    assert {
+        item["tool_id"] for item in inventory["tools"]
+    } == {"get_agent_contract", "agr_curation_query"}
+
+
+def test_tool_details_diagnostic_reports_agent_specific_metadata():
+    from src.lib.agent_studio.diagnostic_tools import get_diagnostic_tools_registry, reset_registry
+
+    reset_registry()
+    registry = get_diagnostic_tools_registry()
+
+    details_tool = registry.get_tool("get_tool_details")
+    assert details_tool is not None
+    result = details_tool.handler(
+        tool_id="agr_curation_query",
+        agent_id="disease_validation",
+    )
+
+    assert result["success"] is True
+    assert result["tool_id"] == "agr_curation_query"
+    assert result["agent_id"] == "disease_validation"
+    assert result["tool"]["name"]
 
 
 def test_get_tool_registry_has_description():

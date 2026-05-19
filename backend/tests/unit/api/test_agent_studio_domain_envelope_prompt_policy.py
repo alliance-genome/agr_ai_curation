@@ -156,6 +156,8 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "get_domain_envelope_state" in prompt
     assert "get_domain_pack_validation_plan" in prompt
     assert "get_export_submission_readiness" in prompt
+    assert "get_tool_inventory" in prompt
+    assert "get_tool_details" in prompt
     assert "`lookup_attempts` is an audit trail" in prompt
     assert "`normalized_payload`" in prompt
     assert "are not semantic truth for new domain-envelope runs" in prompt
@@ -175,6 +177,7 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "tools deliberately unavailable" in prompt
     assert "what fields it proposes or preserves as hints" in prompt
     assert "what fields it materializes or validates authoritatively" in prompt
+    assert "what a specialist, extractor, or validator can do" in prompt
 
 
 def test_agent_studio_system_prompt_canonical_and_packaged_copies_match():
