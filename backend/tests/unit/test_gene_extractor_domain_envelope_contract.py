@@ -225,6 +225,70 @@ def test_gene_extractor_schema_requires_payload_metadata_evidence_alignment():
         _gene_extractor_schema().model_validate(payload)
 
 
+def test_gene_extractor_schema_rejects_unresolved_zfin_drug_like_mentions():
+    payload = _valid_gene_extractor_payload()
+    obj = payload["curatable_objects"][0]
+    obj["pending_ref_id"] = "gene-mention-evidence-sb225002"
+    obj["payload"].update(
+        {
+            "mention": "SB225002",
+            "species": "Danio rerio",
+            "taxon_hint": "NCBITaxon:7955",
+            "data_provider_hint": "ZFIN",
+            "proposed_primary_external_id": None,
+            "proposed_gene_symbol": None,
+            "proposed_taxon": "NCBITaxon:7955",
+            "evidence_record_id": "ev-sb225002",
+            "verified_quote": (
+                "SB225002 caused boundary disruptions restricted to the mid-trunk segments."
+            ),
+            "chunk_id": "chunk-sb225002",
+        }
+    )
+    obj["evidence_record_ids"] = ["ev-sb225002"]
+    payload["metadata"]["raw_mentions"][0] = {
+        "mention": "SB225002",
+        "entity_type": "gene",
+        "evidence_record_ids": ["ev-sb225002"],
+    }
+    payload["metadata"]["evidence_records"][0].update(
+        {
+            "evidence_record_id": "ev-sb225002",
+            "entity": "SB225002",
+            "verified_quote": (
+                "SB225002 caused boundary disruptions restricted to the mid-trunk segments."
+            ),
+            "section": "Results",
+            "chunk_id": "chunk-sb225002",
+        }
+    )
+
+    with pytest.raises(ValidationError, match="drug-like compound codes"):
+        _gene_extractor_schema().model_validate(payload)
+
+
+def test_gene_extractor_schema_accepts_uppercase_zfin_mention_with_gene_hint():
+    payload = _valid_gene_extractor_payload()
+    obj = payload["curatable_objects"][0]
+    obj["payload"].update(
+        {
+            "mention": "HER1",
+            "species": "Danio rerio",
+            "taxon_hint": "NCBITaxon:7955",
+            "data_provider_hint": "ZFIN",
+            "proposed_primary_external_id": None,
+            "proposed_gene_symbol": "her1",
+            "proposed_taxon": "NCBITaxon:7955",
+        }
+    )
+    payload["metadata"]["raw_mentions"][0]["mention"] = "HER1"
+    payload["metadata"]["evidence_records"][0]["entity"] = "HER1"
+
+    envelope = _gene_extractor_schema().model_validate(payload)
+
+    assert envelope.curatable_objects[0].payload.proposed_gene_symbol == "her1"
+
+
 @pytest.mark.parametrize(
     ("location", "field_name", "value"),
     (

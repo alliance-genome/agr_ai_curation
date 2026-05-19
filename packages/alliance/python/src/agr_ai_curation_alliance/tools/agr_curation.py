@@ -523,6 +523,16 @@ def _normalize_allele_symbol_for_db(symbol: str) -> List[str]:
         # Also try without any brackets (concatenated)
         variants.append(f"{gene}{allele}{suffix}")
 
+    # Convert FlyBase bracket notation to the AGR DB's HTML superscript storage form:
+    # N[fa-g] -> N<sup>fa-g</sup>.
+    bracket_match = re.match(r'^([A-Za-z0-9]+)\[([^\]]+)\](.*)$', symbol)
+    if bracket_match:
+        gene = bracket_match.group(1)
+        allele = bracket_match.group(2)
+        suffix = bracket_match.group(3)
+        variants.append(f"{gene}<sup>{allele}</sup>{suffix}")
+        variants.append(f"{gene}{allele}{suffix}")
+
     # Convert flattened FlyBase superscript notation from PDF text:
     # "N fa-g" -> "N[fa-g]" / "N<sup>fa-g</sup>" / "Nfa-g".
     # Require a hyphenated right-hand allele token so generic two-word phrases
@@ -537,6 +547,20 @@ def _normalize_allele_symbol_for_db(symbol: str) -> List[str]:
         variants.append(f"{gene}[{allele}]")
         variants.append(f"{gene}<sup>{allele}</sup>")
         variants.append(f"{gene}{allele}")
+
+    # Some PDF/model paths collapse FlyBase superscript notation without the
+    # whitespace ("N fa-g" -> "Nfa-g"). Keep this conservative: only split a
+    # single uppercase gene symbol followed by a hyphenated allele designation.
+    collapsed_flybase_match = re.match(
+        r"^([A-Z])([A-Za-z0-9][A-Za-z0-9_.:-]*-[A-Za-z0-9_.:-]*)$",
+        symbol.strip(),
+    )
+    if collapsed_flybase_match:
+        gene = collapsed_flybase_match.group(1)
+        allele = collapsed_flybase_match.group(2)
+        variants.append(f"{gene}[{allele}]")
+        variants.append(f"{gene}<sup>{allele}</sup>")
+        variants.append(f"{gene} {allele}")
 
     return list(dict.fromkeys(variants))
 

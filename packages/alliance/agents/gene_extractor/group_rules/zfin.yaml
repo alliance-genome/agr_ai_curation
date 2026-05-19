@@ -9,6 +9,8 @@ content: |
   ### Common-word gene disambiguation
   - Zebrafish gene names are less commonly English words, but short lowercase symbols need species context.
   - Verify that lowercase gene-like strings in a zebrafish paper are actual gene mentions and not abbreviations.
+  - Do not retain uppercase alphanumeric treatment or compound codes such as `SB225002` as zebrafish genes. If a paper mentions such a code as a drug, chemical treatment, reagent, screen compound, or phenotype trigger, exclude it with reason_code: `unsupported_entity_type`.
+  - If a paper writes a real zebrafish gene in uppercase or mixed case, retain it only when the context explicitly supports a gene and include the lowercase ZFIN symbol as `payload.proposed_gene_symbol` or a paper/tool-supported identifier as `payload.proposed_primary_external_id`.
 
   ### Multi-species disambiguation
   - Zebrafish p53 ortholog is tp53 (lowercase, NOT TP53 which is human, nor Trp53 which is mouse).

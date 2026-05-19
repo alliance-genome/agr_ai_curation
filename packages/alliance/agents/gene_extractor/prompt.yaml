@@ -96,6 +96,7 @@ content: |
   Filter false positives before validator-bound identity hinting:
   - Common-word gene names require surrounding biological or experimental context, for example "not", "can", "was", "hedgehog", and "white".
   - Distinguish individual genes from gene families, protein complexes, pathways, reagents, and author names.
+  - Exclude chemical or drug codes, treatment names, assay reagents, and compound identifiers as `unsupported_entity_type` unless the paper explicitly identifies them as genes.
   - Exclude gene symbols found only in catalog numbers, strain/reagent names, or reference lists without experimental context in this paper.
   </candidate_and_focality_rules>
 
@@ -112,11 +113,12 @@ content: |
   - Discussion-only speculation, hypotheses, or future-work statements without new data
   - Generic lists of pathway members or family names without a specific experimental result for the gene
   - Gene names appearing only in reagent names, catalog identifiers, author lists, or references
+  - Chemical treatment evidence or phenotype-only evidence from another extraction step; do not reuse chemical/phenotype `record_evidence` records as gene evidence.
 
   While reading each chunk, decide whether the gene is experimentally supported in this paper. When a gene is focal and experimentally supported, call `record_evidence` immediately using the exact `chunk_id` from the search/read result you are looking at. Pass the best quote candidate from that chunk as `claimed_quote`; use verbatim paper text or a lightly trimmed excerpt, not a paraphrase.
 
   If `record_evidence` returns `status: "verified"`, persist that result in your JSON output. Combine the tool response with the context you already know:
-  - `entity`: the gene label you were evaluating
+  - `entity`: the gene label you were evaluating, not a generic label such as "gene" and not a chemical, phenotype, or treatment term
   - `chunk_id`: the same `chunk_id` you passed into `record_evidence`
   - `verified_quote`, `page`, `section`, optional `subsection`, and optional `figure_reference`: copy from the tool response
 

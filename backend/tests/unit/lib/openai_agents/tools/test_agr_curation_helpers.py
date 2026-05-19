@@ -60,6 +60,17 @@ def test_normalization_helpers(monkeypatch):
         "N<sup>fa-g</sup>",
         "Nfa-g",
     ]
+    assert agr_curation._normalize_allele_symbol_for_db("N[fa-g]") == [
+        "N[fa-g]",
+        "N<sup>fa-g</sup>",
+        "Nfa-g",
+    ]
+    assert agr_curation._normalize_allele_symbol_for_db("Nfa-g") == [
+        "Nfa-g",
+        "N[fa-g]",
+        "N<sup>fa-g</sup>",
+        "N fa-g",
+    ]
     assert agr_curation._normalize_allele_symbol_for_db("plain_symbol") == ["plain_symbol"]
 
     monkeypatch.setattr(agr_curation, "DEFAULT_LIMIT", 100)

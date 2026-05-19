@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from src.lib.openai_agents.models import (
@@ -32,6 +33,7 @@ GENE_LINKML_SCHEMA_URI = (
     "https://github.com/alliance-genome/agr_curation_schema/blob/"
     f"{GENE_LINKML_COMMIT}/model/schema/gene.yaml"
 )
+ZFIN_TAXON_CURIE = "NCBITaxon:7955"
 
 
 def _strip_required_string(value: object, field_name: str) -> object:
@@ -144,6 +146,34 @@ class GeneMentionEvidencePayload(BaseModel):
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError("page must be an integer")
         return value
+
+    @model_validator(mode="after")
+    def _reject_unresolved_zfin_drug_like_mentions(self) -> "GeneMentionEvidencePayload":
+        zfin_context = (
+            self.data_provider_hint == "ZFIN"
+            or self.taxon_hint == ZFIN_TAXON_CURIE
+            or self.proposed_taxon == ZFIN_TAXON_CURIE
+            or (self.species or "").strip().lower() in {"danio rerio", "zebrafish"}
+        )
+        if not zfin_context:
+            return self
+
+        proposed_symbol = (self.proposed_gene_symbol or "").strip()
+        has_gene_identity_hint = bool(
+            self.proposed_primary_external_id
+            or (proposed_symbol and proposed_symbol == proposed_symbol.lower())
+        )
+        if has_gene_identity_hint:
+            return self
+
+        mention = self.mention.strip()
+        if re.search(r"[A-Z]", mention) and re.search(r"\d", mention):
+            raise ValueError(
+                "ZFIN gene_mention_evidence payloads must not retain uppercase "
+                "drug-like compound codes as genes unless a lowercase proposed_gene_symbol "
+                "or proposed_primary_external_id is present"
+            )
+        return self
 
 
 class GeneMentionEvidenceObjectEnvelope(CuratableObjectEnvelope):
