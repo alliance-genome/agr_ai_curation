@@ -7,6 +7,8 @@ shared selector and envelope finding contracts.
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import copy
 import json
 import logging
@@ -87,7 +89,7 @@ def dispatch_active_validator_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
-    agent_runner = runner or run_package_scoped_validator_agent
+    agent_runner = runner or _default_package_scoped_validator_runner()
 
     selector_findings: list[ValidationFinding] = []
     materialization_items: list[ValidatorResultMaterializationInput] = []
@@ -256,6 +258,39 @@ def run_package_scoped_validator_agent(
             run_kwargs["max_turns"] = binding.max_tool_calls
         return Runner.run_sync(agent, **run_kwargs)
     raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
+
+
+def run_package_scoped_validator_agent_in_worker_thread(
+    request: DomainValidationRequest,
+    *,
+    binding: ValidatorBinding,
+) -> Any:
+    """Execute a package validator from sync code that is already in an event loop."""
+
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=1,
+        thread_name_prefix="domain-validator-agent",
+    ) as executor:
+        future = executor.submit(
+            run_package_scoped_validator_agent,
+            request,
+            binding=binding,
+        )
+        return future.result()
+
+
+def _default_package_scoped_validator_runner() -> DomainValidatorAgentRunner:
+    if _running_event_loop_exists():
+        return run_package_scoped_validator_agent_in_worker_thread
+    return run_package_scoped_validator_agent
+
+
+def _running_event_loop_exists() -> bool:
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
 
 
 def _validated_result_from_agent_output(
@@ -427,6 +462,7 @@ __all__ = [
     "ActiveValidatorDispatchResult",
     "DomainValidatorAgentRunner",
     "dispatch_active_validator_bindings",
+    "run_package_scoped_validator_agent_in_worker_thread",
     "run_package_scoped_validator_agent",
     "unresolved_validator_result_for_dispatch_problem",
     "validator_result_from_agent_output",

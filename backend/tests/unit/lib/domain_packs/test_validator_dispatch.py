@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -311,6 +313,41 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
         materialized_gene.to_object_ref()
     ]
     assert result.validator_results[0].status == "resolved"
+
+
+def test_dispatch_default_runner_uses_worker_thread_from_running_event_loop(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pack = _loaded_pack(tmp_path)
+    event_loop_thread_id = threading.get_ident()
+    captured = {}
+
+    def _fake_package_validator(request, *, binding):
+        with pytest.raises(RuntimeError):
+            asyncio.get_running_loop()
+        captured["thread_id"] = threading.get_ident()
+        captured["binding"] = binding
+        return _result_payload(request)
+
+    monkeypatch.setattr(
+        "src.lib.domain_packs.validator_dispatch.run_package_scoped_validator_agent",
+        _fake_package_validator,
+    )
+
+    async def _dispatch_inside_event_loop():
+        return dispatch_active_validator_bindings(
+            _envelope(),
+            pack,
+            source_envelope_revision=3,
+        )
+
+    result = asyncio.run(_dispatch_inside_event_loop())
+
+    assert captured["thread_id"] != event_loop_thread_id
+    assert captured["binding"].binding_id == "fixture.identifier_lookup"
+    finding = _single_result_finding(result)
+    assert finding.status.value == "resolved"
 
 
 def test_dispatch_skips_active_binding_without_inputs_or_expected_results(
