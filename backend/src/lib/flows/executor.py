@@ -1005,6 +1005,19 @@ async def _collect_flow_validator_materialization_inputs(
                     "validator_binding_id": binding_id,
                     "status": validator_result.status,
                     "request_id": request.request_id,
+                    "validator_agent": request.validator_agent.model_dump(mode="json"),
+                    "target": request.target.model_dump(mode="json"),
+                    "selected_inputs": dict(request.selected_inputs),
+                    "input_selectors": dict(request.input_selectors),
+                    "expected_result_fields": dict(request.expected_result_fields),
+                    "lookup_attempts": [
+                        attempt.model_dump(mode="json")
+                        if hasattr(attempt, "model_dump")
+                        else dict(attempt)
+                        for attempt in (validator_result.lookup_attempts or [])
+                        if hasattr(attempt, "model_dump") or isinstance(attempt, Mapping)
+                    ],
+                    "curator_message": validator_result.curator_message,
                     "missing_expected_fields": list(
                         validator_result.missing_expected_fields
                     ),
@@ -1221,6 +1234,95 @@ def _build_step_evidence_preview(
     """Return the bounded step-evidence preview included in SSE events."""
 
     return list(evidence_records[:_FLOW_STEP_EVIDENCE_PREVIEW_LIMIT])
+
+
+def _build_flow_validator_lookup_audit_events(
+    completed_step: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    """Return synthetic lookup events for automatic flow validator groups."""
+
+    validation_results = completed_step.get("validation_group_results")
+    if not isinstance(validation_results, Mapping):
+        return []
+    groups = validation_results.get("groups")
+    if not isinstance(groups, list):
+        return []
+
+    events: list[dict[str, Any]] = []
+    agent_name = str(
+        completed_step.get("agent_name")
+        or completed_step.get("agent_id")
+        or "Flow validation"
+    )
+    for group in groups:
+        if not isinstance(group, Mapping):
+            continue
+        binding_id = str(group.get("validator_binding_id") or "").strip()
+        lookup_attempts = group.get("lookup_attempts")
+        if not binding_id or not isinstance(lookup_attempts, list):
+            continue
+        status = str(group.get("status") or "").strip() or "unknown"
+        for index, attempt in enumerate(lookup_attempts, start=1):
+            if not isinstance(attempt, Mapping):
+                continue
+            provider = str(attempt.get("provider") or "validator").strip()
+            method = str(attempt.get("method") or "validator_lookup").strip()
+            query = attempt.get("query") if isinstance(attempt.get("query"), Mapping) else {}
+            outcome = str(attempt.get("outcome") or "unknown").strip()
+            try:
+                result_count = int(attempt.get("result_count") or 0)
+            except (TypeError, ValueError):
+                result_count = 0
+            friendly_provider = provider or "validator"
+            friendly_method = method or "validator_lookup"
+            tool_args = {
+                "provider": friendly_provider,
+                "method": friendly_method,
+                **dict(query),
+            }
+            events.append(
+                {
+                    "type": "TOOL_START",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "agent": agent_name,
+                        "friendlyName": (
+                            f"{agent_name}: Validator Lookup "
+                            f"({binding_id}, {friendly_provider}.{friendly_method})"
+                        ),
+                        "isSpecialistInternal": True,
+                        "lookupIndex": index,
+                        "toolArgs": tool_args,
+                        "toolName": "domain_validator_lookup",
+                        "validatorBindingId": binding_id,
+                        "validatorResultStatus": status,
+                        "source": "flow_validation_group",
+                    },
+                }
+            )
+            events.append(
+                {
+                    "type": "TOOL_COMPLETE",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "error": attempt.get("message") if outcome == "error" else None,
+                        "friendlyName": (
+                            f"{agent_name}: Validator Lookup "
+                            f"{outcome or 'complete'}"
+                        ),
+                        "isSpecialistInternal": True,
+                        "lookupIndex": index,
+                        "outcome": outcome,
+                        "resultCount": result_count,
+                        "success": outcome != "error",
+                        "toolName": "domain_validator_lookup",
+                        "validatorBindingId": binding_id,
+                        "validatorResultStatus": status,
+                        "source": "flow_validation_group",
+                    },
+                }
+            )
+    return events
 
 
 def _build_completed_step_adapter_keys(
@@ -2441,11 +2543,15 @@ async def execute_flow(
             trace_id = event_data.get("trace_id")
 
         flow_step_evidence_event: Optional[dict[str, Any]] = None
+        flow_validator_audit_events: list[dict[str, Any]] = []
         if event_type == "TOOL_COMPLETE":
             details = event.get("details", {}) or {}
             tool_name = str(details.get("toolName") or "").strip()
             completed_step = _find_completed_step_by_tool_name(completed_steps, tool_name)
             if completed_step is not None:
+                flow_validator_audit_events = (
+                    _build_flow_validator_lookup_audit_events(completed_step)
+                )
                 step_evidence_records = list(completed_step.get("evidence_records") or [])
                 step_evidence_preview = _build_step_evidence_preview(step_evidence_records)
                 flow_step_evidence_event = {
@@ -2547,6 +2653,8 @@ async def execute_flow(
             )
             break
         yield event
+        for flow_validator_audit_event in flow_validator_audit_events:
+            yield flow_validator_audit_event
         if flow_step_evidence_event is not None:
             yield flow_step_evidence_event
 

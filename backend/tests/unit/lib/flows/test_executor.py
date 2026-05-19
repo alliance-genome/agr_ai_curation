@@ -1345,14 +1345,31 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert calls[0]["request"].validator_binding_id == "fixture.identifier_lookup"
         assert len(materialization_inputs) == 1
         assert materialization_inputs[0].match is match
-        assert metadata == [
+        assert len(metadata) == 1
+        assert {
+            "group_id": metadata[0]["group_id"],
+            "state": metadata[0]["state"],
+            "validator_binding_id": metadata[0]["validator_binding_id"],
+            "status": metadata[0]["status"],
+            "request_id": metadata[0]["request_id"],
+            "missing_expected_fields": metadata[0]["missing_expected_fields"],
+        } == {
+            "group_id": "automatic-lookup",
+            "state": "automatic",
+            "validator_binding_id": "fixture.identifier_lookup",
+            "status": "resolved",
+            "request_id": calls[0]["request"].request_id,
+            "missing_expected_fields": [],
+        }
+        assert metadata[0]["selected_inputs"] == {"identifier": "AGR:0001"}
+        assert metadata[0]["lookup_attempts"] == [
             {
-                "group_id": "automatic-lookup",
-                "state": "automatic",
-                "validator_binding_id": "fixture.identifier_lookup",
-                "status": "resolved",
-                "request_id": calls[0]["request"].request_id,
-                "missing_expected_fields": [],
+                "provider": "fixture",
+                "method": "identifier_lookup",
+                "query": {"identifier": "AGR:0001"},
+                "result_count": 1,
+                "outcome": "success",
+                "message": None,
             }
         ]
 
@@ -1485,16 +1502,27 @@ class TestGetAllAgentToolsStepOrderRuntime:
             validator_result.lookup_attempts[0].method
             == "unsupported_provider_taxon_mapping"
         )
-        assert metadata == [
-            {
-                "group_id": "automatic-phenotype-lookup",
-                "state": "automatic",
-                "validator_binding_id": "phenotype_term_ontology_validator",
-                "status": "unresolved",
-                "request_id": validator_result.request_id,
-                "missing_expected_fields": [],
-            }
-        ]
+        assert len(metadata) == 1
+        assert {
+            "group_id": metadata[0]["group_id"],
+            "state": metadata[0]["state"],
+            "validator_binding_id": metadata[0]["validator_binding_id"],
+            "status": metadata[0]["status"],
+            "request_id": metadata[0]["request_id"],
+            "missing_expected_fields": metadata[0]["missing_expected_fields"],
+        } == {
+            "group_id": "automatic-phenotype-lookup",
+            "state": "automatic",
+            "validator_binding_id": "phenotype_term_ontology_validator",
+            "status": "unresolved",
+            "request_id": validator_result.request_id,
+            "missing_expected_fields": [],
+        }
+        assert metadata[0]["lookup_attempts"][0]["outcome"] == "blocked"
+        assert (
+            metadata[0]["lookup_attempts"][0]["method"]
+            == "unsupported_provider_taxon_mapping"
+        )
 
     def test_automatic_validation_group_skips_non_dispatch_binding(
         self, monkeypatch
@@ -1837,14 +1865,34 @@ class TestGetAllAgentToolsStepOrderRuntime:
         assert len(materialization_inputs) == 1
         assert materialization_inputs[0].match is match
         assert materialization_inputs[0].request is calls[0]["request"]
-        assert metadata == [
+        assert len(metadata) == 1
+        assert {
+            "group_id": metadata[0]["group_id"],
+            "state": metadata[0]["state"],
+            "validator_binding_id": metadata[0]["validator_binding_id"],
+            "status": metadata[0]["status"],
+            "request_id": metadata[0]["request_id"],
+            "missing_expected_fields": metadata[0]["missing_expected_fields"],
+        } == {
+            "group_id": "edge:validation-1",
+            "state": "supplemental",
+            "validator_binding_id": "custom.supplemental",
+            "status": "resolved",
+            "request_id": calls[0]["request"].request_id,
+            "missing_expected_fields": [],
+        }
+        assert metadata[0]["selected_inputs"] == {"identifier": "AGR:0001"}
+        assert metadata[0]["expected_result_fields"] == {
+            "identifier": "gene.identifier"
+        }
+        assert metadata[0]["lookup_attempts"] == [
             {
-                "group_id": "edge:validation-1",
-                "state": "supplemental",
-                "validator_binding_id": "custom.supplemental",
-                "status": "resolved",
-                "request_id": calls[0]["request"].request_id,
-                "missing_expected_fields": [],
+                "provider": "flow_validator",
+                "method": "non_lookup_validation",
+                "query": {"source_envelope_revision": 7},
+                "result_count": 1,
+                "outcome": "success",
+                "message": None,
             }
         ]
 
@@ -3046,6 +3094,117 @@ class TestExecuteFlowTermination:
         assert flow_finished["data"]["adapter_keys"] == ["gene_expression"]
         assert len(persisted_requests) == 1
         assert persisted_requests[0].flow_run_id == "00000000-0000-0000-0000-000000000123"
+
+    @pytest.mark.asyncio
+    async def test_execute_flow_emits_validator_lookup_audit_events(self, monkeypatch):
+        flow = _make_flow([
+            _task_input_node(),
+            _agent_node("n1", "gene-expression", step_goal="Extract genes"),
+        ])
+        payload = _structured_step_output("TP53")
+        completed_step = _make_completed_step(
+            agent_id="gene-expression",
+            agent_name="Gene Expression",
+            tool_name="ask_gene_expression_specialist",
+            step=1,
+            adapter_key="gene_expression",
+            payload=payload,
+        )
+        completed_step["validation_group_results"] = {
+            "source_envelope_id": "env-1",
+            "source_envelope_revision": 3,
+            "materialized_envelope_revision": 4,
+            "groups": [
+                {
+                    "group_id": "gene-expression-relation",
+                    "state": "automatic",
+                    "validator_binding_id": "relation_vocabulary_validation",
+                    "status": "resolved",
+                    "request_id": "request-1",
+                    "lookup_attempts": [
+                        {
+                            "provider": "agr_curation_query",
+                            "method": "controlled_vocabulary_term",
+                            "query": {
+                                "vocabulary": "Expression Relation",
+                                "term_name": "is_expressed_in",
+                            },
+                            "result_count": 1,
+                            "outcome": "success",
+                            "message": None,
+                        }
+                    ],
+                    "missing_expected_fields": [],
+                }
+            ],
+        }
+
+        supervisor = MagicMock(name="Flow Supervisor")
+        supervisor._flow_unavailable_steps = []
+        supervisor._flow_execution_state = _make_flow_execution_state(completed_step)
+
+        monkeypatch.setattr(
+            "src.lib.flows.executor.create_flow_supervisor",
+            lambda **_kwargs: supervisor,
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.build_flow_prompt",
+            lambda *_args, **_kwargs: "run flow",
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.DocumentContext.fetch",
+            lambda *_args, **_kwargs: SimpleNamespace(section_count=lambda: 0, abstract=None),
+        )
+        monkeypatch.setattr(
+            "src.lib.flows.executor.persist_extraction_results",
+            _recording_persist_extraction_results(),
+        )
+
+        async def _fake_run_agent_streamed(**_kwargs):
+            yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-1"}}
+            yield {
+                "type": "TOOL_COMPLETE",
+                "details": {"toolName": "ask_gene_expression_specialist"},
+            }
+            yield {"type": "CHAT_OUTPUT_READY", "data": {}}
+
+        monkeypatch.setattr(
+            "src.lib.openai_agents.runner.run_agent_streamed",
+            _fake_run_agent_streamed,
+        )
+
+        events = [
+            event
+            async for event in execute_flow(
+                flow,
+                user_id="u1",
+                session_id="flow-session-1",
+                document_id="doc-1",
+            )
+        ]
+
+        lookup_events = [
+            event
+            for event in events
+            if (event.get("details") or {}).get("toolName") == "domain_validator_lookup"
+        ]
+
+        assert [event["type"] for event in lookup_events] == [
+            "TOOL_START",
+            "TOOL_COMPLETE",
+        ]
+        assert lookup_events[0]["details"]["validatorBindingId"] == (
+            "relation_vocabulary_validation"
+        )
+        assert lookup_events[0]["details"]["source"] == "flow_validation_group"
+        assert lookup_events[0]["details"]["toolArgs"] == {
+            "provider": "agr_curation_query",
+            "method": "controlled_vocabulary_term",
+            "vocabulary": "Expression Relation",
+            "term_name": "is_expressed_in",
+        }
+        assert lookup_events[1]["details"]["outcome"] == "success"
+        assert lookup_events[1]["details"]["resultCount"] == 1
 
     @pytest.mark.asyncio
     async def test_flow_step_evidence_event_caps_preview_but_preserves_raw_count(self, monkeypatch):

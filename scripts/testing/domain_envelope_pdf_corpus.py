@@ -7,6 +7,7 @@ import argparse
 import json
 import urllib.parse
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,8 @@ class CorpusTrial:
     doi: str | None
     pdf_url: str
     prompt: str
+    expected_validator_bindings: tuple[str, ...]
+    minimum_expected_validator_bindings: int | None = None
 
 
 TRIALS: tuple[CorpusTrial, ...] = (
@@ -52,6 +55,7 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "morphogenesis. Use only evidence in the paper, call record_evidence for one exact "
             "supporting quote, include organism/species hints, and do not extract other genes."
         ),
+        expected_validator_bindings=("alliance_gene_reference_lookup",),
     ),
     CorpusTrial(
         trial_id="allele_drosophila_notch_facet_glossy",
@@ -69,6 +73,7 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "Preserve the paper notation, genotype/phenotype context, organism hints, and one "
             "record_evidence verified quote. Do not resolve allele IDs in the extractor."
         ),
+        expected_validator_bindings=("allele_mention_reference_validation",),
     ),
     CorpusTrial(
         trial_id="disease_mouse_pkd1_adpkd",
@@ -85,6 +90,11 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, "
             "model organism/subject context, role, and one record_evidence verified quote. "
             "Do not perform disease ontology lookup in the extractor."
+        ),
+        expected_validator_bindings=(
+            "disease_ontology_term_lookup",
+            "disease_relation_cv_lookup",
+            "disease_data_provider_lookup",
         ),
     ),
     CorpusTrial(
@@ -103,6 +113,10 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "Preserve dose/timing/context and one record_evidence verified quote. Do not resolve "
             "ChEBI or condition ontology IDs in the extractor."
         ),
+        expected_validator_bindings=(
+            "chemical_condition.chebi_api_lookup",
+            "chemical_condition.condition_relation_type_lookup",
+        ),
     ),
     CorpusTrial(
         trial_id="phenotype_celegans_mus81_reduced_brood",
@@ -120,6 +134,7 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "Preserve subject, phenotype statement, organism hints, and one record_evidence "
             "verified quote. Do not resolve phenotype ontology IDs in the extractor."
         ),
+        expected_validator_bindings=("phenotype_term_ontology_validator",),
     ),
     CorpusTrial(
         trial_id="gene_expression_zebrafish_flcn_brain",
@@ -138,6 +153,10 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "and one record_evidence verified quote. Use the explicit zebrafish organism context "
             "as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or "
             "provider database IDs in the extractor."
+        ),
+        expected_validator_bindings=(
+            "relation_vocabulary_validation",
+            "data_provider_validation",
         ),
     ),
     CorpusTrial(
@@ -158,6 +177,12 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "explicit zebrafish organism context as ZFIN/NCBITaxon:7955 selector hints for gene "
             "or phenotype candidates; those hints are not final identity resolution."
         ),
+        expected_validator_bindings=(
+            "chemical_condition.chebi_api_lookup",
+            "phenotype_term_ontology_validator",
+            "alliance_gene_reference_lookup",
+        ),
+        minimum_expected_validator_bindings=2,
     ),
 )
 
@@ -273,6 +298,117 @@ def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
             or str(((event.get("details") or {}).get("toolName") or "")) == "agr_species_context_lookup"
         ],
     }
+
+
+def _validator_binding_id_from_event(event: dict[str, Any]) -> str:
+    details = event.get("details") or {}
+    return str(details.get("validatorBindingId") or "").strip()
+
+
+def _validator_lookup_events(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    lookup_events: list[dict[str, Any]] = []
+    for event in events:
+        details = event.get("details") or {}
+        tool_name = str(details.get("toolName") or "").strip()
+        binding_id = _validator_binding_id_from_event(event)
+        if binding_id and tool_name in {"domain_validator_lookup", "agr_curation_query"}:
+            lookup_events.append(event)
+    return lookup_events
+
+
+def _fallback_events(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in events
+        if str(event.get("type") or "").strip() == "SPECIALIST_TEXT_FALLBACK_SUCCESS"
+    ]
+
+
+def _validator_problem_events(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    problem_events: list[dict[str, Any]] = []
+    for event in events:
+        event_text = json.dumps(event, sort_keys=True).lower()
+        details = event.get("details") or {}
+        result_status = str(details.get("validatorResultStatus") or "").strip().lower()
+        outcome = str(details.get("outcome") or "").strip().lower()
+        if (
+            result_status == "error"
+            or outcome == "error"
+            or "validator_agent_error" in event_text
+            or "invalid_schema" in event_text
+        ):
+            problem_events.append(event)
+    return problem_events
+
+
+def validate_tightened_trial_gate(
+    *,
+    trial: CorpusTrial,
+    flow_result: dict[str, Any],
+    checks: list[dict[str, Any]],
+    allow_specialist_text_fallback: bool,
+) -> dict[str, Any]:
+    events = flow_result.get("events") or []
+    lookup_events = _validator_lookup_events(events)
+    fallback_events = _fallback_events(events)
+    problem_events = _validator_problem_events(events)
+    observed_counts = Counter(
+        binding_id
+        for event in lookup_events
+        if (binding_id := _validator_binding_id_from_event(event))
+    )
+    expected_bindings = tuple(trial.expected_validator_bindings)
+    minimum_count = (
+        trial.minimum_expected_validator_bindings
+        if trial.minimum_expected_validator_bindings is not None
+        else len(expected_bindings)
+    )
+    observed_expected_bindings = [
+        binding_id for binding_id in expected_bindings if observed_counts.get(binding_id, 0) > 0
+    ]
+    missing_expected_bindings = [
+        binding_id for binding_id in expected_bindings if observed_counts.get(binding_id, 0) <= 0
+    ]
+    enough_expected_bindings = len(observed_expected_bindings) >= minimum_count
+    fallback_ok = allow_specialist_text_fallback or not fallback_events
+    no_problem_events = not problem_events
+    ok = enough_expected_bindings and fallback_ok and no_problem_events
+    payload = {
+        "expected_validator_bindings": expected_bindings,
+        "minimum_expected_validator_bindings": minimum_count,
+        "observed_validator_lookup_counts": dict(sorted(observed_counts.items())),
+        "observed_expected_validator_bindings": observed_expected_bindings,
+        "missing_expected_validator_bindings": missing_expected_bindings,
+        "specialist_text_fallback_event_count": len(fallback_events),
+        "validator_problem_event_count": len(problem_events),
+        "allow_specialist_text_fallback": allow_specialist_text_fallback,
+    }
+    checks.append(
+        {
+            "step": f"{trial.trial_id}_tightened_validator_audit_gate",
+            "ok": ok,
+            "payload": payload,
+        }
+    )
+    if not ok:
+        reasons: list[str] = []
+        if not enough_expected_bindings:
+            reasons.append(
+                "missing validator audit events for "
+                f"{missing_expected_bindings}; observed {dict(sorted(observed_counts.items()))}"
+            )
+        if not fallback_ok:
+            reasons.append(
+                f"specialist text fallback events present: {len(fallback_events)}"
+            )
+        if not no_problem_events:
+            reasons.append(
+                f"validator error/invalid-schema events present: {len(problem_events)}"
+            )
+        raise smoke.SmokeFailure(
+            f"Tightened corpus gate failed for {trial.trial_id}: " + "; ".join(reasons)
+        )
+    return payload
 
 
 def execute_flow_permissive(
@@ -441,6 +577,12 @@ def run_trial(
                 )
             except Exception as exc:
                 note.setdefault("warnings", []).append(f"flow_evidence_export_failed: {exc}")
+        note["tightened_validator_audit_gate"] = validate_tightened_trial_gate(
+            trial=trial,
+            flow_result=flow_result,
+            checks=trial_checks,
+            allow_specialist_text_fallback=args.allow_specialist_text_fallback,
+        )
         if zero_evidence_records:
             raise smoke.SmokeFailure(
                 "Flow completed with zero persisted evidence records"
@@ -485,6 +627,14 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--allow-duplicate-reuse", action="store_true")
     parser.add_argument("--delete-existing-sample-documents", action="store_true")
     parser.add_argument("--cleanup-documents", action="store_true")
+    parser.add_argument(
+        "--allow-specialist-text-fallback",
+        action="store_true",
+        help=(
+            "Debug-only relaxation: record but do not fail SPECIALIST_TEXT_FALLBACK_SUCCESS "
+            "events. Validator lookup audit events are still required."
+        ),
+    )
     return parser.parse_args(list(argv) if argv is not None else None)
 
 
