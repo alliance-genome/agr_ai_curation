@@ -287,6 +287,11 @@ def _metadata_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
+def _extraction_metadata_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = _metadata_payload(payload).get("extraction_metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
 def _evidence_record_key(record: Dict[str, Any]) -> tuple[Any, ...]:
     return (
         record.get("entity"),
@@ -634,10 +639,20 @@ def normalize_evidence_records(value: Any) -> List[Dict[str, Any]]:
 
 
 def _candidate_entity_fallback(record_dict: Dict[str, Any]) -> Optional[str]:
-    for key in ("label", "mention"):
-        candidate = str(record_dict.get(key) or "").strip()
-        if candidate:
-            return candidate
+    for source in (record_dict, record_dict.get("payload")):
+        if not isinstance(source, dict):
+            continue
+        for key in ("entity", "label", "mention", "normalized_symbol", "normalized_label"):
+            candidate = str(source.get(key) or "").strip()
+            if candidate:
+                return candidate
+
+        mention = source.get("mention")
+        if isinstance(mention, dict):
+            for key in ("text", "normalized_hint", "label"):
+                candidate = str(mention.get(key) or "").strip()
+                if candidate:
+                    return candidate
 
     source_mentions = record_dict.get("source_mentions")
     if isinstance(source_mentions, list):
@@ -647,6 +662,28 @@ def _candidate_entity_fallback(record_dict: Dict[str, Any]) -> Optional[str]:
                 return text
 
     return None
+
+
+def _payload_evidence_record_ids(record_dict: Dict[str, Any]) -> List[str]:
+    """Return evidence IDs carried inside a curatable object's payload."""
+
+    payload = record_dict.get("payload")
+    if not isinstance(payload, dict):
+        return []
+
+    return _merge_unique_reference_ids(
+        payload.get("evidence_record_ids"),
+        payload.get("evidence_record_id"),
+    )
+
+
+def _is_curatable_object_like_record(record_dict: Dict[str, Any]) -> bool:
+    return bool(
+        record_dict.get("object_type")
+        or record_dict.get("pending_ref_id")
+        or record_dict.get("object_id")
+        or record_dict.get("model_ref")
+    )
 
 
 def _canonicalize_nested_evidence_references(
@@ -679,6 +716,11 @@ def _canonicalize_nested_evidence_references(
         )
 
     evidence_record_ids = registry.canonicalize_reference_ids(record_dict.get("evidence_record_ids"))
+    if _is_curatable_object_like_record(record_dict):
+        evidence_record_ids = _merge_unique_reference_ids(
+            evidence_record_ids,
+            registry.canonicalize_reference_ids(_payload_evidence_record_ids(record_dict)),
+        )
     legacy_evidence = record_dict.get("evidence")
     if isinstance(legacy_evidence, list):
         evidence_record_ids = _merge_unique_reference_ids(
@@ -690,7 +732,14 @@ def _canonicalize_nested_evidence_references(
             ),
         )
 
-    if "evidence_record_ids" in record_dict or isinstance(legacy_evidence, list):
+    if (
+        "evidence_record_ids" in record_dict
+        or isinstance(legacy_evidence, list)
+        or (
+            _is_curatable_object_like_record(record_dict)
+            and _payload_evidence_record_ids(record_dict)
+        )
+    ):
         canonical_record["evidence_record_ids"] = evidence_record_ids
 
     return canonical_record
@@ -712,6 +761,7 @@ def canonicalize_structured_result_payload(
     registry.add_many(preferred_evidence_records)
     registry.add_many(payload.get("evidence_records"))
     registry.add_many(_metadata_payload(payload).get("evidence_records"))
+    registry.add_many(_extraction_metadata_payload(payload).get("evidence_records"))
     canonical_payload = _canonicalize_nested_evidence_references(
         payload,
         registry=registry,
@@ -771,6 +821,40 @@ def canonicalize_structured_result_payload(
     return canonical_payload
 
 
+def _extract_object_payload_evidence_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Extract evidence records embedded in domain-envelope object payloads."""
+
+    registry = _EvidenceRegistry()
+    objects = payload.get("objects")
+    if not isinstance(objects, list):
+        objects = payload.get("curatable_objects")
+    if not isinstance(objects, list):
+        return []
+
+    for obj in objects:
+        obj_dict = _coerce_evidence_record_dict(obj)
+        if not isinstance(obj_dict, dict):
+            continue
+
+        payload_dict = obj_dict.get("payload")
+        if not isinstance(payload_dict, dict):
+            continue
+
+        registry.add(
+            payload_dict,
+            entity_fallback=_candidate_entity_fallback(obj_dict),
+        )
+
+        payload_records = payload_dict.get("evidence_records")
+        if isinstance(payload_records, list):
+            registry.add_many(
+                payload_records,
+                entity_fallback=_candidate_entity_fallback(obj_dict),
+            )
+
+    return registry.records()
+
+
 def extract_evidence_records_from_structured_result(value: Any) -> List[Dict[str, Any]]:
     """Extract normalized evidence records from a structured extraction result."""
 
@@ -781,7 +865,18 @@ def extract_evidence_records_from_structured_result(value: Any) -> List[Dict[str
     evidence_records = normalize_evidence_records(payload.get("evidence_records"))
     if evidence_records:
         return evidence_records
-    return normalize_evidence_records(_metadata_payload(payload).get("evidence_records"))
+
+    evidence_records = normalize_evidence_records(_metadata_payload(payload).get("evidence_records"))
+    if evidence_records:
+        return evidence_records
+
+    evidence_records = normalize_evidence_records(
+        _extraction_metadata_payload(payload).get("evidence_records")
+    )
+    if evidence_records:
+        return evidence_records
+
+    return _extract_object_payload_evidence_records(payload)
 
 
 def _coerce_dict_list(value: Any) -> List[Dict[str, Any]]:
@@ -849,10 +944,41 @@ def _structured_result_retained_collections(
 
     curatable_object_records = _coerce_dict_list(payload.get("curatable_objects"))
     if curatable_object_records:
-        return [("curatable_objects", curatable_object_records)]
+        evidence_backed_objects = [
+            record
+            for record in curatable_object_records
+            if _curatable_object_requires_evidence_refs(record)
+        ]
+        if evidence_backed_objects:
+            return [("curatable_objects", evidence_backed_objects)]
 
     item_records = _coerce_dict_list(payload.get("items"))
     return [("items", item_records)] if item_records else []
+
+
+def _curatable_object_requires_evidence_refs(record: Dict[str, Any]) -> bool:
+    """Return whether a curatable object represents an evidence-backed finding."""
+
+    if _merge_unique_reference_ids(record.get("evidence_record_ids")):
+        return True
+    if _payload_evidence_record_ids(record):
+        return True
+
+    object_role = str(record.get("object_role") or "").strip()
+    if object_role == "curatable_unit":
+        return True
+    if object_role in {"metadata_only", "supporting_reference", "validated_reference"}:
+        return False
+
+    metadata = record.get("metadata")
+    if isinstance(metadata, dict):
+        metadata_role = str(metadata.get("object_role") or "").strip()
+        if metadata_role == "curatable_unit":
+            return True
+        if metadata_role in {"metadata_only", "supporting_reference", "validated_reference"}:
+            return False
+
+    return True
 
 
 def structured_result_missing_evidence_record_refs(value: Any, *, expected_output_type: Any = None) -> bool:

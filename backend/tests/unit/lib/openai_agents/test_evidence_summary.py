@@ -356,3 +356,144 @@ def test_record_evidence_summary_ignores_terminal_unverified_retry_result():
     )
 
     assert record is None
+
+
+def test_extract_evidence_records_from_domain_envelope_extraction_metadata():
+    envelope = {
+        "envelope_id": "gene-expression-envelope",
+        "domain_pack_id": "gene_expression",
+        "objects": [
+            {
+                "object_type": "GeneExpressionAnnotation",
+                "pending_ref_id": "expression-flcn-brain",
+                "payload": {
+                    "gene": {"symbol": "flcn"},
+                    "anatomy": {"label": "brain"},
+                },
+                "evidence_record_ids": ["evidence-flcn-brain"],
+            }
+        ],
+        "metadata": {
+            "extraction_metadata": {
+                "evidence_records": [
+                    {
+                        **_record(
+                            entity="flcn",
+                            quote="flcn transcripts were detected in the embryonic brain.",
+                            page=6,
+                            section="Results",
+                            chunk_id="chunk-flcn",
+                        ),
+                        "evidence_record_id": "evidence-flcn-brain",
+                    }
+                ]
+            }
+        },
+    }
+
+    assert extract_evidence_records_from_structured_result(envelope) == [
+        {
+            **_record(
+                entity="flcn",
+                quote="flcn transcripts were detected in the embryonic brain.",
+                page=6,
+                section="Results",
+                chunk_id="chunk-flcn",
+            ),
+            "evidence_record_id": "evidence-flcn-brain",
+        }
+    ]
+
+
+def test_extract_evidence_records_from_domain_envelope_object_payload():
+    envelope = {
+        "envelope_id": "gene-envelope",
+        "domain_pack_id": "gene",
+        "objects": [
+            {
+                "object_type": "gene_mention_evidence",
+                "object_role": "validated_reference",
+                "pending_ref_id": "gene-crb",
+                "payload": {
+                    "mention": "Crumbs",
+                    "evidence_record_id": "evidence-crb",
+                    "verified_quote": "Crumbs regulates R8 cell fate.",
+                    "page": 3,
+                    "section": "Results",
+                    "chunk_id": "chunk-crb",
+                },
+                "evidence_record_ids": ["evidence-crb"],
+            }
+        ],
+        "metadata": {},
+    }
+
+    assert extract_evidence_records_from_structured_result(envelope) == [
+        {
+            "entity": "Crumbs",
+            "verified_quote": "Crumbs regulates R8 cell fate.",
+            "page": 3,
+            "section": "Results",
+            "chunk_id": "chunk-crb",
+            "evidence_record_id": "evidence-crb",
+        }
+    ]
+
+
+def test_canonicalize_copies_payload_evidence_ids_to_curatable_objects():
+    payload = {
+        "curatable_objects": [
+            {
+                "object_type": "EvidenceQuote",
+                "object_role": "metadata_only",
+                "pending_ref_id": "quote-1",
+                "payload": {
+                    "evidence_record_id": "evidence-quote-1",
+                    "verified_quote": "Notch mutant clones showed smooth eye facets.",
+                    "page": 4,
+                    "section": "Results",
+                    "chunk_id": "chunk-notch",
+                },
+            },
+            {
+                "object_type": "Reference",
+                "object_role": "validated_reference",
+                "pending_ref_id": "reference-1",
+                "payload": {"title": "Notch Controls Cell Adhesion in the Drosophila Eye"},
+            },
+            {
+                "object_type": "AllelePaperEvidenceAssociation",
+                "object_role": "curatable_unit",
+                "pending_ref_id": "association-1",
+                "payload": {
+                    "association_kind": "allele_paper_evidence",
+                    "evidence_record_ids": ["evidence-quote-1"],
+                },
+                "evidence_record_ids": ["evidence-quote-1"],
+            },
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    **_record(
+                        entity="Notch",
+                        quote="Notch mutant clones showed smooth eye facets.",
+                        page=4,
+                        section="Results",
+                        chunk_id="chunk-notch",
+                    ),
+                    "evidence_record_id": "evidence-quote-1",
+                }
+            ]
+        },
+        "run_summary": {"kept_count": 1},
+    }
+
+    canonical = canonicalize_structured_result_payload(payload)
+    report = structured_result_evidence_reference_report(canonical)
+
+    assert canonical["curatable_objects"][0]["evidence_record_ids"] == [
+        "evidence-quote-1"
+    ]
+    assert report["missing_record_refs"] == []
+    assert structured_result_missing_evidence_record_refs(canonical) is False
