@@ -336,6 +336,34 @@ def test_concrete_validator_envelope_projects_to_shared_result_contract():
     assert not hasattr(result, "gene_candidates")
 
 
+def test_validator_result_identity_fields_are_normalized_to_request():
+    request = _validation_request()
+    payload = _result_payload(request)
+    payload.update(
+        {
+            "request_id": "domain-validation:stale",
+            "validator_binding_id": "stale.binding",
+            "validator_agent": {
+                "package_id": "stale.package",
+                "agent_id": "stale_agent",
+            },
+            "target": {
+                "domain_pack_id": "stale.pack",
+                "object_type": "stale_object",
+            },
+        }
+    )
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "resolved"
+    assert result.request_id == request.request_id
+    assert result.validator_binding_id == request.validator_binding_id
+    assert result.validator_agent == request.validator_agent
+    assert result.target == request.target
+    assert result.resolved_values["identifier"] == "AGR:0001"
+
+
 def test_unknown_lookup_outcome_becomes_invalid_schema_result(tmp_path: Path):
     pack = _loaded_pack(tmp_path)
 
