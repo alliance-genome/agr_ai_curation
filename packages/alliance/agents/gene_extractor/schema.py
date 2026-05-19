@@ -55,17 +55,36 @@ class GeneMentionEvidencePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mention: StrictStr = Field(description="Gene mention exactly as written in the paper")
-    primary_external_id: StrictStr = Field(
-        description="Alliance Gene primary external identifier resolved by validation tooling"
-    )
-    gene_symbol: StrictStr = Field(description="Current accepted symbol for the resolved gene")
-    taxon: StrictStr = Field(description="NCBI Taxon CURIE for the resolved gene")
     species: StrictStr | None = Field(
         default=None,
         description="Curator-facing species label when available from extraction context",
     )
+    taxon_hint: StrictStr | None = Field(
+        default=None,
+        description="Paper-backed NCBI Taxon CURIE hint for validator input",
+    )
+    data_provider_hint: StrictStr | None = Field(
+        default=None,
+        description="Paper-backed Alliance provider hint, such as FB, WB, MGI, HGNC, ZFIN, RGD, or SGD",
+    )
+    proposed_primary_external_id: StrictStr | None = Field(
+        default=None,
+        description="Extractor-proposed Alliance Gene identifier for validator confirmation",
+    )
+    proposed_gene_symbol: StrictStr | None = Field(
+        default=None,
+        description="Extractor-proposed current gene symbol for validator confirmation",
+    )
+    proposed_taxon: StrictStr | None = Field(
+        default=None,
+        description="Extractor-proposed NCBI Taxon CURIE for validator confirmation",
+    )
+    identity_resolution_notes: list[StrictStr] = Field(
+        default_factory=list,
+        description="Auditable notes describing extractor-side species or identity hints",
+    )
     confidence: Literal["high", "medium", "low"] = Field(
-        description="Extractor confidence in the normalized gene reference and evidence match"
+        description="Extractor confidence in the gene mention, species context, and evidence match"
     )
     evidence_record_id: StrictStr = Field(
         description="Stable ID returned by the paper evidence verification tool"
@@ -82,9 +101,6 @@ class GeneMentionEvidencePayload(BaseModel):
 
     @field_validator(
         "mention",
-        "primary_external_id",
-        "gene_symbol",
-        "taxon",
         "evidence_record_id",
         "verified_quote",
         "section",
@@ -95,10 +111,31 @@ class GeneMentionEvidencePayload(BaseModel):
     def _validate_required_strings(cls, value: object, info) -> object:
         return _strip_required_string(value, info.field_name)
 
-    @field_validator("species", "subsection", "figure_reference", mode="before")
+    @field_validator(
+        "species",
+        "taxon_hint",
+        "data_provider_hint",
+        "proposed_primary_external_id",
+        "proposed_gene_symbol",
+        "proposed_taxon",
+        "subsection",
+        "figure_reference",
+        mode="before",
+    )
     @classmethod
     def _validate_optional_strings(cls, value: object) -> object:
         return _strip_optional_string(value)
+
+    @field_validator("identity_resolution_notes")
+    @classmethod
+    def _validate_identity_resolution_notes(cls, value: list[StrictStr]) -> list[StrictStr]:
+        normalized_notes: list[str] = []
+        for item in value:
+            normalized = str(item).strip()
+            if not normalized:
+                raise ValueError("identity_resolution_notes must not contain empty values")
+            normalized_notes.append(normalized)
+        return normalized_notes
 
     @field_validator("page", mode="before")
     @classmethod

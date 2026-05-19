@@ -411,6 +411,226 @@ def test_validator_result_materialization_creates_reference_object_and_finding()
     DomainEnvelope.model_validate(result.envelope.model_dump(mode="json"))
 
 
+def test_validator_result_materialization_patches_target_payload_from_resolved_values():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.target_patch",
+        display_name="Fixture Target Patch Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        metadata={
+            "validator_bindings": {
+                "active": [
+                    {
+                        "binding_id": "fixture.gene_lookup",
+                        "display_name": "Gene lookup",
+                        "validator_agent": {
+                            "package_id": "fixture.validators",
+                            "agent_id": "gene_validator",
+                        },
+                        "applies_to": {
+                            "domain_pack_id": "fixture.target_patch",
+                            "object_types": ["GeneMention"],
+                        },
+                        "input_fields": {
+                            "mention": {
+                                "source": "payload",
+                                "path": "mention",
+                            }
+                        },
+                        "expected_result_fields": {
+                            "curie": "primary_external_id",
+                            "symbol": "gene_symbol",
+                            "taxon": "taxon",
+                        },
+                    }
+                ],
+                "under_development": [],
+            }
+        },
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="GeneMention",
+                display_name="Gene mention",
+                metadata={"object_role": "validated_reference"},
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="mention",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="primary_external_id",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="gene_symbol",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="taxon",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="target-patch-env",
+        domain_pack_id="fixture.target_patch",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneMention",
+                pending_ref_id="gene-mention-1",
+                status=CuratableObjectStatus.PENDING,
+                payload={"mention": "crumbs"},
+            )
+        ],
+    )
+    item = _validator_item(
+        metadata,
+        envelope,
+        resolved_values={
+            "curie": "FB:FBgn0000368",
+            "symbol": "crb",
+            "taxon": "NCBITaxon:7227",
+        },
+        resolved_objects=[
+            {
+                "gene_id": "FB:FBgn0000368",
+                "symbol": "crb",
+                "taxon": "NCBITaxon:7227",
+                "species": "Drosophila melanogaster",
+                "data_provider": "FB",
+            }
+        ],
+    )
+
+    result = materialize_validator_results_into_envelope(envelope, metadata, [item])
+
+    assert result.materialized_objects == ()
+    patched = result.envelope.objects[0]
+    assert patched.status is CuratableObjectStatus.VALIDATED
+    assert patched.payload == {
+        "mention": "crumbs",
+        "primary_external_id": "FB:FBgn0000368",
+        "gene_symbol": "crb",
+        "taxon": "NCBITaxon:7227",
+    }
+    assert patched.metadata["validator_resolved_value_materialization"][0][
+        "validator_binding_id"
+    ] == "fixture.gene_lookup"
+    finding = result.appended_findings[0]
+    assert finding.status is ValidationFindingStatus.RESOLVED
+    assert finding.details["validation_result"]["resolved_values"]["curie"] == (
+        "FB:FBgn0000368"
+    )
+
+
+def test_validator_result_materialization_merges_multiple_target_payload_patches():
+    metadata = DomainPackMetadata(
+        pack_id="fixture.target_patch",
+        display_name="Fixture Target Patch Pack",
+        version="0.1.0",
+        metadata_api_version="1.0.0",
+        metadata={
+            "validator_bindings": {
+                "active": [
+                    {
+                        "binding_id": "fixture.gene_lookup",
+                        "display_name": "Gene lookup",
+                        "validator_agent": {
+                            "package_id": "fixture.validators",
+                            "agent_id": "gene_validator",
+                        },
+                        "applies_to": {
+                            "domain_pack_id": "fixture.target_patch",
+                            "object_types": ["GeneMention"],
+                        },
+                        "input_fields": {
+                            "mention": {
+                                "source": "payload",
+                                "path": "mention",
+                            }
+                        },
+                        "expected_result_fields": {
+                            "curie": "primary_external_id",
+                            "symbol": "gene_symbol",
+                            "taxon": "taxon",
+                        },
+                    }
+                ],
+                "under_development": [],
+            }
+        },
+        object_definitions=[
+            DomainPackObjectDefinition(
+                object_type="GeneMention",
+                display_name="Gene mention",
+                metadata={"object_role": "validated_reference"},
+                fields=[
+                    DomainPackFieldDefinition(
+                        field_path="mention",
+                        field_type=DomainPackFieldType.STRING,
+                        required=True,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="primary_external_id",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="gene_symbol",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                    DomainPackFieldDefinition(
+                        field_path="taxon",
+                        field_type=DomainPackFieldType.STRING,
+                    ),
+                ],
+            )
+        ],
+    )
+    envelope = DomainEnvelope(
+        envelope_id="target-patch-env",
+        domain_pack_id="fixture.target_patch",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="GeneMention",
+                pending_ref_id="gene-mention-1",
+                status=CuratableObjectStatus.PENDING,
+                payload={"mention": "crumbs"},
+            )
+        ],
+    )
+    first_item = _validator_item(
+        metadata,
+        envelope,
+        resolved_values={"curie": "FB:FBgn0000368"},
+        resolved_objects=[],
+    )
+    second_item = _validator_item(
+        metadata,
+        envelope,
+        resolved_values={"symbol": "crb", "taxon": "NCBITaxon:7227"},
+        resolved_objects=[],
+    )
+
+    result = materialize_validator_results_into_envelope(
+        envelope,
+        metadata,
+        [first_item, second_item],
+    )
+
+    assert result.envelope.objects[0].payload == {
+        "mention": "crumbs",
+        "primary_external_id": "FB:FBgn0000368",
+        "gene_symbol": "crb",
+        "taxon": "NCBITaxon:7227",
+    }
+    assert len(
+        result.envelope.objects[0].metadata["validator_resolved_value_materialization"]
+    ) == 2
+
+
 def test_validator_result_materialization_is_deterministic_for_existing_reference():
     metadata = _validator_metadata()
     envelope = _validator_envelope()

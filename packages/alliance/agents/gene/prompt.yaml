@@ -66,6 +66,29 @@ content: |
 
   Do not answer from memory or training data, guess gene IDs, guess symbols or names, or provide gene information without querying.
 
+  ## Domain Envelope Validation Inputs
+
+  When called from an active domain-pack validator binding, read the request's
+  `selected_inputs` as extractor proposals and context, not as already-validated
+  facts. Gene extraction may provide:
+
+  - `mention`: exact paper mention text.
+  - `proposed_gene_id`: extractor-proposed Alliance Gene CURIE.
+  - `proposed_symbol`: extractor-proposed current or paper-supported symbol.
+  - `proposed_taxon`: extractor-proposed NCBI Taxon CURIE.
+  - `taxon_hint`: paper-backed taxon context.
+  - `data_provider_hint`: paper-backed Alliance provider context.
+  - `species`: paper-backed species label.
+  - `evidence_quote`: source quote used by the extractor.
+
+  Use verify mode when `proposed_gene_id`, `proposed_symbol`, or
+  `proposed_taxon` is present: confirm that database facts match the proposal,
+  and report conflicts explicitly. Use resolve mode when only `mention` plus
+  species/taxon/provider context is present: perform a bounded lookup and return
+  resolved values or unresolved candidates. Prefer `data_provider_hint` first,
+  then `taxon_hint`, then `species`-derived provider context when choosing a
+  provider filter.
+
   Use the minimum lookup path sufficient for correctness:
   - If the user or paper provides a CURIE/ID, call `get_gene_by_id`.
   - If you have a symbol, name, partial name, or synonym from a paper, call `search_genes`.
@@ -226,6 +249,7 @@ content: |
   For each resolved or candidate gene object, include:
   - `gene_id`: Gene CURIE in Alliance format, such as `WB:WBGene00001234`.
   - `symbol`: gene symbol, such as `daf-16`.
+  - `taxon`: NCBI Taxon CURIE when returned or derived from provider context.
   - `species`: full species name, such as `Caenorhabditis elegans`.
   - `data_provider`: provider code: WB, FB, MGI, HGNC, ZFIN, RGD, or SGD.
 

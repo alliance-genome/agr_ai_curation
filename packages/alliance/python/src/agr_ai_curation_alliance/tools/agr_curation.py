@@ -3012,6 +3012,39 @@ def _derive_agr_query_optional_arg_keys() -> Tuple[str, ...]:
 _AGR_QUERY_OPTIONAL_ARG_KEYS = _derive_agr_query_optional_arg_keys()
 
 
+@function_tool(strict_mode=False)
+def agr_species_context_lookup(
+    species: Optional[str] = None,
+    data_provider: Optional[str] = None,
+    provider_name: Optional[str] = None,
+    taxon_id: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> AgrQueryResult:
+    """Resolve only species/provider/taxon context for extraction agents.
+
+    This intentionally exposes no gene-name, gene-ID, synonym, or generic entity
+    lookup parameters. Gene identity resolution belongs to validator agents.
+    """
+
+    provider_query = provider_name
+    if not provider_query and species:
+        provider_query = species
+
+    if data_provider or provider_query or taxon_id:
+        return _AGR_QUERY_CALLABLE(
+            method="get_data_provider",
+            abbreviation=data_provider,
+            provider_name=provider_query,
+            taxon_id=taxon_id,
+            limit=limit,
+        )
+
+    return _AGR_QUERY_CALLABLE(
+        method="get_data_providers",
+        limit=limit,
+    )
+
+
 def create_groq_agr_curation_query_tool():
     """Create Groq-compatible wrapper for AGR query tool.
 

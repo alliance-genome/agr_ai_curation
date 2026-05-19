@@ -20,6 +20,9 @@ class GeneCandidateDetail(DomainValidatorBaseModel):
     species: Optional[StrictStr] = Field(
         default=None, description="Full species name returned by the lookup"
     )
+    taxon: Optional[StrictStr] = Field(
+        default=None, description="NCBI Taxon CURIE returned by the lookup"
+    )
     data_provider: Optional[StrictStr] = Field(
         default=None, description="Alliance data provider code"
     )

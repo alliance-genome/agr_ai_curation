@@ -15,6 +15,7 @@ from src.lib.config import agent_loader, agent_sources, schema_discovery
 from src.lib.curation_workspace.extraction_results import (
     build_extraction_envelope_candidate_with_evidence,
 )
+from src.lib.packages.tool_registry import load_tool_registry
 from src.schemas.models import LEGACY_SEMANTIC_LIST_FIELDS
 
 
@@ -86,10 +87,15 @@ def _valid_gene_extractor_payload() -> dict[str, object]:
                 ],
                 "payload": {
                     "mention": "daf-16",
-                    "primary_external_id": "WB:WBGene00000912",
-                    "gene_symbol": "daf-16",
-                    "taxon": "NCBITaxon:6239",
                     "species": "Caenorhabditis elegans",
+                    "taxon_hint": "NCBITaxon:6239",
+                    "data_provider_hint": "WB",
+                    "proposed_primary_external_id": "WB:WBGene00000912",
+                    "proposed_gene_symbol": "daf-16",
+                    "proposed_taxon": "NCBITaxon:6239",
+                    "identity_resolution_notes": [
+                        "Paper context supports C. elegans/WormBase provider context."
+                    ],
                     "confidence": "high",
                     "evidence_record_id": "ev-daf16-1",
                     "verified_quote": "DAF-16 translocated to nuclei after heat shock.",
@@ -127,7 +133,7 @@ def _valid_gene_extractor_payload() -> dict[str, object]:
                 }
             ],
             "normalization_notes": [
-                "Resolved daf-16 through agr_curation_query against Alliance Gene."
+                "Proposed daf-16 identity from paper-backed species context for validator confirmation."
             ],
             "exclusions": [
                 {
@@ -165,7 +171,9 @@ def test_gene_extractor_schema_accepts_gene_mention_evidence_domain_envelope():
     assert obj.object_type == GENE_MENTION_EVIDENCE_OBJECT_TYPE
     assert obj.object_role == "validated_reference"
     assert obj.model_ref == GENE_MENTION_EVIDENCE_MODEL_ID
-    assert obj.payload.primary_external_id == "WB:WBGene00000912"
+    assert obj.payload.proposed_primary_external_id == "WB:WBGene00000912"
+    assert obj.payload.taxon_hint == "NCBITaxon:6239"
+    assert not hasattr(obj.payload, "primary_external_id")
     assert obj.payload.evidence_record_id == "ev-daf16-1"
     assert obj.evidence_record_ids == ["ev-daf16-1"]
     assert envelope.metadata.raw_mentions[0].mention == "daf-16"
@@ -206,7 +214,7 @@ def test_gene_extractor_schema_rejects_legacy_gene_assertion_payload():
 
     message = str(exc_info.value)
     assert GENE_MENTION_EVIDENCE_OBJECT_TYPE in message
-    assert "normalized_symbol" in message or "primary_external_id" in message
+    assert "normalized_symbol" in message or "proposed_primary_external_id" in message
 
 
 def test_gene_extractor_schema_requires_payload_metadata_evidence_alignment():
@@ -254,8 +262,11 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert '"object_type": "gene_mention_evidence"' in prompt_content
     assert "`object_role`: `validated_reference`" in prompt_content
     assert "`model_ref`: `GeneMentionEvidencePayload`" in prompt_content
-    assert "`payload.primary_external_id`" in prompt_content
-    assert "Active validator bindings own final Alliance Gene identity decisions." in prompt_content
+    assert "`payload.proposed_primary_external_id`" in prompt_content
+    assert "agr_species_context_lookup" in prompt_content
+    assert "agr_species_context_lookup" in agent_data["tools"]
+    assert "agr_curation_query" not in agent_data["tools"]
+    assert "Active validator bindings own final Alliance Gene identity decisions" in prompt_content
     assert "repair_mode" not in prompt_content
     assert "repair_hints" not in prompt_content
     assert "repair_notes" not in prompt_content
@@ -271,7 +282,21 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
         content = str(yaml.safe_load(group_rule_file.read_text(encoding="utf-8"))["content"])
         assert "gene_mention_evidence" in content
         assert "GeneMentionEvidencePayload" in content
-        assert "payload.primary_external_id" in content
+        assert "payload.proposed_primary_external_id" in content
+
+
+def test_gene_extractor_species_context_tool_is_registered_without_broad_lookup():
+    source = _gene_extractor_source()
+    agent_data = yaml.safe_load(source.agent_yaml.read_text(encoding="utf-8"))
+    registry = load_tool_registry(REPO_PACKAGES_DIR)
+    species_tool = registry.get("agr_species_context_lookup")
+
+    assert species_tool is not None
+    assert species_tool.import_path == (
+        "agr_ai_curation_alliance.tools.agr_curation:agr_species_context_lookup"
+    )
+    assert "agr_species_context_lookup" in agent_data["tools"]
+    assert "agr_curation_query" not in agent_data["tools"]
 
 
 def test_gene_extractor_payload_persists_as_curatable_objects_only_for_new_runs():

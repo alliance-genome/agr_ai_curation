@@ -294,6 +294,25 @@ def materialize_validator_results_into_envelope(
     materialized_objects: list[CuratableObjectEnvelope] = []
 
     for item in items:
+        (
+            working_envelope,
+            patch_problem,
+        ) = _patch_target_object_from_resolved_values(
+            working_envelope,
+            item,
+            object_definitions=object_definitions,
+            source_envelope_revision=source_envelope_revision,
+        )
+        if patch_problem is not None:
+            findings.append(
+                _finding_for_materialization_problem(
+                    item,
+                    patch_problem,
+                    source_envelope_revision=source_envelope_revision,
+                )
+            )
+            continue
+
         new_objects, materialization_problem = _materialized_objects_for_result(
             working_envelope,
             item,
@@ -338,6 +357,121 @@ def materialize_validator_results_into_envelope(
     )
 
 
+def _patch_target_object_from_resolved_values(
+    envelope: DomainEnvelope,
+    item: ValidatorResultMaterializationInput,
+    *,
+    object_definitions: Mapping[str, DomainPackObjectDefinition],
+    source_envelope_revision: int | None,
+) -> tuple[DomainEnvelope, str | None]:
+    """Patch validator-owned scalar results onto the matched envelope object."""
+
+    result = item.result
+    matched_target = item.match.object_envelope
+    if result.status != "resolved" or matched_target is None or not result.resolved_values:
+        return envelope, None
+
+    target = _current_object_for_match(envelope, matched_target)
+    if target is None:
+        return envelope, None
+
+    object_definition = item.match.object_definition
+    if object_definition is None:
+        object_definition = object_definitions.get(target.object_type)
+    if object_definition is None:
+        return envelope, None
+
+    declared_fields = {field.field_path: field for field in object_definition.fields}
+    payload = dict(target.payload)
+    changed = False
+
+    for result_field, raw_field_path in item.request.expected_result_fields.items():
+        if not isinstance(raw_field_path, str) or not raw_field_path.strip():
+            return envelope, (
+                "expected_result_fields values must be non-empty field path strings"
+            )
+        resolved_value = result.resolved_values.get(result_field)
+        if _missing_resolved_value(resolved_value):
+            continue
+        materialized_field_path = _materialized_field_path(
+            raw_field_path,
+            declared_fields=declared_fields,
+        )
+        if materialized_field_path is None:
+            continue
+        current_value = _payload_value(payload, materialized_field_path)
+        if current_value is not _MISSING and current_value == resolved_value:
+            continue
+        _set_payload_value(payload, materialized_field_path, resolved_value)
+        changed = True
+
+    if not changed:
+        return envelope, None
+
+    metadata = dict(target.metadata)
+    existing_patch_metadata = metadata.get("validator_resolved_value_materialization")
+    patch_events: list[dict[str, Any]]
+    if isinstance(existing_patch_metadata, list):
+        patch_events = list(existing_patch_metadata)
+    else:
+        patch_events = []
+    patch_events.append(
+        {
+            "source": "domain_validator_resolved_values",
+            "request_id": result.request_id,
+            "validator_binding_id": result.validator_binding_id,
+            "validator_agent": result.validator_agent.model_dump(mode="json"),
+            **(
+                {"source_envelope_revision": source_envelope_revision}
+                if source_envelope_revision is not None
+                else {}
+            ),
+        }
+    )
+    metadata["validator_resolved_value_materialization"] = patch_events
+
+    patched_target = target.model_copy(
+        update={
+            "payload": payload,
+            "status": CuratableObjectStatus.VALIDATED,
+            "metadata": metadata,
+        }
+    )
+    objects = [
+        patched_target if _same_object_identity(candidate, target) else candidate
+        for candidate in envelope.objects
+    ]
+    return envelope.model_copy(update={"objects": objects}), None
+
+
+def _current_object_for_match(
+    envelope: DomainEnvelope,
+    target: CuratableObjectEnvelope,
+) -> CuratableObjectEnvelope | None:
+    """Return the current envelope object corresponding to a match target."""
+
+    for candidate in envelope.objects:
+        if _same_object_identity(candidate, target):
+            return candidate
+    return None
+
+
+def _same_object_identity(
+    candidate: CuratableObjectEnvelope,
+    target: CuratableObjectEnvelope,
+) -> bool:
+    """Return whether two envelope objects identify the same target object."""
+
+    if target.object_id is not None:
+        return candidate.object_id == target.object_id
+    if target.pending_ref_id is not None:
+        return (
+            candidate.pending_ref_id == target.pending_ref_id
+            and candidate.object_type == target.object_type
+        )
+    return candidate is target
+
+
 def _materialized_objects_for_result(
     envelope: DomainEnvelope,
     item: ValidatorResultMaterializationInput,
@@ -352,8 +486,16 @@ def _materialized_objects_for_result(
     if not result.resolved_objects:
         return [], None
 
+    resolved_objects = [
+        raw_object
+        for raw_object in result.resolved_objects
+        if _looks_like_materializable_object(raw_object)
+    ]
+    if not resolved_objects:
+        return [], None
+
     materialized_objects: list[CuratableObjectEnvelope] = []
-    for object_index, raw_object in enumerate(result.resolved_objects):
+    for object_index, raw_object in enumerate(resolved_objects):
         if not isinstance(raw_object, Mapping):
             return [], f"resolved_objects[{object_index}] must be an object"
 
@@ -435,6 +577,17 @@ def _materialized_objects_for_result(
         )
 
     return materialized_objects, None
+
+
+def _looks_like_materializable_object(raw_object: Any) -> bool:
+    """Return whether a resolved object is an envelope materialization payload."""
+
+    if not isinstance(raw_object, Mapping):
+        return True
+    return any(
+        key in raw_object
+        for key in ("object_type", "canonical_id", "payload")
+    )
 
 
 def _validated_reference_payload(

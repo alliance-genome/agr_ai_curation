@@ -558,6 +558,40 @@ tools:
           Prefer bulk lookup methods when available (for example search_genes_bulk/search_alleles_bulk) using list inputs instead of one-call-per-entity loops.
           If provider/model supports it, issue parallel tool calls in the same turn.
           Avoid one-call-per-entity loops when enough evidence already exists to synthesize output.
+  - tool_id: agr_species_context_lookup
+    binding_kind: static
+    callable: agr_ai_curation_alliance.tools.agr_curation:agr_species_context_lookup
+    required_context: []
+    description: Resolve Alliance species, data provider, and NCBI taxon context without gene or allele lookup
+    source_file: python/src/agr_ai_curation_alliance/tools/agr_curation.py
+    metadata:
+      name: AGR Species Context Lookup
+      category: Database
+      audit:
+        display_name: AGR Species Context Lookup
+      documentation:
+        summary: Narrow extractor-safe lookup for provider/species/taxon context. This tool does not search gene names, gene IDs, synonyms, or generic entity mappings.
+        parameters:
+          - name: species
+            type: string
+            required: false
+            description: Species label from the paper, such as Drosophila melanogaster or C. elegans.
+          - name: data_provider
+            type: string
+            required: false
+            description: Alliance provider abbreviation, such as FB, WB, MGI, HGNC, ZFIN, RGD, or SGD.
+          - name: provider_name
+            type: string
+            required: false
+            description: Data provider display name or organism/provider label.
+          - name: taxon_id
+            type: string
+            required: false
+            description: NCBI Taxon CURIE, such as NCBITaxon:7227.
+          - name: limit
+            type: integer
+            required: false
+            description: Maximum number of provider candidates to return.
   - tool_id: search_document
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.documents:create_search_document_tool

@@ -78,10 +78,12 @@ object_definitions:
       evidence_role: gene_mention_evidence
       blocking_validation: false
       workspace_display:
-        primary_label_field: gene_symbol
-        secondary_label_field: primary_external_id
+        primary_label_field: mention
+        secondary_label_field: gene_symbol
         summary_fields:
           - mention
+          - proposed_gene_symbol
+          - data_provider_hint
           - gene_symbol
           - primary_external_id
           - taxon
@@ -106,20 +108,34 @@ object_definitions:
               domain_pack_id: gene
               object_types:
                 - gene_mention_evidence
-              field_paths:
-                - primary_external_id
-                - gene_symbol
-                - taxon
             input_fields:
-              gene_id:
+              mention:
                 source: payload
-                path: primary_external_id
-              gene_symbol:
+                path: mention
+              proposed_gene_id:
                 source: payload
-                path: gene_symbol
-              taxon:
+                path: proposed_primary_external_id
+                required: false
+              proposed_symbol:
                 source: payload
-                path: taxon
+                path: proposed_gene_symbol
+                required: false
+              proposed_taxon:
+                source: payload
+                path: proposed_taxon
+                required: false
+              taxon_hint:
+                source: payload
+                path: taxon_hint
+                required: false
+              data_provider_hint:
+                source: payload
+                path: data_provider_hint
+                required: false
+              species:
+                source: payload
+                path: species
+                required: false
               evidence_quote:
                 source: payload
                 path: verified_quote
@@ -166,8 +182,7 @@ object_definitions:
       - field_path: primary_external_id
         field_type: string
         display_name: Gene ID
-        description: Alliance Gene primary external identifier resolved by validation tooling.
-        required: true
+        description: Alliance Gene primary external identifier materialized by validation tooling.
         metadata:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
@@ -185,8 +200,7 @@ object_definitions:
       - field_path: gene_symbol
         field_type: string
         display_name: Gene symbol
-        description: Current accepted symbol for the resolved gene.
-        required: true
+        description: Current accepted symbol materialized by validation tooling.
         metadata:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
@@ -204,8 +218,7 @@ object_definitions:
       - field_path: taxon
         field_type: string
         display_name: Taxon
-        description: NCBI Taxon CURIE for the resolved gene.
-        required: true
+        description: NCBI Taxon CURIE materialized by validation tooling for the resolved gene.
         metadata:
           validatable: true
           validator_binding_id: alliance_gene_reference_lookup
@@ -224,6 +237,30 @@ object_definitions:
         field_type: string
         display_name: Species
         description: Curator-facing species label when available from extraction context.
+      - field_path: taxon_hint
+        field_type: string
+        display_name: Taxon hint
+        description: Paper-backed NCBI Taxon CURIE hint preserved for validator input.
+      - field_path: data_provider_hint
+        field_type: string
+        display_name: Data provider hint
+        description: Paper-backed Alliance provider hint preserved for validator input.
+      - field_path: proposed_primary_external_id
+        field_type: string
+        display_name: Proposed gene ID
+        description: Extractor-proposed Alliance Gene identifier for validator confirmation.
+      - field_path: proposed_gene_symbol
+        field_type: string
+        display_name: Proposed gene symbol
+        description: Extractor-proposed gene symbol for validator confirmation.
+      - field_path: proposed_taxon
+        field_type: string
+        display_name: Proposed taxon
+        description: Extractor-proposed NCBI Taxon CURIE for validator confirmation.
+      - field_path: identity_resolution_notes
+        field_type: array
+        display_name: Identity resolution notes
+        description: Extractor-side notes describing paper-backed species or proposed identity hints.
       - field_path: confidence
         field_type: enum
         display_name: Confidence

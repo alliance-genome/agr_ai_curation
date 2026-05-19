@@ -17,5 +17,5 @@ content: |
 
   ### Shared gene validated-reference output contract
   - Emit retained gene mention/evidence findings only as `gene_mention_evidence` objects in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
-  - Each object must use `object_role: validated_reference`, `model_ref: GeneMentionEvidencePayload`, `definition_state: in_development`, `payload.primary_external_id`, `payload.gene_symbol`, `payload.taxon`, `payload.evidence_record_id`, and verified evidence locator fields.
+  - Each object must use `object_role: validated_reference`, `model_ref: GeneMentionEvidencePayload`, `definition_state: in_development`, `payload.mention`, evidence fields, and optional `payload.species`, `payload.taxon_hint`, `payload.data_provider_hint`, `payload.proposed_primary_external_id`, `payload.proposed_gene_symbol`, and `payload.proposed_taxon` when supported.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.

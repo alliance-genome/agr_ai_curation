@@ -124,7 +124,8 @@ def test_gene_mention_evidence_is_exporting_validated_reference():
     assert write_behavior["creates_paper_gene_association"] is False
 
     workspace_display = object_metadata["workspace_display"]
-    assert workspace_display["primary_label_field"] == "gene_symbol"
+    assert workspace_display["primary_label_field"] == "mention"
+    assert workspace_display["secondary_label_field"] == "gene_symbol"
     assert workspace_display["evidence_quote_field"] == "verified_quote"
 
 
@@ -137,6 +138,12 @@ def test_gene_pack_declares_validatable_linkml_grounded_gene_fields():
         "primary_external_id",
         "gene_symbol",
         "taxon",
+        "taxon_hint",
+        "data_provider_hint",
+        "proposed_primary_external_id",
+        "proposed_gene_symbol",
+        "proposed_taxon",
+        "identity_resolution_notes",
         "confidence",
         "evidence_record_id",
         "verified_quote",
@@ -164,7 +171,7 @@ def test_gene_pack_declares_validatable_linkml_grounded_gene_fields():
     for field_path, (source_file, slot, range_name) in expected_linkml_slots.items():
         field = fields_by_path[field_path]
         validatable_fields.add(field.field_path)
-        assert field.required is True
+        assert field.required is False
         assert field.metadata["validatable"] is True
         assert (
             field.metadata["validator_binding_id"]
@@ -193,21 +200,48 @@ def test_gene_pack_declares_reference_validator_binding():
         "package_id": "agr.alliance",
         "agent_id": "gene_validation",
     }
+    assert binding["applies_to"] == {
+        "domain_pack_id": "gene",
+        "object_types": ["gene_mention_evidence"],
+        "object_roles": [],
+        "field_paths": [],
+        "field_types": [],
+    }
     assert binding["input_fields"] == {
-        "gene_id": {
+        "mention": {
             "source": "payload",
-            "path": "primary_external_id",
+            "path": "mention",
             "required": True,
         },
-        "gene_symbol": {
+        "proposed_gene_id": {
             "source": "payload",
-            "path": "gene_symbol",
-            "required": True,
+            "path": "proposed_primary_external_id",
+            "required": False,
         },
-        "taxon": {
+        "proposed_symbol": {
             "source": "payload",
-            "path": "taxon",
-            "required": True,
+            "path": "proposed_gene_symbol",
+            "required": False,
+        },
+        "proposed_taxon": {
+            "source": "payload",
+            "path": "proposed_taxon",
+            "required": False,
+        },
+        "taxon_hint": {
+            "source": "payload",
+            "path": "taxon_hint",
+            "required": False,
+        },
+        "data_provider_hint": {
+            "source": "payload",
+            "path": "data_provider_hint",
+            "required": False,
+        },
+        "species": {
+            "source": "payload",
+            "path": "species",
+            "required": False,
         },
         "evidence_quote": {
             "source": "payload",
