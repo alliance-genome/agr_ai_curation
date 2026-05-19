@@ -17,7 +17,7 @@ content: |
   - Document retrieval performed before answering.
   - Each retained annotation supported by an experiment in THIS paper.
   - Each retained evidence quote verified with `record_evidence` against the exact chunk currently on screen.
-  - Validator-bound fields carry evidence-backed inputs only; active validator bindings own final relation and data-provider decisions.
+  - Validator-bound fields carry evidence-backed selector inputs only; active validator bindings own final relation and data-provider verification.
   - Distinct expression patterns represented as separate annotations.
   - Non-curatable candidates preserved in `metadata.exclusions[]` with canonical reason_code values.
   - Uncertain but potentially useful findings preserved in `metadata.ambiguities[]` for curator review.
@@ -166,9 +166,9 @@ content: |
   </tools_and_retrieval>
 
   <active_validator_binding_policy>
-  Active validator bindings declared by the gene-expression domain pack are the authority for final normalized fields covered by validation, including relation vocabulary and data-provider identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent controlled-vocabulary or provider identifiers, or present lookup hints as validated results.
+  Active validator bindings declared by the gene-expression domain pack are the authority for final normalized fields covered by validation, including relation vocabulary and data-provider identity. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent controlled-vocabulary identifiers, or present lookup hints as validated results.
 
-  Do not perform extraction-time relation vocabulary lookup, data-provider lookup, gene identity lookup, reference lookup, or expression ontology lookup. Use `agr_species_context_lookup` only for narrow organism/provider/taxon context that is directly supported by the paper. Unresolved validator outcomes remain envelope validation findings for curator review.
+  Do not perform extraction-time relation vocabulary lookup, data-provider database lookup, gene identity lookup, reference lookup, or expression ontology lookup. Use `agr_species_context_lookup` only for narrow organism/provider/taxon context that is directly supported by the paper. A paper-supported organism/provider context may be used as the selector input at `payload.data_provider.abbreviation`; the data-provider validator still verifies it. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
   <search_infrastructure>
@@ -265,6 +265,9 @@ content: |
 
   Payload field contract:
   - Use Alliance/LinkML field names, not legacy flat helper names.
+  - Represent dotted field paths as nested JSON objects. For example, emit
+    `"data_provider": {"abbreviation": "ZFIN"}`, not a literal key named
+    `"data_provider.abbreviation"`.
   - Required payload paths are `date_created`, `internal`, `data_provider`,
     `data_provider.abbreviation`, `expression_annotation_subject`,
     `expression_annotation_subject.primary_external_id`,
@@ -282,6 +285,12 @@ content: |
   - For `GeneExpressionAnnotation`, set `relation.name` to `is_expressed_in`.
     This is the LinkML-required relation for gene-expression annotations and
     does not require an extraction-time database lookup.
+  - For `GeneExpressionAnnotation`, set `data_provider.abbreviation` when the
+    organism/provider context is clear from the paper or from
+    `agr_species_context_lookup` (for example, zebrafish / Danio rerio => `ZFIN`,
+    mouse / Mus musculus => `MGI`, Drosophila melanogaster => `FB`, and
+    C. elegans => `WB`). This is a LinkML-required selector value; the active
+    data-provider validator owns final verification.
   - Put spatial context under `expression_pattern.where_expressed`, using
     `anatomical_structure.name` / `cellular_component.name` labels when CURIEs are not
     resolved. At least one of `anatomical_structure` or `cellular_component` should be present.

@@ -162,6 +162,20 @@ def validate_gene_expression_extraction_objects(
                 f"{location}.payload relation.name must be "
                 f"{GENE_EXPRESSION_RELATION_NAME}"
             )
+        data_provider = obj.payload.get("data_provider")
+        provider_abbreviation = (
+            data_provider.get("abbreviation")
+            if isinstance(data_provider, Mapping)
+            else None
+        )
+        if (
+            not isinstance(provider_abbreviation, str)
+            or not provider_abbreviation.strip()
+        ):
+            errors.append(
+                f"{location}.payload data_provider.abbreviation must be a "
+                "non-empty Alliance provider abbreviation"
+            )
 
         if not obj.evidence_record_ids:
             errors.append(f"{location}.evidence_record_ids must not be empty")
@@ -502,6 +516,28 @@ def validate_pending_gene_expression_envelope(
                     ),
                     object_ref=object_ref,
                     details={"expected_relation_name": GENE_EXPRESSION_RELATION_NAME},
+                )
+            )
+        data_provider = expression_object.payload.get("data_provider")
+        provider_abbreviation = (
+            data_provider.get("abbreviation")
+            if isinstance(data_provider, Mapping)
+            else None
+        )
+        if (
+            not isinstance(provider_abbreviation, str)
+            or not provider_abbreviation.strip()
+        ):
+            findings.append(
+                ValidationFinding(
+                    severity=ValidationFindingSeverity.ERROR,
+                    code="alliance.gene_expression.data_provider_abbreviation_missing",
+                    message=(
+                        "GeneExpressionAnnotation requires a non-empty "
+                        "data_provider.abbreviation selector."
+                    ),
+                    object_ref=object_ref,
+                    details={"required_field": "data_provider.abbreviation"},
                 )
             )
 

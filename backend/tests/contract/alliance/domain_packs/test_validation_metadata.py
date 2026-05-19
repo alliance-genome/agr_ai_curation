@@ -377,7 +377,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
     assert relation_binding.state is ValidationBindingState.ACTIVE
     assert relation_binding.object_types == ("GeneExpressionAnnotation",)
     assert relation_binding.field_paths == ("relation.name",)
-    assert relation_binding.input_fields["vocabulary"].value == "relation"
+    assert relation_binding.input_fields["vocabulary"].value == "Expression Relation"
     assert "relation_vocabulary_validation" in registries[
         "agr.alliance.gene_expression"
     ].policy_for(

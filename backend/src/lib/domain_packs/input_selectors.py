@@ -60,21 +60,43 @@ def build_domain_validation_request(
     problems: list[_SelectorProblem] = []
     selected_inputs: dict[str, Any] = {}
     selectors: dict[str, dict[str, Any]] = {}
+    declared_non_literal_inputs = False
+    selected_non_literal_inputs = False
+    missing_optional_non_literal_inputs = False
 
     for input_name, selector in binding.input_fields.items():
         selectors[input_name] = selector.model_dump(mode="json", exclude_none=True)
+        if selector.source != "literal":
+            declared_non_literal_inputs = True
         value, problem = _resolve_selector(match, input_name, selector)
         if problem is not None:
             problems.append(problem)
             continue
         if value is _OPTIONAL_INPUT_MISSING:
+            if selector.source != "literal":
+                missing_optional_non_literal_inputs = True
             continue
+        if selector.source != "literal":
+            selected_non_literal_inputs = True
         selected_inputs[input_name] = value
 
     if problems:
         return SelectorBuildResult(
             request=None,
             findings=tuple(_problem_finding(match, problem) for problem in problems),
+            selected_inputs=selected_inputs,
+            input_selectors=selectors,
+            evidence=_evidence_records_for_target(match),
+        )
+
+    if (
+        declared_non_literal_inputs
+        and missing_optional_non_literal_inputs
+        and not selected_non_literal_inputs
+    ):
+        return SelectorBuildResult(
+            request=None,
+            findings=(),
             selected_inputs=selected_inputs,
             input_selectors=selectors,
             evidence=_evidence_records_for_target(match),

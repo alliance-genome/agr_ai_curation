@@ -135,8 +135,9 @@ TRIALS: tuple[CorpusTrial, ...] = (
             "Read the loaded paper and extract exactly one gene-expression observation candidate: "
             "zebrafish flcn expression during embryonic development, preferably brain, retina, "
             "hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints "
-            "and one record_evidence verified quote. Do not resolve anatomy, stage, gene, or "
-            "provider IDs in the extractor."
+            "and one record_evidence verified quote. Use the explicit zebrafish organism context "
+            "as the ZFIN data-provider selector, but do not resolve anatomy, stage, gene, or "
+            "provider database IDs in the extractor."
         ),
     ),
     CorpusTrial(

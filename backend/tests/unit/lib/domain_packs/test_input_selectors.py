@@ -270,7 +270,9 @@ def test_validation_request_carries_selected_inputs_evidence_and_expected_fields
     assert request["expected_result_fields"] == {"selected": "selected"}
 
 
-def test_optional_payload_selector_is_fast_path_not_admission_gate(tmp_path: Path):
+def test_optional_payload_selector_missing_suppresses_literal_only_request(
+    tmp_path: Path,
+):
     result = _run_selector(
         tmp_path,
         """
@@ -286,13 +288,38 @@ def test_optional_payload_selector_is_fast_path_not_admission_gate(tmp_path: Pat
     )
 
     assert result.findings == ()
-    assert result.request is not None
-    request = result.request.model_dump(mode="json")
-    assert request["selected_inputs"] == {"ontology_term_type": "DOTerm"}
-    assert request["input_selectors"]["curie"] == {
+    assert result.request is None
+    assert result.selected_inputs == {"ontology_term_type": "DOTerm"}
+    assert result.input_selectors["curie"] == {
         "source": "payload",
         "path": "value",
         "required": False,
+    }
+
+
+def test_optional_payload_selector_present_keeps_literal_context(
+    tmp_path: Path,
+):
+    result = _run_selector(
+        tmp_path,
+        """
+          curie:
+            source: payload
+            path: value
+            required: false
+          ontology_term_type:
+            source: literal
+            value: DOTerm
+""",
+        _assertion_envelope(payload={"value": "DOID:1"}),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    request = result.request.model_dump(mode="json")
+    assert request["selected_inputs"] == {
+        "curie": "DOID:1",
+        "ontology_term_type": "DOTerm",
     }
 
 

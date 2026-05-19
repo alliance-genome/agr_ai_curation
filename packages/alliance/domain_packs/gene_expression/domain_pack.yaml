@@ -852,7 +852,7 @@ metadata:
         input_fields:
           vocabulary:
             source: literal
-            value: relation
+            value: Expression Relation
           term_name:
             source: payload
             path: relation.name
