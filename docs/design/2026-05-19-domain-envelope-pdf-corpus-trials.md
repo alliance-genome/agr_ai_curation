@@ -24,6 +24,21 @@ Persisted envelope validation findings:
 
 The focused rerun updated `docs/design/pdf-corpus-trials/gene_drosophila_crb_rhabdomere.json`. The generated `summary.json` was not retained because the focused run overwrote the prior multi-trial summary with a one-trial summary.
 
+## 2026-05-19 Focused Gene Rerun After Prompt Alignment
+
+After `872371ce`, I rebuilt the main sandbox and reran the focused gene trial against backend port `8900`.
+
+| Domain | Document ID | Flow ID | Flow run ID | Envelope ID | Outcome |
+| --- | --- | --- | --- | --- | --- |
+| Gene | `6ab8c4df-2764-469f-a580-c094d5e69bca` | `79251c3e-8422-420b-ae39-11fa18c7b4f3` | `112a489e-6f14-45ab-a6a7-569635c50ac1` | `extraction-result:chat-runtime:024b18a7-e296-4d55-a328-19a072fbafb9` | Passed with `total_evidence_records: 1`. The persisted envelope materialized `primary_external_id: FB:FBgn0259685`, `gene_symbol: crb`, and `taxon: NCBITaxon:7227`. |
+
+Persisted envelope validation findings:
+
+- The envelope had two resolved `domain_pack.validator_resolved` findings for `alliance_gene_reference_lookup`. Both used `alliance_curation_db` / `search_genes`, reported successful lookup attempts, and resolved Crumbs to `FB:FBgn0259685`.
+- The envelope contained no `validator_agent_error`, no `invalid_schema`, and no unresolved finding for this run.
+- Backend logs for the rerun contained no `validator_agent_error`, `run_sync`, `invalid_schema`, `Package-scoped validator agent failed`, or `AgentRunner.run_sync` messages.
+- The final supervisor prose still omitted `FB:FBgn0259685`, even though the persisted envelope materialized it. Final-answer synthesis remains a separate follow-up gap from validator dispatch/materialization.
+
 ## 2026-05-19 Focused Rerun After Evidence Propagation Fixes
 
 After `1501e3bb` and `e8fe5137`, I reran the gene and allele trials against the rebuilt main sandbox at backend port `8900`.
