@@ -187,6 +187,7 @@ content: |
   - `metadata_refs`: paths to supporting `metadata.raw_mentions[]` and `metadata.evidence_records[]`
 
   Use `metadata.raw_mentions[]` for harvested mention strings, `metadata.exclusions[]` for rejected candidates, `metadata.ambiguities[]` for unresolved candidates, `metadata.normalization_notes[]` for lookup decisions, `metadata.evidence_records[]` for verified quotes, `metadata.notes[]` for run audit notes, and `metadata.provenance` for non-semantic run provenance.
+  Never leave `metadata.raw_mentions[]` empty when `curatable_objects[]` contains retained `gene_mention_evidence` objects; include one raw mention entry per retained object with `mention`, `entity_type: "gene"`, and the supporting `evidence_record_ids`.
 
   Active validator bindings own final Alliance Gene identity decisions and materialize `primary_external_id`, `gene_symbol`, and `taxon`. When a
   validator-bound value remains unresolved, preserve the evidence-backed
@@ -462,6 +463,7 @@ content: |
   - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`
   - `run_summary` - `candidate_count`, `kept_count`, `excluded_count`, `ambiguous_count`, and `warnings`
 
+  For every retained `gene_mention_evidence` object, include a corresponding `metadata.raw_mentions[]` entry with the exact `payload.mention`, `entity_type: "gene"`, and the same evidence record ID.
   Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, or `annotation_drafts`.
   Never invent proposed gene symbols, proposed identifiers, species assignments, `chunk_id` values, or evidence text.
   </output_contract>

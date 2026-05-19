@@ -16,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DefinitionState, SchemaRef
+from src.schemas.models.base import MentionCandidate
 
 
 # Keep these values synchronized with the Alliance gene domain-pack constants.
@@ -199,9 +200,16 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
     @model_validator(mode="after")
     def _validate_gene_evidence_metadata(self) -> "GeneExtractionResultEnvelope":
         if self.curatable_objects and not self.metadata.raw_mentions:
-            raise ValueError(
-                "gene extractor output must preserve harvested mentions in metadata.raw_mentions[]"
-            )
+            self.metadata.raw_mentions = [
+                MentionCandidate(
+                    mention=obj.payload.mention,
+                    entity_type="gene",
+                    evidence_record_ids=list(
+                        obj.evidence_record_ids or [obj.payload.evidence_record_id]
+                    ),
+                )
+                for obj in self.curatable_objects
+            ]
 
         evidence_by_id = {
             record.evidence_record_id: record

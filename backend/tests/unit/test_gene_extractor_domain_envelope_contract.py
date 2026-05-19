@@ -338,9 +338,12 @@ def test_gene_domain_pack_fixture_converts_to_pending_gene_mention_envelope():
     assert all(LEGACY_SEMANTIC_LIST_FIELDS.isdisjoint(obj.payload) for obj in converted.objects)
 
 
-def test_gene_extractor_schema_rejects_missing_raw_mentions_for_retained_objects():
+def test_gene_extractor_schema_synthesizes_missing_raw_mentions_for_retained_objects():
     payload = copy.deepcopy(_valid_gene_extractor_payload())
     payload["metadata"]["raw_mentions"] = []
 
-    with pytest.raises(ValidationError, match="metadata.raw_mentions"):
-        _gene_extractor_schema().model_validate(payload)
+    envelope = _gene_extractor_schema().model_validate(payload)
+
+    assert envelope.metadata.raw_mentions[0].mention == "daf-16"
+    assert envelope.metadata.raw_mentions[0].entity_type == "gene"
+    assert envelope.metadata.raw_mentions[0].evidence_record_ids == ["ev-daf16-1"]
