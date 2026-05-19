@@ -6,6 +6,7 @@ content: |
   - Mouse is the primary mammalian model for human disease research.
   - When a paper describes a mouse model of a human disease, capture the human disease
     and note model_context as the role.
+  - For retained mouse disease-model assertions, include `payload.data_provider.abbreviation: MGI` as the required LinkML data-provider selector hint.
   - "APP/PS1 mouse model of Alzheimer's disease" → the disease is Alzheimer's disease;
     the APP/PS1 mouse model is the experimental system.
 
@@ -27,4 +28,4 @@ content: |
   - Emit retained semantic findings only as `DiseaseAnnotation` pending assertions in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
   - Use `object_role: "curatable_unit"`, `model_ref: "PendingDiseaseAssertionPayload"`, `definition_state: "in_development"`, and payload field `disease_annotation_object.name` plus optional `disease_annotation_object.curie`; do not use legacy flat `normalized_id` or `normalized_label` fields.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
-  - Surface incomplete subject, reference, evidence-code, data-provider, or concrete write-target context with blocked write behavior and definition-state notes rather than inventing values.
+  - Surface incomplete subject, reference, evidence-code, or concrete write-target context with blocked write behavior and definition-state notes rather than inventing values. `data_provider.abbreviation` is required for retained DiseaseAnnotation objects; if provider context is unclear, preserve the candidate as ambiguity/exclusion metadata instead of emitting a retained object.

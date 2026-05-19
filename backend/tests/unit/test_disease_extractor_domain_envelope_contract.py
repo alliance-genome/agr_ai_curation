@@ -106,6 +106,7 @@ def test_disease_extractor_schema_accepts_pending_disease_annotation_output():
         "curie": "DOID:0050434",
         "name": "Andersen-Tawil syndrome",
     }
+    assert obj.payload["data_provider"] == {"abbreviation": "ZFIN"}
     assert obj.evidence_record_ids == [
         "ats-model-evidence-1",
         "ats-cohort-evidence-1",
@@ -162,6 +163,7 @@ def test_disease_extractor_schema_rejects_legacy_flat_disease_payload_fields():
     [
         "mention",
         "disease_annotation_object.name",
+        "data_provider.abbreviation",
     ],
 )
 def test_disease_extractor_schema_rejects_blank_required_payload_values(
@@ -270,6 +272,7 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
     assert "`model_ref`: `PendingDiseaseAssertionPayload`" in prompt_content
     assert "`disease_annotation_object.name`" in prompt_content
     assert "`data_provider.abbreviation`" in prompt_content
+    assert "required for retained DiseaseAnnotation objects" in prompt_content
     assert "`is_model_of`" in prompt_content
     assert "LinkML requires disease relation and data-provider context" in prompt_content
     assert "Do not use legacy flat payload fields" in prompt_content
@@ -330,6 +333,7 @@ def test_disease_extractor_fixture_converts_to_pending_domain_envelope():
     [
         "mention",
         "disease_annotation_object.name",
+        "data_provider.abbreviation",
     ],
 )
 def test_pending_disease_validator_rejects_blank_required_payload_values(

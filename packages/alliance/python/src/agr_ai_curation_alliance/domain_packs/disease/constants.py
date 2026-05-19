@@ -38,6 +38,8 @@ REQUIRED_DISEASE_PAYLOAD_FIELDS = (
     "disease_annotation_object.name",
     "role",
     "confidence",
+    "data_provider",
+    "data_provider.abbreviation",
     "evidence_record_ids",
     "evidence_records",
 )

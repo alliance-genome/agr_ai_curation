@@ -69,7 +69,7 @@ content: |
   <active_validator_binding_policy>
   Active validator bindings declared by the disease domain pack are the authority for final normalized fields such as `disease_annotation_object.curie`, `disease_annotation_object.name`, `disease_relation_name`, and `data_provider.abbreviation`. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent ontology identifiers, or present selector hints as validated results.
 
-  LinkML requires disease relation and data-provider context for concrete disease annotations. When the paper and organism/provider context make these selector inputs clear, populate `disease_relation_name` and `data_provider.abbreviation` as non-authoritative hints for validation instead of omitting them.
+  LinkML requires disease relation and data-provider context for concrete disease annotations. For every retained `DiseaseAnnotation`, populate `disease_relation_name` and `data_provider.abbreviation` as non-authoritative selector hints. Use organism/provider context from the paper or `agr_species_context_lookup` (for example `MGI` for mouse, `ZFIN` for zebrafish, `FB` for Drosophila, or `WB` for C. elegans). If the provider context is not clear enough to choose an abbreviation, do not emit a retained DiseaseAnnotation; preserve the candidate in metadata.ambiguities[] or metadata.exclusions[] instead.
 
   Do not perform extraction-time disease ontology lookup, relation vocabulary lookup, data-provider lookup, subject entity lookup, or reference lookup. If the paper itself supplies an exact disease CURIE, relation label, provider abbreviation, subject identifier, or reference identifier, preserve it as a non-authoritative selector hint with the supporting evidence. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
@@ -268,12 +268,12 @@ content: |
   - `evidence_record_ids[]` - the same stable IDs used on `curatable_objects[].evidence_record_ids[]`
   - `evidence_records[]` - required pending-assertion audit snapshot copied from matching `metadata.evidence_records[]`; keep `metadata.evidence_records[]` as the canonical evidence registry
   - `disease_relation_name` when supported by the paper as a selector hint, such as is_implicated_in, is_marker_for, contributes_to, or is_model_of. For `role: "model_context"` disease-model assertions, use `is_model_of` when the evidence supports that relation.
-  - `data_provider.abbreviation` when the organism/provider context is clear from paper evidence or `agr_species_context_lookup` context, such as `MGI` for mouse, `ZFIN` for zebrafish, `FB` for Drosophila, or `WB` for C. elegans.
+  - `data_provider.abbreviation` - required for retained DiseaseAnnotation objects. Use the paper-backed organism/provider context or `agr_species_context_lookup` context, such as `MGI` for mouse, `ZFIN` for zebrafish, `FB` for Drosophila, or `WB` for C. elegans.
   - `disease_annotation_subject` only when the paper identifies a gene, allele, or affected genomic model subject; use `subject_type`, `subject_label`, and `subject_identifier` only when directly supported
   - `condition_relations[]` only when experimental condition context is directly supported
 
   Do not use legacy flat payload fields such as `normalized_label`, `normalized_id`, `disease_curie`, or `disease_name`.
-  Do not emit `single_reference` or `evidence_code_curies` unless those values are explicitly known and grounded. When subject, reference, evidence-code, data-provider, or concrete write-target context is incomplete, leave the field absent and record the blocker in object `definition_notes[]`, `metadata.write_behavior`, `metadata.notes[]`, or `metadata.normalization_notes[]`.
+  Do not emit `single_reference` or `evidence_code_curies` unless those values are explicitly known and grounded. When subject, reference, evidence-code, or concrete write-target context is incomplete, leave the field absent and record the blocker in object `definition_notes[]`, `metadata.write_behavior`, `metadata.notes[]`, or `metadata.normalization_notes[]`.
 
   Link object audit refs:
   - `curatable_objects[].evidence_record_ids[]` must resolve to `metadata.evidence_records[]`.

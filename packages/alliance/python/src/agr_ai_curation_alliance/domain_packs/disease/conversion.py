@@ -182,13 +182,20 @@ class ToolVerifiedDiseaseAssertion(BaseModel):
     disease_name: StrictStr
     role: Literal["primary", "background", "comparative", "model_context", "unspecified"]
     confidence: Literal["high", "medium", "low"]
+    data_provider_abbreviation: StrictStr
     evidence_record_ids: list[StrictStr] = Field(min_length=1)
     disease_relation_name: StrictStr | None = None
     subject: ToolVerifiedDiseaseSubject | None = None
     conditions: list[ToolVerifiedDiseaseCondition] = Field(default_factory=list)
     evidence_code_curies: list[StrictStr] = Field(default_factory=list)
 
-    @field_validator("mention", "disease_curie", "disease_name", mode="before")
+    @field_validator(
+        "mention",
+        "disease_curie",
+        "disease_name",
+        "data_provider_abbreviation",
+        mode="before",
+    )
     @classmethod
     def _validate_required_strings(cls, value: object, info) -> object:
         return _strip_required_string(value, info.field_name)
@@ -734,6 +741,9 @@ def _payload_for_assertion(
         },
         "role": assertion.role,
         "confidence": assertion.confidence,
+        "data_provider": {
+            "abbreviation": assertion.data_provider_abbreviation,
+        },
         "evidence_record_ids": list(assertion.evidence_record_ids),
         "evidence_records": [
             _evidence_payload(evidence_by_id[evidence_id])

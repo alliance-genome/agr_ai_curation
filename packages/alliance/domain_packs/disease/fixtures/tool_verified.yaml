@@ -37,6 +37,8 @@ fixtures:
               name: Andersen-Tawil syndrome
             role: model_context
             confidence: high
+            data_provider:
+              abbreviation: ZFIN
             evidence_record_ids:
               - ats-model-evidence-1
               - ats-cohort-evidence-1

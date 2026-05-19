@@ -497,6 +497,7 @@ def test_tool_verified_disease_fixture_converts_to_pending_envelope():
         "curie": "DOID:0050434",
         "name": "Andersen-Tawil syndrome",
     }
+    assert payload["data_provider"] == {"abbreviation": "ZFIN"}
     assert field_path_exists(payload, "evidence_records[0].verified_quote")
     assert payload["disease_relation_name"] == "is_model_of"
 

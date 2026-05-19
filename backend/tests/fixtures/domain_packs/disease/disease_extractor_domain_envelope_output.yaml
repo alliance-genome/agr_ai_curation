@@ -26,6 +26,8 @@ output:
         role: model_context
         confidence: high
         disease_relation_name: is_model_of
+        data_provider:
+          abbreviation: ZFIN
         disease_annotation_subject:
           subject_type: gene
           subject_label: kcnj2
@@ -78,6 +80,7 @@ output:
             - confidence
             - evidence_record_ids
             - evidence_records
+            - data_provider
           under_development:
             - disease_relation_name
             - condition_relations
@@ -85,7 +88,6 @@ output:
             - disease_annotation_subject
             - single_reference
             - evidence_code_curies
-            - data_provider
   metadata:
     raw_mentions:
       - mention: Andersen-Tawil syndrome
@@ -115,7 +117,8 @@ output:
         chunk_id: chunk-disease-cohort
     normalization_notes:
       - Andersen-Tawil syndrome was resolved to DiseaseAnnotation disease_annotation_object DOID:0050434 through AGR disease lookup.
-      - Subject, reference, data-provider, and evidence-code materialization remain blocked for pending disease assertion output.
+      - ZFIN data-provider context is included as a required DiseaseAnnotation selector hint.
+      - Subject, reference, and evidence-code materialization remain blocked for pending disease assertion output.
     exclusions:
       - mention: ventricular arrhythmia phenotype
         reason_code: unsupported_entity_type

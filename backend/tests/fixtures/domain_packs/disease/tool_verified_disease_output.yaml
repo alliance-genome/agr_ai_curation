@@ -8,6 +8,7 @@ disease_assertions:
     disease_name: Andersen-Tawil syndrome
     role: model_context
     confidence: high
+    data_provider_abbreviation: ZFIN
     disease_relation_name: is_model_of
     subject:
       subject_type: gene
