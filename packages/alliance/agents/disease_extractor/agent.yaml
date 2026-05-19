@@ -15,7 +15,7 @@ name: "Disease Extraction Agent"
 description: >
   Extracts disease assertions from uploaded PDFs as DiseaseAnnotation pending
   assertion domain-envelope objects with evidence-first inclusion/exclusion
-  decisions and database-assisted normalization.
+  decisions and validator-owned normalization.
 
 category: "Extraction"
 subcategory: "PDF Extraction"
@@ -43,7 +43,7 @@ tools:
   - read_subsection
   - record_evidence
   - get_agent_contract
-  - agr_curation_query
+  - agr_species_context_lookup
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA

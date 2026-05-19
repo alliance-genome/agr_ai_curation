@@ -100,6 +100,22 @@ def test_bundled_alliance_allele_extractor_declares_record_evidence(monkeypatch)
     ]
 
 
+def test_bundled_alliance_disease_extractor_uses_narrow_context_tool(monkeypatch):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+
+    agents = agent_loader.load_agent_definitions(force_reload=True)
+    disease_extractor = agents["disease_extractor"]
+
+    assert disease_extractor.tools == [
+        "search_document",
+        "read_section",
+        "read_subsection",
+        "record_evidence",
+        "get_agent_contract",
+        "agr_species_context_lookup",
+    ]
+
+
 def test_bundled_alliance_chemical_extractor_uses_narrow_context_tool(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
 

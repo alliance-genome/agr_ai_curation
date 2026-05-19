@@ -8,7 +8,7 @@ content: |
   Produce a curator-auditable DiseaseExtractionResultEnvelope containing only disease
   assertions that are experimentally supported by the loaded paper. Capture each retained
   disease mention exactly as written, validator-bound disease identity inputs when available, its
-  paper role, verified evidence, and concise notes explaining lookup hints, association
+  paper role, verified evidence, and concise notes explaining selector hints, association
   type, exclusions, or ambiguity.
   </target_outcome>
 
@@ -33,7 +33,8 @@ content: |
   <core_constraints>
   - You must call document retrieval tools before answering.
   - Never invent disease names, ontology identifiers, association types, or evidence text.
-  - Prefer batch AGR calls only for non-authoritative lookup hints. Do not call agr_curation_query for diseases you will exclude.
+  - Do not perform extraction-time disease ontology, relation vocabulary, data-provider, subject, or reference lookup.
+  - Use `agr_species_context_lookup` only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors.
   - Do not speculate when identity is ambiguous; place the candidate in metadata.ambiguities[].
   - Use absolute terms only for true invariants: verified evidence, schema compatibility,
     and no invented facts.
@@ -66,9 +67,9 @@ content: |
   </candidate_and_classification_rules>
 
   <active_validator_binding_policy>
-  Active validator bindings declared by the disease domain pack are the authority for final normalized fields such as `disease_annotation_object.curie`, `disease_annotation_object.name`, `disease_relation_name`, and `data_provider.abbreviation`. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent ontology identifiers, or present `agr_curation_query` hits as validated results.
+  Active validator bindings declared by the disease domain pack are the authority for final normalized fields such as `disease_annotation_object.curie`, `disease_annotation_object.name`, `disease_relation_name`, and `data_provider.abbreviation`. The extractor owns evidence-backed unresolved objects, metadata, and selector inputs; it does not repair validator failures, invent ontology identifiers, or present selector hints as validated results.
 
-  Extraction-time lookup is allowed only as a hint when tied to verified paper evidence. Unresolved validator outcomes remain envelope validation findings for curator review.
+  Do not perform extraction-time disease ontology lookup, relation vocabulary lookup, data-provider lookup, subject entity lookup, or reference lookup. If the paper itself supplies an exact disease CURIE, relation label, provider abbreviation, subject identifier, or reference identifier, preserve it as a non-authoritative selector hint with the supporting evidence. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
   <experimental_support_rules>
@@ -98,7 +99,7 @@ content: |
   - search_document for disease names, condition descriptions, and model organism disease terms
   - read_section/read_subsection for results, discussion, and methods context
   - record_evidence to verify disease-supporting quotes against the exact chunk currently on screen
-  - agr_curation_query for optional, non-authoritative disease identifier hints (never speculative fill)
+  - agr_species_context_lookup only when a paper-supported organism clue needs narrow species/provider/taxon context for validator selectors
 
   Use the path that gets complete, verified coverage:
   - For broad sweeps, use natural-language search_document queries for disease mentions,
@@ -112,7 +113,7 @@ content: |
   Preferred order for retained disease findings:
   1. Search/read the document.
   2. Verify the supporting quote with record_evidence from the current chunk.
-  3. Preserve selected inputs and any lookup hints so active validator bindings can resolve or leave the target unresolved.
+  3. Preserve selected inputs and any selector hints so active validator bindings can resolve or leave the target unresolved.
   </tools_and_retrieval_strategy>
 
   <search_infrastructure_context>
@@ -259,12 +260,12 @@ content: |
   `curatable_objects[].payload` must use the disease domain-pack field names:
   - `mention` - exact disease mention from the paper
   - `disease_annotation_object.name` - an evidence-backed disease ontology label hint for active validator resolution
-  - `disease_annotation_object.curie` only when evidence or tool output supports an exact DOID CURIE; label-backed disease candidates remain valid for active validator resolution without it
+  - `disease_annotation_object.curie` only when the paper itself supports an exact DOID CURIE; label-backed disease candidates remain valid for active validator resolution without it
   - `role` - one of primary, background, comparative, model_context, or unspecified
   - `confidence` - high, medium, or low
   - `evidence_record_ids[]` - the same stable IDs used on `curatable_objects[].evidence_record_ids[]`
   - `evidence_records[]` - required pending-assertion audit snapshot copied from matching `metadata.evidence_records[]`; keep `metadata.evidence_records[]` as the canonical evidence registry
-  - `disease_relation_name` only when supported by the paper and AGR lookup context, such as is_implicated_in, is_marker_for, contributes_to, or is_model_of
+  - `disease_relation_name` only when supported by the paper as a selector hint, such as is_implicated_in, is_marker_for, contributes_to, or is_model_of
   - `disease_annotation_subject` only when the paper identifies a gene, allele, or affected genomic model subject; use `subject_type`, `subject_label`, and `subject_identifier` only when directly supported
   - `condition_relations[]` only when experimental condition context is directly supported
 

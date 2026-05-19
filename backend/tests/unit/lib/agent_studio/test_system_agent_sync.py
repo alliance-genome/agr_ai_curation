@@ -262,7 +262,12 @@ def test_sync_skips_agent_with_missing_prompt(monkeypatch):
             "disease_extractor",
             "disease_extractor",
             "DiseaseExtractionResultEnvelope",
-            ["search_document", "read_section", "read_subsection", "agr_curation_query"],
+            [
+                "search_document",
+                "read_section",
+                "read_subsection",
+                "agr_species_context_lookup",
+            ],
         ),
         (
             "chemical_extractor",

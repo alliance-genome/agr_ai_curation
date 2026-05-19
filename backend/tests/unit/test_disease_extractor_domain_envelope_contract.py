@@ -254,7 +254,14 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
     )
     agent_data = yaml.safe_load(source.agent_yaml.read_text(encoding="utf-8"))
 
-    assert "record_evidence" in agent_data["tools"]
+    assert agent_data["tools"] == [
+        "search_document",
+        "read_section",
+        "read_subsection",
+        "record_evidence",
+        "get_agent_contract",
+        "agr_species_context_lookup",
+    ]
     assert "DiseaseAnnotation curatable_objects[]" in agent_data["supervisor_routing"][
         "description"
     ]
@@ -264,6 +271,9 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
     assert "`disease_annotation_object.name`" in prompt_content
     assert "Do not use legacy flat payload fields" in prompt_content
     assert "Active validator bindings own final disease identity" in prompt_content
+    assert "agr_species_context_lookup" in prompt_content
+    assert "Do not perform extraction-time disease ontology lookup" in prompt_content
+    assert "agr_curation_query" not in prompt_content
     assert "repair_mode" not in prompt_content
     assert "repair_notes" not in prompt_content
     assert "repair_hints" not in prompt_content
@@ -275,6 +285,7 @@ def test_disease_extractor_prompt_agent_and_group_rules_name_domain_contract():
         assert "DiseaseAnnotation" in content
         assert "PendingDiseaseAssertionPayload" in content
         assert "disease_annotation_object.name" in content
+        assert "agr_curation_query" not in content
 
 
 def test_disease_extractor_payload_persists_curatable_objects_only_for_new_runs():
