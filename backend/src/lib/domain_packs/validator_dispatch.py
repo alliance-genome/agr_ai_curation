@@ -93,6 +93,13 @@ def dispatch_active_validator_bindings(
     materialization_items: list[ValidatorResultMaterializationInput] = []
     validator_results: list[DomainValidatorResultBase] = []
     for match in _ordered_matches(matches):
+        if not _binding_has_dispatch_contract(match.binding):
+            LOGGER.info(
+                "Skipping active validator binding %s because it declares no "
+                "input_fields or expected_result_fields",
+                match.binding.binding_id,
+            )
+            continue
         selector_result = build_domain_validation_request(match)
         if selector_result.findings:
             selector_findings.extend(selector_result.findings)
@@ -410,6 +417,10 @@ def _ordered_matches(
             ),
         )
     )
+
+
+def _binding_has_dispatch_contract(binding: ValidatorBinding) -> bool:
+    return bool(binding.input_fields or binding.expected_result_fields)
 
 
 __all__ = [

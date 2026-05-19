@@ -43,6 +43,62 @@ def test_domain_validator_result_accepts_resolved_and_unresolved_only():
         DomainValidatorResultBase.model_validate(_base_payload("under_development"))
 
 
+def test_domain_validator_normalizes_lookup_query_strings_and_raw_scores():
+    payload = _base_payload()
+    payload["candidates"] = [
+        {
+            "value": "CHEBI:17160",
+            "label": "17alpha-estradiol",
+            "object_type": "ChemicalTerm",
+            "score": 48.159214,
+            "matched_fields": {"name": "estradiol"},
+            "details": {"source": "ebi_chebi"},
+        }
+    ]
+    payload["lookup_attempts"] = [
+        {
+            "provider": "ebi_chebi",
+            "method": "compound",
+            "query": "https://www.ebi.ac.uk/chebi/backend/api/public/compound/17160/",
+            "result_count": 1,
+            "outcome": "success",
+        },
+        {
+            "provider": "ebi_chebi",
+            "method": "compound",
+            "query": "64153",
+            "result_count": 1,
+            "outcome": "success",
+        },
+    ]
+
+    result = DomainValidatorResultBase.model_validate(payload)
+
+    assert result.candidates[0].score is None
+    assert result.candidates[0].details["raw_score"] == 48.159214
+    assert result.lookup_attempts[0].query == {
+        "url": "https://www.ebi.ac.uk/chebi/backend/api/public/compound/17160/"
+    }
+    assert result.lookup_attempts[1].query == {"value": "64153"}
+
+
+def test_domain_validator_infers_missing_status_from_resolved_lookup_output():
+    payload = _base_payload()
+    del payload["status"]
+    payload["resolved_objects"] = [{"curie": "DOID:898", "name": "ADPKD"}]
+    payload["lookup_attempts"] = [
+        {
+            "provider": "agr_curation_query",
+            "method": "search_ontology_terms",
+            "query": {"term": "autosomal dominant polycystic kidney disease"},
+            "result_count": 1,
+            "outcome": "success",
+        }
+    ]
+
+    assert DomainValidatorResultBase.model_validate(payload).status == "resolved"
+
+
 def test_domain_validator_schema_detection_allows_inheritance_and_embedding():
     class InheritedResult(DomainValidatorResultBase):
         pass

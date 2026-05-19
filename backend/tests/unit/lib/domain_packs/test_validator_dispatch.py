@@ -108,6 +108,59 @@ def _loaded_pack(tmp_path: Path, *, max_tool_calls: int | None = 3) -> LoadedDom
     )
 
 
+def _empty_dispatch_pack(tmp_path: Path) -> LoadedDomainPack:
+    pack_path = tmp_path / "fixture.empty-dispatch"
+    pack_path.mkdir()
+    metadata_path = pack_path / "domain_pack.yaml"
+    metadata_path.write_text(
+        """
+pack_id: fixture.empty_dispatch
+display_name: Fixture Empty Dispatch Pack
+version: 0.1.0
+metadata_api_version: 1.0.0
+status: active
+model_definitions:
+  - model_id: ThingPayload
+    display_name: Thing payload
+object_definitions:
+  - object_type: Thing
+    display_name: Thing
+    model_ref: ThingPayload
+    fields:
+      - field_path: label
+        field_type: string
+metadata:
+  validator_bindings:
+    active:
+      - binding_id: fixture.structural_data_check
+        display_name: Data check
+        validator_agent:
+          package_id: fixture.validators
+          agent_id: thing_validator
+        applies_to:
+          domain_pack_id: fixture.empty_dispatch
+          object_types:
+            - Thing
+        input_fields: {}
+        expected_result_fields: {}
+        required: true
+        blocking: false
+        allow_opt_out: true
+        definition_state: in_development
+""".strip(),
+        encoding="utf-8",
+    )
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+
 def _envelope(
     *,
     identifier: str = "BAD:0001",
@@ -258,6 +311,38 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
         materialized_gene.to_object_ref()
     ]
     assert result.validator_results[0].status == "resolved"
+
+
+def test_dispatch_skips_active_binding_without_inputs_or_expected_results(
+    tmp_path: Path,
+):
+    pack = _empty_dispatch_pack(tmp_path)
+    envelope = DomainEnvelope(
+        envelope_id="empty-dispatch-env",
+        domain_pack_id="fixture.empty_dispatch",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="Thing",
+                pending_ref_id="thing-1",
+                payload={"label": "empty dispatch"},
+            )
+        ],
+    )
+
+    def _runner(request, *, binding):  # pragma: no cover - must not be called
+        raise AssertionError("empty structural binding should not dispatch")
+
+    result = dispatch_active_validator_bindings(
+        envelope,
+        pack,
+        runner=_runner,
+    )
+
+    assert [match.binding.binding_id for match in result.matched_bindings] == [
+        "fixture.structural_data_check"
+    ]
+    assert result.validator_results == ()
+    assert result.appended_findings == ()
 
 
 def test_dispatch_active_binding_returns_unresolved_validator_result(

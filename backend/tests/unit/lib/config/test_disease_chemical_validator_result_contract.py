@@ -149,6 +149,8 @@ def test_disease_and_chemical_prompt_contracts_use_shared_fields():
             'status: "resolved"',
             'status: "unresolved"',
             "lookup_attempts[].outcome",
+            "lookup_attempts[].query",
+            "must always be a JSON object",
             "missing_expected_fields",
             "candidates",
             "ambiguous",

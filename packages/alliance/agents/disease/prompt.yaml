@@ -72,7 +72,7 @@ content: |
   - `resolved_objects`: list SQL-grounded disease ontology records. Use `curie`, `name`, and any available `definition`, `is_obsolete`, `synonyms`, `parents`, `children`, and `xrefs`.
   - `missing_expected_fields`: list expected result field keys that could not be resolved.
   - `candidates`: list alternate matches for ambiguous or partial lookups. Use `value` for the DOID or candidate label, `label` for the disease name, `object_type: "DOTerm"`, `matched_fields` for matched input fields, and `details` for domain facts such as definition, synonyms, parent/child hints, obsolete status, and SQL row IDs.
-  - `lookup_attempts`: one entry per SQL lookup attempted. Use provider `alliance_curation_db`, method names such as `ontologyterm.curie`, `ontologyterm.name_like`, `ontologyterm.synonym_like`, or `ontologytermclosure`, the exact query payload, result count, and outcome `"success"`, `"not_found"`, `"ambiguous"`, `"conflict"`, or `"error"`.
+  - `lookup_attempts`: one entry per SQL lookup attempted. Use provider `alliance_curation_db`, method names such as `ontologyterm.curie`, `ontologyterm.name_like`, `ontologyterm.synonym_like`, or `ontologytermclosure`, the exact query payload, result count, and outcome `"success"`, `"not_found"`, `"ambiguous"`, `"conflict"`, or `"error"`. `lookup_attempts[].query` must always be a JSON object, never a bare string.
   - `curator_message`: concise curator-facing decision summary.
   - `explanation`: explain which inputs were searched, why the status is resolved or unresolved, and how ambiguity or missing fields were handled.
   </output_contract>

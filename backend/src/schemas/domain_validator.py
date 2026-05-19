@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, StrictStr, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
 
 DomainValidatorStatus = Literal["resolved", "unresolved"]
 
@@ -97,6 +104,34 @@ class ValidatorCandidate(DomainValidatorBaseModel):
         description="Provider-owned candidate diagnostics",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _preserve_non_confidence_scores(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+
+        score = value.get("score")
+        if score is None or isinstance(score, bool):
+            return value
+
+        try:
+            numeric_score = float(score)
+        except (TypeError, ValueError):
+            return value
+
+        if 0.0 <= numeric_score <= 1.0:
+            return value
+
+        normalized = dict(value)
+        details = normalized.get("details")
+        if not isinstance(details, dict):
+            details = {}
+        details = dict(details)
+        details.setdefault("raw_score", score)
+        normalized["details"] = details
+        normalized["score"] = None
+        return normalized
+
 
 class ValidatorLookupAttempt(DomainValidatorBaseModel):
     """One lookup attempted while resolving a validator target."""
@@ -116,6 +151,20 @@ class ValidatorLookupAttempt(DomainValidatorBaseModel):
         default=None,
         description="Short curator- or developer-facing lookup note",
     )
+
+    @field_validator("query", mode="before")
+    @classmethod
+    def _normalize_query_payload(cls, value: object) -> object:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith(("http://", "https://")):
+                return {"url": text}
+            return {"value": text}
+        return {"value": value}
 
 
 class DomainValidatorResultBase(DomainValidatorBaseModel):
@@ -155,6 +204,34 @@ class DomainValidatorResultBase(DomainValidatorBaseModel):
     explanation: StrictStr = Field(
         description="Validator reasoning and decision explanation"
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _infer_omitted_status(cls, value: object) -> object:
+        if not isinstance(value, dict) or "status" in value:
+            return value
+
+        normalized = dict(value)
+        lookup_attempts = normalized.get("lookup_attempts")
+        missing_fields = normalized.get("missing_expected_fields")
+        resolved_values = normalized.get("resolved_values")
+        resolved_objects = normalized.get("resolved_objects")
+        has_successful_lookup = False
+        if isinstance(lookup_attempts, list):
+            has_successful_lookup = any(
+                isinstance(attempt, dict) and attempt.get("outcome") == "success"
+                for attempt in lookup_attempts
+            )
+        has_resolution = bool(resolved_values) or bool(resolved_objects)
+        normalized["status"] = (
+            "resolved"
+            if has_successful_lookup
+            and has_resolution
+            and isinstance(missing_fields, list)
+            and not missing_fields
+            else "unresolved"
+        )
+        return normalized
 
     @field_validator("status", mode="before")
     @classmethod
