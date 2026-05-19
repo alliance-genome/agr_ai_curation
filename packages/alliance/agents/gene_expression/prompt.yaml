@@ -310,9 +310,13 @@ content: |
   </output_contract>
 
   <unresolved_validation>
-  Active validator bindings own final relation, data-provider, and identifier resolution.
-  When a required validator-bound value is unresolved, keep the extraction envelope
-  evidence-backed, preserve candidate context in `metadata.ambiguities[]`,
-  `metadata.normalization_notes[]`, or `metadata.notes[]`, and leave final decisions
-  for validator result fields and envelope validation findings.
+  Active validator bindings currently own final relation and data-provider
+  verification for this domain pack. Subject gene, source reference, assay,
+  anatomy, stage, cellular-component, UBERON/GO slim-term, and reagent-context
+  validators remain under development unless the domain-pack metadata explicitly
+  promotes them to active bindings.
+  When a required value is unresolved, keep the extraction envelope evidence-backed,
+  preserve candidate context in `metadata.ambiguities[]`,
+  `metadata.normalization_notes[]`, or `metadata.notes[]`, and do not describe
+  under-development identity or ontology fields as database-validated.
   </unresolved_validation>

@@ -11,6 +11,10 @@ import pytest
 import yaml
 
 from src.lib.domain_packs.loader import load_domain_fixture_pack
+from src.lib.domain_packs.validation_registry import (
+    DomainPackValidationRegistry,
+    ValidationBindingState,
+)
 from src.schemas.domain_envelope import CuratableObjectStatus, field_path_exists
 from src.schemas.domain_envelope import DefinitionState
 from src.schemas.domain_pack_metadata import DomainPackFieldType
@@ -76,6 +80,10 @@ def _gene_expression_pack():
     pack = registry.get_pack(GENE_EXPRESSION_DOMAIN_PACK_ID)
     assert pack is not None
     return pack
+
+
+def _gene_expression_validation_registry():
+    return DomainPackValidationRegistry.from_domain_pack(_gene_expression_pack())
 
 
 def _iter_mapping_keys(value: Any):
@@ -200,6 +208,97 @@ def test_gene_expression_object_embeds_required_experiment_and_context_fields():
         field for field in curatable_unit.fields if field.field_type is DomainPackFieldType.OBJECT_REF
     ]
     assert object_ref_fields == []
+
+
+def test_gene_expression_active_validation_scope_does_not_hide_planned_gaps():
+    registry = _gene_expression_validation_registry()
+    metadata = _gene_expression_pack().metadata
+    curatable_unit = metadata.object_definitions[0]
+
+    active_bindings = {
+        binding.binding_id: binding
+        for binding in registry.bindings
+        if binding.state is ValidationBindingState.ACTIVE
+    }
+    assert set(active_bindings) == {
+        "data_provider_validation",
+        "relation_vocabulary_validation",
+    }
+    assert active_bindings["data_provider_validation"].field_paths == (
+        "data_provider.abbreviation",
+    )
+    assert active_bindings["relation_vocabulary_validation"].field_paths == (
+        "relation.name",
+    )
+
+    active_validator_ids = {
+        entry.validator_id
+        for entry in registry.validator_metadata
+        if entry.state is ValidationBindingState.ACTIVE
+    }
+    assert {
+        "data_provider_validation",
+        "relation_vocabulary_validation",
+    } <= active_validator_ids
+
+    under_development_binding_ids = {
+        binding.binding_id
+        for binding in registry.bindings
+        if binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+    }
+    assert {
+        "subject_gene_validation",
+        "expression_context_ontology_validation",
+        "source_reference_validation",
+        "reagent_context_materialization",
+    } <= under_development_binding_ids
+
+    under_development_validator_ids = {
+        entry.validator_id
+        for entry in registry.validator_metadata
+        if entry.state is ValidationBindingState.UNDER_DEVELOPMENT
+    }
+    assert {
+        "gene_expression.subject_gene_resolution",
+        "gene_expression.ontology_term_resolution",
+        "source_reference_validation",
+        "gene_expression.reagent_context_materialization",
+    } <= under_development_validator_ids
+
+    planned_gap_fields = {
+        "expression_annotation_subject.primary_external_id",
+        "expression_annotation_subject.gene_symbol",
+        "single_reference.reference_id",
+        "expression_experiment.expression_assay_used.curie",
+        "expression_experiment.expression_assay_used.name",
+        "when_expressed_stage_name",
+        "expression_pattern.where_expressed.anatomical_structure.curie",
+        "expression_pattern.where_expressed.anatomical_structure.name",
+        "expression_pattern.where_expressed.cellular_component.curie",
+        "expression_pattern.where_expressed.cellular_component.name",
+    }
+    active_field_paths = {
+        field_path
+        for binding in active_bindings.values()
+        for field_path in binding.field_paths
+    }
+    assert planned_gap_fields.isdisjoint(active_field_paths)
+
+    under_development_field_paths = {
+        field_path
+        for binding in registry.bindings
+        if binding.state is ValidationBindingState.UNDER_DEVELOPMENT
+        for field_path in binding.field_paths
+    }
+    assert planned_gap_fields <= under_development_field_paths
+
+    fields_by_path = {field.field_path: field for field in curatable_unit.fields}
+    silently_active_gap_fields = [
+        field_path
+        for field_path in sorted(planned_gap_fields)
+        if fields_by_path[field_path].metadata.get("validator_state") == "active"
+    ]
+    assert silently_active_gap_fields == []
 
 
 def test_tmem67_fixture_validates_as_pending_gene_expression_annotation():

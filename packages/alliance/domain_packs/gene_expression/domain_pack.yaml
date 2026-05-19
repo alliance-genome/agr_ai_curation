@@ -822,16 +822,28 @@ metadata:
       - validator_id: gene_expression.export_submission_projection
         display_name: Gene expression ready for export
         description: Validate GeneExpressionAnnotation export/submission target projection payloads.
+      - validator_id: relation_vocabulary_validation
+        display_name: Relation vocabulary lookup
+        description: Active package binding validates the LinkML-required GeneExpressionAnnotation relation against controlled vocabulary rows.
+      - validator_id: data_provider_validation
+        display_name: Data provider validation
+        description: Active package binding validates the LinkML-required data provider abbreviation through the shared Alliance data-provider validator.
     under_development:
       - validator_id: gene_expression.linkml_anatomical_site_postcondition
         display_name: Anatomical site postcondition
         description: Enforce the LinkML AnatomicalSite rule requiring anatomical_structure or cellular_component once validator runtime wiring lands.
       - validator_id: gene_expression.ontology_term_resolution
         display_name: Expression ontology term resolution
-        description: Validate embedded MMO, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
-      - validator_id: gene_expression.relation_vocabulary_lookup
-        display_name: Relation vocabulary lookup
-        description: Validate GeneExpressionAnnotation relation names against controlled vocabulary rows without treating them as ontology terms.
+        description: Validate embedded MMO assay, stage, anatomy, UBERON, and GO term CURIEs against configured Alliance ontology sources.
+      - validator_id: gene_expression.subject_gene_resolution
+        display_name: Subject gene validation
+        description: Validate embedded expression annotation subject gene identifiers and symbols through the shared Alliance gene validator.
+      - validator_id: source_reference_validation
+        display_name: Source reference validation
+        description: Validate embedded literature/reference identifiers through the API-backed reference validator once gene-expression materialization and export flows are ready.
+      - validator_id: gene_expression.reagent_context_materialization
+        display_name: Reagent context materialization
+        description: Preserve reagent, genotype, reporter, and strain context as evidence metadata until explicit LinkML/export materialization targets and validators are active.
       - validator_id: gene_expression.live_write_transport
         display_name: Live database write path
         blocked_by: read_only_curation_db
@@ -888,6 +900,66 @@ metadata:
         curator_override:
           allowed: false
     under_development:
+      - binding_id: subject_gene_validation
+        display_name: Subject gene validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: gene_validation
+        state_explanation: Subject gene validation is planned for embedded GeneExpressionAnnotation subjects but is not active until request selectors and materialization targets are promoted for this pack.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_annotation_subject.primary_external_id
+            - expression_annotation_subject.gene_symbol
+        input_fields:
+          gene_id:
+            source: payload
+            path: expression_annotation_subject.primary_external_id
+            required: false
+          gene_symbol:
+            source: payload
+            path: expression_annotation_subject.gene_symbol
+            required: false
+          data_provider:
+            source: payload
+            path: data_provider.abbreviation
+            required: false
+        expected_result_fields:
+          primary_external_id: expression_annotation_subject.primary_external_id
+          gene_symbol: expression_annotation_subject.gene_symbol
+      - binding_id: expression_context_ontology_validation
+        display_name: Expression context ontology validation
+        validator_agent:
+          package_id: agr.alliance
+          agent_id: ontology_term_validation
+        state_explanation: Assay, stage, anatomy, UBERON, cellular-component, and qualifier ontology validation remains metadata-only until per-field selectors and result materialization are promoted.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
+          field_paths:
+            - expression_experiment.expression_assay_used.curie
+            - expression_experiment.expression_assay_used.name
+            - when_expressed_stage_name
+            - expression_pattern.when_expressed.developmental_stage_start
+            - expression_pattern.when_expressed.stage_uberon_slim_terms
+            - expression_pattern.where_expressed.anatomical_structure
+            - expression_pattern.where_expressed.anatomical_structure.curie
+            - expression_pattern.where_expressed.anatomical_structure.name
+            - expression_pattern.where_expressed.anatomical_structure_uberon_terms
+            - expression_pattern.where_expressed.cellular_component
+            - expression_pattern.where_expressed.cellular_component.curie
+            - expression_pattern.where_expressed.cellular_component.name
+            - expression_pattern.where_expressed.cellular_component_qualifiers
+      - binding_id: reagent_context_materialization
+        display_name: Reagent context materialization
+        state_explanation: Reagent, genotype, reporter, and strain details currently remain in metadata.raw_mentions, metadata.normalization_notes, metadata.ambiguities, or object metadata; no LinkML payload field or validator materialization target is active yet.
+        applies_to:
+          domain_pack_id: agr.alliance.gene_expression
+          object_types:
+            - GeneExpressionAnnotation
       - binding_id: source_reference_validation
         display_name: Source reference validation
         validator_agent:
