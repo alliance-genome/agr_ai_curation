@@ -385,8 +385,8 @@ Materializer:
 
 ## Cross-Agent Inventory
 
-This inventory captures the repo state for the extractor-to-validator envelope
-cleanup as of 2026-05-19. "Active bindings" are the bindings currently under
+This inventory captures the repo state after the extractor tool-boundary cleanup
+committed through `042d0b61` on 2026-05-19. "Active bindings" are the bindings currently under
 `validator_bindings.active`; bindings listed under `under_development` are
 important rollout candidates but should not be treated as dispatch evidence
 until promoted.
@@ -394,11 +394,11 @@ until promoted.
 | Extractor agent | Validator agent | Domain pack | Active bindings | Extractor tools allowed | Extractor tools removed | Validator tools required | Expected materialized fields |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `gene_extractor` | `gene_validation` | `agr.alliance.gene` | `alliance_gene_reference_lookup` | `search_document`, `read_section`, `read_subsection`, `record_evidence`, `get_agent_contract`, `agr_species_context_lookup` | `agr_curation_query` gene lookup methods | `get_agent_contract`, `agr_curation_query` | `primary_external_id`, `gene_symbol`, `taxon` from `curie`, `symbol`, `taxon` |
-| `allele_extractor` | `allele_validation` | `agr.alliance.allele` | `allele_pending_envelope_validator`, `allele_mention_reference_validation` | Document/evidence tools plus a future narrow gene/allele context helper if needed | Broad `agr_curation_query` should be removed or method-restricted before allele identity cleanup | `get_agent_contract`, `agr_curation_query` | `allele.primary_external_id`, `allele.allele_symbol`, `allele.taxon` |
-| `chemical_extractor` | `chemical_validation`, `ontology_term_validation`, `controlled_vocabulary_validation` | `agr.alliance.chemical_condition` | `chemical_condition.pending_envelope_validator`, `chemical_condition.chebi_api_lookup`, `chemical_condition.term_chebi_api_lookup`, `chemical_condition.condition_ontology_lookup`, `chemical_condition.condition_relation_type_lookup` | Document/evidence tools plus narrow condition context only | Broad `agr_curation_query` chemical, ontology, and vocabulary lookup should move to validators; direct ChEBI lookup should be validator-owned | `chemical_validation`: `get_agent_contract`, `chebi_api_call`; `ontology_term_validation` and `controlled_vocabulary_validation`: `get_agent_contract`, `agr_curation_query` | `condition_chemical.curie`, `condition_chemical.name`, `curie`, `name`, `condition_class.curie`, `condition_relation_type.name`, `condition_relation_type.vocabulary`, `condition_relation_type.id` |
-| `disease_extractor` | `disease_validation`, `ontology_term_validation`, `controlled_vocabulary_validation`, `data_provider_validation` | `agr.alliance.disease` | `disease_pending_envelope_validator`, `disease_ontology_term_lookup`, `disease_relation_cv_lookup`, `disease_condition_relation_lookup`, `disease_data_provider_lookup` | Document/evidence tools plus narrow species/provider/context helpers | Broad `agr_curation_query` disease, CV, ontology, subject, and reference lookup should move to validators | `disease_validation`: currently `get_agent_contract`, `curation_db_sql`; helper validators use `get_agent_contract`, `agr_curation_query` | `disease_annotation_object.curie`, `disease_annotation_object.name`, `disease_relation_name`, `disease_relation_vocabulary`, `disease_relation_id`, `condition_relations[0].condition_relation_type.*`, `data_provider.abbreviation` |
-| `gene_expression_extraction` | `controlled_vocabulary_validation`, `data_provider_validation` | `agr.alliance.gene_expression` | `relation_vocabulary_validation`, `data_provider_validation` | Document/evidence tools plus narrow provider/context helpers | Broad `agr_curation_query` should be removed or method-restricted; anatomy, stage, assay, reference, and reagent lookups should not be extractor-owned | `get_agent_contract`, `agr_curation_query` | `relation.name`, `relation.vocabulary`, `relation.id`, `data_provider.abbreviation` |
-| `phenotype_extractor` | `ontology_term_validation` | `agr.alliance.phenotype` | `phenotype_term_ontology_validator` | Document/evidence tools plus narrow subject/taxon context helpers | Broad `agr_curation_query` phenotype-term, subject, and reference lookup should move to validators | `get_agent_contract`, `agr_curation_query` | `curie`, `label` for `PhenotypeTerm` payloads |
+| `allele_extractor` | `allele_validation` | `agr.alliance.allele` | `allele_pending_envelope_validator`, `allele_mention_reference_validation` | `search_document`, `read_section`, `read_subsection`, `record_evidence`, `get_agent_contract`, `agr_species_context_lookup` | Broad `agr_curation_query` allele and reference lookup | `get_agent_contract`, `agr_curation_query` | `allele.primary_external_id`, `allele.allele_symbol`, `allele.taxon` |
+| `chemical_extractor` | `chemical_validation`, `ontology_term_validation`, `controlled_vocabulary_validation` | `agr.alliance.chemical_condition` | `chemical_condition.pending_envelope_validator`, `chemical_condition.chebi_api_lookup`, `chemical_condition.term_chebi_api_lookup`, `chemical_condition.condition_ontology_lookup`, `chemical_condition.condition_relation_type_lookup` | `search_document`, `read_section`, `read_subsection`, `record_evidence`, `get_agent_contract`, `agr_species_context_lookup` | Broad `agr_curation_query` chemical, ontology, and vocabulary lookup; direct ChEBI lookup is validator-owned | `chemical_validation`: `get_agent_contract`, `chebi_api_call`; `ontology_term_validation` and `controlled_vocabulary_validation`: `get_agent_contract`, `agr_curation_query` | `condition_chemical.curie`, `condition_chemical.name`, `curie`, `name`, `condition_class.curie`, `condition_relation_type.name`, `condition_relation_type.vocabulary`, `condition_relation_type.id` |
+| `disease_extractor` | `disease_validation`, `ontology_term_validation`, `controlled_vocabulary_validation`, `data_provider_validation` | `agr.alliance.disease` | `disease_pending_envelope_validator`, `disease_ontology_term_lookup`, `disease_relation_cv_lookup`, `disease_condition_relation_lookup`, `disease_data_provider_lookup` | `search_document`, `read_section`, `read_subsection`, `record_evidence`, `get_agent_contract`, `agr_species_context_lookup` | Broad `agr_curation_query` disease, CV, ontology, subject, and reference lookup | `disease_validation`: currently `get_agent_contract`, `curation_db_sql`; helper validators use `get_agent_contract`, `agr_curation_query` | `disease_annotation_object.curie`, `disease_annotation_object.name`, `disease_relation_name`, `disease_relation_vocabulary`, `disease_relation_id`, `condition_relations[0].condition_relation_type.*`, `data_provider.abbreviation` |
+| `gene_expression_extraction` | `controlled_vocabulary_validation`, `data_provider_validation` | `agr.alliance.gene_expression` | `relation_vocabulary_validation`, `data_provider_validation` | `search_document`, `read_section`, `read_subsection`, `record_evidence`, `get_agent_contract`, `agr_species_context_lookup` | Broad `agr_curation_query` relation, data-provider, anatomy, stage, assay, reference, and reagent lookup | `get_agent_contract`, `agr_curation_query` | `relation.name`, `relation.vocabulary`, `relation.id`, `data_provider.abbreviation` |
+| `phenotype_extractor` | `ontology_term_validation` | `agr.alliance.phenotype` | `phenotype_term_ontology_validator` | `search_document`, `read_section`, `read_subsection`, `record_evidence`, `get_agent_contract`, `agr_species_context_lookup` | Broad `agr_curation_query` phenotype-term, subject, and reference lookup | `get_agent_contract`, `agr_curation_query` | `curie`, `label` for `PhenotypeTerm` payloads |
 | None; shared validator invoked by phenotype/disease once promoted | `subject_entity_validation` with `gene_validation`, `allele_validation`, or `agm_validation` downstream | `agr.alliance.phenotype`, `agr.alliance.disease` | None active; `phenotype_subject_entity_validator` and `disease_subject_materialization` are `under_development` | Not extractor-owned | Subject lookup should stay out of extractors except proposed labels, type hints, identifiers, and taxon context | `subject_entity_validation`: `get_agent_contract`, `agr_curation_query`; downstream validators: `gene_validation`, `allele_validation`, `agm_validation` | Planned fields include `subject_identifier`, `subject_type`, `subject_label`, `taxon` |
 | None; shared validator invoked by domain packs once promoted | `reference_validation` | `agr.alliance.allele`, `agr.alliance.chemical_condition`, `agr.alliance.gene_expression`, `agr.alliance.phenotype`, `agr.alliance.disease` | None active in these packs; source/reference bindings are `under_development` | Extractors may preserve paper-backed `pmid`, `doi`, title, citation, and document context | Literature API lookup should stay validator-owned | `get_agent_contract`, `agr_literature_reference_lookup` | Planned fields include `reference_id`, `curie`, `title` |
 | None; shared validator invoked by chemical/disease once promoted | `experimental_condition_validation` | `agr.alliance.chemical_condition`, `agr.alliance.disease` | None active; `experimental_condition_validation` is `under_development` | Extractors may preserve condition text, relation hints, component mentions, quantities, and evidence | Composite condition normalization should stay validator-owned | `get_agent_contract`, `agr_curation_query`, `chebi_api_call` | Planned fields include `ExperimentalCondition.condition_id` and normalized component fields |
@@ -407,13 +407,13 @@ until promoted.
 
 Rollout implications:
 
-- Gene is the reference implementation: the extractor now has a narrow species
+- Gene is the reference implementation: the extractor has a narrow species
   context tool, the active binding feeds proposed/context fields, and validator
   lookup attempts are visible in chat streaming.
-- Allele, chemical condition, disease, gene expression, and phenotype still
-  expose broad `agr_curation_query` to extractors. Each domain needs either a
-  narrow context tool or runtime method enforcement before its prompt/schema
-  cleanup can honestly claim validator-owned identity.
+- Allele, chemical condition, disease, gene expression, and phenotype now use
+  the same extractor-side narrow context boundary. Their prompts forbid
+  extraction-time identity lookup and preserve paper-backed values only as
+  selector hints for validators.
 - Disease validation currently depends on `curation_db_sql`, unlike the other
   package validators that use package/runtime tools. That should be reviewed
   before treating disease as the next template domain.
@@ -441,7 +441,8 @@ Rollout implications:
   materialization, or present as nullable fields with validation status?
 - Should proposed fields remain in the final review payload after validation,
   or move to object metadata after materialization?
-- Should the provider/taxon lookup be a new narrow tool or a runtime-enforced
-  view of `agr_curation_query`?
+- Should `agr_species_context_lookup` stay as the shared narrow provider/taxon
+  tool for all extractors, or should domain-specific context helpers be added
+  where species context alone is insufficient?
 - Should species-name-to-provider mapping use deterministic config only, or may
   it query the curation database when names are ambiguous?
