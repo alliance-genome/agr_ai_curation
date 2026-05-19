@@ -448,6 +448,87 @@ def test_gene_adapter_drops_zfin_compound_like_gene_objects():
     ]["warnings"]
 
 
+def test_phenotype_adapter_materializes_nested_term_object_for_validation():
+    payload = _sample_domain_envelope_payload()
+    payload["curatable_objects"] = [
+        {
+            "object_type": "PhenotypeAnnotation",
+            "pending_ref_id": "phenotype-annotation-1",
+            "payload": {
+                "annotation_kind": "phenotype_assertion",
+                "phenotype_annotation_object": "boundary disruptions",
+                "phenotype_terms": [
+                    {
+                        "resolution_state": "pending_ontology_resolution",
+                        "curie": None,
+                        "label": "boundary disruptions",
+                        "source_mentions": ["boundary disruptions"],
+                        "ontology_lookup_hint": {
+                            "taxon_id": "NCBITaxon:7955",
+                            "evidence_record_id": "evidence-phenotype",
+                        },
+                        "export_state": "blocked_pending_ontology_resolution",
+                        "write_blocked_reason": "phenotype term CURIE unresolved",
+                    }
+                ],
+                "evidence_record_ids": ["evidence-phenotype"],
+            },
+            "evidence_record_ids": ["evidence-phenotype"],
+        }
+    ]
+    payload["metadata"]["evidence_records"] = [
+        {
+            "evidence_record_id": "evidence-phenotype",
+            "entity": "phenotype",
+            "verified_quote": "SB225002 caused boundary disruptions.",
+            "page": 1,
+            "section": "Results",
+            "chunk_id": "chunk-phenotype",
+        }
+    ]
+
+    candidate = build_extraction_envelope_candidate(
+        json.dumps(payload),
+        agent_key="phenotype_extractor",
+        adapter_key="phenotype",
+        conversation_summary="Extract phenotype evidence.",
+    )
+
+    assert candidate is not None
+    objects = candidate.payload_json["curatable_objects"]
+    assert [obj["object_type"] for obj in objects] == [
+        "PhenotypeAnnotation",
+        "PhenotypeTerm",
+    ]
+    annotation = objects[0]
+    phenotype_term = objects[1]
+    assert annotation["object_refs"] == [
+        {
+            "pending_ref_id": "phenotype-term-1-1",
+            "object_type": "PhenotypeTerm",
+        }
+    ]
+    assert phenotype_term["pending_ref_id"] == "phenotype-term-1-1"
+    assert phenotype_term["object_role"] == "validated_reference"
+    assert phenotype_term["model_ref"] == "PhenotypeTermPayload"
+    assert phenotype_term["payload"]["label"] == "boundary disruptions"
+    assert phenotype_term["payload"]["ontology_lookup_hint"] == {
+        "taxon_id": "NCBITaxon:7955",
+        "evidence_record_id": "evidence-phenotype",
+    }
+    assert phenotype_term["evidence_record_ids"] == ["evidence-phenotype"]
+    assert phenotype_term["metadata"] == {
+        "object_role": "validated_reference",
+        "validation_state": "pending_ontology_resolution",
+        "validator_binding_id": "phenotype_term_ontology_validator",
+        "export_state": "blocked_pending_ontology_resolution",
+        "write_blocked_reason": "phenotype term CURIE unresolved",
+    }
+    assert "materialized_nested_phenotype_terms:1" in candidate.payload_json[
+        "run_summary"
+    ]["warnings"]
+
+
 def test_build_extraction_envelope_candidate_accepts_persisted_domain_envelope_shape():
     candidate = build_extraction_envelope_candidate(
         json.dumps(_sample_persisted_domain_envelope_payload()),
