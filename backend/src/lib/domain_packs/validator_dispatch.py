@@ -7,6 +7,7 @@ shared selector and envelope finding contracts.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from src.schemas.domain_envelope import (
 from src.schemas.domain_validator import (
     DomainValidationRequest,
     DomainValidatorResultBase,
+    is_domain_validator_result_schema,
 )
 
 from .input_selectors import build_domain_validation_request
@@ -212,7 +214,7 @@ def run_package_scoped_validator_agent(
 ) -> Any:
     """Execute the package-owned validator through the unified agent runtime."""
 
-    from agents import Runner
+    from agents import AgentOutputSchema, Runner
 
     from src.lib.agent_studio.catalog_service import get_agent_by_id
     from src.lib.config.agent_loader import (
@@ -231,6 +233,15 @@ def run_package_scoped_validator_agent(
         )
 
     agent = get_agent_by_id(canonical_system_agent_key(agent_definition))
+    output_type = getattr(agent, "output_type", None)
+    if is_domain_validator_result_schema(output_type):
+        runtime_agent = copy.copy(agent)
+        runtime_agent.output_type = AgentOutputSchema(
+            output_type,
+            strict_json_schema=False,
+        )
+        agent = runtime_agent
+
     payload = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     if hasattr(Runner, "run_sync"):
         run_kwargs: dict[str, Any] = {"input": payload}

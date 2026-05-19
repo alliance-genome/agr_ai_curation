@@ -271,15 +271,28 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         binding.binding_id: binding for binding in registries["gene"].bindings
     }["alliance_gene_reference_lookup"]
     assert gene_binding.object_types == ("gene_mention_evidence",)
-    assert gene_binding.field_paths == (
-        "primary_external_id",
-        "gene_symbol",
-        "taxon",
+    assert gene_binding.field_paths == ()
+    assert gene_binding.expected_result_fields == {
+        "curie": "primary_external_id",
+        "symbol": "gene_symbol",
+        "taxon": "taxon",
+    }
+    assert set(gene_binding.input_fields) == {
+        "mention",
+        "proposed_gene_id",
+        "proposed_symbol",
+        "proposed_taxon",
+        "taxon_hint",
+        "data_provider_hint",
+        "species",
+        "evidence_quote",
+    }
+    assert (
+        "alliance_gene_reference_lookup"
+        not in registries["gene"]
+        .policy_for("gene_mention_evidence", "primary_external_id")
+        .validator_binding_ids
     )
-    assert "alliance_gene_reference_lookup" in registries["gene"].policy_for(
-        "gene_mention_evidence",
-        "primary_external_id",
-    ).validator_binding_ids
 
     disease_bindings = {
         binding.binding_id: binding

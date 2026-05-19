@@ -811,6 +811,138 @@ def _is_domain_envelope_output_json(
     return isinstance(payload, dict)
 
 
+def _validator_dispatch_has_error_result(dispatch_result: Any) -> bool:
+    """Return whether any dispatched validator result reports an execution error."""
+
+    for result in getattr(dispatch_result, "validator_results", ()) or ():
+        for attempt in getattr(result, "lookup_attempts", ()) or ():
+            if getattr(attempt, "outcome", None) == "error":
+                return True
+    return False
+
+
+def _validator_dispatch_status_counts(dispatch_result: Any) -> dict[str, int]:
+    """Count validator result statuses for compact audit labels."""
+
+    counts: dict[str, int] = {}
+    for result in getattr(dispatch_result, "validator_results", ()) or ():
+        status = str(getattr(result, "status", "unknown") or "unknown")
+        counts[status] = counts.get(status, 0) + 1
+    return counts
+
+
+def _validator_dispatch_completion_label(
+    specialist_name: str,
+    dispatch_result: Any,
+) -> str:
+    counts = _validator_dispatch_status_counts(dispatch_result)
+    if not counts:
+        return f"{specialist_name}: Active Validator Dispatch complete"
+
+    status_summary = ", ".join(
+        f"{status} {count}" for status, count in sorted(counts.items())
+    )
+    return (
+        f"{specialist_name}: Active Validator Dispatch complete "
+        f"({status_summary})"
+    )
+
+
+def _validator_lookup_tool_args(attempt: Any) -> dict[str, Any]:
+    """Build audit-panel-friendly tool arguments for one validator lookup."""
+
+    raw_query = getattr(attempt, "query", None)
+    query = dict(raw_query) if isinstance(raw_query, dict) else {}
+    method = str(getattr(attempt, "method", "") or "")
+
+    if method and "method" not in query:
+        query["method"] = method
+
+    # The audit panel knows how to pretty-print AGR curation query methods. For
+    # generic dispatch errors, show a JSON string instead of "[object Object]".
+    if method not in {
+        "get_gene_by_exact_symbol",
+        "search_genes",
+        "get_gene_by_id",
+        "get_allele_by_exact_symbol",
+        "search_alleles",
+        "get_allele_by_id",
+        "get_species",
+        "get_data_providers",
+        "search_anatomy_terms",
+        "search_life_stage_terms",
+        "search_go_terms",
+    }:
+        return {
+            "query": json.dumps(raw_query or {}, sort_keys=True),
+            "method": method or "validator_lookup",
+        }
+
+    return query
+
+
+def _emit_validator_lookup_audit_events(
+    *,
+    specialist_name: str,
+    dispatch_result: Any,
+) -> None:
+    """Surface package-scoped validator lookup attempts in the live audit stream."""
+
+    for result in getattr(dispatch_result, "validator_results", ()) or ():
+        binding_id = getattr(result, "validator_binding_id", None)
+        status = getattr(result, "status", None)
+        for index, attempt in enumerate(
+            getattr(result, "lookup_attempts", ()) or (),
+            start=1,
+        ):
+            method = str(getattr(attempt, "method", "") or "validator_lookup")
+            provider = str(getattr(attempt, "provider", "") or "validator")
+            outcome = str(getattr(attempt, "outcome", "") or "unknown")
+            message = getattr(attempt, "message", None)
+            tool_args = _validator_lookup_tool_args(attempt)
+            friendly_name = (
+                f"{specialist_name}: Validator Lookup"
+                f" ({binding_id}, {provider}.{method})"
+            )
+
+            add_specialist_event({
+                "type": "TOOL_START",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "toolName": "agr_curation_query"
+                    if provider == "agr_curation_query"
+                    else "domain_validator_lookup",
+                    "friendlyName": friendly_name,
+                    "agent": specialist_name,
+                    "toolArgs": tool_args,
+                    "isSpecialistInternal": True,
+                    "validatorBindingId": binding_id,
+                    "validatorResultStatus": status,
+                    "lookupIndex": index,
+                },
+            })
+            add_specialist_event({
+                "type": "TOOL_COMPLETE",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "toolName": "agr_curation_query"
+                    if provider == "agr_curation_query"
+                    else "domain_validator_lookup",
+                    "friendlyName": (
+                        f"{specialist_name}: Validator Lookup {outcome}"
+                    ),
+                    "success": outcome not in {"error", "conflict"},
+                    "error": message if outcome == "error" else None,
+                    "isSpecialistInternal": True,
+                    "validatorBindingId": binding_id,
+                    "validatorResultStatus": status,
+                    "lookupIndex": index,
+                    "resultCount": getattr(attempt, "result_count", None),
+                    "outcome": outcome,
+                },
+            })
+
+
 async def _dispatch_domain_envelope_validators_for_chat(
     final_output: str,
     *,
@@ -930,19 +1062,27 @@ async def _dispatch_domain_envelope_validators_for_chat(
             source_envelope_revision=1,
         )
 
+        has_validator_error = _validator_dispatch_has_error_result(dispatch_result)
         add_specialist_event({
             "type": "TOOL_COMPLETE",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "details": {
                 "toolName": "dispatch_active_validator_bindings",
-                "friendlyName": f"{specialist_name}: Active Validator Dispatch complete",
-                "success": True,
+                "friendlyName": _validator_dispatch_completion_label(
+                    specialist_name,
+                    dispatch_result,
+                ),
+                "success": not has_validator_error,
                 "isSpecialistInternal": True,
                 "matchedBindingCount": len(dispatch_result.matched_bindings),
                 "validatorResultCount": len(dispatch_result.validator_results),
                 "appendedFindingCount": len(dispatch_result.appended_findings),
             },
         })
+        _emit_validator_lookup_audit_events(
+            specialist_name=specialist_name,
+            dispatch_result=dispatch_result,
+        )
 
         logger.info(
             "%s chat domain-envelope validation dispatched %s binding(s), "

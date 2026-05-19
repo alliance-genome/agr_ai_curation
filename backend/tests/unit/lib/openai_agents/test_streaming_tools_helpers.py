@@ -456,6 +456,35 @@ def _resolved_gene_validator_payload(request):
     }
 
 
+def _errored_gene_validator_payload(request):
+    return {
+        "status": "unresolved",
+        "request_id": request.request_id,
+        "validator_binding_id": request.validator_binding_id,
+        "validator_agent": request.validator_agent.model_dump(mode="json"),
+        "target": request.target.model_dump(mode="json"),
+        "resolved_values": {},
+        "resolved_objects": [],
+        "missing_expected_fields": ["curie", "symbol", "taxon"],
+        "candidates": [],
+        "lookup_attempts": [
+            {
+                "provider": "domain_validator_dispatch",
+                "method": "validator_agent_error",
+                "query": {
+                    "request_id": request.request_id,
+                    "selected_inputs": dict(request.selected_inputs),
+                },
+                "result_count": 0,
+                "outcome": "error",
+                "message": "Validator agent execution failed: schema compile error",
+            }
+        ],
+        "curator_message": "Validator agent execution failed: schema compile error",
+        "explanation": "Validator agent execution failed: schema compile error",
+    }
+
+
 @pytest.mark.asyncio
 async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(monkeypatch):
     emitted = []
@@ -600,6 +629,73 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch)
     assert payload["objects"][0]["payload"]["taxon"] == "NCBITaxon:7227"
     assert payload["validation_findings"]
     assert emitted[0]["details"]["toolArgs"]["domain_pack_id"] == "gene"
+    lookup_events = [
+        event
+        for event in emitted
+        if event["details"]["toolName"] == "agr_curation_query"
+    ]
+    assert [event["type"] for event in lookup_events] == [
+        "TOOL_START",
+        "TOOL_COMPLETE",
+    ]
+    assert lookup_events[0]["details"]["toolArgs"] == {
+        "gene_symbol": "crumbs",
+        "method": "search_genes",
+    }
+
+
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_surfaces_validator_lookup_errors(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+
+    from src.lib.curation_workspace import adapter_registry, extraction_results
+    from src.lib.domain_packs import validator_dispatch
+
+    adapter_registry.load_curation_adapter_registry.cache_clear()
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+    monkeypatch.setattr(
+        validator_dispatch,
+        "run_package_scoped_validator_agent",
+        lambda request, *, binding: _errored_gene_validator_payload(request),
+    )
+
+    result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        _gene_extractor_domain_output(),
+        expected_output_type=GeneExtractionResultEnvelope,
+        specialist_name="Gene Extraction",
+        tool_name="ask_gene_extractor_specialist",
+    )
+
+    payload = json.loads(result)
+    assert payload["validation_findings"]
+    dispatch_complete = [
+        event
+        for event in emitted
+        if event["details"]["toolName"] == "dispatch_active_validator_bindings"
+        and event["type"] == "TOOL_COMPLETE"
+    ][0]
+    assert dispatch_complete["details"]["success"] is False
+    assert "(unresolved 1)" in dispatch_complete["details"]["friendlyName"]
+
+    lookup_complete = [
+        event
+        for event in emitted
+        if event["details"]["toolName"] == "domain_validator_lookup"
+        and event["type"] == "TOOL_COMPLETE"
+    ][0]
+    assert lookup_complete["details"]["success"] is False
+    assert lookup_complete["details"]["outcome"] == "error"
+    assert lookup_complete["details"]["error"].startswith(
+        "Validator agent execution failed"
+    )
 
 
 @pytest.mark.asyncio

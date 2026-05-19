@@ -3,12 +3,24 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
+from src.lib.config.agent_loader import AgentDefinition
 from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
-from src.lib.domain_packs.validator_dispatch import dispatch_active_validator_bindings
+from src.lib.domain_packs.validator_dispatch import (
+    dispatch_active_validator_bindings,
+    run_package_scoped_validator_agent,
+)
 from src.schemas.domain_envelope import CuratableObjectEnvelope, DomainEnvelope
+from src.schemas.domain_validator import (
+    DomainValidationRequest,
+    ValidationTarget,
+    ValidatorAgentRef,
+)
 
 
 def _pack_text(*, max_tool_calls: int | None = 3) -> str:
@@ -168,6 +180,24 @@ def _result_payload(
         "curator_message": None,
         "explanation": "Fixture validator result.",
     }
+
+
+def _validation_request() -> DomainValidationRequest:
+    return DomainValidationRequest(
+        request_id="domain-validation:test",
+        validator_binding_id="fixture.identifier_lookup",
+        validator_agent=ValidatorAgentRef(
+            package_id="fixture.validators",
+            agent_id="identifier_validator",
+        ),
+        target=ValidationTarget(
+            domain_pack_id="fixture.dispatch",
+            object_type="GeneAssertion",
+            field_path="gene.identifier",
+        ),
+        selected_inputs={"identifier": "BAD:0001"},
+        expected_result_fields={"identifier": "gene.identifier"},
+    )
 
 
 def _single_result_finding(result):
@@ -417,3 +447,44 @@ def test_ambiguous_optional_selector_still_blocks_dispatch(tmp_path: Path):
         "selector_ambiguous"
     }
     assert result.validator_results == ()
+
+
+def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from agents import AgentOutputSchema
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    source_agent = SimpleNamespace(output_type=GeneResultEnvelope)
+    captured = {}
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        captured["agent"] = agent
+        captured["kwargs"] = kwargs
+        return {"status": "resolved"}
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    binding = SimpleNamespace(max_tool_calls=4)
+    run_package_scoped_validator_agent(_validation_request(), binding=binding)
+
+    runtime_agent = captured["agent"]
+    assert runtime_agent is not source_agent
+    assert isinstance(runtime_agent.output_type, AgentOutputSchema)
+    assert runtime_agent.output_type.output_type is GeneResultEnvelope
+    assert runtime_agent.output_type.is_strict_json_schema() is False
+    assert captured["kwargs"]["max_turns"] == 4
