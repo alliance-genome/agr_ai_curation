@@ -1,0 +1,158 @@
+{
+  "timestamp_utc": "2026-05-19T05:10:22Z",
+  "note": "Aggregate summary generated from per-trial corpus JSON files.",
+  "overall_status": "fail",
+  "results": [
+    {
+      "trial_id": "allele_drosophila_notch_facet_glossy",
+      "domain": "allele",
+      "title": "Notch Controls Cell Adhesion in the Drosophila Eye",
+      "organism": "Drosophila melanogaster",
+      "pmid": "24415930",
+      "pmcid": "PMC3886913",
+      "doi": "10.1371/journal.pgen.1004087",
+      "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1004087&type=printable",
+      "prompt": "Read the loaded paper and extract exactly one allele or variant candidate: the Drosophila Notch facet-glossy allele, written as Nfa-g, N^{fa-g}, or similar. Preserve the paper notation, genotype/phenotype context, organism hints, and one record_evidence verified quote. Do not resolve allele IDs in the extractor.",
+      "document_id": "505f6ec6-fe61-4c3d-8c2b-254231948ac2",
+      "flow_id": "f369b4c2-1ef3-4bde-a07f-ad33a43195c3",
+      "status": "fail",
+      "error": "Flow execution emitted error events: [{'type': 'SPECIALIST_ERROR', 'session_id': 'corpus-flow-1e26b29f', 'turn_id': 'a388dfd0b91c4206b790a412d74cc232', 'timestamp': '2026-05-19T05:07:38.092476+00:00', 'details': {'specialist': 'Allele/Variant Extraction Agent', 'output_type': 'AlleleExtractionResultEnvelope', 'error': 'Allele/Variant Extraction Agent completed extraction output without the required verified evidence records.', 'reason': 'missing_evidence_records', 'requires_evidence': True, 'missing_record_refs': True, 'structured_evidence_count': 1, 'live_evidence_count': 1, 'evidence_reference_report': {'payload_type': 'str', 'retained_collection_count': 1, 'retained_item_count': 4, 'missing_record_refs': [{'collection': 'curatable_objects', 'index': 1, 'label': 'reference-1', 'normalized_id': None, 'entity_type': 'Reference', 'source_mentions': []}, {'collection': 'curatable_objects', 'index': 2, 'label': \"{'text': 'Nfa-g'}\", 'normalized_id': None, 'entity_type': 'AlleleMention', 'source_mentions': []}, {'collection': 'curatable_objects', 'index': 3, 'label': 'evidence-quote-1', 'normalized_id': None, 'entity_type': 'EvidenceQuote', 'source_mentions': []}], 'kept_count': 1, 'evidence_record_count': 1, 'evidence_record_ids': ['evidence-36b9b72798e94406']}, 'severity': 'error'}}, {'type': 'FLOW_ERROR', 'session_id': 'corpus-flow-1e26b29f', 'turn_id': 'a388dfd0b91c4206b790a412d74cc232', 'timestamp': '2026-05-19T05:07:38.095990+00:00', 'details': {'reason': 'specialist_step_failed', 'message': \"Flow 'Corpus allele_drosophila_notch_facet_glossy cb7e58' stopped because a specialist step failed. Allele/Variant Extraction Agent completed extraction output without the required verified evidence records.\"}}]",
+      "warnings": null,
+      "total_evidence_records": null,
+      "response_preview": null,
+      "domain_event_count": 0
+    },
+    {
+      "trial_id": "chemical_zebrafish_estradiol_segmentation",
+      "domain": "chemical_condition",
+      "title": "Small molecule screen in embryonic zebrafish using modular variations to target segmentation",
+      "organism": "Danio rerio",
+      "pmid": "29196643",
+      "pmcid": "PMC5711842",
+      "doi": "10.1038/s41467-017-01469-5",
+      "pdf_url": "https://www.nature.com/articles/s41467-017-01469-5.pdf",
+      "prompt": "Read the loaded paper and extract exactly one chemical or experimental-condition candidate: estradiol treatment in embryonic zebrafish segmentation experiments. Preserve dose/timing/context and one record_evidence verified quote. Do not resolve ChEBI or condition ontology IDs in the extractor.",
+      "document_id": "a0bb1a47-1e69-42eb-9cf2-26b9caef2c66",
+      "flow_id": "5de0c792-eb69-4047-a131-00a28ba7ce16",
+      "status": "pass",
+      "error": null,
+      "warnings": [
+        "flow_completed_with_zero_persisted_evidence_records",
+        "flow_evidence_export_failed: Unexpected flow evidence export response: 404 {\"detail\":\"Flow run evidence not found\"}"
+      ],
+      "total_evidence_records": 0,
+      "response_preview": "It seems there is an issue with extracting the information using the tool. Unfortunately, I can't proceed with the extraction due to this error. Please try again later or check the tool configuration.",
+      "domain_event_count": 2
+    },
+    {
+      "trial_id": "cross_domain_zebrafish_segmentation_screen",
+      "domain": "cross_domain",
+      "title": "Small molecule screen in embryonic zebrafish using modular variations to target segmentation",
+      "organism": "Danio rerio",
+      "pmid": "29196643",
+      "pmcid": "PMC5711842",
+      "doi": "10.1038/s41467-017-01469-5",
+      "pdf_url": "https://www.nature.com/articles/s41467-017-01469-5.pdf",
+      "prompt": "Run a compact cross-domain pass over this zebrafish segmentation paper. Extract at most one chemical condition, one phenotype statement, and one central gene if the paper supports it. Each extractor must use record_evidence for one exact supporting quote and must leave identity/ontology resolution to validators.",
+      "document_id": "a0bb1a47-1e69-42eb-9cf2-26b9caef2c66",
+      "flow_id": "2df7be77-de95-43c8-bc7d-92c5de9fc43d",
+      "status": "pass",
+      "error": null,
+      "warnings": [
+        "flow_completed_with_zero_persisted_evidence_records",
+        "flow_evidence_export_failed: Unexpected flow evidence export response: 404 {\"detail\":\"Flow run evidence not found\"}"
+      ],
+      "total_evidence_records": 0,
+      "response_preview": "It seems there is an issue with the chemical extraction step, preventing further progress. Without this step, I cannot proceed with the phenotype and gene extraction steps.\n\nIf you have any further instructions or need assistance with something else, feel free to let me know!",
+      "domain_event_count": 6
+    },
+    {
+      "trial_id": "disease_mouse_pkd1_adpkd",
+      "domain": "disease",
+      "title": "Network Analysis of a Pkd1-Mouse Model of Autosomal Dominant Polycystic Kidney Disease Identifies HNF4alpha as a Disease Modifier",
+      "organism": "Mus musculus",
+      "pmid": "23209420",
+      "pmcid": "PMC3516559",
+      "doi": "10.1371/journal.pgen.1003053",
+      "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1003053&type=printable",
+      "prompt": "Read the loaded paper and extract exactly one disease assertion candidate: the Pkd1 mouse model of autosomal dominant polycystic kidney disease. Preserve disease mention, model organism/subject context, role, and one record_evidence verified quote. Do not perform disease ontology lookup in the extractor.",
+      "document_id": "b0e7ce22-0d9f-4f93-be99-4ef901a96968",
+      "flow_id": "b52f9920-7529-43a4-8e0a-609dbfe44451",
+      "status": "pass",
+      "error": null,
+      "warnings": [
+        "flow_completed_with_zero_persisted_evidence_records",
+        "flow_evidence_export_failed: Unexpected flow evidence export response: 404 {\"detail\":\"Flow run evidence not found\"}"
+      ],
+      "total_evidence_records": 0,
+      "response_preview": "It seems there was an error with the extraction tool. Let me try again to extract the required information.It seems there is a persistent issue with the extraction tool. Unfortunately, I'm unable to complete the task due to this error. Please try again later or contact support for assistance.",
+      "domain_event_count": 2
+    },
+    {
+      "trial_id": "gene_drosophila_crb_rhabdomere",
+      "domain": "gene",
+      "title": "Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye",
+      "organism": "Drosophila melanogaster",
+      "pmid": "34097697",
+      "pmcid": "PMC8211197",
+      "doi": "10.1371/journal.pgen.1009146",
+      "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1009146&type=printable",
+      "prompt": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+      "document_id": "6b2958cb-0cdf-41b0-98f6-51d076375bd9",
+      "flow_id": "2a524b09-e8cf-449e-ba96-efbd38df26fb",
+      "status": "pass",
+      "error": null,
+      "warnings": [
+        "flow_completed_with_zero_persisted_evidence_records",
+        "flow_evidence_export_failed: Flow evidence export was empty: {'flow_name': 'Corpus gene_drosophila_crb_rhabdomere 5d3dd2', 'flow_run_id': '3d218e5a-9636-4865-8a5b-be79944407d7', 'steps': [{'agent_id': 'gene_extractor', 'agent_name': 'Gene Extraction Agent', 'evidence_count': 0, 'evidence_records': [], 'step': 1, 'tool_name': 'ask_gene_extractor_specialist'}], 'total_evidence_records': 0}"
+      ],
+      "total_evidence_records": 0,
+      "response_preview": "The gene \"Crumbs\" (symbol: crb) was extracted from the paper in the context of rhabdomere or photoreceptor apical-domain morphogenesis in *Drosophila melanogaster*. \n\n### Supporting Evidence:\n- **Quote:** \"Crumbs regulates R8 cell fate through its FERM-binding motif. (A-C) Confocal microscope images of adult *D. melanogaster* retinas stained with anti-GFP (grey), anti-Rh5 (magenta) and anti-Rh6 (green) antibodies.\"\n- **Species:** *Drosophila melanogaster*\n- **Taxon Hint:** NCBITaxon:7227\n- **Data Provider Hint:** FB\n\nThe gene was resolved to \"crb\" with CURIE \"FB:FBgn0259685\". \n\nThis completes the task of extracting the gene candidate from the document.",
+      "domain_event_count": 3
+    },
+    {
+      "trial_id": "gene_expression_zebrafish_flcn_brain",
+      "domain": "gene_expression",
+      "title": "Expression and knockdown of zebrafish folliculin suggests requirement for embryonic brain morphogenesis",
+      "organism": "Danio rerio",
+      "pmid": "27391801",
+      "pmcid": "PMC4939010",
+      "doi": "10.1186/s12861-016-0119-8",
+      "pdf_url": "https://bmcdevbiol.biomedcentral.com/counter/pdf/10.1186/s12861-016-0119-8.pdf",
+      "prompt": "Read the loaded paper and extract exactly one gene-expression observation candidate: zebrafish flcn expression during embryonic development, preferably brain, retina, hatching gland, or fin-bud context if supported. Preserve anatomy/stage/taxon hints and one record_evidence verified quote. Do not resolve anatomy, stage, gene, or provider IDs in the extractor.",
+      "document_id": "d0d4f8af-1485-41d0-aa76-37bb415ddbfa",
+      "flow_id": "92499f22-85fc-44ce-826b-c3fde79facc1",
+      "status": "pass",
+      "error": null,
+      "warnings": [
+        "flow_completed_with_zero_persisted_evidence_records",
+        "flow_evidence_export_failed: Unexpected flow evidence export response: 404 {\"detail\":\"Flow run evidence not found\"}"
+      ],
+      "total_evidence_records": 0,
+      "response_preview": "It seems there was an error with the extraction tool. Let me try that again.It seems there is a persistent issue with the extraction tool. Unfortunately, I'm unable to proceed with extracting the gene-expression observation at this time. Please try again later or contact support for further assistance.",
+      "domain_event_count": 10
+    },
+    {
+      "trial_id": "phenotype_celegans_mus81_reduced_brood",
+      "domain": "phenotype",
+      "title": "Joint Molecule Resolution Requires the Redundant Activities of MUS-81 and XPF-1 during Caenorhabditis elegans Meiosis",
+      "organism": "Caenorhabditis elegans",
+      "pmid": "23874212",
+      "pmcid": "PMC3715453",
+      "doi": "10.1371/journal.pgen.1003582",
+      "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1003582&type=printable",
+      "prompt": "Read the loaded paper and extract exactly one phenotype assertion candidate: the reduced brood size phenotype reported for C. elegans mus-81(tm1937) mutants. Preserve subject, phenotype statement, organism hints, and one record_evidence verified quote. Do not resolve phenotype ontology IDs in the extractor.",
+      "document_id": "1aae256e-dabb-4c87-91cc-96555787364d",
+      "flow_id": "49e95baf-1c22-4486-8b43-dc4c29932529",
+      "status": "pass",
+      "error": null,
+      "warnings": [
+        "flow_completed_with_zero_persisted_evidence_records",
+        "flow_evidence_export_failed: Unexpected flow evidence export response: 404 {\"detail\":\"Flow run evidence not found\"}"
+      ],
+      "total_evidence_records": 0,
+      "response_preview": "It seems there is an issue with the extraction tool. I recommend trying again later or checking the tool's configuration.",
+      "domain_event_count": 2
+    }
+  ]
+}
