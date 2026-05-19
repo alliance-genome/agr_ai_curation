@@ -173,6 +173,34 @@ def test_chemical_and_disease_active_bindings_have_active_capability_metadata():
     assert missing_active_metadata == []
 
 
+def test_alliance_evidence_record_selectors_use_verified_quote_path():
+    alliance_registry = load_alliance_domain_pack_registry()
+    pack_ids = {
+        "agr.alliance.gene_expression",
+        "gene",
+        "agr.alliance.allele",
+        "agr.alliance.disease",
+        "agr.alliance.chemical_condition",
+        "agr.alliance.phenotype",
+    }
+
+    legacy_quote_selectors: list[str] = []
+    for pack_id in sorted(pack_ids):
+        registry = DomainPackValidationRegistry.from_domain_pack(
+            alliance_registry.get_pack(pack_id)
+        )
+        for binding in registry.bindings:
+            for input_name, selector in binding.input_fields.items():
+                if selector.source != "evidence_record":
+                    continue
+                if selector.path == "quote":
+                    legacy_quote_selectors.append(
+                        f"{pack_id}:{binding.binding_id}:{input_name}"
+                    )
+
+    assert legacy_quote_selectors == []
+
+
 def test_alliance_validator_metadata_has_curator_facing_display_names():
     alliance_registry = load_alliance_domain_pack_registry()
     pack_ids = {

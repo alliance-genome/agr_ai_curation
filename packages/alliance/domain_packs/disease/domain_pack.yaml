@@ -1036,7 +1036,7 @@ metadata:
             required: false
           evidence_quote:
             source: evidence_record
-            path: quote
+            path: verified_quote
             required: false
         expected_result_fields:
           condition_id: ExperimentalCondition.condition_id

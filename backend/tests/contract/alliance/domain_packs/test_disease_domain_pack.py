@@ -394,7 +394,7 @@ def test_disease_pack_declares_validatable_disease_and_condition_fields():
     }
     assert composite_binding["input_fields"]["evidence_quote"] == {
         "source": "evidence_record",
-        "path": "quote",
+        "path": "verified_quote",
         "required": False,
     }
     assert composite_binding["expected_result_fields"] == {

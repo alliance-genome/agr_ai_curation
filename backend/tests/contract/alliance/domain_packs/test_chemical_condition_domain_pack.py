@@ -299,7 +299,7 @@ def test_chemical_condition_pack_declares_roles_and_validator_bindings():
     }
     assert composite_binding["input_fields"]["evidence_quote"] == {
         "source": "evidence_record",
-        "path": "quote",
+        "path": "verified_quote",
         "required": False,
     }
     assert "experimental_condition_validation" not in active_binding_ids
