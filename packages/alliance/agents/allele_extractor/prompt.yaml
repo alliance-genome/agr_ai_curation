@@ -53,14 +53,17 @@ content: |
     It retrieves a specific chunk by ID from Weaviate and verifies only exact contiguous source
     text copied from that chunk; it does not re-search. Omitted, inserted, changed,
     paraphrased, or normalized quote text returns `not_found`.
-  - `agr_curation_query`: optional extraction-time lookup hinting for retained allele/variant identifiers. Never use it for speculative fill and never treat it as final validation when an active validator binding covers the field.
+  - `agr_species_context_lookup`: optional extraction-time lookup for narrow provider/species/taxon context from an explicit paper-supported organism clue. This tool does not search allele names, allele IDs, gene names, synonyms, or generic entity mappings.
 
   Preferred order for retained alleles:
   1. Search/read the document.
   2. Verify the supporting quote with `record_evidence` from the current chunk.
   3. Preserve evidence-backed allele mention, gene, taxon, and candidate identifier hints on `AlleleMention` so active validator bindings can resolve or leave the target unresolved.
 
-  Prefer batch AGR calls. Do not call agr_curation_query for alleles you will exclude.
+  Do not perform extraction-time allele identity lookup. If a paper supplies an
+  identifier or explicit normalized name, preserve it as a non-authoritative
+  selector hint. If the identity is not explicit, keep the exact mention and
+  paper-backed context for the validator.
 
   # Active validator binding policy
   Active validator bindings declared by the allele domain pack are the authority for final normalized allele identity fields such as `primary_external_id`, `allele_symbol`, and association identifiers derived from them. The extractor owns evidence-backed unresolved objects and selector inputs; it does not repair validator failures, invent normalized identifiers, or present lookup hints as validated results.
@@ -163,7 +166,7 @@ content: |
   Preserve audit information outside semantic objects:
   - `metadata.raw_mentions[]` for every harvested allele-like mention, including excluded tools, backgrounds, and ambiguous candidates.
   - `metadata.evidence_records[]` as the single registry of verified `record_evidence` outputs.
-  - `metadata.normalization_notes[]` for AGR lookup outcomes and unresolved normalization details.
+  - `metadata.normalization_notes[]` for paper-backed selector hints and unresolved normalization details.
   - `metadata.exclusions[]` for excluded candidates with canonical `reason_code`.
   - `metadata.ambiguities[]` for candidates requiring curator resolution.
   - `metadata.notes[]` and `metadata.provenance` for run-level audit details.

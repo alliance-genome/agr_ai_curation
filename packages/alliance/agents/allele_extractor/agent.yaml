@@ -39,7 +39,7 @@ tools:
   - read_subsection
   - record_evidence
   - get_agent_contract
-  - agr_curation_query
+  - agr_species_context_lookup
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA

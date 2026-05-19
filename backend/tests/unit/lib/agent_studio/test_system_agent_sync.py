@@ -251,7 +251,12 @@ def test_sync_skips_agent_with_missing_prompt(monkeypatch):
             "allele_extractor",
             "allele_extractor",
             "AlleleExtractionResultEnvelope",
-            ["search_document", "read_section", "read_subsection", "agr_curation_query"],
+            [
+                "search_document",
+                "read_section",
+                "read_subsection",
+                "agr_species_context_lookup",
+            ],
         ),
         (
             "disease_extractor",

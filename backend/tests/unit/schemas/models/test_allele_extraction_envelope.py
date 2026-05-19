@@ -6,6 +6,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+import yaml
 from pydantic import ValidationError
 
 from src.lib.config import schema_discovery
@@ -138,7 +139,7 @@ def _valid_allele_envelope_payload() -> dict:
                 }
             ],
             "normalization_notes": [
-                "Resolved daf-2(m41) to WB:WBVar00000001 with agr_curation_query."
+                "Paper supplied daf-2(m41) with a stable selector hint."
             ],
             "exclusions": [
                 {
@@ -287,3 +288,41 @@ def test_allele_extractor_schema_rejects_repair_surfaces(
 
     with pytest.raises(ValidationError):
         allele_schema.model_validate(payload)
+
+
+def test_allele_extractor_prompt_and_tools_keep_identity_lookup_validator_owned():
+    agent_yaml = (
+        REPO_ROOT / "packages" / "alliance" / "agents" / "allele_extractor" / "agent.yaml"
+    )
+    prompt_yaml = (
+        REPO_ROOT / "packages" / "alliance" / "agents" / "allele_extractor" / "prompt.yaml"
+    )
+
+    agent_data = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
+    prompt_content = str(yaml.safe_load(prompt_yaml.read_text(encoding="utf-8"))["content"])
+
+    assert "agr_species_context_lookup" in agent_data["tools"]
+    assert "agr_curation_query" not in agent_data["tools"]
+    assert "agr_species_context_lookup" in prompt_content
+    assert "Active validator bindings declared by the allele domain pack" in prompt_content
+    assert "Do not perform extraction-time allele identity lookup" in prompt_content
+    assert "agr_curation_query" not in prompt_content
+
+
+def test_allele_extractor_group_rules_do_not_direct_database_lookup():
+    group_rules_dir = (
+        REPO_ROOT
+        / "packages"
+        / "alliance"
+        / "agents"
+        / "allele_extractor"
+        / "group_rules"
+    )
+
+    for group_rule_file in group_rules_dir.glob("*.yaml"):
+        content = str(
+            yaml.safe_load(group_rule_file.read_text(encoding="utf-8"))["content"]
+        )
+        assert "search_alleles" not in content
+        assert "get_allele" not in content
+        assert "agr_curation_query" not in content

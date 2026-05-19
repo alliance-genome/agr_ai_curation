@@ -37,9 +37,9 @@ def test_allele_extractor_mgi_overlay_includes_lab_code_disambiguation_workflow(
     assert "tm1.1Hko" in content
     assert "em1Cya" in content
     assert "em1Gpt" in content
-    assert "fullname_attribution" in content
-    assert "`search_alleles` substring matching" in content
-    assert "cross-check that the candidate's gene matches the experimental gene(s) discussed in the current paper" in content
+    assert "Active allele" in content
+    assert "paper-backed context that can help validation" in content
+    assert "do not" in content
     assert "ambiguities[]" in content
 
 
