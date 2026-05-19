@@ -62,6 +62,14 @@ Validation findings are separate from attachment metadata: findings are the
 current results written back to the envelope, while export and submission
 blockers describe whether the reviewed envelope is ready for final actions.
 
+Extraction and validation have separate responsibilities. First-pass extraction
+agents read uploaded papers, record evidence, and preserve paper-backed
+proposals or selector hints. They can use the narrow species/provider/taxon
+context helper when organism context is needed, but final gene, allele, disease,
+chemical, phenotype, ontology, reference, relation, and data-provider resolution
+belongs to validator agents. Validator results and materialization are what make
+resolved fields authoritative.
+
 **Clickable Tool Names**
 
 Tool names in agent cards are clickable! Click any tool name to open a detailed panel showing:
@@ -70,7 +78,7 @@ Tool names in agent cards are clickable! Click any tool name to open a detailed 
 - **Methods** - For multi-method tools (like database queries), see all available methods with examples
 - **Agent Context** - Which methods are relevant to the selected agent
 
-This helps you understand exactly what capabilities each agent has and how they interact with databases and APIs.
+This helps you understand exactly what capabilities each agent has and how they interact with databases and APIs. When comparing extractor and validator agents, check which document/evidence tools the extractor can use, which broad lookup tools are deliberately unavailable to it, and which validator tools perform authoritative database, API, or ontology resolution.
 
 **Ask Opus about agents:**
 - "Why does this agent look for negative evidence?"
@@ -79,6 +87,7 @@ This helps you understand exactly what capabilities each agent has and how they 
 - "What does this instruction mean in practice?"
 - "Can Agent Studio custom agents inspect the repository source code?"
 - "Is there a tool policy that prevents this tool from being attached?"
+- "Which tools can this extractor use, which lookup tools are deliberately unavailable, and which validator materializes the final fields?"
 
 ### Flows Tab
 
@@ -232,6 +241,7 @@ Click the **"Discuss with Claude"** button in the Workshop toolbar to send your 
 - "What would happen if I changed this instruction?"
 - "Does this prompt still produce the required domain-envelope fields?"
 - "Which automatic validators will run for this agent?"
+- "Does this custom extractor still keep proposed fields separate from validator-materialized fields?"
 
 ## Discussing a Chat Response
 
@@ -263,6 +273,12 @@ matches were found, and whether an individual attempt was successful,
 ambiguous, not found, transient, blocked, or under development. A transient
 attempt can still appear in the audit trail even when a later retry produced a
 successful top-level lookup result.
+
+For domain-envelope runs, a complete-looking extraction event is not enough to
+prove validation succeeded. Check the validation findings and lookup attempts to
+see which validator binding ran, what `DomainValidationRequest` fields it
+received, what lookup it performed, and whether the final result was resolved,
+unresolved, ambiguous, unavailable, or only under-development metadata.
 
 Curator review is driven by validation findings and field paths. A review action
 may update a bounded field, resolve or waive a finding when policy allows it, or

@@ -162,6 +162,15 @@ correction wrappers. Biological validation belongs to package-scoped validator
 bindings, and unresolved validator outcomes are represented as
 `ValidationFinding` records on the envelope.
 
+Extractor and validator tool boundaries are part of the contract. First-pass
+extractors read papers, call document/evidence tools, and may use the narrow
+species/provider/taxon context helper for paper-grounded organism context. They
+must not use broad database/entity lookup tools to resolve final gene, allele,
+disease, chemical, phenotype, ontology, reference, relation, or data-provider
+identity when an active validator binding owns that resolution. Those final
+fields are resolved by validators from `DomainValidationRequest` inputs and then
+materialized back into envelope findings or objects.
+
 Validators return structured decisions and facts such as resolved values,
 resolved objects, missing expected fields, candidates, lookup attempts,
 curator-facing messages, and explanations. Materialization records those results

@@ -166,6 +166,28 @@ def test_agent_studio_system_prompt_grounded_in_domain_envelope_tools():
     assert "read `validator_bindings[].validator_agent.agent_id`" in prompt
     assert "validation_attachments[].validator_agent_id" in prompt
     assert "get_prompt(agent_id=<validator agent id>)" in prompt
+    assert "Extractor and validator responsibilities are deliberately separate" in prompt
+    assert "First-pass extractors must not use broad database/entity lookup tools" in prompt
+    assert "`agr_species_context_lookup` is the shared narrow context tool" in prompt
+    assert "Validators receive `DomainValidationRequest` payloads" in prompt
+    assert "Materialized/resolved fields belong to validator results" in prompt
+    assert "Do not infer that an extractor called a validator directly" in prompt
+    assert "tools deliberately unavailable" in prompt
+    assert "what fields it proposes or preserves as hints" in prompt
+    assert "what fields it materializes or validates authoritatively" in prompt
+
+
+def test_agent_studio_system_prompt_canonical_and_packaged_copies_match():
+    canonical_path = REPO_ROOT / "alliance_config" / "agent_studio_system_prompt.md"
+    if not canonical_path.exists():
+        # The backend unit-test image may include only /app/backend. Local and
+        # full-repo runs still guard the canonical runtime copy.
+        return
+
+    canonical_prompt = canonical_path.read_text(encoding="utf-8")
+    packaged_prompt = _read_repo_text("backend/src/api/agent_studio_system_prompt.md")
+
+    assert canonical_prompt == packaged_prompt
 
 
 def test_validator_dispatch_cleanup_guardrail_rejects_stale_active_surface_terms():

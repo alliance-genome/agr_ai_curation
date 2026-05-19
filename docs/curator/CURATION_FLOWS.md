@@ -26,6 +26,8 @@ Curation Flows are visual workflows that let you chain multiple AI agents togeth
 - Active default validators attach automatically from domain-pack metadata
 - Active validators can be skipped only when flow configuration replaces or supplements them with explicit validation
 - Under-development validators are visible metadata and are not scheduled
+- Extractors preserve paper-backed proposals and selector hints; validators own
+  authoritative database/API/ontology resolution and materialized fields
 
 **Repeatable Results**
 - Same workflow = consistent extraction across documents
@@ -123,7 +125,8 @@ Add specific instructions for this step. These are prepended to the agent's syst
 For domain-pack extraction agents, the Properties Panel shows the domain
 envelope object types, field paths, required fields, schema/provider references,
 source-of-truth notes, and validation policy. This tells you what the extractor
-is expected to save for review and export.
+is expected to save for review and export. It also helps distinguish extractor
+proposal fields from validator-materialized fields.
 
 **Validation Attachments**
 
@@ -137,6 +140,13 @@ Under-development validators can appear as roadmap or context metadata. They do
 not run and do not create validation findings. Current findings, lookup audit
 notes, and export/submission readiness blockers are shown from the saved domain
 envelope after a run.
+
+First-pass extractors should use document/evidence tools and the narrow
+species/provider/taxon context helper when needed. They should not be configured
+to do broad entity, ontology, reference, relation, or data-provider lookup when
+an active validator binding owns that resolution. Check the node's tool list and
+validation attachments together: the extractor's unavailable lookup tools are
+intentional when the matching validator is responsible for those fields.
 
 To add a custom validation step, add a validation agent after the extraction
 node. Use its steering prompt to point at the envelope object, field path, or
