@@ -328,6 +328,7 @@ def test_phenotype_extractor_schema_canonicalizes_runtime_scaffold_objects():
         "version": "1b11d0888f19",
     }
     annotation_subject = annotation["payload"]["phenotype_annotation_subject"]
+    annotation_subject["resolution_state"] = "resolved"
     annotation_subject["subject_identifier"] = None
     annotation_term = annotation["payload"]["phenotype_terms"][0]
     annotation_term["curie"] = None
@@ -337,6 +338,7 @@ def test_phenotype_extractor_schema_canonicalizes_runtime_scaffold_objects():
         "filename": None,
     }
     payload["curatable_objects"] = [annotation]
+    payload["metadata"]["raw_mentions"] = []
 
     envelope = _validate_phenotype_extractor_payload(payload)
 
@@ -352,6 +354,11 @@ def test_phenotype_extractor_schema_canonicalizes_runtime_scaffold_objects():
     }
     assert annotation_object.schema_ref.schema_id == "alliance.linkml.PhenotypeAnnotation"
     assert annotation_object.schema_ref.version == LINKML_COMMIT
+    assert (
+        annotation_object.payload.phenotype_annotation_subject.resolution_state
+        == "pending_entity_resolution"
+    )
+    assert envelope.metadata.raw_mentions[0].entity_type == "phenotype"
     assert annotation_object.metadata["export_behavior"]["status"] == "blocked"
     assert annotation_object.metadata["write_behavior"]["status"] == "blocked"
 

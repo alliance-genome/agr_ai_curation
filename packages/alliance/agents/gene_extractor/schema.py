@@ -84,6 +84,26 @@ def _is_unsupported_zfin_drug_like_payload(payload: Mapping[str, Any]) -> bool:
     return bool(re.search(r"[A-Z]", mention) and re.search(r"\d", mention))
 
 
+def _align_metadata_evidence_record_chunk_id(
+    payload: Mapping[str, Any],
+    metadata_record: dict[str, Any],
+) -> None:
+    if _optional_text(payload.get("evidence_record_id")) != _optional_text(
+        metadata_record.get("evidence_record_id")
+    ):
+        return
+    for field_name in ("verified_quote", "section"):
+        if _optional_text(payload.get(field_name)) != _optional_text(
+            metadata_record.get(field_name)
+        ):
+            return
+    if payload.get("page") != metadata_record.get("page"):
+        return
+    chunk_id = _optional_text(payload.get("chunk_id"))
+    if chunk_id:
+        metadata_record["chunk_id"] = chunk_id
+
+
 class GeneMentionEvidencePayload(BaseModel):
     """Payload for one verified gene mention evidence object."""
 
@@ -270,6 +290,21 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
         if not isinstance(curatable_objects, list):
             return normalized
 
+        metadata = normalized.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            normalized["metadata"] = metadata
+        evidence_records = metadata.get("evidence_records")
+        if not isinstance(evidence_records, list):
+            evidence_records = []
+        evidence_by_id = {
+            evidence_id: record
+            for record in evidence_records
+            if isinstance(record, dict)
+            for evidence_id in [_optional_text(record.get("evidence_record_id"))]
+            if evidence_id
+        }
+
         kept_objects: list[object] = []
         exclusions: list[dict[str, Any]] = []
         for obj in curatable_objects:
@@ -299,14 +334,18 @@ class GeneExtractionResultEnvelope(RuntimeGeneExtractionResultEnvelope):
                     }
                 )
                 continue
+            if (
+                obj.get("object_type") == GENE_MENTION_EVIDENCE_OBJECT_TYPE
+                and isinstance(payload, Mapping)
+            ):
+                evidence_id = _optional_text(payload.get("evidence_record_id"))
+                metadata_record = evidence_by_id.get(evidence_id or "")
+                if isinstance(metadata_record, dict):
+                    _align_metadata_evidence_record_chunk_id(payload, metadata_record)
             kept_objects.append(obj)
 
         if exclusions:
             normalized["curatable_objects"] = kept_objects
-            metadata = normalized.get("metadata")
-            if not isinstance(metadata, dict):
-                metadata = {}
-                normalized["metadata"] = metadata
             existing_exclusions = metadata.get("exclusions")
             if not isinstance(existing_exclusions, list):
                 existing_exclusions = []

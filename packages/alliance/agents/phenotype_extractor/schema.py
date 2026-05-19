@@ -222,6 +222,25 @@ def _blocked_write_behavior() -> dict[str, Any]:
     }
 
 
+def _normalize_subject_payload_scaffold(payload: dict[str, Any]) -> None:
+    if payload.get("resolution_state") != "resolved":
+        return
+    missing = [
+        field_name
+        for field_name in ("subject_identifier", "subject_type", "taxon")
+        if _is_missing(payload.get(field_name))
+    ]
+    if not missing:
+        return
+    if "subject_identifier" not in missing:
+        return
+    payload["resolution_state"] = "pending_entity_resolution"
+    payload.setdefault(
+        "resolution_note",
+        "Subject was marked resolved but is missing required resolved identifiers.",
+    )
+
+
 class PhenotypeSubjectPayload(BaseModel):
     """Pending biological entity subject metadata for a phenotype assertion."""
 
@@ -617,45 +636,87 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
                     uri=PHENOTYPE_SCHEMA_URI,
                     definition_state=DefinitionState.IN_DEVELOPMENT,
                 )
+                payload = obj.get("payload")
+                if isinstance(payload, dict):
+                    subject_payload = payload.get("phenotype_annotation_subject")
+                    if isinstance(subject_payload, dict):
+                        _normalize_subject_payload_scaffold(subject_payload)
             elif obj.get("object_type") == PHENOTYPE_SUBJECT_OBJECT_TYPE:
-                obj.setdefault(
-                    "schema_ref",
-                    _schema_ref_payload(
-                        schema_id=PHENOTYPE_SUBJECT_SCHEMA_ID,
-                        name="BiologicalEntity",
-                        uri=PHENOTYPE_SUBJECT_SCHEMA_URI,
-                        definition_state=DefinitionState.IN_DEVELOPMENT,
-                    ),
+                obj["schema_ref"] = _schema_ref_payload(
+                    schema_id=PHENOTYPE_SUBJECT_SCHEMA_ID,
+                    name="BiologicalEntity",
+                    uri=PHENOTYPE_SUBJECT_SCHEMA_URI,
+                    definition_state=DefinitionState.IN_DEVELOPMENT,
                 )
+                payload = obj.get("payload")
+                if isinstance(payload, dict):
+                    _normalize_subject_payload_scaffold(payload)
+                    metadata_payload = obj.setdefault("metadata", {})
+                    if isinstance(metadata_payload, dict):
+                        metadata_payload.setdefault(
+                            "validation_state",
+                            payload.get("resolution_state"),
+                        )
             elif obj.get("object_type") == PHENOTYPE_TERM_OBJECT_TYPE:
-                obj.setdefault(
-                    "schema_ref",
-                    _schema_ref_payload(
-                        schema_id=PHENOTYPE_TERM_SCHEMA_ID,
-                        name="PhenotypeTerm",
-                        uri=PHENOTYPE_TERM_SCHEMA_URI,
-                    ),
+                obj["schema_ref"] = _schema_ref_payload(
+                    schema_id=PHENOTYPE_TERM_SCHEMA_ID,
+                    name="PhenotypeTerm",
+                    uri=PHENOTYPE_TERM_SCHEMA_URI,
                 )
             elif obj.get("object_type") == REFERENCE_OBJECT_TYPE:
-                obj.setdefault(
-                    "schema_ref",
-                    _schema_ref_payload(
-                        schema_id=REFERENCE_SCHEMA_ID,
-                        name="Reference",
-                        uri=REFERENCE_SCHEMA_URI,
-                    ),
+                obj["schema_ref"] = _schema_ref_payload(
+                    schema_id=REFERENCE_SCHEMA_ID,
+                    name="Reference",
+                    uri=REFERENCE_SCHEMA_URI,
                 )
-
-        existing_by_type: dict[str, list[dict[str, Any]]] = {}
-        for obj in curatable_objects:
-            if isinstance(obj, dict) and isinstance(obj.get("object_type"), str):
-                existing_by_type.setdefault(str(obj["object_type"]), []).append(obj)
 
         has_annotation_object = any(
             obj.get("object_type") == PHENOTYPE_OBJECT_TYPE
             for obj in curatable_objects
             if isinstance(obj, Mapping)
         )
+        raw_mentions = metadata.get("raw_mentions")
+        if has_annotation_object and not raw_mentions:
+            inferred_mentions: list[dict[str, Any]] = []
+            for obj in curatable_objects:
+                if not isinstance(obj, Mapping):
+                    continue
+                if obj.get("object_type") != PHENOTYPE_OBJECT_TYPE:
+                    continue
+                payload = obj.get("payload")
+                if not isinstance(payload, Mapping):
+                    continue
+                source_mentions = payload.get("source_mentions")
+                mention = None
+                if isinstance(source_mentions, list):
+                    mention = next(
+                        (
+                            item.strip()
+                            for item in source_mentions
+                            if isinstance(item, str) and item.strip()
+                        ),
+                        None,
+                    )
+                mention = mention or _optional_text(
+                    payload.get("phenotype_annotation_object")
+                )
+                if mention:
+                    inferred_mentions.append(
+                        {
+                            "mention": mention,
+                            "entity_type": "phenotype",
+                            "evidence_record_ids": list(
+                                payload.get("evidence_record_ids") or []
+                            ),
+                        }
+                    )
+            metadata["raw_mentions"] = inferred_mentions
+
+        existing_by_type: dict[str, list[dict[str, Any]]] = {}
+        for obj in curatable_objects:
+            if isinstance(obj, dict) and isinstance(obj.get("object_type"), str):
+                existing_by_type.setdefault(str(obj["object_type"]), []).append(obj)
+
         reference_ref = None
         reference_objects = existing_by_type.get(REFERENCE_OBJECT_TYPE, [])
         if reference_objects:

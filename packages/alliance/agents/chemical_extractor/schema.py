@@ -219,6 +219,30 @@ def _append_object_ref(
     refs.append({"pending_ref_id": pending_ref_id, "object_type": object_type})
 
 
+def _align_metadata_evidence_record_from_quote_payload(
+    payload: Mapping[str, Any],
+    metadata_record: dict[str, Any],
+) -> None:
+    """Keep duplicated quote-location scaffold in sync when the quote matches."""
+
+    if _optional_text(payload.get("evidence_record_id")) != _optional_text(
+        metadata_record.get("evidence_record_id")
+    ):
+        return
+    for field_name in ("verified_quote", "section"):
+        if _optional_text(payload.get(field_name)) != _optional_text(
+            metadata_record.get(field_name)
+        ):
+            return
+    if payload.get("page") != metadata_record.get("page"):
+        return
+
+    for field_name in ("chunk_id", "subsection", "figure_reference"):
+        payload_value = payload.get(field_name)
+        if payload_value is not None:
+            metadata_record[field_name] = payload_value
+
+
 def _validate_string_list(value: list[StrictStr], field_name: str) -> list[str]:
     normalized_values: list[str] = []
     seen: set[str] = set()
@@ -563,6 +587,38 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
                 obj.setdefault("model_ref", EVIDENCE_QUOTE_MODEL_REF)
                 obj.setdefault("object_role", "metadata_only")
                 obj.setdefault("definition_state", DefinitionState.IN_DEVELOPMENT.value)
+                payload = obj.get("payload")
+                if isinstance(payload, Mapping):
+                    evidence_id = _optional_text(payload.get("evidence_record_id"))
+                    metadata_record = evidence_by_id.get(evidence_id or "")
+                    if isinstance(metadata_record, dict):
+                        _align_metadata_evidence_record_from_quote_payload(
+                            payload,
+                            metadata_record,
+                        )
+            elif obj.get("object_type") == REFERENCE_OBJECT_TYPE:
+                obj["schema_ref"] = _schema_ref_payload(
+                    schema_id=REFERENCE_SCHEMA_ID,
+                    name=REFERENCE_SCHEMA_NAME,
+                    uri=REFERENCE_SCHEMA_URI,
+                )
+                obj.setdefault("model_ref", REFERENCE_MODEL_REF)
+                obj.setdefault("object_role", "validated_reference")
+            elif obj.get("object_type") == CHEMICAL_TERM_OBJECT_TYPE:
+                obj["schema_ref"] = _schema_ref_payload(
+                    schema_id=CHEMICAL_TERM_SCHEMA_ID,
+                    name=CHEMICAL_TERM_SCHEMA_NAME,
+                    uri=CHEMICAL_TERM_SCHEMA_URI,
+                )
+                obj.setdefault("model_ref", CHEMICAL_TERM_MODEL_REF)
+                obj.setdefault("object_role", "validated_reference")
+            elif obj.get("object_type") == CHEMICAL_CONDITION_OBJECT_TYPE:
+                obj["schema_ref"] = _schema_ref_payload(
+                    schema_id=CHEMICAL_CONDITION_SCHEMA_ID,
+                    name=CHEMICAL_CONDITION_SCHEMA_NAME,
+                    uri=CHEMICAL_CONDITION_SCHEMA_URI,
+                    definition_state=DefinitionState.IN_DEVELOPMENT,
+                )
 
         existing_by_type: dict[str, list[dict[str, Any]]] = {}
         for obj in curatable_objects:

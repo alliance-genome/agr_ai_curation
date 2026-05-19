@@ -225,6 +225,17 @@ def test_gene_extractor_schema_requires_payload_metadata_evidence_alignment():
         _gene_extractor_schema().model_validate(payload)
 
 
+def test_gene_extractor_schema_canonicalizes_evidence_chunk_id_scaffold():
+    payload = _valid_gene_extractor_payload()
+    payload["metadata"]["evidence_records"][0]["chunk_id"] = "chunk-with-typo"
+
+    envelope = _gene_extractor_schema().model_validate(payload)
+
+    assert envelope.metadata.evidence_records[0].chunk_id == (
+        payload["curatable_objects"][0]["payload"]["chunk_id"]
+    )
+
+
 def test_gene_extractor_schema_excludes_unresolved_zfin_drug_like_mentions():
     payload = _valid_gene_extractor_payload()
     obj = payload["curatable_objects"][0]

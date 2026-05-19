@@ -305,12 +305,15 @@ def test_chemical_extractor_schema_accepts_label_backed_pending_ontology_candida
 
 def test_chemical_extractor_schema_canonicalizes_runtime_scaffold_objects():
     payload = _valid_chemical_extractor_payload()
+    reference = copy.deepcopy(payload["curatable_objects"][0])
     condition = copy.deepcopy(payload["curatable_objects"][-1])
     evidence = copy.deepcopy(payload["curatable_objects"][2])
+    reference["schema_ref"]["definition_state"] = "in_development"
     condition["object_refs"] = []
     condition["metadata"] = {}
     evidence["pending_ref_id"] = None
-    payload["curatable_objects"] = [condition, evidence]
+    payload["metadata"]["evidence_records"][0]["chunk_id"] = "chunk-with-typo"
+    payload["curatable_objects"] = [condition, reference, evidence]
 
     envelope = _validate_chemical_extractor_payload(payload)
 
@@ -326,9 +329,14 @@ def test_chemical_extractor_schema_canonicalizes_runtime_scaffold_objects():
         EVIDENCE_QUOTE_OBJECT_TYPE,
     }
     assert condition_object.metadata["export_behavior"]["status"] == "blocked"
-    assert any(
-        obj.object_type == REFERENCE_OBJECT_TYPE
+    reference_object = next(
+        obj
         for obj in envelope.curatable_objects
+        if obj.object_type == REFERENCE_OBJECT_TYPE
+    )
+    assert reference_object.schema_ref.definition_state == "stable"
+    assert envelope.metadata.evidence_records[0].chunk_id == (
+        evidence["payload"]["chunk_id"]
     )
     assert all(obj.pending_ref_id for obj in envelope.curatable_objects)
 
