@@ -307,6 +307,86 @@ async def test_record_evidence_rapidfuzz_recovers_quote_with_citations_and_trail
     )
 
 
+@pytest.mark.asyncio
+async def test_record_evidence_accepts_llm_confirmed_pdf_superscript_markup(monkeypatch):
+    chunk_id = "chunk-crb-superscript"
+    chunk_text = (
+        "significantly increased levels of NinaC in $crb^{11A22}$ and $crb^{8F105}$ "
+        "as compared to controls might be relevant in the context of the role of Crb "
+        "in rhabdomere shape."
+    )
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 1,
+            "parent_section": "Results and Discussion",
+            "metadata": {},
+        }
+
+    async def _fake_llm_confirmation(**kwargs):
+        assert kwargs["entity"] == "crumbs"
+        assert "$crb^{11A22}$" in kwargs["candidates"][0].text
+        return 0
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="crumbs",
+        chunk_id=chunk_id,
+        claimed_quote=(
+            "significantly increased levels of NinaC in crb11A22 and crb8F105 as "
+            "compared to controls might be relevant in the context of the role of Crb "
+            "in rhabdomere shape."
+        ),
+    )
+
+    assert result["status"] == "verified"
+    assert "$crb^{11A22}$" in result["verified_quote"]
+    assert "$crb^{8F105}$" in result["verified_quote"]
+
+
+@pytest.mark.asyncio
+async def test_record_evidence_accepts_llm_confirmed_clipped_chunk_boundary(monkeypatch):
+    chunk_id = "chunk-clipped-boundary"
+    chunk_text = (
+        "ssociate Crb abundances to the severity of their phenotypes. This result can "
+        "now be applied to other mutants with defects in members of the Crb complex."
+    )
+
+    async def _fake_get_chunk_by_id(**kwargs):
+        assert kwargs["chunk_id"] == chunk_id
+        return {
+            "id": chunk_id,
+            "text": chunk_text,
+            "page_number": 1,
+            "parent_section": "Results and Discussion",
+            "metadata": {},
+        }
+
+    async def _fake_llm_confirmation(**kwargs):
+        assert kwargs["entity"] == "crumbs"
+        assert kwargs["candidates"][0].text.startswith("ssociate Crb")
+        return 0
+
+    monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
+    monkeypatch.setattr(record_evidence, "_confirm_fuzzy_evidence_with_llm", _fake_llm_confirmation)
+    tool = record_evidence.create_record_evidence_tool("doc-123", "user-1")
+
+    result = await tool(
+        entity="crumbs",
+        chunk_id=chunk_id,
+        claimed_quote="associate Crb abundances to the severity of their phenotypes.",
+    )
+
+    assert result["status"] == "verified"
+    assert result["verified_quote"].startswith("ssociate Crb abundances")
+
+
 def test_fuzzy_candidate_review_ranking_uses_similarity_not_display_entity():
     claimed_quote = "GeneA mutants showed abnormal rhabdomeres."
     candidates = [
@@ -619,6 +699,8 @@ async def test_record_evidence_regression_rejects_all_341_neighboring_allele_quo
 
     async def _fake_llm_confirmation(**kwargs):
         llm_confirmation_calls.append(kwargs)
+        if kwargs["entity"] in {"LSL-DTA", "CD8a-/-"}:
+            return None
         return 0
 
     monkeypatch.setattr(record_evidence, "get_chunk_by_id", _fake_get_chunk_by_id)
