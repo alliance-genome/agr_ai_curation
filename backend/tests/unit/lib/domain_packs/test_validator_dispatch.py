@@ -594,6 +594,41 @@ def test_validator_result_identity_mismatch_becomes_invalid_schema_result():
     assert "different request" in result.explanation
 
 
+def test_validator_result_allows_target_input_value_context_drift():
+    request = _validation_request()
+    request = request.model_copy(
+        update={
+            "selected_inputs": {
+                "identifier": "BAD:0001",
+                "evidence_quote": "Molar abundance was 1.54 \u00b1 0.34 fmole/eye.",
+            },
+            "target": request.target.model_copy(
+                update={
+                    "object_id": "object-1",
+                    "input_values": {
+                        "identifier": "BAD:0001",
+                        "evidence_quote": (
+                            "Molar abundance was 1.54 \u00b1 0.34 fmole/eye."
+                        ),
+                    },
+                }
+            ),
+        }
+    )
+    payload = _result_payload(request)
+    payload["target"]["input_values"]["evidence_quote"] = (
+        "Molar abundance was 1.54 \u0000b1 0.34 fmole/eye."
+    )
+
+    result = validator_result_from_agent_output(payload, request=request)
+
+    assert result.status == "resolved"
+    assert result.target == request.target
+    assert result.target.input_values["evidence_quote"].endswith(
+        "\u00b1 0.34 fmole/eye."
+    )
+
+
 def test_dispatch_rejects_identity_mismatch_without_materializing(tmp_path: Path):
     pack = _loaded_pack(tmp_path)
 

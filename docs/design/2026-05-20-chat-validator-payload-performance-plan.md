@@ -65,3 +65,17 @@ shape and runtime fanout, not the existence of validated identity fields.
    `apical spectrin cytoskeleton`; parallelism and payload compaction reduce
    cost, but they do not fix over-extraction by themselves.
 
+## Follow-up: Validator Target Context Drift
+
+A later run, trace `44c29ee61e8a6e82fb4b13221e7956b3`, confirmed that the
+parallel/deduped validator path was faster, but surfaced a false
+`invalid_schema` result. The gene validator correctly resolved `crumbs` to
+`crb` / `FB:FBgn0259685`; the rejection happened because the validator copied
+the request target's `input_values.evidence_quote` with a mangled `±` escape.
+
+`target.input_values` is validator context, not materialization identity. The
+identity guard should continue to reject mismatched request IDs, binding IDs,
+validator agents, object IDs, object types, roles, field paths, and expected
+fields, but should not reject a good lookup solely because copied context text
+drifted. Accepted validator results should be canonicalized back to the
+dispatcher-owned request identity before materialization.

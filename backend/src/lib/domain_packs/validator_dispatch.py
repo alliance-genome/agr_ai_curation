@@ -514,8 +514,9 @@ def _validated_result_from_agent_output(
         result.request_id != request.request_id
         or result.validator_binding_id != request.validator_binding_id
         or result.validator_agent.model_dump(mode="json") != expected_agent
-        or result.target.model_dump(mode="json") != request.target.model_dump(
-            mode="json"
+        or not _validator_result_target_matches_request_identity(
+            result,
+            request=request,
         )
     ):
         LOGGER.info(
@@ -531,7 +532,40 @@ def _validated_result_from_agent_output(
                 "binding, validator agent, or target."
             ),
         )
-    return result
+    return result.model_copy(
+        update={
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent,
+            "target": request.target,
+        }
+    )
+
+
+def _validator_result_target_matches_request_identity(
+    result: DomainValidatorResultBase,
+    *,
+    request: DomainValidationRequest,
+) -> bool:
+    """Return whether the validator result targets the request's object/field.
+
+    ``target.input_values`` is request context for the validator, not target
+    identity. The model must copy object and field identity exactly, but copied
+    context text can drift through JSON escaping or normalization without
+    changing where the result should materialize.
+    """
+
+    return _target_identity_payload(result.target) == _target_identity_payload(
+        request.target
+    )
+
+
+def _target_identity_payload(target: Any) -> dict[str, Any]:
+    if hasattr(target, "model_dump"):
+        return target.model_dump(mode="json", exclude={"input_values"})
+    if isinstance(target, dict):
+        return {key: value for key, value in target.items() if key != "input_values"}
+    return {}
 
 
 def _extract_structured_output(raw_output: Any) -> Any:
