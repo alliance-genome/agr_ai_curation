@@ -859,6 +859,71 @@ def test_search_alleles_uses_generic_db_fuzzy_fallback_when_api_search_misses(mo
     assert result.data[0]["match_type"] == "fuzzy_symbol"
 
 
+def test_search_alleles_uses_single_all_taxa_fuzzy_fallback_without_provider(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+    standard_calls = []
+    fallback_calls = []
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            standard_calls.append((entity_type, search_pattern, taxon_curie, include_synonyms, limit))
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def _fake_fuzzy_fallback(_db, *, search_pattern, taxon_curie, include_synonyms, limit):
+        fallback_calls.append((search_pattern, taxon_curie, include_synonyms, limit))
+        return [
+            {
+                "entity_curie": "FB:FBal0001817",
+                "taxon_curie": "NCBITaxon:7227",
+                "entity": "crb<sup>11A22</sup>",
+                "match_type": "fuzzy_symbol",
+                "score": 0.71,
+            }
+        ]
+
+    def _fake_batch_fetch(_db, curies):
+        assert curies == ["FB:FBal0001817"]
+        return {
+            "FB:FBal0001817": {
+                "curie": "FB:FBal0001817",
+                "symbol": "crb<sup>11A22</sup>",
+                "name": None,
+                "taxon": "NCBITaxon:7227",
+            }
+        }, {}
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(
+        agr_curation,
+        "PROVIDER_TO_TAXON",
+        {"FB": "NCBITaxon:7227", "MGI": "NCBITaxon:10090"},
+    )
+    monkeypatch.setattr(
+        agr_curation,
+        "TAXON_TO_PROVIDER",
+        {"NCBITaxon:7227": "FB", "NCBITaxon:10090": "MGI"},
+    )
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_allele_details_bulk", _fake_batch_fetch)
+    monkeypatch.setattr(agr_curation, "_search_alleles_fuzzy_via_db", _fake_fuzzy_fallback)
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = query_fn(method="search_alleles", allele_symbol="crb 11A22", limit=5)
+
+    assert result.status == "ok"
+    assert result.count == 1
+    assert [call[2] for call in standard_calls] == ["NCBITaxon:7227", "NCBITaxon:10090"]
+    assert fallback_calls == [("crb 11A22", None, True, 5)]
+    assert result.data[0]["curie"] == "FB:FBal0001817"
+    assert result.data[0]["taxon"] == "NCBITaxon:7227"
+
+
 def test_search_alleles_records_batch_fetch_failure_when_retry_succeeds(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
     closed = {"value": False}

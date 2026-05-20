@@ -603,7 +603,7 @@ def _search_alleles_fuzzy_via_db(
     db: Any,
     *,
     search_pattern: str,
-    taxon_curie: str,
+    taxon_curie: Optional[str],
     include_synonyms: bool,
     limit: int,
 ) -> List[Dict[str, Any]]:
@@ -625,6 +625,7 @@ def _search_alleles_fuzzy_via_db(
             WITH candidates AS (
                 SELECT
                     be.primaryexternalid AS entity_curie,
+                    taxon.curie AS taxon_curie,
                     symbol.displaytext AS matched_text,
                     'fuzzy_symbol' AS match_type,
                     similarity(lower(symbol.displaytext), lower(:search_pattern)) AS score
@@ -634,13 +635,14 @@ def _search_alleles_fuzzy_via_db(
                 JOIN slotannotation symbol ON a.id = symbol.singleallele_id
                     AND symbol.slotannotationtype = 'AlleleSymbolSlotAnnotation'
                     AND symbol.obsolete = false
-                WHERE taxon.curie = :taxon_curie
+                WHERE (:taxon_curie IS NULL OR taxon.curie = :taxon_curie)
                   AND symbol.displaytext IS NOT NULL
 
                 UNION ALL
 
                 SELECT
                     be.primaryexternalid AS entity_curie,
+                    taxon.curie AS taxon_curie,
                     synonym.displaytext AS matched_text,
                     'fuzzy_synonym' AS match_type,
                     similarity(lower(synonym.displaytext), lower(:search_pattern)) AS score
@@ -651,12 +653,13 @@ def _search_alleles_fuzzy_via_db(
                     AND synonym.slotannotationtype = 'AlleleSynonymSlotAnnotation'
                     AND synonym.obsolete = false
                 WHERE :include_synonyms = true
-                  AND taxon.curie = :taxon_curie
+                  AND (:taxon_curie IS NULL OR taxon.curie = :taxon_curie)
                   AND synonym.displaytext IS NOT NULL
             ),
             ranked AS (
                 SELECT
                     entity_curie,
+                    taxon_curie,
                     matched_text,
                     match_type,
                     score,
@@ -667,7 +670,7 @@ def _search_alleles_fuzzy_via_db(
                 FROM candidates
                 WHERE score >= :threshold
             )
-            SELECT entity_curie, matched_text, match_type, score
+            SELECT entity_curie, taxon_curie, matched_text, match_type, score
             FROM ranked
             WHERE rank = 1
             ORDER BY score DESC, length(matched_text) ASC
@@ -687,9 +690,10 @@ def _search_alleles_fuzzy_via_db(
         return [
             {
                 "entity_curie": row[0],
-                "entity": row[1],
-                "match_type": row[2],
-                "score": float(row[3]) if row[3] is not None else None,
+                "taxon_curie": row[1],
+                "entity": row[2],
+                "match_type": row[3],
+                "score": float(row[4]) if row[4] is not None else None,
             }
             for row in rows
         ]
@@ -1868,7 +1872,7 @@ def agr_curation_query(
                             include_synonyms=include_synonyms,
                             limit=limit_value
                         )
-                        if not results:
+                        if data_provider and not results:
                             results = _search_alleles_fuzzy_via_db(
                                 db,
                                 search_pattern=symbol_variant,
@@ -1906,13 +1910,16 @@ def agr_curation_query(
                             curie = result.get('entity_curie')
                             if not curie:
                                 continue
+                            result_taxon = result.get("taxon_curie") or tid
+                            if not result_taxon:
+                                continue
                             pending_matches.append({
                                 "curie": curie,
-                                "taxon": tid,
+                                "taxon": result_taxon,
                                 "matched_entity": result.get('entity', symbol_variant),
                                 "match_type": result.get('match_type', 'unknown'),
                             })
-                            allele_curies_by_taxon[tid].append(curie)
+                            allele_curies_by_taxon[result_taxon].append(curie)
                     except Exception as e:
                         logger.warning('Failed to fuzzy search alleles in taxon %s: %s', tid, e)
                         lookup_attempts.append(
@@ -1932,6 +1939,74 @@ def agr_curation_query(
                                 lookup_status=LOOKUP_STATUS_TRANSIENT,
                                 explanation=(
                                     f"Allele search for {symbol_variant!r} in taxon {tid} failed "
+                                    "while querying the curation DB."
+                                ),
+                                error=e,
+                            )
+                        )
+            if not data_provider and not pending_matches:
+                for symbol_variant in symbol_variants:
+                    try:
+                        results = _search_alleles_fuzzy_via_db(
+                            db,
+                            search_pattern=symbol_variant,
+                            taxon_curie=None,
+                            include_synonyms=include_synonyms,
+                            limit=limit_value,
+                        )
+                        lookup_attempts.append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    allele_symbol=symbol_variant,
+                                    original_allele_symbol=allele_symbol
+                                    if symbol_variant != allele_symbol
+                                    else None,
+                                    include_synonyms=include_synonyms,
+                                    limit=limit_value,
+                                ),
+                                lookup_status=(
+                                    LOOKUP_STATUS_SUCCESS
+                                    if results
+                                    else LOOKUP_STATUS_NOT_FOUND
+                                ),
+                                explanation=(
+                                    f"Searched allele symbol {symbol_variant!r} across all taxa; "
+                                    f"the curation DB returned {len(results)} fuzzy candidate(s)."
+                                ),
+                                candidate_count=len(results),
+                            )
+                        )
+                        for result in results:
+                            curie = result.get('entity_curie')
+                            result_taxon = result.get("taxon_curie")
+                            if not curie or not result_taxon:
+                                continue
+                            pending_matches.append({
+                                "curie": curie,
+                                "taxon": result_taxon,
+                                "matched_entity": result.get('entity', symbol_variant),
+                                "match_type": result.get('match_type', 'unknown'),
+                            })
+                            allele_curies_by_taxon[result_taxon].append(curie)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to fuzzy search alleles across all taxa: %s",
+                            e,
+                        )
+                        lookup_attempts.append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    allele_symbol=symbol_variant,
+                                    include_synonyms=include_synonyms,
+                                    limit=limit_value,
+                                ),
+                                lookup_status=LOOKUP_STATUS_TRANSIENT,
+                                explanation=(
+                                    f"Allele search for {symbol_variant!r} across all taxa failed "
                                     "while querying the curation DB."
                                 ),
                                 error=e,
@@ -2072,7 +2147,7 @@ def agr_curation_query(
                             include_synonyms=include_synonyms,
                             limit=limit_value
                         )
-                        if not results:
+                        if data_provider and not results:
                             results = _search_alleles_fuzzy_via_db(
                                 db,
                                 search_pattern=symbol,
@@ -2107,13 +2182,16 @@ def agr_curation_query(
                             curie = result.get('entity_curie')
                             if not curie:
                                 continue
+                            result_taxon = result.get("taxon_curie") or tid
+                            if not result_taxon:
+                                continue
                             symbol_matches.append({
                                 "curie": curie,
-                                "taxon": tid,
+                                "taxon": result_taxon,
                                 "matched_entity": result.get('entity', symbol),
                                 "match_type": result.get('match_type', 'unknown'),
                             })
-                            allele_curies_by_taxon[tid].append(curie)
+                            allele_curies_by_taxon[result_taxon].append(curie)
                     except Exception as e:
                         logger.warning("Failed to fuzzy search alleles in bulk for '%s' taxon %s: %s", symbol, tid, e)
                         lookup_attempts_by_symbol[symbol].append(
@@ -2130,6 +2208,71 @@ def agr_curation_query(
                                 lookup_status=LOOKUP_STATUS_TRANSIENT,
                                 explanation=(
                                     f"Allele search for {symbol!r} in taxon {tid} failed "
+                                    "while querying the curation DB."
+                                ),
+                                error=e,
+                            )
+                        )
+                if not data_provider and not symbol_matches:
+                    try:
+                        results = _search_alleles_fuzzy_via_db(
+                            db,
+                            search_pattern=symbol,
+                            taxon_curie=None,
+                            include_synonyms=include_synonyms,
+                            limit=limit_value,
+                        )
+                        lookup_attempts_by_symbol[symbol].append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    allele_symbol=symbol,
+                                    include_synonyms=include_synonyms,
+                                    limit=limit_value,
+                                ),
+                                lookup_status=(
+                                    LOOKUP_STATUS_SUCCESS
+                                    if results
+                                    else LOOKUP_STATUS_NOT_FOUND
+                                ),
+                                explanation=(
+                                    f"Searched allele symbol {symbol!r} across all taxa; "
+                                    f"the curation DB returned {len(results)} fuzzy candidate(s)."
+                                ),
+                                candidate_count=len(results),
+                            )
+                        )
+                        for result in results:
+                            curie = result.get('entity_curie')
+                            result_taxon = result.get("taxon_curie")
+                            if not curie or not result_taxon:
+                                continue
+                            symbol_matches.append({
+                                "curie": curie,
+                                "taxon": result_taxon,
+                                "matched_entity": result.get('entity', symbol),
+                                "match_type": result.get('match_type', 'unknown'),
+                            })
+                            allele_curies_by_taxon[result_taxon].append(curie)
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to fuzzy search alleles in bulk for '%s' across all taxa: %s",
+                            symbol,
+                            e,
+                        )
+                        lookup_attempts_by_symbol[symbol].append(
+                            _lookup_attempt(
+                                method=method,
+                                attempted_query=_attempt_query(
+                                    method,
+                                    allele_symbol=symbol,
+                                    include_synonyms=include_synonyms,
+                                    limit=limit_value,
+                                ),
+                                lookup_status=LOOKUP_STATUS_TRANSIENT,
+                                explanation=(
+                                    f"Allele search for {symbol!r} across all taxa failed "
                                     "while querying the curation DB."
                                 ),
                                 error=e,
