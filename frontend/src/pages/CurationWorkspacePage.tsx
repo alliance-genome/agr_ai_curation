@@ -9,6 +9,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material'
+import AccountTreeRoundedIcon from '@mui/icons-material/AccountTreeRounded'
 
 import {
   buildCurationPDFViewerOwner,
@@ -163,6 +164,7 @@ function CurationWorkspacePageContent({
 }: {
   queueNavigationState: ReturnType<typeof readCurationQueueNavigationState>
 }) {
+  const location = useLocation()
   const {
     activeCandidateId,
     candidates,
@@ -545,6 +547,27 @@ function CurationWorkspacePageContent({
                   queueContext={queueNavigationState?.queueContext}
                   queueRequest={queueNavigationState?.queueRequest}
                 />
+                <Button
+                  component={RouterLink}
+                  startIcon={<AccountTreeRoundedIcon />}
+                  to={`/go-flow-demo/${workspace.session.session_id}`}
+                  state={{
+                    backToWorkspacePath: `${location.pathname}${location.search}`,
+                  }}
+                  size="small"
+                  variant="outlined"
+                  sx={{
+                    borderRadius: 1,
+                    fontSize: '0.75rem',
+                    fontWeight: 500,
+                    letterSpacing: 0,
+                    minHeight: 32,
+                    py: 0.5,
+                    textTransform: 'none',
+                  }}
+                >
+                  Flow view
+                </Button>
                 <Button
                   onClick={() => setSubmissionDialogOpen(true)}
                   size="small"

@@ -1,0 +1,378 @@
+import type { GoFlowDemoGraph } from './types'
+
+const selectedPaperBadges = [
+  { label: 'entity resolved', status: 'resolved' },
+  { label: 'GO term resolved', status: 'resolved' },
+  { label: 'reference matched', status: 'resolved' },
+  { label: 'needs curator review', status: 'review' },
+] as const
+
+const contextBadges = [
+  { label: 'existing GO-CAM context', status: 'context' },
+  { label: 'entity resolved', status: 'resolved' },
+  { label: 'needs curator review', status: 'review' },
+] as const
+
+export const goFlowDemoGraph: GoFlowDemoGraph = {
+  paper: {
+    title: 'Phosphorylation of the conserved transcription factor ATF-7 by PMK-1 p38 MAPK regulates innate immunity in Caenorhabditis elegans',
+    shortLabel: 'Shivers et al. 2010',
+    pmid: '20369020',
+    doi: '10.1371/journal.pgen.1000892',
+    publicationYear: 2010,
+  },
+  modelContext: {
+    id: 'gomodel:568b0f9600000284',
+    title: 'Antibacterial innate immune response in the intestine via MAPK cascade (C. elegans)',
+  },
+  activities: [
+    {
+      id: 'tir1-adaptor-activity',
+      title: 'TIR-1 signaling adaptor activity',
+      geneProduct: 'tir-1',
+      geneId: 'WB:WBGene00006575',
+      molecularFunction: {
+        id: 'GO:0035591',
+        label: 'signaling adaptor activity',
+      },
+      occursIn: {
+        id: 'GO:0005886',
+        label: 'plasma membrane',
+      },
+      partOf: {
+        id: 'GO:0140367',
+        label: 'antibacterial innate immune response',
+      },
+      inputContext: null,
+      evidencePosture: 'existing_context',
+      evidencePostureLabel: 'existing GO-CAM context',
+      evidenceCode: {
+        id: 'ECO:0000315',
+        label: 'mutant phenotype evidence',
+      },
+      pmid: null,
+      doi: null,
+      sourceSystem: 'existing GO-CAM',
+      paperSnippet: 'Shown as upstream context for the canonical C. elegans intestinal p38 MAPK cascade.',
+      figurePointer: 'Context layer from GO-CAM model gomodel:568b0f9600000284.',
+      processBadges: [
+        {
+          id: 'GO:0045089',
+          label: 'positive regulation of innate immune response',
+        },
+      ],
+      validationBadges: [...contextBadges],
+      position: { x: 0, y: 110 },
+    },
+    {
+      id: 'nsy1-mapkkk-activity',
+      title: 'NSY-1 MAP kinase kinase kinase activity',
+      geneProduct: 'nsy-1',
+      geneId: 'WB:WBGene00003822',
+      molecularFunction: {
+        id: 'GO:0004709',
+        label: 'MAP kinase kinase kinase activity',
+      },
+      occursIn: {
+        id: 'GO:0005829',
+        label: 'cytosol',
+      },
+      partOf: {
+        id: 'GO:0140367',
+        label: 'antibacterial innate immune response',
+      },
+      inputContext: null,
+      evidencePosture: 'existing_context',
+      evidencePostureLabel: 'existing GO-CAM context',
+      evidenceCode: {
+        id: 'ECO:0000315',
+        label: 'mutant phenotype evidence',
+      },
+      pmid: null,
+      doi: null,
+      sourceSystem: 'existing GO-CAM',
+      paperSnippet: 'Included to show the upstream MAP kinase cascade context already curated for the model.',
+      figurePointer: 'Context layer from GO-CAM model gomodel:568b0f9600000284.',
+      processBadges: [
+        {
+          id: 'GO:0045089',
+          label: 'positive regulation of innate immune response',
+        },
+      ],
+      validationBadges: [...contextBadges],
+      position: { x: 280, y: 110 },
+    },
+    {
+      id: 'sek1-mapkk-activity',
+      title: 'SEK-1 MAP kinase kinase activity',
+      geneProduct: 'sek-1',
+      geneId: 'WB:WBGene00004758',
+      molecularFunction: {
+        id: 'GO:0004708',
+        label: 'MAP kinase kinase activity',
+      },
+      occursIn: {
+        id: 'GO:0005829',
+        label: 'cytosol',
+      },
+      partOf: {
+        id: 'GO:0140367',
+        label: 'antibacterial innate immune response',
+      },
+      inputContext: null,
+      evidencePosture: 'existing_context',
+      evidencePostureLabel: 'existing GO-CAM context',
+      evidenceCode: {
+        id: 'ECO:0000315',
+        label: 'mutant phenotype evidence',
+      },
+      pmid: null,
+      doi: null,
+      sourceSystem: 'existing GO-CAM',
+      paperSnippet: 'Included as the kinase immediately upstream of PMK-1 in the reference GO-CAM scaffold.',
+      figurePointer: 'Context layer from GO-CAM model gomodel:568b0f9600000284.',
+      processBadges: [
+        {
+          id: 'GO:0045089',
+          label: 'positive regulation of innate immune response',
+        },
+      ],
+      validationBadges: [...contextBadges],
+      position: { x: 560, y: 110 },
+    },
+    {
+      id: 'pmk1-mapk-activity',
+      title: 'PMK-1 MAP kinase activity',
+      geneProduct: 'pmk-1',
+      geneId: 'WB:WBGene00004055',
+      molecularFunction: {
+        id: 'GO:0004707',
+        label: 'MAP kinase activity',
+      },
+      occursIn: {
+        id: 'GO:0005829',
+        label: 'cytosol',
+      },
+      partOf: {
+        id: 'GO:0140367',
+        label: 'antibacterial innate immune response',
+      },
+      inputContext: {
+        id: 'WB:WBGene00000223',
+        label: 'atf-7',
+      },
+      evidencePosture: 'selected_paper',
+      evidencePostureLabel: 'selected paper evidence',
+      evidenceCode: {
+        id: 'ECO:0000314',
+        label: 'direct assay evidence',
+      },
+      pmid: 'PMID:20369020',
+      doi: 'DOI:10.1371/journal.pgen.1000892',
+      sourceSystem: 'WormBase / QuickGO',
+      paperSnippet: 'The selected paper supports PMK-1-dependent regulation of ATF-7 during pathogen-response experiments.',
+      figurePointer: 'Evidence pointer: Shivers et al. 2010, PMK-1 and ATF-7 phosphorylation assays.',
+      processBadges: [
+        {
+          id: 'GO:0140367',
+          label: 'antibacterial innate immune response',
+        },
+        {
+          id: 'GO:0050829',
+          label: 'defense response to Gram-negative bacterium',
+        },
+      ],
+      validationBadges: [...selectedPaperBadges],
+      position: { x: 560, y: 330 },
+    },
+    {
+      id: 'atf7-transcription-factor-activity',
+      title: 'ATF-7 DNA-binding transcription factor activity',
+      geneProduct: 'atf-7',
+      geneId: 'WB:WBGene00000223',
+      molecularFunction: {
+        id: 'GO:0000981',
+        label: 'DNA-binding transcription factor activity, RNA polymerase II-specific',
+      },
+      occursIn: {
+        id: 'GO:0005634',
+        label: 'nucleus',
+      },
+      partOf: {
+        id: 'GO:0140367',
+        label: 'antibacterial innate immune response',
+      },
+      inputContext: null,
+      evidencePosture: 'selected_paper',
+      evidencePostureLabel: 'selected paper evidence',
+      evidenceCode: {
+        id: 'ECO:0000314',
+        label: 'direct assay evidence',
+      },
+      pmid: 'PMID:20369020',
+      doi: 'DOI:10.1371/journal.pgen.1000892',
+      sourceSystem: 'WormBase / QuickGO',
+      paperSnippet: 'The selected paper links ATF-7 activity to immune-gene transcription, pathogen-response genetics, and PMK-1 regulation.',
+      figurePointer: 'Evidence pointer: Shivers et al. 2010, ATF-7 localization and pathogen-induced expression assays.',
+      processBadges: [
+        {
+          id: 'GO:0000122',
+          label: 'negative regulation of transcription by RNA polymerase II',
+        },
+        {
+          id: 'GO:0045944',
+          label: 'positive regulation of transcription by RNA polymerase II',
+        },
+        {
+          id: 'GO:0045089',
+          label: 'positive regulation of innate immune response',
+        },
+      ],
+      validationBadges: [...selectedPaperBadges],
+      position: { x: 880, y: 330 },
+    },
+    {
+      id: 'vhp1-mapk-phosphatase-activity',
+      title: 'VHP-1 MAPK phosphatase activity',
+      geneProduct: 'vhp-1',
+      geneId: 'WB:WBGene00006923',
+      molecularFunction: {
+        id: 'GO:0017017',
+        label: 'MAP kinase tyrosine/serine/threonine phosphatase activity',
+      },
+      occursIn: {
+        id: 'GO:0005829',
+        label: 'cytosol',
+      },
+      partOf: {
+        id: 'GO:0140367',
+        label: 'antibacterial innate immune response',
+      },
+      inputContext: {
+        id: 'WB:WBGene00004055',
+        label: 'pmk-1',
+      },
+      evidencePosture: 'existing_context',
+      evidencePostureLabel: 'existing GO-CAM context',
+      evidenceCode: {
+        id: 'ECO:0000315',
+        label: 'mutant phenotype evidence',
+      },
+      pmid: null,
+      doi: null,
+      sourceSystem: 'existing GO-CAM',
+      paperSnippet: 'Shown as a lighter context activity to demonstrate inhibition styling into PMK-1.',
+      figurePointer: 'Context layer from GO-CAM model gomodel:568b0f9600000284.',
+      processBadges: [
+        {
+          id: 'GO:0045089',
+          label: 'positive regulation of innate immune response',
+        },
+      ],
+      validationBadges: [...contextBadges],
+      position: { x: 270, y: 330 },
+    },
+  ],
+  relations: [
+    {
+      id: 'tir1-to-nsy1',
+      source: 'tir1-adaptor-activity',
+      target: 'nsy1-mapkkk-activity',
+      predicate: {
+        id: 'RO:0002213',
+        label: 'positively regulates',
+      },
+      evidencePosture: 'existing_context',
+      evidencePostureLabel: 'existing GO-CAM context',
+      evidenceCode: null,
+      pmid: null,
+      doi: null,
+      sourceSystem: 'existing GO-CAM',
+      paperSnippet: 'Upstream pathway context from the existing model, not a selected-paper extraction claim.',
+      figurePointer: 'Context layer from GO-CAM model gomodel:568b0f9600000284.',
+      validationBadges: [...contextBadges],
+      polarity: 'context',
+    },
+    {
+      id: 'nsy1-to-sek1',
+      source: 'nsy1-mapkkk-activity',
+      target: 'sek1-mapkk-activity',
+      predicate: {
+        id: 'RO:0002213',
+        label: 'positively regulates',
+      },
+      evidencePosture: 'existing_context',
+      evidencePostureLabel: 'existing GO-CAM context',
+      evidenceCode: null,
+      pmid: null,
+      doi: null,
+      sourceSystem: 'existing GO-CAM',
+      paperSnippet: 'Upstream pathway context from the existing model, not a selected-paper extraction claim.',
+      figurePointer: 'Context layer from GO-CAM model gomodel:568b0f9600000284.',
+      validationBadges: [...contextBadges],
+      polarity: 'context',
+    },
+    {
+      id: 'sek1-to-pmk1',
+      source: 'sek1-mapkk-activity',
+      target: 'pmk1-mapk-activity',
+      predicate: {
+        id: 'RO:0002213',
+        label: 'positively regulates',
+      },
+      evidencePosture: 'existing_context',
+      evidencePostureLabel: 'existing GO-CAM context',
+      evidenceCode: null,
+      pmid: null,
+      doi: null,
+      sourceSystem: 'existing GO-CAM',
+      paperSnippet: 'Upstream pathway context from the existing model, not the central selected-paper edge.',
+      figurePointer: 'Context layer from GO-CAM model gomodel:568b0f9600000284.',
+      validationBadges: [...contextBadges],
+      polarity: 'context',
+    },
+    {
+      id: 'pmk1-to-atf7',
+      source: 'pmk1-mapk-activity',
+      target: 'atf7-transcription-factor-activity',
+      predicate: {
+        id: 'RO:0002629',
+        label: 'directly positively regulates',
+      },
+      evidencePosture: 'selected_paper',
+      evidencePostureLabel: 'selected paper evidence',
+      evidenceCode: {
+        id: 'ECO:0000314',
+        label: 'direct assay evidence',
+      },
+      pmid: 'PMID:20369020',
+      doi: 'DOI:10.1371/journal.pgen.1000892',
+      sourceSystem: 'WormBase / QuickGO',
+      paperSnippet: 'The graph predicate stays causal: directly positively regulates. Phosphorylation is kept in this evidence detail rather than used as the edge label.',
+      figurePointer: 'Evidence pointer: PMK-1-dependent ATF-7 phosphorylation in Shivers et al. 2010.',
+      validationBadges: [...selectedPaperBadges],
+      polarity: 'positive',
+    },
+    {
+      id: 'vhp1-to-pmk1',
+      source: 'vhp1-mapk-phosphatase-activity',
+      target: 'pmk1-mapk-activity',
+      predicate: {
+        id: 'RO:0002630',
+        label: 'directly negatively regulates',
+      },
+      evidencePosture: 'existing_context',
+      evidencePostureLabel: 'existing GO-CAM context',
+      evidenceCode: null,
+      pmid: null,
+      doi: null,
+      sourceSystem: 'existing GO-CAM',
+      paperSnippet: 'Negative regulation is shown as context to make inhibition visually distinct from the selected PMK-1 to ATF-7 edge.',
+      figurePointer: 'Context layer from GO-CAM model gomodel:568b0f9600000284.',
+      validationBadges: [...contextBadges],
+      polarity: 'negative',
+    },
+  ],
+}
+
+export const DEFAULT_GO_FLOW_DEMO_SELECTION_ID = 'pmk1-mapk-activity'

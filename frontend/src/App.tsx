@@ -86,6 +86,7 @@ const BatchPage = lazy(() => import('./pages/BatchPage'))
 const ChangelogPage = lazy(() => import('./pages/ChangelogPage'))
 const CurationInventoryPage = lazy(() => import('./pages/CurationInventoryPage'))
 const CurationWorkspacePage = lazy(() => import('./pages/CurationWorkspacePage'))
+const GOFlowDemoPage = lazy(() => import('./pages/GOFlowDemoPage'))
 const HistoryPage = lazy(() => import('./features/history/HistoryPage'))
 const PersistentPdfWorkspaceLayout = lazy(() => import('./components/pdfViewer/PersistentPdfWorkspaceLayout'))
 const Settings = lazy(() => import('./pages/weaviate/Settings'))
@@ -693,6 +694,8 @@ export function AppContent() {
           <Route path="/agent-studio" element={renderLazyRoute(<AgentStudioPage />)} />
           <Route path="/batch" element={renderLazyRoute(<BatchPage />)} />
           <Route path="/curation" element={renderLazyRoute(<CurationInventoryPage />)} />
+          <Route path="/go-flow-demo" element={renderLazyRoute(<GOFlowDemoPage />)} />
+          <Route path="/go-flow-demo/:sessionId" element={renderLazyRoute(<GOFlowDemoPage />)} />
           <Route element={renderLazyRoute(<PersistentPdfWorkspaceLayout />)}>
             <Route index element={renderLazyRoute(<HomePage />)} />
             <Route

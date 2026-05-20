@@ -574,6 +574,10 @@ function renderPage(initialEntry: string | { pathname: string; state?: unknown }
                 </>
               )}
             />
+            <Route
+              path="/go-flow-demo/:sessionId"
+              element={<LocationProbe />}
+            />
           </Routes>
         </MemoryRouter>
       </ThemeProvider>
@@ -624,6 +628,24 @@ describe('CurationWorkspacePage', () => {
     expect(screen.getAllByText('APOE').length).toBeGreaterThan(0)
     expect(screen.getByText('validated')).toBeInTheDocument()
     expect(screen.getByText('ambiguous')).toBeInTheDocument()
+  })
+
+  it('links to the GO flow demo with workspace return state', async () => {
+    serviceMocks.fetchCurationWorkspace.mockResolvedValue(buildWorkspace())
+
+    renderPage('/curation/session-1')
+
+    const flowViewLink = await screen.findByRole('link', { name: /flow view/i })
+    expect(flowViewLink).toHaveAttribute('href', '/go-flow-demo/session-1')
+
+    fireEvent.click(flowViewLink)
+
+    await waitFor(() => {
+      expect(screen.getByTestId('location')).toHaveTextContent('/go-flow-demo/session-1')
+    })
+    expect(screen.getByTestId('location-state')).toHaveTextContent(
+      '"backToWorkspacePath":"/curation/session-1/candidate-accepted"',
+    )
   })
 
   it('renders domain-envelope object rows from persisted review-row projections', async () => {
