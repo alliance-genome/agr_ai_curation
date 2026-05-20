@@ -1,0 +1,558 @@
+{
+  "artifact": "validator-batch-comparison-2026-05-21",
+  "baseline_repo": {
+    "branch": "main",
+    "commit": "f14d1a52ede56d029ce9218907ea97eaf0c89aee",
+    "commit_short": "f14d1a52",
+    "commit_subject": "Persist validated extraction envelopes internally",
+    "status_short": "M config/agents/supervisor/prompt.yaml\n M docs/design/2026-05-20-chat-validator-payload-performance-plan.md\n M docs/design/pdf-corpus-trials/allele_drosophila_notch_facet_glossy.json\n M docs/design/pdf-corpus-trials/chemical_zebrafish_estradiol_segmentation.json\n M docs/design/pdf-corpus-trials/cross_domain_zebrafish_segmentation_screen.json\n M docs/design/pdf-corpus-trials/disease_mouse_pkd1_adpkd.json\n M docs/design/pdf-corpus-trials/gene_drosophila_crb_rhabdomere.json\n M docs/design/pdf-corpus-trials/gene_expression_zebrafish_flcn_brain.json\n M docs/design/pdf-corpus-trials/phenotype_celegans_mus81_reduced_brood.json\n M docs/design/pdf-corpus-trials/summary.json\n M packages/alliance/agents/gene_extractor/prompt.yaml\n M scripts/testing/domain_envelope_pdf_corpus.py\n?? docs/design/2026-05-16-go-annotation-flow-view-plan.md\n?? docs/design/2026-05-17-symphony-full-auto-review-design.md\n?? docs/design/2026-05-17-validation-agent-rationalization-plan.md\n?? docs/design/2026-05-18-alliance-identifier-weaviate-index-design.md\n?? docs/design/2026-05-20-go-flow-demo-restore-handoff.md"
+  },
+  "focused_gene_validator_comparison": {
+    "active_validator_dispatch_duration_seconds": {
+      "baseline": 17.435,
+      "delta": 3.09,
+      "percent_change": 17.7,
+      "post_change": 20.525,
+      "ratio": 1.177
+    },
+    "baseline_status": "fail",
+    "batch_validator_run_count": {
+      "baseline": null,
+      "delta": null,
+      "post_change": 0
+    },
+    "comparison_basis": "focused baseline rerun with validator timing vs full post-change corpus run",
+    "duration_seconds": {
+      "baseline": 42.304,
+      "delta": 29.795,
+      "percent_change": 70.4,
+      "post_change": 72.099,
+      "ratio": 1.704
+    },
+    "flow_execution_duration_seconds": {
+      "baseline": 42.188,
+      "delta": 10.989,
+      "percent_change": 26.0,
+      "post_change": 53.177,
+      "ratio": 1.26
+    },
+    "notes": [
+      "post-change run emitted no batch validator dispatch events",
+      "post-change corpus produced two separate single-request gene validator dispatches, so the batch path had no live multi-request opportunity",
+      "this is the most useful live gene validator comparison because the full baseline gene trial failed before validator timing was observed"
+    ],
+    "observed_validator_lookup_counts": {
+      "baseline": {
+        "alliance_gene_reference_lookup": 4
+      },
+      "post_change": {
+        "alliance_gene_reference_lookup": 4
+      }
+    },
+    "post_status": "fail",
+    "specialist_text_fallback_event_count": {
+      "baseline": 0,
+      "delta": 0.0,
+      "post_change": 0
+    },
+    "trial_id": "gene_drosophila_crb_rhabdomere",
+    "validator_agent_run_count": {
+      "baseline": 2,
+      "delta": 0.0,
+      "post_change": 2
+    },
+    "validator_lookup_event_count": {
+      "baseline": 4,
+      "delta": 0.0,
+      "post_change": 4
+    },
+    "validator_problem_event_count": {
+      "baseline": 0,
+      "delta": 0.0,
+      "post_change": 0
+    }
+  },
+  "generated_from": {
+    "baseline_focused_gene_summary": "docs/design/pdf-corpus-trials/baseline-2026-05-20-gene-rerun-1/summary.json",
+    "baseline_full_summary": "docs/design/pdf-corpus-trials/baseline-2026-05-20/summary.json",
+    "post_change_summary": "docs/design/pdf-corpus-trials/batch-validator-2026-05-21/summary.json"
+  },
+  "interpretation": {
+    "accuracy_observation": "Validator problem events remained at zero in the post-change run. Failures are still flow/gate level failures or specialist text fallback gates, not batch parser crashes.",
+    "next_optimization_target": "Coalesce gene extractor outputs before chat-time validator dispatch, or introduce a short-lived request-scoped validator batch queue across consecutive extractor tool outputs. Without that, single-request dispatches cannot realize the batch speedup in live corpus runs.",
+    "summary": "The code path now supports opt-in batch validator dispatch and the unit tests prove multi-request gene envelopes use one gene_validation batch. The live corpus did not exercise that path for the gene trial because the extractor flow emitted separate single-request validator dispatches."
+  },
+  "overall": {
+    "baseline_status": "fail",
+    "baseline_total_duration_seconds": 486.387,
+    "post_change_batch_validator_run_count": 0.0,
+    "post_change_status": "fail",
+    "post_change_total_duration_seconds": 563.602,
+    "post_change_validator_agent_run_count": 43.0,
+    "total_duration_delta_seconds": 77.215,
+    "total_duration_percent_change": 15.9,
+    "total_duration_ratio": 1.159
+  },
+  "post_change_repo": {
+    "branch": "main",
+    "commit": "e300d1e124b0ba4ffe0443589377bde6f9d8c4b1",
+    "commit_short": "e300d1e1",
+    "commit_subject": "Add batch validator dispatch for gene validation",
+    "status_short": "M config/agents/supervisor/prompt.yaml\n M docs/design/2026-05-20-chat-validator-payload-performance-plan.md\n M docs/design/pdf-corpus-trials/allele_drosophila_notch_facet_glossy.json\n M docs/design/pdf-corpus-trials/chemical_zebrafish_estradiol_segmentation.json\n M docs/design/pdf-corpus-trials/cross_domain_zebrafish_segmentation_screen.json\n M docs/design/pdf-corpus-trials/disease_mouse_pkd1_adpkd.json\n M docs/design/pdf-corpus-trials/gene_drosophila_crb_rhabdomere.json\n M docs/design/pdf-corpus-trials/gene_expression_zebrafish_flcn_brain.json\n M docs/design/pdf-corpus-trials/phenotype_celegans_mus81_reduced_brood.json\n M docs/design/pdf-corpus-trials/summary.json\n M packages/alliance/agents/gene_extractor/prompt.yaml\n?? docs/design/2026-05-16-go-annotation-flow-view-plan.md\n?? docs/design/2026-05-17-symphony-full-auto-review-design.md\n?? docs/design/2026-05-17-validation-agent-rationalization-plan.md\n?? docs/design/2026-05-18-alliance-identifier-weaviate-index-design.md\n?? docs/design/2026-05-20-go-flow-demo-restore-handoff.md"
+  },
+  "sandbox": {
+    "backend_url": "http://10.79.64.167:8900",
+    "post_change_commit": "e300d1e1",
+    "post_change_commit_subject": "Add batch validator dispatch for gene validation"
+  },
+  "trials": [
+    {
+      "active_validator_dispatch_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 20.525,
+        "ratio": null
+      },
+      "baseline_status": "fail",
+      "batch_validator_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 0
+      },
+      "duration_seconds": {
+        "baseline": 92.723,
+        "delta": -20.624,
+        "percent_change": -22.2,
+        "post_change": 72.099,
+        "ratio": 0.778
+      },
+      "flow_execution_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 53.177,
+        "ratio": null
+      },
+      "notes": [
+        "baseline did not emit flow execution timing for this trial",
+        "baseline did not emit active validator dispatch timing for this trial",
+        "post-change run emitted no batch validator dispatch events",
+        "post-change corpus produced two separate single-request gene validator dispatches, so the batch path had no live multi-request opportunity"
+      ],
+      "observed_validator_lookup_counts": {
+        "baseline": {},
+        "post_change": {
+          "alliance_gene_reference_lookup": 4
+        }
+      },
+      "post_status": "fail",
+      "specialist_text_fallback_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      },
+      "trial_id": "gene_drosophila_crb_rhabdomere",
+      "validator_agent_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 2
+      },
+      "validator_lookup_event_count": {
+        "baseline": 0,
+        "delta": 4.0,
+        "post_change": 4
+      },
+      "validator_problem_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      }
+    },
+    {
+      "active_validator_dispatch_duration_seconds": {
+        "baseline": 15.848,
+        "delta": -3.048,
+        "percent_change": -19.2,
+        "post_change": 12.8,
+        "ratio": 0.808
+      },
+      "baseline_status": "pass",
+      "batch_validator_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 0
+      },
+      "duration_seconds": {
+        "baseline": 46.855,
+        "delta": 4.329,
+        "percent_change": 9.2,
+        "post_change": 51.184,
+        "ratio": 1.092
+      },
+      "flow_execution_duration_seconds": {
+        "baseline": 31.337,
+        "delta": 4.508,
+        "percent_change": 14.4,
+        "post_change": 35.845,
+        "ratio": 1.144
+      },
+      "notes": [
+        "status changed from pass to fail",
+        "post-change run emitted no batch validator dispatch events",
+        "post-change run used more specialist text fallback events"
+      ],
+      "observed_validator_lookup_counts": {
+        "baseline": {
+          "allele_mention_reference_validation": 6
+        },
+        "post_change": {
+          "allele_mention_reference_validation": 6
+        }
+      },
+      "post_status": "fail",
+      "specialist_text_fallback_event_count": {
+        "baseline": 0,
+        "delta": 1.0,
+        "post_change": 1
+      },
+      "trial_id": "allele_drosophila_notch_facet_glossy",
+      "validator_agent_run_count": {
+        "baseline": 1,
+        "delta": 0.0,
+        "post_change": 1
+      },
+      "validator_lookup_event_count": {
+        "baseline": 6,
+        "delta": 0.0,
+        "post_change": 6
+      },
+      "validator_problem_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      }
+    },
+    {
+      "active_validator_dispatch_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 25.219,
+        "ratio": null
+      },
+      "baseline_status": "fail",
+      "batch_validator_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 0
+      },
+      "duration_seconds": {
+        "baseline": 64.879,
+        "delta": 14.943,
+        "percent_change": 23.0,
+        "post_change": 79.822,
+        "ratio": 1.23
+      },
+      "flow_execution_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 64.489,
+        "ratio": null
+      },
+      "notes": [
+        "baseline did not emit flow execution timing for this trial",
+        "baseline did not emit active validator dispatch timing for this trial",
+        "post-change run emitted no batch validator dispatch events",
+        "post-change run used more specialist text fallback events"
+      ],
+      "observed_validator_lookup_counts": {
+        "baseline": {},
+        "post_change": {
+          "disease_data_provider_lookup": 4,
+          "disease_ontology_term_lookup": 8,
+          "disease_relation_cv_lookup": 4
+        }
+      },
+      "post_status": "fail",
+      "specialist_text_fallback_event_count": {
+        "baseline": 0,
+        "delta": 1.0,
+        "post_change": 1
+      },
+      "trial_id": "disease_mouse_pkd1_adpkd",
+      "validator_agent_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 8
+      },
+      "validator_lookup_event_count": {
+        "baseline": 0,
+        "delta": 16.0,
+        "post_change": 16
+      },
+      "validator_problem_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      }
+    },
+    {
+      "active_validator_dispatch_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 58.985,
+        "ratio": null
+      },
+      "baseline_status": "fail",
+      "batch_validator_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 0
+      },
+      "duration_seconds": {
+        "baseline": 101.336,
+        "delta": 11.664,
+        "percent_change": 11.5,
+        "post_change": 113.0,
+        "ratio": 1.115
+      },
+      "flow_execution_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 100.71,
+        "ratio": null
+      },
+      "notes": [
+        "baseline did not emit flow execution timing for this trial",
+        "baseline did not emit active validator dispatch timing for this trial",
+        "post-change run emitted no batch validator dispatch events"
+      ],
+      "observed_validator_lookup_counts": {
+        "baseline": {},
+        "post_change": {
+          "chemical_condition.chebi_api_lookup": 16,
+          "chemical_condition.condition_ontology_lookup": 4,
+          "chemical_condition.condition_relation_type_lookup": 4,
+          "chemical_condition.term_chebi_api_lookup": 16
+        }
+      },
+      "post_status": "fail",
+      "specialist_text_fallback_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      },
+      "trial_id": "chemical_zebrafish_estradiol_segmentation",
+      "validator_agent_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 12
+      },
+      "validator_lookup_event_count": {
+        "baseline": 0,
+        "delta": 40.0,
+        "post_change": 40
+      },
+      "validator_problem_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      }
+    },
+    {
+      "active_validator_dispatch_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 0.004,
+        "ratio": null
+      },
+      "baseline_status": "fail",
+      "batch_validator_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 0
+      },
+      "duration_seconds": {
+        "baseline": 41.125,
+        "delta": 8.095,
+        "percent_change": 19.7,
+        "post_change": 49.22,
+        "ratio": 1.197
+      },
+      "flow_execution_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 33.903,
+        "ratio": null
+      },
+      "notes": [
+        "baseline did not emit flow execution timing for this trial",
+        "baseline did not emit active validator dispatch timing for this trial",
+        "post-change run emitted no batch validator dispatch events"
+      ],
+      "observed_validator_lookup_counts": {
+        "baseline": {},
+        "post_change": {
+          "phenotype_term_ontology_validator": 4
+        }
+      },
+      "post_status": "fail",
+      "specialist_text_fallback_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      },
+      "trial_id": "phenotype_celegans_mus81_reduced_brood",
+      "validator_agent_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 0
+      },
+      "validator_lookup_event_count": {
+        "baseline": 0,
+        "delta": 4.0,
+        "post_change": 4
+      },
+      "validator_problem_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      }
+    },
+    {
+      "active_validator_dispatch_duration_seconds": {
+        "baseline": 9.743,
+        "delta": -1.63,
+        "percent_change": -16.7,
+        "post_change": 8.113,
+        "ratio": 0.833
+      },
+      "baseline_status": "pass",
+      "batch_validator_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 0
+      },
+      "duration_seconds": {
+        "baseline": 47.735,
+        "delta": -0.174,
+        "percent_change": -0.4,
+        "post_change": 47.561,
+        "ratio": 0.996
+      },
+      "flow_execution_duration_seconds": {
+        "baseline": 29.373,
+        "delta": 2.827,
+        "percent_change": 9.6,
+        "post_change": 32.2,
+        "ratio": 1.096
+      },
+      "notes": [
+        "post-change run emitted no batch validator dispatch events"
+      ],
+      "observed_validator_lookup_counts": {
+        "baseline": {
+          "data_provider_validation": 2,
+          "relation_vocabulary_validation": 2
+        },
+        "post_change": {
+          "data_provider_validation": 2,
+          "relation_vocabulary_validation": 2
+        }
+      },
+      "post_status": "pass",
+      "specialist_text_fallback_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      },
+      "trial_id": "gene_expression_zebrafish_flcn_brain",
+      "validator_agent_run_count": {
+        "baseline": 2,
+        "delta": 0.0,
+        "post_change": 2
+      },
+      "validator_lookup_event_count": {
+        "baseline": 4,
+        "delta": 0.0,
+        "post_change": 4
+      },
+      "validator_problem_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      }
+    },
+    {
+      "active_validator_dispatch_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 86.846,
+        "ratio": null
+      },
+      "baseline_status": "fail",
+      "batch_validator_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 0
+      },
+      "duration_seconds": {
+        "baseline": 91.734,
+        "delta": 58.982,
+        "percent_change": 64.3,
+        "post_change": 150.716,
+        "ratio": 1.643
+      },
+      "flow_execution_duration_seconds": {
+        "baseline": null,
+        "delta": null,
+        "percent_change": null,
+        "post_change": 150.593,
+        "ratio": null
+      },
+      "notes": [
+        "baseline did not emit flow execution timing for this trial",
+        "baseline did not emit active validator dispatch timing for this trial",
+        "post-change run emitted no batch validator dispatch events"
+      ],
+      "observed_validator_lookup_counts": {
+        "baseline": {},
+        "post_change": {
+          "chemical_condition.chebi_api_lookup": 22,
+          "chemical_condition.condition_ontology_lookup": 6,
+          "chemical_condition.condition_relation_type_lookup": 6,
+          "chemical_condition.term_chebi_api_lookup": 22
+        }
+      },
+      "post_status": "fail",
+      "specialist_text_fallback_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      },
+      "trial_id": "cross_domain_zebrafish_segmentation_screen",
+      "validator_agent_run_count": {
+        "baseline": null,
+        "delta": null,
+        "post_change": 18
+      },
+      "validator_lookup_event_count": {
+        "baseline": 0,
+        "delta": 56.0,
+        "post_change": 56
+      },
+      "validator_problem_event_count": {
+        "baseline": 0,
+        "delta": 0.0,
+        "post_change": 0
+      }
+    }
+  ]
+}
