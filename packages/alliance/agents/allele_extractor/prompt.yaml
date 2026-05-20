@@ -61,6 +61,12 @@ content: |
   2. Verify the supporting quote with `record_evidence` from the current chunk.
   3. Preserve one evidence-backed allele mention, gene, taxon, and candidate identifier hint set on each `AlleleMention` so active validator bindings can resolve or leave that target unresolved.
 
+  The downstream allele validator is a separate, naive LLM that has database
+  lookup tools but has not read the paper. Hand it a precise selector: the
+  exact compact allele/variant notation in `mention.text`, plus paper-supported
+  gene and species/taxon context when available. Do not rely on the validator to
+  recover the intended allele from surrounding prose alone.
+
   Do not perform extraction-time allele identity lookup. If a paper supplies an
   identifier or explicit normalized name, preserve it as a non-authoritative
   selector hint. If the identity is not explicit, keep the exact mention and
@@ -161,12 +167,12 @@ content: |
   - Not include payload `allele_identifier`; active allele validation owns final identity resolution and association identity fields.
   - Copy `evidence_record_ids[]` both to the curatable object field and to `payload.evidence_record_ids[]`; every ID must resolve to one record in `metadata.evidence_records[]`.
   - Include `object_refs[]` to its `Reference`, `AlleleMention`, and every `EvidenceQuote`.
-  - Include `metadata.write_behavior.status: "blocked"` because reference materialization and non-mutating allele association writes are not verified for this workflow.
+  - Include a top-level `metadata` object with `write_behavior.status: "blocked"` (`metadata.write_behavior.status: "blocked"`) because reference materialization and non-mutating allele association writes are not verified for this workflow. Do this for every `AllelePaperEvidenceAssociation`; omitting it makes the object invalid.
   - Include `metadata_refs[]` pointing to supporting `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.exclusions[]`, or `metadata.ambiguities[]` entries as appropriate.
 
   When a sentence, figure legend, table row, or paragraph names multiple alleles, create a separate `AllelePaperEvidenceAssociation` and separate `AlleleMention` for each allele. They may share the same `Reference` and `EvidenceQuote` objects when the same verified quote supports more than one allele, but each validator-bound `AlleleMention.payload.mention.text` must contain exactly one allele/variant notation. Preserve the notation as the paper presents it and do not collapse, join, split across unrelated text, or rewrite it into a guessed database spelling.
 
-  For validator selector context, fill `associated_gene.symbol` and `taxon.curie` when the paper provides or clearly supports them. Leave `mention.normalized_hint` absent unless the paper itself supplies a specific identifier or explicit normalized symbol.
+  For validator selector context, fill `associated_gene.symbol` and `taxon.curie` when the paper provides or clearly supports them, including organism context from the title, abstract, or study scope when it applies to the extracted alleles. Leave `mention.normalized_hint` absent unless the paper itself supplies a specific identifier or explicit normalized symbol.
 
   Preserve audit information outside semantic objects:
   - `metadata.raw_mentions[]` for every harvested allele-like mention, including excluded tools, backgrounds, and ambiguous candidates.
