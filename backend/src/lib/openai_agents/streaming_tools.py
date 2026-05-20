@@ -955,12 +955,7 @@ def _reduce_specialist_output_for_supervisor(
     if _is_domain_envelope_extraction_output_type(expected_output_type):
         summary_text = _domain_envelope_supervisor_summary(payload)
         if summary_text:
-            supervisor_payload = dict(payload)
-            metadata = supervisor_payload.get("metadata")
-            supervisor_metadata = dict(metadata) if isinstance(metadata, dict) else {}
-            supervisor_metadata["supervisor_summary"] = summary_text
-            supervisor_payload["metadata"] = supervisor_metadata
-            return json.dumps(supervisor_payload)
+            return summary_text
 
     return final_output
 

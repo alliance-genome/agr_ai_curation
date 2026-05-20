@@ -48,6 +48,15 @@ from .validation_findings import append_validation_findings_to_envelope
 
 LOGGER = logging.getLogger(__name__)
 
+DEFAULT_MAX_PARALLEL_VALIDATORS = 4
+_VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS = frozenset(
+    {
+        "evidence_quote",
+        "verified_quote",
+        "evidence_record_id",
+    }
+)
+
 class DomainValidatorAgentRunner(Protocol):
     """Callable that executes one package-owned validator request."""
 
@@ -71,6 +80,12 @@ class ActiveValidatorDispatchResult:
     validator_results: tuple[DomainValidatorResultBase, ...]
 
 
+@dataclass(frozen=True)
+class _DispatchJob:
+    match: ValidatorBindingMatch
+    request: DomainValidationRequest
+
+
 def dispatch_active_validator_bindings(
     envelope: DomainEnvelope,
     domain_pack: LoadedDomainPack,
@@ -79,6 +94,7 @@ def dispatch_active_validator_bindings(
     registry: DomainPackValidationRegistry | None = None,
     runner: DomainValidatorAgentRunner | None = None,
     source_envelope_revision: int | None = None,
+    max_parallel_validators: int = DEFAULT_MAX_PARALLEL_VALIDATORS,
 ) -> ActiveValidatorDispatchResult:
     """Dispatch active validator bindings and append result findings."""
 
@@ -92,8 +108,10 @@ def dispatch_active_validator_bindings(
     agent_runner = runner or _default_package_scoped_validator_runner()
 
     selector_findings: list[ValidationFinding] = []
-    materialization_items: list[ValidatorResultMaterializationInput] = []
-    validator_results: list[DomainValidatorResultBase] = []
+    jobs: list[_DispatchJob] = []
+    ordered_dispatch_units: list[
+        _DispatchJob | ValidatorResultMaterializationInput
+    ] = []
     for match in _ordered_matches(matches):
         if not _binding_has_dispatch_contract(match.binding):
             LOGGER.info(
@@ -111,42 +129,42 @@ def dispatch_active_validator_bindings(
 
         request = selector_result.request
         validator_result = preflight_unresolved_validator_result(request)
-        if validator_result is None:
-            try:
-                raw_output = agent_runner(request, binding=match.binding)
-                validator_result = _validated_result_from_agent_output(
-                    raw_output,
-                    request=request,
-                )
-            except Exception as exc:
-                LOGGER.warning(
-                    "Package-scoped validator agent failed for binding %s request %s",
-                    request.validator_binding_id,
-                    request.request_id,
-                    exc_info=exc,
-                )
-                validator_result = _unresolved_result_for_dispatch_problem(
-                    request,
-                    reason="validator_agent_error",
-                    explanation=f"Validator agent execution failed: {exc}",
-                )
-
-        validator_result = _enforce_expected_result_fields(
-            validator_result,
-            request=request,
-        )
-        validator_result = _ensure_classifiable_validator_result(
-            validator_result,
-            request=request,
-        )
-        validator_results.append(validator_result)
-        materialization_items.append(
-            ValidatorResultMaterializationInput(
-                match=match,
+        if validator_result is not None:
+            validator_result = _finalize_validator_result(
+                validator_result,
                 request=request,
-                result=validator_result,
             )
-        )
+            ordered_dispatch_units.append(
+                ValidatorResultMaterializationInput(
+                    match=match,
+                    request=request,
+                    result=validator_result,
+                )
+            )
+            continue
+
+        job = _DispatchJob(match=match, request=request)
+        jobs.append(job)
+        ordered_dispatch_units.append(job)
+
+    _, executed_items = _run_validator_jobs(
+        jobs,
+        agent_runner=agent_runner,
+        max_parallel_validators=max_parallel_validators,
+    )
+    executed_items_by_request_id = {
+        item.request.request_id: item for item in executed_items
+    }
+
+    materialization_items: list[ValidatorResultMaterializationInput] = []
+    validator_results: list[DomainValidatorResultBase] = []
+    for unit in ordered_dispatch_units:
+        if isinstance(unit, _DispatchJob):
+            materialization_item = executed_items_by_request_id[unit.request.request_id]
+        else:
+            materialization_item = unit
+        materialization_items.append(materialization_item)
+        validator_results.append(materialization_item.result)
 
     updated_envelope = envelope
     appended_findings: list[ValidationFinding] = []
@@ -177,6 +195,187 @@ def dispatch_active_validator_bindings(
         appended_findings=tuple(appended_findings),
         validator_results=tuple(validator_results),
     )
+
+
+def _run_validator_jobs(
+    jobs: list[_DispatchJob],
+    *,
+    agent_runner: DomainValidatorAgentRunner,
+    max_parallel_validators: int,
+) -> tuple[
+    list[DomainValidatorResultBase],
+    list[ValidatorResultMaterializationInput],
+]:
+    if not jobs:
+        return [], []
+
+    grouped_jobs = _dedupe_validator_jobs(jobs)
+    if len(grouped_jobs) < len(jobs):
+        LOGGER.info(
+            "Deduplicated %s validator dispatch job(s) into %s unique request(s)",
+            len(jobs),
+            len(grouped_jobs),
+        )
+
+    group_results: dict[int, list[DomainValidatorResultBase]] = {}
+    worker_count = max(1, min(max_parallel_validators, len(grouped_jobs)))
+    if worker_count == 1:
+        for group_index, group in enumerate(grouped_jobs):
+            group_results[group_index] = _run_validator_job_group(
+                group,
+                agent_runner=agent_runner,
+            )
+    else:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="domain-validator-dispatch",
+        ) as executor:
+            future_by_group_index = {
+                executor.submit(
+                    _run_validator_job_group,
+                    group,
+                    agent_runner=agent_runner,
+                ): group_index
+                for group_index, group in enumerate(grouped_jobs)
+            }
+            for future in concurrent.futures.as_completed(future_by_group_index):
+                group_results[future_by_group_index[future]] = future.result()
+
+    result_by_request_id: dict[str, DomainValidatorResultBase] = {}
+    for group_index, group in enumerate(grouped_jobs):
+        for job, result in zip(group, group_results[group_index], strict=True):
+            result_by_request_id[job.request.request_id] = result
+
+    validator_results: list[DomainValidatorResultBase] = []
+    materialization_items: list[ValidatorResultMaterializationInput] = []
+    for job in jobs:
+        validator_result = result_by_request_id[job.request.request_id]
+        validator_results.append(validator_result)
+        materialization_items.append(
+            ValidatorResultMaterializationInput(
+                match=job.match,
+                request=job.request,
+                result=validator_result,
+            )
+        )
+    return validator_results, materialization_items
+
+
+def _dedupe_validator_jobs(jobs: list[_DispatchJob]) -> list[list[_DispatchJob]]:
+    groups_by_key: dict[str, list[_DispatchJob]] = {}
+    ordered_groups: list[list[_DispatchJob]] = []
+    for job in jobs:
+        key = _validator_request_dedupe_key(job.request)
+        group = groups_by_key.get(key)
+        if group is None:
+            group = []
+            groups_by_key[key] = group
+            ordered_groups.append(group)
+        group.append(job)
+    return ordered_groups
+
+
+def _validator_request_dedupe_key(request: DomainValidationRequest) -> str:
+    selected_identity_inputs = {
+        key: value
+        for key, value in request.selected_inputs.items()
+        if key not in _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS
+    }
+    if not selected_identity_inputs:
+        selected_identity_inputs = dict(request.selected_inputs)
+
+    return json.dumps(
+        {
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": {
+                "domain_pack_id": request.target.domain_pack_id,
+                "object_type": request.target.object_type,
+                "object_role": request.target.object_role,
+                "field_path": request.target.field_path,
+                "expected_fields": list(request.target.expected_fields),
+            },
+            "selected_inputs": selected_identity_inputs,
+            "expected_result_fields": request.expected_result_fields,
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _run_validator_job_group(
+    jobs: list[_DispatchJob],
+    *,
+    agent_runner: DomainValidatorAgentRunner,
+) -> list[DomainValidatorResultBase]:
+    representative = jobs[0]
+    validator_result = _run_single_validator_job(
+        representative,
+        agent_runner=agent_runner,
+    )
+    return [
+        validator_result
+        if job is representative
+        else _remap_validator_result_for_request(validator_result, job.request)
+        for job in jobs
+    ]
+
+
+def _run_single_validator_job(
+    job: _DispatchJob,
+    *,
+    agent_runner: DomainValidatorAgentRunner,
+) -> DomainValidatorResultBase:
+    request = job.request
+    try:
+        raw_output = agent_runner(request, binding=job.match.binding)
+        validator_result = _validated_result_from_agent_output(
+            raw_output,
+            request=request,
+        )
+    except Exception as exc:
+        LOGGER.warning(
+            "Package-scoped validator agent failed for binding %s request %s",
+            request.validator_binding_id,
+            request.request_id,
+            exc_info=exc,
+        )
+        validator_result = _unresolved_result_for_dispatch_problem(
+            request,
+            reason="validator_agent_error",
+            explanation=f"Validator agent execution failed: {exc}",
+        )
+    return _finalize_validator_result(validator_result, request=request)
+
+
+def _finalize_validator_result(
+    validator_result: DomainValidatorResultBase,
+    *,
+    request: DomainValidationRequest,
+) -> DomainValidatorResultBase:
+    validator_result = _enforce_expected_result_fields(
+        validator_result,
+        request=request,
+    )
+    return _ensure_classifiable_validator_result(
+        validator_result,
+        request=request,
+    )
+
+
+def _remap_validator_result_for_request(
+    validator_result: DomainValidatorResultBase,
+    request: DomainValidationRequest,
+) -> DomainValidatorResultBase:
+    remapped = validator_result.model_copy(
+        update={
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent,
+            "target": request.target,
+        }
+    )
+    return _finalize_validator_result(remapped, request=request)
 
 
 def validator_result_from_agent_output(

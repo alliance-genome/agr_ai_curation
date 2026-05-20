@@ -212,8 +212,8 @@ content: |
     Distinguish genes that are directly investigated or supported by new data from genes mentioned only
     as background, prior work, controls, reagents, or comparisons. Use the abstract, introduction,
     results, discussion, figure legends, and methods where helpful for context. Retain explicit evidence
-    in the extraction output, normalize Alliance identifiers when possible, and keep exclusions explicit
-    when a gene is mentioned but is not central to the paper's findings."
+    in the extraction output, preserve validator-ready species/provider context, and keep exclusions
+    explicit when a gene is mentioned but is not central to the paper's findings."
   )
   </example>
 
@@ -242,7 +242,7 @@ content: |
   ask_gene_extractor_specialist(
     "Extract all experimentally supported C. elegans genes from the loaded paper.
     Search across the full document, retain explicit evidence, exclude background-only mentions,
-    and normalize the retained genes to Alliance identifiers when possible."
+    and preserve validator-ready context for active identifier validation."
   )
   </example>
 

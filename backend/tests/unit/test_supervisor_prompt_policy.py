@@ -45,3 +45,5 @@ def test_config_supervisor_prompt_keeps_alliance_specific_handoffs():
     assert "normalized IDs" not in content
     assert "Gene assertions/normalized IDs" not in content
     assert "evidence and normalization" not in content
+    assert "normalize Alliance identifiers when possible" not in content
+    assert "normalize the retained genes to Alliance identifiers" not in content

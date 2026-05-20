@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -191,6 +192,45 @@ def _envelope(
                 ],
             )
         ],
+    )
+
+
+def _multi_object_envelope(
+    identifiers: list[str],
+    *,
+    evidence_quotes: list[str] | None = None,
+) -> DomainEnvelope:
+    objects = []
+    for index, identifier in enumerate(identifiers, start=1):
+        payload: dict[str, Any] = {
+            "gene": {
+                "identifier": identifier,
+                "symbol": f"ABC-{index}",
+            }
+        }
+        if evidence_quotes is not None:
+            evidence_record_id = f"evidence-{index}"
+            payload["evidence_records"] = [
+                {
+                    "evidence_record_id": evidence_record_id,
+                    "quote": evidence_quotes[index - 1],
+                }
+            ]
+            evidence_record_ids = [evidence_record_id]
+        else:
+            evidence_record_ids = []
+        objects.append(
+            CuratableObjectEnvelope(
+                object_type="GeneAssertion",
+                pending_ref_id=f"object-{index}",
+                payload=payload,
+                evidence_record_ids=evidence_record_ids,
+            )
+        )
+    return DomainEnvelope(
+        envelope_id="dispatch-env",
+        domain_pack_id="fixture.dispatch",
+        objects=objects,
     )
 
 
@@ -409,6 +449,72 @@ def test_dispatch_active_binding_returns_unresolved_validator_result(
     assert finding.details["failure_classification"] == "missing_expected_result_field"
     assert finding.details["lookup_attempts"][0]["lookup_status"] == "not_found"
     assert result.validator_results[0].status == "unresolved"
+
+
+def test_dispatch_deduplicates_equivalent_identity_requests_before_validation(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+    calls = []
+
+    def _runner(request, *, binding):
+        calls.append(request.request_id)
+        return _result_payload(request)
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(
+            ["BAD:0001", "BAD:0001"],
+            evidence_quotes=["First paper quote.", "Second paper quote."],
+        ),
+        pack,
+        runner=_runner,
+    )
+
+    assert len(calls) == 1
+    assert len(result.validator_results) == 2
+    assert {item.status for item in result.validator_results} == {"resolved"}
+    assert len(
+        [
+            finding
+            for finding in result.envelope.validation_findings
+            if finding.code == "domain_pack.validator_resolved"
+        ]
+    ) == 2
+    materialized_gene = next(
+        domain_object
+        for domain_object in result.envelope.objects
+        if domain_object.object_type == "Gene"
+    )
+    assert all(
+        materialized_gene.to_object_ref() in domain_object.object_refs
+        for domain_object in result.envelope.objects
+        if domain_object.object_type == "GeneAssertion"
+    )
+
+
+def test_dispatch_runs_unique_validator_requests_in_parallel(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+    barrier = threading.Barrier(2)
+    seen_thread_ids: set[int] = set()
+
+    def _runner(request, *, binding):
+        seen_thread_ids.add(threading.get_ident())
+        barrier.wait(timeout=1)
+        return _result_payload(request)
+
+    started_at = time.monotonic()
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(["BAD:0001", "BAD:0002"]),
+        pack,
+        runner=_runner,
+        max_parallel_validators=2,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert elapsed < 0.9
+    assert len(seen_thread_ids) == 2
+    assert len(result.validator_results) == 2
+    assert {item.status for item in result.validator_results} == {"resolved"}
 
 
 def test_invalid_validator_schema_becomes_controlled_unresolved_result(
