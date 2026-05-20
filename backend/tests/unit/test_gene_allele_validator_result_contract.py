@@ -311,6 +311,8 @@ def test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries():
         "Evidence text is context for judging candidates",
         "Keep supporting evidence quotes out of the `allele_symbol` argument",
         "Do not use a full sentence or surrounding prose as the search string",
+        "omit `data_provider` rather than guessing",
+        "across taxa",
     ]
     for fragment in required_fragments:
         assert fragment in prompt
