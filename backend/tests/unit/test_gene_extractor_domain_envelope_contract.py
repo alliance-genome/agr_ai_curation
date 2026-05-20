@@ -345,7 +345,14 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert "agr_species_context_lookup" in prompt_content
     assert "agr_species_context_lookup" in agent_data["tools"]
     assert "agr_curation_query" not in agent_data["tools"]
+    assert "context-naive LLM agent" in prompt_content
+    assert "high-value handoff channel" in prompt_content
+    assert "most specific paper-backed gene or protein" in prompt_content
+    assert "useful as a database lookup" in prompt_content
     assert "Active validator bindings own final Alliance Gene identity decisions" in prompt_content
+    assert "Actin 5C" not in prompt_content
+    assert "Opsin-1" not in prompt_content
+    assert "Crumbs (Crb)" not in prompt_content
     assert "repair_mode" not in prompt_content
     assert "repair_hints" not in prompt_content
     assert "repair_notes" not in prompt_content

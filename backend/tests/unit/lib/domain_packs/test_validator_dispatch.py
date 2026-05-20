@@ -316,6 +316,9 @@ def _gene_mentions_envelope(mentions: list[str]) -> DomainEnvelope:
                     "species": "Drosophila melanogaster",
                     "taxon_hint": "NCBITaxon:7227",
                     "data_provider_hint": "FlyBase",
+                    "identity_resolution_notes": [
+                        f"Paper-backed context for {mention}."
+                    ],
                     "verified_quote": f"{mention} was discussed in the paper.",
                 },
             )
@@ -788,91 +791,86 @@ def test_bad_batch_extra_request_id_becomes_controlled_unresolved_results(
     )
 
 
-def test_alliance_gene_pack_batches_gene_mentions_through_batch_path():
+def test_alliance_gene_pack_uses_singleton_gene_validation_with_handoff_context():
     pack = _alliance_gene_pack()
     mentions = ["crumbs", "crb", "ninaE", "Actin"]
     captured_mentions: list[str] = []
+    captured_notes: list[list[str]] = []
 
-    def _single_runner(request, *, binding):  # pragma: no cover - must not be called
-        raise AssertionError("gene_validation should use the batch runner")
-
-    def _batch_runner(jobs, *, binding):
-        captured_mentions.extend(
-            str(job.request.selected_inputs["mention"]) for job in jobs
+    def _single_runner(request, *, binding):
+        mention = str(request.selected_inputs["mention"])
+        captured_mentions.append(mention)
+        captured_notes.append(list(request.selected_inputs["identity_resolution_notes"]))
+        assert request.selected_inputs["evidence_quote"] == (
+            f"{mention} was discussed in the paper."
         )
-        results = []
-        for job in jobs:
-            request = job.request
-            mention = str(request.selected_inputs["mention"])
-            if mention == "Actin":
-                results.append(
-                    {
-                        "status": "unresolved",
-                        "request_id": request.request_id,
-                        "validator_binding_id": request.validator_binding_id,
-                        "validator_agent": request.validator_agent.model_dump(mode="json"),
-                        "target": request.target.model_dump(mode="json"),
-                        "resolved_values": {},
-                        "resolved_objects": [],
-                        "missing_expected_fields": ["curie", "symbol", "taxon"],
-                        "candidates": [
-                            {
-                                "value": "Actin",
-                                "label": "Actin",
-                                "object_type": "Gene",
-                                "matched_fields": {"mention": "Actin"},
-                            }
-                        ],
-                        "lookup_attempts": [
-                            {
-                                "provider": "fixture_gene_lookup",
-                                "method": "search_genes_bulk",
-                                "query": {
-                                    "gene_symbols": mentions,
-                                    "data_provider": "FlyBase",
-                                },
-                                "result_count": 4,
-                                "outcome": "ambiguous",
-                            }
-                        ],
-                        "curator_message": "Actin remains ambiguous.",
-                        "explanation": "Bulk lookup returned ambiguous Actin candidates.",
-                    }
-                )
-                continue
 
-            results.append(
+        if mention == "Actin":
+            return {
+                "status": "unresolved",
+                "request_id": request.request_id,
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": request.validator_agent.model_dump(mode="json"),
+                "target": request.target.model_dump(mode="json"),
+                "resolved_values": {},
+                "resolved_objects": [],
+                "missing_expected_fields": ["curie", "symbol", "taxon"],
+                "candidates": [
+                    {
+                        "value": "Actin",
+                        "label": "Actin",
+                        "object_type": "Gene",
+                        "matched_fields": {"mention": "Actin"},
+                    }
+                ],
+                "lookup_attempts": [
+                    {
+                        "provider": "fixture_gene_lookup",
+                        "method": "search_genes",
+                        "query": {
+                            "gene_symbol": mention,
+                            "data_provider": "FlyBase",
+                        },
+                        "result_count": 4,
+                        "outcome": "ambiguous",
+                    }
+                ],
+                "curator_message": "Actin remains ambiguous.",
+                "explanation": "Lookup returned ambiguous Actin candidates.",
+            }
+
+        return {
+            "status": "resolved",
+            "request_id": request.request_id,
+            "validator_binding_id": request.validator_binding_id,
+            "validator_agent": request.validator_agent.model_dump(mode="json"),
+            "target": request.target.model_dump(mode="json"),
+            "resolved_values": {
+                "curie": f"AGR:{len(captured_mentions):07d}",
+                "symbol": "crb" if mention in {"crumbs", "crb"} else mention,
+                "taxon": "NCBITaxon:7227",
+            },
+            "resolved_objects": [],
+            "missing_expected_fields": [],
+            "candidates": [],
+            "lookup_attempts": [
                 {
-                    "status": "resolved",
-                    "request_id": request.request_id,
-                    "validator_binding_id": request.validator_binding_id,
-                    "validator_agent": request.validator_agent.model_dump(mode="json"),
-                    "target": request.target.model_dump(mode="json"),
-                    "resolved_values": {
-                        "curie": f"AGR:{len(results) + 1:07d}",
-                        "symbol": "crb" if mention in {"crumbs", "crb"} else mention,
-                        "taxon": "NCBITaxon:7227",
+                    "provider": "fixture_gene_lookup",
+                    "method": "search_genes",
+                    "query": {
+                        "gene_symbol": mention,
+                        "data_provider": "FlyBase",
                     },
-                    "resolved_objects": [],
-                    "missing_expected_fields": [],
-                    "candidates": [],
-                    "lookup_attempts": [
-                        {
-                            "provider": "fixture_gene_lookup",
-                            "method": "search_genes_bulk",
-                            "query": {
-                                "gene_symbols": mentions,
-                                "data_provider": "FlyBase",
-                            },
-                            "result_count": 4,
-                            "outcome": "success",
-                        }
-                    ],
-                    "curator_message": f"{mention} resolved through bulk lookup.",
-                    "explanation": "Bulk lookup resolved this gene mention.",
+                    "result_count": 1,
+                    "outcome": "success",
                 }
-            )
-        return {"results": results}
+            ],
+            "curator_message": f"{mention} resolved through lookup.",
+            "explanation": "Lookup resolved this gene mention.",
+        }
+
+    def _batch_runner(jobs, *, binding):  # pragma: no cover - must not be called
+        raise AssertionError("gene_validation should use the singleton runner")
 
     result = dispatch_active_validator_bindings(
         _gene_mentions_envelope(mentions),
@@ -883,19 +881,20 @@ def test_alliance_gene_pack_batches_gene_mentions_through_batch_path():
     )
 
     assert captured_mentions == mentions
-    assert result.validator_agent_run_count == 1
-    assert result.batch_validator_run_count == 1
-    assert len(result.validator_batch_groups) == 1
-    assert result.validator_batch_groups[0]["duration_seconds"] >= 0
-    assert result.validator_batch_groups[0]["runner_duration_seconds"] >= 0
-    assert result.validator_batch_groups[0]["output_validation_duration_seconds"] >= 0
+    assert captured_notes == [
+        [f"Paper-backed context for {mention}."]
+        for mention in mentions
+    ]
+    assert result.validator_agent_run_count == len(mentions)
+    assert result.batch_validator_run_count == 0
+    assert result.validator_batch_groups == ()
     assert [item.status for item in result.validator_results] == [
         "resolved",
         "resolved",
         "resolved",
         "unresolved",
     ]
-    assert result.validator_results[0].lookup_attempts[0].method == "search_genes_bulk"
+    assert result.validator_results[0].lookup_attempts[0].method == "search_genes"
     assert [item.payload.get("gene_symbol") for item in result.envelope.objects] == [
         "crb",
         "crb",

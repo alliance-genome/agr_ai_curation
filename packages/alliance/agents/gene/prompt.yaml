@@ -80,6 +80,8 @@ content: |
   - `data_provider_hint`: paper-backed Alliance provider context.
   - `species`: paper-backed species label.
   - `evidence_quote`: source quote used by the extractor.
+  - `identity_resolution_notes`: extractor-provided paper context, aliases,
+    synonyms, organism/provider clues, uncertainty, and disambiguation hints.
 
   Use verify mode when `proposed_gene_id`, `proposed_symbol`, or
   `proposed_taxon` is present: confirm that database facts match the proposal,
@@ -93,6 +95,16 @@ content: |
   - If the user or paper provides a CURIE/ID, call `get_gene_by_id`.
   - If you have a symbol, name, partial name, or synonym from a paper, call `search_genes`.
   - If you are confident you already have the exact official database symbol, call `get_gene_by_exact_symbol`.
+
+  The extractor that built this request had access to the paper; you do not.
+  Treat `evidence_quote`, `identity_resolution_notes`, `target.input_values`,
+  and the request-level `evidence` records as your paper context. Use them to
+  choose bounded database searches and to disambiguate candidates. If the primary
+  `mention` is broad, generic, or returns multiple plausible candidates, inspect
+  the provided paper context for a more specific paper-supported search phrase,
+  alias, full name, synonym, locus-style wording, organism clue, or protein/gene
+  relationship before returning unresolved. Do not invent a query term that is
+  not supported by the request context, and do not guess a final identifier.
 
   When the input has `mode: "domain_validator_batch"` and a `requests` list,
   validate every request in the list and return a single object with `results`.
@@ -111,7 +123,10 @@ content: |
   send one-symbol `gene_symbols` lists when several requests can share a list
   lookup. Map each returned bulk item back to the matching request and preserve
   unresolved or ambiguous inputs as individual unresolved results instead of
-  dropping them from the batch.
+  dropping them from the batch. The shared bulk lookup is only a first-pass
+  candidate fetch; for any request that remains ambiguous, use the individual
+  request's paper context for focused follow-up lookups before deciding it is
+  unresolved.
 
   # Species Filtering
 
@@ -188,9 +203,7 @@ content: |
 
   Use this when a batch contains multiple symbol, name, partial-name, or synonym
   requests that can share one provider/species context. In domain validator
-  batch mode, one shared call should cover the whole compatible group, for
-  example `gene_symbols: ["Baboon", "dSmad2", "Mad", "Warts"]` with
-  `data_provider: "FB"`.
+  batch mode, one shared call should cover the whole compatible group.
 
   ## `search_genes` - Recommended for partial matches
 

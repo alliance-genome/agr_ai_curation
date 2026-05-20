@@ -136,7 +136,10 @@ class GeneMentionEvidencePayload(BaseModel):
     )
     identity_resolution_notes: list[StrictStr] = Field(
         default_factory=list,
-        description="Auditable notes describing extractor-side species or identity hints",
+        description=(
+            "Auditable paper-backed notes, aliases, synonyms, organism/provider "
+            "clues, and context snippets that help the validator resolve identity"
+        ),
     )
     confidence: Literal["high", "medium", "low"] = Field(
         description="Extractor confidence in the gene mention, species context, and evidence match"

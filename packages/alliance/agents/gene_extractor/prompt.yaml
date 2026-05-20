@@ -90,6 +90,35 @@ content: |
   Extraction-time lookup is limited to provider/species/taxon context through `agr_species_context_lookup`. Do not search gene names, gene symbols, gene synonyms, gene IDs, or generic entity-to-CURIE mappings. If identity remains ambiguous or absent, keep the candidate auditable in `metadata.ambiguities[]` or `metadata.normalization_notes[]`; unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
+  <validator_handoff_context>
+  The active gene validator is a separate, context-naive LLM agent with database
+  lookup tools. It does not have access to the paper unless you pass paper-backed
+  context through the envelope. Give it enough precise information to resolve the
+  entity against a complex gene database, while keeping final identifier choices
+  under validator authority.
+
+  Treat `payload.identity_resolution_notes` as a high-value handoff channel, not
+  an optional afterthought. Use concise, paper-backed notes to preserve:
+  - Exact aliases, symbols, full names, abbreviations, locus-style labels, or
+    protein/gene name relationships that appear in the paper.
+  - Organism, strain, provider, taxon, or model-system clues that narrow the
+    database search space.
+  - Short quote snippets or nearby sentence context that would help a validator
+    distinguish one similarly named entity from another.
+  - Figure, table, section, assay, mutant, perturbation, localization, phenotype,
+    interaction, or expression context when it materially supports identity.
+  - Uncertainty, alternate names, and disambiguation rationale when the paper
+    supports more than one possible way to search for the same entity.
+
+  For `payload.mention`, preserve the most specific paper-backed gene or protein
+  label that represents the retained entity and is useful as a database lookup
+  phrase. Do not collapse a precise paper mention into a broader family, pathway,
+  reagent, or generic protein label when the passage gives a more searchable
+  name, alias, synonym, modifier, or locus-style wording for the same entity.
+  Never invent symbols, identifiers, taxa, species, or quote text; put only
+  paper-supported hints in the handoff.
+  </validator_handoff_context>
+
   <candidate_and_focality_rules>
   Search titles, abstracts, results, figure legends, tables, and relevant methods/discussion passages for gene symbols, full names, and synonyms. Capture mentions exactly as written, preserving case, hyphens, and punctuation.
 
@@ -208,6 +237,10 @@ content: |
 
   Use `metadata.raw_mentions[]` for harvested mention strings, `metadata.exclusions[]` for rejected candidates, `metadata.ambiguities[]` for unresolved candidates, `metadata.normalization_notes[]` for lookup decisions, `metadata.evidence_records[]` for verified quotes, `metadata.notes[]` for run audit notes, and `metadata.provenance` for non-semantic run provenance.
   Never leave `metadata.raw_mentions[]` empty when `curatable_objects[]` contains retained `gene_mention_evidence` objects; include one raw mention entry per retained object with `mention`, `entity_type: "gene"`, and the supporting `evidence_record_ids`.
+  Prefer one to three high-signal `payload.identity_resolution_notes` for each
+  retained object when paper context can improve validator search precision.
+  Notes may quote short paper snippets or summarize nearby context, but must not
+  contain invented database identifiers or unsupported species assignments.
 
   Active validator bindings own final Alliance Gene identity decisions and materialize `primary_external_id`, `gene_symbol`, and `taxon`. When a
   validator-bound value remains unresolved, preserve the evidence-backed

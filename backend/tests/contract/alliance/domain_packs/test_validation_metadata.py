@@ -379,6 +379,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "data_provider_hint",
         "species",
         "evidence_quote",
+        "identity_resolution_notes",
     }
     assert (
         "alliance_gene_reference_lookup"

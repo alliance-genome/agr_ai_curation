@@ -281,6 +281,25 @@ def test_gene_prompt_requires_shared_bulk_lookup_for_batch_requests():
         assert fragment in prompt
 
 
+def test_gene_prompt_uses_extractor_handoff_context_for_disambiguation():
+    prompt = yaml.safe_load(
+        (ALLIANCE_AGENTS_PATH / "gene" / "prompt.yaml").read_text(encoding="utf-8")
+    )["content"]
+
+    required_fragments = [
+        "`identity_resolution_notes`",
+        "you do not",
+        "request-level `evidence` records",
+        "more specific paper-supported search phrase",
+        "paper context for focused follow-up lookups",
+    ]
+    for fragment in required_fragments:
+        assert fragment in prompt
+
+    for paper_specific_fragment in ("Actin 5C", "Opsin-1", "Crumbs (Crb)"):
+        assert paper_specific_fragment not in prompt
+
+
 def test_allele_prompt_describes_flybase_bracket_retry_policy():
     prompt = yaml.safe_load(
         (ALLIANCE_AGENTS_PATH / "allele" / "prompt.yaml").read_text(encoding="utf-8")

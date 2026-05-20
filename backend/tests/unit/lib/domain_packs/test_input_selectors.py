@@ -357,6 +357,25 @@ def test_runtime_selector_ambiguity_becomes_structured_finding(tmp_path: Path):
     assert finding.details["selector_problem"]["value_count"] == 2
 
 
+def test_allow_multiple_payload_selector_preserves_list_values(tmp_path: Path):
+    result = _run_selector(
+        tmp_path,
+        """
+          selected:
+            source: payload
+            path: aliases
+            allow_multiple: true
+""",
+        _assertion_envelope(payload={"aliases": ["AGR:1", "AGR:2"]}),
+    )
+
+    assert result.findings == ()
+    assert result.request is not None
+    request = result.request.model_dump(mode="json")
+    assert request["selected_inputs"] == {"selected": ["AGR:1", "AGR:2"]}
+    assert request["target"]["input_values"] == {"selected": ["AGR:1", "AGR:2"]}
+
+
 def test_runtime_selector_unresolved_ref_becomes_structured_finding(tmp_path: Path):
     result = _run_selector(
         tmp_path,

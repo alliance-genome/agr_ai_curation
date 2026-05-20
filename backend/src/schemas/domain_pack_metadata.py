@@ -161,18 +161,25 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
     """Deterministic selector for one validator input value."""
 
     _ALLOWED_FIELDS_BY_SOURCE: ClassVar[dict[str, set[str]]] = {
-        "payload": {"source", "path", "required"},
-        "envelope_metadata": {"source", "path", "required"},
-        "object_metadata": {"source", "path", "required"},
-        "evidence_record": {"source", "path", "record_id", "required"},
+        "payload": {"source", "path", "required", "allow_multiple"},
+        "envelope_metadata": {"source", "path", "required", "allow_multiple"},
+        "object_metadata": {"source", "path", "required", "allow_multiple"},
+        "evidence_record": {
+            "source",
+            "path",
+            "record_id",
+            "required",
+            "allow_multiple",
+        },
         "object_ref": {
             "source",
             "path",
             "field_path",
             "object_type",
             "required",
+            "allow_multiple",
         },
-        "literal": {"source", "value", "required"},
+        "literal": {"source", "value", "required", "allow_multiple"},
     }
 
     source: Literal[
@@ -189,6 +196,7 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
     record_id: Optional[str] = None
     value: Any = None
     required: bool = True
+    allow_multiple: Optional[bool] = None
 
     @field_validator("path", "field_path")
     @classmethod
