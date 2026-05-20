@@ -78,8 +78,10 @@ content: |
 
   Work in this order for retained genes:
   1. Search/read the document for candidate mentions and context.
-  2. Verify evidence with `record_evidence` from the current chunk as soon as a gene appears focal and experimentally supported.
-  3. Preserve selected inputs such as mention, species/taxon/provider context, evidence quote, and proposed identity hints so active validator bindings can resolve or leave the target unresolved.
+  2. For central-focus questions, build a short provisional list of focal genes before calling `record_evidence`; do not verify every gene or protein returned by a broad search.
+  3. Verify evidence with `record_evidence` from the current chunk once a gene is both focal and experimentally supported.
+  4. Stop evidence collection once each retained focal gene has enough verified evidence for curator review and validator dispatch.
+  5. Preserve selected inputs such as mention, species/taxon/provider context, evidence quote, and proposed identity hints so active validator bindings can resolve or leave the target unresolved.
   </tools>
 
   <active_validator_binding_policy>
@@ -123,7 +125,23 @@ content: |
   - `verified_quote`, `page`, `section`, optional `subsection`, and optional `figure_reference`: copy from the tool response
 
   If the tool returns `status: "not_found"`, inspect the preview, retry once only when the mismatch is clearly fixable, then drop that evidence if it still does not verify.
+  If the tool response includes `terminal: true` or `retry_exhausted: true`, do not call `record_evidence` again for that entity/chunk pair.
   </evidence_rules>
+
+  <central_focus_efficiency_rules>
+  When the curator asks for genes that are "the focus", "central", or "central experimental focus" of a publication, prioritize precision over exhaustive mention capture.
+
+  First identify a provisional shortlist from the title, abstract, Results/Discussion headings, and figure/table context. Then verify evidence only for shortlisted genes. Do not use verified evidence collection as a screening mechanism for every gene in a broad `gene` search result.
+
+  Retain genes that the paper directly investigates as experimental subjects or central mechanistic conclusions. Exclude genes or proteins that are measured, compared, listed as altered abundance candidates, pathway neighbors, complex components, reagents, controls, or downstream/contextual readouts unless the paper itself frames that individual gene as a central experimental focus.
+
+  For central-focus questions:
+  - Keep one strongest verified evidence quote per retained gene by default.
+  - Add a second verified quote for the same gene only when it changes the curator decision or disambiguates the focal gene identity.
+  - Keep the total retained `gene_mention_evidence` objects small, normally 1-3 and at most 4 unless the user explicitly asks for exhaustive evidence.
+  - Do not call `record_evidence` for exclusions unless the candidate is genuinely non-trivial and the curator would need source text to understand the exclusion.
+  - Once each retained focal gene has one verified quote plus species/provider context when available, proceed to the final envelope instead of searching for more support.
+  </central_focus_efficiency_rules>
 
   <exclusion_and_abstain_rules>
   Genes mentioned only as background, prior work, discussion speculation, pathway context, or reagent setup usually belong in `metadata.exclusions[]`.
@@ -174,7 +192,7 @@ content: |
   <domain_envelope_contract>
   `curatable_objects[]` is the only semantic object list. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, or `annotation_drafts`.
 
-  Emit one `gene_mention_evidence` object per verified gene/evidence pairing. If one retained gene has two verified quotes, create two `gene_mention_evidence` objects that share the same `mention` and paper-backed identity/context hints but carry different `evidence_record_id`, `verified_quote`, `page`, `section`, and `chunk_id` payload fields.
+  Emit one `gene_mention_evidence` object per verified gene/evidence pairing. For central-focus questions, prefer one verified pairing per retained gene; create a second pairing for the same gene only when the second quote materially changes the curator decision or identity context. If one retained gene has two verified quotes, create two `gene_mention_evidence` objects that share the same `mention` and paper-backed identity/context hints but carry different `evidence_record_id`, `verified_quote`, `page`, `section`, and `chunk_id` payload fields.
 
   Each `gene_mention_evidence` object must include:
   - `object_type`: `gene_mention_evidence`

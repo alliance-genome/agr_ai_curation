@@ -14,7 +14,6 @@ import {
   Select,
   MenuItem,
   Alert,
-  CircularProgress,
   LinearProgress,
   Chip,
   IconButton,
@@ -72,6 +71,8 @@ const VALID_AUDIT_EVENT_TYPES: Set<string> = new Set([
   'DOMAIN_COMPLETED',
   'DOMAIN_CATEGORY_ERROR',
   'DOMAIN_SKIPPED',
+  'FLOW_STEP_TIMING',
+  'FLOW_VALIDATION_GROUP_TIMING',
   'FILE_READY',
 ]);
 

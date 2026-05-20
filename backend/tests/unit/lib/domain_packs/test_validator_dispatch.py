@@ -885,6 +885,10 @@ def test_alliance_gene_pack_batches_gene_mentions_through_batch_path():
     assert captured_mentions == mentions
     assert result.validator_agent_run_count == 1
     assert result.batch_validator_run_count == 1
+    assert len(result.validator_batch_groups) == 1
+    assert result.validator_batch_groups[0]["duration_seconds"] >= 0
+    assert result.validator_batch_groups[0]["runner_duration_seconds"] >= 0
+    assert result.validator_batch_groups[0]["output_validation_duration_seconds"] >= 0
     assert [item.status for item in result.validator_results] == [
         "resolved",
         "resolved",
@@ -1311,5 +1315,9 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     assert runtime_agent.output_type.is_strict_json_schema() is False
     payload = json.loads(captured["kwargs"]["input"])
     assert payload["mode"] == "domain_validator_batch"
+    assert "one bulk lookup tool call per compatible shared lookup group" in payload[
+        "instructions"
+    ]
+    assert "gene_symbols" in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
     assert captured["kwargs"]["max_turns"] == 4

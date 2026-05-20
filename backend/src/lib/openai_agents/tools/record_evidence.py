@@ -326,11 +326,6 @@ def _rank_fuzzy_candidates_for_review(
     return sorted(
         candidates,
         key=lambda candidate: (
-            _candidate_satisfies_required_identity(
-                entity=entity,
-                claimed_quote=claimed_quote,
-                candidate_text=candidate.text,
-            ),
             candidate.score,
             -len(candidate.text),
         ),
@@ -528,20 +523,16 @@ async def _find_fuzzy_verified_quote(
     best = candidates[0]
     second_score = candidates[1].score if len(candidates) > 1 else 0.0
     margin = best.score - second_score
-    identity_preserved = _identity_tokens_preserved(
-        entity=entity,
-        claimed_quote=claimed_quote,
-        candidate_text=best.text,
-    )
+    claim_coverage = _claim_token_coverage(claimed_quote, best.text)
 
     logger.info(
         "record_evidence fuzzy candidates entity=%r best_score=%.4f second_score=%.4f "
-        "margin=%.4f identity_preserved=%s candidate_count=%d",
+        "margin=%.4f claim_coverage=%.4f candidate_count=%d",
         entity,
         best.score,
         second_score,
         margin,
-        identity_preserved,
+        claim_coverage,
         len(candidates),
     )
 
@@ -565,20 +556,6 @@ async def _find_fuzzy_verified_quote(
             selected_index,
             selected.score,
             _claim_token_coverage(claimed_quote, selected.text),
-        )
-        return None, _QuoteMatch(raw_start=best.raw_start, raw_end=best.raw_end), candidates
-
-    if not _candidate_satisfies_required_identity(
-        entity=entity,
-        claimed_quote=claimed_quote,
-        candidate_text=selected.text,
-    ):
-        logger.warning(
-            "record_evidence rejected LLM-accepted fuzzy candidate because identity tokens changed "
-            "entity=%r selected_index=%d score=%.4f",
-            entity,
-            selected_index,
-            selected.score,
         )
         return None, _QuoteMatch(raw_start=best.raw_start, raw_end=best.raw_end), candidates
 

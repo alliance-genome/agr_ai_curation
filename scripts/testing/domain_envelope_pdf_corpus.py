@@ -69,6 +69,31 @@ TRIALS: tuple[CorpusTrial, ...] = (
         expected_validator_bindings=("alliance_gene_reference_lookup",),
     ),
     CorpusTrial(
+        trial_id="gene_drosophila_r8_tgfb_multi_gene",
+        domain="gene",
+        agent_ids=("gene_extractor",),
+        title=(
+            "Parallel Activin and BMP signaling coordinates R7/R8 "
+            "photoreceptor subtype pairing in the stochastic Drosophila retina"
+        ),
+        organism="Drosophila melanogaster",
+        pmcid="PMC5599232",
+        pmid="28853393",
+        doi="10.7554/eLife.25301",
+        pdf_url="https://cdn.elifesciences.org/articles/25301/elife-25301-v2.pdf",
+        prompt=(
+            "Read the loaded paper and extract four distinct paper-grounded "
+            "Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype "
+            "specification findings. Prefer concrete genes explicitly discussed "
+            "in the abstract or results, such as babo/Baboon, dSmad2, Mad, "
+            "wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one "
+            "exact supporting quote per retained gene, include Drosophila "
+            "melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, "
+            "and do not resolve gene IDs in the extractor."
+        ),
+        expected_validator_bindings=("alliance_gene_reference_lookup",),
+    ),
+    CorpusTrial(
         trial_id="allele_drosophila_notch_facet_glossy",
         domain="allele",
         agent_ids=("allele_extractor",),
@@ -372,11 +397,288 @@ def _selected_trials(names: Iterable[str]) -> list[CorpusTrial]:
     ]
 
 
+def _evidence_record_key(record: Mapping[str, Any]) -> tuple[Any, ...]:
+    record_id = str(record.get("evidence_record_id") or "").strip()
+    if record_id:
+        return ("id", record_id)
+    return (
+        "locator",
+        str(record.get("entity") or "").strip(),
+        str(record.get("chunk_id") or "").strip(),
+        str(record.get("verified_quote") or "").strip(),
+    )
+
+
+def _normalized_evidence_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip().lower()
+
+
+def _evidence_record_locator_key(record: Mapping[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(record.get("entity") or "").strip().lower(),
+        str(record.get("chunk_id") or "").strip(),
+        _normalized_evidence_text(record.get("verified_quote")),
+    )
+
+
+def _evidence_record_ids(records: Iterable[Mapping[str, Any]]) -> set[str]:
+    return {
+        record_id
+        for record in records
+        if (record_id := str(record.get("evidence_record_id") or "").strip())
+    }
+
+
+def _evidence_record_locator_keys(
+    records: Iterable[Mapping[str, Any]],
+) -> set[tuple[str, str, str]]:
+    return {_evidence_record_locator_key(record) for record in records}
+
+
+def _evidence_record_is_in(
+    record: Mapping[str, Any],
+    *,
+    record_ids: set[str],
+    locator_keys: set[tuple[str, str, str]],
+) -> bool:
+    record_id = str(record.get("evidence_record_id") or "").strip()
+    if record_id and record_id in record_ids:
+        return True
+    return _evidence_record_locator_key(record) in locator_keys
+
+
+def _evidence_record_matches_attempt(
+    record: Mapping[str, Any],
+    attempt: Mapping[str, Any],
+) -> bool:
+    record_entity = str(record.get("entity") or "").strip().lower()
+    attempt_entity = str(attempt.get("entity") or "").strip().lower()
+    if record_entity and attempt_entity and record_entity != attempt_entity:
+        return False
+
+    record_chunk_id = str(record.get("chunk_id") or "").strip()
+    attempt_chunk_id = str(attempt.get("chunk_id") or "").strip()
+    if record_chunk_id and attempt_chunk_id and record_chunk_id != attempt_chunk_id:
+        return False
+
+    record_quote = _normalized_evidence_text(record.get("verified_quote"))
+    attempt_quote = _normalized_evidence_text(attempt.get("claimed_quote"))
+    if not record_quote or not attempt_quote:
+        return True
+    return record_quote in attempt_quote or attempt_quote in record_quote
+
+
+def _matching_evidence_record_ids(
+    records: Iterable[Mapping[str, Any]],
+    attempt: Mapping[str, Any],
+) -> list[str]:
+    matches: list[str] = []
+    attempt_record_id = str(attempt.get("tool_evidence_record_id") or "").strip()
+    for record in records:
+        record_id = str(record.get("evidence_record_id") or "").strip()
+        if attempt_record_id and record_id == attempt_record_id:
+            matches.append(record_id)
+            continue
+        if not _evidence_record_matches_attempt(record, attempt):
+            continue
+        if record_id:
+            matches.append(record_id)
+        else:
+            matches.append("|".join(_evidence_record_locator_key(record)))
+    return matches
+
+
+def _unique_evidence_records(records: Iterable[Any]) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    unique: list[dict[str, Any]] = []
+    for record in records:
+        if not isinstance(record, Mapping):
+            continue
+        key = _evidence_record_key(record)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(dict(record))
+    return unique
+
+
+def _record_evidence_attempts_from_summaries(
+    specialist_summaries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    attempts: list[dict[str, Any]] = []
+    for summary in specialist_summaries:
+        specialist = summary.get("specialist")
+        for call in summary.get("toolCalls") or []:
+            if not isinstance(call, Mapping) or call.get("name") != "record_evidence":
+                continue
+            args = call.get("args") if isinstance(call.get("args"), Mapping) else {}
+            output_summary = (
+                call.get("outputSummary")
+                if isinstance(call.get("outputSummary"), Mapping)
+                else {}
+            )
+            attempts.append(
+                {
+                    "specialist": specialist,
+                    "entity": args.get("entity"),
+                    "chunk_id": args.get("chunk_id"),
+                    "claimed_quote": args.get("claimed_quote"),
+                    "durationMs": call.get("durationMs"),
+                    "tool_status": output_summary.get("status"),
+                    "tool_message": output_summary.get("message"),
+                    "tool_verified_quote": output_summary.get("verified_quote"),
+                    "tool_evidence_record_id": output_summary.get("evidence_record_id"),
+                    "tool_retry_exhausted": output_summary.get("retry_exhausted"),
+                    "tool_terminal": output_summary.get("terminal"),
+                    "tool_output_summary": dict(output_summary),
+                }
+            )
+    return attempts
+
+
+def _entity_counts(records: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for record in records:
+        entity = str(record.get("entity") or "").strip() or "(missing)"
+        counts[entity] += 1
+    return dict(counts)
+
+
+def _evidence_usage_audit(
+    *,
+    specialist_summaries: list[dict[str, Any]],
+    evidence_summary_events: list[dict[str, Any]],
+    flow_step_evidence_events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    live_records = _unique_evidence_records(
+        record
+        for summary in specialist_summaries
+        for record in summary.get("liveEvidenceRecords") or []
+    )
+    retained_records = _unique_evidence_records(
+        record
+        for summary in specialist_summaries
+        for record in summary.get("retainedEvidenceRecords") or []
+    )
+    evidence_summary_records = _unique_evidence_records(
+        record
+        for event in evidence_summary_events
+        for record in event.get("evidence_records") or []
+    )
+    flow_step_records = _unique_evidence_records(
+        record
+        for event in flow_step_evidence_events
+        for record in event.get("evidence_records") or []
+    )
+
+    retained_ids = _evidence_record_ids(retained_records)
+    retained_locator_keys = _evidence_record_locator_keys(retained_records)
+    if not retained_ids and not retained_locator_keys:
+        retained_ids = _evidence_record_ids(evidence_summary_records)
+        retained_locator_keys = _evidence_record_locator_keys(evidence_summary_records)
+    if not retained_ids and not retained_locator_keys:
+        retained_ids = _evidence_record_ids(flow_step_records)
+        retained_locator_keys = _evidence_record_locator_keys(flow_step_records)
+
+    unretained_live_records = [
+        record
+        for record in live_records
+        if not _evidence_record_is_in(
+            record,
+            record_ids=retained_ids,
+            locator_keys=retained_locator_keys,
+        )
+    ]
+    attempts = []
+    for attempt in _record_evidence_attempts_from_summaries(specialist_summaries):
+        live_matches = _matching_evidence_record_ids(live_records, attempt)
+        retained_matches = _matching_evidence_record_ids(retained_records, attempt)
+        evidence_summary_matches = _matching_evidence_record_ids(
+            evidence_summary_records,
+            attempt,
+        )
+        flow_step_matches = _matching_evidence_record_ids(flow_step_records, attempt)
+        attempts.append(
+            {
+                **attempt,
+                "record_evidence_verified": str(
+                    attempt.get("tool_status") or ""
+                ).strip().lower()
+                == "verified",
+                "live_verified": bool(live_matches),
+                "retained_in_structured_output": bool(retained_matches),
+                "present_in_evidence_summary_event": bool(evidence_summary_matches),
+                "present_in_flow_step_evidence": bool(flow_step_matches),
+                "matched_live_evidence_record_ids": live_matches,
+                "matched_retained_evidence_record_ids": retained_matches,
+                "matched_evidence_summary_record_ids": evidence_summary_matches,
+                "matched_flow_step_evidence_record_ids": flow_step_matches,
+            }
+        )
+    return {
+        "record_evidence_attempt_count": len(attempts),
+        "record_evidence_attempt_counts_by_entity": _entity_counts(attempts),
+        "record_evidence_attempts": attempts,
+        "live_verified_evidence_count": len(live_records),
+        "live_verified_evidence_counts_by_entity": _entity_counts(live_records),
+        "live_verified_evidence_records": live_records,
+        "retained_evidence_count": len(retained_records),
+        "retained_evidence_counts_by_entity": _entity_counts(retained_records),
+        "retained_evidence_records": retained_records,
+        "evidence_summary_record_count": len(evidence_summary_records),
+        "evidence_summary_record_counts_by_entity": _entity_counts(
+            evidence_summary_records
+        ),
+        "evidence_summary_records": evidence_summary_records,
+        "flow_step_evidence_record_count": len(flow_step_records),
+        "flow_step_evidence_record_counts_by_entity": _entity_counts(
+            flow_step_records
+        ),
+        "flow_step_evidence_records": flow_step_records,
+        "unretained_live_evidence_count": len(unretained_live_records),
+        "unretained_live_evidence_counts_by_entity": _entity_counts(
+            unretained_live_records
+        ),
+        "unretained_live_evidence_records": unretained_live_records,
+    }
+
+
 def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
     events = flow_result.get("events") or []
     event_types = flow_result.get("event_types") or []
     run_finished = flow_result.get("run_finished") or {}
     flow_finished = flow_result.get("flow_finished") or {}
+    specialist_summaries = [
+        event.get("details") or {}
+        for event in events
+        if event.get("type") == "SPECIALIST_SUMMARY"
+        and isinstance(event.get("details"), dict)
+    ]
+    flow_step_timings = [
+        event.get("details") or {}
+        for event in events
+        if event.get("type") == "FLOW_STEP_TIMING"
+        and isinstance(event.get("details"), dict)
+    ]
+    flow_validation_group_timings = [
+        event.get("details") or {}
+        for event in events
+        if event.get("type") == "FLOW_VALIDATION_GROUP_TIMING"
+        and isinstance(event.get("details"), dict)
+    ]
+    evidence_summary_events = [
+        event
+        for event in events
+        if event.get("type") == "evidence_summary"
+        and isinstance(event, dict)
+    ]
+    validator_batch_timing_events = [
+        event.get("details") or {}
+        for event in events
+        if (event.get("details") or {}).get("toolName")
+        == "dispatch_active_validator_batch"
+        and isinstance(event.get("details"), dict)
+    ]
     return {
         "event_types": event_types,
         "flow_run_id": flow_result.get("flow_run_id"),
@@ -385,11 +687,25 @@ def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
         "run_finished_keys": sorted(run_finished.keys()),
         "flow_finished": flow_finished,
         "flow_step_evidence_events": flow_result.get("flow_step_evidence_events") or [],
+        "specialist_summaries": specialist_summaries,
+        "flow_step_timings": flow_step_timings,
+        "flow_validation_group_timings": flow_validation_group_timings,
+        "evidence_summary_events": evidence_summary_events,
+        "evidence_usage_audit": _evidence_usage_audit(
+            specialist_summaries=specialist_summaries,
+            evidence_summary_events=evidence_summary_events,
+            flow_step_evidence_events=flow_result.get("flow_step_evidence_events") or [],
+        ),
+        "validator_batch_timing_events": validator_batch_timing_events,
         "domain_events": [
             event
             for event in events
             if str(event.get("type", "")).startswith("DOMAIN_")
             or "VALIDATOR" in str(event.get("type", ""))
+            or str(event.get("type", "")) == "evidence_summary"
+            or str(event.get("type", "")) == "FLOW_STEP_TIMING"
+            or str(event.get("type", "")) == "FLOW_VALIDATION_GROUP_TIMING"
+            or str(event.get("type", "")) == "SPECIALIST_SUMMARY"
             or "validation" in json.dumps(event, sort_keys=True).lower()
             or "lookup_attempt" in json.dumps(event, sort_keys=True).lower()
             or str(((event.get("details") or {}).get("toolName") or "")) == "domain_validator_lookup"
@@ -534,6 +850,58 @@ def _flow_event_timing_summary(
         _event_elapsed_seconds(run_started, flow_finished)
         or _event_elapsed_seconds(run_started, run_finished)
     )
+    specialist_summaries = [
+        event.get("details") or {}
+        for event in events
+        if event.get("type") == "SPECIALIST_SUMMARY"
+        and isinstance(event.get("details"), dict)
+    ]
+    specialist_phase_totals_ms: dict[str, int] = {}
+    for summary in specialist_summaries:
+        phase_timings = summary.get("phaseTimingsMs")
+        if not isinstance(phase_timings, dict):
+            continue
+        for phase_name, value in phase_timings.items():
+            try:
+                specialist_phase_totals_ms[str(phase_name)] = (
+                    specialist_phase_totals_ms.get(str(phase_name), 0)
+                    + int(value or 0)
+                )
+            except (TypeError, ValueError):
+                continue
+    flow_step_timings = [
+        event.get("details") or {}
+        for event in events
+        if event.get("type") == "FLOW_STEP_TIMING"
+        and isinstance(event.get("details"), dict)
+    ]
+    flow_validation_group_timings = [
+        event.get("details") or {}
+        for event in events
+        if event.get("type") == "FLOW_VALIDATION_GROUP_TIMING"
+        and isinstance(event.get("details"), dict)
+    ]
+    flow_validation_group_phase_totals_ms: dict[str, int] = {}
+    for detail in flow_validation_group_timings:
+        phase_timings = detail.get("phaseTimingsMs")
+        if not isinstance(phase_timings, dict):
+            continue
+        for phase_name, value in phase_timings.items():
+            try:
+                flow_validation_group_phase_totals_ms[str(phase_name)] = (
+                    flow_validation_group_phase_totals_ms.get(str(phase_name), 0)
+                    + int(value or 0)
+                )
+            except (TypeError, ValueError):
+                continue
+    validator_batch_details = [
+        event.get("details") or {}
+        for event in events
+        if (event.get("details") or {}).get("toolName")
+        == "dispatch_active_validator_batch"
+        and event.get("type") == "TOOL_COMPLETE"
+        and isinstance(event.get("details"), dict)
+    ]
     return {
         "flow_execution_duration_seconds": (
             event_duration
@@ -547,6 +915,80 @@ def _flow_event_timing_summary(
         "active_validator_dispatch_duration_seconds": (
             _active_validator_dispatch_duration_seconds(events)
         ),
+        "specialist_total_duration_seconds": round(
+            sum(int(summary.get("totalDurationMs") or 0) for summary in specialist_summaries)
+            / 1000,
+            3,
+        ),
+        "specialist_stream_duration_seconds": round(
+            sum(int(summary.get("streamDurationMs") or 0) for summary in specialist_summaries)
+            / 1000,
+            3,
+        ),
+        "specialist_phase_totals_seconds": {
+            key: round(value / 1000, 3)
+            for key, value in sorted(specialist_phase_totals_ms.items())
+        },
+        "flow_step_timing_seconds": [
+            {
+                "step": detail.get("step"),
+                "tool_name": detail.get("toolName"),
+                "total_duration_seconds": round(
+                    int(detail.get("totalDurationMs") or 0) / 1000,
+                    3,
+                ),
+                "phase_timings_seconds": {
+                    key: round(int(value or 0) / 1000, 3)
+                    for key, value in (
+                        (detail.get("phaseTimingsMs") or {}).items()
+                        if isinstance(detail.get("phaseTimingsMs"), dict)
+                        else []
+                    )
+                },
+            }
+            for detail in flow_step_timings
+        ],
+        "flow_validation_group_timing_seconds": [
+            {
+                "status": detail.get("status"),
+                "total_duration_seconds": round(
+                    int(detail.get("totalDurationMs") or 0) / 1000,
+                    3,
+                ),
+                "phase_timings_seconds": {
+                    key: round(int(value or 0) / 1000, 3)
+                    for key, value in (
+                        (detail.get("phaseTimingsMs") or {}).items()
+                        if isinstance(detail.get("phaseTimingsMs"), dict)
+                        else []
+                    )
+                },
+                "group_count": detail.get("groupCount"),
+                "executable_group_count": detail.get("executableGroupCount"),
+                "materialization_input_count": detail.get("materializationInputCount"),
+                "selector_finding_count": detail.get("selectorFindingCount"),
+                "appended_finding_count": detail.get("appendedFindingCount"),
+            }
+            for detail in flow_validation_group_timings
+        ],
+        "flow_validation_group_phase_totals_seconds": {
+            key: round(value / 1000, 3)
+            for key, value in sorted(flow_validation_group_phase_totals_ms.items())
+        },
+        "validator_batch_timing_seconds": [
+            {
+                "validator_binding_id": detail.get("validatorBindingId"),
+                "request_count": detail.get("validatorBatchRequestCount"),
+                "duration_seconds": detail.get("validatorBatchDurationSeconds"),
+                "runner_duration_seconds": detail.get(
+                    "validatorBatchRunnerDurationSeconds"
+                ),
+                "output_validation_duration_seconds": detail.get(
+                    "validatorBatchOutputValidationDurationSeconds"
+                ),
+            }
+            for detail in validator_batch_details
+        ],
     }
 
 
@@ -756,6 +1198,17 @@ def _annotate_note_with_flow_result(
     note["active_validator_dispatch_duration_seconds"] = flow_timing.get(
         "active_validator_dispatch_duration_seconds"
     )
+    for key in (
+        "specialist_total_duration_seconds",
+        "specialist_stream_duration_seconds",
+        "specialist_phase_totals_seconds",
+        "flow_step_timing_seconds",
+        "flow_validation_group_timing_seconds",
+        "flow_validation_group_phase_totals_seconds",
+        "validator_batch_timing_seconds",
+    ):
+        if key in flow_timing:
+            note[key] = flow_timing[key]
     for key in (
         "validator_event_count",
         "validator_lookup_event_count",

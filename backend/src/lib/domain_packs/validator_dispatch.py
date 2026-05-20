@@ -553,15 +553,26 @@ def _run_validator_job_batch(
         phase="start",
         summary=summary,
     )
+    runner_duration_seconds = 0.0
+    output_validation_duration_seconds = 0.0
+    runner_started_at = time.monotonic()
     try:
         raw_output = batch_runner(jobs, binding=binding)
+        runner_duration_seconds = time.monotonic() - runner_started_at
+        validation_started_at = time.monotonic()
         validator_results = _validated_results_from_agent_batch_output(
             raw_output,
             jobs=jobs,
         )
+        output_validation_duration_seconds = time.monotonic() - validation_started_at
         summary = {
             **summary,
             "duration_seconds": round(time.monotonic() - started_at, 3),
+            "runner_duration_seconds": round(runner_duration_seconds, 3),
+            "output_validation_duration_seconds": round(
+                output_validation_duration_seconds,
+                3,
+            ),
             "status": "completed",
             "resolved_count": sum(
                 1 for result in validator_results if result.status == "resolved"
@@ -577,6 +588,8 @@ def _run_validator_job_batch(
         )
         return validator_results, summary
     except Exception as exc:
+        if runner_duration_seconds == 0.0:
+            runner_duration_seconds = time.monotonic() - runner_started_at
         LOGGER.warning(
             "Package-scoped validator batch failed for binding %s request(s) %s",
             binding.binding_id,
@@ -597,6 +610,11 @@ def _run_validator_job_batch(
         summary = {
             **summary,
             "duration_seconds": round(time.monotonic() - started_at, 3),
+            "runner_duration_seconds": round(runner_duration_seconds, 3),
+            "output_validation_duration_seconds": round(
+                output_validation_duration_seconds,
+                3,
+            ),
             "status": "error",
             "error": str(exc),
             "resolved_count": 0,
@@ -617,10 +635,22 @@ def _run_single_validator_job(
 ) -> DomainValidatorResultBase:
     request = job.request
     try:
+        runner_started_at = time.monotonic()
         raw_output = agent_runner(request, binding=job.match.binding)
+        runner_duration_seconds = time.monotonic() - runner_started_at
+        validation_started_at = time.monotonic()
         validator_result = _validated_result_from_agent_output(
             raw_output,
             request=request,
+        )
+        output_validation_duration_seconds = time.monotonic() - validation_started_at
+        LOGGER.info(
+            "Package-scoped validator agent completed for binding %s request %s "
+            "in %.3fs (output validation %.3fs)",
+            request.validator_binding_id,
+            request.request_id,
+            runner_duration_seconds,
+            output_validation_duration_seconds,
         )
     except Exception as exc:
         LOGGER.warning(
@@ -746,7 +776,32 @@ def run_package_scoped_validator_agent(
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
             run_kwargs["max_turns"] = binding.max_tool_calls
-        return Runner.run_sync(agent, **run_kwargs)
+        run_started_at = time.monotonic()
+        try:
+            result = Runner.run_sync(agent, **run_kwargs)
+        except Exception:
+            LOGGER.warning(
+                "Package-scoped validator Runner.run_sync failed for %s:%s "
+                "binding %s request %s after %.3fs",
+                request.validator_agent.package_id,
+                request.validator_agent.agent_id,
+                request.validator_binding_id,
+                request.request_id,
+                time.monotonic() - run_started_at,
+                exc_info=True,
+            )
+            raise
+        LOGGER.info(
+            "Package-scoped validator Runner.run_sync completed for %s:%s "
+            "binding %s request %s in %.3fs (payload_bytes=%s)",
+            request.validator_agent.package_id,
+            request.validator_agent.agent_id,
+            request.validator_binding_id,
+            request.request_id,
+            time.monotonic() - run_started_at,
+            len(payload),
+        )
+        return result
     raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
 
 
@@ -802,8 +857,11 @@ def run_package_scoped_validator_agent_batch(
                 "JSON object with a results array containing exactly one "
                 "DomainValidatorResultBase-compatible result per request_id. "
                 "Copy dispatcher-owned identity fields from each request. Use "
-                "bulk lookup methods when more than one request can share a "
-                "validator-owned lookup."
+                "one bulk lookup tool call per compatible shared lookup group "
+                "when a bulk method exists, using list inputs such as "
+                "gene_symbols or allele_symbols. Map the returned items back to "
+                "their request_ids, and do not loop one lookup call per request "
+                "when one shared bulk call can answer the group."
             ),
             "requests": [
                 job.request.model_dump(mode="json")
@@ -816,7 +874,32 @@ def run_package_scoped_validator_agent_batch(
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
             run_kwargs["max_turns"] = max(binding.max_tool_calls, len(jobs) + 1)
-        return Runner.run_sync(agent, **run_kwargs)
+        run_started_at = time.monotonic()
+        try:
+            result = Runner.run_sync(agent, **run_kwargs)
+        except Exception:
+            LOGGER.warning(
+                "Package-scoped validator batch Runner.run_sync failed for %s:%s "
+                "binding %s request_count=%s after %.3fs",
+                representative_request.validator_agent.package_id,
+                representative_request.validator_agent.agent_id,
+                representative_request.validator_binding_id,
+                len(jobs),
+                time.monotonic() - run_started_at,
+                exc_info=True,
+            )
+            raise
+        LOGGER.info(
+            "Package-scoped validator batch Runner.run_sync completed for %s:%s "
+            "binding %s request_count=%s in %.3fs (payload_bytes=%s)",
+            representative_request.validator_agent.package_id,
+            representative_request.validator_agent.agent_id,
+            representative_request.validator_binding_id,
+            len(jobs),
+            time.monotonic() - run_started_at,
+            len(payload),
+        )
+        return result
     raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
 
 

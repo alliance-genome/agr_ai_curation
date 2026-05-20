@@ -14,13 +14,21 @@ Langfuse Integration:
 import asyncio
 import json
 import logging
+import os
 import time
 import uuid
 from collections import deque
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, AsyncGenerator, Dict, Any, Optional, List
 
-from agents import Agent, Runner, RunConfig, set_default_openai_client, set_default_openai_api
+from agents import (
+    Agent,
+    Runner,
+    RunConfig,
+    set_default_openai_api,
+    set_default_openai_client,
+    set_default_openai_responses_transport,
+)
 from agents.models.openai_provider import OpenAIProvider
 from openai.types.responses import (
     ResponseTextDeltaEvent,
@@ -101,6 +109,22 @@ _CONTEXT_MESSAGE_ROLE_ALIASES = {
 _VALID_CONTEXT_MESSAGE_ROLES = {"assistant", "developer", "system", "user"}
 
 
+def _env_flag_disabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"0", "false", "no", "off"}
+
+
+def _openai_responses_websocket_enabled(provider: Any) -> bool:
+    """Return whether OpenAI Responses WebSocket transport should be enabled."""
+
+    if _env_flag_disabled("OPENAI_RESPONSES_WEBSOCKET_ENABLED"):
+        return False
+    if str(getattr(provider, "api_mode", "")).strip().lower() != "responses":
+        return False
+    if str(getattr(provider, "driver", "openai_native")).strip().lower() != "openai_native":
+        return False
+    return True
+
+
 def _configure_api_mode():
     """Configure OpenAI SDK API mode based on default runner provider."""
     provider = get_default_runner_provider()
@@ -108,10 +132,14 @@ def _configure_api_mode():
         set_default_openai_api("chat_completions")
     else:
         set_default_openai_api("responses")
+
+    websocket_enabled = _openai_responses_websocket_enabled(provider)
+    set_default_openai_responses_transport("websocket" if websocket_enabled else "http")
     logger.info(
-        "Using %s API mode for default runner provider=%s",
+        "Using %s API mode for default runner provider=%s (responses_transport=%s)",
         provider.api_mode,
         provider.provider_id,
+        "websocket" if websocket_enabled else "http",
     )
 
 
@@ -131,6 +159,9 @@ def _create_openai_client_kwargs() -> dict:
         kwargs["api_key"] = api_key
     if base_url:
         kwargs["base_url"] = base_url
+    websocket_base_url = os.getenv("OPENAI_WEBSOCKET_BASE_URL", "").strip()
+    if websocket_base_url:
+        kwargs["websocket_base_url"] = websocket_base_url
 
     logger.info(
         "Using provider=%s base_url=%s",

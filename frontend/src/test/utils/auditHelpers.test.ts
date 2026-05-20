@@ -112,6 +112,8 @@ describe('parseSSEEvent (T012)', () => {
       'SUPERVISOR_COMPLETE',
       'SUPERVISOR_ERROR',
       'FLOW_STEP_EVIDENCE',
+      'FLOW_STEP_TIMING',
+      'FLOW_VALIDATION_GROUP_TIMING',
     ]
 
     eventTypes.forEach(type => {
@@ -395,6 +397,14 @@ describe('getEventPrefix (T014)', () => {
     expect(getEventPrefix('FLOW_STEP_EVIDENCE')).toBe('[EVIDENCE]')
   })
 
+  it('returns [TIMING] for flow step timing events', () => {
+    expect(getEventPrefix('FLOW_STEP_TIMING')).toBe('[TIMING]')
+  })
+
+  it('returns [TIMING] for flow validation group timing events', () => {
+    expect(getEventPrefix('FLOW_VALIDATION_GROUP_TIMING')).toBe('[TIMING]')
+  })
+
   it('handles all event types', () => {
     const eventTypes: AuditEventType[] = [
       'SUPERVISOR_START',
@@ -420,6 +430,8 @@ describe('getEventPrefix (T014)', () => {
       'DOMAIN_CATEGORY_ERROR',
       'DOMAIN_SKIPPED',
       'FLOW_STEP_EVIDENCE',
+      'FLOW_STEP_TIMING',
+      'FLOW_VALIDATION_GROUP_TIMING',
       'FILE_READY',
     ]
 
@@ -447,6 +459,8 @@ describe('getEventPrefix (T014)', () => {
       'DOMAIN_CATEGORY_ERROR': '[DOMAIN ERROR]',
       'DOMAIN_SKIPPED': '[DOMAIN]',
       'FLOW_STEP_EVIDENCE': '[EVIDENCE]',
+      'FLOW_STEP_TIMING': '[TIMING]',
+      'FLOW_VALIDATION_GROUP_TIMING': '[TIMING]',
       'FILE_READY': '[FILE]',
     }
 
@@ -513,6 +527,63 @@ describe('getEventLabel (T015)', () => {
 
     expect(getEventLabel(event)).toBe(
       'Flow step 2 captured 2 evidence quotes (5 total so far) from Gene Agent via ask_gene_specialist'
+    )
+  })
+
+  it('formats FLOW_STEP_TIMING with runtime phase context', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'FLOW_STEP_TIMING',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        flowId: 'flow-1',
+        flowName: 'Flow 1',
+        flowRunId: 'run-1',
+        step: 1,
+        toolName: 'ask_gene_specialist',
+        agentId: 'gene-agent',
+        agentName: 'Gene Agent',
+        totalDurationMs: 1234,
+        phaseTimingsMs: {
+          specialist_tool_invoke_ms: 1000,
+          validation_groups_ms: 200,
+        },
+        usedInternalExtractionPayload: true,
+        candidateBuilt: true,
+        evidenceCount: 2,
+      },
+    }
+
+    expect(getEventLabel(event)).toBe(
+      'Flow step 1 timing for Gene Agent: total 1.2s, specialist 1.0s, validation 200ms'
+    )
+  })
+
+  it('formats FLOW_VALIDATION_GROUP_TIMING with runtime phase context', () => {
+    const event: AuditEvent = {
+      id: '123',
+      type: 'FLOW_VALIDATION_GROUP_TIMING',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        flowId: 'flow-1',
+        flowName: 'Flow 1',
+        flowRunId: 'run-1',
+        status: 'success',
+        totalDurationMs: 13378,
+        executableGroupCount: 1,
+        phaseTimingsMs: {
+          collect_materialization_inputs_ms: 12000,
+          persist_candidates_ms: 500,
+          materialize_validator_results_ms: 700,
+          checkpoint_write_ms: 100,
+        },
+      },
+    }
+
+    expect(getEventLabel(event)).toBe(
+      'Flow validation group timing (1 executable): total 13.4s, collect 12.0s, persist 500ms, materialize 700ms, checkpoint 100ms'
     )
   })
 
@@ -1000,6 +1071,8 @@ describe('getEventSeverity (T016)', () => {
       'DOMAIN_CATEGORY_ERROR': 'error',
       'DOMAIN_SKIPPED': 'info',
       'FLOW_STEP_EVIDENCE': 'info',
+      'FLOW_STEP_TIMING': 'info',
+      'FLOW_VALIDATION_GROUP_TIMING': 'info',
       'FILE_READY': 'success',
     }
 

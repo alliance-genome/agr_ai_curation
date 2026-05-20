@@ -1154,6 +1154,97 @@ class TestGetAllAgentToolsStepOrderRuntime:
 
     @patch("src.lib.flows.executor._create_streaming_tool")
     @patch("src.lib.flows.executor.get_agent_by_id")
+    def test_flow_step_uses_internal_extraction_payload_when_return_is_compact(
+        self, mock_get_agent, mock_streaming, monkeypatch
+    ):
+        """Compact supervisor output must not hide the full envelope from flow state."""
+        executor = _executor_module()
+        from src.lib.openai_agents.streaming_tools import (
+            add_specialist_event,
+            clear_collected_events,
+            get_collected_events,
+        )
+
+        mock_get_agent.return_value = MagicMock(spec=Agent, instructions="Base")
+        evidence_record = _make_evidence_record(
+            "TP53",
+            verified_quote="TP53 expression increased.",
+            chunk_id="chunk-tp53",
+        )
+        payload = _structured_step_output(
+            "TP53",
+            evidence_records=[evidence_record],
+        )
+        validation_candidates = []
+
+        def _make_streaming_tool(agent, tool_name, tool_description, specialist_name):
+            @function_tool(name_override=tool_name, description_override=tool_description)
+            async def _tool(query: str) -> str:
+                add_specialist_event({
+                    "type": executor.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+                    "details": {
+                        "toolName": tool_name,
+                        "friendlyName": f"{specialist_name}: Internal Extraction Result",
+                        "success": True,
+                    },
+                    "internal": {
+                        "tool_output": json.dumps(payload),
+                        "output_length": len(json.dumps(payload)),
+                    },
+                })
+                return "Validated domain envelope result for gene."
+
+            return _tool
+
+        async def _fake_validation_groups(**kwargs):
+            validation_candidates.append(kwargs["candidate"])
+            return {"validation_group_results": {"groups": []}}
+
+        mock_streaming.side_effect = _make_streaming_tool
+        monkeypatch.setattr(
+            executor,
+            "_execute_validation_groups_for_step",
+            _fake_validation_groups,
+        )
+
+        flow = _make_flow([
+            _agent_node("n1", "gene", output_key="gene_output"),
+        ])
+
+        clear_collected_events()
+        try:
+            tools, _, _, execution_state = get_all_agent_tools(
+                flow,
+                include_unavailable=True,
+            )
+            tool_ctx = SimpleNamespace(tool_name="flow_step_tool")
+            result = asyncio.run(
+                tools[0].on_invoke_tool(tool_ctx, json.dumps({"query": "extract"}))
+            )
+            collected_events = list(get_collected_events())
+        finally:
+            clear_collected_events()
+
+        assert result == "Validated domain envelope result for gene."
+        assert len(validation_candidates) == 1
+        assert validation_candidates[0] is not None
+        assert validation_candidates[0].payload_json["items"][0]["label"] == "TP53"
+        completed_step = execution_state["completed_steps"][0]
+        assert completed_step["candidate"].payload_json["items"][0]["label"] == "TP53"
+        assert completed_step["evidence_count"] == 1
+        assert completed_step["evidence_records"][0]["entity"] == "TP53"
+        assert execution_state["template_variables"]["gene_output"] != result
+        assert "TP53" in execution_state["template_variables"]["gene_output"]
+        timing_event = next(
+            event for event in collected_events if event.get("type") == "FLOW_STEP_TIMING"
+        )
+        assert timing_event["details"]["toolName"] == "ask_gene_specialist"
+        assert timing_event["details"]["usedInternalExtractionPayload"] is True
+        assert timing_event["details"]["candidateBuilt"] is True
+        assert "specialist_tool_invoke_ms" in timing_event["details"]["phaseTimingsMs"]
+
+    @patch("src.lib.flows.executor._create_streaming_tool")
+    @patch("src.lib.flows.executor.get_agent_by_id")
     def test_non_custom_input_source_preserves_supervisor_query(
         self, mock_get_agent, mock_streaming
     ):
@@ -1682,6 +1773,123 @@ class TestGetAllAgentToolsStepOrderRuntime:
                         status=ValidationFindingStatus.RESOLVED,
                         code="domain_pack.validator_resolved",
                         message="Already resolved.",
+                        details={
+                            "validation_metadata": {
+                                "validator_binding_id": binding.binding_id,
+                                "target": match.target_details(),
+                            }
+                        },
+                    )
+                ]
+            }
+        )
+
+        class _Registry:
+            def match_bindings(self, _envelope, *, states):
+                assert states == [ValidationBindingState.ACTIVE]
+                return (match,)
+
+        def _unexpected_package_validator(*_args, **_kwargs):
+            raise AssertionError("package validator should not rerun")
+
+        monkeypatch.setattr(
+            executor,
+            "run_package_scoped_validator_agent",
+            _unexpected_package_validator,
+        )
+
+        materialization_inputs, selector_findings, metadata = asyncio.run(
+            executor._collect_flow_validator_materialization_inputs(
+                source_envelope=envelope,
+                source_envelope_revision=7,
+                registry=_Registry(),
+                groups=[
+                    {
+                        "group_id": "automatic-lookup",
+                        "state": "automatic",
+                        "binding_id": "fixture.identifier_lookup",
+                    }
+                ],
+                flow=_make_flow([]),
+                agent_context={"user_id": "curator-1"},
+            )
+        )
+
+        assert materialization_inputs == []
+        assert selector_findings == []
+        assert metadata == [
+            {
+                "group_id": "automatic-lookup",
+                "state": "automatic",
+                "validator_binding_id": "fixture.identifier_lookup",
+                "status": "already_validated",
+            }
+        ]
+
+    def test_automatic_validation_group_reuses_existing_unresolved_finding(
+        self, monkeypatch
+    ):
+        """Flow validation should not rerun failed active validator attempts."""
+        executor = _executor_module()
+        from src.lib.domain_packs.validation_registry import (
+            ValidationBindingState,
+            ValidatorAgentRef as RegistryValidatorAgentRef,
+            ValidatorBinding,
+            ValidatorBindingMatch,
+        )
+        from src.schemas.domain_envelope import (
+            CuratableObjectEnvelope,
+            DomainEnvelope,
+            ValidationFinding,
+            ValidationFindingSeverity,
+            ValidationFindingStatus,
+        )
+        from src.schemas.domain_pack_metadata import DomainPackInputSelector
+
+        envelope = DomainEnvelope(
+            envelope_id="env-already-attempted",
+            domain_pack_id="fixture.validation",
+            objects=[
+                CuratableObjectEnvelope(
+                    object_type="GeneAssertion",
+                    pending_ref_id="object-1",
+                    payload={"gene": {"identifier": "AGR:missing"}},
+                )
+            ],
+        )
+        binding = ValidatorBinding(
+            binding_id="fixture.identifier_lookup",
+            state=ValidationBindingState.ACTIVE,
+            source_scope="field",
+            source_object_type="GeneAssertion",
+            source_field_path="gene.identifier",
+            validator_agent=RegistryValidatorAgentRef(
+                package_id="fixture.validators",
+                agent_id="package_agent",
+            ),
+            object_types=("GeneAssertion",),
+            field_paths=("gene.identifier",),
+            input_fields={
+                "identifier": DomainPackInputSelector(
+                    source="payload",
+                    path="gene.identifier",
+                )
+            },
+            expected_result_fields={"identifier": "gene.identifier"},
+        )
+        match = ValidatorBindingMatch(
+            binding=binding,
+            envelope=envelope,
+            object_envelope=envelope.objects[0],
+        )
+        envelope = envelope.model_copy(
+            update={
+                "validation_findings": [
+                    ValidationFinding(
+                        severity=ValidationFindingSeverity.WARNING,
+                        status=ValidationFindingStatus.OPEN,
+                        code="domain_pack.validator_unresolved",
+                        message="Already attempted and unresolved.",
                         details={
                             "validation_metadata": {
                                 "validator_binding_id": binding.binding_id,

@@ -19,6 +19,7 @@ import importlib
 import json
 import logging
 import re
+import time
 import uuid
 from collections import deque
 from contextvars import ContextVar
@@ -95,6 +96,51 @@ _DOMAIN_ENVELOPE_SUPERVISOR_FIELD_SKIP = {
     "taxon_hint",
     "verified_quote",
 }
+
+
+def _elapsed_ms(started_at: float) -> int:
+    """Return elapsed monotonic time in milliseconds."""
+
+    return int((time.monotonic() - started_at) * 1000)
+
+
+def _tool_output_summary(tool_name: str, output: Any) -> Optional[Dict[str, Any]]:
+    """Return a compact, artifact-safe summary of a tool output payload."""
+
+    payload = coerce_tool_event_dict(output)
+    if not isinstance(payload, dict):
+        return None
+
+    if tool_name != "record_evidence":
+        return None
+
+    summary_fields = (
+        "status",
+        "entity",
+        "chunk_id",
+        "claimed_quote",
+        "verified_quote",
+        "evidence_record_id",
+        "page",
+        "section",
+        "subsection",
+        "figure_reference",
+        "message",
+        "retry_instructions",
+        "unverified_attempts",
+        "max_unverified_attempts",
+        "retry_exhausted",
+        "terminal",
+    )
+    summary: Dict[str, Any] = {}
+    for field_name in summary_fields:
+        if field_name not in payload:
+            continue
+        value = payload.get(field_name)
+        if isinstance(value, str) and len(value) > 1000:
+            value = f"{value[:1000]}..."
+        summary[field_name] = value
+    return summary
 
 
 def _is_domain_envelope_extraction_output_type(output_type: Any) -> bool:
@@ -1268,6 +1314,9 @@ async def _dispatch_domain_envelope_validators_for_chat(
             ),
         )
 
+    dispatch_wall_started_at = time.monotonic()
+    dispatch_phase_timings_ms: Dict[str, int] = {}
+
     try:
         from src.lib.curation_workspace.curation_prep_service import (
             _domain_envelope_from_extraction_result,
@@ -1297,10 +1346,14 @@ async def _dispatch_domain_envelope_validators_for_chat(
             message=f"Domain-envelope validator dispatch is unavailable: {exc}",
         ) from exc
 
+    candidate_started_at = time.monotonic()
     candidate = build_extraction_envelope_candidate(
         final_output,
         agent_key=agent_key,
         conversation_summary=f"{specialist_name} chat extraction",
+    )
+    dispatch_phase_timings_ms["candidate_build_ms"] = _elapsed_ms(
+        candidate_started_at
     )
     if candidate is None:
         raise SpecialistOutputError(
@@ -1313,6 +1366,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         )
 
     try:
+        envelope_started_at = time.monotonic()
         extraction_record = CurationExtractionResultRecord(
             extraction_result_id=f"chat-runtime:{uuid.uuid4()}",
             document_id="chat-runtime",
@@ -1327,6 +1381,9 @@ async def _dispatch_domain_envelope_validators_for_chat(
         )
         envelope = _domain_envelope_from_extraction_result(extraction_record)
         domain_pack = resolve_curation_domain_pack_by_id(envelope.domain_pack_id)
+        dispatch_phase_timings_ms["envelope_materialization_ms"] = _elapsed_ms(
+            envelope_started_at
+        )
         if domain_pack is None:
             error_message = (
                 "Domain-envelope validator dispatch could not resolve domain pack "
@@ -1350,6 +1407,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
                     "domain_pack_id": envelope.domain_pack_id,
                     "object_count": len(envelope.objects),
                 },
+                "phaseTimingsMs": dict(dispatch_phase_timings_ms),
                 "isSpecialistInternal": True,
             },
         })
@@ -1388,17 +1446,27 @@ async def _dispatch_domain_envelope_validators_for_chat(
                     "validatorBatchRequestCount": request_count,
                     "validatorBatchRequestIds": event.get("request_ids") or [],
                     "validatorBatchDurationSeconds": event.get("duration_seconds"),
+                    "validatorBatchRunnerDurationSeconds": event.get(
+                        "runner_duration_seconds"
+                    ),
+                    "validatorBatchOutputValidationDurationSeconds": event.get(
+                        "output_validation_duration_seconds"
+                    ),
                     "validatorBatchResolvedCount": event.get("resolved_count"),
                     "validatorBatchUnresolvedCount": event.get("unresolved_count"),
                 },
             })
 
+        core_dispatch_started_at = time.monotonic()
         dispatch_result = await asyncio.to_thread(
             dispatch_active_validator_bindings,
             envelope,
             domain_pack,
             event_emitter=_emit_validator_dispatch_event,
             source_envelope_revision=1,
+        )
+        dispatch_phase_timings_ms["core_dispatch_ms"] = _elapsed_ms(
+            core_dispatch_started_at
         )
 
         has_validator_error = _validator_dispatch_has_error_result(dispatch_result)
@@ -1429,6 +1497,12 @@ async def _dispatch_domain_envelope_validators_for_chat(
                     getattr(dispatch_result, "validator_batch_groups", ())
                 ),
                 "appendedFindingCount": len(dispatch_result.appended_findings),
+                "durationMs": _elapsed_ms(dispatch_wall_started_at),
+                "durationSeconds": round(
+                    _elapsed_ms(dispatch_wall_started_at) / 1000,
+                    3,
+                ),
+                "phaseTimingsMs": dict(dispatch_phase_timings_ms),
             },
         })
         _emit_validator_lookup_audit_events(
@@ -1450,7 +1524,12 @@ async def _dispatch_domain_envelope_validators_for_chat(
                 "operation": "chat_domain_envelope_validation",
             },
         )
-        return json.dumps(dispatch_result.envelope.model_dump(mode="json"))
+        serialization_started_at = time.monotonic()
+        serialized_envelope = json.dumps(dispatch_result.envelope.model_dump(mode="json"))
+        dispatch_phase_timings_ms["result_serialization_ms"] = _elapsed_ms(
+            serialization_started_at
+        )
+        return serialized_envelope
     except Exception as exc:
         logger.warning(
             "Domain-envelope chat validation failed for %s: %s",
@@ -1667,6 +1746,7 @@ class SpecialistToolCall:
     tool_name: str
     tool_args: Optional[Dict[str, Any]] = None
     output_preview: Optional[str] = None
+    output_summary: Optional[Dict[str, Any]] = None
     duration_ms: Optional[int] = None
 
 
@@ -1847,6 +1927,8 @@ async def run_specialist_with_events(
         The specialist's final output as a string
     """
     start_time = datetime.now(timezone.utc)
+    wall_started_at = time.monotonic()
+    phase_timings_ms: Dict[str, int] = {}
     tool_calls: List[SpecialistToolCall] = []
     live_evidence_records: List[Dict[str, Any]] = []
     pending_tool_calls: "deque[Dict[str, Any]]" = deque()
@@ -1943,12 +2025,14 @@ async def run_specialist_with_events(
     )
 
     # Run with streaming to capture internal events
+    runner_create_started_at = time.monotonic()
     result = Runner.run_streamed(
         runtime_agent,
         input=input_text,
         max_turns=max_turns,
         run_config=effective_config
     )
+    phase_timings_ms["runner_create_ms"] = _elapsed_ms(runner_create_started_at)
 
     # Event tracking for debugging
     total_event_count = 0
@@ -1956,6 +2040,7 @@ async def run_specialist_with_events(
     is_generating = False  # Track if we've emitted AGENT_GENERATING
     stream_recovered_final_output = ""
 
+    stream_consume_started_at = time.monotonic()
     try:
         async for event in result.stream_events():
             total_event_count += 1
@@ -2301,8 +2386,10 @@ async def run_specialist_with_events(
 
                         # Update the last tool call with output info
                         tool_index = completed_tool.get("tool_index")
+                        output_summary = _tool_output_summary(current_tool_name, output)
                         if isinstance(tool_index, int) and 0 <= tool_index < len(tool_calls):
                             tool_calls[tool_index].output_preview = output_preview
+                            tool_calls[tool_index].output_summary = output_summary
                             tool_calls[tool_index].duration_ms = duration_ms
 
                         evidence_record = build_record_evidence_summary_record(
@@ -2378,8 +2465,14 @@ async def run_specialist_with_events(
             total_event_count,
             event_type_counts,
         )
+        phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
+            stream_consume_started_at
+        )
 
     except Exception as e:
+        phase_timings_ms["stream_consume_ms"] = _elapsed_ms(
+            stream_consume_started_at
+        )
         if type(e).__name__ == "MaxTurnsExceeded":
             error_message = (
                 f"{specialist_name} reached max turns ({max_turns}) after "
@@ -2416,10 +2509,10 @@ async def run_specialist_with_events(
             # Re-raise to propagate unrecoverable stream errors.
             raise
 
-    # Calculate total duration
-    total_duration = datetime.now(timezone.utc) - start_time
-    total_duration_ms = int(total_duration.total_seconds() * 1000)
+    stream_duration = datetime.now(timezone.utc) - start_time
+    stream_duration_ms = int(stream_duration.total_seconds() * 1000)
 
+    post_stream_started_at = time.monotonic()
     required_tool_error = _required_tool_failure_message(
         agent=runtime_agent,
         specialist_name=specialist_name,
@@ -2446,7 +2539,7 @@ async def run_specialist_with_events(
         raise SpecialistOutputError(
             specialist_name=specialist_name,
             output_type_name=output_type_name,
-            message=required_tool_error,
+                message=required_tool_error,
         )
 
     # Get final output - handle both structured and string outputs
@@ -2898,6 +2991,9 @@ async def run_specialist_with_events(
                 )
             )
 
+    phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
+
+    evidence_summary_started_at = time.monotonic()
     _emit_specialist_evidence_summary_or_raise(
         specialist_name=specialist_name,
         tool_name=tool_name,
@@ -2905,14 +3001,25 @@ async def run_specialist_with_events(
         final_output=final_output,
         live_evidence_records=live_evidence_records,
     )
+    phase_timings_ms["evidence_summary_ms"] = _elapsed_ms(
+        evidence_summary_started_at
+    )
 
+    validator_dispatch_started_at = time.monotonic()
     final_output = await _dispatch_domain_envelope_validators_for_chat(
         final_output,
         expected_output_type=expected_output_type,
         specialist_name=specialist_name,
         tool_name=tool_name,
     )
+    phase_timings_ms["domain_validator_dispatch_ms"] = _elapsed_ms(
+        validator_dispatch_started_at
+    )
+    retained_evidence_records = extract_evidence_records_from_structured_result(
+        final_output
+    )
 
+    internal_event_started_at = time.monotonic()
     if tool_name and _is_domain_envelope_output_json(
         final_output,
         expected_output_type=expected_output_type,
@@ -2931,10 +3038,31 @@ async def run_specialist_with_events(
                 "output_length": len(str(final_output)),
             },
         })
+    phase_timings_ms["internal_extraction_event_ms"] = _elapsed_ms(
+        internal_event_started_at
+    )
 
+    supervisor_reduction_started_at = time.monotonic()
     final_output = _reduce_specialist_output_for_supervisor(
         final_output,
         expected_output_type=expected_output_type,
+    )
+    phase_timings_ms["supervisor_output_reduction_ms"] = _elapsed_ms(
+        supervisor_reduction_started_at
+    )
+
+    total_duration_ms = _elapsed_ms(wall_started_at)
+    tool_duration_total_ms = sum(
+        duration
+        for duration in (tc.duration_ms for tc in tool_calls)
+        if duration is not None
+    )
+    tool_duration_known_count = sum(
+        1 for tc in tool_calls if tc.duration_ms is not None
+    )
+    non_tool_stream_duration_ms = max(
+        0,
+        phase_timings_ms.get("stream_consume_ms", 0) - tool_duration_total_ms,
     )
 
     # Emit summary event
@@ -2945,11 +3073,25 @@ async def run_specialist_with_events(
             "specialist": specialist_name,
             "toolCallCount": len(tool_calls),
             "totalDurationMs": total_duration_ms,
+            "streamDurationMs": stream_duration_ms,
+            "phaseTimingsMs": dict(phase_timings_ms),
+            "toolDurationTotalMs": tool_duration_total_ms,
+            "toolDurationKnownCount": tool_duration_known_count,
+            "toolDurationUnknownCount": len(tool_calls) - tool_duration_known_count,
+            "nonToolStreamDurationMs": non_tool_stream_duration_ms,
+            "liveEvidenceRecordCount": len(live_evidence_records),
+            "liveEvidenceRecords": list(live_evidence_records),
+            "retainedEvidenceRecordCount": len(retained_evidence_records),
+            "retainedEvidenceRecords": retained_evidence_records,
+            "eventCount": total_event_count,
+            "eventTypeCounts": dict(event_type_counts),
             "toolCalls": [
                 {
                     "name": tc.tool_name,
                     "args": tc.tool_args,
-                    "durationMs": tc.duration_ms
+                    "durationMs": tc.duration_ms,
+                    "outputPreview": tc.output_preview,
+                    "outputSummary": tc.output_summary,
                 }
                 for tc in tool_calls
             ]

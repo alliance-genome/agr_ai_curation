@@ -97,6 +97,15 @@ async def test_run_specialist_uses_streaming_text_fallback_when_final_output_mis
         and e.get("details", {}).get("extraction_method") == "streaming_text_fallback"
         for e in captured_events
     )
+    summary = next(
+        e.get("details") or {}
+        for e in captured_events
+        if e.get("type") == "SPECIALIST_SUMMARY"
+    )
+    assert summary["totalDurationMs"] >= summary["streamDurationMs"]
+    assert "stream_consume_ms" in summary["phaseTimingsMs"]
+    assert "post_stream_output_ms" in summary["phaseTimingsMs"]
+    assert "domain_validator_dispatch_ms" in summary["phaseTimingsMs"]
 
 
 @pytest.mark.asyncio

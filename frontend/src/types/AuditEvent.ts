@@ -31,6 +31,8 @@ export type AuditEventType =
   | 'DOMAIN_CATEGORY_ERROR' // Domain task failure
   | 'DOMAIN_SKIPPED'        // Domain skipped due to missing requirements
   | 'FLOW_STEP_EVIDENCE'    // Flow step emitted evidence records/counts
+  | 'FLOW_STEP_TIMING'      // Flow step emitted runtime timing breakdown
+  | 'FLOW_VALIDATION_GROUP_TIMING' // Flow validation group emitted runtime timing breakdown
   | 'FILE_READY'            // File output is ready for download
 
 export interface AuditEvent {
@@ -91,6 +93,8 @@ export type AuditEventDetails =
   | DomainCategoryErrorDetails
   | DomainSkippedDetails
   | FlowStepEvidenceDetails
+  | FlowStepTimingDetails
+  | FlowValidationGroupTimingDetails
   | FileReadyDetails
 
 export interface SupervisorStartDetails {
@@ -238,6 +242,38 @@ export interface FlowStepEvidenceDetails {
   evidence_records: EvidenceRecord[]
   evidence_count: number
   total_evidence_records: number
+}
+
+export interface FlowStepTimingDetails {
+  flowId: string
+  flowName: string
+  flowRunId: string
+  step: number
+  toolName?: string | null
+  agentId?: string | null
+  agentName?: string | null
+  totalDurationMs: number
+  phaseTimingsMs?: Record<string, number>
+  usedInternalExtractionPayload?: boolean
+  candidateBuilt?: boolean
+  evidenceCount?: number
+}
+
+export interface FlowValidationGroupTimingDetails {
+  flowId: string
+  flowName: string
+  flowRunId?: string | null
+  status: string
+  totalDurationMs: number
+  phaseTimingsMs?: Record<string, number>
+  groupCount?: number
+  executableGroupCount?: number
+  groupCountsByState?: Record<string, number>
+  materializationInputCount?: number
+  selectorFindingCount?: number
+  appendedFindingCount?: number
+  resultGroupCount?: number
+  error?: string
 }
 
 export interface FileReadyDetails {
