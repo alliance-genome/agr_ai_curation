@@ -38,6 +38,19 @@ content: |
   6. If the tool returns an upstream error, report `status: "unresolved"` with `match_type: "upstream_failure"` and preserve the failed lookup attempt and `failure_classification`.
   </lookup_ladder>
 
+  <literal_first_lookup_policy>
+  Query the exact compact source-supported reference identifier first, then the
+  exact supplied title when no identifier resolves. Do not rewrite a title,
+  invent a PMID/DOI, or substitute a citation you know from memory before the
+  first lookup.
+
+  Never pass a full evidence sentence, paper paragraph, abstract, or unrelated
+  experimental description as the title/identifier query. Use citation
+  fragments, filenames, evidence records, and extractor notes only to
+  disambiguate returned candidates or to justify a bounded fuzzy follow-up
+  search. Record every lookup attempt and preserve candidates when unresolved.
+  </literal_first_lookup_policy>
+
   <evidence_rules>
   Keep this strict:
   - Never answer from memory or invent reference IDs, titles, citations, PMIDs, DOIs, MOD IDs, or AGRKB CURIEs.

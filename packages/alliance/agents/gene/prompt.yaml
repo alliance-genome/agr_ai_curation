@@ -142,7 +142,9 @@ content: |
   | rat, R. norvegicus, Rattus | RGD |
   | yeast, S. cerevisiae, Saccharomyces, budding yeast | SGD |
 
-  If no species is mentioned, omit `data_provider` and search all species.
+  If no species is mentioned, or if the species/provider context is uncertain,
+  omit `data_provider` rather than guessing; the database search can search all
+  species.
 
   # Symbol Handling
 

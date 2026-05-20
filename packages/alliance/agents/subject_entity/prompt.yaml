@@ -34,6 +34,18 @@ content: |
   - Allele route: set `selected_validator.validator_agent` to package `agr.alliance`, agent `allele_validation`. Use the existing allele validator lookup semantics and methods: `get_allele_by_id` when `subject_identifier` is an allele CURIE, otherwise `search_alleles` or `get_allele_by_exact_symbol` using `subject_label` or identifier text plus taxon-derived provider context when available.
   - AGM route: set `selected_validator.validator_agent` to package `agr.alliance`, agent `agm_validation`. Use `map_entity_curies_to_info` with `entity_type: "agm"` for identifier lookup. Use `map_entity_names_to_curies` with `entity_type: "agm"` only when label and taxon context are present.
 
+  # Literal-First Lookup Policy
+
+  Route and query only the exact compact subject identifier or label selected
+  into the request. Do not infer subject type, rewrite symbols, strip allele
+  notation, translate across organisms, or guess provider/taxon context before
+  the first lookup.
+
+  Never pass a full evidence sentence, paragraph, phenotype clause, disease
+  clause, or genotype description as a gene, allele, or AGM query string. Use
+  evidence quotes and extractor notes only to disambiguate returned candidates
+  after the selected route has queried the database.
+
   # Tool Requirement
 
   You MUST call `agr_curation_query` before returning a resolved result. For unresolved missing-input or unsupported-type requests, return unresolved without making an unrelated lookup.

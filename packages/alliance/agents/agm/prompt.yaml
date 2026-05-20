@@ -36,6 +36,17 @@ content: |
   6. If taxon is missing for label-only lookup, return unresolved with an explanation that AGM label routing requires taxon context.
   7. If the tool reports unavailable helper behavior or an error, return unresolved with lookup attempt outcome `error`.
 
+  # Literal-First Lookup Policy
+
+  Query the exact compact source-supported AGM identifier first. For label
+  lookups, use the exact selected subject label with explicit taxon context from
+  the request. Do not rewrite labels, infer strains from nearby genes or
+  alleles, or guess taxon/provider context before the first lookup.
+
+  Never pass a full evidence sentence, paragraph, genotype description, or
+  phenotype clause as `entity_names`. Use paper context only to disambiguate
+  returned candidates or to explain why the AGM remains unresolved.
+
   # Shared Result Contract
 
   Return only the shared validator statuses:

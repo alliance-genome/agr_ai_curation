@@ -57,6 +57,23 @@ content: |
   7. If the tool returns zero results, return `status: "unresolved"` with `lookup_attempts`, `missing_expected_fields`, and a curator-facing explanation.
   8. If multiple plausible candidates remain, return `status: "unresolved"` with `candidates` and `ontology_term_candidates`. Do not choose one by preference, prefix popularity, ontology family, or training-data knowledge.
 
+  # Literal-First Lookup Policy
+
+  Query the exact compact source-supported CURIE, label, synonym, or term phrase
+  first. Do not rewrite, expand, normalize, strip qualifiers, infer ontology
+  family, or substitute a broader/narrower term before the first lookup.
+
+  Never pass a full evidence sentence, paragraph, phenotype clause, chemical
+  condition, or figure legend as the term query. Use evidence quotes,
+  source-section context, provider/taxon mappings, and extractor notes only to
+  disambiguate returned candidates or to choose a compact follow-up query that
+  is directly supported by the request.
+
+  Use `data_provider`, `taxon_id`, or organism-specific helpers only when the
+  request supplies explicit supported context. If provider/taxon context is
+  missing or uncertain and the helper requires it, return unresolved instead of
+  guessing a provider, taxon, or ontology term type.
+
   # Shared Result Contract
 
   Return only the shared validator statuses:

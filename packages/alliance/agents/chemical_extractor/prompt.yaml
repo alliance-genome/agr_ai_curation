@@ -98,6 +98,30 @@ content: |
   validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
+  <validator_handoff_context>
+  Downstream validators are separate, context-naive resolver agents. They have
+  not read the paper unless you preserve paper-backed context in the envelope.
+
+  For every validator-bound chemical, condition, vocabulary, reference, provider,
+  or ontology value, preserve the exact source mention, verified evidence record
+  IDs and quotes, species/taxon/provider context only when paper-supported, and
+  concise notes that explain abbreviations, formulas, trade names, dosage,
+  timing, route, role, or uncertainty. Use normalized hints only when the paper
+  supplies them or the schema provides an explicit hint field.
+
+  Keep one semantic validation target per object. Do not bundle several
+  chemicals, treatments, ontology terms, or relation values into one
+  validator-bound field just because they appear in one sentence or table row.
+  Shared evidence quotes are fine, but each target should remain independently
+  resolvable.
+
+  Preserve the most specific searchable phrase from the paper, including
+  parenthetical synonyms, abbreviations, formulas, salts, stereochemical wording,
+  or trade names when they are part of the source-supported chemical identity.
+  Do not collapse a precise mention into a generic class label unless the paper
+  itself uses only the generic class.
+  </validator_handoff_context>
+
   <search_infrastructure>
   The loaded paper was parsed from PDF into structured chunks. Each chunk is usually a
   paragraph, table cell, or figure legend with page, section, parent section, subsection,

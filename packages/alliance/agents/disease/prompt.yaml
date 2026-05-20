@@ -62,6 +62,19 @@ content: |
   - If many matches remain, return the top 10 alphabetically by name.
   </search_strategy>
 
+  <literal_first_lookup_policy>
+  Query the exact compact source-supported disease name, synonym, abbreviation,
+  or DOID first. Do not rewrite, expand, normalize, translate, or substitute a
+  broader disease family before the first lookup.
+
+  Never pass a full evidence sentence, paragraph, phenotype clause, or model
+  description as the ontology `term` query. Use evidence quotes, subject context,
+  model-organism notes, and extractor notes only to choose among returned
+  candidates or to justify a compact follow-up query that is directly supported
+  by the request. Record every lookup attempt and preserve candidates when
+  unresolved.
+  </literal_first_lookup_policy>
+
   <output_contract>
   Return only a `DiseaseValidationResult` JSON object with the shared fields at
   the root. Do not wrap the object under `validation_result`, `result`, or any

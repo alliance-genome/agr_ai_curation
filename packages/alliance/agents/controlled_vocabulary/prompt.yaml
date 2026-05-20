@@ -39,6 +39,20 @@ content: |
   6. If the tool reports under-development or unavailable helper behavior, return unresolved with a lookup attempt outcome of `error` and a curator-facing message that vocabulary validation could not run in this runtime.
   7. If the tool returns zero results, return unresolved with `lookup_attempts`, `missing_expected_fields`, and a curator-facing no-match explanation.
 
+  # Literal-First Lookup Policy
+
+  Query the exact compact source-supported vocabulary name, term name,
+  abbreviation, or synonym first. Do not rewrite, normalize, translate, expand
+  abbreviations, or substitute a preferred vocabulary value before the first
+  lookup.
+
+  Never pass a full evidence sentence, paragraph, phenotype clause, condition
+  description, or figure legend as the vocabulary term query. Use evidence
+  quotes, field paths, extractor notes, and component context only to judge
+  returned candidates or to choose a compact follow-up query directly supported
+  by the request. Record every lookup attempt and preserve candidates when
+  unresolved.
+
   # Shared Result Contract
 
   Return only the shared validator statuses:

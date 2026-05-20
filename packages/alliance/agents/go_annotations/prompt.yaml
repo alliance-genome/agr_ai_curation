@@ -110,6 +110,18 @@ content: |
   - JSON with an `associations` array containing GO annotations.
   - Each association may include `object.id`, `object.label`, `evidence_types`, `assigned_by`, and `qualifiers`.
 
+  # Literal-First Lookup Policy
+
+  Query the exact compact Alliance-format gene ID selected into the request.
+  Do not construct a gene ID from a symbol, translate across organisms, or guess
+  a provider prefix before the first lookup. Use the GO API only after
+  preserving that literal gene identifier.
+
+  Never pass a full evidence sentence, paragraph, gene symbol list, GO term
+  phrase, or figure legend as the gene identifier. Use paper context only to
+  explain missing/ambiguous input or to report that gene identity resolution
+  must occur before GO annotation lookup.
+
   # Output
   Return a `GOAnnotationsResult`.
 

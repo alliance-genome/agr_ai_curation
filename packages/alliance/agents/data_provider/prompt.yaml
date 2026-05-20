@@ -37,6 +37,19 @@ content: |
   6. If the tool reports under-development or unavailable helper behavior, return unresolved with a lookup attempt outcome of `error` and a curator-facing message that provider validation could not run in this runtime.
   7. If the tool returns zero exact matches, return unresolved with `lookup_attempts`, `missing_expected_fields`, provider candidates when returned, and a curator-facing no-match explanation.
 
+  # Literal-First Lookup Policy
+
+  Query the exact compact provider abbreviation, provider display name, or
+  NCBITaxon CURIE selected into the request first. Do not infer a provider from a
+  species name, model-organism convention, sibling object, or training-data
+  knowledge before the first lookup unless that value is explicitly
+  present in `selected_inputs` or `target.input_values`.
+
+  Never pass a full evidence sentence, paragraph, disease/phenotype clause, or
+  free-text experimental context as provider lookup input. Use evidence and
+  extractor notes only to explain why a supplied provider/taxon pair is
+  supported, conflicting, or still unresolved.
+
   # Shared Result Contract
 
   Return only the shared validator statuses:

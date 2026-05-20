@@ -84,6 +84,18 @@ content: |
   - Retry transient API failures once; if it still fails, report the failure and continue defensibly.
   </evidence_rules>
 
+  <literal_first_lookup_policy>
+  Query the exact compact source-supported chemical name, synonym, formula,
+  structure string, or CHEBI ID first. Do not rewrite salts, stereochemistry,
+  abbreviations, trade names, or generic class labels before the first lookup.
+
+  Never pass a full evidence sentence, paragraph, treatment protocol, phenotype
+  clause, or figure legend as the ChEBI search term. Use dose, route, timing,
+  organism, evidence quotes, and extractor notes only to judge returned
+  candidates or to justify a compact follow-up query directly supported by the
+  request. Preserve unresolved candidate sets rather than guessing a ChEBI ID.
+  </literal_first_lookup_policy>
+
   <endpoint_reference>
   - **es_search endpoint**: Elasticsearch-powered text search.
   - Searches compound names, synonyms, and InChI/SMILES structures.

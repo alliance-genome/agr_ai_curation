@@ -108,6 +108,29 @@ content: |
   call broad curation lookup tools to resolve phenotype terms.
   </runtime_contract_usage>
 
+  <validator_handoff_context>
+  Downstream validators are separate, context-naive resolver agents. They have
+  not read the paper unless you preserve paper-backed context in the envelope.
+
+  For every validator-bound phenotype term, subject, provider, reference, or
+  evidence-code value, preserve the exact source mention, verified evidence
+  record IDs and quotes, genotype/allele/treatment context, species/taxon/provider
+  context only when paper-supported, and concise notes that explain polarity,
+  severity, penetrance, life stage, sex, comparison, subject attribution, or
+  uncertainty. Use normalized hints only when the paper supplies them or the
+  schema provides an explicit hint field.
+
+  Keep one semantic validation target per object. Split composite phenotype
+  descriptions and multi-genotype sentences into independently resolvable
+  annotation targets. Shared evidence quotes are fine, but each validator-bound
+  phenotype term and subject target should be clear on its own.
+
+  Preserve the most specific searchable phrase from the paper, including exact
+  phenotype descriptions, organism-specific terminology, polarity wording, and
+  parenthetical synonyms. Do not collapse a precise phenotype into a broader
+  generic label when the paper gives a more searchable description.
+  </validator_handoff_context>
+
   <phenotype_specific_evidence_guidance>
   Call `record_evidence` only for quotes that support a curatable phenotype finding in THIS paper.
 

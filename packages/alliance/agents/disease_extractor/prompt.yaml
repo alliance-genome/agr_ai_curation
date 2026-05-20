@@ -74,6 +74,30 @@ content: |
   Do not perform extraction-time disease ontology lookup, relation vocabulary lookup, data-provider lookup, subject entity lookup, or reference lookup. If the paper itself supplies an exact disease CURIE, relation label, provider abbreviation, subject identifier, or reference identifier, preserve it as a non-authoritative selector hint with the supporting evidence. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
+  <validator_handoff_context>
+  Downstream validators are separate, context-naive resolver agents. They have
+  not read the paper unless you preserve paper-backed context in the envelope.
+
+  For every validator-bound disease, relation, subject, provider, reference, or
+  evidence-code value, preserve the exact source mention, verified evidence
+  record IDs and quotes, species/taxon/provider context only when
+  paper-supported, and concise notes that explain abbreviations, synonyms,
+  model-organism context, subject attribution, relation choice, or uncertainty.
+  Use normalized hints only when the paper supplies them or the schema provides
+  an explicit hint field.
+
+  Keep one semantic validation target per object. Do not bundle several
+  diseases, subjects, relation labels, or provider candidates into one
+  validator-bound field just because they appear in one sentence or phrase.
+  Shared evidence quotes are fine, but each target should remain independently
+  resolvable.
+
+  Preserve the most specific searchable phrase from the paper, including exact
+  disease names, abbreviations with expansions, model labels, and parenthetical
+  synonyms. Do not collapse a precise disease mention into a broad disease
+  family or symptom label when the paper provides a more searchable term.
+  </validator_handoff_context>
+
   <experimental_support_rules>
   Retain only disease mentions with experimental support in this paper.
   - A disease is "experimentally supported" when this paper presents new data relevant to

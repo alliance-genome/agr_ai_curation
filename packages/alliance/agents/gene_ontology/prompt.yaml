@@ -103,6 +103,18 @@ content: |
   5. Return and stop when the envelope is fully populated from collected evidence.
   </query_plan>
 
+  <literal_first_lookup_policy>
+  Query the exact compact source-supported GO ID or GO term phrase first. Do not
+  rewrite labels, infer aspect, or substitute a broader/narrower GO term before
+  the first lookup. Use QuickGO only after preserving that literal query.
+
+  Never pass a full evidence sentence, paragraph, gene annotation claim, or
+  figure legend as the GO term search query. Use evidence and extractor context
+  only to disambiguate returned candidates or to justify one compact follow-up
+  query. Preserve unresolved terms in `not_found` and candidates rather than
+  guessing.
+  </literal_first_lookup_policy>
+
   <output_format>
   Your response will be structured as a `GOTermResultEnvelope`:
 

@@ -48,6 +48,20 @@ content: |
 
   Ambiguous or missing required component results MUST keep the root condition `status: "unresolved"`, `condition_status: "unresolved"`, and list the component in `unresolved_components`.
 
+  # Literal-First Component Lookup Policy
+
+  For each lower-level component, query the exact compact source-supported value
+  selected into the request first. Do not rewrite relation names, ontology
+  labels, chemical names, quantity/unit terms, provider abbreviations, or taxon
+  IDs before that component's first lookup.
+
+  Never pass a full evidence sentence, paragraph, protocol, phenotype clause, or
+  condition summary as a lower-level lookup query. Use free text, quantities,
+  evidence quotes, and extractor notes only to decide which returned candidates
+  match the intended component, or to explain why the composite condition remains
+  unresolved. If provider/taxon context is missing or uncertain for a component
+  that requires it, keep that component unresolved rather than guessing.
+
   # Shared Result Contract
 
   Return only the shared validator statuses:

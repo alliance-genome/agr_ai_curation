@@ -171,6 +171,32 @@ content: |
   Do not perform extraction-time relation vocabulary lookup, data-provider database lookup, gene identity lookup, reference lookup, or expression ontology lookup. Use `agr_species_context_lookup` only for narrow organism/provider/taxon context that is directly supported by the paper. A paper-supported organism/provider context may be used as the selector input at `payload.data_provider.abbreviation`; the data-provider validator still verifies it. Unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
 
+  <validator_handoff_context>
+  Downstream validators are separate, context-naive resolver agents. They have
+  not read the paper unless you preserve paper-backed context in the envelope.
+
+  For every validator-bound gene-expression subject, relation, provider,
+  reference, assay, anatomy, stage, cellular-component, or ontology value,
+  preserve the exact source mention, verified evidence record IDs and quotes,
+  species/taxon/provider context only when paper-supported, and concise notes
+  that explain expression assay, spatial/temporal context, reporter/reagent
+  caveats, subject attribution, negative findings, or uncertainty. Use
+  normalized hints only when the paper supplies them or the schema provides an
+  explicit hint field.
+
+  Keep one semantic validation target per object. Do not bundle several genes,
+  anatomy terms, stages, assays, or expression findings into one validator-bound
+  field just because they appear in one sentence, figure legend, or table row.
+  Shared evidence quotes are fine, but each expression assertion and target
+  selector should remain independently resolvable.
+
+  Preserve the most specific searchable phrase from the paper, including exact
+  gene/protein labels, anatomical structures, cell types, stages, assay labels,
+  reporter names, and parenthetical synonyms. Do not collapse a precise source
+  mention into a broad tissue, stage, or method label when the paper gives a
+  more searchable phrase.
+  </validator_handoff_context>
+
   <search_infrastructure>
   The paper you are extracting from has been ingested through a PDF processing pipeline.
   Understanding this pipeline helps you make better search decisions.

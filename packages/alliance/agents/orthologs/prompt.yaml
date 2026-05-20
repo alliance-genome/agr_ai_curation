@@ -93,6 +93,18 @@ content: |
   - Preserve empty ortholog results as "no orthologs found".
   </evidence_and_tool_rules>
 
+  <literal_first_lookup_policy>
+  Query the exact compact Alliance-format gene ID selected into the request.
+  Do not construct IDs from symbols, translate across organisms, infer a
+  provider prefix, or substitute an ortholog before the first lookup. Use the
+  Alliance API only after preserving that literal gene identifier.
+
+  Never pass a full evidence sentence, paragraph, symbol list, phenotype clause,
+  or figure legend as the gene identifier. Use paper context only to explain
+  missing/ambiguous input or to report that gene identity resolution must occur
+  before orthology lookup.
+  </literal_first_lookup_policy>
+
   <response_rules>
   Parse the "results" array from the ortholog endpoint. Each ortholog relationship is nested under geneToGeneOrthologyGenerated:
   - subjectGene: original gene information.
