@@ -1226,6 +1226,51 @@ def _validator_lookup_tool_args(attempt: Any) -> dict[str, Any]:
     return query
 
 
+def _validator_lookup_audit_key(binding_id: Any, attempt: Any) -> str:
+    raw_query = getattr(attempt, "query", None)
+    return json.dumps(
+        {
+            "binding_id": str(binding_id or ""),
+            "provider": str(getattr(attempt, "provider", "") or "validator"),
+            "method": str(getattr(attempt, "method", "") or "validator_lookup"),
+            "query": raw_query if isinstance(raw_query, dict) else raw_query,
+            "outcome": str(getattr(attempt, "outcome", "") or "unknown"),
+            "message": getattr(attempt, "message", None),
+            "result_count": getattr(attempt, "result_count", None),
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _validator_lookup_status_summary(status_counts: dict[str, int]) -> str:
+    if not status_counts:
+        return "unknown"
+    if len(status_counts) == 1:
+        return next(iter(status_counts))
+    return "mixed"
+
+
+def _validator_lookup_complete_label(
+    specialist_name: str,
+    outcome: str,
+    *,
+    target_count: int,
+    status_summary: str,
+) -> str:
+    if target_count <= 1:
+        return f"{specialist_name}: Validator Lookup {outcome}"
+    status_text = (
+        "mixed validation"
+        if status_summary == "mixed"
+        else f"{status_summary} validation"
+    )
+    return (
+        f"{specialist_name}: Validator Lookup {outcome} "
+        f"({target_count} targets, {status_text})"
+    )
+
+
 def _emit_validator_lookup_audit_events(
     *,
     specialist_name: str,
@@ -1233,59 +1278,93 @@ def _emit_validator_lookup_audit_events(
 ) -> None:
     """Surface package-scoped validator lookup attempts in the live audit stream."""
 
+    lookup_records: list[dict[str, Any]] = []
+    lookup_record_by_key: dict[str, dict[str, Any]] = {}
     for result in getattr(dispatch_result, "validator_results", ()) or ():
         binding_id = getattr(result, "validator_binding_id", None)
         status = getattr(result, "status", None)
-        for index, attempt in enumerate(
-            getattr(result, "lookup_attempts", ()) or (),
-            start=1,
-        ):
-            method = str(getattr(attempt, "method", "") or "validator_lookup")
-            provider = str(getattr(attempt, "provider", "") or "validator")
-            outcome = str(getattr(attempt, "outcome", "") or "unknown")
-            message = getattr(attempt, "message", None)
-            tool_args = _validator_lookup_tool_args(attempt)
-            friendly_name = (
-                f"{specialist_name}: Validator Lookup"
-                f" ({binding_id}, {provider}.{method})"
+        request_id = getattr(result, "request_id", None)
+        for attempt in getattr(result, "lookup_attempts", ()) or ():
+            key = _validator_lookup_audit_key(binding_id, attempt)
+            record = lookup_record_by_key.get(key)
+            if record is None:
+                record = {
+                    "attempt": attempt,
+                    "binding_id": binding_id,
+                    "statuses": {},
+                    "request_ids": [],
+                }
+                lookup_record_by_key[key] = record
+                lookup_records.append(record)
+            status_key = str(status or "unknown")
+            record["statuses"][status_key] = (
+                int(record["statuses"].get(status_key, 0)) + 1
             )
+            if request_id is not None:
+                record["request_ids"].append(str(request_id))
 
-            add_specialist_event({
-                "type": "TOOL_START",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "details": {
-                    "toolName": "agr_curation_query"
-                    if provider == "agr_curation_query"
-                    else "domain_validator_lookup",
-                    "friendlyName": friendly_name,
-                    "agent": specialist_name,
-                    "toolArgs": tool_args,
-                    "isSpecialistInternal": True,
-                    "validatorBindingId": binding_id,
-                    "validatorResultStatus": status,
-                    "lookupIndex": index,
-                },
-            })
-            add_specialist_event({
-                "type": "TOOL_COMPLETE",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "details": {
-                    "toolName": "agr_curation_query"
-                    if provider == "agr_curation_query"
-                    else "domain_validator_lookup",
-                    "friendlyName": (
-                        f"{specialist_name}: Validator Lookup {outcome}"
-                    ),
-                    "success": outcome not in {"error", "conflict"},
-                    "error": message if outcome == "error" else None,
-                    "isSpecialistInternal": True,
-                    "validatorBindingId": binding_id,
-                    "validatorResultStatus": status,
-                    "lookupIndex": index,
-                    "resultCount": getattr(attempt, "result_count", None),
-                    "outcome": outcome,
-                },
-            })
+    for index, record in enumerate(lookup_records, start=1):
+        attempt = record["attempt"]
+        binding_id = record["binding_id"]
+        status_counts = dict(record["statuses"])
+        status_summary = _validator_lookup_status_summary(status_counts)
+        request_ids = list(record["request_ids"])
+        duplicate_count = len(request_ids) or sum(status_counts.values()) or 1
+        method = str(getattr(attempt, "method", "") or "validator_lookup")
+        provider = str(getattr(attempt, "provider", "") or "validator")
+        outcome = str(getattr(attempt, "outcome", "") or "unknown")
+        message = getattr(attempt, "message", None)
+        tool_args = _validator_lookup_tool_args(attempt)
+        friendly_name = (
+            f"{specialist_name}: Validator Lookup"
+            f" ({binding_id}, {provider}.{method})"
+        )
+
+        add_specialist_event({
+            "type": "TOOL_START",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "toolName": "agr_curation_query"
+                if provider == "agr_curation_query"
+                else "domain_validator_lookup",
+                "friendlyName": friendly_name,
+                "agent": specialist_name,
+                "toolArgs": tool_args,
+                "isSpecialistInternal": True,
+                "validatorBindingId": binding_id,
+                "validatorResultStatus": status_summary,
+                "validatorResultStatuses": status_counts,
+                "validatorLookupDuplicateCount": duplicate_count,
+                "validatorLookupRequestIds": request_ids,
+                "lookupIndex": index,
+            },
+        })
+        add_specialist_event({
+            "type": "TOOL_COMPLETE",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "toolName": "agr_curation_query"
+                if provider == "agr_curation_query"
+                else "domain_validator_lookup",
+                "friendlyName": _validator_lookup_complete_label(
+                    specialist_name,
+                    outcome,
+                    target_count=duplicate_count,
+                    status_summary=status_summary,
+                ),
+                "success": outcome not in {"error", "conflict"},
+                "error": message if outcome == "error" else None,
+                "isSpecialistInternal": True,
+                "validatorBindingId": binding_id,
+                "validatorResultStatus": status_summary,
+                "validatorResultStatuses": status_counts,
+                "validatorLookupDuplicateCount": duplicate_count,
+                "validatorLookupRequestIds": request_ids,
+                "lookupIndex": index,
+                "resultCount": getattr(attempt, "result_count", None),
+                "outcome": outcome,
+            },
+        })
 
 
 async def _dispatch_domain_envelope_validators_for_chat(

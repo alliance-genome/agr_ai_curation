@@ -308,3 +308,124 @@ async def test_run_specialist_retry_raises_when_retry_also_missing_output(monkey
     assert calls["count"] == 2
     assert any(e.get("type") == "SPECIALIST_RETRY" for e in captured_events)
     assert any(e.get("type") == "SPECIALIST_ERROR" for e in captured_events)
+
+
+def test_validator_lookup_audit_events_dedupe_identical_batch_attempts(monkeypatch):
+    captured_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+
+    query = {
+        "data_provider": "FB",
+        "gene_symbols": ["actin", "crumbs", "opsin"],
+        "include_synonyms": True,
+        "limit": 10,
+    }
+
+    def result(request_id, status):
+        return SimpleNamespace(
+            request_id=request_id,
+            validator_binding_id="alliance_gene_reference_lookup",
+            status=status,
+            lookup_attempts=[
+                SimpleNamespace(
+                    provider="alliance_curation_db",
+                    method="search_genes_bulk",
+                    query=query,
+                    result_count=3,
+                    outcome="success",
+                    message=None,
+                )
+            ],
+        )
+
+    dispatch_result = SimpleNamespace(
+        validator_results=[
+            result("request-crumbs", "resolved"),
+            result("request-actin", "unresolved"),
+            result("request-opsin", "unresolved"),
+        ]
+    )
+
+    streaming_tools._emit_validator_lookup_audit_events(
+        specialist_name="Gene Extraction",
+        dispatch_result=dispatch_result,
+    )
+
+    start_events = [event for event in captured_events if event["type"] == "TOOL_START"]
+    complete_events = [
+        event for event in captured_events if event["type"] == "TOOL_COMPLETE"
+    ]
+
+    assert len(start_events) == 1
+    assert len(complete_events) == 1
+    start_details = start_events[0]["details"]
+    complete_details = complete_events[0]["details"]
+    assert start_details["validatorResultStatus"] == "mixed"
+    assert start_details["validatorResultStatuses"] == {
+        "resolved": 1,
+        "unresolved": 2,
+    }
+    assert start_details["validatorLookupDuplicateCount"] == 3
+    assert start_details["validatorLookupRequestIds"] == [
+        "request-crumbs",
+        "request-actin",
+        "request-opsin",
+    ]
+    assert complete_details["friendlyName"] == (
+        "Gene Extraction: Validator Lookup success "
+        "(3 targets, mixed validation)"
+    )
+
+
+def test_validator_lookup_audit_events_keep_distinct_queries(monkeypatch):
+    captured_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+
+    dispatch_result = SimpleNamespace(
+        validator_results=[
+            SimpleNamespace(
+                request_id="request-crumbs",
+                validator_binding_id="alliance_gene_reference_lookup",
+                status="resolved",
+                lookup_attempts=[
+                    SimpleNamespace(
+                        provider="alliance_curation_db",
+                        method="search_genes",
+                        query={"data_provider": "FB", "gene_symbol": "crumbs"},
+                        result_count=1,
+                        outcome="success",
+                        message=None,
+                    )
+                ],
+            ),
+            SimpleNamespace(
+                request_id="request-actin",
+                validator_binding_id="alliance_gene_reference_lookup",
+                status="unresolved",
+                lookup_attempts=[
+                    SimpleNamespace(
+                        provider="alliance_curation_db",
+                        method="search_genes",
+                        query={"data_provider": "FB", "gene_symbol": "actin"},
+                        result_count=10,
+                        outcome="ambiguous",
+                        message=None,
+                    )
+                ],
+            ),
+        ]
+    )
+
+    streaming_tools._emit_validator_lookup_audit_events(
+        specialist_name="Gene Extraction",
+        dispatch_result=dispatch_result,
+    )
+
+    assert (
+        len([event for event in captured_events if event["type"] == "TOOL_START"])
+        == 2
+    )
+    assert (
+        len([event for event in captured_events if event["type"] == "TOOL_COMPLETE"])
+        == 2
+    )
