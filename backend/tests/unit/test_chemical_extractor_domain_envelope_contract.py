@@ -284,6 +284,21 @@ def test_chemical_extractor_schema_accepts_chemical_condition_objects():
     assert envelope.metadata.ambiguities[0].mention == "Dex"
 
 
+def test_chemical_extractor_schema_backfills_condition_payload_evidence_ids():
+    payload = _valid_chemical_extractor_payload()
+    del payload["curatable_objects"][-1]["payload"]["evidence_record_ids"]
+
+    envelope = _validate_chemical_extractor_payload(payload)
+
+    condition = next(
+        obj
+        for obj in envelope.curatable_objects
+        if obj.object_type == CHEMICAL_CONDITION_OBJECT_TYPE
+    )
+    assert condition.evidence_record_ids == ["rapamycin-treatment-evidence-1"]
+    assert condition.payload.evidence_record_ids == ["rapamycin-treatment-evidence-1"]
+
+
 def test_chemical_extractor_schema_accepts_label_backed_pending_ontology_candidates():
     payload = _valid_chemical_extractor_payload()
     del payload["curatable_objects"][1]["payload"]["curie"]

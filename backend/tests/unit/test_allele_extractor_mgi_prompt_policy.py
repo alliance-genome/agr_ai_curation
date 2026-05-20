@@ -53,8 +53,6 @@ def test_allele_extractor_prompt_declares_allele_domain_envelope_contract():
     assert "`EvidenceQuote`" in content
     assert '`definition_state: "in_development"`' in content
     assert '`metadata.write_behavior.status: "blocked"`' in content
-    assert "`payload.evidence_record_ids[]` as required" in content
-    assert "same evidence ID must appear in all three places" in content
     assert "Do not emit any top-level helper list of retained alleles" in content
     assert "`CurationPrepCandidate`" in content
 

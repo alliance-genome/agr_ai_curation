@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from pydantic import model_validator
@@ -43,6 +44,44 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
     """Config-discovered allele extraction envelope bound to the allele pack."""
 
     __envelope_class__ = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _canonicalize_association_evidence_ids(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        curatable_objects = value.get("curatable_objects")
+        if not isinstance(curatable_objects, list):
+            return value
+
+        canonical_value = deepcopy(value)
+        for obj in canonical_value.get("curatable_objects") or []:
+            if (
+                not isinstance(obj, dict)
+                or obj.get("object_type") != "AllelePaperEvidenceAssociation"
+            ):
+                continue
+
+            payload = obj.get("payload")
+            if not isinstance(payload, dict):
+                payload = {}
+                obj["payload"] = payload
+
+            payload_evidence_ids = payload.get("evidence_record_ids")
+            if isinstance(payload_evidence_ids, list) and payload_evidence_ids:
+                continue
+            if (
+                "evidence_record_ids" in payload
+                and payload_evidence_ids is not None
+                and payload_evidence_ids != []
+            ):
+                continue
+
+            object_evidence_ids = obj.get("evidence_record_ids")
+            if isinstance(object_evidence_ids, list) and object_evidence_ids:
+                payload["evidence_record_ids"] = list(object_evidence_ids)
+
+        return canonical_value
 
     @model_validator(mode="after")
     def _validate_allele_domain_envelope(self) -> "AlleleExtractionResultEnvelope":

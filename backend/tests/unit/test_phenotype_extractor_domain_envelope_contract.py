@@ -297,6 +297,21 @@ def test_phenotype_extractor_schema_accepts_domain_pack_objects_and_metadata():
     assert envelope.metadata.exclusions[0].reason_code == "previously_reported"
 
 
+def test_phenotype_extractor_schema_backfills_annotation_payload_evidence_ids():
+    payload = _valid_phenotype_payload()
+    del payload["curatable_objects"][-1]["payload"]["evidence_record_ids"]
+
+    envelope = _validate_phenotype_extractor_payload(payload)
+
+    annotation = next(
+        obj
+        for obj in envelope.curatable_objects
+        if obj.object_type == PHENOTYPE_OBJECT_TYPE
+    )
+    assert annotation.evidence_record_ids == ["reduced-brood-size-evidence-1"]
+    assert annotation.payload.evidence_record_ids == ["reduced-brood-size-evidence-1"]
+
+
 def test_phenotype_extractor_schema_accepts_pending_term_without_curie():
     payload = _valid_phenotype_payload()
     term = payload["curatable_objects"][2]

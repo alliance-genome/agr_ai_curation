@@ -180,6 +180,19 @@ def test_allele_extractor_schema_accepts_domain_pack_objects_and_metadata(allele
     assert envelope.metadata.ambiguities[0].mention == "daf-2(mx)"
 
 
+def test_allele_extractor_schema_backfills_association_payload_evidence_ids(
+    allele_schema,
+):
+    payload = _valid_allele_envelope_payload()
+    del payload["curatable_objects"][-1]["payload"]["evidence_record_ids"]
+
+    envelope = _validate_allele_envelope(allele_schema, payload)
+
+    association = envelope.curatable_objects[-1]
+    assert association.evidence_record_ids == ["daf-2-m41-evidence-1"]
+    assert association.payload["evidence_record_ids"] == ["daf-2-m41-evidence-1"]
+
+
 def test_allele_extractor_schema_rejects_legacy_semantic_lists(allele_schema):
     payload = _valid_allele_envelope_payload()
     payload["alleles"] = []

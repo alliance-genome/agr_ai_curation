@@ -699,6 +699,14 @@ class ChemicalExtractionResultEnvelope(RuntimeChemicalExtractionResultEnvelope):
                     uri=CHEMICAL_CONDITION_SCHEMA_URI,
                     definition_state=DefinitionState.IN_DEVELOPMENT,
                 )
+            payload_evidence_ids = payload.get("evidence_record_ids")
+            object_evidence_ids = obj.get("evidence_record_ids")
+            if (
+                (payload_evidence_ids is None or payload_evidence_ids == [])
+                and isinstance(object_evidence_ids, list)
+                and object_evidence_ids
+            ):
+                payload["evidence_record_ids"] = list(object_evidence_ids)
             obj.setdefault(
                 "evidence_record_ids",
                 list(payload.get("evidence_record_ids") or []),
