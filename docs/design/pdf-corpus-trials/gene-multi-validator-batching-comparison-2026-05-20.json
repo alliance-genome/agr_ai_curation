@@ -1,0 +1,130 @@
+{
+  "created_at_utc": "2026-05-20T07:10:00Z",
+  "backend_url": "http://10.79.64.167:8900",
+  "selected_paper": {
+    "title": "Parallel Activin and BMP signaling coordinates R7/R8 photoreceptor subtype pairing in the stochastic Drosophila retina",
+    "article_url": "https://elifesciences.org/articles/25301",
+    "pdf_url": "https://cdn.elifesciences.org/articles/25301/elife-25301-v2.pdf",
+    "species": "Drosophila melanogaster",
+    "provider": "FB",
+    "taxon": "NCBITaxon:7227",
+    "candidate_gene_symbols": [
+      "babo/Baboon",
+      "dSmad2",
+      "Mad",
+      "wts/Warts",
+      "melt/Melted",
+      "Rh5",
+      "Rh6"
+    ],
+    "selection_rationale": "The open eLife PDF explicitly discusses several Drosophila genes in Activin/BMP/Hippo/R8 subtype specification results, making it suitable for live multi-gene extractor and validator dispatch coverage."
+  },
+  "runs": {
+    "pre_batch_baseline": {
+      "sandbox_commit_short": "f14d1a52",
+      "sandbox_commit_subject": "Persist validated extraction envelopes internally",
+      "output_dir": "docs/design/pdf-corpus-trials/gene-multi-validator-baseline-2026-05-20",
+      "trial_json": "docs/design/pdf-corpus-trials/gene-multi-validator-baseline-2026-05-20/gene_drosophila_r8_tgfb_multi_gene.json",
+      "status": "fail",
+      "flow_error": "incomplete_flow_steps",
+      "flow_execution_duration_seconds": 70.811,
+      "active_validator_dispatch_duration_seconds": 11.968,
+      "validator_agent_run_count": 4,
+      "batch_validator_run_count": 0,
+      "validator_lookup_event_count": 8,
+      "validator_problem_event_count": 0,
+      "dispatch_completion_count": 1,
+      "dispatch_completion_details": [
+        {
+          "matchedBindingCount": 4,
+          "validatorResultCount": 4,
+          "batchValidatorRunCount": null,
+          "validatorAgentRunCount": null,
+          "validatorBatchGroups": []
+        }
+      ]
+    },
+    "original_batch_probe": {
+      "sandbox_commit_short": "e300d1e1",
+      "sandbox_commit_subject": "Add batch validator dispatch for gene validation",
+      "output_dir": "docs/design/pdf-corpus-trials/gene-multi-validator-candidate-2026-05-20",
+      "trial_json": "docs/design/pdf-corpus-trials/gene-multi-validator-candidate-2026-05-20/gene_drosophila_r8_tgfb_multi_gene.json",
+      "status": "fail",
+      "flow_error": "incomplete_flow_steps",
+      "flow_execution_duration_seconds": 215.181,
+      "active_validator_dispatch_duration_seconds": 81.206,
+      "validator_agent_run_count": 2,
+      "batch_validator_run_count": 2,
+      "validator_lookup_event_count": 16,
+      "validator_problem_event_count": 0,
+      "dispatch_completion_count": 2,
+      "batch_group_request_counts": [
+        4,
+        4
+      ],
+      "batch_group_duration_seconds": [
+        27.067,
+        54.133
+      ]
+    },
+    "tightened_batch_post_change": {
+      "sandbox_commit_short": "0629498e",
+      "sandbox_commit_subject": "Tighten gene validator batch lookup guidance",
+      "output_dir": "docs/design/pdf-corpus-trials/gene-multi-validator-batching-2026-05-20",
+      "trial_json": "docs/design/pdf-corpus-trials/gene-multi-validator-batching-2026-05-20/gene_drosophila_r8_tgfb_multi_gene.json",
+      "status": "fail",
+      "flow_error": "incomplete_flow_steps",
+      "flow_execution_duration_seconds": 148.026,
+      "active_validator_dispatch_duration_seconds": 58.679,
+      "validator_agent_run_count": 2,
+      "batch_validator_run_count": 2,
+      "validator_lookup_event_count": 16,
+      "validator_problem_event_count": 0,
+      "dispatch_completion_count": 2,
+      "batch_group_request_counts": [
+        4,
+        4
+      ],
+      "batch_group_duration_seconds": [
+        27.105,
+        31.568
+      ]
+    }
+  },
+  "interpretation": {
+    "live_runtime_shape": "Each successful gene extractor attempt returned one domain envelope containing four gene_mention_evidence objects, so dispatch_active_validator_bindings saw four DomainValidationRequest values in one call. The flow made two extractor attempts in the batch-enabled runs because the supervisor still ended with incomplete_flow_steps.",
+    "chosen_strategy": "Case A plus Case C: keep the existing single-envelope dispatcher batching and tighten the generic batch payload plus gene validator prompt so compatible gene requests are grouped into one search_genes_bulk lookup per shared provider/species context.",
+    "live_batching_occurred": true,
+    "search_genes_bulk_used": true,
+    "prompt_change_effect": {
+      "before_active_validator_dispatch_seconds": 81.206,
+      "after_active_validator_dispatch_seconds": 58.679,
+      "delta_seconds": -22.527,
+      "reduction_percent": 27.7,
+      "speedup_factor": 1.38
+    },
+    "pre_batch_vs_post_change": {
+      "pre_batch_active_validator_dispatch_seconds": 11.968,
+      "post_change_active_validator_dispatch_seconds": 58.679,
+      "delta_seconds": 46.711,
+      "slowdown_factor": 4.9,
+      "summary": "The tightened batch run improved over the original batch probe but was still slower than the pre-batch parallel singleton validator path in this benchmark."
+    },
+    "remaining_bottlenecks": [
+      "The flow repeats the gene extractor attempt and therefore repeats validator dispatch before failing with incomplete_flow_steps.",
+      "The batch validator uses fewer validator agent runs but still spends 27-32 seconds per four-request batch in this post-change run.",
+      "The corpus JSON exposes validator lookup_attempt audit records, not raw validator-agent tool-call counts, so it cannot prove whether the LLM made one physical search_genes_bulk call or copied itemized bulk lookup_attempts into each result."
+    ]
+  },
+  "validation": {
+    "syntax": [
+      "PYTHONPYCACHEPREFIX=/tmp/agr-ai-curation-pycache python3 -m py_compile backend/src/lib/domain_packs/validator_dispatch.py scripts/testing/domain_envelope_pdf_corpus.py"
+    ],
+    "tests": [
+      {
+        "command": "docker compose -f docker-compose.test.yml run --rm backend-unit-tests bash -lc \"python -m pytest tests/unit/lib/domain_packs/test_validator_dispatch.py tests/unit/test_gene_allele_validator_result_contract.py -v --tb=short\"",
+        "result": "34 passed, 1 warning"
+      }
+    ]
+  }
+}
