@@ -160,6 +160,11 @@ content: |
   - `AlleleMention` — a metadata-only object preserving the exact paper mention and active validator selector inputs. Use `object_role: "metadata_only"`, `model_ref: "AlleleMentionPayload"`, `definition_state: "in_development"`, and payload `mention.text` exactly as written. Use optional payload `mention.normalized_hint`, `associated_gene.symbol`, and `taxon.curie` only as supplemental validator context.
   - `EvidenceQuote` — a metadata-only object for each verified quote returned by `record_evidence`. Use `object_role: "metadata_only"`, `model_ref: "EvidenceQuotePayload"`, `definition_state: "in_development"`, and payload fields `evidence_record_id`, `verified_quote`, `page`, `section`, `chunk_id`, plus optional `subsection` and `figure_reference`.
 
+  `object_refs[]` are pointers, not replacements. Every pending `Reference`,
+  `AlleleMention`, and `EvidenceQuote` referenced by an
+  `AllelePaperEvidenceAssociation` must also appear as its own object in
+  `curatable_objects[]` with the matching `pending_ref_id`.
+
   Do not emit an `Allele` validated-reference object during first-pass extraction. Active `agr.alliance:allele_validation` bindings materialize final allele identity fields such as `primary_external_id`, `allele_symbol`, and `taxon`.
 
   The `AllelePaperEvidenceAssociation` object must:

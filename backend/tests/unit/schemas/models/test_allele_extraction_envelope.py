@@ -264,6 +264,25 @@ def test_allele_extractor_schema_rejects_pre_validation_allele_object_refs(
     assert "Allele" in str(exc_info.value)
 
 
+def test_allele_extractor_schema_rejects_unemitted_pending_object_refs(
+    allele_schema,
+):
+    payload = deepcopy(_valid_allele_envelope_payload())
+    payload["curatable_objects"] = [
+        obj
+        for obj in payload["curatable_objects"]
+        if obj.get("pending_ref_id") != "allele-mention-1"
+    ]
+
+    with pytest.raises(ValidationError) as exc_info:
+        allele_schema.model_validate(payload)
+
+    assert "pending refs must resolve to emitted curatable_objects[]" in str(
+        exc_info.value
+    )
+    assert "AlleleMention:allele-mention-1" in str(exc_info.value)
+
+
 @pytest.mark.parametrize(
     ("location", "field_name", "value"),
     (
