@@ -171,6 +171,7 @@ content: |
   - Use payload `association_kind: "allele_paper_evidence"`.
   - Not include payload `allele_identifier`; active allele validation owns final identity resolution and association identity fields.
   - Copy `evidence_record_ids[]` both to the curatable object field and to `payload.evidence_record_ids[]`; every ID must resolve to one record in `metadata.evidence_records[]`.
+  - Treat `payload.evidence_record_ids[]` as required. If an association has verified evidence but `payload.evidence_record_ids[]` is absent or empty, the JSON is invalid. The same evidence ID must appear in all three places: `AllelePaperEvidenceAssociation.evidence_record_ids[]`, `AllelePaperEvidenceAssociation.payload.evidence_record_ids[]`, and `metadata.evidence_records[].evidence_record_id`.
   - Include `object_refs[]` to its `Reference`, `AlleleMention`, and every `EvidenceQuote`.
   - Include a top-level `metadata` object with `write_behavior.status: "blocked"` (`metadata.write_behavior.status: "blocked"`) because reference materialization and non-mutating allele association writes are not verified for this workflow. Do this for every `AllelePaperEvidenceAssociation`; omitting it makes the object invalid.
   - Include `metadata_refs[]` pointing to supporting `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.exclusions[]`, or `metadata.ambiguities[]` entries as appropriate.
