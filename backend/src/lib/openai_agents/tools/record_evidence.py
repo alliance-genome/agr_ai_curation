@@ -65,11 +65,11 @@ _SOURCE_TRAILING_PUNCTUATION = ".,;:!?)]}"
 _FUZZY_CANDIDATE_LIMIT = 5
 _FUZZY_REVIEW_CANDIDATE_LIMIT = 3
 _FUZZY_MIN_SCORE = 0.78
-_MIN_CLAIM_TOKEN_COVERAGE = 0.90
+_MIN_CLAIM_TOKEN_COVERAGE = 0.78
 _EVIDENCE_CONFIRMATION_MODEL_ENV = "EVIDENCE_CONFIRMATION_MODEL"
 _EVIDENCE_CONFIRMATION_ENABLED_ENV = "EVIDENCE_CONFIRMATION_ENABLED"
 _EVIDENCE_CONFIRMATION_TIMEOUT_ENV = "EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS"
-_DEFAULT_EVIDENCE_CONFIRMATION_MODEL = "gpt-5.4-mini"
+_DEFAULT_EVIDENCE_CONFIRMATION_MODEL = "gpt-5.4-nano"
 _DEFAULT_EVIDENCE_CONFIRMATION_TIMEOUT_SECONDS = 8.0
 
 
@@ -326,11 +326,6 @@ def _rank_fuzzy_candidates_for_review(
     return sorted(
         candidates,
         key=lambda candidate: (
-            _candidate_satisfies_required_identity(
-                entity=entity,
-                claimed_quote=claimed_quote,
-                candidate_text=candidate.text,
-            ),
             candidate.score,
             -len(candidate.text),
         ),
@@ -461,14 +456,41 @@ async def _confirm_fuzzy_evidence_with_llm(
                 {
                     "role": "system",
                     "content": (
-                        "You are a strict evidence quote arbiter. Decide whether one candidate "
-                        "span is the same paper evidence as the claimed quote. Accept citation "
-                        "marker, whitespace, and typography differences only when the biological "
-                        "entity, stock numbers, allele/genotype labels, measurements, and other "
-                        "identity-bearing tokens are preserved. Reject neighboring sentences, "
-                        "changed identifiers, changed numbers, or merely related claims. Return "
-                        "only JSON: {\"decision\":\"accept|reject|ambiguous\","
-                        "\"selected_index\":0,\"reason\":\"short\"}."
+                        "You are deciding whether one raw PDF text span is a safe source-backed "
+                        "match for a claimed evidence quote.\n\n"
+                        "The claimed quote was produced by another AI system while reading a "
+                        "scientific paper. It may be a cleaned-up or lightly paraphrased copy of "
+                        "the paper text. The candidate spans are raw text snippets retrieved from "
+                        "our indexed PDF database using fuzzy matching. If you accept a candidate, "
+                        "our software will store that candidate text as the verified evidence "
+                        "quote for downstream curation review.\n\n"
+                        "Your job is not to demand exact wording. Your job is to decide whether "
+                        "the candidate faithfully supports the same scientific evidence as the "
+                        "claimed quote and is close enough to be a reasonable fuzzy-match source "
+                        "for that quote.\n\n"
+                        "Accept a candidate when it preserves the important claim-bearing "
+                        "details. These details can include, but are not limited to, biological "
+                        "entities, identifiers, alleles or genotypes, measurements, experimental "
+                        "conditions, species, direction or magnitude of an effect, and other "
+                        "details needed to keep the scientific meaning intact.\n\n"
+                        "PDF extraction artifacts are expected. Do not reject solely because of "
+                        "citation markers, line breaks, typography differences, math or "
+                        "superscript markup, page headers, clipped first or last characters, "
+                        "punctuation changes, or small amounts of surrounding context.\n\n"
+                        "Extra surrounding words or an adjacent sentence fragment are acceptable "
+                        "if the candidate still clearly supports the claimed quote and does not "
+                        "add a conflicting, unsupported, or misleading claim. Prefer the shortest "
+                        "acceptable candidate, but do not reject a good candidate only because it "
+                        "includes harmless surrounding context.\n\n"
+                        "Reject a candidate when it changes, drops, or invents a detail needed to "
+                        "support the claim; changes the scientific meaning; rewrites an "
+                        "identifier, genotype, measurement, condition, species, or other "
+                        "important detail; or is merely related text rather than evidence for the "
+                        "same claim.\n\n"
+                        "Return only JSON. For an accepted candidate, use "
+                        "{\"decision\":\"accept\",\"selected_index\":0,\"reason\":\"one concise "
+                        "sentence explaining the main reason\"}. For reject or ambiguous, use "
+                        "selected_index:null."
                     ),
                 },
                 {
@@ -528,20 +550,16 @@ async def _find_fuzzy_verified_quote(
     best = candidates[0]
     second_score = candidates[1].score if len(candidates) > 1 else 0.0
     margin = best.score - second_score
-    identity_preserved = _identity_tokens_preserved(
-        entity=entity,
-        claimed_quote=claimed_quote,
-        candidate_text=best.text,
-    )
+    claim_coverage = _claim_token_coverage(claimed_quote, best.text)
 
     logger.info(
         "record_evidence fuzzy candidates entity=%r best_score=%.4f second_score=%.4f "
-        "margin=%.4f identity_preserved=%s candidate_count=%d",
+        "margin=%.4f claim_coverage=%.4f candidate_count=%d",
         entity,
         best.score,
         second_score,
         margin,
-        identity_preserved,
+        claim_coverage,
         len(candidates),
     )
 
@@ -565,20 +583,6 @@ async def _find_fuzzy_verified_quote(
             selected_index,
             selected.score,
             _claim_token_coverage(claimed_quote, selected.text),
-        )
-        return None, _QuoteMatch(raw_start=best.raw_start, raw_end=best.raw_end), candidates
-
-    if not _candidate_satisfies_required_identity(
-        entity=entity,
-        claimed_quote=claimed_quote,
-        candidate_text=selected.text,
-    ):
-        logger.warning(
-            "record_evidence rejected LLM-accepted fuzzy candidate because identity tokens changed "
-            "entity=%r selected_index=%d score=%.4f",
-            entity,
-            selected_index,
-            selected.score,
         )
         return None, _QuoteMatch(raw_start=best.raw_start, raw_end=best.raw_end), candidates
 

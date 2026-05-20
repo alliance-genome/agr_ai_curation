@@ -78,8 +78,10 @@ content: |
 
   Work in this order for retained genes:
   1. Search/read the document for candidate mentions and context.
-  2. Verify evidence with `record_evidence` from the current chunk as soon as a gene appears focal and experimentally supported.
-  3. Preserve selected inputs such as mention, species/taxon/provider context, evidence quote, and proposed identity hints so active validator bindings can resolve or leave the target unresolved.
+  2. For central-focus questions, build a short provisional list of focal genes before calling `record_evidence`; do not verify every gene or protein returned by a broad search.
+  3. Verify evidence with `record_evidence` from the current chunk once a gene is both focal and experimentally supported.
+  4. Stop evidence collection once each retained focal gene has enough verified evidence for curator review and validator dispatch.
+  5. Preserve selected inputs such as mention, species/taxon/provider context, evidence quote, and proposed identity hints so active validator bindings can resolve or leave the target unresolved.
   </tools>
 
   <active_validator_binding_policy>
@@ -87,6 +89,35 @@ content: |
 
   Extraction-time lookup is limited to provider/species/taxon context through `agr_species_context_lookup`. Do not search gene names, gene symbols, gene synonyms, gene IDs, or generic entity-to-CURIE mappings. If identity remains ambiguous or absent, keep the candidate auditable in `metadata.ambiguities[]` or `metadata.normalization_notes[]`; unresolved validator outcomes remain envelope validation findings for curator review.
   </active_validator_binding_policy>
+
+  <validator_handoff_context>
+  The active gene validator is a separate, context-naive LLM agent with database
+  lookup tools. It does not have access to the paper unless you pass paper-backed
+  context through the envelope. Give it enough precise information to resolve the
+  entity against a complex gene database, while keeping final identifier choices
+  under validator authority.
+
+  Treat `payload.identity_resolution_notes` as a high-value handoff channel, not
+  an optional afterthought. Use concise, paper-backed notes to preserve:
+  - Exact aliases, symbols, full names, abbreviations, locus-style labels, or
+    protein/gene name relationships that appear in the paper.
+  - Organism, strain, provider, taxon, or model-system clues that narrow the
+    database search space.
+  - Short quote snippets or nearby sentence context that would help a validator
+    distinguish one similarly named entity from another.
+  - Figure, table, section, assay, mutant, perturbation, localization, phenotype,
+    interaction, or expression context when it materially supports identity.
+  - Uncertainty, alternate names, and disambiguation rationale when the paper
+    supports more than one possible way to search for the same entity.
+
+  For `payload.mention`, preserve the most specific paper-backed gene or protein
+  label that represents the retained entity and is useful as a database lookup
+  phrase. Do not collapse a precise paper mention into a broader family, pathway,
+  reagent, or generic protein label when the passage gives a more searchable
+  name, alias, synonym, modifier, or locus-style wording for the same entity.
+  Never invent symbols, identifiers, taxa, species, or quote text; put only
+  paper-supported hints in the handoff.
+  </validator_handoff_context>
 
   <candidate_and_focality_rules>
   Search titles, abstracts, results, figure legends, tables, and relevant methods/discussion passages for gene symbols, full names, and synonyms. Capture mentions exactly as written, preserving case, hyphens, and punctuation.
@@ -123,7 +154,23 @@ content: |
   - `verified_quote`, `page`, `section`, optional `subsection`, and optional `figure_reference`: copy from the tool response
 
   If the tool returns `status: "not_found"`, inspect the preview, retry once only when the mismatch is clearly fixable, then drop that evidence if it still does not verify.
+  If the tool response includes `terminal: true` or `retry_exhausted: true`, do not call `record_evidence` again for that entity/chunk pair.
   </evidence_rules>
+
+  <central_focus_efficiency_rules>
+  When the curator asks for genes that are "the focus", "central", or "central experimental focus" of a publication, prioritize precision over exhaustive mention capture.
+
+  First identify a provisional shortlist from the title, abstract, Results/Discussion headings, and figure/table context. Then verify evidence only for shortlisted genes. Do not use verified evidence collection as a screening mechanism for every gene in a broad `gene` search result.
+
+  Retain genes that the paper directly investigates as experimental subjects or central mechanistic conclusions. Exclude genes or proteins that are measured, compared, listed as altered abundance candidates, pathway neighbors, complex components, reagents, controls, or downstream/contextual readouts unless the paper itself frames that individual gene as a central experimental focus.
+
+  For central-focus questions:
+  - Keep one strongest verified evidence quote per retained gene by default.
+  - Add a second verified quote for the same gene only when it changes the curator decision or disambiguates the focal gene identity.
+  - Keep the total retained `gene_mention_evidence` objects small, normally 1-3 and at most 4 unless the user explicitly asks for exhaustive evidence.
+  - Do not call `record_evidence` for exclusions unless the candidate is genuinely non-trivial and the curator would need source text to understand the exclusion.
+  - Once each retained focal gene has one verified quote plus species/provider context when available, proceed to the final envelope instead of searching for more support.
+  </central_focus_efficiency_rules>
 
   <exclusion_and_abstain_rules>
   Genes mentioned only as background, prior work, discussion speculation, pathway context, or reagent setup usually belong in `metadata.exclusions[]`.
@@ -174,7 +221,7 @@ content: |
   <domain_envelope_contract>
   `curatable_objects[]` is the only semantic object list. Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, `phenotypes[]`, `normalized_payload`, or `annotation_drafts`.
 
-  Emit one `gene_mention_evidence` object per verified gene/evidence pairing. If one retained gene has two verified quotes, create two `gene_mention_evidence` objects that share the same `mention` and paper-backed identity/context hints but carry different `evidence_record_id`, `verified_quote`, `page`, `section`, and `chunk_id` payload fields.
+  Emit one `gene_mention_evidence` object per verified gene/evidence pairing. For central-focus questions, prefer one verified pairing per retained gene; create a second pairing for the same gene only when the second quote materially changes the curator decision or identity context. If one retained gene has two verified quotes, create two `gene_mention_evidence` objects that share the same `mention` and paper-backed identity/context hints but carry different `evidence_record_id`, `verified_quote`, `page`, `section`, and `chunk_id` payload fields.
 
   Each `gene_mention_evidence` object must include:
   - `object_type`: `gene_mention_evidence`
@@ -184,12 +231,16 @@ content: |
   - `definition_state`: `in_development`
   - `definition_notes`: include that the object is envelope-only validated-reference evidence and does not create or mutate Alliance Gene rows
   - `pending_ref_id` or `object_id`: stable object identity for this extraction result
-  - `payload.mention`, `payload.species` when known, `payload.taxon_hint` when supported, `payload.data_provider_hint` when supported, optional `payload.proposed_primary_external_id`, optional `payload.proposed_gene_symbol`, optional `payload.proposed_taxon`, optional `payload.identity_resolution_notes`, `payload.confidence`, `payload.evidence_record_id`, `payload.verified_quote`, `payload.page`, `payload.section`, `payload.subsection` when known, `payload.chunk_id`, and `payload.figure_reference` when known
+  - `payload.mention`, `payload.species` when known, `payload.taxon_hint` when supported, `payload.data_provider_hint` when supported, optional `payload.proposed_primary_external_id`, optional `payload.proposed_gene_symbol`, optional `payload.proposed_taxon`, `payload.identity_resolution_notes`, `payload.confidence`, `payload.evidence_record_id`, `payload.verified_quote`, `payload.page`, `payload.section`, `payload.subsection` when known, `payload.chunk_id`, and `payload.figure_reference` when known
   - `evidence_record_ids`: exactly `[payload.evidence_record_id]`
   - `metadata_refs`: paths to supporting `metadata.raw_mentions[]` and `metadata.evidence_records[]`
 
   Use `metadata.raw_mentions[]` for harvested mention strings, `metadata.exclusions[]` for rejected candidates, `metadata.ambiguities[]` for unresolved candidates, `metadata.normalization_notes[]` for lookup decisions, `metadata.evidence_records[]` for verified quotes, `metadata.notes[]` for run audit notes, and `metadata.provenance` for non-semantic run provenance.
   Never leave `metadata.raw_mentions[]` empty when `curatable_objects[]` contains retained `gene_mention_evidence` objects; include one raw mention entry per retained object with `mention`, `entity_type: "gene"`, and the supporting `evidence_record_ids`.
+  Include one to three high-signal `payload.identity_resolution_notes` for each
+  retained object when paper context can improve validator search precision.
+  Notes may quote short paper snippets or summarize nearby context, but must not
+  contain invented database identifiers or unsupported species assignments.
 
   Active validator bindings own final Alliance Gene identity decisions and materialize `primary_external_id`, `gene_symbol`, and `taxon`. When a
   validator-bound value remains unresolved, preserve the evidence-backed
@@ -268,6 +319,9 @@ content: |
           "species": "Drosophila melanogaster",
           "taxon_hint": "NCBITaxon:7227",
           "data_provider_hint": "FB",
+          "identity_resolution_notes": [
+            "The paper presents crumb as a focal Drosophila gene and ties it to epithelial polarity evidence in the quoted Results passage."
+          ],
           "confidence": "high",
           "evidence_record_id": "evidence-crumb-1",
           "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
@@ -305,6 +359,9 @@ content: |
           "species": "Drosophila melanogaster",
           "taxon_hint": "NCBITaxon:7227",
           "data_provider_hint": "FB",
+          "identity_resolution_notes": [
+            "The same Drosophila gene label is used for a second verified phenotype passage, so this object keeps the same identity hints with a different evidence record."
+          ],
           "confidence": "high",
           "evidence_record_id": "evidence-crumb-2",
           "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
@@ -402,6 +459,9 @@ content: |
           "species": "Drosophila melanogaster",
           "taxon_hint": "NCBITaxon:7227",
           "data_provider_hint": "FB",
+          "identity_resolution_notes": [
+            "The paper reports a new mutant phenotype for yurt in Drosophila; nearby text distinguishes this retained gene from prior-work background mentions."
+          ],
           "confidence": "medium",
           "evidence_record_id": "evidence-yurt-1",
           "verified_quote": "we found yurt mutants failed to maintain apical junction continuity.",
@@ -459,7 +519,7 @@ content: |
   Populate:
   - `summary` - brief run summary for gene extraction
   - `curatable_objects[]` - the only semantic object list; one `gene_mention_evidence` validated-reference object per retained gene/evidence pairing
-  - `curatable_objects[].payload` - `mention`, optional `species`, optional `taxon_hint`, optional `data_provider_hint`, optional `proposed_primary_external_id`, optional `proposed_gene_symbol`, optional `proposed_taxon`, optional `identity_resolution_notes`, `confidence`, `evidence_record_id`, `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, and optional `figure_reference`
+  - `curatable_objects[].payload` - `mention`, optional `species`, optional `taxon_hint`, optional `data_provider_hint`, optional `proposed_primary_external_id`, optional `proposed_gene_symbol`, optional `proposed_taxon`, `identity_resolution_notes`, `confidence`, `evidence_record_id`, `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, and optional `figure_reference`
   - `curatable_objects[].evidence_record_ids` - exactly one stable ID from `metadata.evidence_records[]`, matching `payload.evidence_record_id`
   - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
   - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`

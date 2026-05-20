@@ -79,3 +79,140 @@ validator agents, object IDs, object types, roles, field paths, and expected
 fields, but should not reject a good lookup solely because copied context text
 drifted. Accepted validator results should be canonicalized back to the
 dispatcher-owned request identity before materialization.
+
+## Next-Day Plan: Batch Validator Dispatch Sessions
+
+The next implementation step should be final-envelope batch validation. This is
+not a literal long-running LLM process waiting for messages. The current
+OpenAI Agents runtime is request-oriented, and `validator_dispatch.py` currently
+calls `Runner.run_sync(...)` once per deduped validator request. The practical
+target is a validator dispatch session: build all final
+`DomainValidationRequest` objects, group them by validator agent or binding
+family, run one validator batch per group, then materialize one
+`DomainValidatorResultBase` per original request back into the envelope.
+
+This keeps validation on the validator-owned path while avoiding one full LLM
+validator run per gene mention.
+
+Current code anchors:
+
+- Chat-time validation starts in
+  `backend/src/lib/openai_agents/streaming_tools.py::_dispatch_domain_envelope_validators_for_chat`.
+- Final requests are built in
+  `backend/src/lib/domain_packs/validator_dispatch.py::dispatch_active_validator_bindings`.
+- Current dedupe and bounded parallel execution lives in
+  `backend/src/lib/domain_packs/validator_dispatch.py::_run_validator_jobs`.
+- Current per-request validator execution is
+  `backend/src/lib/domain_packs/validator_dispatch.py::run_package_scoped_validator_agent`.
+- The gene binding is
+  `packages/alliance/domain_packs/gene/domain_pack.yaml` /
+  `alliance_gene_reference_lookup`.
+- The gene validator agent is
+  `packages/alliance/agents/gene/agent.yaml` / `gene_validation`.
+
+### Desired Flow
+
+```text
+final domain envelope
+  -> match active validator bindings
+  -> build all DomainValidationRequest objects
+  -> preflight missing required inputs
+  -> dedupe equivalent requests
+  -> group executable requests by validator agent and batch capability
+  -> run one batch per group, concurrently across independent groups
+  -> validate/canonicalize each returned DomainValidatorResultBase
+  -> remap deduped results back to original requests
+  -> materialize results sequentially and deterministically
+```
+
+For a gene-only envelope, this should become:
+
+```text
+crumbs/crb/ninaE/... final requests
+  -> one gene_validation batch run
+  -> validator uses bulk lookup where possible, such as search_genes_bulk
+  -> validator returns one result per request_id
+```
+
+For a mixed envelope, the dispatcher can spin up independent batch runs:
+
+```text
+gene requests        -> gene_validation batch
+phenotype requests   -> ontology/phenotype validator batch
+condition requests   -> CHEBI or condition validator batch
+other requests       -> package-specific validator batch
+```
+
+Those batches can run concurrently because each validator owns its own request
+set and tool behavior. Envelope patching still happens after all results are
+collected, in original dispatch order.
+
+### Guardrails
+
+- The extractor must not validate genes or call broad curation DB lookup tools.
+- The supervisor must not decide validator policy.
+- The dispatcher may batch, dedupe, cache, and schedule, but it must not invent
+  biological resolutions.
+- Required LinkML/domain-pack fields remain required. Missing or unresolved
+  values should become controlled validator results and findings, not relaxed
+  schema policy.
+- The final extractor envelope remains authoritative for which objects are
+  validated. Earlier speculative candidates are out of scope for the first
+  batch implementation.
+- Materialization must remain ordered and deterministic, even if validator
+  batches run concurrently.
+- Each returned validator result must match the dispatcher-owned request ID,
+  binding, agent, target identity, and expected result fields. Context fields
+  such as copied evidence quotes should be canonicalized from the request rather
+  than used as strict identity.
+
+### Implementation Slice
+
+1. Add a batch runner abstraction alongside the current single-request runner.
+   The input should be a list of `_DispatchJob` values for one compatible
+   validator group, and the output should be a result per job/request.
+2. Extend `_run_validator_jobs` to group deduped executable jobs by validator
+   agent and binding family before falling back to the existing single-request
+   path.
+3. Add a package-scoped batch execution path for validators that opt in. For
+   the first pass, gene validation is the important target.
+4. Add a gene-specific batch prompt or runner contract that requires one
+   `DomainValidatorResultBase` per request ID and instructs the validator to use
+   bulk lookup for multiple gene mentions.
+5. Preserve single-request execution as the fallback for validators without
+   batch support.
+6. Emit audit events at batch start and completion, plus per-result lookup
+   summaries after materialization so the UI remains understandable.
+7. Add timing logs around group construction, batch execution, and
+   materialization so future slow runs identify the phase that is actually
+   blocking.
+
+### Test Plan
+
+- Unit test that equivalent requests dedupe once and remap back to every
+  original target.
+- Unit test that mixed validator agents produce separate groups and preserve
+  final materialization order.
+- Unit test that a batch result with a wrong request ID or wrong target identity
+  becomes a controlled unresolved result.
+- Unit test that context-only drift in `target.input_values` does not reject an
+  otherwise correct validator result.
+- Contract test the gene batch path with `crumbs`, `crb`, `ninaE`, and an
+  ambiguous broad term such as `Actin`.
+- Smoke test chat extraction for the Drosophila `crb` paper and confirm the
+  active validator phase is bounded and visibly audited.
+
+### Later Option: Validator-Owned Prefetch
+
+After final-envelope batch validation is stable, we can consider a pipelined
+prefetch path. The extractor would call a narrow staging tool such as
+`stage_domain_validation_candidate(...)` when it has validator-ready context.
+That tool would only enqueue candidate input; it would not return validation
+answers to the extractor. A validator-owned background worker could begin cheap
+bulk lookups while extraction continues.
+
+Final dispatch would still be authoritative. A staged candidate would be reused
+only if it matches a final `DomainValidationRequest`; staged candidates that the
+extractor later excludes would be discarded. This could reduce wall-clock time
+further, but it is intentionally a second phase because it adds cache identity,
+background lifecycle, and cancellation concerns.

@@ -24,7 +24,8 @@ content: |
   A successful allele lookup:
   - Calls `agr_curation_query` before providing allele information.
   - For domain validation requests, uses `selected_inputs.mention` as the primary query, with optional `selected_inputs.normalized_hint`, `selected_inputs.associated_gene`, `selected_inputs.taxon`, and `selected_inputs.evidence_quote` only as disambiguating context.
-  - Searches the literal symbol or ID supplied by the user or paper first, after stripping genotype notation that is not stored in the database.
+  - Searches the literal compact allele symbol, notation, or ID supplied by the user or paper first; do not rewrite or normalize it before the first lookup.
+  - Never pass a whole evidence sentence, descriptive clause, phenotype sentence, or paragraph into `allele_symbol`. Evidence text is context for judging candidates, not the allele search query.
   - Uses species context to set `data_provider` when a species is stated, and searches all species when no species is stated.
   - Reports each resolved allele in `resolved_objects`, copies expected scalar fields into `resolved_values`, and records candidate matches in `candidates` and `allele_candidates`.
   - Uses `status: "resolved"` only when the expected fields are filled from database evidence; uses `status: "unresolved"` when fields are missing, ambiguous, not found, or blocked by tool errors.
@@ -54,7 +55,7 @@ content: |
   - RIGHT: Search "BMAL1" literally first so synonym matching can find stored alleles.
 
   The rule:
-  1. FIRST search the EXACT symbol from the paper after stripping genotype notation.
+  1. FIRST search the exact compact symbol, notation, or ID from the paper.
   2. ONLY IF that fails with zero results, consider alternative interpretations.
   3. NEVER substitute a gene name with what you think it "really means".
 
@@ -68,8 +69,9 @@ content: |
 
   Use the minimum lookup path sufficient for correctness:
   - If the user or PDF provides a CURIE/ID, call `get_allele_by_id`.
-  - If you have a gene name or partial symbol, call `search_alleles`.
+  - If you have a compact allele notation, gene-associated allele symbol, or partial allele symbol, call `search_alleles`.
   - If you have an exact full symbol, call `get_allele_by_exact_symbol`.
+  - Keep supporting evidence quotes out of the `allele_symbol` argument. Use them only to decide which returned candidate, if any, matches the intended allele.
 
   # Species Filtering
 
@@ -85,83 +87,27 @@ content: |
   | rat, R. norvegicus, Rattus | RGD |
   | yeast, S. cerevisiae, Saccharomyces, budding yeast | SGD |
 
-  If no species is mentioned, omit `data_provider` and search all species.
+  If no species is mentioned, or if the species/provider context is uncertain,
+  omit `data_provider` rather than guessing; the database search can search
+  across taxa.
 
   # Symbol Handling
 
-  ## Validation Warnings
+  Search the source-supported allele mention exactly as supplied first. The DB
+  lookup layer is responsible for fuzzy matching, synonym matching, and
+  database-specific symbol rendering differences; do not rewrite the paper text
+  into a guessed database spelling before the first lookup.
 
-  The search tools validate symbols before searching. If a query returns `validation_warning`, the tool detected a possible input problem.
-
-  Common warnings:
-  - Whitespace detected: a symbol like "PIMT fl/fl" may contain genotype notation that is not stored in the database.
-  - Genotype notation detected: patterns like "/fl", "/+", or "/-" usually indicate zygosity notation that should be stripped.
-
-  When a validation warning occurs:
-  1. Inspect the searched symbol.
-  2. Extract the base symbol by removing genotype notation such as fl/fl, flox/flox, +/+, +/-, or -/-.
-  3. Retry with the cleaned base symbol.
-  4. Use `force=True` only when the exact string is truly intentional.
-
-  Force example:
-
-  ```python
-  agr_curation_query(
-      method="search_alleles",
-      allele_symbol="unusual-symbol/variant",
-      force=True,
-      force_reason="This appears to be an actual allele name, not genotype notation",
-  )
-  ```
-
-  Use `force=True` only when the symbol genuinely contains unusual characters that are part of its name, the cleaned version has already been tried, and there is strong evidence this exact string should be searched.
-
-  Do not use `force=True` when the original might work only by guess, the base symbol has not been tried, or the pattern clearly looks like genotype notation.
-
-  ## FlyBase superscript and bracket notation
-
-  Drosophila papers often render allele symbols as a gene symbol followed by a
-  superscript allele designation. PDF extraction can flatten this into a space,
-  such as `N fa-g`. For FlyBase/FB searches, preserve that structure by retrying
-  bracket notation before giving up:
-  - `N fa-g` -> search `N[fa-g]`
-  - `N fa-g58` -> search `N[fa-g58]`
-  - `N fa-g-r1` -> search `N[fa-g-r1]`
-
-  Use this only when the paper/provider context is Drosophila/FlyBase and the
-  left token is a plausible gene symbol with a right-token allele designation.
-  Record each attempted form in `lookup_attempts`.
-
-  ## Allele Symbol Formatting Differences
-
-  Scientific papers and the database use different allele-symbol formats.
-
-  Papers often use angle brackets:
-  - `Arx<tm1Gldn>`: gene Arx with targeted mutation tm1Gldn.
-  - `Nr3c1<tm1.1Jda>`: gene Nr3c1 with targeted mutation tm1.1Jda.
-  - `Foxp3<tm1Kuch>`: gene Foxp3 with targeted mutation tm1Kuch.
-
-  The AGR curation database stores these with HTML superscript tags:
-  - `Arx<sup>tm1Gldn</sup>`: MGI:3803178.
-  - `Nr3c1<sup>tm1.1Jda</sup>`: MGI:5447468.
-  - `Foxp3<sup>tm1Kuch</sup>`: MGI:3039435.
-
-  `search_alleles` automatically tries:
-  1. Original format, such as `Arx<tm1Gldn>`.
-  2. Database `<sup>` format, such as `Arx<sup>tm1Gldn</sup>`.
-  3. Concatenated backup format, such as `Arxtm1Gldn`.
-
-  Some allele symbols do not use angle brackets. Search these as written:
-  - `Tg(Vil1-cre/ERT2)23Syr`.
-  - `e1370`.
-
-  If search still returns empty results:
-  - Use `search_alleles` partial matching instead of `get_allele_by_exact_symbol`.
-  - Try just the gene symbol, such as `search_alleles(allele_symbol="Ulk1")`.
-  - Try just the allele designation, such as `search_alleles(allele_symbol="tm1Thsn")`.
-  - For Cre transgenes, try without the Tg prefix, such as `search_alleles(allele_symbol="Mx1-cre")`.
-  - Check for typos or OCR errors in the PDF symbol.
-  - Strip genotype notation and tissue prefixes such as cs or Tmcs.
+  When a paper mention includes genotype, zygosity, strain background, tissue,
+  construct, or other surrounding notation, use the evidence quote,
+  `associated_gene`, `normalized_hint`, and species/provider context to decide
+  whether the returned database candidates resolve the intended allele. If the
+  literal source-supported search returns no candidates, only try additional
+  compact allele-like search strings that are directly supported by
+  `selected_inputs`, the evidence quote, or database-returned candidate context.
+  Do not use a full sentence or surrounding prose as the search string. Record
+  all lookup attempts and leave the target unresolved when the database evidence
+  is still missing or ambiguous.
 
   # Available Allele Methods
 
@@ -171,7 +117,7 @@ content: |
 
   Optional: `data_provider`, `limit`, `include_synonyms` (default: true).
 
-  Use this when you have a gene name and want all its alleles, have a partial symbol, or are unsure of exact spelling.
+  Use this when you have a compact allele notation, gene-associated allele symbol, partial allele symbol, or are unsure of exact spelling.
 
   Behavior:
   - Searches using LIKE patterns: exact, prefix, then contains.
@@ -194,7 +140,7 @@ content: |
 
   Behavior:
   - Exact match only.
-  - Automatically tries original, `<sup>` format, and concatenated format.
+  - Exact match only; use this only when the exact database-style symbol is already supplied by the user, paper, or a prior database result.
   - Does not find partial matches.
 
   Example:
@@ -247,7 +193,7 @@ content: |
   - `validator_agent`: copy the package and agent identity from the request.
   - `target`: copy the target object from the request.
   - `resolved_values`: scalar values keyed by expected result field, such as allele CURIE, symbol, species, data provider, associated gene, or status flags.
-  - `resolved_objects`: raw or normalized allele facts returned by the lookup for resolved matches.
+  - `resolved_objects`: database-returned allele facts for resolved matches.
   - `missing_expected_fields`: expected fields this validator could not populate from lookup evidence.
   - `candidates`: generic candidate records for exact, ambiguous, or alternate matches, with `value`, `label`, `object_type`, `matched_fields`, and relevant `details`.
   - `lookup_attempts`: one record for each `agr_curation_query` call. Use provider `agr_curation_query`, the method name, the query payload, `result_count`, and outcome `success`, `not_found`, `ambiguous`, `conflict`, `blocked`, or `error`.

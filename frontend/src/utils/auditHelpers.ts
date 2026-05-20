@@ -32,6 +32,8 @@ import type {
   DomainCategoryErrorDetails,
   DomainSkippedDetails,
   FlowStepEvidenceDetails,
+  FlowStepTimingDetails,
+  FlowValidationGroupTimingDetails,
   FileReadyDetails,
 } from '../types/AuditEvent'
 
@@ -55,6 +57,20 @@ const AGR_ENDPOINT_LABELS: Record<string, string> = {
   allele_search: 'AGR Allele Search',
   gene_search: 'AGR Gene Search',
   disease_search: 'AGR Disease Search'
+}
+
+function formatMilliseconds(ms: number | undefined): string {
+  if (typeof ms !== 'number' || Number.isNaN(ms)) return 'unknown'
+  if (ms >= 1000) return `${(ms / 1000).toFixed(1)}s`
+  return `${Math.round(ms)}ms`
+}
+
+function timingPhaseMs(
+  details: { phaseTimingsMs?: Record<string, number> },
+  key: string
+): number | undefined {
+  const value = details.phaseTimingsMs?.[key]
+  return typeof value === 'number' ? value : undefined
 }
 
 const DOMAIN_DISPLAY_NAMES: Record<string, string> = {
@@ -207,6 +223,8 @@ export function getEventPrefix(type: AuditEventType, details?: any): string {
     DOMAIN_CATEGORY_ERROR: '[DOMAIN ERROR]',
     DOMAIN_SKIPPED: '[DOMAIN]',
     FLOW_STEP_EVIDENCE: '[EVIDENCE]',
+    FLOW_STEP_TIMING: '[TIMING]',
+    FLOW_VALIDATION_GROUP_TIMING: '[TIMING]',
     FILE_READY: '[FILE]'
   }
   return prefixes[type]
@@ -280,6 +298,10 @@ export function getEventSeverity(type: AuditEventType, details?: any): AuditSeve
   if (type === 'FILE_READY') return 'success'
   if (type === 'FLOW_STEP_EVIDENCE') {
     return details?.evidence_count > 0 ? 'success' : 'info'
+  }
+  if (type === 'FLOW_STEP_TIMING') return 'info'
+  if (type === 'FLOW_VALIDATION_GROUP_TIMING') {
+    return details?.status === 'error' ? 'warning' : 'info'
   }
 
   return 'info'
@@ -475,6 +497,51 @@ export function getEventLabel(event: AuditEvent): string {
             : ''
 
       return `Flow step ${flowEvidence.step} captured ${quoteCount}${totalCountText}${sourceText}`
+    }
+
+    case 'FLOW_STEP_TIMING': {
+      const timing = event.details as FlowStepTimingDetails
+      const agentLabel = typeof timing.agentName === 'string' && timing.agentName.trim().length > 0
+        ? timing.agentName.trim()
+        : timing.toolName || 'flow step'
+      const specialistMs = timingPhaseMs(timing, 'specialist_tool_invoke_ms')
+      const validatorMs = timingPhaseMs(timing, 'validation_groups_ms')
+      const parts = [`total ${formatMilliseconds(timing.totalDurationMs)}`]
+      if (specialistMs !== undefined) {
+        parts.push(`specialist ${formatMilliseconds(specialistMs)}`)
+      }
+      if (validatorMs !== undefined && validatorMs > 0) {
+        parts.push(`validation ${formatMilliseconds(validatorMs)}`)
+      }
+      return `Flow step ${timing.step} timing for ${agentLabel}: ${parts.join(', ')}`
+    }
+
+    case 'FLOW_VALIDATION_GROUP_TIMING': {
+      const timing = event.details as FlowValidationGroupTimingDetails
+      const collectMs = timingPhaseMs(timing, 'collect_materialization_inputs_ms')
+      const persistMs = timingPhaseMs(timing, 'persist_candidates_ms')
+      const materializeMs = timingPhaseMs(timing, 'materialize_validator_results_ms')
+      const checkpointMs = timingPhaseMs(timing, 'checkpoint_write_ms')
+      const parts = [`total ${formatMilliseconds(timing.totalDurationMs)}`]
+      if (collectMs !== undefined) {
+        parts.push(`collect ${formatMilliseconds(collectMs)}`)
+      }
+      if (persistMs !== undefined) {
+        parts.push(`persist ${formatMilliseconds(persistMs)}`)
+      }
+      if (materializeMs !== undefined) {
+        parts.push(`materialize ${formatMilliseconds(materializeMs)}`)
+      }
+      if (checkpointMs !== undefined) {
+        parts.push(`checkpoint ${formatMilliseconds(checkpointMs)}`)
+      }
+      const countText = typeof timing.executableGroupCount === 'number'
+        ? ` (${timing.executableGroupCount} executable)`
+        : ''
+      const statusText = timing.status && timing.status !== 'success'
+        ? ` ${timing.status}`
+        : ''
+      return `Flow validation group timing${statusText}${countText}: ${parts.join(', ')}`
     }
 
     case 'SPECIALIST_RETRY': {

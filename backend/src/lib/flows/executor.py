@@ -22,6 +22,7 @@ import asyncio
 import csv
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -120,6 +121,23 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _elapsed_ms(started_at: float) -> int:
+    """Return elapsed monotonic time in milliseconds."""
+
+    return int((time.monotonic() - started_at) * 1000)
+
+
+def _emit_flow_runtime_event(event: dict[str, Any]) -> None:
+    """Best-effort emission into the current live specialist event stream."""
+
+    try:
+        from src.lib.openai_agents.streaming_tools import add_specialist_event
+
+        add_specialist_event(event)
+    except Exception:
+        logger.debug("Failed to emit flow runtime event", exc_info=True)
+
+
 def _tool_safe_agent_id(agent_id: str) -> str:
     """Normalize agent_id into a valid Python identifier segment for tool names."""
     return agent_id.replace("-", "_")
@@ -171,6 +189,66 @@ def _stringify_tool_output(value: Any) -> str:
     if isinstance(value, (dict, list)):
         return json.dumps(value)
     return str(value or "")
+
+
+def _capture_internal_extraction_event_cursor() -> dict[str, Any]:
+    """Capture current specialist-event positions before invoking a flow step."""
+
+    try:
+        from src.lib.openai_agents.streaming_tools import (
+            get_collected_events,
+            get_live_event_list,
+        )
+    except Exception:
+        return {}
+
+    collected_events = get_collected_events()
+    live_events = get_live_event_list()
+    return {
+        "collected_events": collected_events,
+        "collected_index": len(collected_events),
+        "live_events": live_events,
+        "live_index": len(live_events) if live_events is not None else None,
+    }
+
+
+def _internal_extraction_tool_output_since(
+    cursor: Mapping[str, Any],
+    *,
+    tool_name: str,
+) -> Any | None:
+    """Return the latest full structured extraction payload emitted by a step."""
+
+    normalized_tool_name = str(tool_name or "").strip()
+    if not normalized_tool_name:
+        return None
+
+    sources: list[tuple[Any, int]] = []
+    live_events = cursor.get("live_events")
+    live_index = cursor.get("live_index")
+    if isinstance(live_events, list) and isinstance(live_index, int):
+        sources.append((live_events, live_index))
+
+    collected_events = cursor.get("collected_events")
+    collected_index = cursor.get("collected_index")
+    if isinstance(collected_events, list) and isinstance(collected_index, int):
+        sources.append((collected_events, collected_index))
+
+    for events, start_index in sources:
+        for event in reversed(events[start_index:]):
+            if not isinstance(event, Mapping):
+                continue
+            if event.get("type") != INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+                continue
+            details = event.get("details") or {}
+            if not isinstance(details, Mapping):
+                continue
+            if str(details.get("toolName") or "").strip() != normalized_tool_name:
+                continue
+            internal = event.get("internal") or {}
+            if isinstance(internal, Mapping) and "tool_output" in internal:
+                return internal.get("tool_output")
+    return None
 
 
 def _truncate_tool_output(value: Any, max_chars: int = _FLOW_STEP_OUTPUT_PREVIEW_CHARS) -> str:
@@ -907,7 +985,7 @@ async def _collect_flow_validator_materialization_inputs(
                 )
                 continue
 
-            if state == "automatic" and _source_envelope_has_resolved_validator_finding(
+            if state == "automatic" and _source_envelope_has_validator_finding(
                 source_envelope,
                 binding_id=binding_id,
                 match=match,
@@ -1028,18 +1106,15 @@ async def _collect_flow_validator_materialization_inputs(
     return materialization_inputs, selector_findings, result_metadata
 
 
-def _source_envelope_has_resolved_validator_finding(
+def _source_envelope_has_validator_finding(
     source_envelope: DomainEnvelope,
     *,
     binding_id: str,
     match: ValidatorBindingMatch,
 ) -> bool:
-    """Return whether an automatic flow validator was already satisfied upstream."""
+    """Return whether an automatic flow validator already ran upstream."""
 
     for finding in source_envelope.validation_findings:
-        status = getattr(finding.status, "value", finding.status)
-        if str(status) != "resolved":
-            continue
         details = finding.details if isinstance(finding.details, Mapping) else {}
         validation_metadata = details.get("validation_metadata")
         if not isinstance(validation_metadata, Mapping):
@@ -1092,21 +1167,75 @@ async def _execute_validation_groups_for_step(
     if not groups:
         return {}
 
+    timing_started_at = time.monotonic()
+    phase_timings_ms: dict[str, int] = {}
+    group_counts_by_state = {
+        state: len(state_groups)
+        for state, state_groups in sorted(grouped.items())
+    }
+
+    def _emit_validation_group_timing(
+        *,
+        status: str,
+        error: str | None = None,
+        extra_details: Mapping[str, Any] | None = None,
+    ) -> None:
+        details: dict[str, Any] = {
+            "flowId": str(flow.id),
+            "flowName": flow.name,
+            "flowRunId": flow_run_id,
+            "status": status,
+            "totalDurationMs": _elapsed_ms(timing_started_at),
+            "phaseTimingsMs": dict(phase_timings_ms),
+            "groupCount": len(groups),
+            "executableGroupCount": len(executable_groups),
+            "groupCountsByState": group_counts_by_state,
+            "groups": [
+                {
+                    "groupId": group.get("group_id"),
+                    "state": group.get("state"),
+                    "validatorBindingId": group.get("binding_id"),
+                    "required": group.get("required"),
+                    "blocking": group.get("blocking"),
+                }
+                for group in groups
+            ],
+        }
+        if error:
+            details["error"] = error
+        if extra_details:
+            details.update(dict(extra_details))
+        _emit_flow_runtime_event(
+            {
+                "type": "FLOW_VALIDATION_GROUP_TIMING",
+                "timestamp": _now_iso(),
+                "details": details,
+            }
+        )
+
     result_metadata: list[dict[str, Any]] = []
     if candidate is None:
         if executable_groups:
-            raise RuntimeError(
-                "Validation groups require a structured extraction envelope candidate."
-            )
+            error = "Validation groups require a structured extraction envelope candidate."
+            _emit_validation_group_timing(status="error", error=error)
+            raise RuntimeError(error)
+        _emit_validation_group_timing(status="skipped", extra_details={"reason": "no_candidate"})
         return {"validation_group_results": {"groups": result_metadata}}
     if not executable_groups and not grouped.get("skipped"):
+        _emit_validation_group_timing(
+            status="skipped",
+            extra_details={"reason": "no_executable_groups"},
+        )
         return {"validation_group_results": {"groups": result_metadata}}
     if not document_id or not user_id or not session_id:
-        raise RuntimeError(
+        error = (
             "Validation groups require document_id, user_id, and session_id so the "
             "source envelope revision can be persisted."
         )
+        _emit_validation_group_timing(status="error", error=error)
+        raise RuntimeError(error)
 
+    persist_started_at = time.monotonic()
     persisted_records = _persist_flow_extraction_candidates(
         candidates=[candidate],
         document_id=document_id,
@@ -1115,31 +1244,45 @@ async def _execute_validation_groups_for_step(
         trace_id=get_current_trace_id(),
         flow_run_id=flow_run_id,
     )
+    phase_timings_ms["persist_candidates_ms"] = _elapsed_ms(persist_started_at)
     if not persisted_records:
-        raise RuntimeError("Validation groups could not persist the source envelope.")
+        error = "Validation groups could not persist the source envelope."
+        _emit_validation_group_timing(status="error", error=error)
+        raise RuntimeError(error)
 
+    materialization_started_at = time.monotonic()
     source_ref = ensure_domain_envelope_materialization(
         persisted_records[0],
         persist=True,
     )
+    phase_timings_ms["ensure_materialization_ms"] = _elapsed_ms(
+        materialization_started_at
+    )
 
     session = SessionLocal()
     try:
+        source_load_started_at = time.monotonic()
         envelope_row = session.get(DomainEnvelopeModel, source_ref.envelope_id)
         if envelope_row is None:
-            raise RuntimeError(
-                f"Persisted domain envelope {source_ref.envelope_id} was not found."
-            )
+            error = f"Persisted domain envelope {source_ref.envelope_id} was not found."
+            _emit_validation_group_timing(status="error", error=error)
+            raise RuntimeError(error)
         source_envelope_revision = int(envelope_row.revision)
         source_envelope = DomainEnvelope.model_validate(envelope_row.envelope_json)
         domain_pack = resolve_curation_domain_pack_by_id(source_envelope.domain_pack_id)
         if domain_pack is None:
-            raise RuntimeError(
+            error = (
                 "No domain pack is registered for "
                 f"domain_pack_id={source_envelope.domain_pack_id!r}."
             )
+            _emit_validation_group_timing(status="error", error=error)
+            raise RuntimeError(error)
         registry = DomainPackValidationRegistry.from_domain_pack(domain_pack)
+        phase_timings_ms["load_source_envelope_ms"] = _elapsed_ms(
+            source_load_started_at
+        )
 
+        collect_started_at = time.monotonic()
         materialization_inputs, selector_findings, executable_metadata = (
             await _collect_flow_validator_materialization_inputs(
                 source_envelope=source_envelope,
@@ -1150,18 +1293,26 @@ async def _execute_validation_groups_for_step(
                 agent_context=agent_context,
             )
         )
+        phase_timings_ms["collect_materialization_inputs_ms"] = _elapsed_ms(
+            collect_started_at
+        )
         result_metadata.extend(executable_metadata)
 
         working_envelope = source_envelope
         appended_findings: list[ValidationFinding] = []
         if selector_findings:
+            selector_started_at = time.monotonic()
             working_envelope, selector_appended = append_validation_findings_to_envelope(
                 working_envelope,
                 selector_findings,
                 actor_id="flow_validator_group",
             )
             appended_findings.extend(selector_appended)
+            phase_timings_ms["append_selector_findings_ms"] = _elapsed_ms(
+                selector_started_at
+            )
         if materialization_inputs:
+            result_materialization_started_at = time.monotonic()
             materialization_result = materialize_validator_results_into_envelope(
                 working_envelope,
                 domain_pack.metadata,
@@ -1171,9 +1322,13 @@ async def _execute_validation_groups_for_step(
             )
             working_envelope = materialization_result.envelope
             appended_findings.extend(materialization_result.appended_findings)
+            phase_timings_ms["materialize_validator_results_ms"] = _elapsed_ms(
+                result_materialization_started_at
+            )
 
         materialized_revision = source_envelope_revision
         if appended_findings:
+            checkpoint_started_at = time.monotonic()
             checkpoint = write_domain_envelope_checkpoint(
                 session,
                 DomainEnvelopeCheckpointRequest(
@@ -1188,7 +1343,22 @@ async def _execute_validation_groups_for_step(
                 ),
             )
             materialized_revision = checkpoint.revision
+            phase_timings_ms["checkpoint_write_ms"] = _elapsed_ms(
+                checkpoint_started_at
+            )
 
+        _emit_validation_group_timing(
+            status="success",
+            extra_details={
+                "sourceEnvelopeId": source_envelope.envelope_id,
+                "sourceEnvelopeRevision": source_envelope_revision,
+                "materializedEnvelopeRevision": materialized_revision,
+                "materializationInputCount": len(materialization_inputs),
+                "selectorFindingCount": len(selector_findings),
+                "appendedFindingCount": len(appended_findings),
+                "resultGroupCount": len(result_metadata),
+            },
+        )
         return {
             "validation_group_results": {
                 "source_envelope_id": source_envelope.envelope_id,
@@ -1654,6 +1824,8 @@ def get_all_agent_tools(
 
         @function_tool(name_override=tool_name, description_override=description_override)
         async def _ordered_tool(query: str) -> str:
+            step_started_at = time.monotonic()
+            phase_timings_ms: dict[str, int] = {}
             next_idx = execution_state["next_tool_index"]
             if next_idx >= len(ordered_tool_names):
                 return (
@@ -1693,6 +1865,8 @@ def get_all_agent_tools(
             # _create_streaming_tool() returns a FunctionTool (not a plain callable).
             # Invoke via on_invoke_tool() so we execute the underlying specialist wrapper.
             output_filename_token = set_current_output_filename_stem(output_filename_descriptor)
+            internal_event_cursor = _capture_internal_extraction_event_cursor()
+            specialist_started_at = time.monotonic()
             try:
                 direct_formatter_result = await _try_save_tsv_formatter_flow_output(
                     agent_id=agent_id,
@@ -1712,8 +1886,22 @@ def get_all_agent_tools(
                     result = await tool_callable(query=resolved_query)
             finally:
                 reset_current_output_filename_stem(output_filename_token)
+                phase_timings_ms["specialist_tool_invoke_ms"] = _elapsed_ms(
+                    specialist_started_at
+                )
 
-            result_text = _stringify_tool_output(result)
+            internal_payload_started_at = time.monotonic()
+            step_result = _internal_extraction_tool_output_since(
+                internal_event_cursor,
+                tool_name=tool_name,
+            )
+            used_internal_extraction_payload = step_result is not None
+            phase_timings_ms["internal_payload_lookup_ms"] = _elapsed_ms(
+                internal_payload_started_at
+            )
+            if not used_internal_extraction_payload:
+                step_result = result
+            result_text = _stringify_tool_output(step_result)
             output_key = str(node_data.get("output_key") or "").strip()
             if output_key:
                 execution_state["template_variables"][output_key] = result_text
@@ -1723,9 +1911,10 @@ def get_all_agent_tools(
                 if any(validation_schedule.values())
                 else {}
             )
+            candidate_started_at = time.monotonic()
             candidate, step_evidence_metadata = (
                 build_extraction_envelope_candidate_with_evidence(
-                    result,
+                    step_result,
                     agent_key=agent_id,
                     conversation_summary=flow_conversation_summary,
                     adapter_key=curation_adapter_key,
@@ -1740,10 +1929,18 @@ def get_all_agent_tools(
                     },
                 )
             )
+            phase_timings_ms["candidate_evidence_build_ms"] = _elapsed_ms(
+                candidate_started_at
+            )
+            evidence_accumulation_started_at = time.monotonic()
             step_evidence = _accumulate_step_evidence(
                 execution_state["evidence_registry"],
                 step_evidence_metadata.get("evidence_records", []),
             )
+            phase_timings_ms["evidence_accumulation_ms"] = _elapsed_ms(
+                evidence_accumulation_started_at
+            )
+            validation_started_at = time.monotonic()
             validation_group_metadata = await _execute_validation_groups_for_step(
                 flow=flow,
                 candidate=candidate,
@@ -1755,6 +1952,16 @@ def get_all_agent_tools(
                 agent_context=context,
                 flow_conversation_summary=flow_conversation_summary,
             )
+            phase_timings_ms["validation_groups_ms"] = _elapsed_ms(
+                validation_started_at
+            )
+            state_update_started_at = time.monotonic()
+            total_step_duration_ms = _elapsed_ms(step_started_at)
+            step_timing = {
+                "totalDurationMs": total_step_duration_ms,
+                "phaseTimingsMs": dict(phase_timings_ms),
+                "usedInternalExtractionPayload": used_internal_extraction_payload,
+            }
             execution_state["completed_steps"].append(
                 {
                     "step": step_number,
@@ -1764,12 +1971,41 @@ def get_all_agent_tools(
                     "output": result_text,
                     "output_preview": _truncate_tool_output(result_text),
                     "candidate": candidate,
+                    "timing": step_timing,
                     **validation_schedule_metadata,
                     **validation_group_metadata,
                     **step_evidence,
                 }
             )
             execution_state["next_tool_index"] = next_idx + 1
+            phase_timings_ms["state_update_ms"] = _elapsed_ms(
+                state_update_started_at
+            )
+            total_step_duration_ms = _elapsed_ms(step_started_at)
+            step_timing["totalDurationMs"] = total_step_duration_ms
+            step_timing["phaseTimingsMs"] = dict(phase_timings_ms)
+            _emit_flow_runtime_event(
+                {
+                    "type": "FLOW_STEP_TIMING",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "flowId": str(flow.id),
+                        "flowName": flow.name,
+                        "flowRunId": flow_run_id,
+                        "step": step_number,
+                        "toolName": tool_name,
+                        "agentId": agent_id,
+                        "agentName": agent_name,
+                        "totalDurationMs": total_step_duration_ms,
+                        "phaseTimingsMs": dict(phase_timings_ms),
+                        "usedInternalExtractionPayload": (
+                            used_internal_extraction_payload
+                        ),
+                        "candidateBuilt": candidate is not None,
+                        "evidenceCount": int(step_evidence.get("evidence_count") or 0),
+                    },
+                }
+            )
             return result
 
         return _ordered_tool

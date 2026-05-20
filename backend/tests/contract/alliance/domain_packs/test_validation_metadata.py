@@ -379,6 +379,7 @@ def test_alliance_relative_validator_metadata_targets_fields_and_policies():
         "data_provider_hint",
         "species",
         "evidence_quote",
+        "identity_resolution_notes",
     }
     assert (
         "alliance_gene_reference_lookup"
@@ -997,6 +998,9 @@ def test_representative_alliance_active_validators_dispatch_unresolved_results()
                             "primary_external_id": "FB:FBgn0002940",
                             "gene_symbol": "ninaE",
                             "taxon": "NCBITaxon:7227",
+                            "identity_resolution_notes": [
+                                "Fixture paper context identifies ninaE as a Drosophila gene mention."
+                            ],
                             "confidence": "high",
                             "evidence_record_id": "evidence-1",
                             "verified_quote": "ninaE",

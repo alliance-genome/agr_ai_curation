@@ -9,15 +9,22 @@ from src.lib.prompts.context import PromptAssemblyMetadata, PromptRun
 
 def test_configure_api_mode_uses_provider_mode(monkeypatch):
     calls = []
+    transport_calls = []
     monkeypatch.setattr(
         runner,
         "get_default_runner_provider",
         lambda: SimpleNamespace(provider_id="openai", api_mode="chat_completions"),
     )
     monkeypatch.setattr(runner, "set_default_openai_api", lambda mode: calls.append(mode))
+    monkeypatch.setattr(
+        runner,
+        "set_default_openai_responses_transport",
+        lambda transport: transport_calls.append(transport),
+    )
 
     runner._configure_api_mode()
     assert calls[-1] == "chat_completions"
+    assert transport_calls[-1] == "http"
 
     monkeypatch.setattr(
         runner,
@@ -26,6 +33,57 @@ def test_configure_api_mode_uses_provider_mode(monkeypatch):
     )
     runner._configure_api_mode()
     assert calls[-1] == "responses"
+    assert transport_calls[-1] == "websocket"
+
+
+def test_configure_api_mode_can_disable_openai_responses_websocket(monkeypatch):
+    calls = []
+    transport_calls = []
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_ENABLED", "false")
+    monkeypatch.setattr(
+        runner,
+        "get_default_runner_provider",
+        lambda: SimpleNamespace(
+            provider_id="openai",
+            driver="openai_native",
+            api_mode="responses",
+        ),
+    )
+    monkeypatch.setattr(runner, "set_default_openai_api", lambda mode: calls.append(mode))
+    monkeypatch.setattr(
+        runner,
+        "set_default_openai_responses_transport",
+        lambda transport: transport_calls.append(transport),
+    )
+
+    runner._configure_api_mode()
+
+    assert calls[-1] == "responses"
+    assert transport_calls[-1] == "http"
+
+
+def test_configure_api_mode_keeps_websocket_disabled_for_non_responses_provider(monkeypatch):
+    transport_calls = []
+    monkeypatch.setenv("OPENAI_RESPONSES_WEBSOCKET_ENABLED", "true")
+    monkeypatch.setattr(
+        runner,
+        "get_default_runner_provider",
+        lambda: SimpleNamespace(
+            provider_id="gemini",
+            driver="litellm",
+            api_mode="chat_completions",
+        ),
+    )
+    monkeypatch.setattr(runner, "set_default_openai_api", lambda _mode: None)
+    monkeypatch.setattr(
+        runner,
+        "set_default_openai_responses_transport",
+        lambda transport: transport_calls.append(transport),
+    )
+
+    runner._configure_api_mode()
+
+    assert transport_calls[-1] == "http"
 
 
 def test_create_openai_client_kwargs_includes_configured_key_and_base(monkeypatch):
@@ -40,6 +98,20 @@ def test_create_openai_client_kwargs_includes_configured_key_and_base(monkeypatc
     kwargs = runner._create_openai_client_kwargs()
     assert kwargs["api_key"] == "test-key"
     assert kwargs["base_url"] == "https://api.example.test/v1"
+
+
+def test_create_openai_client_kwargs_includes_websocket_base_url(monkeypatch):
+    monkeypatch.setenv("OPENAI_WEBSOCKET_BASE_URL", "wss://api.example.test/v1")
+    monkeypatch.setattr(
+        runner,
+        "get_default_runner_provider",
+        lambda: SimpleNamespace(provider_id="openai"),
+    )
+    monkeypatch.setattr(runner, "get_api_key", lambda _provider: "test-key")
+    monkeypatch.setattr(runner, "get_base_url", lambda _provider: "https://api.example.test/v1")
+
+    kwargs = runner._create_openai_client_kwargs()
+    assert kwargs["websocket_base_url"] == "wss://api.example.test/v1"
 
 
 def test_create_openai_client_kwargs_omits_empty_values(monkeypatch):

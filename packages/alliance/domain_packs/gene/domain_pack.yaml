@@ -140,12 +140,17 @@ object_definitions:
                 source: payload
                 path: verified_quote
                 required: false
+              identity_resolution_notes:
+                source: payload
+                path: identity_resolution_notes
+                required: true
+                allow_multiple: true
             expected_result_fields:
               curie: primary_external_id
               symbol: gene_symbol
               taxon: taxon
             batch:
-              enabled: true
+              enabled: false
               family: alliance_gene_reference_lookup
             required: true
             blocking: false
@@ -263,6 +268,7 @@ object_definitions:
       - field_path: identity_resolution_notes
         field_type: array
         display_name: Identity resolution notes
+        required: true
         description: Extractor-side notes describing paper-backed species or proposed identity hints.
       - field_path: confidence
         field_type: enum

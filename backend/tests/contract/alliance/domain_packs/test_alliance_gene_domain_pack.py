@@ -272,7 +272,13 @@ def test_gene_pack_declares_reference_validator_binding():
             "source": "payload",
             "path": "verified_quote",
             "required": False,
-        }
+        },
+        "identity_resolution_notes": {
+            "source": "payload",
+            "path": "identity_resolution_notes",
+            "required": True,
+            "allow_multiple": True,
+        },
     }
     assert binding["expected_result_fields"] == {
         "curie": "primary_external_id",
@@ -282,6 +288,10 @@ def test_gene_pack_declares_reference_validator_binding():
     assert binding["required"] is True
     assert binding["blocking"] is False
     assert binding["allow_opt_out"] is True
+    assert binding["batch"] == {
+        "enabled": False,
+        "family": GENE_REFERENCE_VALIDATOR_BINDING_ID,
+    }
     assert binding["curator_override"] == {"allowed": False}
 
 

@@ -80,6 +80,8 @@ content: |
   - `data_provider_hint`: paper-backed Alliance provider context.
   - `species`: paper-backed species label.
   - `evidence_quote`: source quote used by the extractor.
+  - `identity_resolution_notes`: extractor-provided paper context, aliases,
+    synonyms, organism/provider clues, uncertainty, and disambiguation hints.
 
   Use verify mode when `proposed_gene_id`, `proposed_symbol`, or
   `proposed_taxon` is present: confirm that database facts match the proposal,
@@ -93,6 +95,16 @@ content: |
   - If the user or paper provides a CURIE/ID, call `get_gene_by_id`.
   - If you have a symbol, name, partial name, or synonym from a paper, call `search_genes`.
   - If you are confident you already have the exact official database symbol, call `get_gene_by_exact_symbol`.
+
+  The extractor that built this request had access to the paper; you do not.
+  Treat `evidence_quote`, `identity_resolution_notes`, `target.input_values`,
+  and the request-level `evidence` records as your paper context. Use them to
+  choose bounded database searches and to disambiguate candidates. If the primary
+  `mention` is broad, generic, or returns multiple plausible candidates, inspect
+  the provided paper context for a more specific paper-supported search phrase,
+  alias, full name, synonym, locus-style wording, organism clue, or protein/gene
+  relationship before returning unresolved. Do not invent a query term that is
+  not supported by the request context, and do not guess a final identifier.
 
   When the input has `mode: "domain_validator_batch"` and a `requests` list,
   validate every request in the list and return a single object with `results`.
@@ -111,7 +123,10 @@ content: |
   send one-symbol `gene_symbols` lists when several requests can share a list
   lookup. Map each returned bulk item back to the matching request and preserve
   unresolved or ambiguous inputs as individual unresolved results instead of
-  dropping them from the batch.
+  dropping them from the batch. The shared bulk lookup is only a first-pass
+  candidate fetch; for any request that remains ambiguous, use the individual
+  request's paper context for focused follow-up lookups before deciding it is
+  unresolved.
 
   # Species Filtering
 
@@ -131,34 +146,13 @@ content: |
 
   # Symbol Handling
 
-  ## Validation Warnings
-
-  The search tools validate symbols before searching. If a query returns `validation_warning`, the tool detected a possible input problem.
-
-  Common warnings:
-  - Whitespace detected: a symbol like "p53 +/+" may contain genotype notation that is not stored in the database.
-  - Genotype notation detected: patterns like "/fl", "/+", or "/-" usually indicate zygosity notation that should be stripped.
-
-  When a validation warning occurs:
-  1. Inspect the searched symbol.
-  2. Extract the base symbol by removing genotype notation such as +/+, +/-, -/-, fl/fl, or flox/flox.
-  3. Retry with the cleaned base symbol.
-  4. Use `force=True` only when the exact string is truly intentional.
-
-  Force example:
-
-  ```python
-  agr_curation_query(
-      method="search_genes",
-      gene_symbol="unusual-symbol/variant",
-      force=True,
-      force_reason="This appears to be an actual gene name, not genotype notation",
-  )
-  ```
-
-  Use `force=True` only when the symbol genuinely contains unusual characters that are part of its name, the cleaned version has already been tried, and there is strong evidence this exact string should be searched.
-
-  Do not use `force=True` when the original might work only by guess, the base symbol has not been tried, or the pattern clearly looks like genotype notation.
+  Search tools send supplied symbols to the curation DB lookup layer without
+  local symbol-shape rejection. If a paper mention includes genotype, zygosity,
+  strain background, tissue, construct, or surrounding notation, use the
+  evidence quote and species/provider context to decide whether database
+  candidates resolve the intended gene. Do not assume local formatting rules are
+  authoritative; let database evidence and returned candidates drive the final
+  decision.
 
   ## Symbol Conventions
 
@@ -188,9 +182,7 @@ content: |
 
   Use this when a batch contains multiple symbol, name, partial-name, or synonym
   requests that can share one provider/species context. In domain validator
-  batch mode, one shared call should cover the whole compatible group, for
-  example `gene_symbols: ["Baboon", "dSmad2", "Mad", "Warts"]` with
-  `data_provider: "FB"`.
+  batch mode, one shared call should cover the whole compatible group.
 
   ## `search_genes` - Recommended for partial matches
 

@@ -225,6 +225,19 @@ def test_gene_extractor_schema_requires_payload_metadata_evidence_alignment():
         _gene_extractor_schema().model_validate(payload)
 
 
+@pytest.mark.parametrize("notes_value", [[], None])
+def test_gene_extractor_schema_requires_identity_resolution_notes(notes_value):
+    payload = _valid_gene_extractor_payload()
+    object_payload = payload["curatable_objects"][0]["payload"]
+    if notes_value is None:
+        object_payload.pop("identity_resolution_notes")
+    else:
+        object_payload["identity_resolution_notes"] = notes_value
+
+    with pytest.raises(ValidationError, match="identity_resolution_notes"):
+        _gene_extractor_schema().model_validate(payload)
+
+
 def test_gene_extractor_schema_canonicalizes_evidence_chunk_id_scaffold():
     payload = _valid_gene_extractor_payload()
     payload["metadata"]["evidence_records"][0]["chunk_id"] = "chunk-with-typo"
@@ -345,7 +358,16 @@ def test_gene_extractor_prompt_agent_and_group_rules_name_domain_envelope_contra
     assert "agr_species_context_lookup" in prompt_content
     assert "agr_species_context_lookup" in agent_data["tools"]
     assert "agr_curation_query" not in agent_data["tools"]
+    assert "context-naive LLM agent" in prompt_content
+    assert "high-value handoff channel" in prompt_content
+    assert "most specific paper-backed gene or protein" in prompt_content
+    assert "useful as a database lookup" in prompt_content
+    assert "`payload.identity_resolution_notes`" in prompt_content
+    assert "Include one to three high-signal" in prompt_content
     assert "Active validator bindings own final Alliance Gene identity decisions" in prompt_content
+    assert "Actin 5C" not in prompt_content
+    assert "Opsin-1" not in prompt_content
+    assert "Crumbs (Crb)" not in prompt_content
     assert "repair_mode" not in prompt_content
     assert "repair_hints" not in prompt_content
     assert "repair_notes" not in prompt_content

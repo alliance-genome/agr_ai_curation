@@ -374,8 +374,8 @@ def test_query_search_genes_bulk_mixed_results_are_partial(monkeypatch):
     assert result.data["items"][1]["count"] == 0
 
 
-def test_query_search_alleles_bulk_includes_validation_warning_items(monkeypatch):
-    """search_alleles_bulk should surface validation warnings per input item."""
+def test_query_search_alleles_bulk_searches_symbols_without_local_shape_validation(monkeypatch):
+    """search_alleles_bulk should query spaced/genotype-like source strings."""
     query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
 
     class _Display:
@@ -430,11 +430,11 @@ def test_query_search_alleles_bulk_includes_validation_warning_items(monkeypatch
     assert result.data["resolution_status"] == "partial"
     assert result.data["status_counts"] == {
         "resolved": 1,
-        "validation_warning": 1,
+        "no_matches": 1,
     }
     assert len(result.data["items"]) == 2
     assert result.data["items"][0]["status"] == "resolved"
-    assert result.data["items"][1]["status"] == "validation_warning"
+    assert result.data["items"][1]["status"] == "no_matches"
 
 
 def test_query_search_alleles_bulk_all_not_found_is_no_matches(monkeypatch):
@@ -478,14 +478,14 @@ def test_query_search_alleles_bulk_all_not_found_is_no_matches(monkeypatch):
     ]
 
 
-def test_query_search_genes_bulk_all_validation_warnings_are_blocked(monkeypatch):
-    """All locally rejected bulk inputs should aggregate as blocked, not no-match."""
+def test_query_search_genes_bulk_searches_spaced_symbols(monkeypatch):
+    """Spaced bulk gene inputs should be queried rather than locally blocked."""
     query_fn = _unwrap_function_tool(agr_curation.agr_curation_query)
 
     class FakeDb:
         @staticmethod
         def search_entities(*_args, **_kwargs):
-            raise AssertionError("validation-blocked bulk inputs must not query the DB")
+            return []
 
     class Resolver:
         @staticmethod
@@ -495,14 +495,6 @@ def test_query_search_genes_bulk_all_validation_warnings_are_blocked(monkeypatch
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
     monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
-    monkeypatch.setattr(
-        agr_curation,
-        "validate_search_symbol",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            is_valid=False,
-            warning_message="invalid symbol",
-        ),
-    )
 
     result = query_fn(
         method="search_genes_bulk",
@@ -513,17 +505,17 @@ def test_query_search_genes_bulk_all_validation_warnings_are_blocked(monkeypatch
 
     assert result.status == "ok"
     assert result.count == 0
-    assert result.lookup_status == "blocked"
-    assert result.failure_classification == "blocked"
+    assert result.lookup_status == "not_found"
+    assert result.failure_classification == "not_found"
     assert result.data["requested_count"] == 2
     assert result.data["resolved_count"] == 0
-    assert result.data["resolution_status"] == "blocked"
-    assert result.data["status_counts"] == {"validation_warning": 2}
+    assert result.data["resolution_status"] == "no_matches"
+    assert result.data["status_counts"] == {"no_matches": 2}
     assert [item["status"] for item in result.data["items"]] == [
-        "validation_warning",
-        "validation_warning",
+        "no_matches",
+        "no_matches",
     ]
-    assert all(item["lookup_status"] == "blocked" for item in result.data["items"])
+    assert all(item["lookup_status"] == "not_found" for item in result.data["items"])
 
 
 def test_search_genes_bulk_uses_batched_detail_lookup(monkeypatch):

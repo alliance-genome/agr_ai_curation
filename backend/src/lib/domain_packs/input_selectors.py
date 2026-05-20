@@ -379,6 +379,8 @@ def _single_value(
                 "Selector resolved an empty list.",
                 field_path=field_path,
             )
+        if selector.allow_multiple is True:
+            return value, None
         if len(value) > 1:
             return _ambiguous(
                 input_name,

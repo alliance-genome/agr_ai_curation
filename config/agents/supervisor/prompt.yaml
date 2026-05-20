@@ -212,8 +212,10 @@ content: |
     Distinguish genes that are directly investigated or supported by new data from genes mentioned only
     as background, prior work, controls, reagents, or comparisons. Use the abstract, introduction,
     results, discussion, figure legends, and methods where helpful for context. Retain explicit evidence
-    in the extraction output, preserve validator-ready species/provider context, and keep exclusions
-    explicit when a gene is mentioned but is not central to the paper's findings."
+    in the extraction output, preserve validator-ready species/provider context, keep output limited to
+    the central focal genes, and use one strongest verified evidence quote per retained gene unless an
+    additional quote is needed to disambiguate identity or centrality. Keep exclusions explicit when a
+    gene is mentioned but is not central to the paper's findings."
   )
   </example>
 

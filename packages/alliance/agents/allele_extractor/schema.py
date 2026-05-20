@@ -71,11 +71,20 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
             for record in self.metadata.evidence_records
             if record.evidence_record_id
         }
+        declared_pending_refs = {
+            (obj.pending_ref_id, obj.object_type)
+            for obj in self.curatable_objects
+            if obj.pending_ref_id
+        }
         for obj in self.curatable_objects:
             self._validate_object_role(obj)
             self._validate_object_definition_state(obj)
             if obj.object_type == "AllelePaperEvidenceAssociation":
-                self._validate_association_object(obj, evidence_record_ids)
+                self._validate_association_object(
+                    obj,
+                    evidence_record_ids,
+                    declared_pending_refs,
+                )
             elif obj.object_type == "EvidenceQuote":
                 self._validate_required_payload_fields(
                     obj,
@@ -104,6 +113,7 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
         cls,
         obj: CuratableObjectEnvelope,
         evidence_record_ids: set[str],
+        declared_pending_refs: set[tuple[str, str]],
     ) -> None:
         cls._validate_required_payload_fields(obj, _REQUIRED_ASSOCIATION_PAYLOAD_FIELDS)
         if obj.payload.get("association_kind") != "allele_paper_evidence":
@@ -143,6 +153,19 @@ class AlleleExtractionResultEnvelope(RuntimeAlleleExtractionResultEnvelope):
             raise ValueError(
                 "AllelePaperEvidenceAssociation must reference supporting objects: "
                 + ", ".join(missing_ref_types)
+            )
+        missing_declared_refs = [
+            f"{ref.object_type}:{ref.pending_ref_id}"
+            for ref in obj.object_refs
+            if ref.pending_ref_id
+            and ref.object_type in _REQUIRED_ASSOCIATION_REF_TYPES
+            and (ref.pending_ref_id, ref.object_type) not in declared_pending_refs
+        ]
+        if missing_declared_refs:
+            raise ValueError(
+                "AllelePaperEvidenceAssociation object_refs[] pending refs must "
+                "resolve to emitted curatable_objects[]: "
+                + ", ".join(missing_declared_refs)
             )
 
         payload_evidence_ids = _string_list(obj.payload.get("evidence_record_ids"))

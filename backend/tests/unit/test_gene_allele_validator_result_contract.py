@@ -281,11 +281,46 @@ def test_gene_prompt_requires_shared_bulk_lookup_for_batch_requests():
         assert fragment in prompt
 
 
-def test_allele_prompt_describes_flybase_bracket_retry_policy():
+def test_gene_prompt_uses_extractor_handoff_context_for_disambiguation():
+    prompt = yaml.safe_load(
+        (ALLIANCE_AGENTS_PATH / "gene" / "prompt.yaml").read_text(encoding="utf-8")
+    )["content"]
+
+    required_fragments = [
+        "`identity_resolution_notes`",
+        "you do not",
+        "request-level `evidence` records",
+        "more specific paper-supported search phrase",
+        "paper context for focused follow-up lookups",
+    ]
+    for fragment in required_fragments:
+        assert fragment in prompt
+
+    for paper_specific_fragment in ("Actin 5C", "Opsin-1", "Crumbs (Crb)"):
+        assert paper_specific_fragment not in prompt
+
+
+def test_allele_prompt_keeps_evidence_quotes_out_of_symbol_queries():
     prompt = yaml.safe_load(
         (ALLIANCE_AGENTS_PATH / "allele" / "prompt.yaml").read_text(encoding="utf-8")
     )["content"]
 
-    assert "`blocked`" in prompt
-    assert "`N fa-g` -> search `N[fa-g]`" in prompt
-    assert "Drosophila/FlyBase" in prompt
+    required_fragments = [
+        "do not rewrite or normalize it before the first lookup",
+        "Never pass a whole evidence sentence",
+        "Evidence text is context for judging candidates",
+        "Keep supporting evidence quotes out of the `allele_symbol` argument",
+        "Do not use a full sentence or surrounding prose as the search string",
+        "omit `data_provider` rather than guessing",
+        "across taxa",
+    ]
+    for fragment in required_fragments:
+        assert fragment in prompt
+
+    forbidden_fragments = [
+        "`N fa-g` -> search `N[fa-g]`",
+        "after stripping genotype notation",
+        "Automatically tries original",
+    ]
+    for fragment in forbidden_fragments:
+        assert fragment not in prompt
