@@ -115,6 +115,7 @@ from src.lib.config import list_model_definitions
 from src.lib.context import set_current_session_id, set_current_user_id
 from src.lib.http_errors import log_exception, raise_sanitized_http_exception
 from src.lib.openai_agents import run_agent_streamed
+from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.models.sql.agent import Agent as UnifiedAgent
 from src.models.sql import SessionLocal, get_db
 from src.models.sql.chat_session import ChatSession as ChatSessionModel
@@ -1048,6 +1049,8 @@ async def test_agent_endpoint(
                 active_groups=active_groups,
                 agent=test_agent,
             ):
+                if event.get("type") == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+                    continue
                 flat = _flatten_runner_event(event, session_id)
                 if flat.get("type") == "RUN_STARTED":
                     trace_id = flat.get("trace_id")

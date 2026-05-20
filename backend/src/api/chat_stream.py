@@ -593,6 +593,9 @@ async def chat_stream_endpoint(
                 if candidate:
                     extraction_candidates.append(candidate)
 
+                if event_type == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+                    continue
+
                 if not evidence_summary_event_received:
                     evidence_record = _build_evidence_record_from_tool_event(event)
                     if evidence_record:

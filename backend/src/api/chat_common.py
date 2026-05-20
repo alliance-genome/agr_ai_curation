@@ -65,6 +65,7 @@ from ..lib.openai_agents.evidence_summary import (
     build_record_evidence_summary_record,
     normalize_evidence_records,
 )
+from ..lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from ..lib.flows.executor import execute_flow
 from ..lib.weaviate_client.documents import get_document
 from ..models.sql import CurationFlow, SessionLocal, get_db
@@ -147,9 +148,9 @@ def _build_extraction_candidate_from_tool_event(
     conversation_summary: Optional[str],
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Optional[ExtractionEnvelopeCandidate]:
-    """Parse a backend-only tool-complete event into a persistable candidate."""
+    """Parse a backend-only extraction event into a persistable candidate."""
 
-    if event.get("type") != "TOOL_COMPLETE":
+    if event.get("type") not in {"TOOL_COMPLETE", INTERNAL_EXTRACTION_RESULT_EVENT_TYPE}:
         return None
 
     details = event.get("details", {}) or {}

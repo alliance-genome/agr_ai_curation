@@ -40,6 +40,7 @@ from .evidence_summary import (
     structured_result_missing_evidence_record_refs,
     structured_result_requires_evidence,
 )
+from .event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from .tool_call_policy import (
     DOCUMENT_REQUIRED_TOOL_NAMES,
     required_package_tool_names_from_metadata,
@@ -2858,6 +2859,25 @@ async def run_specialist_with_events(
         specialist_name=specialist_name,
         tool_name=tool_name,
     )
+
+    if tool_name and _is_domain_envelope_output_json(
+        final_output,
+        expected_output_type=expected_output_type,
+    ):
+        add_specialist_event({
+            "type": INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "details": {
+                "toolName": tool_name,
+                "friendlyName": f"{specialist_name}: Internal Extraction Result",
+                "success": True,
+                "isSpecialistInternal": True,
+            },
+            "internal": {
+                "tool_output": final_output,
+                "output_length": len(str(final_output)),
+            },
+        })
 
     final_output = _reduce_specialist_output_for_supervisor(
         final_output,

@@ -88,6 +88,7 @@ from src.lib.openai_agents.config import (
     resolve_model_provider,
 )
 from src.lib.openai_agents.evidence_summary import _EvidenceRegistry
+from src.lib.openai_agents.event_types import INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
 from src.lib.openai_agents.agents.supervisor_agent import _create_streaming_tool
 from src.lib.document_context import DocumentContext
 from src.schemas.curation_workspace import (
@@ -2596,6 +2597,9 @@ async def execute_flow(
     ):
         event_type = event.get("type")
         event_data = event.get("data", {}) or {}
+
+        if event_type == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+            continue
 
         if event_type == "RUN_STARTED" and "trace_id" in event_data:
             trace_id = event_data.get("trace_id")

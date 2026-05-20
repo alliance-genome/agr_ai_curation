@@ -822,6 +822,9 @@ async def execute_flow_endpoint(
                 event_data = event.get("data", {}) or {}
                 event_details = event.get("details", {}) or {}
 
+                if event_type == INTERNAL_EXTRACTION_RESULT_EVENT_TYPE:
+                    continue
+
                 if event_type == "RUN_STARTED" and "trace_id" in event_data:
                     trace_id = event_data.get("trace_id")
                     _persist_execute_flow_runtime_state(

@@ -745,6 +745,63 @@ def _canonicalize_nested_evidence_references(
     return canonical_record
 
 
+def _retained_evidence_record_ids(payload: Dict[str, Any]) -> List[str]:
+    """Return evidence IDs referenced by retained extraction findings."""
+
+    evidence_record_ids: List[str] = []
+    for _, records in _structured_result_retained_collections(payload):
+        for record in records:
+            evidence_record_ids = _merge_unique_reference_ids(
+                evidence_record_ids,
+                record.get("evidence_record_ids"),
+                _payload_evidence_record_ids(record),
+            )
+    return evidence_record_ids
+
+
+def _prune_unreferenced_evidence_records(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop live evidence records that are not referenced by retained findings."""
+
+    retained_ids = set(_retained_evidence_record_ids(payload))
+    if not retained_ids:
+        return payload
+
+    def _filtered(records_value: Any) -> Any:
+        evidence_records = normalize_evidence_records(records_value)
+        if not evidence_records:
+            return records_value
+        return [
+            record
+            for record in evidence_records
+            if str(record.get("evidence_record_id") or "") in retained_ids
+        ]
+
+    canonical_payload = dict(payload)
+    if "evidence_records" in canonical_payload:
+        canonical_payload["evidence_records"] = _filtered(
+            canonical_payload.get("evidence_records")
+        )
+
+    metadata = canonical_payload.get("metadata")
+    if isinstance(metadata, dict):
+        metadata = dict(metadata)
+        if "evidence_records" in metadata:
+            metadata["evidence_records"] = _filtered(metadata.get("evidence_records"))
+
+        extraction_metadata = metadata.get("extraction_metadata")
+        if isinstance(extraction_metadata, dict):
+            extraction_metadata = dict(extraction_metadata)
+            if "evidence_records" in extraction_metadata:
+                extraction_metadata["evidence_records"] = _filtered(
+                    extraction_metadata.get("evidence_records")
+                )
+            metadata["extraction_metadata"] = extraction_metadata
+
+        canonical_payload["metadata"] = metadata
+
+    return canonical_payload
+
+
 def canonicalize_structured_result_payload(
     value: Any,
     *,
@@ -818,7 +875,7 @@ def canonicalize_structured_result_payload(
             metadata["evidence_records"] = registry.records()
             canonical_payload["metadata"] = metadata
 
-    return canonical_payload
+    return _prune_unreferenced_evidence_records(canonical_payload)
 
 
 def _extract_object_payload_evidence_records(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -948,15 +1005,20 @@ def _structured_result_retained_collections(
         if retained_collections:
             return retained_collections
 
-    curatable_object_records = _coerce_dict_list(payload.get("curatable_objects"))
-    if curatable_object_records:
+    generic_collections: List[Tuple[str, List[Dict[str, Any]]]] = []
+    for field_name in ("objects", "curatable_objects"):
+        object_records = _coerce_dict_list(payload.get(field_name))
+        if not object_records:
+            continue
         evidence_backed_objects = [
             record
-            for record in curatable_object_records
+            for record in object_records
             if _curatable_object_requires_evidence_refs(record)
         ]
         if evidence_backed_objects:
-            return [("curatable_objects", evidence_backed_objects)]
+            generic_collections.append((field_name, evidence_backed_objects))
+    if generic_collections:
+        return generic_collections
 
     item_records = _coerce_dict_list(payload.get("items"))
     return [("items", item_records)] if item_records else []

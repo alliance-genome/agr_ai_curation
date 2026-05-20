@@ -1747,9 +1747,19 @@ async def test_specialist_accepts_schema_defined_retained_collection_without_ite
 
     assert not any(event.get("type") == "SPECIALIST_ERROR" for event in captured_events)
     assert any(event.get("type") == "evidence_summary" for event in captured_events)
-    assert json.loads(result)["curatable_objects"][0]["evidence_record_ids"] == [
-        expected_record["evidence_record_id"]
-    ]
+    try:
+        result_payload = json.loads(result)
+    except json.JSONDecodeError:
+        internal_events = [
+            event
+            for event in captured_events
+            if event.get("type") == streaming_tools.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE
+        ]
+        assert internal_events
+        result_payload = json.loads(internal_events[-1]["internal"]["tool_output"])
+
+    objects = result_payload.get("curatable_objects") or result_payload.get("objects")
+    assert objects[0]["evidence_record_ids"] == [expected_record["evidence_record_id"]]
 
 
 @pytest.mark.asyncio

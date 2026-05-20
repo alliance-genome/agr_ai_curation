@@ -443,6 +443,78 @@ def test_extract_evidence_records_from_domain_envelope_object_payload():
     ]
 
 
+def test_canonicalize_prunes_unreferenced_live_evidence_from_domain_envelope():
+    crb_record = {
+        **_record(
+            entity="crumbs",
+            quote="Crumbs protein acts as a positional cue for rhabdomere.",
+            page=13,
+            section="Results",
+            chunk_id="chunk-crb",
+        ),
+        "evidence_record_id": "evidence-crb",
+    }
+    ninae_record = {
+        **_record(
+            entity="ninaE",
+            quote="Decreased levels of Rh1 induced by mutating the ninaE gene.",
+            page=14,
+            section="Results",
+            chunk_id="chunk-ninae",
+        ),
+        "evidence_record_id": "evidence-ninae",
+    }
+    opsin_record = {
+        **_record(
+            entity="Opsin",
+            quote="Crumbs abundance was lower than the abundance of Opsin.",
+            page=13,
+            section="Results",
+            chunk_id="chunk-opsin",
+        ),
+        "evidence_record_id": "evidence-opsin",
+    }
+    envelope = {
+        "envelope_id": "gene-envelope",
+        "domain_pack_id": "gene",
+        "objects": [
+            {
+                "object_type": "gene_mention_evidence",
+                "pending_ref_id": "gene-crb",
+                "payload": {
+                    "mention": "crumbs",
+                    "evidence_record_id": "evidence-crb",
+                },
+                "evidence_record_ids": ["evidence-crb"],
+            },
+            {
+                "object_type": "gene_mention_evidence",
+                "pending_ref_id": "gene-ninae",
+                "payload": {
+                    "mention": "ninaE",
+                    "evidence_record_id": "evidence-ninae",
+                },
+                "evidence_record_ids": ["evidence-ninae"],
+            },
+        ],
+        "metadata": {"evidence_records": [crb_record, ninae_record]},
+    }
+
+    canonical = canonicalize_structured_result_payload(
+        envelope,
+        preferred_evidence_records=[crb_record, opsin_record, ninae_record],
+    )
+
+    assert [
+        record["evidence_record_id"]
+        for record in canonical["metadata"]["evidence_records"]
+    ] == ["evidence-crb", "evidence-ninae"]
+    assert extract_evidence_records_from_structured_result(canonical) == [
+        crb_record,
+        ninae_record,
+    ]
+
+
 def test_canonicalize_copies_payload_evidence_ids_to_curatable_objects():
     payload = {
         "curatable_objects": [

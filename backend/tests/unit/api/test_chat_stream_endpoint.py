@@ -608,6 +608,116 @@ def test_chat_stream_endpoint_persists_extraction_envelopes_after_success(monkey
     assert persisted_request.metadata["envelope_destination"] == "gene_expression"
 
 
+def test_chat_stream_endpoint_persists_internal_extraction_result_without_streaming_it(monkeypatch):
+    chat._LOCAL_CANCEL_EVENTS.clear()
+    chat._LOCAL_SESSION_OWNERS.clear()
+
+    persisted_requests = []
+
+    _patch_chat_impl(monkeypatch, "set_current_session_id", lambda _session_id: None)
+    _patch_chat_impl(monkeypatch, "set_current_user_id", lambda _user_id: None)
+    _patch_chat_impl(
+        monkeypatch,
+        "document_state",
+        SimpleNamespace(get_document=lambda _uid: {"id": "doc-1", "filename": "paper.pdf"}),
+    )
+    _patch_chat_impl(monkeypatch, "get_groups_from_cognito", lambda _groups: [])
+    _patch_chat_impl(monkeypatch, "_build_context_messages_from_durable_messages", lambda *_args, **_kwargs: ([{"role": "user", "content": _kwargs.get("user_message", "")}] if _kwargs.get("user_message") is not None else []))
+    _patch_chat_impl(
+        monkeypatch,
+        "get_supervisor_tool_agent_map",
+        lambda: {"ask_gene_expression_specialist": "gene-expression"},
+    )
+    monkeypatch.setattr(
+        extraction_results_module,
+        "_get_agent_curation_metadata",
+        lambda _agent_key: {"adapter_key": "gene_expression", "launchable": True},
+    )
+
+    full_extraction_output = json.dumps(
+        {
+            "actor": "gene_expression_specialist",
+            "destination": "gene_expression",
+            "confidence": 0.9,
+            "reasoning": "done",
+            "items": [{"label": "notch"}],
+            "raw_mentions": [],
+            "exclusions": [],
+            "ambiguities": [],
+            "run_summary": {
+                "candidate_count": 1,
+                "kept_count": 1,
+                "excluded_count": 0,
+                "ambiguous_count": 0,
+                "warnings": [],
+            },
+        }
+    )
+
+    async def _register_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return True
+
+    async def _unregister_active_stream(
+        session_id: str,
+        user_id: str | None = None,
+        stream_token: str | None = None,
+    ):
+        return None
+
+    async def _clear_cancel_signal(_session_id: str):
+        return None
+
+    async def _check_cancel_signal(_session_id: str) -> bool:
+        return False
+
+    async def _run_agent_streamed(**_kwargs):
+        yield {"type": "RUN_STARTED", "data": {"trace_id": "trace-456"}}
+        yield {
+            "type": chat_common.INTERNAL_EXTRACTION_RESULT_EVENT_TYPE,
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {"tool_output": full_extraction_output},
+        }
+        yield {
+            "type": "TOOL_COMPLETE",
+            "details": {"toolName": "ask_gene_expression_specialist"},
+            "internal": {
+                "tool_output": "Validated domain envelope result for gene_expression."
+            },
+        }
+        yield {"type": "RUN_FINISHED", "data": {"response": "done"}}
+
+    _patch_chat_impl(monkeypatch, "register_active_stream", _register_active_stream)
+    _patch_chat_impl(monkeypatch, "unregister_active_stream", _unregister_active_stream)
+    _patch_chat_impl(monkeypatch, "clear_cancel_signal", _clear_cancel_signal)
+    _patch_chat_impl(monkeypatch, "check_cancel_signal", _check_cancel_signal)
+    _patch_chat_impl(monkeypatch, "run_agent_streamed", _run_agent_streamed)
+    _patch_chat_impl(
+        monkeypatch,
+        "persist_extraction_results",
+        lambda requests, **_kwargs: persisted_requests.extend(requests),
+    )
+
+    response = asyncio.run(
+        chat.chat_stream_endpoint(
+            chat_message=chat.ChatMessage(message="Extract findings", session_id="session-chat-internal"),
+            user={"sub": "auth-sub", "cognito:groups": []},
+        )
+    )
+
+    events = asyncio.run(_consume_stream(response))
+    asyncio.run(response.background())
+
+    assert [event["type"] for event in events] == ["RUN_STARTED", "TOOL_COMPLETE", "turn_completed"]
+    assert len(persisted_requests) == 1
+    assert persisted_requests[0].origin_session_id == "session-chat-internal"
+    assert persisted_requests[0].candidate_count == 1
+    assert persisted_requests[0].metadata["tool_name"] == "ask_gene_expression_specialist"
+
+
 def test_chat_stream_endpoint_emits_evidence_summary_after_record_evidence(monkeypatch):
     expected_record = _expected_evidence_record()
     chat._LOCAL_CANCEL_EVENTS.clear()
