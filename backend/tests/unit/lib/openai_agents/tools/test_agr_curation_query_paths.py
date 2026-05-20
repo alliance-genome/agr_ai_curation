@@ -10,14 +10,6 @@ def _unwrap_query_function(tool):
     return agr_curation._unwrap_function_tool_callable(tool, "agr_curation_query")
 
 
-def _valid_validation():
-    return SimpleNamespace(is_valid=True, warning_message=None)
-
-
-def _invalid_validation(msg):
-    return SimpleNamespace(is_valid=False, warning_message=msg)
-
-
 def test_get_gene_by_exact_symbol_branches(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
 
@@ -211,12 +203,6 @@ def test_search_genes_detail_fetch_failure_is_transient(monkeypatch):
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
     monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
     monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
-    monkeypatch.setattr(
-        agr_curation,
-        "validate_search_symbol",
-        lambda *_args, **_kwargs: _valid_validation(),
-    )
-
     result = query_fn(
         method="search_genes",
         gene_symbol="unc-54",
@@ -301,12 +287,6 @@ def test_search_genes_filters_obsolete_internal_gene_rows(monkeypatch):
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
     monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:7227": "FB"})
     monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
-    monkeypatch.setattr(
-        agr_curation,
-        "validate_search_symbol",
-        lambda *_args, **_kwargs: _valid_validation(),
-    )
-
     result = query_fn(
         method="search_genes",
         gene_symbol="Crumbs",
@@ -365,12 +345,6 @@ def test_search_genes_records_batch_setup_failure_when_retry_succeeds(monkeypatc
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
     monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
     monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
-    monkeypatch.setattr(
-        agr_curation,
-        "validate_search_symbol",
-        lambda *_args, **_kwargs: _valid_validation(),
-    )
-
     result = query_fn(
         method="search_genes",
         gene_symbol="unc-54",
@@ -419,12 +393,6 @@ def test_search_genes_bulk_detail_fetch_failure_is_transient(monkeypatch):
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
     monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
     monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
-    monkeypatch.setattr(
-        agr_curation,
-        "validate_search_symbol",
-        lambda *_args, **_kwargs: _valid_validation(),
-    )
-
     result = query_fn(
         method="search_genes_bulk",
         gene_symbols=["unc-54"],
@@ -465,12 +433,6 @@ def test_search_genes_bulk_search_failure_is_transient_failure(monkeypatch):
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
     monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
-    monkeypatch.setattr(
-        agr_curation,
-        "validate_search_symbol",
-        lambda *_args, **_kwargs: _valid_validation(),
-    )
-
     result = query_fn(
         method="search_genes_bulk",
         gene_symbols=["unc-54"],
@@ -489,7 +451,7 @@ def test_search_genes_bulk_search_failure_is_transient_failure(monkeypatch):
     assert item["lookup_attempts"][0]["error"]["type"] == "TimeoutError"
 
 
-def test_search_genes_validation_force_and_success_paths(monkeypatch):
+def test_search_genes_queries_symbols_without_local_validation(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
 
     class _Display:
@@ -528,29 +490,18 @@ def test_search_genes_validation_force_and_success_paths(monkeypatch):
     monkeypatch.setattr(agr_curation, "enrich_with_match_context", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(agr_curation, "is_valid_curie", lambda curie: curie.startswith("WB:"))
 
-    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _invalid_validation("bad symbol"))
-    validation_warn = query_fn(method="search_genes", gene_symbol="bad symbol")
-    assert validation_warn.status == "validation_warning"
+    spaced = query_fn(method="search_genes", gene_symbol="bad symbol", data_provider="WB")
+    assert spaced.status == "ok"
+    assert spaced.count == 1
+    assert spaced.lookup_attempts[0]["attempted_query"]["gene_symbol"] == "bad symbol"
 
-    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _valid_validation())
-    monkeypatch.setattr(agr_curation, "check_force_parameters", lambda *_args, **_kwargs: (False, "force reason required"))
-    force_error = query_fn(method="search_genes", gene_symbol="unc-54", force=True, force_reason=None)
-    assert force_error.status == "error"
-    assert "force reason required" in (force_error.message or "")
-
-    override_calls = []
-    monkeypatch.setattr(agr_curation, "check_force_parameters", lambda *_args, **_kwargs: (True, None))
-    monkeypatch.setattr(agr_curation, "log_validation_override", lambda *args, **_kwargs: override_calls.append(args))
     unknown_provider = query_fn(
         method="search_genes",
         gene_symbol="unc-54",
-        force=True,
-        force_reason="intentional",
         data_provider="BAD",
     )
     assert unknown_provider.status == "error"
     assert "Unknown data_provider" in (unknown_provider.message or "")
-    assert override_calls
 
     success = query_fn(method="search_genes", gene_symbol="unc-54", include_synonyms=True, limit=5)
     assert success.status == "ok"
@@ -621,21 +572,14 @@ def test_allele_exact_and_search_paths(monkeypatch):
     exact = query_fn(method="get_allele_by_exact_symbol", allele_symbol="Arx<tm1Gldn>", data_provider="MGI")
     assert exact.status == "ok"
     assert exact.count == 1
-    assert exact.data[0]["matched_variant"] in {"Arx<tm1Gldn>", "Arx<sup>tm1Gldn</sup>", "Arxtm1Gldn"}
+    assert exact.data[0]["matched_variant"] == "Arx<tm1Gldn>"
     assert "invalid_curie_prefixes:1" in (exact.warnings or [])
 
-    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _invalid_validation("bad allele"))
-    warn = query_fn(method="search_alleles", allele_symbol="bad allele", data_provider="MGI")
-    assert warn.status == "validation_warning"
+    spaced_search = query_fn(method="search_alleles", allele_symbol="bad allele", data_provider="MGI", limit=5)
+    assert spaced_search.status == "ok"
+    assert spaced_search.count == 1
+    assert spaced_search.lookup_attempts[0]["attempted_query"]["allele_symbol"] == "bad allele"
 
-    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _valid_validation())
-    monkeypatch.setattr(agr_curation, "check_force_parameters", lambda *_args, **_kwargs: (False, "reason needed"))
-    force_err = query_fn(method="search_alleles", allele_symbol="e1370", force=True, data_provider="MGI")
-    assert force_err.status == "error"
-    assert "reason needed" in (force_err.message or "")
-
-    monkeypatch.setattr(agr_curation, "check_force_parameters", lambda *_args, **_kwargs: (True, None))
-    monkeypatch.setattr(agr_curation, "log_validation_override", lambda *_args, **_kwargs: None)
     search = query_fn(method="search_alleles", allele_symbol="e1370", data_provider="MGI", limit=5)
     assert search.status == "ok"
     assert search.count == 1
@@ -716,11 +660,6 @@ def test_search_alleles_detail_fetch_failure_is_transient(monkeypatch):
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
     monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
     monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
-    monkeypatch.setattr(
-        agr_curation,
-        "validate_search_symbol",
-        lambda *_args, **_kwargs: _valid_validation(),
-    )
 
     result = query_fn(
         method="search_alleles",
@@ -742,7 +681,7 @@ def test_search_alleles_detail_fetch_failure_is_transient(monkeypatch):
     assert detail_attempt["error"]["type"] == "TimeoutError"
 
 
-def test_search_alleles_retries_flattened_flybase_superscript_notation(monkeypatch):
+def test_search_alleles_queries_flattened_flybase_notation_as_supplied(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
     captured = {"patterns": []}
 
@@ -754,12 +693,12 @@ def test_search_alleles_retries_flattened_flybase_superscript_notation(monkeypat
             if (
                 entity_type == "allele"
                 and taxon_curie == "NCBITaxon:7227"
-                and search_pattern == "N<sup>fa-g</sup>"
+                and search_pattern == "N fa-g"
             ):
                 return [
                     {
                         "entity_curie": "FB:FBal0012868",
-                        "entity": "N<sup>fa-g</sup>",
+                        "entity": "N fa-g",
                         "match_type": "exact",
                     }
                 ]
@@ -797,17 +736,12 @@ def test_search_alleles_retries_flattened_flybase_superscript_notation(monkeypat
 
     assert result.status == "ok"
     assert result.count == 1
-    assert "N[fa-g]" in captured["patterns"]
-    assert "N<sup>fa-g</sup>" in captured["patterns"]
+    assert captured["patterns"] == ["N fa-g"]
     assert result.data[0]["curie"] == "FB:FBal0012868"
     assert result.data[0]["symbol"] == "N<sup>fa-g</sup>"
-    assert any(
-        warning.startswith("normalized_allele_symbol_variants:")
-        for warning in result.warnings or []
-    )
 
 
-def test_search_alleles_retries_collapsed_flybase_superscript_notation(monkeypatch):
+def test_search_alleles_queries_collapsed_flybase_notation_as_supplied(monkeypatch):
     query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
     captured = {"patterns": []}
 
@@ -819,12 +753,12 @@ def test_search_alleles_retries_collapsed_flybase_superscript_notation(monkeypat
             if (
                 entity_type == "allele"
                 and taxon_curie == "NCBITaxon:7227"
-                and search_pattern == "N<sup>fa-g</sup>"
+                and search_pattern == "Nfa-g"
             ):
                 return [
                     {
                         "entity_curie": "FB:FBal0012868",
-                        "entity": "N<sup>fa-g</sup>",
+                        "entity": "Nfa-g",
                         "match_type": "exact",
                     }
                 ]
@@ -862,8 +796,67 @@ def test_search_alleles_retries_collapsed_flybase_superscript_notation(monkeypat
 
     assert result.status == "ok"
     assert result.count == 1
-    assert captured["patterns"][:3] == ["Nfa-g", "N[fa-g]", "N<sup>fa-g</sup>"]
+    assert captured["patterns"] == ["Nfa-g"]
     assert result.data[0]["curie"] == "FB:FBal0012868"
+
+
+def test_search_alleles_uses_generic_db_fuzzy_fallback_when_api_search_misses(monkeypatch):
+    query_fn = _unwrap_query_function(agr_curation.agr_curation_query)
+    fallback_calls = []
+
+    class FakeDb:
+        @staticmethod
+        def search_entities(entity_type, search_pattern, taxon_curie, include_synonyms, limit):
+            _ = entity_type, search_pattern, taxon_curie, include_synonyms, limit
+            return []
+
+    class Resolver:
+        @staticmethod
+        def get_db_client():
+            return FakeDb()
+
+    def _fake_fuzzy_fallback(_db, *, search_pattern, taxon_curie, include_synonyms, limit):
+        fallback_calls.append((search_pattern, taxon_curie, include_synonyms, limit))
+        return [
+            {
+                "entity_curie": "FB:FBal0001817",
+                "entity": "crb<sup>11A22</sup>",
+                "match_type": "fuzzy_symbol",
+                "score": 0.71,
+            }
+        ]
+
+    def _fake_batch_fetch(_db, curies):
+        assert curies == ["FB:FBal0001817"]
+        return {
+            "FB:FBal0001817": {
+                "curie": "FB:FBal0001817",
+                "symbol": "crb<sup>11A22</sup>",
+                "name": None,
+                "taxon": "NCBITaxon:7227",
+            }
+        }, {}
+
+    monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
+    monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"FB": "NCBITaxon:7227"})
+    monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:7227": "FB"})
+    monkeypatch.setattr(agr_curation, "_GROUP_MAPPING_LOAD_ERROR", None)
+    monkeypatch.setattr(agr_curation, "_fetch_allele_details_bulk", _fake_batch_fetch)
+    monkeypatch.setattr(agr_curation, "_search_alleles_fuzzy_via_db", _fake_fuzzy_fallback)
+    monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
+
+    result = query_fn(
+        method="search_alleles",
+        allele_symbol="crb 11A22",
+        data_provider="FB",
+        limit=5,
+    )
+
+    assert result.status == "ok"
+    assert result.count == 1
+    assert fallback_calls == [("crb 11A22", "NCBITaxon:7227", True, 5)]
+    assert result.data[0]["curie"] == "FB:FBal0001817"
+    assert result.data[0]["match_type"] == "fuzzy_symbol"
 
 
 def test_search_alleles_records_batch_fetch_failure_when_retry_succeeds(monkeypatch):
@@ -921,11 +914,6 @@ def test_search_alleles_records_batch_fetch_failure_when_retry_succeeds(monkeypa
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
     monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
     monkeypatch.setattr(agr_curation, "is_valid_curie", lambda _curie: True)
-    monkeypatch.setattr(
-        agr_curation,
-        "validate_search_symbol",
-        lambda *_args, **_kwargs: _valid_validation(),
-    )
 
     result = query_fn(
         method="search_alleles",
@@ -975,7 +963,6 @@ def test_search_alleles_bulk_detail_fetch_failure_is_transient(monkeypatch):
     monkeypatch.setattr(agr_curation, "get_curation_resolver", lambda: Resolver())
     monkeypatch.setattr(agr_curation, "PROVIDER_TO_TAXON", {"WB": "NCBITaxon:6239"})
     monkeypatch.setattr(agr_curation, "TAXON_TO_PROVIDER", {"NCBITaxon:6239": "WB"})
-    monkeypatch.setattr(agr_curation, "validate_search_symbol", lambda *_args, **_kwargs: _valid_validation())
 
     result = query_fn(
         method="search_alleles_bulk",

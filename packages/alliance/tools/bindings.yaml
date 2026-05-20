@@ -538,10 +538,10 @@ tools:
                 description: Max results
               force:
                 type: boolean
-                description: Skip symbol validation
+                description: Backward-compatible no-op; search methods no longer perform local symbol-shape validation
               force_reason:
                 type: string
-                description: Reason for skipping validation
+                description: Backward-compatible no-op for older callers
             required: [method]
       required_tool_call:
         enforce: true

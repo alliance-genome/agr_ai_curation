@@ -31,6 +31,7 @@ from agr_ai_curation_runtime.agr_lookup import (
 from .agr_lookup import (
     bulk_item_status_from_lookup_status as _bulk_item_status_from_lookup_status,
     candidate_from_result as _candidate_from_result,
+    create_db_session,
     entity_detail_lookup_attempts as _entity_detail_lookup_attempts,
     fetch_allele_details_bulk as _fetch_allele_details_bulk,
     fetch_gene_details_bulk as _fetch_gene_details_bulk,
@@ -41,16 +42,16 @@ from .agr_lookup import (
 )
 from agr_ai_curation_runtime import get_curation_resolver, is_valid_curie, list_groups
 from .search_helpers import (
-    validate_search_symbol,
     enrich_with_match_context,
-    check_force_parameters,
-    log_validation_override,
 )
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_LIMIT = int(os.getenv("AGR_DEFAULT_LIMIT", "100"))
 HARD_MAX = int(os.getenv("AGR_HARD_MAX", "500"))
+_ALLELE_FUZZY_SIMILARITY_THRESHOLD = float(
+    os.getenv("AGR_ALLELE_FUZZY_SIMILARITY_THRESHOLD", "0.35")
+)
 
 
 class AgrQueryResult(BaseModel):
@@ -499,72 +500,6 @@ def _lookup_response(
     )
 
 
-def _normalize_allele_symbol_for_db(symbol: str) -> List[str]:
-    """
-    Normalize allele symbols for database search.
-
-    The AGR database stores allele symbols with HTML superscript tags:
-    - Database format: Arx<sup>tm1Gldn</sup>
-    - Paper format: Arx<tm1Gldn>
-
-    This function converts paper notation to database format.
-    Returns list of search variants to try (original + normalized).
-    """
-    variants = [symbol]  # Always try original first
-
-    # Convert angle brackets to HTML sup tags: Gene<allele> -> Gene<sup>allele</sup>
-    angle_match = re.match(r'^([A-Za-z0-9]+)<([^>]+)>(.*)$', symbol)
-    if angle_match:
-        gene = angle_match.group(1)
-        allele = angle_match.group(2)
-        suffix = angle_match.group(3)
-        # Add the database format with <sup> tags
-        variants.append(f"{gene}<sup>{allele}</sup>{suffix}")
-        # Also try without any brackets (concatenated)
-        variants.append(f"{gene}{allele}{suffix}")
-
-    # Convert FlyBase bracket notation to the AGR DB's HTML superscript storage form:
-    # N[fa-g] -> N<sup>fa-g</sup>.
-    bracket_match = re.match(r'^([A-Za-z0-9]+)\[([^\]]+)\](.*)$', symbol)
-    if bracket_match:
-        gene = bracket_match.group(1)
-        allele = bracket_match.group(2)
-        suffix = bracket_match.group(3)
-        variants.append(f"{gene}<sup>{allele}</sup>{suffix}")
-        variants.append(f"{gene}{allele}{suffix}")
-
-    # Convert flattened FlyBase superscript notation from PDF text:
-    # "N fa-g" -> "N[fa-g]" / "N<sup>fa-g</sup>" / "Nfa-g".
-    # Require a hyphenated right-hand allele token so generic two-word phrases
-    # such as "bad allele" remain validation warnings rather than guesses.
-    whitespace_match = re.match(
-        r"^([A-Za-z][A-Za-z0-9]*)\s+([A-Za-z0-9][A-Za-z0-9_.:-]*-[A-Za-z0-9_.:-]*)$",
-        symbol.strip(),
-    )
-    if whitespace_match:
-        gene = whitespace_match.group(1)
-        allele = whitespace_match.group(2)
-        variants.append(f"{gene}[{allele}]")
-        variants.append(f"{gene}<sup>{allele}</sup>")
-        variants.append(f"{gene}{allele}")
-
-    # Some PDF/model paths collapse FlyBase superscript notation without the
-    # whitespace ("N fa-g" -> "Nfa-g"). Keep this conservative: only split a
-    # single uppercase gene symbol followed by a hyphenated allele designation.
-    collapsed_flybase_match = re.match(
-        r"^([A-Z])([A-Za-z0-9][A-Za-z0-9_.:-]*-[A-Za-z0-9_.:-]*)$",
-        symbol.strip(),
-    )
-    if collapsed_flybase_match:
-        gene = collapsed_flybase_match.group(1)
-        allele = collapsed_flybase_match.group(2)
-        variants.append(f"{gene}[{allele}]")
-        variants.append(f"{gene}<sup>{allele}</sup>")
-        variants.append(f"{gene} {allele}")
-
-    return list(dict.fromkeys(variants))
-
-
 def _normalize_limit(limit: Optional[int]) -> Tuple[int, List[str]]:
     """Normalize limit with defaults and caps."""
     warnings = []
@@ -664,6 +599,113 @@ def _extract_fullname_attribution(fullname: Optional[str], taxon_id: str) -> Opt
     return None
 
 
+def _search_alleles_fuzzy_via_db(
+    db: Any,
+    *,
+    search_pattern: str,
+    taxon_curie: str,
+    include_synonyms: bool,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Use database trigram similarity as a generic fallback for allele search."""
+    session = None
+    try:
+        from sqlalchemy import text
+
+        session = create_db_session(db)
+        if session is None:
+            return []
+    except Exception as exc:
+        logger.debug("Allele fuzzy fallback setup failed: %s", exc)
+        return []
+
+    try:
+        sql_query = text(
+            """
+            WITH candidates AS (
+                SELECT
+                    be.primaryexternalid AS entity_curie,
+                    symbol.displaytext AS matched_text,
+                    'fuzzy_symbol' AS match_type,
+                    similarity(lower(symbol.displaytext), lower(:search_pattern)) AS score
+                FROM biologicalentity be
+                JOIN allele a ON be.id = a.id
+                LEFT JOIN ontologyterm taxon ON be.taxon_id = taxon.id
+                JOIN slotannotation symbol ON a.id = symbol.singleallele_id
+                    AND symbol.slotannotationtype = 'AlleleSymbolSlotAnnotation'
+                    AND symbol.obsolete = false
+                WHERE taxon.curie = :taxon_curie
+                  AND symbol.displaytext IS NOT NULL
+
+                UNION ALL
+
+                SELECT
+                    be.primaryexternalid AS entity_curie,
+                    synonym.displaytext AS matched_text,
+                    'fuzzy_synonym' AS match_type,
+                    similarity(lower(synonym.displaytext), lower(:search_pattern)) AS score
+                FROM biologicalentity be
+                JOIN allele a ON be.id = a.id
+                LEFT JOIN ontologyterm taxon ON be.taxon_id = taxon.id
+                JOIN slotannotation synonym ON a.id = synonym.singleallele_id
+                    AND synonym.slotannotationtype = 'AlleleSynonymSlotAnnotation'
+                    AND synonym.obsolete = false
+                WHERE :include_synonyms = true
+                  AND taxon.curie = :taxon_curie
+                  AND synonym.displaytext IS NOT NULL
+            ),
+            ranked AS (
+                SELECT
+                    entity_curie,
+                    matched_text,
+                    match_type,
+                    score,
+                    row_number() OVER (
+                        PARTITION BY entity_curie
+                        ORDER BY score DESC, length(matched_text) ASC
+                    ) AS rank
+                FROM candidates
+                WHERE score >= :threshold
+            )
+            SELECT entity_curie, matched_text, match_type, score
+            FROM ranked
+            WHERE rank = 1
+            ORDER BY score DESC, length(matched_text) ASC
+            LIMIT :limit
+            """
+        )
+        rows = session.execute(
+            sql_query,
+            {
+                "search_pattern": search_pattern,
+                "taxon_curie": taxon_curie,
+                "include_synonyms": include_synonyms,
+                "threshold": _ALLELE_FUZZY_SIMILARITY_THRESHOLD,
+                "limit": limit,
+            },
+        ).fetchall()
+        return [
+            {
+                "entity_curie": row[0],
+                "entity": row[1],
+                "match_type": row[2],
+                "score": float(row[3]) if row[3] is not None else None,
+            }
+            for row in rows
+        ]
+    except Exception as exc:
+        logger.debug(
+            "Allele fuzzy fallback failed for %r in %s: %s",
+            search_pattern,
+            taxon_curie,
+            exc,
+        )
+        return []
+    finally:
+        if session is not None:
+            session.close()
+
+
 def _ok(
     data: Any = None,
     count: Optional[int] = None,
@@ -718,34 +760,6 @@ def _err(
         lookup_status=failure_classification,
         failure_classification=failure_classification,
         explanation=explanation,
-        lookup_attempts=lookup_attempts,
-    )
-
-
-def _validation_warning(
-    message: str,
-    *,
-    method: Optional[str] = None,
-    attempted_query: Optional[Dict[str, Any]] = None,
-) -> AgrQueryResult:
-    """Return a validation warning response (not an error, but search not executed)."""
-    lookup_attempts = None
-    if method is not None:
-        query = attempted_query or _attempt_query(method)
-        lookup_attempts = [
-            _lookup_attempt(
-                method=method,
-                attempted_query=query,
-                lookup_status=LOOKUP_STATUS_BLOCKED,
-                explanation=message,
-            )
-        ]
-    return AgrQueryResult(
-        status="validation_warning",
-        message=message,
-        lookup_status=LOOKUP_STATUS_BLOCKED,
-        failure_classification=LOOKUP_STATUS_BLOCKED,
-        explanation=message,
         lookup_attempts=lookup_attempts,
     )
 
@@ -816,16 +830,8 @@ def agr_curation_query(
     """
     Query the Alliance Genome Resources Curation Database.
 
-    IMPORTANT - Symbol Validation:
-    Gene and allele symbol searches (search_genes, search_alleles) are validated
-    before execution. If the symbol contains patterns that suggest genotype notation
-    (whitespace, fl/fl, +/+, -/-), the tool returns a validation_warning instead of
-    searching. This prevents searches that will definitely fail.
-
-    To handle validation_warning:
-    1. Extract the base symbol (remove genotype notation)
-    2. Retry with the cleaned symbol
-    3. Only use force=True if you're certain the exact string should be searched
+    Search methods send supplied symbols to the curation DB lookup layer without
+    local symbol-shape rejection or deterministic nomenclature rewriting.
 
     Args:
         method: The query method (search_genes, search_genes_bulk, search_alleles, search_alleles_bulk, etc.)
@@ -855,13 +861,14 @@ def agr_curation_query(
         include_synonyms: Search synonyms in addition to primary symbols (default: True)
         include_obsolete: Include obsolete controlled vocabulary terms
         limit: Maximum results to return
-        force: Skip symbol validation (default: False). Requires force_reason.
-        force_reason: Explanation for why validation is being skipped (required if force=True)
+        force: Accepted for backward-compatible callers; search methods no longer
+            perform local symbol validation before querying.
+        force_reason: Accepted for backward-compatible callers.
         validation_retry_context: Optional supervisor-owned context for bounded
             validator reruns, such as missing declared result projections.
 
     Returns:
-        AgrQueryResult with status='ok', 'error', or 'validation_warning'
+        AgrQueryResult with status='ok' or 'error'
     """
     limit_value: Optional[int] = None
 
@@ -1201,36 +1208,6 @@ def agr_curation_query(
                     attempted_query=_attempt_query(method, gene_symbol=gene_symbol),
                 )
 
-            # Validate symbol before searching (unless force=True)
-            if not force:
-                validation = validate_search_symbol(gene_symbol, 'gene')
-                if not validation.is_valid:
-                    return _validation_warning(
-                        validation.warning_message,
-                        method=method,
-                        attempted_query=_attempt_query(
-                            method,
-                            gene_symbol=gene_symbol,
-                            data_provider=data_provider,
-                            include_synonyms=include_synonyms,
-                        ),
-                    )
-            else:
-                # Check force_reason is provided
-                force_valid, force_error = check_force_parameters(force, force_reason)
-                if not force_valid:
-                    return _err(
-                        force_error,
-                        method=method,
-                        attempted_query=_attempt_query(
-                            method,
-                            gene_symbol=gene_symbol,
-                            force=force,
-                        ),
-                    )
-                # Log the override for tracing
-                log_validation_override(gene_symbol, 'gene', force_reason)
-
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
@@ -1406,19 +1383,6 @@ def agr_curation_query(
                     attempted_query=_attempt_query(method, gene_symbols=gene_symbols),
                 )
 
-            if force:
-                force_valid, force_error = check_force_parameters(force, force_reason)
-                if not force_valid:
-                    return _err(
-                        force_error,
-                        method=method,
-                        attempted_query=_attempt_query(
-                            method,
-                            gene_symbols=normalized_symbols,
-                            force=force,
-                        ),
-                    )
-
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
@@ -1436,27 +1400,10 @@ def agr_curation_query(
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
             pending_matches: Dict[str, List[Dict[str, Any]]] = {}
-            validation_messages: Dict[str, str] = {}
             gene_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
             lookup_attempts_by_symbol: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
             for symbol in normalized_symbols:
-                if not force:
-                    validation = validate_search_symbol(symbol, 'gene')
-                    if not validation.is_valid:
-                        validation_messages[symbol] = validation.warning_message
-                        lookup_attempts_by_symbol[symbol].append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(method, gene_symbol=symbol),
-                                lookup_status=LOOKUP_STATUS_BLOCKED,
-                                explanation=validation.warning_message,
-                            )
-                        )
-                        continue
-                else:
-                    log_validation_override(symbol, 'gene', force_reason)
-
                 symbol_matches: List[Dict[str, Any]] = []
                 for tid in taxon_ids:
                     try:
@@ -1534,20 +1481,6 @@ def agr_curation_query(
             bulk_items: List[Dict[str, Any]] = []
 
             for symbol in normalized_symbols:
-                if symbol in validation_messages:
-                    bulk_items.append({
-                        "input": symbol,
-                        "status": "validation_warning",
-                        "message": validation_messages[symbol],
-                        "results": [],
-                        "count": 0,
-                        "lookup_status": LOOKUP_STATUS_BLOCKED,
-                        "failure_classification": LOOKUP_STATUS_BLOCKED,
-                        "explanation": validation_messages[symbol],
-                        "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
-                    })
-                    continue
-
                 item_warnings: List[str] = []
                 genes_data: List[Dict[str, Any]] = []
                 for match in pending_matches.get(symbol, []):
@@ -1733,10 +1666,7 @@ def agr_curation_query(
             else:
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
-            # Normalize allele symbol: convert Gene<allele> to Gene<sup>allele</sup>
-            symbol_variants = _normalize_allele_symbol_for_db(allele_symbol)
-            if len(symbol_variants) > 1:
-                logger.info("Normalized allele symbol '%s' to variants: %s", allele_symbol, symbol_variants)
+            symbol_variants = [allele_symbol]
 
             alleles_data: List[Dict[str, Any]] = []
             seen_curies = set()  # Avoid duplicates across variants
@@ -1905,58 +1835,7 @@ def agr_curation_query(
                     attempted_query=_attempt_query(method, allele_symbol=allele_symbol),
                 )
 
-            symbol_variants = _normalize_allele_symbol_for_db(allele_symbol)
-
-            # Validate symbol before searching (unless force=True)
-            if not force:
-                validation = validate_search_symbol(allele_symbol, 'allele')
-                if not validation.is_valid:
-                    valid_variants = [
-                        variant
-                        for variant in symbol_variants
-                        if variant != allele_symbol
-                        and validate_search_symbol(variant, 'allele').is_valid
-                    ]
-                    if valid_variants:
-                        warnings.append(
-                            "normalized_allele_symbol_variants:"
-                            + ",".join(valid_variants)
-                        )
-                        symbol_variants = valid_variants
-                    else:
-                        return _validation_warning(
-                            validation.warning_message,
-                            method=method,
-                            attempted_query=_attempt_query(
-                                method,
-                                allele_symbol=allele_symbol,
-                                data_provider=data_provider,
-                                include_synonyms=include_synonyms,
-                            ),
-                        )
-                else:
-                    symbol_variants = [
-                        variant
-                        for variant in symbol_variants
-                        if validate_search_symbol(variant, 'allele').is_valid
-                    ]
-                    if not symbol_variants:
-                        symbol_variants = [allele_symbol]
-            else:
-                # Check force_reason is provided
-                force_valid, force_error = check_force_parameters(force, force_reason)
-                if not force_valid:
-                    return _err(
-                        force_error,
-                        method=method,
-                        attempted_query=_attempt_query(
-                            method,
-                            allele_symbol=allele_symbol,
-                            force=force,
-                        ),
-                    )
-                # Log the override for tracing
-                log_validation_override(allele_symbol, 'allele', force_reason)
+            symbol_variants = [allele_symbol]
 
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
@@ -1989,6 +1868,14 @@ def agr_curation_query(
                             include_synonyms=include_synonyms,
                             limit=limit_value
                         )
+                        if not results:
+                            results = _search_alleles_fuzzy_via_db(
+                                db,
+                                search_pattern=symbol_variant,
+                                taxon_curie=tid,
+                                include_synonyms=include_synonyms,
+                                limit=limit_value,
+                            )
                         lookup_attempts.append(
                             _lookup_attempt(
                                 method=method,
@@ -2154,19 +2041,6 @@ def agr_curation_query(
                     attempted_query=_attempt_query(method, allele_symbols=allele_symbols),
                 )
 
-            if force:
-                force_valid, force_error = check_force_parameters(force, force_reason)
-                if not force_valid:
-                    return _err(
-                        force_error,
-                        method=method,
-                        attempted_query=_attempt_query(
-                            method,
-                            allele_symbols=normalized_symbols,
-                            force=force,
-                        ),
-                    )
-
             if data_provider:
                 taxon = PROVIDER_TO_TAXON.get(data_provider)
                 if not taxon:
@@ -2184,27 +2058,10 @@ def agr_curation_query(
                 taxon_ids = list(PROVIDER_TO_TAXON.values())
 
             pending_matches: Dict[str, List[Dict[str, Any]]] = {}
-            validation_messages: Dict[str, str] = {}
             allele_curies_by_taxon: Dict[str, List[str]] = defaultdict(list)
             lookup_attempts_by_symbol: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
 
             for symbol in normalized_symbols:
-                if not force:
-                    validation = validate_search_symbol(symbol, 'allele')
-                    if not validation.is_valid:
-                        validation_messages[symbol] = validation.warning_message
-                        lookup_attempts_by_symbol[symbol].append(
-                            _lookup_attempt(
-                                method=method,
-                                attempted_query=_attempt_query(method, allele_symbol=symbol),
-                                lookup_status=LOOKUP_STATUS_BLOCKED,
-                                explanation=validation.warning_message,
-                            )
-                        )
-                        continue
-                else:
-                    log_validation_override(symbol, 'allele', force_reason)
-
                 symbol_matches: List[Dict[str, Any]] = []
                 for tid in taxon_ids:
                     try:
@@ -2215,6 +2072,14 @@ def agr_curation_query(
                             include_synonyms=include_synonyms,
                             limit=limit_value
                         )
+                        if not results:
+                            results = _search_alleles_fuzzy_via_db(
+                                db,
+                                search_pattern=symbol,
+                                taxon_curie=tid,
+                                include_synonyms=include_synonyms,
+                                limit=limit_value,
+                            )
                         lookup_attempts_by_symbol[symbol].append(
                             _lookup_attempt(
                                 method=method,
@@ -2282,20 +2147,6 @@ def agr_curation_query(
             bulk_items: List[Dict[str, Any]] = []
 
             for symbol in normalized_symbols:
-                if symbol in validation_messages:
-                    bulk_items.append({
-                        "input": symbol,
-                        "status": "validation_warning",
-                        "message": validation_messages[symbol],
-                        "results": [],
-                        "count": 0,
-                        "lookup_status": LOOKUP_STATUS_BLOCKED,
-                        "failure_classification": LOOKUP_STATUS_BLOCKED,
-                        "explanation": validation_messages[symbol],
-                        "lookup_attempts": lookup_attempts_by_symbol.get(symbol) or None,
-                    })
-                    continue
-
                 item_warnings: List[str] = []
                 alleles_data: List[Dict[str, Any]] = []
                 seen_curies = set()

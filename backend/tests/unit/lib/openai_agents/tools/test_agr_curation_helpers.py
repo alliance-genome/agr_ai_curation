@@ -48,31 +48,7 @@ def test_curie_validation_helpers(monkeypatch):
     assert invalid_count == 1
 
 
-def test_normalization_helpers(monkeypatch):
-    assert agr_curation._normalize_allele_symbol_for_db("Arx<tm1Gldn>") == [
-        "Arx<tm1Gldn>",
-        "Arx<sup>tm1Gldn</sup>",
-        "Arxtm1Gldn",
-    ]
-    assert agr_curation._normalize_allele_symbol_for_db("N fa-g") == [
-        "N fa-g",
-        "N[fa-g]",
-        "N<sup>fa-g</sup>",
-        "Nfa-g",
-    ]
-    assert agr_curation._normalize_allele_symbol_for_db("N[fa-g]") == [
-        "N[fa-g]",
-        "N<sup>fa-g</sup>",
-        "Nfa-g",
-    ]
-    assert agr_curation._normalize_allele_symbol_for_db("Nfa-g") == [
-        "Nfa-g",
-        "N[fa-g]",
-        "N<sup>fa-g</sup>",
-        "N fa-g",
-    ]
-    assert agr_curation._normalize_allele_symbol_for_db("plain_symbol") == ["plain_symbol"]
-
+def test_limit_normalization_helpers(monkeypatch):
     monkeypatch.setattr(agr_curation, "DEFAULT_LIMIT", 100)
     monkeypatch.setattr(agr_curation, "HARD_MAX", 500)
 
@@ -119,10 +95,6 @@ def test_result_factories():
     err = agr_curation._err("boom")
     assert err.status == "error"
     assert err.message == "boom"
-
-    warning = agr_curation._validation_warning("bad symbol")
-    assert warning.status == "validation_warning"
-    assert warning.message == "bad symbol"
 
 
 def test_lookup_response_serializes_attempts_candidates_and_projections():

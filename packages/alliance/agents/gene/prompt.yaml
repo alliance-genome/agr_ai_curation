@@ -146,34 +146,13 @@ content: |
 
   # Symbol Handling
 
-  ## Validation Warnings
-
-  The search tools validate symbols before searching. If a query returns `validation_warning`, the tool detected a possible input problem.
-
-  Common warnings:
-  - Whitespace detected: a symbol like "p53 +/+" may contain genotype notation that is not stored in the database.
-  - Genotype notation detected: patterns like "/fl", "/+", or "/-" usually indicate zygosity notation that should be stripped.
-
-  When a validation warning occurs:
-  1. Inspect the searched symbol.
-  2. Extract the base symbol by removing genotype notation such as +/+, +/-, -/-, fl/fl, or flox/flox.
-  3. Retry with the cleaned base symbol.
-  4. Use `force=True` only when the exact string is truly intentional.
-
-  Force example:
-
-  ```python
-  agr_curation_query(
-      method="search_genes",
-      gene_symbol="unusual-symbol/variant",
-      force=True,
-      force_reason="This appears to be an actual gene name, not genotype notation",
-  )
-  ```
-
-  Use `force=True` only when the symbol genuinely contains unusual characters that are part of its name, the cleaned version has already been tried, and there is strong evidence this exact string should be searched.
-
-  Do not use `force=True` when the original might work only by guess, the base symbol has not been tried, or the pattern clearly looks like genotype notation.
+  Search tools send supplied symbols to the curation DB lookup layer without
+  local symbol-shape rejection. If a paper mention includes genotype, zygosity,
+  strain background, tissue, construct, or surrounding notation, use the
+  evidence quote and species/provider context to decide whether database
+  candidates resolve the intended gene. Do not assume local formatting rules are
+  authoritative; let database evidence and returned candidates drive the final
+  decision.
 
   ## Symbol Conventions
 
