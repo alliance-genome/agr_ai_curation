@@ -143,7 +143,7 @@ object_definitions:
               identity_resolution_notes:
                 source: payload
                 path: identity_resolution_notes
-                required: false
+                required: true
                 allow_multiple: true
             expected_result_fields:
               curie: primary_external_id
@@ -268,6 +268,7 @@ object_definitions:
       - field_path: identity_resolution_notes
         field_type: array
         display_name: Identity resolution notes
+        required: true
         description: Extractor-side notes describing paper-backed species or proposed identity hints.
       - field_path: confidence
         field_type: enum

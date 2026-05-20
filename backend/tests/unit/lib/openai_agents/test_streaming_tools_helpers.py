@@ -428,7 +428,9 @@ def _gene_extractor_domain_output() -> str:
                         "proposed_primary_external_id": None,
                         "proposed_gene_symbol": "crb",
                         "proposed_taxon": None,
-                        "identity_resolution_notes": [],
+                        "identity_resolution_notes": [
+                            "The paper identifies crumbs as a Drosophila gene and the quote provides focal identity context."
+                        ],
                         "confidence": "high",
                         "evidence_record_id": "evidence-crumbs-1",
                         "verified_quote": "Crumbs protein acts as a positional cue for rhabdomere morphogenesis.",

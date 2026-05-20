@@ -135,7 +135,7 @@ class GeneMentionEvidencePayload(BaseModel):
         description="Extractor-proposed NCBI Taxon CURIE for validator confirmation",
     )
     identity_resolution_notes: list[StrictStr] = Field(
-        default_factory=list,
+        min_length=1,
         description=(
             "Auditable paper-backed notes, aliases, synonyms, organism/provider "
             "clues, and context snippets that help the validator resolve identity"
@@ -193,6 +193,8 @@ class GeneMentionEvidencePayload(BaseModel):
             if not normalized:
                 raise ValueError("identity_resolution_notes must not contain empty values")
             normalized_notes.append(normalized)
+        if not normalized_notes:
+            raise ValueError("identity_resolution_notes must contain at least one value")
         return normalized_notes
 
     @field_validator("page", mode="before")

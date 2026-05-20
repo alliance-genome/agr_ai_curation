@@ -231,13 +231,13 @@ content: |
   - `definition_state`: `in_development`
   - `definition_notes`: include that the object is envelope-only validated-reference evidence and does not create or mutate Alliance Gene rows
   - `pending_ref_id` or `object_id`: stable object identity for this extraction result
-  - `payload.mention`, `payload.species` when known, `payload.taxon_hint` when supported, `payload.data_provider_hint` when supported, optional `payload.proposed_primary_external_id`, optional `payload.proposed_gene_symbol`, optional `payload.proposed_taxon`, optional `payload.identity_resolution_notes`, `payload.confidence`, `payload.evidence_record_id`, `payload.verified_quote`, `payload.page`, `payload.section`, `payload.subsection` when known, `payload.chunk_id`, and `payload.figure_reference` when known
+  - `payload.mention`, `payload.species` when known, `payload.taxon_hint` when supported, `payload.data_provider_hint` when supported, optional `payload.proposed_primary_external_id`, optional `payload.proposed_gene_symbol`, optional `payload.proposed_taxon`, `payload.identity_resolution_notes`, `payload.confidence`, `payload.evidence_record_id`, `payload.verified_quote`, `payload.page`, `payload.section`, `payload.subsection` when known, `payload.chunk_id`, and `payload.figure_reference` when known
   - `evidence_record_ids`: exactly `[payload.evidence_record_id]`
   - `metadata_refs`: paths to supporting `metadata.raw_mentions[]` and `metadata.evidence_records[]`
 
   Use `metadata.raw_mentions[]` for harvested mention strings, `metadata.exclusions[]` for rejected candidates, `metadata.ambiguities[]` for unresolved candidates, `metadata.normalization_notes[]` for lookup decisions, `metadata.evidence_records[]` for verified quotes, `metadata.notes[]` for run audit notes, and `metadata.provenance` for non-semantic run provenance.
   Never leave `metadata.raw_mentions[]` empty when `curatable_objects[]` contains retained `gene_mention_evidence` objects; include one raw mention entry per retained object with `mention`, `entity_type: "gene"`, and the supporting `evidence_record_ids`.
-  Prefer one to three high-signal `payload.identity_resolution_notes` for each
+  Include one to three high-signal `payload.identity_resolution_notes` for each
   retained object when paper context can improve validator search precision.
   Notes may quote short paper snippets or summarize nearby context, but must not
   contain invented database identifiers or unsupported species assignments.
@@ -319,6 +319,9 @@ content: |
           "species": "Drosophila melanogaster",
           "taxon_hint": "NCBITaxon:7227",
           "data_provider_hint": "FB",
+          "identity_resolution_notes": [
+            "The paper presents crumb as a focal Drosophila gene and ties it to epithelial polarity evidence in the quoted Results passage."
+          ],
           "confidence": "high",
           "evidence_record_id": "evidence-crumb-1",
           "verified_quote": "Crumb is essential for maintaining epithelial polarity in the embryo.",
@@ -356,6 +359,9 @@ content: |
           "species": "Drosophila melanogaster",
           "taxon_hint": "NCBITaxon:7227",
           "data_provider_hint": "FB",
+          "identity_resolution_notes": [
+            "The same Drosophila gene label is used for a second verified phenotype passage, so this object keeps the same identity hints with a different evidence record."
+          ],
           "confidence": "high",
           "evidence_record_id": "evidence-crumb-2",
           "verified_quote": "Loss of crumb disrupted apical membrane organization in 83% of embryos.",
@@ -453,6 +459,9 @@ content: |
           "species": "Drosophila melanogaster",
           "taxon_hint": "NCBITaxon:7227",
           "data_provider_hint": "FB",
+          "identity_resolution_notes": [
+            "The paper reports a new mutant phenotype for yurt in Drosophila; nearby text distinguishes this retained gene from prior-work background mentions."
+          ],
           "confidence": "medium",
           "evidence_record_id": "evidence-yurt-1",
           "verified_quote": "we found yurt mutants failed to maintain apical junction continuity.",
@@ -510,7 +519,7 @@ content: |
   Populate:
   - `summary` - brief run summary for gene extraction
   - `curatable_objects[]` - the only semantic object list; one `gene_mention_evidence` validated-reference object per retained gene/evidence pairing
-  - `curatable_objects[].payload` - `mention`, optional `species`, optional `taxon_hint`, optional `data_provider_hint`, optional `proposed_primary_external_id`, optional `proposed_gene_symbol`, optional `proposed_taxon`, optional `identity_resolution_notes`, `confidence`, `evidence_record_id`, `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, and optional `figure_reference`
+  - `curatable_objects[].payload` - `mention`, optional `species`, optional `taxon_hint`, optional `data_provider_hint`, optional `proposed_primary_external_id`, optional `proposed_gene_symbol`, optional `proposed_taxon`, `identity_resolution_notes`, `confidence`, `evidence_record_id`, `verified_quote`, `page`, `section`, optional `subsection`, `chunk_id`, and optional `figure_reference`
   - `curatable_objects[].evidence_record_ids` - exactly one stable ID from `metadata.evidence_records[]`, matching `payload.evidence_record_id`
   - `curatable_objects[].metadata_refs` - references to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, or `exclusions[0]`
   - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`

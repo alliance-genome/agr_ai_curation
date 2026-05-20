@@ -276,7 +276,7 @@ def test_gene_pack_declares_reference_validator_binding():
         "identity_resolution_notes": {
             "source": "payload",
             "path": "identity_resolution_notes",
-            "required": False,
+            "required": True,
             "allow_multiple": True,
         },
     }
