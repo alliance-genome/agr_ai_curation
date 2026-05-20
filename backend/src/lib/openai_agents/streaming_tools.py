@@ -1047,12 +1047,17 @@ def _domain_envelope_supervisor_summary(payload: Dict[str, Any]) -> str:
     findings = payload.get("validation_findings")
     if isinstance(findings, list):
         status_counts: Dict[str, int] = {}
+        resolved_messages: List[str] = []
         unresolved_messages: List[str] = []
         for finding in findings:
             if not isinstance(finding, dict):
                 continue
             status = str(finding.get("status") or "unknown").strip() or "unknown"
             status_counts[status] = status_counts.get(status, 0) + 1
+            if status == "resolved" and len(resolved_messages) < 5:
+                resolved_summary = _domain_envelope_resolved_finding_summary(finding)
+                if resolved_summary:
+                    resolved_messages.append(resolved_summary)
             if status != "resolved" and len(unresolved_messages) < 3:
                 code = str(finding.get("code") or "validation finding").strip()
                 message = str(finding.get("message") or "").strip()
@@ -1064,10 +1069,109 @@ def _domain_envelope_supervisor_summary(payload: Dict[str, Any]) -> str:
                 f"{status}={count}" for status, count in sorted(status_counts.items())
             )
             lines.append(f"Validation findings: {counts}.")
+        for message in resolved_messages:
+            lines.append(f"Resolved validator finding: {message}")
         for message in unresolved_messages:
             lines.append(f"Unresolved validator finding: {message}")
 
     return "\n".join(lines)
+
+
+def _domain_envelope_resolved_finding_summary(finding: Dict[str, Any]) -> str:
+    details = finding.get("details")
+    if not isinstance(details, dict):
+        return ""
+
+    validation_result = details.get("validation_result")
+    if not isinstance(validation_result, dict):
+        validation_result = {}
+    resolved_values = validation_result.get("resolved_values")
+    if not isinstance(resolved_values, dict):
+        resolved_values = {}
+
+    lookup_attempts = details.get("lookup_attempts")
+    if not isinstance(lookup_attempts, list):
+        lookup_attempts = []
+
+    validation_request = details.get("validation_request")
+    if not isinstance(validation_request, dict):
+        validation_request = {}
+
+    target_label = _domain_envelope_request_label(validation_request)
+    resolved_id = _first_scalar_value(
+        resolved_values,
+        ("curie", "primary_external_id", "external_id", "id", "identifier"),
+    ) or _first_lookup_attempt_scalar(lookup_attempts, "resolved_id")
+    resolved_symbol = _first_scalar_value(
+        resolved_values,
+        ("symbol", "allele_symbol", "gene_symbol", "label", "name"),
+    ) or _first_lookup_attempt_scalar(lookup_attempts, "resolved_label")
+    resolved_taxon = _first_scalar_value(resolved_values, ("taxon", "taxon_curie"))
+
+    parts: list[str] = []
+    if target_label:
+        parts.append(_truncate_for_supervisor_summary(target_label, limit=80))
+    if resolved_id:
+        parts.append(f"curie={_truncate_for_supervisor_summary(resolved_id)}")
+    if resolved_symbol:
+        parts.append(f"symbol={_truncate_for_supervisor_summary(resolved_symbol)}")
+    if resolved_taxon:
+        parts.append(f"taxon={_truncate_for_supervisor_summary(resolved_taxon)}")
+    if not parts:
+        message = str(finding.get("message") or "").strip()
+        return _truncate_for_supervisor_summary(message, limit=180) if message else ""
+    return "; ".join(parts)
+
+
+def _domain_envelope_request_label(validation_request: Dict[str, Any]) -> str:
+    for source_key in ("selected_inputs",):
+        source = validation_request.get(source_key)
+        if not isinstance(source, dict):
+            continue
+        label = _first_scalar_value(
+            source,
+            ("mention", "label", "name", "symbol", "curie", "id"),
+        )
+        if label:
+            return label
+
+    target = validation_request.get("target")
+    if not isinstance(target, dict):
+        return ""
+    input_values = target.get("input_values")
+    if isinstance(input_values, dict):
+        label = _first_scalar_value(
+            input_values,
+            ("mention", "label", "name", "symbol", "curie", "id"),
+        )
+        if label:
+            return label
+    return _first_scalar_value(target, ("object_id", "object_type", "field_path")) or ""
+
+
+def _first_scalar_value(source: Dict[str, Any], keys: tuple[str, ...]) -> str:
+    for key in keys:
+        value = source.get(key)
+        if _is_supervisor_summary_scalar(value):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
+
+
+def _first_lookup_attempt_scalar(
+    lookup_attempts: list[Any],
+    key: str,
+) -> str:
+    for attempt in lookup_attempts:
+        if not isinstance(attempt, dict):
+            continue
+        value = attempt.get(key)
+        if _is_supervisor_summary_scalar(value):
+            text = str(value).strip()
+            if text:
+                return text
+    return ""
 
 
 def _domain_envelope_supervisor_payload_fields(payload: Any) -> str:

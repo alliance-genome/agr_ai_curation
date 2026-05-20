@@ -140,6 +140,56 @@ def test_domain_envelope_reduction_prioritizes_materialized_fields_for_superviso
         json.loads(result)
 
 
+def test_domain_envelope_reduction_includes_resolved_validator_values():
+    envelope_output = json.dumps(
+        {
+            "envelope_id": "env-test-allele",
+            "domain_pack_id": "agr.alliance.allele",
+            "domain_pack_version": "0.1.0",
+            "objects": [
+                {
+                    "object_type": "AllelePaperEvidenceAssociation",
+                    "object_role": "curatable_unit",
+                    "pending_ref_id": "allele-assoc-crb-11A22",
+                    "status": "pending",
+                    "payload": {"mention": "crb 11A22"},
+                }
+            ],
+            "validation_findings": [
+                {
+                    "code": "domain_pack.validator_resolved",
+                    "severity": "info",
+                    "status": "resolved",
+                    "message": "Resolved crb 11A22.",
+                    "details": {
+                        "validation_request": {
+                            "selected_inputs": {"mention": "crb 11A22"}
+                        },
+                        "validation_result": {
+                            "resolved_values": {
+                                "curie": "FB:FBal0001817",
+                                "symbol": "crb<sup>11A22</sup>",
+                                "taxon": "NCBITaxon:7227",
+                            }
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    result = streaming_tools._reduce_specialist_output_for_supervisor(
+        envelope_output,
+        expected_output_type=GeneExtractionResultEnvelope,
+    )
+
+    assert "Validation findings: resolved=1." in result
+    assert "Resolved validator finding: crb 11A22" in result
+    assert "curie=FB:FBal0001817" in result
+    assert "symbol=crb<sup>11A22</sup>" in result
+    assert "taxon=NCBITaxon:7227" in result
+
+
 def test_runtime_instruction_append_updates_pending_prompt_assembly():
     clear_prompt_context()
     prompt = PromptTemplate(
