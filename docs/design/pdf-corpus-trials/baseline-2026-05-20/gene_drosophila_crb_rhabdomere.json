@@ -1,0 +1,248 @@
+{
+  "active_validator_dispatch_duration_seconds": null,
+  "checks": [
+    {
+      "ok": true,
+      "payload": {
+        "chunk_count": null,
+        "document_id": "6e4c6c20-7fb4-47ae-ad25-14507f630687",
+        "error_message": null,
+        "file_size_bytes": 4359435,
+        "filename": "gene_drosophila_crb_rhabdomere-c1ebd884.pdf",
+        "job_id": "27b49cf1-c375-42a0-83d0-52224dd60585",
+        "processing_completed_at": null,
+        "processing_started_at": null,
+        "status": "PENDING",
+        "upload_timestamp": "2026-05-20T03:11:07.969489Z",
+        "user_id": 1,
+        "weaviate_tenant": "dev_user_123"
+      },
+      "status_code": 201,
+      "step": "gene_drosophila_crb_rhabdomere_upload"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "cancel_requested": false,
+        "chunk_count": 96,
+        "document_id": "6e4c6c20-7fb4-47ae-ad25-14507f630687",
+        "embedding_status": "completed",
+        "job_id": "27b49cf1-c375-42a0-83d0-52224dd60585",
+        "job_status": "completed",
+        "pipeline_status": {
+          "completed_at": "2026-05-20T03:11:23.058629+00:00",
+          "current_stage": "completed",
+          "document_id": "6e4c6c20-7fb4-47ae-ad25-14507f630687",
+          "error_count": 0,
+          "message": "Processing completed successfully",
+          "progress_percentage": 100,
+          "stage_results": [],
+          "started_at": "2026-05-20T03:11:07.972389+00:00",
+          "updated_at": "2026-05-20T03:11:23.058441+00:00"
+        },
+        "processing_status": "completed",
+        "vector_count": 96
+      },
+      "status_code": 200,
+      "step": "gene_drosophila_crb_rhabdomere_processing_complete"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "document_id": "6e4c6c20-7fb4-47ae-ad25-14507f630687",
+        "returned_chunks": 96,
+        "total_items": 96
+      },
+      "status_code": 200,
+      "step": "gene_drosophila_crb_rhabdomere_chunks"
+    },
+    {
+      "ok": true,
+      "payload": {
+        "created_at": "2026-05-20T03:11:23.335251Z",
+        "description": "Real-PDF corpus trial for gene",
+        "execution_count": 0,
+        "flow_definition": {
+          "edges": [
+            {
+              "condition": null,
+              "id": "edge_1",
+              "replaces_attachment_id": null,
+              "role": "control_flow",
+              "satisfies_binding_id": null,
+              "source": "task_input_1",
+              "target": "agent_1"
+            }
+          ],
+          "entry_node_id": "task_input_1",
+          "nodes": [
+            {
+              "data": {
+                "agent_description": null,
+                "agent_display_name": "Corpus Trial Instructions",
+                "agent_id": "task_input",
+                "custom_input": null,
+                "custom_instructions": null,
+                "include_evidence": null,
+                "input_source": "user_query",
+                "output_filename_template": null,
+                "output_key": "trial_instructions",
+                "prompt_version": null,
+                "step_goal": null,
+                "task_instructions": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "validation_attachments": [],
+                "validation_groups": []
+              },
+              "id": "task_input_1",
+              "position": {
+                "x": 0.0,
+                "y": 0.0
+              },
+              "type": "task_input"
+            },
+            {
+              "data": {
+                "agent_description": null,
+                "agent_display_name": "Gene Extractor",
+                "agent_id": "gene_extractor",
+                "custom_input": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "custom_instructions": null,
+                "include_evidence": null,
+                "input_source": "custom",
+                "output_filename_template": null,
+                "output_key": "gene_extractor_output",
+                "prompt_version": null,
+                "step_goal": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+                "task_instructions": null,
+                "validation_attachments": [
+                  {
+                    "affected_fields": [
+                      "mention",
+                      "primary_external_id",
+                      "gene_symbol",
+                      "taxon",
+                      "species",
+                      "taxon_hint",
+                      "data_provider_hint",
+                      "proposed_primary_external_id",
+                      "proposed_gene_symbol",
+                      "proposed_taxon",
+                      "identity_resolution_notes",
+                      "confidence",
+                      "evidence_record_id",
+                      "verified_quote",
+                      "page",
+                      "section",
+                      "subsection",
+                      "chunk_id",
+                      "figure_reference"
+                    ],
+                    "allow_opt_out": true,
+                    "attachment_id": "gene:binding:alliance_gene_reference_lookup:object:gene_mention_evidence:*",
+                    "blocked_by": null,
+                    "blocking": false,
+                    "default_enabled": true,
+                    "definition_state": "stable",
+                    "description": "",
+                    "domain_pack_id": "gene",
+                    "domain_pack_version": "0.1.0",
+                    "enabled": true,
+                    "export_blocking": false,
+                    "field_path": null,
+                    "field_type": null,
+                    "label": "Gene mention: Alliance gene lookup",
+                    "object_role": "validated_reference",
+                    "object_type": "gene_mention_evidence",
+                    "reason": null,
+                    "required": true,
+                    "scope": "object",
+                    "state": "active",
+                    "state_explanation": null,
+                    "tool_method": null,
+                    "tool_name": null,
+                    "validation_kind": null,
+                    "validator_agent_id": "gene_validation",
+                    "validator_binding_id": "alliance_gene_reference_lookup",
+                    "validator_id": "agr.alliance:gene_validation",
+                    "validator_package_id": "agr.alliance"
+                  }
+                ],
+                "validation_groups": [
+                  {
+                    "allow_opt_out": true,
+                    "attachment_id": "gene:binding:alliance_gene_reference_lookup:object:gene_mention_evidence:*",
+                    "binding_id": "alliance_gene_reference_lookup",
+                    "blocking": false,
+                    "edge_id": null,
+                    "group_id": "gene:binding:alliance_gene_reference_lookup:object:gene_mention_evidence:*",
+                    "label": "Gene mention: Alliance gene lookup",
+                    "replaces_attachment_id": null,
+                    "required": true,
+                    "state": "automatic",
+                    "validator_node_id": null
+                  }
+                ]
+              },
+              "id": "agent_1",
+              "position": {
+                "x": 280.0,
+                "y": 0.0
+              },
+              "type": "agent"
+            }
+          ],
+          "version": "1.0"
+        },
+        "id": "48df89d0-cf65-4b75-9ec1-1b0439d2934d",
+        "last_executed_at": null,
+        "name": "Corpus gene_drosophila_crb_rhabdomere 2b207c",
+        "updated_at": "2026-05-20T03:11:23.335251Z",
+        "user_id": 1
+      },
+      "status_code": 201,
+      "step": "gene_drosophila_crb_rhabdomere_flow_create"
+    }
+  ],
+  "created_document": true,
+  "document_id": "6e4c6c20-7fb4-47ae-ad25-14507f630687",
+  "duration_seconds": 92.723,
+  "error": "Flow execution emitted error events: [{'type': 'FLOW_ERROR', 'session_id': 'corpus-flow-e39ea0db', 'turn_id': '20e033b04eba4758b71cd1a57f1155b4', 'timestamp': '2026-05-20T03:12:40.621757+00:00', 'details': {'reason': 'incomplete_flow_steps', 'message': \"Flow 'Corpus gene_drosophila_crb_rhabdomere 2b207c' ended before all required steps ran. Missing: step 1 (ask_gene_extractor_specialist).\", 'missing_steps': [{'step': 1, 'tool_name': 'ask_gene_extractor_specialist'}]}}]",
+  "finished_at": "2026-05-20T03:12:40.632555+00:00",
+  "flow_execution_duration_seconds": null,
+  "flow_execution_duration_source": null,
+  "flow_execution_wall_clock_seconds": null,
+  "flow_id": "48df89d0-cf65-4b75-9ec1-1b0439d2934d",
+  "observed_validator_lookup_counts": {},
+  "pdf_path": "/tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere.pdf",
+  "pdf_size_bytes": 4359435,
+  "processing_duration_seconds": 15.34,
+  "specialist_text_fallback_event_count": 0,
+  "started_at": "2026-05-20T03:11:07.913694+00:00",
+  "status": "fail",
+  "trial": {
+    "agent_ids": [
+      "gene_extractor"
+    ],
+    "agent_prompts": null,
+    "doi": "10.1371/journal.pgen.1009146",
+    "domain": "gene",
+    "expected_validator_bindings": [
+      "alliance_gene_reference_lookup"
+    ],
+    "minimum_expected_validator_bindings": null,
+    "organism": "Drosophila melanogaster",
+    "pdf_url": "https://journals.plos.org/plosgenetics/article/file?id=10.1371/journal.pgen.1009146&type=printable",
+    "pmcid": "PMC8211197",
+    "pmid": "34097697",
+    "prompt": "Read the loaded paper and extract exactly one paper-grounded gene candidate: Drosophila crb/Crumbs in the context of rhabdomere or photoreceptor apical-domain morphogenesis. Use only evidence in the paper, call record_evidence for one exact supporting quote, include organism/species hints, and do not extract other genes.",
+    "title": "Crumbs and the apical spectrin cytoskeleton regulate R8 cell fate in the Drosophila eye",
+    "trial_id": "gene_drosophila_crb_rhabdomere"
+  },
+  "upload_duration_seconds": 0.053,
+  "upload_pdf_path": "/tmp/agr_domain_envelope_pdf_corpus/gene_drosophila_crb_rhabdomere-c1ebd884.pdf",
+  "validator_agent_run_count": null,
+  "validator_agent_run_count_source": null,
+  "validator_event_count": 0,
+  "validator_lookup_event_count": 0,
+  "validator_problem_event_count": 0
+}

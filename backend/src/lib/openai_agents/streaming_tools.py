@@ -1354,10 +1354,50 @@ async def _dispatch_domain_envelope_validators_for_chat(
             },
         })
 
+        def _emit_validator_dispatch_event(event: dict[str, Any]) -> None:
+            event_name = str(event.get("event") or "")
+            is_start = event_name == "validator_batch_start"
+            is_complete = event_name == "validator_batch_complete"
+            if not is_start and not is_complete:
+                return
+            request_count = int(event.get("request_count") or 0)
+            binding_id = event.get("validator_binding_id")
+            friendly_action = "start" if is_start else str(event.get("status") or "complete")
+            add_specialist_event({
+                "type": "TOOL_START" if is_start else "TOOL_COMPLETE",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "details": {
+                    "toolName": "dispatch_active_validator_batch",
+                    "friendlyName": (
+                        f"{specialist_name}: Validator Batch {friendly_action} "
+                        f"({binding_id}, {request_count} request"
+                        f"{'' if request_count == 1 else 's'})"
+                    ),
+                    "agent": specialist_name,
+                    "toolArgs": {
+                        "validator_binding_id": binding_id,
+                        "batch_family": event.get("batch_family"),
+                        "request_count": request_count,
+                    },
+                    "success": event.get("status") != "error",
+                    "error": event.get("error"),
+                    "isSpecialistInternal": True,
+                    "validatorBindingId": binding_id,
+                    "validatorAgent": event.get("validator_agent"),
+                    "validatorBatchFamily": event.get("batch_family"),
+                    "validatorBatchRequestCount": request_count,
+                    "validatorBatchRequestIds": event.get("request_ids") or [],
+                    "validatorBatchDurationSeconds": event.get("duration_seconds"),
+                    "validatorBatchResolvedCount": event.get("resolved_count"),
+                    "validatorBatchUnresolvedCount": event.get("unresolved_count"),
+                },
+            })
+
         dispatch_result = await asyncio.to_thread(
             dispatch_active_validator_bindings,
             envelope,
             domain_pack,
+            event_emitter=_emit_validator_dispatch_event,
             source_envelope_revision=1,
         )
 
@@ -1375,6 +1415,19 @@ async def _dispatch_domain_envelope_validators_for_chat(
                 "isSpecialistInternal": True,
                 "matchedBindingCount": len(dispatch_result.matched_bindings),
                 "validatorResultCount": len(dispatch_result.validator_results),
+                "validatorAgentRunCount": getattr(
+                    dispatch_result,
+                    "validator_agent_run_count",
+                    len(dispatch_result.validator_results),
+                ),
+                "batchValidatorRunCount": getattr(
+                    dispatch_result,
+                    "batch_validator_run_count",
+                    0,
+                ),
+                "validatorBatchGroups": list(
+                    getattr(dispatch_result, "validator_batch_groups", ())
+                ),
                 "appendedFindingCount": len(dispatch_result.appended_findings),
             },
         })

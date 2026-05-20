@@ -126,6 +126,9 @@ class ValidatorBinding:
     required: bool = False
     allow_opt_out: bool = False
     max_tool_calls: int | None = None
+    batch_enabled: bool = False
+    batch_family: str | None = None
+    batch_max_size: int | None = None
     curator_override_allowed: bool = False
     applies_to_domain_pack_id: str | None = None
     object_types: tuple[str, ...] = ()
@@ -188,6 +191,16 @@ class ValidatorBinding:
             details["expected_result_fields"] = dict(self.expected_result_fields)
         if self.max_tool_calls is not None:
             details["max_tool_calls"] = self.max_tool_calls
+        if self.batch_enabled:
+            details["batch"] = {
+                key: value
+                for key, value in {
+                    "enabled": True,
+                    "family": self.batch_family,
+                    "max_size": self.batch_max_size,
+                }.items()
+                if value is not None
+            }
         if self.curator_override_allowed:
             details["curator_override"] = {"allowed": True}
         return details
@@ -852,6 +865,7 @@ def _collect_validator_bindings(
             raw_item.get("curator_override"),
             "curator_override",
         )
+        batch_config = _optional_mapping(raw_item.get("batch"), "batch")
 
         if state is ValidationBindingState.UNDER_DEVELOPMENT:
             display_name = _required_string(
@@ -901,6 +915,9 @@ def _collect_validator_bindings(
                     )
                 ),
                 max_tool_calls=_optional_int(raw_item.get("max_tool_calls")),
+                batch_enabled=active and _optional_bool(batch_config.get("enabled")),
+                batch_family=_optional_string(batch_config.get("family")),
+                batch_max_size=_optional_int(batch_config.get("max_size")),
                 curator_override_allowed=active
                 and _optional_bool(curator_override.get("allowed")),
                 raw=dict(raw_item),

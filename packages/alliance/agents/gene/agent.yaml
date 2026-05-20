@@ -59,7 +59,8 @@ model_config:
 requires_document: false
 required_params: []
 
-batch_capabilities: []
+batch_capabilities:
+  - domain_validator_batch
 
 # -----------------------------------------------------------------------------
 # FRONTEND DISPLAY

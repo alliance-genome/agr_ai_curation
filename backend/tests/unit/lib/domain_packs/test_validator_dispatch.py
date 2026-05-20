@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ from src.lib.domain_packs.loader import load_domain_pack_metadata
 from src.lib.domain_packs.registry import LoadedDomainPack
 from src.lib.domain_packs.validator_dispatch import (
     dispatch_active_validator_bindings,
+    run_package_scoped_validator_agent_batch,
     run_package_scoped_validator_agent,
     validator_result_from_agent_output,
 )
@@ -27,10 +29,50 @@ from src.schemas.domain_validator import (
 )
 
 
-def _pack_text(*, max_tool_calls: int | None = 3) -> str:
+def _pack_text(
+    *,
+    max_tool_calls: int | None = 3,
+    batch_enabled: bool = False,
+    second_binding: bool = False,
+) -> str:
     max_tool_calls_yaml = (
         f"        max_tool_calls: {max_tool_calls}\n"
         if max_tool_calls is not None
+        else ""
+    )
+    batch_yaml = (
+        "        batch:\n"
+        "          enabled: true\n"
+        "          family: fixture_gene_reference\n"
+        if batch_enabled
+        else ""
+    )
+    second_binding_yaml = (
+        """
+      - binding_id: fixture.symbol_lookup
+        display_name: Symbol lookup
+        validator_agent:
+          package_id: fixture.validators
+          agent_id: symbol_validator
+        applies_to:
+          domain_pack_id: fixture.dispatch
+          object_types:
+            - GeneAssertion
+          field_paths:
+            - gene.symbol
+        required: true
+        blocking: false
+        batch:
+          enabled: true
+          family: fixture_symbol_reference
+        input_fields:
+          symbol:
+            source: payload
+            path: gene.symbol
+        expected_result_fields:
+          symbol: gene.symbol
+"""
+        if second_binding
         else ""
     )
     return f"""
@@ -89,15 +131,26 @@ metadata:
         expected_result_fields:
           identifier: gene.identifier
           symbol: gene.symbol
+{batch_yaml}{second_binding_yaml}
 """.strip()
 
 
-def _loaded_pack(tmp_path: Path, *, max_tool_calls: int | None = 3) -> LoadedDomainPack:
+def _loaded_pack(
+    tmp_path: Path,
+    *,
+    max_tool_calls: int | None = 3,
+    batch_enabled: bool = False,
+    second_binding: bool = False,
+) -> LoadedDomainPack:
     pack_path = tmp_path / "fixture.dispatch"
     pack_path.mkdir()
     metadata_path = pack_path / "domain_pack.yaml"
     metadata_path.write_text(
-        _pack_text(max_tool_calls=max_tool_calls),
+        _pack_text(
+            max_tool_calls=max_tool_calls,
+            batch_enabled=batch_enabled,
+            second_binding=second_binding,
+        ),
         encoding="utf-8",
     )
     metadata = load_domain_pack_metadata(metadata_path)
@@ -153,6 +206,21 @@ metadata:
 """.strip(),
         encoding="utf-8",
     )
+    metadata = load_domain_pack_metadata(metadata_path)
+    return LoadedDomainPack(
+        pack_id=metadata.pack_id,
+        display_name=metadata.display_name,
+        version=metadata.version,
+        pack_path=pack_path,
+        metadata_path=metadata_path,
+        metadata=metadata,
+    )
+
+
+def _alliance_gene_pack() -> LoadedDomainPack:
+    repo_root = Path(__file__).resolve().parents[5]
+    pack_path = repo_root / "packages" / "alliance" / "domain_packs" / "gene"
+    metadata_path = pack_path / "domain_pack.yaml"
     metadata = load_domain_pack_metadata(metadata_path)
     return LoadedDomainPack(
         pack_id=metadata.pack_id,
@@ -231,6 +299,28 @@ def _multi_object_envelope(
         envelope_id="dispatch-env",
         domain_pack_id="fixture.dispatch",
         objects=objects,
+    )
+
+
+def _gene_mentions_envelope(mentions: list[str]) -> DomainEnvelope:
+    return DomainEnvelope(
+        envelope_id="gene-env",
+        domain_pack_id="gene",
+        objects=[
+            CuratableObjectEnvelope(
+                object_type="gene_mention_evidence",
+                pending_ref_id=f"gene-mention-{index}",
+                object_role="validated_reference",
+                payload={
+                    "mention": mention,
+                    "species": "Drosophila melanogaster",
+                    "taxon_hint": "NCBITaxon:7227",
+                    "data_provider_hint": "FlyBase",
+                    "verified_quote": f"{mention} was discussed in the paper.",
+                },
+            )
+            for index, mention in enumerate(mentions, start=1)
+        ],
     )
 
 
@@ -515,6 +605,299 @@ def test_dispatch_runs_unique_validator_requests_in_parallel(tmp_path: Path):
     assert len(seen_thread_ids) == 2
     assert len(result.validator_results) == 2
     assert {item.status for item in result.validator_results} == {"resolved"}
+
+
+def test_dispatch_batches_opted_in_validator_requests(tmp_path: Path):
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+    batch_calls: list[list[str]] = []
+
+    def _single_runner(request, *, binding):  # pragma: no cover - must not be called
+        raise AssertionError("batch-enabled binding should use the batch runner")
+
+    def _batch_runner(jobs, *, binding):
+        batch_calls.append([job.request.selected_inputs["identifier"] for job in jobs])
+        return [
+            _result_payload(
+                job.request,
+                resolved_values={
+                    "identifier": f"AGR:{index:04d}",
+                    "symbol": f"ABC-{index}",
+                },
+            )
+            for index, job in enumerate(jobs, start=1)
+        ]
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(["BAD:0001", "BAD:0002"]),
+        pack,
+        runner=_single_runner,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+
+    assert batch_calls == [["BAD:0001", "BAD:0002"]]
+    assert result.validator_agent_run_count == 1
+    assert result.batch_validator_run_count == 1
+    assert len(result.validator_results) == 2
+    assert [item.status for item in result.validator_results] == [
+        "resolved",
+        "resolved",
+    ]
+
+
+def test_dispatch_batches_after_dedupe_and_remaps_to_original_requests(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+    batch_request_ids: list[list[str]] = []
+
+    def _batch_runner(jobs, *, binding):
+        batch_request_ids.append([job.request.request_id for job in jobs])
+        return [_result_payload(job.request) for job in jobs]
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(
+            ["BAD:0001", "BAD:0001", "BAD:0002"],
+            evidence_quotes=[
+                "First paper quote.",
+                "Second paper quote.",
+                "Third paper quote.",
+            ],
+        ),
+        pack,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+
+    assert len(batch_request_ids) == 1
+    assert len(batch_request_ids[0]) == 2
+    assert result.validator_agent_run_count == 1
+    assert result.batch_validator_run_count == 1
+    assert len(result.validator_results) == 3
+    assert result.validator_results[0].request_id != result.validator_results[1].request_id
+    assert {item.status for item in result.validator_results} == {"resolved"}
+
+
+def test_dispatch_batches_mixed_validator_agents_separately_and_preserves_order(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path, batch_enabled=True, second_binding=True)
+    batch_groups: list[tuple[str, list[str]]] = []
+
+    def _batch_runner(jobs, *, binding):
+        batch_groups.append(
+            (
+                binding.validator_agent.agent_id,
+                [job.request.validator_binding_id for job in jobs],
+            )
+        )
+        if binding.binding_id == "fixture.symbol_lookup":
+            return [
+                _result_payload(
+                    job.request,
+                    resolved_values={"symbol": job.request.selected_inputs["symbol"]},
+                )
+                for job in jobs
+            ]
+        return [_result_payload(job.request) for job in jobs]
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(["BAD:0001", "BAD:0002"]),
+        pack,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+
+    assert batch_groups == [
+        (
+            "identifier_validator",
+            ["fixture.identifier_lookup", "fixture.identifier_lookup"],
+        ),
+        ("symbol_validator", ["fixture.symbol_lookup", "fixture.symbol_lookup"]),
+    ]
+    assert [item.validator_binding_id for item in result.validator_results] == [
+        "fixture.identifier_lookup",
+        "fixture.identifier_lookup",
+        "fixture.symbol_lookup",
+        "fixture.symbol_lookup",
+    ]
+    assert result.validator_agent_run_count == 2
+    assert result.batch_validator_run_count == 2
+
+
+def test_bad_batch_result_identity_becomes_controlled_unresolved_result(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+
+    def _batch_runner(jobs, *, binding):
+        payloads = [_result_payload(job.request) for job in jobs]
+        payloads[0]["target"]["object_type"] = "stale_object"
+        return {"results": payloads}
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(["BAD:0001", "BAD:0002"]),
+        pack,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+
+    assert result.validator_results[0].status == "unresolved"
+    assert result.validator_results[0].lookup_attempts[0].method == "invalid_schema"
+    assert result.validator_results[1].status == "resolved"
+    findings = [
+        finding
+        for finding in result.envelope.validation_findings
+        if finding.code
+        in {"domain_pack.validator_resolved", "domain_pack.validator_unresolved"}
+    ]
+    assert [finding.code for finding in findings] == [
+        "domain_pack.validator_unresolved",
+        "domain_pack.validator_resolved",
+    ]
+
+
+def test_bad_batch_extra_request_id_becomes_controlled_unresolved_results(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path, batch_enabled=True)
+
+    def _batch_runner(jobs, *, binding):
+        payloads = [_result_payload(job.request) for job in jobs]
+        extra_payload = _result_payload(jobs[0].request)
+        extra_payload["request_id"] = "domain-validation:unexpected"
+        return {"results": [*payloads, extra_payload]}
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(["BAD:0001", "BAD:0002"]),
+        pack,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+
+    assert [item.status for item in result.validator_results] == [
+        "unresolved",
+        "unresolved",
+    ]
+    assert {
+        item.lookup_attempts[0].method for item in result.validator_results
+    } == {"invalid_schema"}
+    assert all(
+        "unexpected request IDs" in item.explanation
+        for item in result.validator_results
+    )
+
+
+def test_alliance_gene_pack_batches_gene_mentions_through_batch_path():
+    pack = _alliance_gene_pack()
+    mentions = ["crumbs", "crb", "ninaE", "Actin"]
+    captured_mentions: list[str] = []
+
+    def _single_runner(request, *, binding):  # pragma: no cover - must not be called
+        raise AssertionError("gene_validation should use the batch runner")
+
+    def _batch_runner(jobs, *, binding):
+        captured_mentions.extend(
+            str(job.request.selected_inputs["mention"]) for job in jobs
+        )
+        results = []
+        for job in jobs:
+            request = job.request
+            mention = str(request.selected_inputs["mention"])
+            if mention == "Actin":
+                results.append(
+                    {
+                        "status": "unresolved",
+                        "request_id": request.request_id,
+                        "validator_binding_id": request.validator_binding_id,
+                        "validator_agent": request.validator_agent.model_dump(mode="json"),
+                        "target": request.target.model_dump(mode="json"),
+                        "resolved_values": {},
+                        "resolved_objects": [],
+                        "missing_expected_fields": ["curie", "symbol", "taxon"],
+                        "candidates": [
+                            {
+                                "value": "Actin",
+                                "label": "Actin",
+                                "object_type": "Gene",
+                                "matched_fields": {"mention": "Actin"},
+                            }
+                        ],
+                        "lookup_attempts": [
+                            {
+                                "provider": "fixture_gene_lookup",
+                                "method": "search_genes_bulk",
+                                "query": {
+                                    "gene_symbols": mentions,
+                                    "data_provider": "FlyBase",
+                                },
+                                "result_count": 4,
+                                "outcome": "ambiguous",
+                            }
+                        ],
+                        "curator_message": "Actin remains ambiguous.",
+                        "explanation": "Bulk lookup returned ambiguous Actin candidates.",
+                    }
+                )
+                continue
+
+            results.append(
+                {
+                    "status": "resolved",
+                    "request_id": request.request_id,
+                    "validator_binding_id": request.validator_binding_id,
+                    "validator_agent": request.validator_agent.model_dump(mode="json"),
+                    "target": request.target.model_dump(mode="json"),
+                    "resolved_values": {
+                        "curie": f"AGR:{len(results) + 1:07d}",
+                        "symbol": "crb" if mention in {"crumbs", "crb"} else mention,
+                        "taxon": "NCBITaxon:7227",
+                    },
+                    "resolved_objects": [],
+                    "missing_expected_fields": [],
+                    "candidates": [],
+                    "lookup_attempts": [
+                        {
+                            "provider": "fixture_gene_lookup",
+                            "method": "search_genes_bulk",
+                            "query": {
+                                "gene_symbols": mentions,
+                                "data_provider": "FlyBase",
+                            },
+                            "result_count": 4,
+                            "outcome": "success",
+                        }
+                    ],
+                    "curator_message": f"{mention} resolved through bulk lookup.",
+                    "explanation": "Bulk lookup resolved this gene mention.",
+                }
+            )
+        return {"results": results}
+
+    result = dispatch_active_validator_bindings(
+        _gene_mentions_envelope(mentions),
+        pack,
+        runner=_single_runner,
+        batch_runner=_batch_runner,
+        max_parallel_validators=1,
+    )
+
+    assert captured_mentions == mentions
+    assert result.validator_agent_run_count == 1
+    assert result.batch_validator_run_count == 1
+    assert [item.status for item in result.validator_results] == [
+        "resolved",
+        "resolved",
+        "resolved",
+        "unresolved",
+    ]
+    assert result.validator_results[0].lookup_attempts[0].method == "search_genes_bulk"
+    assert [item.payload.get("gene_symbol") for item in result.envelope.objects] == [
+        "crb",
+        "crb",
+        "ninaE",
+        None,
+    ]
 
 
 def test_invalid_validator_schema_becomes_controlled_unresolved_result(
@@ -880,4 +1263,53 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert isinstance(runtime_agent.output_type, AgentOutputSchema)
     assert runtime_agent.output_type.output_type is GeneResultEnvelope
     assert runtime_agent.output_type.is_strict_json_schema() is False
+    assert captured["kwargs"]["max_turns"] == 4
+
+
+def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from agents import AgentOutputSchema
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(output_type=GeneResultEnvelope)
+    captured = {}
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+
+    def _fake_run_sync(agent, **kwargs):
+        captured["agent"] = agent
+        captured["kwargs"] = kwargs
+        return {"results": [_result_payload(request)]}
+
+    monkeypatch.setattr("agents.Runner.run_sync", _fake_run_sync)
+
+    binding = SimpleNamespace(max_tool_calls=4)
+    run_package_scoped_validator_agent_batch(
+        [SimpleNamespace(request=request)],
+        binding=binding,
+    )
+
+    runtime_agent = captured["agent"]
+    assert runtime_agent is not source_agent
+    assert isinstance(runtime_agent.output_type, AgentOutputSchema)
+    assert runtime_agent.output_type.output_type.__name__ == "GeneResultEnvelopeBatchEnvelope"
+    assert runtime_agent.output_type.is_strict_json_schema() is False
+    payload = json.loads(captured["kwargs"]["input"])
+    assert payload["mode"] == "domain_validator_batch"
+    assert payload["requests"][0]["request_id"] == request.request_id
     assert captured["kwargs"]["max_turns"] == 4

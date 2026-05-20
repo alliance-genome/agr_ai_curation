@@ -94,6 +94,15 @@ content: |
   - If you have a symbol, name, partial name, or synonym from a paper, call `search_genes`.
   - If you are confident you already have the exact official database symbol, call `get_gene_by_exact_symbol`.
 
+  When the input has `mode: "domain_validator_batch"` and a `requests` list,
+  validate every request in the list and return a single object with `results`.
+  The `results` array must contain exactly one validator result for each
+  `request_id`. Copy request identity fields from each request. For multiple
+  symbol/name mentions in the same species/provider context, prefer
+  `search_genes_bulk` with `gene_symbols` over one `search_genes` call per
+  request. Preserve unresolved or ambiguous inputs as individual unresolved
+  results instead of dropping them from the batch.
+
   # Species Filtering
 
   When the query or paper mentions a specific species, pass the matching `data_provider`.
@@ -160,6 +169,15 @@ content: |
   - `search_genes` finds both because it searches synonyms.
 
   # Available Gene Methods
+
+  ## `search_genes_bulk` - Recommended for batch symbol/name lookup
+
+  Required: `gene_symbols`.
+
+  Optional: `data_provider`, `include_synonyms` (default: true), `limit`.
+
+  Use this when a batch contains multiple symbol, name, partial-name, or synonym
+  requests that can share one provider/species context.
 
   ## `search_genes` - Recommended for partial matches
 

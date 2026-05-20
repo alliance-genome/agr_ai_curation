@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
+import time
 import urllib.parse
 import urllib.request
 from collections import Counter
@@ -37,6 +39,14 @@ class CorpusTrial:
     expected_validator_bindings: tuple[str, ...]
     minimum_expected_validator_bindings: int | None = None
     agent_prompts: Mapping[str, str] | None = None
+
+
+class FlowExecutionFailure(smoke.SmokeFailure):
+    """Flow execution failed after returning SSE evidence worth preserving."""
+
+    def __init__(self, message: str, *, summary: dict[str, Any]) -> None:
+        super().__init__(message)
+        self.summary = summary
 
 
 TRIALS: tuple[CorpusTrial, ...] = (
@@ -215,6 +225,60 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _duration_since(started_at: float) -> float:
+    return round(time.monotonic() - started_at, 3)
+
+
+def _event_timestamp(event: Mapping[str, Any]) -> datetime | None:
+    raw_timestamp = str(event.get("timestamp") or "").strip()
+    if not raw_timestamp:
+        return None
+    if raw_timestamp.endswith("Z"):
+        raw_timestamp = f"{raw_timestamp[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw_timestamp)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _event_elapsed_seconds(
+    start_event: Mapping[str, Any] | None,
+    finish_event: Mapping[str, Any] | None,
+) -> float | None:
+    if start_event is None or finish_event is None:
+        return None
+    started_at = _event_timestamp(start_event)
+    finished_at = _event_timestamp(finish_event)
+    if started_at is None or finished_at is None:
+        return None
+    return round(max(0.0, (finished_at - started_at).total_seconds()), 3)
+
+
+def _git_metadata() -> dict[str, Any]:
+    def _git(args: list[str]) -> str | None:
+        try:
+            completed = subprocess.run(
+                ["git", *args],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return None
+        return completed.stdout.strip()
+
+    return {
+        "branch": _git(["branch", "--show-current"]),
+        "commit": _git(["rev-parse", "HEAD"]),
+        "commit_short": _git(["rev-parse", "--short", "HEAD"]),
+        "commit_subject": _git(["log", "-1", "--pretty=%s"]),
+        "status_short": _git(["status", "--short"]),
+    }
+
+
 def _download_pdf(trial: CorpusTrial, download_dir: Path) -> Path:
     download_dir.mkdir(parents=True, exist_ok=True)
     pdf_path = download_dir / f"{trial.trial_id}.pdf"
@@ -376,6 +440,143 @@ def _validator_problem_events(events: Iterable[dict[str, Any]]) -> list[dict[str
     return problem_events
 
 
+def _active_validator_dispatch_events(
+    events: Iterable[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    start_events: list[dict[str, Any]] = []
+    complete_events: list[dict[str, Any]] = []
+    for event in events:
+        details = event.get("details") or {}
+        if details.get("toolName") != "dispatch_active_validator_bindings":
+            continue
+        event_type = str(event.get("type") or "").strip()
+        if event_type == "TOOL_START":
+            start_events.append(event)
+        elif event_type == "TOOL_COMPLETE":
+            complete_events.append(event)
+    return start_events, complete_events
+
+
+def _active_validator_dispatch_duration_seconds(
+    events: Iterable[dict[str, Any]],
+) -> float | None:
+    start_events, complete_events = _active_validator_dispatch_events(events)
+    durations = [
+        duration
+        for start_event, complete_event in zip(start_events, complete_events)
+        if (duration := _event_elapsed_seconds(start_event, complete_event)) is not None
+    ]
+    if not durations:
+        return None
+    return round(sum(durations), 3)
+
+
+def _validator_dispatch_completion_details(
+    events: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    _, complete_events = _active_validator_dispatch_events(events)
+    return [
+        event.get("details") or {}
+        for event in complete_events
+        if isinstance(event.get("details"), dict)
+    ]
+
+
+def _validator_agent_run_count_from_events(
+    events: Iterable[dict[str, Any]],
+) -> tuple[int | None, str | None]:
+    details = _validator_dispatch_completion_details(events)
+    direct_counts = [
+        int(value)
+        for detail in details
+        if (value := detail.get("validatorAgentRunCount")) is not None
+    ]
+    if direct_counts:
+        return sum(direct_counts), "dispatch_completion.validatorAgentRunCount"
+
+    fallback_counts = [
+        int(value)
+        for detail in details
+        if (value := detail.get("validatorResultCount")) is not None
+    ]
+    if fallback_counts:
+        return sum(fallback_counts), "dispatch_completion.validatorResultCount_fallback"
+    return None, None
+
+
+def _batch_validator_run_count_from_events(events: Iterable[dict[str, Any]]) -> int:
+    details = _validator_dispatch_completion_details(events)
+    direct_counts = [
+        int(value)
+        for detail in details
+        if (value := detail.get("batchValidatorRunCount")) is not None
+    ]
+    if direct_counts:
+        return sum(direct_counts)
+    return sum(
+        1
+        for event in events
+        if event.get("type") == "TOOL_COMPLETE"
+        and (event.get("details") or {}).get("toolName")
+        == "dispatch_active_validator_batch"
+    )
+
+
+def _flow_event_timing_summary(
+    *,
+    events: list[dict[str, Any]],
+    wall_clock_duration_seconds: float,
+) -> dict[str, Any]:
+    run_started = next((event for event in events if event.get("type") == "RUN_STARTED"), None)
+    run_finished = next((event for event in events if event.get("type") == "RUN_FINISHED"), None)
+    flow_finished = next((event for event in events if event.get("type") == "FLOW_FINISHED"), None)
+    event_duration = (
+        _event_elapsed_seconds(run_started, flow_finished)
+        or _event_elapsed_seconds(run_started, run_finished)
+    )
+    return {
+        "flow_execution_duration_seconds": (
+            event_duration
+            if event_duration is not None
+            else wall_clock_duration_seconds
+        ),
+        "flow_execution_duration_source": (
+            "sse_event_timestamps" if event_duration is not None else "wall_clock"
+        ),
+        "flow_execution_wall_clock_seconds": wall_clock_duration_seconds,
+        "active_validator_dispatch_duration_seconds": (
+            _active_validator_dispatch_duration_seconds(events)
+        ),
+    }
+
+
+def _validator_observation_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    lookup_events = _validator_lookup_events(events)
+    problem_events = _validator_problem_events(events)
+    fallback_events = _fallback_events(events)
+    observed_counts = Counter(
+        binding_id
+        for event in lookup_events
+        if (binding_id := _validator_binding_id_from_event(event))
+    )
+    validator_agent_run_count, count_source = _validator_agent_run_count_from_events(events)
+    return {
+        "validator_event_count": sum(
+            1
+            for event in events
+            if "validator" in json.dumps(event, sort_keys=True).lower()
+        ),
+        "validator_lookup_event_count": len(lookup_events),
+        "batch_validator_run_count": _batch_validator_run_count_from_events(events),
+        "validator_problem_event_count": len(problem_events),
+        "specialist_text_fallback_event_count": len(fallback_events),
+        "observed_validator_lookup_counts": dict(sorted(observed_counts.items())),
+        "validator_agent_run_count": validator_agent_run_count,
+        "validator_agent_run_count_source": count_source,
+        "validator_dispatch_completion_details": _validator_dispatch_completion_details(events),
+    }
+
+
 def validate_tightened_trial_gate(
     *,
     trial: CorpusTrial,
@@ -456,6 +657,7 @@ def execute_flow_permissive(
     flow_timeout_seconds: float,
     checks: list[dict[str, Any]],
 ) -> dict[str, Any]:
+    started_at = time.monotonic()
     response = smoke.http_request(
         "POST",
         f"{base_url}/api/chat/execute-flow",
@@ -468,6 +670,7 @@ def execute_flow_permissive(
         },
         timeout=flow_timeout_seconds,
     )
+    wall_clock_duration_seconds = _duration_since(started_at)
     smoke.require(
         response.status_code == 200,
         f"Unexpected execute-flow response: {response.status_code} {response.text}",
@@ -476,13 +679,11 @@ def execute_flow_permissive(
     smoke.require(events, "Flow execution returned no SSE events")
     event_types = [str(event.get("type", "")) for event in events]
     error_events = smoke.collect_error_events(events)
-    smoke.require(not error_events, f"Flow execution emitted error events: {error_events}")
 
     flow_finished = next((event for event in events if event.get("type") == "FLOW_FINISHED"), {})
     run_started = next((event for event in events if event.get("type") == "RUN_STARTED"), {})
     run_finished = next((event for event in events if event.get("type") == "RUN_FINISHED"), {})
     terminal_status = str(flow_finished.get("status") or "").strip().lower()
-    smoke.require(terminal_status == "completed", f"Flow did not complete successfully: {flow_finished}")
     flow_run_id = str(flow_finished.get("flow_run_id") or "").strip()
     total_evidence_records = int(flow_finished.get("total_evidence_records") or 0)
     flow_step_evidence_events = [
@@ -497,23 +698,78 @@ def execute_flow_permissive(
         "flow_run_id": flow_run_id,
         "total_evidence_records": total_evidence_records,
         "flow_step_evidence_events": flow_step_evidence_events,
+        "timing": _flow_event_timing_summary(
+            events=events,
+            wall_clock_duration_seconds=wall_clock_duration_seconds,
+        ),
+        "validator_observations": _validator_observation_summary(events),
+        "error_events": error_events,
     }
     checks.append(
         {
             "step": "execute_flow_permissive",
-            "ok": total_evidence_records > 0,
+            "ok": not error_events
+            and terminal_status == "completed"
+            and total_evidence_records > 0,
             "status_code": response.status_code,
             "payload": {
                 "event_types": event_types,
                 "run_started": run_started,
                 "run_finished": run_finished,
                 "flow_finished": flow_finished,
+                "error_events": error_events,
                 "flow_step_evidence_events": flow_step_evidence_events,
                 "zero_evidence_warning": total_evidence_records == 0,
+                "timing": summary["timing"],
+                "validator_observations": summary["validator_observations"],
             },
         }
     )
+    if error_events:
+        raise FlowExecutionFailure(
+            f"Flow execution emitted error events: {error_events}",
+            summary=summary,
+        )
+    if terminal_status != "completed":
+        raise FlowExecutionFailure(
+            f"Flow did not complete successfully: {flow_finished}",
+            summary=summary,
+        )
     return summary
+
+
+def _annotate_note_with_flow_result(
+    note: dict[str, Any],
+    flow_result: dict[str, Any],
+) -> None:
+    flow_timing = flow_result.get("timing") or {}
+    validator_observations = flow_result.get("validator_observations") or {}
+    note["flow_execution_duration_seconds"] = flow_timing.get(
+        "flow_execution_duration_seconds"
+    )
+    note["flow_execution_duration_source"] = flow_timing.get(
+        "flow_execution_duration_source"
+    )
+    note["flow_execution_wall_clock_seconds"] = flow_timing.get(
+        "flow_execution_wall_clock_seconds"
+    )
+    note["active_validator_dispatch_duration_seconds"] = flow_timing.get(
+        "active_validator_dispatch_duration_seconds"
+    )
+    for key in (
+        "validator_event_count",
+        "validator_lookup_event_count",
+        "batch_validator_run_count",
+        "validator_problem_event_count",
+        "specialist_text_fallback_event_count",
+        "observed_validator_lookup_counts",
+        "validator_agent_run_count",
+        "validator_agent_run_count_source",
+        "validator_dispatch_completion_details",
+    ):
+        if key in validator_observations:
+            note[key] = validator_observations[key]
+    note["flow_summary"] = _summarize_flow_events(flow_result)
 
 
 def run_trial(
@@ -526,6 +782,7 @@ def run_trial(
     checks: list[dict[str, Any]],
     args: argparse.Namespace,
 ) -> dict[str, Any]:
+    trial_started_at = time.monotonic()
     pdf_path = ensure_trial_pdf(trial, download_dir)
     upload_pdf_path = download_dir / f"{trial.trial_id}-{uuid4().hex[:8]}.pdf"
     if not upload_pdf_path.exists():
@@ -540,6 +797,21 @@ def run_trial(
         "flow_id": None,
         "status": "started",
         "checks": [],
+        "duration_seconds": None,
+        "upload_duration_seconds": None,
+        "processing_duration_seconds": None,
+        "flow_execution_duration_seconds": None,
+        "flow_execution_duration_source": None,
+        "flow_execution_wall_clock_seconds": None,
+        "active_validator_dispatch_duration_seconds": None,
+        "validator_event_count": 0,
+        "validator_lookup_event_count": 0,
+        "batch_validator_run_count": 0,
+        "validator_problem_event_count": 0,
+        "specialist_text_fallback_event_count": 0,
+        "observed_validator_lookup_counts": {},
+        "validator_agent_run_count": None,
+        "validator_agent_run_count_source": None,
     }
     trial_checks: list[dict[str, Any]] = note["checks"]
     document_id: str | None = None
@@ -553,6 +825,7 @@ def run_trial(
                 checks=trial_checks,
                 step_prefix=f"{trial.trial_id}_delete_existing",
             )
+        upload_started_at = time.monotonic()
         document_id, created = smoke.upload_pdf(
             base_url=base_url,
             sample_pdf=upload_pdf_path,
@@ -561,8 +834,10 @@ def run_trial(
             can_reuse_duplicate=args.allow_duplicate_reuse,
             step_name=f"{trial.trial_id}_upload",
         )
+        note["upload_duration_seconds"] = _duration_since(upload_started_at)
         note["document_id"] = document_id
         note["created_document"] = created
+        processing_started_at = time.monotonic()
         smoke.wait_for_processing_complete(
             base_url=base_url,
             document_id=document_id,
@@ -572,6 +847,7 @@ def run_trial(
             checks=trial_checks,
             step_name=f"{trial.trial_id}_processing_complete",
         )
+        note["processing_duration_seconds"] = _duration_since(processing_started_at)
         smoke.fetch_chunks(
             base_url=base_url,
             document_id=document_id,
@@ -589,16 +865,21 @@ def run_trial(
             step_name=f"{trial.trial_id}_flow_create",
         )
         note["flow_id"] = flow_id
-        flow_result = execute_flow_permissive(
-            base_url=base_url,
-            headers=headers,
-            flow_id=flow_id,
-            document_id=document_id,
-            user_query=trial.prompt,
-            flow_timeout_seconds=args.flow_timeout_seconds,
-            checks=trial_checks,
-        )
-        note["flow_summary"] = _summarize_flow_events(flow_result)
+        try:
+            flow_result = execute_flow_permissive(
+                base_url=base_url,
+                headers=headers,
+                flow_id=flow_id,
+                document_id=document_id,
+                user_query=trial.prompt,
+                flow_timeout_seconds=args.flow_timeout_seconds,
+                checks=trial_checks,
+            )
+        except FlowExecutionFailure as exc:
+            _annotate_note_with_flow_result(note, exc.summary)
+            raise
+
+        _annotate_note_with_flow_result(note, flow_result)
         zero_evidence_records = int(flow_result.get("total_evidence_records") or 0) == 0
         if zero_evidence_records:
             note.setdefault("warnings", []).append("flow_completed_with_zero_persisted_evidence_records")
@@ -652,6 +933,7 @@ def run_trial(
             except Exception as exc:
                 note["cleanup_error"] = str(exc)
         note["finished_at"] = _now_iso()
+        note["duration_seconds"] = _duration_since(trial_started_at)
         output_dir.mkdir(parents=True, exist_ok=True)
         note_path = output_dir / f"{trial.trial_id}.json"
         note_path.write_text(json.dumps(note, indent=2, sort_keys=True), encoding="utf-8")
@@ -702,6 +984,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     payload: dict[str, Any] = {
         "timestamp_utc": _now_iso(),
         "base_url": base_url,
+        "output_dir": str(output_dir),
+        "repo": _git_metadata(),
         "trial_ids": [trial.trial_id for trial in selected],
         "checks": checks,
         "results": [],
@@ -767,6 +1051,30 @@ def main(argv: Iterable[str] | None = None) -> int:
     payload["overall_status"] = (
         "pass" if all(result.get("status") == "pass" for result in payload["results"]) else "fail"
     )
+    payload["trial_timing_summary"] = [
+        {
+            "trial_id": result.get("trial", {}).get("trial_id"),
+            "status": result.get("status"),
+            "duration_seconds": result.get("duration_seconds"),
+            "upload_duration_seconds": result.get("upload_duration_seconds"),
+            "processing_duration_seconds": result.get("processing_duration_seconds"),
+            "flow_execution_duration_seconds": result.get("flow_execution_duration_seconds"),
+            "active_validator_dispatch_duration_seconds": result.get(
+                "active_validator_dispatch_duration_seconds"
+            ),
+            "validator_agent_run_count": result.get("validator_agent_run_count"),
+            "validator_lookup_event_count": result.get("validator_lookup_event_count"),
+            "batch_validator_run_count": result.get("batch_validator_run_count"),
+            "validator_problem_event_count": result.get("validator_problem_event_count"),
+            "specialist_text_fallback_event_count": result.get(
+                "specialist_text_fallback_event_count"
+            ),
+            "observed_validator_lookup_counts": result.get(
+                "observed_validator_lookup_counts"
+            ),
+        }
+        for result in payload["results"]
+    ]
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = output_dir / "summary.json"
     summary_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")

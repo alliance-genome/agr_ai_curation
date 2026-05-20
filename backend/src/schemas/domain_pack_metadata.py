@@ -250,6 +250,21 @@ class DomainPackInputSelector(DomainPackMetadataBaseModel):
         return self
 
 
+class DomainPackValidatorBatchConfig(DomainPackMetadataBaseModel):
+    """Optional active-validator batch dispatch opt-in."""
+
+    enabled: bool = False
+    family: Optional[str] = None
+    max_size: Optional[int] = Field(default=None, ge=1)
+
+    @field_validator("family")
+    @classmethod
+    def _validate_family(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        return _validate_symbolic_name(value, "validator_bindings.batch.family")
+
+
 class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     """Executable package-scoped validator binding metadata."""
 
@@ -264,6 +279,9 @@ class DomainPackActiveValidatorBinding(DomainPackMetadataBaseModel):
     required: bool = False
     blocking: bool = False
     allow_opt_out: bool = False
+    batch: DomainPackValidatorBatchConfig = Field(
+        default_factory=DomainPackValidatorBatchConfig
+    )
     curator_override: DomainPackValidatorCuratorOverride = Field(
         default_factory=DomainPackValidatorCuratorOverride
     )
@@ -744,6 +762,7 @@ __all__ = [
     "DomainPackValidatorAgentRef",
     "DomainPackValidatorAppliesTo",
     "DomainPackValidatorBindings",
+    "DomainPackValidatorBatchConfig",
     "DomainPackValidatorCuratorOverride",
     "DomainPackInputSelector",
 ]

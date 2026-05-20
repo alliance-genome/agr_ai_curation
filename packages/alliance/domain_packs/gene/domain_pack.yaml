@@ -144,6 +144,9 @@ object_definitions:
               curie: primary_external_id
               symbol: gene_symbol
               taxon: taxon
+            batch:
+              enabled: true
+              family: alliance_gene_reference_lookup
             required: true
             blocking: false
             allow_opt_out: true
