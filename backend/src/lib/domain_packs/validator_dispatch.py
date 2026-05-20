@@ -802,8 +802,11 @@ def run_package_scoped_validator_agent_batch(
                 "JSON object with a results array containing exactly one "
                 "DomainValidatorResultBase-compatible result per request_id. "
                 "Copy dispatcher-owned identity fields from each request. Use "
-                "bulk lookup methods when more than one request can share a "
-                "validator-owned lookup."
+                "one bulk lookup tool call per compatible shared lookup group "
+                "when a bulk method exists, using list inputs such as "
+                "gene_symbols or allele_symbols. Map the returned items back to "
+                "their request_ids, and do not loop one lookup call per request "
+                "when one shared bulk call can answer the group."
             ),
             "requests": [
                 job.request.model_dump(mode="json")

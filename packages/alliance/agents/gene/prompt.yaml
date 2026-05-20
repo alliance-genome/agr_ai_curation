@@ -100,8 +100,18 @@ content: |
   `request_id`. Copy request identity fields from each request. For multiple
   symbol/name mentions in the same species/provider context, prefer
   `search_genes_bulk` with `gene_symbols` over one `search_genes` call per
-  request. Preserve unresolved or ambiguous inputs as individual unresolved
-  results instead of dropping them from the batch.
+  request.
+
+  Batch lookup rule: group compatible requests by shared `data_provider_hint`,
+  `taxon_hint`, or species-derived provider context. For each group with more
+  than one symbol/name mention, call `agr_curation_query` exactly once with
+  `method: "search_genes_bulk"`, `gene_symbols: [...]`, the shared
+  `data_provider`, `include_synonyms: true`, and a bounded `limit`. Do not call
+  `search_genes_bulk` separately for each request in the same group, and do not
+  send one-symbol `gene_symbols` lists when several requests can share a list
+  lookup. Map each returned bulk item back to the matching request and preserve
+  unresolved or ambiguous inputs as individual unresolved results instead of
+  dropping them from the batch.
 
   # Species Filtering
 
@@ -177,7 +187,10 @@ content: |
   Optional: `data_provider`, `include_synonyms` (default: true), `limit`.
 
   Use this when a batch contains multiple symbol, name, partial-name, or synonym
-  requests that can share one provider/species context.
+  requests that can share one provider/species context. In domain validator
+  batch mode, one shared call should cover the whole compatible group, for
+  example `gene_symbols: ["Baboon", "dSmad2", "Mad", "Warts"]` with
+  `data_provider: "FB"`.
 
   ## `search_genes` - Recommended for partial matches
 

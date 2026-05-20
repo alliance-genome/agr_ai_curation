@@ -1311,5 +1311,9 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     assert runtime_agent.output_type.is_strict_json_schema() is False
     payload = json.loads(captured["kwargs"]["input"])
     assert payload["mode"] == "domain_validator_batch"
+    assert "one bulk lookup tool call per compatible shared lookup group" in payload[
+        "instructions"
+    ]
+    assert "gene_symbols" in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
     assert captured["kwargs"]["max_turns"] == 4

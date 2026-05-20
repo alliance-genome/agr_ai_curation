@@ -69,6 +69,31 @@ TRIALS: tuple[CorpusTrial, ...] = (
         expected_validator_bindings=("alliance_gene_reference_lookup",),
     ),
     CorpusTrial(
+        trial_id="gene_drosophila_r8_tgfb_multi_gene",
+        domain="gene",
+        agent_ids=("gene_extractor",),
+        title=(
+            "Parallel Activin and BMP signaling coordinates R7/R8 "
+            "photoreceptor subtype pairing in the stochastic Drosophila retina"
+        ),
+        organism="Drosophila melanogaster",
+        pmcid="PMC5599232",
+        pmid="28853393",
+        doi="10.7554/eLife.25301",
+        pdf_url="https://cdn.elifesciences.org/articles/25301/elife-25301-v2.pdf",
+        prompt=(
+            "Read the loaded paper and extract four distinct paper-grounded "
+            "Drosophila gene candidates from the Activin/BMP/Hippo/R8 subtype "
+            "specification findings. Prefer concrete genes explicitly discussed "
+            "in the abstract or results, such as babo/Baboon, dSmad2, Mad, "
+            "wts/Warts, melt/Melted, Rh5, or Rh6. Use record_evidence for one "
+            "exact supporting quote per retained gene, include Drosophila "
+            "melanogaster, FlyBase/FB, and NCBITaxon:7227 hints when supported, "
+            "and do not resolve gene IDs in the extractor."
+        ),
+        expected_validator_bindings=("alliance_gene_reference_lookup",),
+    ),
+    CorpusTrial(
         trial_id="allele_drosophila_notch_facet_glossy",
         domain="allele",
         agent_ids=("allele_extractor",),
