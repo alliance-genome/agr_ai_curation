@@ -52,6 +52,9 @@ export function getFriendlyProgressMessage(event: SSEEvent): string {
     case 'TOOL_COMPLETE':
       if (event.details?.friendlyName) {
         const name = event.details.friendlyName
+        if (event.details?.toolName?.startsWith('dispatch_active_validator_')) {
+          return name
+        }
         return name.toLowerCase().endsWith('complete') ? name : `${name} complete`
       }
       return 'Tool complete'

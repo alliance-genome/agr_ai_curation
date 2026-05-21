@@ -36,6 +36,30 @@ describe('chatProgress', () => {
     expect(getFriendlyProgressMessage(alreadyCompleteEvent)).toBe('Search PubMed complete')
   })
 
+  it('uses validator lifecycle friendly names for chat progress', () => {
+    const validatorStart: SSEEvent = {
+      type: 'TOOL_START',
+      details: {
+        toolName: 'dispatch_active_validator_request',
+        friendlyName: 'Gene Extraction: Validator Request start (gene.lookup, 1 request)',
+      },
+    }
+    const validatorComplete: SSEEvent = {
+      type: 'TOOL_COMPLETE',
+      details: {
+        toolName: 'dispatch_active_validator_request',
+        friendlyName: 'Gene Extraction: Validator Request complete (resolved)',
+      },
+    }
+
+    expect(getFriendlyProgressMessage(validatorStart)).toBe(
+      'Gene Extraction: Validator Request start (gene.lookup, 1 request)',
+    )
+    expect(getFriendlyProgressMessage(validatorComplete)).toBe(
+      'Gene Extraction: Validator Request complete (resolved)',
+    )
+  })
+
   it('uses action-required copy for refinement events', () => {
     expect(getFriendlyProgressMessage({ type: 'PENDING_USER_INPUT' })).toBe(
       'Action required: please refine the query (limit/filter).',

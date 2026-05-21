@@ -389,6 +389,47 @@ def _validation_request() -> DomainValidationRequest:
     )
 
 
+class _FakeStreamedRunResult:
+    def __init__(self, *, final_output: Any, events: list[Any]):
+        self.final_output = final_output
+        self._events = events
+
+    async def stream_events(self):
+        for event in self._events:
+            yield event
+
+
+def _tool_call_stream_event(
+    name: str,
+    arguments: str = '{"query":"test"}',
+    *,
+    call_id: str | None = None,
+) -> Any:
+    return SimpleNamespace(
+        type="run_item_stream_event",
+        item=SimpleNamespace(
+            type="tool_call_item",
+            name=name,
+            raw_item=SimpleNamespace(arguments=arguments, call_id=call_id),
+        ),
+    )
+
+
+def _tool_output_stream_event(
+    output: str = '{"summary":"ok"}',
+    *,
+    call_id: str | None = None,
+) -> Any:
+    return SimpleNamespace(
+        type="run_item_stream_event",
+        item=SimpleNamespace(
+            type="tool_call_output_item",
+            output=output,
+            raw_item=SimpleNamespace(call_id=call_id),
+        ),
+    )
+
+
 def _single_result_finding(result):
     return next(
         finding
@@ -446,6 +487,69 @@ def test_dispatch_active_binding_sends_typed_request_and_appends_resolved_result
         materialized_gene.to_object_ref()
     ]
     assert result.validator_results[0].status == "resolved"
+
+
+def test_singleton_validator_emits_request_lifecycle_events(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+    events: list[dict[str, Any]] = []
+    call_order: list[str] = []
+
+    def _runner(request, *, binding):
+        call_order.append("runner")
+        assert events[-1]["event"] == "validator_request_start"
+        assert events[-1]["request_id"] == request.request_id
+        return _result_payload(request)
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+        event_emitter=events.append,
+    )
+
+    request_events = [
+        event
+        for event in events
+        if event["event"].startswith("validator_request_")
+    ]
+    assert [event["event"] for event in request_events] == [
+        "validator_request_start",
+        "validator_request_complete",
+    ]
+    assert call_order == ["runner"]
+    assert request_events[0]["selected_input_summary"] == {"identifier": "BAD:0001"}
+    assert request_events[0]["target"]["field_path"] == "gene.identifier"
+    assert request_events[1]["validator_result_status"] == "resolved"
+    assert request_events[1]["success"] is True
+    assert request_events[1]["lookup_attempt_count"] == 1
+    assert result.validator_results[0].status == "resolved"
+
+
+def test_singleton_validator_request_complete_reports_runner_error(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+    events: list[dict[str, Any]] = []
+
+    def _runner(request, *, binding):
+        raise RuntimeError("model unavailable")
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+        event_emitter=events.append,
+    )
+
+    request_complete = [
+        event for event in events if event["event"] == "validator_request_complete"
+    ][0]
+    assert request_complete["dispatch_status"] == "error"
+    assert request_complete["validator_result_status"] == "unresolved"
+    assert request_complete["success"] is False
+    assert request_complete["error"] == "model unavailable"
+    assert request_complete["failure_reason"] == "validator_agent_error"
+    assert result.validator_results[0].lookup_attempts[0].method == "validator_agent_error"
 
 
 def test_dispatch_default_runner_uses_worker_thread_from_running_event_loop(
@@ -585,6 +689,46 @@ def test_dispatch_deduplicates_equivalent_identity_requests_before_validation(
     )
 
 
+def test_deduped_singleton_lifecycle_reports_representative_run(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+    events: list[dict[str, Any]] = []
+
+    def _runner(request, *, binding):
+        return _result_payload(request)
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(
+            ["BAD:0001", "BAD:0001"],
+            evidence_quotes=["First paper quote.", "Second paper quote."],
+        ),
+        pack,
+        runner=_runner,
+        event_emitter=events.append,
+    )
+
+    request_starts = [
+        event for event in events if event["event"] == "validator_request_start"
+    ]
+    request_completes = [
+        event for event in events if event["event"] == "validator_request_complete"
+    ]
+    assert len(request_starts) == 1
+    assert len(request_completes) == 1
+    assert request_starts[0]["request_count"] == 2
+    assert len(request_starts[0]["deduped_request_ids"]) == 2
+    assert request_starts[0]["representative_request_id"] in request_starts[0][
+        "deduped_request_ids"
+    ]
+    assert request_starts[0]["selected_input_summary"]["evidence_quote"] == {
+        "kind": "text",
+        "char_count": len("First paper quote."),
+    }
+    assert len(result.validator_results) == 2
+    assert result.validator_results[0].request_id != result.validator_results[1].request_id
+
+
 def test_dispatch_runs_unique_validator_requests_in_parallel(tmp_path: Path):
     pack = _loaded_pack(tmp_path)
     barrier = threading.Barrier(2)
@@ -608,6 +752,79 @@ def test_dispatch_runs_unique_validator_requests_in_parallel(tmp_path: Path):
     assert len(seen_thread_ids) == 2
     assert len(result.validator_results) == 2
     assert {item.status for item in result.validator_results} == {"resolved"}
+
+
+def test_parallel_singleton_dispatch_emits_request_events_from_workers(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+    barrier = threading.Barrier(2)
+    events: list[dict[str, Any]] = []
+
+    def _runner(request, *, binding):
+        barrier.wait(timeout=1)
+        return _result_payload(request)
+
+    result = dispatch_active_validator_bindings(
+        _multi_object_envelope(["BAD:0001", "BAD:0002"]),
+        pack,
+        runner=_runner,
+        event_emitter=events.append,
+        max_parallel_validators=2,
+    )
+
+    events_by_request: dict[str, list[str]] = {}
+    for event in events:
+        if not event["event"].startswith("validator_request_"):
+            continue
+        events_by_request.setdefault(event["request_id"], []).append(event["event"])
+
+    assert len(events_by_request) == 2
+    assert all(
+        request_events == ["validator_request_start", "validator_request_complete"]
+        for request_events in events_by_request.values()
+    )
+    assert len(result.validator_results) == 2
+
+
+def test_validator_event_emitter_failures_do_not_change_materialization(
+    tmp_path: Path,
+):
+    pack = _loaded_pack(tmp_path)
+
+    def _runner(request, *, binding):
+        return _result_payload(request)
+
+    def _broken_emitter(event):
+        raise RuntimeError("audit stream is unavailable")
+
+    result = dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+        event_emitter=_broken_emitter,
+    )
+
+    assert result.validator_results[0].status == "resolved"
+    assert _single_result_finding(result).code == "domain_pack.validator_resolved"
+
+
+def test_custom_injected_runner_receives_no_event_kwarg(tmp_path: Path):
+    pack = _loaded_pack(tmp_path)
+    received_kwargs = {}
+
+    def _runner(request, **kwargs):
+        received_kwargs.update(kwargs)
+        return _result_payload(request)
+
+    dispatch_active_validator_bindings(
+        _envelope(),
+        pack,
+        runner=_runner,
+        event_emitter=lambda _event: None,
+    )
+
+    assert set(received_kwargs) == {"binding"}
 
 
 def test_dispatch_batches_opted_in_validator_requests(tmp_path: Path):
@@ -1269,6 +1486,65 @@ def test_package_scoped_validator_agent_relaxes_domain_validator_output_schema(
     assert captured["kwargs"]["max_turns"] == 4
 
 
+def test_package_scoped_validator_agent_streams_tool_events_when_emitter_present(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(output_type=GeneResultEnvelope)
+    emitted: list[dict[str, Any]] = []
+    captured = {}
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+
+    def _fake_run_streamed(agent, **kwargs):
+        captured["agent"] = agent
+        captured["kwargs"] = kwargs
+        return _FakeStreamedRunResult(
+            final_output=_result_payload(request),
+            events=[
+                _tool_call_stream_event(
+                    "agr_curation_query",
+                    '{"method":"search_genes","gene_symbol":"ABC-1"}',
+                    call_id="call-1",
+                ),
+                _tool_output_stream_event('{"result_count":1}', call_id="call-1"),
+            ],
+        )
+
+    monkeypatch.setattr("agents.Runner.run_streamed", _fake_run_streamed)
+
+    result = run_package_scoped_validator_agent(
+        request,
+        binding=SimpleNamespace(max_tool_calls=4),
+        event_emitter=emitted.append,
+    )
+
+    assert result.final_output["request_id"] == request.request_id
+    assert captured["kwargs"]["max_turns"] == 4
+    assert [event["event"] for event in emitted] == [
+        "validator_tool_start",
+        "validator_tool_complete",
+    ]
+    assert emitted[0]["tool_name"] == "agr_curation_query"
+    assert emitted[0]["tool_args"]["method"] == "search_genes"
+    assert emitted[0]["validator_request_id"] == request.request_id
+    assert emitted[1]["duration_ms"] is not None
+
+
 def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -1320,3 +1596,56 @@ def test_package_scoped_validator_batch_agent_uses_batch_output_schema(
     assert "gene_symbols" in payload["instructions"]
     assert payload["requests"][0]["request_id"] == request.request_id
     assert captured["kwargs"]["max_turns"] == 4
+
+
+def test_package_scoped_validator_batch_agent_streams_with_batch_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from packages.alliance.agents.gene.schema import GeneResultEnvelope
+
+    request = _validation_request()
+    source_agent = SimpleNamespace(output_type=GeneResultEnvelope)
+    emitted: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        "src.lib.config.agent_loader.get_agent_definition_for_package",
+        lambda package_id, agent_id: AgentDefinition(
+            folder_name="gene",
+            agent_id=agent_id,
+            name="Gene Validation",
+            package_id=package_id,
+            batch_capabilities=["domain_validator_batch"],
+        ),
+    )
+    monkeypatch.setattr(
+        "src.lib.agent_studio.catalog_service.get_agent_by_id",
+        lambda agent_key: source_agent,
+    )
+
+    monkeypatch.setattr(
+        "agents.Runner.run_streamed",
+        lambda agent, **kwargs: _FakeStreamedRunResult(
+            final_output={"results": [_result_payload(request)]},
+            events=[
+                _tool_call_stream_event(
+                    "agr_curation_query",
+                    '{"method":"search_genes","gene_symbol":"ABC-1"}',
+                    call_id="call-1",
+                ),
+                _tool_output_stream_event('{"result_count":1}', call_id="call-1"),
+            ],
+        ),
+    )
+
+    run_package_scoped_validator_agent_batch(
+        [SimpleNamespace(request=request)],
+        binding=SimpleNamespace(
+            max_tool_calls=4,
+            batch_family="fixture_family",
+            binding_id=request.validator_binding_id,
+        ),
+        event_emitter=emitted.append,
+    )
+
+    assert emitted[0]["validator_request_ids"] == [request.request_id]
+    assert emitted[0]["validator_batch_family"] == "fixture_family"

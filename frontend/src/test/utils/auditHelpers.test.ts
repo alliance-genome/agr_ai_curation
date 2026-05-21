@@ -1093,3 +1093,42 @@ describe('getEventSeverity (T016)', () => {
     expect(getEventSeverity('SUPERVISOR_RESULT', { hasError: true })).toBe('warning')
   })
 })
+
+describe('validator audit event formatting', () => {
+  it('formats validator request lifecycle rows with compact tool args', () => {
+    const event: AuditEvent = {
+      id: 'validator-request-start',
+      type: 'TOOL_START',
+      timestamp: new Date(),
+      sessionId: 'session123',
+      details: {
+        toolName: 'dispatch_active_validator_request',
+        friendlyName: 'Gene Extraction: Validator Request start (gene.lookup, 1 request)',
+        isSpecialistInternal: true,
+        isValidatorInternal: true,
+        validatorBindingId: 'gene.lookup',
+        validatorRequestId: 'request-1',
+        toolArgs: {
+          validator_binding_id: 'gene.lookup',
+          request_id: 'request-1',
+          selected_inputs: { mention: 'crumbs' },
+        },
+      } as ToolStartDetails,
+    }
+
+    expect(formatAuditEvent(event)).toContain('[TOOL] Gene Extraction: Validator Request start')
+    expect(formatAuditEvent(event)).toContain('mention: crumbs')
+  })
+
+  it('marks failed validator request completions as warnings', () => {
+    const details: ToolCompleteDetails = {
+      toolName: 'dispatch_active_validator_request',
+      friendlyName: 'Gene Extraction: Validator Request complete (unresolved)',
+      success: false,
+      isValidatorInternal: true,
+      validatorFailureClassification: 'invalid_schema',
+    }
+
+    expect(getEventSeverity('TOOL_COMPLETE', details)).toBe('warning')
+  })
+})

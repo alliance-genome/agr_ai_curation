@@ -1,6 +1,7 @@
 """Focused helper tests for streaming_tools core runtime behavior."""
 
 import json
+import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -878,6 +879,204 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
 
 
 @pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_maps_validator_request_lifecycle(
+    monkeypatch,
+):
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+
+    from src.lib.curation_workspace import (
+        adapter_registry,
+        curation_prep_service,
+        extraction_results,
+    )
+    from src.lib.domain_packs import validator_dispatch
+
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+    source_envelope = SimpleNamespace(domain_pack_id="gene", objects=[SimpleNamespace()])
+    monkeypatch.setattr(
+        curation_prep_service,
+        "_domain_envelope_from_extraction_result",
+        lambda _record: source_envelope,
+    )
+    monkeypatch.setattr(
+        adapter_registry,
+        "resolve_curation_domain_pack_by_id",
+        lambda domain_pack_id: SimpleNamespace(pack_id=domain_pack_id),
+    )
+
+    validated_envelope = SimpleNamespace(
+        model_dump=lambda mode="json": {
+            "envelope_id": "chat-runtime",
+            "domain_pack_id": "gene",
+            "objects": [],
+            "validation_findings": [],
+        }
+    )
+
+    def _fake_dispatch(envelope, domain_pack, **kwargs):
+        emit = kwargs["event_emitter"]
+        emit(
+            {
+                "event": "validator_request_start",
+                "timestamp": "2026-05-21T00:00:00+00:00",
+                "validator_binding_id": "gene.lookup",
+                "validator_agent": {"package_id": "fixture", "agent_id": "gene"},
+                "request_id": "request-1",
+                "representative_request_id": "request-1",
+                "deduped_request_ids": [],
+                "request_count": 1,
+                "target": {
+                    "object_type": "GeneMention",
+                    "object_role": "validated_reference",
+                    "field_path": "gene",
+                },
+                "selected_input_summary": {"mention": "crumbs"},
+                "expected_result_fields": ["curie"],
+            }
+        )
+        emit(
+            {
+                "event": "validator_request_complete",
+                "timestamp": "2026-05-21T00:00:01+00:00",
+                "validator_binding_id": "gene.lookup",
+                "validator_agent": {"package_id": "fixture", "agent_id": "gene"},
+                "request_id": "request-1",
+                "representative_request_id": "request-1",
+                "deduped_request_ids": [],
+                "request_count": 1,
+                "validator_result_status": "resolved",
+                "dispatch_status": "completed",
+                "success": True,
+                "lookup_attempt_count": 1,
+                "duration_seconds": 0.2,
+            }
+        )
+        return SimpleNamespace(
+            envelope=validated_envelope,
+            matched_bindings=(SimpleNamespace(),),
+            validator_results=(),
+            appended_findings=(),
+        )
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "dispatch_active_validator_bindings",
+        _fake_dispatch,
+    )
+
+    await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        _gene_extractor_domain_output(),
+        expected_output_type=GeneExtractionResultEnvelope,
+        specialist_name="Gene Extraction",
+        tool_name="ask_gene_extractor_specialist",
+    )
+
+    tool_names = [event["details"]["toolName"] for event in emitted]
+    assert tool_names == [
+        "dispatch_active_validator_bindings",
+        "dispatch_active_validator_request",
+        "dispatch_active_validator_request",
+        "dispatch_active_validator_bindings",
+    ]
+    assert emitted[1]["timestamp"] == "2026-05-21T00:00:00+00:00"
+    assert emitted[1]["details"]["toolArgs"]["selected_inputs"] == {
+        "mention": "crumbs"
+    }
+    assert emitted[2]["details"]["validatorResultStatus"] == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_chat_validator_callbacks_append_to_captured_live_list_from_threads(
+    monkeypatch,
+):
+    live_events = []
+    streaming_tools.set_live_event_list(live_events)
+
+    from src.lib.curation_workspace import (
+        adapter_registry,
+        curation_prep_service,
+        extraction_results,
+    )
+    from src.lib.domain_packs import validator_dispatch
+
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+    source_envelope = SimpleNamespace(domain_pack_id="gene", objects=[SimpleNamespace()])
+    monkeypatch.setattr(
+        curation_prep_service,
+        "_domain_envelope_from_extraction_result",
+        lambda _record: source_envelope,
+    )
+    monkeypatch.setattr(
+        adapter_registry,
+        "resolve_curation_domain_pack_by_id",
+        lambda domain_pack_id: SimpleNamespace(pack_id=domain_pack_id),
+    )
+
+    validated_envelope = SimpleNamespace(
+        model_dump=lambda mode="json": {
+            "envelope_id": "chat-runtime",
+            "domain_pack_id": "gene",
+            "objects": [],
+            "validation_findings": [],
+        }
+    )
+
+    def _fake_dispatch(envelope, domain_pack, **kwargs):
+        emit = kwargs["event_emitter"]
+
+        def _worker_emit():
+            emit(
+                {
+                    "event": "validator_request_start",
+                    "validator_binding_id": "gene.lookup",
+                    "request_id": "request-1",
+                    "representative_request_id": "request-1",
+                    "request_count": 1,
+                    "target": {},
+                    "selected_input_summary": {},
+                    "expected_result_fields": [],
+                }
+            )
+
+        worker = threading.Thread(target=_worker_emit)
+        worker.start()
+        worker.join(timeout=1)
+        return SimpleNamespace(
+            envelope=validated_envelope,
+            matched_bindings=(SimpleNamespace(),),
+            validator_results=(),
+            appended_findings=(),
+        )
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "dispatch_active_validator_bindings",
+        _fake_dispatch,
+    )
+
+    await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        _gene_extractor_domain_output(),
+        expected_output_type=GeneExtractionResultEnvelope,
+        specialist_name="Gene Extraction",
+        tool_name="ask_gene_extractor_specialist",
+    )
+
+    assert any(
+        event["details"]["toolName"] == "dispatch_active_validator_request"
+        for event in live_events
+    )
+
+
+@pytest.mark.asyncio
 async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch):
     monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
     emitted = []
@@ -939,6 +1138,115 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch)
         "gene_symbol": "crumbs",
         "method": "search_genes",
     }
+
+
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_skips_synthetic_lookup_after_streamed_lookup(
+    monkeypatch,
+):
+    monkeypatch.setenv("AGR_RUNTIME_PACKAGES_DIR", str(REPO_PACKAGES_DIR))
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+
+    from src.lib.curation_workspace import adapter_registry, extraction_results
+    from src.lib.domain_packs import validator_dispatch
+
+    adapter_registry.load_curation_adapter_registry.cache_clear()
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+
+    def _fake_dispatch(envelope, domain_pack, **kwargs):
+        request = SimpleNamespace(
+            request_id="domain-validation:gene:1",
+            validator_binding_id="alliance_gene_reference_lookup",
+            selected_inputs={"mention": "crumbs"},
+        )
+        emit = kwargs["event_emitter"]
+        emit(
+            {
+                "event": "validator_tool_start",
+                "tool_name": "agr_curation_query",
+                "tool_args": {"method": "search_genes", "gene_symbol": "crumbs"},
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": {
+                    "package_id": "agr.alliance",
+                    "agent_id": "gene_validation",
+                },
+                "validator_request_id": request.request_id,
+                "validator_request_ids": [request.request_id],
+            }
+        )
+        emit(
+            {
+                "event": "validator_tool_complete",
+                "tool_name": "agr_curation_query",
+                "validator_binding_id": request.validator_binding_id,
+                "validator_agent": {
+                    "package_id": "agr.alliance",
+                    "agent_id": "gene_validation",
+                },
+                "validator_request_id": request.request_id,
+                "validator_request_ids": [request.request_id],
+                "success": True,
+                "duration_ms": 12,
+            }
+        )
+        validator_result = SimpleNamespace(
+            validator_binding_id=request.validator_binding_id,
+            request_id=request.request_id,
+            status="resolved",
+            lookup_attempts=[
+                SimpleNamespace(
+                    provider="agr_curation_query",
+                    method="search_genes",
+                    query={"gene_symbol": "crumbs"},
+                    result_count=1,
+                    outcome="success",
+                    message=None,
+                )
+            ],
+        )
+        validated_envelope = SimpleNamespace(
+            model_dump=lambda mode="json": {
+                "envelope_id": "chat-runtime",
+                "domain_pack_id": "gene",
+                "objects": [],
+                "validation_findings": [],
+            }
+        )
+        return SimpleNamespace(
+            envelope=validated_envelope,
+            matched_bindings=(SimpleNamespace(),),
+            validator_results=(validator_result,),
+            appended_findings=(),
+        )
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "dispatch_active_validator_bindings",
+        _fake_dispatch,
+    )
+
+    await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+        _gene_extractor_domain_output(),
+        expected_output_type=GeneExtractionResultEnvelope,
+        specialist_name="Gene Extraction",
+        tool_name="ask_gene_extractor_specialist",
+    )
+
+    lookup_events = [
+        event
+        for event in emitted
+        if event["details"]["toolName"] == "agr_curation_query"
+    ]
+    assert [event["type"] for event in lookup_events] == [
+        "TOOL_START",
+        "TOOL_COMPLETE",
+    ]
+    assert lookup_events[0]["details"]["isValidatorInternal"] is True
 
 
 @pytest.mark.asyncio

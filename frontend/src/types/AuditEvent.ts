@@ -127,6 +127,15 @@ export interface ToolStartDetails {
   toolArgs?: Record<string, any>  // Tool inputs from agent tool call
                                   // SQL example: {query: "SELECT * FROM ontology_terms WHERE term_id = 'DOID:10652'"}
                                   // API example: {url: "https://api.example.com/endpoint", method: "GET", params: {...}}
+  isSpecialistInternal?: boolean
+  isValidatorInternal?: boolean
+  validatorBindingId?: string
+  validatorAgent?: Record<string, any>
+  validatorRequestId?: string
+  validatorRequestIds?: string[]
+  representativeRequestId?: string
+  dedupedRequestIds?: string[]
+  validatorBatchFamily?: string
 }
 
 export interface ToolCompleteDetails {
@@ -135,6 +144,22 @@ export interface ToolCompleteDetails {
   success?: boolean     // Whether tool succeeded
   error?: string        // Error payload (if tool failed)
   agent?: string        // Which agent is using the tool
+  isSpecialistInternal?: boolean
+  isValidatorInternal?: boolean
+  validatorBindingId?: string
+  validatorAgent?: Record<string, any>
+  validatorRequestId?: string
+  validatorRequestIds?: string[]
+  representativeRequestId?: string
+  dedupedRequestIds?: string[]
+  validatorResultStatus?: string
+  validatorDispatchStatus?: string
+  validatorFailureClassification?: string
+  validatorFailureReason?: string
+  validatorLookupAttemptCount?: number
+  validatorBatchFamily?: string
+  durationMs?: number
+  outputPreview?: string
 }
 
 export interface LLMCallDetails {

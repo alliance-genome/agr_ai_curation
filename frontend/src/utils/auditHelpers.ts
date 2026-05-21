@@ -617,7 +617,29 @@ function formatToolQuery(toolArgs: Record<string, any>): string {
     return details
   }
 
+  if (toolArgs.validator_binding_id && toolArgs.request_id) {
+    return formatValidatorRequestToolArgs(toolArgs)
+  }
+
   return ''
+}
+
+function formatValidatorRequestToolArgs(toolArgs: Record<string, any>): string {
+  const lines = [
+    `Validator: ${toolArgs.validator_binding_id}`,
+    `Request: ${toolArgs.request_id}`,
+  ]
+  if (toolArgs.selected_inputs && typeof toolArgs.selected_inputs === 'object') {
+    const selectedInputs = formatParameters(
+      toolArgs.selected_inputs,
+      2,
+      MAX_PARAMETER_DISPLAY_LENGTH,
+    )
+    if (selectedInputs) {
+      lines.push(selectedInputs)
+    }
+  }
+  return lines.join('\n')
 }
 
 // Human-readable labels for AGR curation query methods

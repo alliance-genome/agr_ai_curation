@@ -731,6 +731,37 @@ def _validator_lookup_events(events: Iterable[dict[str, Any]]) -> list[dict[str,
     return lookup_events
 
 
+def _validator_request_lifecycle_events(
+    events: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in events
+        if (event.get("details") or {}).get("toolName")
+        == "dispatch_active_validator_request"
+    ]
+
+
+def _streamed_validator_lookup_events(
+    events: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in _validator_lookup_events(events)
+        if (event.get("details") or {}).get("isValidatorInternal") is True
+    ]
+
+
+def _synthetic_validator_lookup_events(
+    events: Iterable[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        event
+        for event in _validator_lookup_events(events)
+        if (event.get("details") or {}).get("isValidatorInternal") is not True
+    ]
+
+
 def _fallback_events(events: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         event
@@ -796,6 +827,80 @@ def _validator_dispatch_completion_details(
         for event in complete_events
         if isinstance(event.get("details"), dict)
     ]
+
+
+def _first_event_timestamp(events: Iterable[dict[str, Any]]) -> datetime | None:
+    timestamps = [
+        timestamp
+        for event in events
+        if (timestamp := _event_timestamp(event)) is not None
+    ]
+    if not timestamps:
+        return None
+    return min(timestamps)
+
+
+def _last_event_timestamp(events: Iterable[dict[str, Any]]) -> datetime | None:
+    timestamps = [
+        timestamp
+        for event in events
+        if (timestamp := _event_timestamp(event)) is not None
+    ]
+    if not timestamps:
+        return None
+    return max(timestamps)
+
+
+def _events_started_before_dispatch_complete(
+    candidate_events: Iterable[dict[str, Any]],
+    all_events: Iterable[dict[str, Any]],
+) -> bool | None:
+    first_candidate_timestamp = _first_event_timestamp(candidate_events)
+    _, dispatch_complete_events = _active_validator_dispatch_events(all_events)
+    first_dispatch_complete_timestamp = _first_event_timestamp(dispatch_complete_events)
+    if first_candidate_timestamp is None or first_dispatch_complete_timestamp is None:
+        return None
+    return first_candidate_timestamp < first_dispatch_complete_timestamp
+
+
+def _validator_lookup_request_keys(events: Iterable[dict[str, Any]]) -> set[tuple[str, str]]:
+    keys: set[tuple[str, str]] = set()
+    for event in events:
+        details = event.get("details") or {}
+        binding_id = str(details.get("validatorBindingId") or "").strip()
+        if not binding_id:
+            continue
+        request_ids: list[str] = []
+        for field_name in (
+            "validatorRequestId",
+            "validatorRequestIds",
+            "validatorLookupRequestIds",
+        ):
+            value = details.get(field_name)
+            if isinstance(value, list):
+                request_ids.extend(str(item) for item in value if item is not None)
+            elif value is not None:
+                request_ids.append(str(value))
+        for request_id in request_ids:
+            if request_id.strip():
+                keys.add((binding_id, request_id.strip()))
+    return keys
+
+
+def _duplicate_synthetic_validator_lookup_event_count(
+    events: Iterable[dict[str, Any]],
+) -> int:
+    event_list = list(events)
+    streamed_keys = _validator_lookup_request_keys(
+        _streamed_validator_lookup_events(event_list)
+    )
+    if not streamed_keys:
+        return 0
+    return sum(
+        1
+        for event in _synthetic_validator_lookup_events(event_list)
+        if _validator_lookup_request_keys([event]) & streamed_keys
+    )
 
 
 def _validator_agent_run_count_from_events(
@@ -994,6 +1099,15 @@ def _flow_event_timing_summary(
 
 def _validator_observation_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
     lookup_events = _validator_lookup_events(events)
+    request_events = _validator_request_lifecycle_events(events)
+    request_start_events = [
+        event for event in request_events if event.get("type") == "TOOL_START"
+    ]
+    request_complete_events = [
+        event for event in request_events if event.get("type") == "TOOL_COMPLETE"
+    ]
+    streamed_lookup_events = _streamed_validator_lookup_events(events)
+    synthetic_lookup_events = _synthetic_validator_lookup_events(events)
     problem_events = _validator_problem_events(events)
     fallback_events = _fallback_events(events)
     observed_counts = Counter(
@@ -1009,6 +1123,20 @@ def _validator_observation_summary(events: list[dict[str, Any]]) -> dict[str, An
             if "validator" in json.dumps(event, sort_keys=True).lower()
         ),
         "validator_lookup_event_count": len(lookup_events),
+        "streamed_validator_lookup_event_count": len(streamed_lookup_events),
+        "synthetic_validator_lookup_event_count": len(synthetic_lookup_events),
+        "duplicate_synthetic_validator_lookup_event_count": (
+            _duplicate_synthetic_validator_lookup_event_count(events)
+        ),
+        "validator_request_event_count": len(request_events),
+        "validator_request_start_event_count": len(request_start_events),
+        "validator_request_complete_event_count": len(request_complete_events),
+        "validator_request_rows_before_dispatch_complete": (
+            _events_started_before_dispatch_complete(request_events, events)
+        ),
+        "streamed_validator_lookup_rows_before_dispatch_complete": (
+            _events_started_before_dispatch_complete(streamed_lookup_events, events)
+        ),
         "batch_validator_run_count": _batch_validator_run_count_from_events(events),
         "validator_problem_event_count": len(problem_events),
         "specialist_text_fallback_event_count": len(fallback_events),
@@ -1016,6 +1144,16 @@ def _validator_observation_summary(events: list[dict[str, Any]]) -> dict[str, An
         "validator_agent_run_count": validator_agent_run_count,
         "validator_agent_run_count_source": count_source,
         "validator_dispatch_completion_details": _validator_dispatch_completion_details(events),
+        "validator_first_request_event_timestamp": (
+            _first_event_timestamp(request_events).isoformat()
+            if _first_event_timestamp(request_events)
+            else None
+        ),
+        "validator_last_request_event_timestamp": (
+            _last_event_timestamp(request_events).isoformat()
+            if _last_event_timestamp(request_events)
+            else None
+        ),
     }
 
 
@@ -1028,8 +1166,11 @@ def validate_tightened_trial_gate(
 ) -> dict[str, Any]:
     events = flow_result.get("events") or []
     lookup_events = _validator_lookup_events(events)
+    request_events = _validator_request_lifecycle_events(events)
     fallback_events = _fallback_events(events)
     problem_events = _validator_problem_events(events)
+    validator_agent_run_count, _count_source = _validator_agent_run_count_from_events(events)
+    batch_validator_run_count = _batch_validator_run_count_from_events(events)
     observed_counts = Counter(
         binding_id
         for event in lookup_events
@@ -1048,15 +1189,33 @@ def validate_tightened_trial_gate(
         binding_id for binding_id in expected_bindings if observed_counts.get(binding_id, 0) <= 0
     ]
     enough_expected_bindings = len(observed_expected_bindings) >= minimum_count
+    singleton_validator_run_count = max(
+        0,
+        int(validator_agent_run_count or 0) - batch_validator_run_count,
+    )
+    request_lifecycle_ok = (
+        singleton_validator_run_count == 0
+        or len(request_events) >= singleton_validator_run_count * 2
+    )
     fallback_ok = allow_specialist_text_fallback or not fallback_events
     no_problem_events = not problem_events
-    ok = enough_expected_bindings and fallback_ok and no_problem_events
+    ok = (
+        enough_expected_bindings
+        and request_lifecycle_ok
+        and fallback_ok
+        and no_problem_events
+    )
     payload = {
         "expected_validator_bindings": expected_bindings,
         "minimum_expected_validator_bindings": minimum_count,
         "observed_validator_lookup_counts": dict(sorted(observed_counts.items())),
         "observed_expected_validator_bindings": observed_expected_bindings,
         "missing_expected_validator_bindings": missing_expected_bindings,
+        "validator_request_event_count": len(request_events),
+        "validator_agent_run_count": validator_agent_run_count,
+        "batch_validator_run_count": batch_validator_run_count,
+        "singleton_validator_run_count": singleton_validator_run_count,
+        "request_lifecycle_ok": request_lifecycle_ok,
         "specialist_text_fallback_event_count": len(fallback_events),
         "validator_problem_event_count": len(problem_events),
         "allow_specialist_text_fallback": allow_specialist_text_fallback,
@@ -1074,6 +1233,12 @@ def validate_tightened_trial_gate(
             reasons.append(
                 "missing validator audit events for "
                 f"{missing_expected_bindings}; observed {dict(sorted(observed_counts.items()))}"
+            )
+        if not request_lifecycle_ok:
+            reasons.append(
+                "missing validator request lifecycle events: "
+                f"request_events={len(request_events)}, "
+                f"singleton_validator_run_count={singleton_validator_run_count}"
             )
         if not fallback_ok:
             reasons.append(
@@ -1212,6 +1377,14 @@ def _annotate_note_with_flow_result(
     for key in (
         "validator_event_count",
         "validator_lookup_event_count",
+        "streamed_validator_lookup_event_count",
+        "synthetic_validator_lookup_event_count",
+        "duplicate_synthetic_validator_lookup_event_count",
+        "validator_request_event_count",
+        "validator_request_start_event_count",
+        "validator_request_complete_event_count",
+        "validator_request_rows_before_dispatch_complete",
+        "streamed_validator_lookup_rows_before_dispatch_complete",
         "batch_validator_run_count",
         "validator_problem_event_count",
         "specialist_text_fallback_event_count",
@@ -1219,6 +1392,8 @@ def _annotate_note_with_flow_result(
         "validator_agent_run_count",
         "validator_agent_run_count_source",
         "validator_dispatch_completion_details",
+        "validator_first_request_event_timestamp",
+        "validator_last_request_event_timestamp",
     ):
         if key in validator_observations:
             note[key] = validator_observations[key]
@@ -1259,6 +1434,14 @@ def run_trial(
         "active_validator_dispatch_duration_seconds": None,
         "validator_event_count": 0,
         "validator_lookup_event_count": 0,
+        "streamed_validator_lookup_event_count": 0,
+        "synthetic_validator_lookup_event_count": 0,
+        "duplicate_synthetic_validator_lookup_event_count": 0,
+        "validator_request_event_count": 0,
+        "validator_request_start_event_count": 0,
+        "validator_request_complete_event_count": 0,
+        "validator_request_rows_before_dispatch_complete": None,
+        "streamed_validator_lookup_rows_before_dispatch_complete": None,
         "batch_validator_run_count": 0,
         "validator_problem_event_count": 0,
         "specialist_text_fallback_event_count": 0,
@@ -1516,7 +1699,23 @@ def main(argv: Iterable[str] | None = None) -> int:
                 "active_validator_dispatch_duration_seconds"
             ),
             "validator_agent_run_count": result.get("validator_agent_run_count"),
+            "validator_request_event_count": result.get("validator_request_event_count"),
+            "validator_request_rows_before_dispatch_complete": result.get(
+                "validator_request_rows_before_dispatch_complete"
+            ),
             "validator_lookup_event_count": result.get("validator_lookup_event_count"),
+            "streamed_validator_lookup_event_count": result.get(
+                "streamed_validator_lookup_event_count"
+            ),
+            "synthetic_validator_lookup_event_count": result.get(
+                "synthetic_validator_lookup_event_count"
+            ),
+            "duplicate_synthetic_validator_lookup_event_count": result.get(
+                "duplicate_synthetic_validator_lookup_event_count"
+            ),
+            "streamed_validator_lookup_rows_before_dispatch_complete": result.get(
+                "streamed_validator_lookup_rows_before_dispatch_complete"
+            ),
             "batch_validator_run_count": result.get("batch_validator_run_count"),
             "validator_problem_event_count": result.get("validator_problem_event_count"),
             "specialist_text_fallback_event_count": result.get(

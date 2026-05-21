@@ -1347,6 +1347,21 @@ def _validator_lookup_audit_key(binding_id: Any, attempt: Any) -> str:
     )
 
 
+def _validator_lookup_request_binding_key(binding_id: Any, request_id: Any) -> str:
+    return json.dumps(
+        {
+            "binding_id": str(binding_id or ""),
+            "request_id": str(request_id or ""),
+        },
+        sort_keys=True,
+    )
+
+
+def _is_streamed_validator_lookup_tool(tool_name: Any) -> bool:
+    text = str(tool_name or "").strip()
+    return text == "domain_validator_lookup" or text.startswith("agr_curation_query")
+
+
 def _validator_lookup_status_summary(status_counts: dict[str, int]) -> str:
     if not status_counts:
         return "unknown"
@@ -1375,10 +1390,185 @@ def _validator_lookup_complete_label(
     )
 
 
+def _event_timestamp(event: dict[str, Any]) -> str:
+    timestamp = event.get("timestamp")
+    if isinstance(timestamp, str) and timestamp:
+        return timestamp
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _emit_validator_batch_audit_event(
+    event: dict[str, Any],
+    *,
+    specialist_name: str,
+    emit_event: Any,
+) -> None:
+    event_name = str(event.get("event") or "")
+    is_start = event_name == "validator_batch_start"
+    request_count = int(event.get("request_count") or 0)
+    binding_id = event.get("validator_binding_id")
+    friendly_action = "start" if is_start else str(event.get("status") or "complete")
+    emit_event({
+        "type": "TOOL_START" if is_start else "TOOL_COMPLETE",
+        "timestamp": _event_timestamp(event),
+        "details": {
+            "toolName": "dispatch_active_validator_batch",
+            "friendlyName": (
+                f"{specialist_name}: Validator Batch {friendly_action} "
+                f"({binding_id}, {request_count} request"
+                f"{'' if request_count == 1 else 's'})"
+            ),
+            "agent": specialist_name,
+            "toolArgs": {
+                "validator_binding_id": binding_id,
+                "batch_family": event.get("batch_family"),
+                "request_count": request_count,
+            },
+            "success": event.get("status") != "error",
+            "error": event.get("error"),
+            "isSpecialistInternal": True,
+            "isValidatorInternal": True,
+            "validatorBindingId": binding_id,
+            "validatorAgent": event.get("validator_agent"),
+            "validatorBatchFamily": event.get("batch_family"),
+            "validatorBatchRequestCount": request_count,
+            "validatorBatchRequestIds": event.get("request_ids") or [],
+            "validatorBatchDurationSeconds": event.get("duration_seconds"),
+            "validatorBatchRunnerDurationSeconds": event.get(
+                "runner_duration_seconds"
+            ),
+            "validatorBatchOutputValidationDurationSeconds": event.get(
+                "output_validation_duration_seconds"
+            ),
+            "validatorBatchResolvedCount": event.get("resolved_count"),
+            "validatorBatchUnresolvedCount": event.get("unresolved_count"),
+        },
+    })
+
+
+def _emit_validator_request_audit_event(
+    event: dict[str, Any],
+    *,
+    specialist_name: str,
+    emit_event: Any,
+) -> None:
+    event_name = str(event.get("event") or "")
+    is_start = event_name == "validator_request_start"
+    binding_id = event.get("validator_binding_id")
+    request_id = event.get("request_id")
+    request_count = int(event.get("request_count") or 1)
+    result_status = str(event.get("validator_result_status") or "pending")
+    friendly_action = "start" if is_start else f"complete ({result_status})"
+    target = event.get("target") if isinstance(event.get("target"), dict) else {}
+    tool_args = {
+        "validator_binding_id": binding_id,
+        "request_id": request_id,
+        "representative_request_id": event.get("representative_request_id"),
+        "request_count": request_count,
+        "target": {
+            "object_type": target.get("object_type"),
+            "object_role": target.get("object_role"),
+            "field_path": target.get("field_path"),
+        },
+        "selected_inputs": event.get("selected_input_summary") or {},
+        "expected_result_fields": event.get("expected_result_fields") or [],
+    }
+    deduped_request_ids = [
+        str(item)
+        for item in (event.get("deduped_request_ids") or [])
+        if item is not None
+    ]
+    if deduped_request_ids:
+        tool_args["deduped_request_ids"] = deduped_request_ids
+
+    emit_event({
+        "type": "TOOL_START" if is_start else "TOOL_COMPLETE",
+        "timestamp": _event_timestamp(event),
+        "details": {
+            "toolName": "dispatch_active_validator_request",
+            "friendlyName": (
+                f"{specialist_name}: Validator Request {friendly_action} "
+                f"({binding_id}, {request_count} request"
+                f"{'' if request_count == 1 else 's'})"
+            ),
+            "agent": specialist_name,
+            "toolArgs": tool_args,
+            "success": event.get("success"),
+            "error": event.get("error"),
+            "isSpecialistInternal": True,
+            "isValidatorInternal": True,
+            "validatorBindingId": binding_id,
+            "validatorAgent": event.get("validator_agent"),
+            "validatorRequestId": request_id,
+            "representativeRequestId": event.get("representative_request_id"),
+            "dedupedRequestIds": deduped_request_ids,
+            "validatorResultStatus": event.get("validator_result_status"),
+            "validatorDispatchStatus": event.get("dispatch_status"),
+            "validatorFailureClassification": event.get("failure_classification"),
+            "validatorFailureReason": event.get("failure_reason"),
+            "validatorLookupAttemptCount": event.get("lookup_attempt_count"),
+            "validatorDurationSeconds": event.get("duration_seconds"),
+            "validatorRunnerDurationSeconds": event.get("runner_duration_seconds"),
+            "validatorOutputValidationDurationSeconds": event.get(
+                "output_validation_duration_seconds"
+            ),
+        },
+    })
+
+
+def _emit_validator_tool_audit_event(
+    event: dict[str, Any],
+    *,
+    specialist_name: str,
+    emit_event: Any,
+) -> None:
+    event_name = str(event.get("event") or "")
+    is_start = event_name == "validator_tool_start"
+    tool_name = str(event.get("tool_name") or "domain_validator_lookup")
+    binding_id = event.get("validator_binding_id")
+    request_ids = [
+        str(item)
+        for item in (event.get("validator_request_ids") or [])
+        if item is not None
+    ]
+    request_id = event.get("validator_request_id")
+    if request_id is not None and str(request_id) not in request_ids:
+        request_ids.append(str(request_id))
+    friendly_action = "start" if is_start else "complete"
+    details: dict[str, Any] = {
+        "toolName": tool_name,
+        "friendlyName": (
+            f"{specialist_name}: Validator {tool_name} {friendly_action}"
+        ),
+        "agent": specialist_name,
+        "isSpecialistInternal": True,
+        "isValidatorInternal": True,
+        "validatorBindingId": binding_id,
+        "validatorAgent": event.get("validator_agent"),
+        "validatorRequestId": request_id,
+        "validatorRequestIds": request_ids,
+        "validatorBatchFamily": event.get("validator_batch_family"),
+        "validatorToolCallId": event.get("tool_call_id"),
+    }
+    if is_start:
+        details["toolArgs"] = event.get("tool_args")
+    else:
+        details["success"] = event.get("success", True)
+        details["durationMs"] = event.get("duration_ms")
+        details["outputPreview"] = event.get("output_preview")
+
+    emit_event({
+        "type": "TOOL_START" if is_start else "TOOL_COMPLETE",
+        "timestamp": _event_timestamp(event),
+        "details": details,
+    })
+
+
 def _emit_validator_lookup_audit_events(
     *,
     specialist_name: str,
     dispatch_result: Any,
+    skipped_request_binding_keys: set[str] | None = None,
 ) -> None:
     """Surface package-scoped validator lookup attempts in the live audit stream."""
 
@@ -1388,6 +1578,16 @@ def _emit_validator_lookup_audit_events(
         binding_id = getattr(result, "validator_binding_id", None)
         status = getattr(result, "status", None)
         request_id = getattr(result, "request_id", None)
+        if (
+            skipped_request_binding_keys
+            and request_id is not None
+            and _validator_lookup_request_binding_key(
+                binding_id,
+                request_id,
+            )
+            in skipped_request_binding_keys
+        ):
+            continue
         for attempt in getattr(result, "lookup_attempts", ()) or ():
             key = _validator_lookup_audit_key(binding_id, attempt)
             record = lookup_record_by_key.get(key)
@@ -1548,6 +1748,15 @@ async def _dispatch_domain_envelope_validators_for_chat(
             ),
         )
 
+    live_event_list = get_live_event_list()
+    streamed_validator_lookup_keys: set[str] = set()
+
+    def _emit_live_specialist_event(event: dict[str, Any]) -> None:
+        if live_event_list is not None:
+            live_event_list.append(event)
+            return
+        add_specialist_event(event)
+
     try:
         envelope_started_at = time.monotonic()
         extraction_record = CurationExtractionResultRecord(
@@ -1579,7 +1788,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
                 message=error_message,
             )
 
-        add_specialist_event({
+        _emit_live_specialist_event({
             "type": "TOOL_START",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "details": {
@@ -1597,48 +1806,49 @@ async def _dispatch_domain_envelope_validators_for_chat(
 
         def _emit_validator_dispatch_event(event: dict[str, Any]) -> None:
             event_name = str(event.get("event") or "")
-            is_start = event_name == "validator_batch_start"
-            is_complete = event_name == "validator_batch_complete"
-            if not is_start and not is_complete:
+            is_batch_start = event_name == "validator_batch_start"
+            is_batch_complete = event_name == "validator_batch_complete"
+            is_request_start = event_name == "validator_request_start"
+            is_request_complete = event_name == "validator_request_complete"
+            is_tool_start = event_name == "validator_tool_start"
+            is_tool_complete = event_name == "validator_tool_complete"
+            if is_batch_start or is_batch_complete:
+                _emit_validator_batch_audit_event(
+                    event,
+                    specialist_name=specialist_name,
+                    emit_event=_emit_live_specialist_event,
+                )
                 return
-            request_count = int(event.get("request_count") or 0)
-            binding_id = event.get("validator_binding_id")
-            friendly_action = "start" if is_start else str(event.get("status") or "complete")
-            add_specialist_event({
-                "type": "TOOL_START" if is_start else "TOOL_COMPLETE",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "details": {
-                    "toolName": "dispatch_active_validator_batch",
-                    "friendlyName": (
-                        f"{specialist_name}: Validator Batch {friendly_action} "
-                        f"({binding_id}, {request_count} request"
-                        f"{'' if request_count == 1 else 's'})"
-                    ),
-                    "agent": specialist_name,
-                    "toolArgs": {
-                        "validator_binding_id": binding_id,
-                        "batch_family": event.get("batch_family"),
-                        "request_count": request_count,
-                    },
-                    "success": event.get("status") != "error",
-                    "error": event.get("error"),
-                    "isSpecialistInternal": True,
-                    "validatorBindingId": binding_id,
-                    "validatorAgent": event.get("validator_agent"),
-                    "validatorBatchFamily": event.get("batch_family"),
-                    "validatorBatchRequestCount": request_count,
-                    "validatorBatchRequestIds": event.get("request_ids") or [],
-                    "validatorBatchDurationSeconds": event.get("duration_seconds"),
-                    "validatorBatchRunnerDurationSeconds": event.get(
-                        "runner_duration_seconds"
-                    ),
-                    "validatorBatchOutputValidationDurationSeconds": event.get(
-                        "output_validation_duration_seconds"
-                    ),
-                    "validatorBatchResolvedCount": event.get("resolved_count"),
-                    "validatorBatchUnresolvedCount": event.get("unresolved_count"),
-                },
-            })
+            if is_request_start or is_request_complete:
+                _emit_validator_request_audit_event(
+                    event,
+                    specialist_name=specialist_name,
+                    emit_event=_emit_live_specialist_event,
+                )
+                return
+            if is_tool_start or is_tool_complete:
+                if _is_streamed_validator_lookup_tool(event.get("tool_name")):
+                    binding_id = event.get("validator_binding_id")
+                    request_ids = [
+                        str(item)
+                        for item in (event.get("validator_request_ids") or [])
+                        if item is not None
+                    ]
+                    request_id = event.get("validator_request_id")
+                    if request_id is not None and str(request_id) not in request_ids:
+                        request_ids.append(str(request_id))
+                    for current_request_id in request_ids:
+                        streamed_validator_lookup_keys.add(
+                            _validator_lookup_request_binding_key(
+                                binding_id,
+                                current_request_id,
+                            )
+                        )
+                _emit_validator_tool_audit_event(
+                    event,
+                    specialist_name=specialist_name,
+                    emit_event=_emit_live_specialist_event,
+                )
 
         core_dispatch_started_at = time.monotonic()
         dispatch_result = await asyncio.to_thread(
@@ -1653,7 +1863,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         )
 
         has_validator_error = _validator_dispatch_has_error_result(dispatch_result)
-        add_specialist_event({
+        _emit_live_specialist_event({
             "type": "TOOL_COMPLETE",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "details": {
@@ -1691,6 +1901,7 @@ async def _dispatch_domain_envelope_validators_for_chat(
         _emit_validator_lookup_audit_events(
             specialist_name=specialist_name,
             dispatch_result=dispatch_result,
+            skipped_request_binding_keys=streamed_validator_lookup_keys,
         )
 
         logger.info(

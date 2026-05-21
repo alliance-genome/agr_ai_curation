@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import copy
+import inspect
 import json
 import logging
 import time
@@ -44,6 +45,7 @@ from .validator_result_classification import (
     lookup_status_for_validator_outcome,
     validator_failure_classification,
 )
+from .validator_stream_events import emit_validator_agent_stream_events
 from .validation_findings import append_validation_findings_to_envelope
 
 
@@ -145,8 +147,12 @@ def dispatch_active_validator_bindings(
         envelope,
         states=[ValidationBindingState.ACTIVE],
     )
-    agent_runner = runner or _default_package_scoped_validator_runner()
-    agent_batch_runner = batch_runner or _default_package_scoped_validator_batch_runner()
+    agent_runner = runner or _default_package_scoped_validator_runner(
+        event_emitter=event_emitter,
+    )
+    agent_batch_runner = batch_runner or _default_package_scoped_validator_batch_runner(
+        event_emitter=event_emitter,
+    )
 
     selector_findings: list[ValidationFinding] = []
     jobs: list[_DispatchJob] = []
@@ -441,6 +447,7 @@ def _execute_validator_run_group(
                 group_index: _run_validator_job_group(
                     grouped_jobs[group_index],
                     agent_runner=agent_runner,
+                    event_emitter=event_emitter,
                 )
             },
             validator_agent_run_count=1,
@@ -524,11 +531,14 @@ def _run_validator_job_group(
     jobs: list[_DispatchJob],
     *,
     agent_runner: DomainValidatorAgentRunner,
+    event_emitter: ValidatorDispatchEventEmitter | None,
 ) -> list[DomainValidatorResultBase]:
     representative = jobs[0]
     validator_result = _run_single_validator_job(
         representative,
         agent_runner=agent_runner,
+        event_emitter=event_emitter,
+        deduped_jobs=jobs,
     )
     return [
         validator_result
@@ -632,8 +642,19 @@ def _run_single_validator_job(
     job: _DispatchJob,
     *,
     agent_runner: DomainValidatorAgentRunner,
+    event_emitter: ValidatorDispatchEventEmitter | None,
+    deduped_jobs: list[_DispatchJob],
 ) -> DomainValidatorResultBase:
     request = job.request
+    summary = _validator_request_summary(deduped_jobs)
+    started_at = time.monotonic()
+    runner_duration_seconds = 0.0
+    output_validation_duration_seconds = 0.0
+    _emit_validator_request_event(
+        event_emitter,
+        phase="start",
+        summary=summary,
+    )
     try:
         runner_started_at = time.monotonic()
         raw_output = agent_runner(request, binding=job.match.binding)
@@ -653,6 +674,8 @@ def _run_single_validator_job(
             output_validation_duration_seconds,
         )
     except Exception as exc:
+        if runner_duration_seconds == 0.0:
+            runner_duration_seconds = time.monotonic() - runner_started_at
         LOGGER.warning(
             "Package-scoped validator agent failed for binding %s request %s",
             request.validator_binding_id,
@@ -664,7 +687,37 @@ def _run_single_validator_job(
             reason="validator_agent_error",
             explanation=f"Validator agent execution failed: {exc}",
         )
-    return _finalize_validator_result(validator_result, request=request)
+        finalized_result = _finalize_validator_result(validator_result, request=request)
+        _emit_validator_request_event(
+            event_emitter,
+            phase="complete",
+            summary=_validator_request_completion_summary(
+                summary,
+                validator_result=finalized_result,
+                dispatch_status="error",
+                duration_seconds=time.monotonic() - started_at,
+                runner_duration_seconds=runner_duration_seconds,
+                output_validation_duration_seconds=output_validation_duration_seconds,
+                error=str(exc),
+            ),
+        )
+        return finalized_result
+
+    finalized_result = _finalize_validator_result(validator_result, request=request)
+    _emit_validator_request_event(
+        event_emitter,
+        phase="complete",
+        summary=_validator_request_completion_summary(
+            summary,
+            validator_result=finalized_result,
+            dispatch_status="completed",
+            duration_seconds=time.monotonic() - started_at,
+            runner_duration_seconds=runner_duration_seconds,
+            output_validation_duration_seconds=output_validation_duration_seconds,
+            error=None,
+        ),
+    )
+    return finalized_result
 
 
 def _finalize_validator_result(
@@ -740,6 +793,7 @@ def run_package_scoped_validator_agent(
     request: DomainValidationRequest,
     *,
     binding: ValidatorBinding,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
 ) -> Any:
     """Execute the package-owned validator through the unified agent runtime."""
 
@@ -776,6 +830,22 @@ def run_package_scoped_validator_agent(
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
             run_kwargs["max_turns"] = binding.max_tool_calls
+        if event_emitter is not None and hasattr(Runner, "run_streamed"):
+            if _running_event_loop_exists():
+                return run_package_scoped_validator_agent_in_worker_thread(
+                    request,
+                    binding=binding,
+                    event_emitter=event_emitter,
+                )
+            return asyncio.run(
+                _run_package_scoped_validator_agent_streamed(
+                    Runner,
+                    agent,
+                    run_kwargs=run_kwargs,
+                    request=request,
+                    event_emitter=event_emitter,
+                )
+            )
         run_started_at = time.monotonic()
         try:
             result = Runner.run_sync(agent, **run_kwargs)
@@ -805,10 +875,41 @@ def run_package_scoped_validator_agent(
     raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
 
 
+async def _run_package_scoped_validator_agent_streamed(
+    runner_cls: Any,
+    agent: Any,
+    *,
+    run_kwargs: dict[str, Any],
+    request: DomainValidationRequest,
+    event_emitter: ValidatorDispatchEventEmitter,
+) -> Any:
+    run_started_at = time.monotonic()
+    result = runner_cls.run_streamed(agent, **run_kwargs)
+    await emit_validator_agent_stream_events(
+        result.stream_events(),
+        event_emitter=event_emitter,
+        validator_binding_id=request.validator_binding_id,
+        validator_agent=request.validator_agent.model_dump(mode="json"),
+        validator_request_id=request.request_id,
+        validator_request_ids=[request.request_id],
+    )
+    LOGGER.info(
+        "Package-scoped validator Runner.run_streamed completed for %s:%s "
+        "binding %s request %s in %.3fs",
+        request.validator_agent.package_id,
+        request.validator_agent.agent_id,
+        request.validator_binding_id,
+        request.request_id,
+        time.monotonic() - run_started_at,
+    )
+    return result
+
+
 def run_package_scoped_validator_agent_batch(
     jobs: list[_DispatchJob],
     *,
     binding: ValidatorBinding,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
 ) -> Any:
     """Execute one package validator batch through the unified agent runtime."""
 
@@ -874,6 +975,23 @@ def run_package_scoped_validator_agent_batch(
         run_kwargs: dict[str, Any] = {"input": payload}
         if binding.max_tool_calls is not None:
             run_kwargs["max_turns"] = max(binding.max_tool_calls, len(jobs) + 1)
+        if event_emitter is not None and hasattr(Runner, "run_streamed"):
+            if _running_event_loop_exists():
+                return run_package_scoped_validator_agent_batch_in_worker_thread(
+                    jobs,
+                    binding=binding,
+                    event_emitter=event_emitter,
+                )
+            return asyncio.run(
+                _run_package_scoped_validator_agent_batch_streamed(
+                    Runner,
+                    agent,
+                    run_kwargs=run_kwargs,
+                    jobs=jobs,
+                    binding=binding,
+                    event_emitter=event_emitter,
+                )
+            )
         run_started_at = time.monotonic()
         try:
             result = Runner.run_sync(agent, **run_kwargs)
@@ -903,6 +1021,38 @@ def run_package_scoped_validator_agent_batch(
     raise RuntimeError("OpenAI Agents Runner.run_sync is unavailable")
 
 
+async def _run_package_scoped_validator_agent_batch_streamed(
+    runner_cls: Any,
+    agent: Any,
+    *,
+    run_kwargs: dict[str, Any],
+    jobs: list[_DispatchJob],
+    binding: ValidatorBinding,
+    event_emitter: ValidatorDispatchEventEmitter,
+) -> Any:
+    representative_request = jobs[0].request
+    run_started_at = time.monotonic()
+    result = runner_cls.run_streamed(agent, **run_kwargs)
+    await emit_validator_agent_stream_events(
+        result.stream_events(),
+        event_emitter=event_emitter,
+        validator_binding_id=representative_request.validator_binding_id,
+        validator_agent=representative_request.validator_agent.model_dump(mode="json"),
+        validator_request_ids=[job.request.request_id for job in jobs],
+        validator_batch_family=binding.batch_family or binding.binding_id,
+    )
+    LOGGER.info(
+        "Package-scoped validator batch Runner.run_streamed completed for %s:%s "
+        "binding %s request_count=%s in %.3fs",
+        representative_request.validator_agent.package_id,
+        representative_request.validator_agent.agent_id,
+        representative_request.validator_binding_id,
+        len(jobs),
+        time.monotonic() - run_started_at,
+    )
+    return result
+
+
 def _batch_output_schema_for_agent_output(output_type: Any) -> type[BaseModel] | None:
     if not is_domain_validator_result_schema(output_type):
         return None
@@ -928,9 +1078,15 @@ def run_package_scoped_validator_agent_in_worker_thread(
     request: DomainValidationRequest,
     *,
     binding: ValidatorBinding,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
 ) -> Any:
     """Execute a package validator from sync code that is already in an event loop."""
 
+    kwargs: dict[str, Any] = {"binding": binding}
+    if event_emitter is not None and _callable_accepts_event_emitter(
+        run_package_scoped_validator_agent
+    ):
+        kwargs["event_emitter"] = event_emitter
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=1,
         thread_name_prefix="domain-validator-agent",
@@ -938,7 +1094,7 @@ def run_package_scoped_validator_agent_in_worker_thread(
         future = executor.submit(
             run_package_scoped_validator_agent,
             request,
-            binding=binding,
+            **kwargs,
         )
         return future.result()
 
@@ -947,9 +1103,15 @@ def run_package_scoped_validator_agent_batch_in_worker_thread(
     jobs: list[_DispatchJob],
     *,
     binding: ValidatorBinding,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
 ) -> Any:
     """Execute a package validator batch from sync code inside an event loop."""
 
+    kwargs: dict[str, Any] = {"binding": binding}
+    if event_emitter is not None and _callable_accepts_event_emitter(
+        run_package_scoped_validator_agent_batch
+    ):
+        kwargs["event_emitter"] = event_emitter
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=1,
         thread_name_prefix="domain-validator-agent-batch",
@@ -957,21 +1119,86 @@ def run_package_scoped_validator_agent_batch_in_worker_thread(
         future = executor.submit(
             run_package_scoped_validator_agent_batch,
             jobs,
-            binding=binding,
+            **kwargs,
         )
         return future.result()
 
 
-def _default_package_scoped_validator_runner() -> DomainValidatorAgentRunner:
+def _default_package_scoped_validator_runner(
+    *,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
+) -> DomainValidatorAgentRunner:
     if _running_event_loop_exists():
-        return run_package_scoped_validator_agent_in_worker_thread
-    return run_package_scoped_validator_agent
+        runner = run_package_scoped_validator_agent_in_worker_thread
+    else:
+        runner = run_package_scoped_validator_agent
+    return _wrap_runner_with_optional_event_emitter(
+        runner,
+        event_emitter=event_emitter,
+    )
 
 
-def _default_package_scoped_validator_batch_runner() -> DomainValidatorBatchAgentRunner:
+def _default_package_scoped_validator_batch_runner(
+    *,
+    event_emitter: ValidatorDispatchEventEmitter | None = None,
+) -> DomainValidatorBatchAgentRunner:
     if _running_event_loop_exists():
-        return run_package_scoped_validator_agent_batch_in_worker_thread
-    return run_package_scoped_validator_agent_batch
+        runner = run_package_scoped_validator_agent_batch_in_worker_thread
+    else:
+        runner = run_package_scoped_validator_agent_batch
+    return _wrap_batch_runner_with_optional_event_emitter(
+        runner,
+        event_emitter=event_emitter,
+    )
+
+
+def _wrap_runner_with_optional_event_emitter(
+    runner: Any,
+    *,
+    event_emitter: ValidatorDispatchEventEmitter | None,
+) -> DomainValidatorAgentRunner:
+    if event_emitter is None or not _callable_accepts_event_emitter(runner):
+        return runner
+
+    def _runner(
+        request: DomainValidationRequest,
+        *,
+        binding: ValidatorBinding,
+    ) -> Any:
+        return runner(request, binding=binding, event_emitter=event_emitter)
+
+    return _runner
+
+
+def _wrap_batch_runner_with_optional_event_emitter(
+    runner: Any,
+    *,
+    event_emitter: ValidatorDispatchEventEmitter | None,
+) -> DomainValidatorBatchAgentRunner:
+    if event_emitter is None or not _callable_accepts_event_emitter(runner):
+        return runner
+
+    def _runner(
+        jobs: list[_DispatchJob],
+        *,
+        binding: ValidatorBinding,
+    ) -> Any:
+        return runner(jobs, binding=binding, event_emitter=event_emitter)
+
+    return _runner
+
+
+def _callable_accepts_event_emitter(callable_obj: Any) -> bool:
+    try:
+        signature = inspect.signature(callable_obj)
+    except (TypeError, ValueError):
+        return False
+    for parameter in signature.parameters.values():
+        if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            return True
+        if parameter.name == "event_emitter":
+            return True
+    return False
 
 
 def _running_event_loop_exists() -> bool:
@@ -1193,6 +1420,160 @@ def _raw_result_request_id(raw_result: Any) -> str | None:
     return None
 
 
+def _validator_request_summary(jobs: list[_DispatchJob]) -> dict[str, Any]:
+    representative = jobs[0]
+    request = representative.request
+    binding = representative.match.binding
+    validator_agent = (
+        binding.validator_agent.to_dict()
+        if binding.validator_agent is not None
+        else request.validator_agent.model_dump(mode="json")
+    )
+    request_ids = [job.request.request_id for job in jobs]
+    return {
+        "validator_binding_id": request.validator_binding_id,
+        "validator_agent": validator_agent,
+        "request_id": request.request_id,
+        "representative_request_id": request.request_id,
+        "deduped_request_ids": request_ids if len(request_ids) > 1 else [],
+        "request_count": len(jobs),
+        "target": _validator_request_target_summary(request),
+        "selected_input_summary": _compact_selected_inputs(request.selected_inputs),
+        "expected_result_fields": list(request.expected_result_fields),
+    }
+
+
+def _validator_request_target_summary(
+    request: DomainValidationRequest,
+) -> dict[str, Any]:
+    return {
+        "domain_pack_id": request.target.domain_pack_id,
+        "object_type": request.target.object_type,
+        "object_role": request.target.object_role,
+        "field_path": request.target.field_path,
+        "expected_fields": list(request.target.expected_fields),
+    }
+
+
+def _compact_selected_inputs(selected_inputs: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: _compact_selected_input_value(key, value)
+        for key, value in sorted(selected_inputs.items())
+    }
+
+
+def _compact_selected_input_value(key: str, value: Any) -> Any:
+    if key in _VALIDATOR_DEDUPE_CONTEXT_INPUT_FIELDS:
+        if isinstance(value, str):
+            return {"kind": "text", "char_count": len(value)}
+        return _shape_summary(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if len(text) <= 120:
+            return text
+        return f"{text[:117]}..."
+    if isinstance(value, int | float | bool) or value is None:
+        return value
+    if isinstance(value, dict):
+        if _is_small_scalar_mapping(value):
+            return {
+                str(item_key): _compact_selected_input_value(str(item_key), item_value)
+                for item_key, item_value in sorted(value.items())
+            }
+        return _shape_summary(value)
+    if isinstance(value, list):
+        if len(value) <= 3 and all(_is_scalar(item) for item in value):
+            return [
+                _compact_selected_input_value(key, item)
+                for item in value
+            ]
+        return _shape_summary(value)
+    return str(value)[:120]
+
+
+def _shape_summary(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return {
+            "kind": "object",
+            "key_count": len(value),
+            "keys": [str(key) for key in list(value)[:8]],
+        }
+    if isinstance(value, list):
+        return {"kind": "list", "count": len(value)}
+    if isinstance(value, str):
+        return {"kind": "text", "char_count": len(value)}
+    return {"kind": type(value).__name__}
+
+
+def _is_small_scalar_mapping(value: dict[Any, Any]) -> bool:
+    return len(value) <= 6 and all(_is_scalar(item) for item in value.values())
+
+
+def _is_scalar(value: Any) -> bool:
+    return isinstance(value, str | int | float | bool) or value is None
+
+
+def _validator_request_completion_summary(
+    summary: dict[str, Any],
+    *,
+    validator_result: DomainValidatorResultBase,
+    dispatch_status: str,
+    duration_seconds: float,
+    runner_duration_seconds: float,
+    output_validation_duration_seconds: float,
+    error: str | None,
+) -> dict[str, Any]:
+    failure_classification = _validator_result_failure_classification(validator_result)
+    failure_reason = _validator_result_failure_reason(validator_result)
+    success = error is None and failure_classification not in {
+        "invalid_schema",
+        "transient",
+    }
+    return {
+        **summary,
+        "dispatch_status": dispatch_status,
+        "validator_result_status": validator_result.status,
+        "success": success,
+        "error": error,
+        "failure_classification": failure_classification,
+        "failure_reason": failure_reason,
+        "lookup_attempt_count": len(validator_result.lookup_attempts),
+        "duration_seconds": round(duration_seconds, 3),
+        "runner_duration_seconds": round(runner_duration_seconds, 3),
+        "output_validation_duration_seconds": round(
+            output_validation_duration_seconds,
+            3,
+        ),
+    }
+
+
+def _validator_result_failure_classification(
+    validator_result: DomainValidatorResultBase,
+) -> str | None:
+    if validator_result.status != "unresolved":
+        return None
+    try:
+        return validator_failure_classification(validator_result)
+    except Exception:
+        LOGGER.debug(
+            "Unable to classify validator request lifecycle result",
+            exc_info=True,
+        )
+        return "unclassified"
+
+
+def _validator_result_failure_reason(
+    validator_result: DomainValidatorResultBase,
+) -> str | None:
+    if validator_result.status != "unresolved":
+        return None
+    for attempt in validator_result.lookup_attempts:
+        method = str(getattr(attempt, "method", "") or "").strip()
+        if method:
+            return method
+    return None
+
+
 def _validator_batch_summary(jobs: list[_DispatchJob]) -> dict[str, Any]:
     representative = jobs[0]
     binding = representative.match.binding
@@ -1223,11 +1604,38 @@ def _emit_validator_batch_event(
         event_emitter(
             {
                 "event": f"validator_batch_{phase}",
+                "timestamp": datetime_now_utc_iso(),
                 **summary,
             }
         )
     except Exception:
         LOGGER.debug("Validator dispatch event emitter failed", exc_info=True)
+
+
+def _emit_validator_request_event(
+    event_emitter: ValidatorDispatchEventEmitter | None,
+    *,
+    phase: str,
+    summary: dict[str, Any],
+) -> None:
+    if event_emitter is None:
+        return
+    try:
+        event_emitter(
+            {
+                "event": f"validator_request_{phase}",
+                "timestamp": datetime_now_utc_iso(),
+                **summary,
+            }
+        )
+    except Exception:
+        LOGGER.debug("Validator dispatch event emitter failed", exc_info=True)
+
+
+def datetime_now_utc_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _enforce_expected_result_fields(
