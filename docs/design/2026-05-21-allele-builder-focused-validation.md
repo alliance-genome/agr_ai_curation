@@ -42,6 +42,8 @@ Additional validation:
 
 - Targeted backend unit suite: `121 passed`
 - Focused backend contract suite: `25 passed, 1 deselected`
+- Corpus runner unit suite: `6 passed`
+- Corpus runner syntax check: passed
 - `git diff --check`: clean
 
 The broader full real-PDF corpus was not used as allele-first acceptance evidence. A full corpus sweep remains a separate regression/release gate.
