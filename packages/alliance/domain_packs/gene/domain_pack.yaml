@@ -337,3 +337,186 @@ metadata:
       schema_dir: model/schema
       root_schema: model/schema/allianceModel.yaml
       cache_script: scripts/testing/cache_agr_curation_schema.sh
+  extraction_builder:
+    enabled: true
+    stage_tool: stage_gene_mention_evidence
+    finalize_tool: finalize_gene_extraction
+    retained_unit: gene_mention_evidence
+    per_retained_finding: true
+    model_final_ack_schema: ExtractionToolFinalizationAck
+    curation_output_schema: GeneExtractionResultEnvelope
+    primary_stage_field: mention
+    dedupe_fields:
+      - mention
+      - evidence_record_ids
+    stage_description: Submit one retained gene mention after verifying its supporting quote with record_evidence.
+    finalize_description: Call exactly once after all retained gene mentions have been staged; the backend builds the final gene envelope.
+    fields:
+      mention:
+        json_type: string
+        required: true
+        maps_to: gene_mention_evidence.payload.mention
+        hint: Exact gene mention or most searchable paper-backed label for the retained entity.
+      evidence_record_ids:
+        json_type: array
+        required: true
+        collection: true
+        min_items: 1
+        maps_to: gene_mention_evidence.payload.evidence_record_id
+        hint: Each value must be returned by a verified record_evidence call from the current run.
+      identity_resolution_notes:
+        json_type: array
+        required: true
+        collection: true
+        min_items: 1
+        maps_to: gene_mention_evidence.payload.identity_resolution_notes
+        hint: One to three paper-backed notes preserving aliases, species/provider context, assay context, or disambiguation clues for the gene validator.
+      confidence:
+        json_type: string
+        required: true
+        maps_to: gene_mention_evidence.payload.confidence
+        hint: Extractor confidence; use high, medium, or low.
+      species:
+        json_type: string
+        maps_to: gene_mention_evidence.payload.species
+        hint: Paper-backed species label when available.
+      taxon_hint:
+        json_type: string
+        maps_to: gene_mention_evidence.payload.taxon_hint
+        hint: Paper-backed NCBI Taxon CURIE hint when available.
+      data_provider_hint:
+        json_type: string
+        maps_to: gene_mention_evidence.payload.data_provider_hint
+        hint: Paper-backed Alliance provider hint when available.
+      proposed_primary_external_id:
+        json_type: string
+        maps_to: gene_mention_evidence.payload.proposed_primary_external_id
+        hint: Optional paper-supplied or context-supported identifier hint; do not invent final identity.
+      proposed_gene_symbol:
+        json_type: string
+        maps_to: gene_mention_evidence.payload.proposed_gene_symbol
+        hint: Optional paper-backed symbol hint for validator confirmation.
+      proposed_taxon:
+        json_type: string
+        maps_to: gene_mention_evidence.payload.proposed_taxon
+        hint: Optional NCBI Taxon CURIE hint for validator confirmation.
+      raw_mentions:
+        json_type: array
+        collection: true
+        maps_to: metadata.raw_mentions
+        hint: Optional supporting harvested mentions for audit metadata.
+    finalize_fields:
+      summary:
+        json_type: string
+        required: true
+        hint: Concise run summary.
+      candidate_count:
+        json_type: integer
+        required: true
+        hint: Number of harvested gene-like candidates considered.
+      kept_count:
+        json_type: integer
+        required: true
+        hint: Must equal the number of successfully staged retained gene findings.
+      excluded_count:
+        json_type: integer
+        required: true
+        hint: Must equal exclusions.length.
+      ambiguous_count:
+        json_type: integer
+        required: true
+        hint: Must equal ambiguities.length.
+      exclusions:
+        json_type: array
+        collection: true
+        hint: Excluded gene-like candidates with allowed reason codes.
+      ambiguities:
+        json_type: array
+        collection: true
+        hint: Unresolved candidates requiring curator review.
+      notes:
+        json_type: array
+        collection: true
+        hint: Optional run-level audit notes.
+    object_graph:
+      required_objects:
+        - gene_mention_evidence
+      validator_targets:
+        - target_id: gene_reference
+          binding_id: alliance_gene_reference_lookup
+          object_type: gene_mention_evidence
+          field_path: mention
+      objects:
+        - object_type: gene_mention_evidence
+          model_ref: GeneMentionEvidencePayload
+          schema_ref:
+            schema_id: alliance.linkml.Gene
+            provider: alliance_linkml
+            name: Gene
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/gene.yaml
+          object_role: validated_reference
+          definition_state: in_development
+          definition_notes:
+            - Envelope-only validated-reference evidence; this object does not create or mutate Alliance Gene rows.
+          pending_ref_template: gene_mention_{staged_id}_{evidence_record_id}
+          repeat_for: evidence_record_ids
+          payload_fields:
+            mention: mention
+            species: species
+            taxon_hint: taxon_hint
+            data_provider_hint: data_provider_hint
+            proposed_primary_external_id: proposed_primary_external_id
+            proposed_gene_symbol: proposed_gene_symbol
+            proposed_taxon: proposed_taxon
+            identity_resolution_notes: identity_resolution_notes
+            confidence: confidence
+            evidence_record_id: evidence_record_id
+            verified_quote: verified_quote
+            page: page
+            section: section
+            subsection: subsection
+            chunk_id: chunk_id
+            figure_reference: figure_reference
+          metadata:
+            object_role: validated_reference
+            evidence_role: gene_mention_evidence
+            write_behavior:
+              mode: none
+              write_target: none
+              reason: Keep extracted genes as validated-reference envelope evidence until a concrete target is verified.
+    allowed_exclusion_reason_codes:
+      - previously_reported
+      - non_experimental_claim
+      - insufficient_experimental_evidence
+      - out_of_scope
+      - ambiguous_entity
+      - duplicate_mention
+      - unsupported_entity_type
+      - gene_family_not_individual
+      - author_or_reagent_name
+      - reference_list_only
+    allowed_ambiguity_reason_codes:
+      - ambiguous_entity
+      - insufficient_selector_context
+      - unresolved_identity
+    examples:
+      stage:
+        mention: daf-2
+        evidence_record_ids:
+          - ev_verified_gene_quote_1
+        identity_resolution_notes:
+          - The paper studies C. elegans daf-2 mutants and reports insulin-like signaling phenotypes.
+        confidence: high
+        taxon_hint: NCBITaxon:6239
+      finalize:
+        summary: Staged one retained gene mention and excluded one pathway-only candidate.
+        candidate_count: 2
+        kept_count: 1
+        excluded_count: 1
+        ambiguous_count: 0
+    repair_messages:
+      invalid_stage_input: Submit one gene mention with paper-backed identity_resolution_notes and verified evidence_record_ids from this run.
+      invalid_finalize_input: Finalization requires internally consistent counts and allowed reason codes.
+      invalid_finalization: Resolve builder finalization issues before ending the run.
+      duplicate_finalization: finalize_gene_extraction must be called exactly once, after all retained gene mentions are staged.

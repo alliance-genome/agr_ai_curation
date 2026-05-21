@@ -556,6 +556,7 @@ metadata:
           metadata:
             write_behavior:
               status: blocked
+              reason: Builder-generated allele paper/evidence associations remain pending until durable reference and allele materialization are verified.
           object_refs:
             - field_path: reference
               object_type: Reference
@@ -622,7 +623,7 @@ metadata:
   validator_bindings:
     active:
       - binding_id: allele_mention_reference_validation
-        display_name: Allele mention reference validation
+        display_name: Allele mention reference
         validator_agent:
           package_id: agr.alliance
           agent_id: allele_validation

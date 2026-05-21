@@ -410,15 +410,20 @@ class DomainPackBuilderField(DomainPackMetadataBaseModel):
 class DomainPackBuilderValidatorTarget(DomainPackMetadataBaseModel):
     """Validator target emitted by a finalized extraction builder envelope."""
 
+    target_id: Optional[str] = None
+    binding_id: Optional[str] = None
     object_type: str
     field_path: str
+    required: Optional[bool] = None
 
-    @field_validator("object_type")
+    @field_validator("target_id", "binding_id", "object_type")
     @classmethod
-    def _validate_object_type(cls, value: str) -> str:
+    def _validate_optional_symbolic(cls, value: Optional[str], info) -> Optional[str]:
+        if value is None:
+            return None
         return _validate_symbolic_name(
             value,
-            "extraction_builder.validator_target.object_type",
+            f"extraction_builder.validator_target.{info.field_name}",
         )
 
     @field_validator("field_path")
@@ -456,11 +461,15 @@ class DomainPackBuilderObjectRule(DomainPackMetadataBaseModel):
 
     object_type: str
     model_ref: Optional[str] = None
+    schema_ref: Optional[SchemaRef] = None
     object_role: str
     definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT
+    definition_notes: list[str] = Field(default_factory=list)
     pending_ref_template: str
+    repeat_for: Optional[str] = None
     payload_fields: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata_refs: list[str] = Field(default_factory=list)
     object_refs: list[DomainPackBuilderObjectRefRule] = Field(default_factory=list)
 
     @field_validator("object_type", "model_ref", "object_role")
@@ -482,6 +491,32 @@ class DomainPackBuilderObjectRule(DomainPackMetadataBaseModel):
             raise ValueError("pending_ref_template must not include surrounding whitespace")
         return value
 
+    @field_validator("repeat_for")
+    @classmethod
+    def _validate_repeat_for(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("repeat_for must not be empty")
+        if value != value.strip():
+            raise ValueError("repeat_for must not include surrounding whitespace")
+        return validate_field_path_syntax(value)
+
+    @field_validator("definition_notes", "metadata_refs")
+    @classmethod
+    def _validate_non_empty_text_list(cls, value: list[str], info) -> list[str]:
+        for item in value:
+            if not item.strip():
+                raise ValueError(
+                    f"extraction_builder.objects.{info.field_name} entries must not be empty"
+                )
+            if item != item.strip():
+                raise ValueError(
+                    f"extraction_builder.objects.{info.field_name} entries must not "
+                    "include surrounding whitespace"
+                )
+        return value
+
     @field_validator("payload_fields")
     @classmethod
     def _validate_payload_field_paths(cls, value: dict[str, str]) -> dict[str, str]:
@@ -496,7 +531,10 @@ class DomainPackBuilderObjectGraph(DomainPackMetadataBaseModel):
     """Domain object graph built by an extraction builder finalizer."""
 
     required_objects: list[str] = Field(min_length=1)
-    validator_target: DomainPackBuilderValidatorTarget
+    validator_target: Optional[DomainPackBuilderValidatorTarget] = None
+    validator_targets: list[DomainPackBuilderValidatorTarget] = Field(
+        default_factory=list
+    )
     objects: list[DomainPackBuilderObjectRule] = Field(default_factory=list)
 
     @field_validator("required_objects")
@@ -522,6 +560,22 @@ class DomainPackBuilderObjectGraph(DomainPackMetadataBaseModel):
                 "extraction_builder.object_graph.objects must define required object(s): "
                 + ", ".join(missing)
             )
+        if self.validator_target is None and not self.validator_targets:
+            raise ValueError(
+                "extraction_builder.object_graph must define validator_target or "
+                "validator_targets"
+            )
+        if self.validator_target is not None and not self.validator_targets:
+            self.validator_targets = [self.validator_target]
+        target_keys = [
+            (
+                item.target_id
+                or item.binding_id
+                or f"{item.object_type}.{item.field_path}"
+            )
+            for item in self.validator_targets
+        ]
+        _require_unique(target_keys, "extraction_builder.object_graph.validator_targets")
         return self
 
 
@@ -535,6 +589,11 @@ class DomainPackExtractionBuilder(DomainPackMetadataBaseModel):
     per_retained_finding: bool = True
     model_final_ack_schema: str = "ExtractionToolFinalizationAck"
     curation_output_schema: Optional[str] = None
+    evidence_record_id_field: str = "evidence_record_ids"
+    primary_stage_field: Optional[str] = None
+    dedupe_fields: list[str] = Field(default_factory=list)
+    zero_retained_behavior: Literal["allow", "warn", "error"] = "allow"
+    zero_validator_jobs_behavior: Literal["error", "allow"] = "error"
     stage_description: str = ""
     finalize_description: str = ""
     fields: dict[str, DomainPackBuilderField] = Field(default_factory=dict)
@@ -551,6 +610,8 @@ class DomainPackExtractionBuilder(DomainPackMetadataBaseModel):
         "retained_unit",
         "model_final_ack_schema",
         "curation_output_schema",
+        "evidence_record_id_field",
+        "primary_stage_field",
     )
     @classmethod
     def _validate_symbolic_optional(cls, value: Optional[str], info) -> Optional[str]:
@@ -568,6 +629,16 @@ class DomainPackExtractionBuilder(DomainPackMetadataBaseModel):
         _require_unique(validated, f"extraction_builder.{info.field_name}")
         return validated
 
+    @field_validator("dedupe_fields")
+    @classmethod
+    def _validate_dedupe_fields(cls, value: list[str]) -> list[str]:
+        validated = [
+            _validate_symbolic_name(item, "extraction_builder.dedupe_fields")
+            for item in value
+        ]
+        _require_unique(validated, "extraction_builder.dedupe_fields")
+        return validated
+
     @field_validator("fields", "finalize_fields")
     @classmethod
     def _validate_field_keys(
@@ -582,12 +653,25 @@ class DomainPackExtractionBuilder(DomainPackMetadataBaseModel):
     @model_validator(mode="after")
     def _validate_required_stage_fields(self) -> "DomainPackExtractionBuilder":
         if self.enabled:
-            required = {"mention_text", "evidence_record_ids"}
+            required = {self.evidence_record_id_field}
             missing = sorted(required - set(self.fields))
             if missing:
                 raise ValueError(
                     "enabled extraction_builder must declare stage field(s): "
                     + ", ".join(missing)
+                )
+            unknown_dedupe_fields = sorted(set(self.dedupe_fields) - set(self.fields))
+            if unknown_dedupe_fields:
+                raise ValueError(
+                    "extraction_builder.dedupe_fields must refer to stage field(s): "
+                    + ", ".join(unknown_dedupe_fields)
+                )
+            if (
+                self.primary_stage_field is not None
+                and self.primary_stage_field not in self.fields
+            ):
+                raise ValueError(
+                    "extraction_builder.primary_stage_field must refer to a stage field"
                 )
         return self
 

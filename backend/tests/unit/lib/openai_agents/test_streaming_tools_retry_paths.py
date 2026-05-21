@@ -538,7 +538,7 @@ def test_validator_lookup_audit_events_dedupe_identical_batch_attempts(monkeypat
         "request-opsin",
     ]
     assert complete_details["friendlyName"] == (
-        "Gene Extraction: Validator Lookup success "
+        "Gene Extraction: Alliance gene reference lookup success "
         "(3 targets, mixed validation)"
     )
 

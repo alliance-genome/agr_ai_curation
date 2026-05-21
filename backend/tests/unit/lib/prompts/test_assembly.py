@@ -206,6 +206,40 @@ def test_core_generated_contract_uses_builder_ack_schema(monkeypatch):
     assert "extraction_builder:metadata" in bundle.layers[1].source_ref
 
 
+def test_builder_prompt_assembly_fails_when_builder_tools_missing(monkeypatch):
+    monkeypatch.setattr(
+        assembly,
+        "load_agent_definitions",
+        lambda: {
+            "allele_extractor": _agent(
+                folder_name="allele_extractor",
+                agent_id="allele_extractor",
+                category="Extraction",
+                tools=["search_document", "record_evidence"],
+                output_schema="AlleleExtractionResultEnvelope",
+                domain_pack_id="agr.alliance.allele",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        assembly,
+        "_domain_pack_validation_registries",
+        lambda: {"agr.alliance.allele": _allele_builder_registry_stub()},
+    )
+    monkeypatch.setattr(
+        assembly,
+        "resolve_output_schema",
+        lambda schema_key: (
+            ExtractionToolFinalizationAck
+            if schema_key == "ExtractionToolFinalizationAck"
+            else DemoStructuredOutput
+        ),
+    )
+
+    with pytest.raises(ValueError, match="missing required builder tool"):
+        assembly.build_agent_core_prompt("allele_extractor")
+
+
 def test_phenotype_editable_prompts_do_not_duplicate_generated_contract_facts():
     agent_prompt_dir = (
         Path(__file__).resolve().parents[5]

@@ -26,11 +26,14 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Mapping
 
 from agents import Agent, AgentOutputSchema, Runner, RunConfig
 
-from .audit_labels import build_specialist_internal_friendly_name
+from .audit_labels import (
+    build_specialist_internal_friendly_name,
+    resolve_tool_display_name,
+)
 from .config import get_max_turns
 from .evidence_summary import (
     build_record_evidence_summary_record,
@@ -115,6 +118,20 @@ def _elapsed_ms(started_at: float) -> int:
     return int((time.monotonic() - started_at) * 1000)
 
 
+def _looks_like_builder_tool_output(payload: Mapping[str, Any]) -> bool:
+    status = payload.get("status")
+    if status not in {"needs_repair", "staged", "finalized"}:
+        return False
+    builder_markers = {
+        "repair_code",
+        "staged_id",
+        "finalized_run_id",
+        "final_ack",
+        "validator_target_count",
+    }
+    return bool(builder_markers.intersection(payload))
+
+
 def _tool_output_summary(tool_name: str, output: Any) -> Optional[Dict[str, Any]]:
     """Return a compact, artifact-safe summary of a tool output payload."""
 
@@ -122,7 +139,7 @@ def _tool_output_summary(tool_name: str, output: Any) -> Optional[Dict[str, Any]
     if not isinstance(payload, dict):
         return None
 
-    if tool_name in {"stage_allele_paper_evidence", "finalize_allele_extraction"}:
+    if _looks_like_builder_tool_output(payload):
         summary_fields = (
             "status",
             "repair_code",
@@ -1551,22 +1568,74 @@ def _validator_lookup_status_summary(status_counts: dict[str, int]) -> str:
 
 def _validator_lookup_complete_label(
     specialist_name: str,
+    lookup_label: str,
     outcome: str,
     *,
     target_count: int,
     status_summary: str,
 ) -> str:
+    label = _validator_lookup_label(lookup_label)
     if target_count <= 1:
-        return f"{specialist_name}: Validator Lookup {outcome}"
+        return f"{specialist_name}: {label} {outcome}"
     status_text = (
         "mixed validation"
         if status_summary == "mixed"
         else f"{status_summary} validation"
     )
     return (
-        f"{specialist_name}: Validator Lookup {outcome} "
+        f"{specialist_name}: {label} {outcome} "
         f"({target_count} targets, {status_text})"
     )
+
+
+def _validator_display_label(binding_id: Any, display_name: Any = None) -> str:
+    label = str(display_name or "").strip()
+    if not label:
+        label = _humanize_validator_binding_id(binding_id)
+    return _strip_validator_label_suffix(label)
+
+
+def _humanize_validator_binding_id(binding_id: Any) -> str:
+    text = str(binding_id or "").strip()
+    if not text:
+        return "Validator"
+    words = [word for word in re.split(r"[._:\-]+", text) if word]
+    while len(words) > 1 and words[-1].lower() in {"validation", "validator"}:
+        words.pop()
+    label = " ".join(words) if words else text
+    return f"{label[:1].upper()}{label[1:]}" if label else "Validator"
+
+
+def _strip_validator_label_suffix(label: str) -> str:
+    stripped = label.strip()
+    lowered = stripped.lower()
+    for suffix in (" validation", " validator"):
+        if lowered.endswith(suffix) and len(stripped) > len(suffix):
+            return stripped[: -len(suffix)].strip()
+    return stripped
+
+
+def _validator_lookup_label(display_label: str) -> str:
+    stripped = display_label.strip()
+    lowered = stripped.lower()
+    if lowered.endswith((" lookup", " search", "query")):
+        return stripped
+    return f"{stripped} lookup"
+
+
+def _validator_display_names_from_dispatch_result(
+    dispatch_result: Any,
+) -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for match in getattr(dispatch_result, "matched_bindings", ()) or ():
+        binding = getattr(match, "binding", None)
+        binding_id = getattr(binding, "binding_id", None)
+        if binding_id is None:
+            continue
+        display_name = getattr(binding, "display_name", None)
+        if display_name:
+            labels[str(binding_id)] = str(display_name)
+    return labels
 
 
 def _event_timestamp(event: dict[str, Any]) -> str:
@@ -1586,20 +1655,25 @@ def _emit_validator_batch_audit_event(
     is_start = event_name == "validator_batch_start"
     request_count = int(event.get("request_count") or 0)
     binding_id = event.get("validator_binding_id")
+    display_label = _validator_display_label(
+        binding_id,
+        event.get("validator_display_name"),
+    )
     friendly_action = "start" if is_start else str(event.get("status") or "complete")
+    friendly_name = (
+        f"{specialist_name}: Validating {display_label} batch"
+        if is_start
+        else f"{specialist_name}: {display_label} batch {friendly_action}"
+    )
     emit_event({
         "type": "TOOL_START" if is_start else "TOOL_COMPLETE",
         "timestamp": _event_timestamp(event),
         "details": {
             "toolName": "dispatch_active_validator_batch",
-            "friendlyName": (
-                f"{specialist_name}: Validator Batch {friendly_action} "
-                f"({binding_id}, {request_count} request"
-                f"{'' if request_count == 1 else 's'})"
-            ),
+            "friendlyName": friendly_name,
             "agent": specialist_name,
             "toolArgs": {
-                "validator_binding_id": binding_id,
+                "validator_display_name": display_label,
                 "batch_family": event.get("batch_family"),
                 "request_count": request_count,
             },
@@ -1608,6 +1682,7 @@ def _emit_validator_batch_audit_event(
             "isSpecialistInternal": True,
             "isValidatorInternal": True,
             "validatorBindingId": binding_id,
+            "validatorDisplayName": display_label,
             "validatorAgent": event.get("validator_agent"),
             "validatorBatchFamily": event.get("batch_family"),
             "validatorBatchRequestCount": request_count,
@@ -1634,15 +1709,22 @@ def _emit_validator_request_audit_event(
     event_name = str(event.get("event") or "")
     is_start = event_name == "validator_request_start"
     binding_id = event.get("validator_binding_id")
+    display_label = _validator_display_label(
+        binding_id,
+        event.get("validator_display_name"),
+    )
     request_id = event.get("request_id")
     request_count = int(event.get("request_count") or 1)
     result_status = str(event.get("validator_result_status") or "pending")
-    friendly_action = "start" if is_start else f"complete ({result_status})"
+    if is_start:
+        friendly_name = f"{specialist_name}: Validating {display_label}"
+        if request_count > 1:
+            friendly_name += f" ({request_count} requests)"
+    else:
+        friendly_name = f"{specialist_name}: {display_label} {result_status}"
     target = event.get("target") if isinstance(event.get("target"), dict) else {}
     tool_args = {
-        "validator_binding_id": binding_id,
-        "request_id": request_id,
-        "representative_request_id": event.get("representative_request_id"),
+        "validator_display_name": display_label,
         "request_count": request_count,
         "target": {
             "object_type": target.get("object_type"),
@@ -1657,19 +1739,12 @@ def _emit_validator_request_audit_event(
         for item in (event.get("deduped_request_ids") or [])
         if item is not None
     ]
-    if deduped_request_ids:
-        tool_args["deduped_request_ids"] = deduped_request_ids
-
     emit_event({
         "type": "TOOL_START" if is_start else "TOOL_COMPLETE",
         "timestamp": _event_timestamp(event),
         "details": {
             "toolName": "dispatch_active_validator_request",
-            "friendlyName": (
-                f"{specialist_name}: Validator Request {friendly_action} "
-                f"({binding_id}, {request_count} request"
-                f"{'' if request_count == 1 else 's'})"
-            ),
+            "friendlyName": friendly_name,
             "agent": specialist_name,
             "toolArgs": tool_args,
             "success": event.get("success"),
@@ -1677,6 +1752,7 @@ def _emit_validator_request_audit_event(
             "isSpecialistInternal": True,
             "isValidatorInternal": True,
             "validatorBindingId": binding_id,
+            "validatorDisplayName": display_label,
             "validatorAgent": event.get("validator_agent"),
             "validatorRequestId": request_id,
             "representativeRequestId": event.get("representative_request_id"),
@@ -1705,6 +1781,15 @@ def _emit_validator_tool_audit_event(
     is_start = event_name == "validator_tool_start"
     tool_name = str(event.get("tool_name") or "domain_validator_lookup")
     binding_id = event.get("validator_binding_id")
+    display_label = _validator_display_label(
+        binding_id,
+        event.get("validator_display_name"),
+    )
+    tool_display_name = resolve_tool_display_name(tool_name)
+    if _is_streamed_validator_lookup_tool(tool_name):
+        base_label = _validator_lookup_label(display_label)
+    else:
+        base_label = f"{display_label}: {tool_display_name}"
     request_ids = [
         str(item)
         for item in (event.get("validator_request_ids") or [])
@@ -1716,13 +1801,14 @@ def _emit_validator_tool_audit_event(
     friendly_action = "start" if is_start else "complete"
     details: dict[str, Any] = {
         "toolName": tool_name,
-        "friendlyName": (
-            f"{specialist_name}: Validator {tool_name} {friendly_action}"
-        ),
+        "friendlyName": f"{specialist_name}: {base_label}"
+        if is_start
+        else f"{specialist_name}: {base_label} {friendly_action}",
         "agent": specialist_name,
         "isSpecialistInternal": True,
         "isValidatorInternal": True,
         "validatorBindingId": binding_id,
+        "validatorDisplayName": display_label,
         "validatorAgent": event.get("validator_agent"),
         "validatorRequestId": request_id,
         "validatorRequestIds": request_ids,
@@ -1751,6 +1837,9 @@ def _emit_validator_lookup_audit_events(
 ) -> None:
     """Surface package-scoped validator lookup attempts in the live audit stream."""
 
+    validator_display_names = _validator_display_names_from_dispatch_result(
+        dispatch_result
+    )
     lookup_records: list[dict[str, Any]] = []
     lookup_record_by_key: dict[str, dict[str, Any]] = {}
     for result in getattr(dispatch_result, "validator_results", ()) or ():
@@ -1793,15 +1882,15 @@ def _emit_validator_lookup_audit_events(
         status_summary = _validator_lookup_status_summary(status_counts)
         request_ids = list(record["request_ids"])
         duplicate_count = len(request_ids) or sum(status_counts.values()) or 1
-        method = str(getattr(attempt, "method", "") or "validator_lookup")
         provider = str(getattr(attempt, "provider", "") or "validator")
         outcome = str(getattr(attempt, "outcome", "") or "unknown")
         message = getattr(attempt, "message", None)
         tool_args = _validator_lookup_tool_args(attempt)
-        friendly_name = (
-            f"{specialist_name}: Validator Lookup"
-            f" ({binding_id}, {provider}.{method})"
+        display_label = _validator_display_label(
+            binding_id,
+            validator_display_names.get(str(binding_id or "")),
         )
+        friendly_name = f"{specialist_name}: {_validator_lookup_label(display_label)}"
 
         add_specialist_event({
             "type": "TOOL_START",
@@ -1815,6 +1904,7 @@ def _emit_validator_lookup_audit_events(
                 "toolArgs": tool_args,
                 "isSpecialistInternal": True,
                 "validatorBindingId": binding_id,
+                "validatorDisplayName": display_label,
                 "validatorResultStatus": status_summary,
                 "validatorResultStatuses": status_counts,
                 "validatorLookupDuplicateCount": duplicate_count,
@@ -1831,6 +1921,7 @@ def _emit_validator_lookup_audit_events(
                 else "domain_validator_lookup",
                 "friendlyName": _validator_lookup_complete_label(
                     specialist_name,
+                    display_label,
                     outcome,
                     target_count=duplicate_count,
                     status_summary=status_summary,
@@ -1839,6 +1930,7 @@ def _emit_validator_lookup_audit_events(
                 "error": message if outcome == "error" else None,
                 "isSpecialistInternal": True,
                 "validatorBindingId": binding_id,
+                "validatorDisplayName": display_label,
                 "validatorResultStatus": status_summary,
                 "validatorResultStatuses": status_counts,
                 "validatorLookupDuplicateCount": duplicate_count,
@@ -3118,9 +3210,8 @@ async def _run_specialist_with_events_impl(
                         tool_success = True
                         tool_error = None
                         if (
-                            current_tool_name
-                            in {"stage_allele_paper_evidence", "finalize_allele_extraction"}
-                            and isinstance(output_summary, dict)
+                            isinstance(output_summary, dict)
+                            and _looks_like_builder_tool_output(output_summary)
                             and output_summary.get("status") == "needs_repair"
                         ):
                             tool_success = False

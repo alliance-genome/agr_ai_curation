@@ -843,6 +843,7 @@ def run_package_scoped_validator_agent(
                     agent,
                     run_kwargs=run_kwargs,
                     request=request,
+                    binding=binding,
                     event_emitter=event_emitter,
                 )
             )
@@ -881,6 +882,7 @@ async def _run_package_scoped_validator_agent_streamed(
     *,
     run_kwargs: dict[str, Any],
     request: DomainValidationRequest,
+    binding: ValidatorBinding,
     event_emitter: ValidatorDispatchEventEmitter,
 ) -> Any:
     run_started_at = time.monotonic()
@@ -889,6 +891,7 @@ async def _run_package_scoped_validator_agent_streamed(
         result.stream_events(),
         event_emitter=event_emitter,
         validator_binding_id=request.validator_binding_id,
+        validator_display_name=getattr(binding, "display_name", None),
         validator_agent=request.validator_agent.model_dump(mode="json"),
         validator_request_id=request.request_id,
         validator_request_ids=[request.request_id],
@@ -1037,6 +1040,7 @@ async def _run_package_scoped_validator_agent_batch_streamed(
         result.stream_events(),
         event_emitter=event_emitter,
         validator_binding_id=representative_request.validator_binding_id,
+        validator_display_name=getattr(binding, "display_name", None),
         validator_agent=representative_request.validator_agent.model_dump(mode="json"),
         validator_request_ids=[job.request.request_id for job in jobs],
         validator_batch_family=binding.batch_family or binding.binding_id,
@@ -1432,6 +1436,7 @@ def _validator_request_summary(jobs: list[_DispatchJob]) -> dict[str, Any]:
     request_ids = [job.request.request_id for job in jobs]
     return {
         "validator_binding_id": request.validator_binding_id,
+        "validator_display_name": binding.display_name,
         "validator_agent": validator_agent,
         "request_id": request.request_id,
         "representative_request_id": request.request_id,
@@ -1584,6 +1589,7 @@ def _validator_batch_summary(jobs: list[_DispatchJob]) -> dict[str, Any]:
     )
     return {
         "validator_binding_id": binding.binding_id,
+        "validator_display_name": binding.display_name,
         "validator_agent": validator_agent,
         "batch_family": binding.batch_family or binding.binding_id,
         "request_count": len(jobs),

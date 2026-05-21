@@ -130,6 +130,7 @@ export interface ToolStartDetails {
   isSpecialistInternal?: boolean
   isValidatorInternal?: boolean
   validatorBindingId?: string
+  validatorDisplayName?: string
   validatorAgent?: Record<string, any>
   validatorRequestId?: string
   validatorRequestIds?: string[]
@@ -147,6 +148,7 @@ export interface ToolCompleteDetails {
   isSpecialistInternal?: boolean
   isValidatorInternal?: boolean
   validatorBindingId?: string
+  validatorDisplayName?: string
   validatorAgent?: Record<string, any>
   validatorRequestId?: string
   validatorRequestIds?: string[]

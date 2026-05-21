@@ -4,6 +4,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import and_, func, or_
@@ -26,6 +27,26 @@ _SYSTEM_MANAGED_INHERITED_TOOL_IDS = {
     "record_evidence",
     "stage_allele_paper_evidence",
 }
+
+
+@lru_cache(maxsize=1)
+def _configured_builder_tool_ids() -> frozenset[str]:
+    from src.lib.domain_packs.extraction_builder import extraction_builder_from_metadata
+    from src.lib.flows.validation_attachments import domain_pack_validation_registries
+
+    tool_ids: set[str] = set()
+    for registry in domain_pack_validation_registries().values():
+        builder = extraction_builder_from_metadata(
+            registry.domain_pack.metadata.metadata
+        )
+        if builder is None:
+            continue
+        tool_ids.update({builder.stage_tool, builder.finalize_tool})
+    return frozenset(tool_ids)
+
+
+def _system_managed_inherited_tool_ids() -> frozenset[str]:
+    return frozenset(_SYSTEM_MANAGED_INHERITED_TOOL_IDS) | _configured_builder_tool_ids()
 LOCKED_PROMPT_MARKERS = (
     "Platform Runtime Contract",
     "backend-owned instructions",
@@ -273,8 +294,9 @@ def _system_managed_tool_ids(db: Session, tool_ids: List[str]) -> List[str]:
     """Tools inherited from system templates that curators cannot attach manually."""
     policy_by_key = _tool_policy_by_key(db)
     managed: List[str] = []
+    system_managed_tool_ids = _system_managed_inherited_tool_ids()
     for tool_id in _dedupe_tool_ids(tool_ids):
-        if tool_id not in _SYSTEM_MANAGED_INHERITED_TOOL_IDS:
+        if tool_id not in system_managed_tool_ids:
             continue
         policy = policy_by_key.get(tool_id)
         if policy is None or not policy.allow_attach:
@@ -303,7 +325,10 @@ def _validate_requested_tool_ids(
         return []
 
     policy_by_key = _tool_policy_by_key(db)
-    inherited_system_managed = set(_dedupe_tool_ids(inherited_tool_ids or [])) & _SYSTEM_MANAGED_INHERITED_TOOL_IDS
+    inherited_system_managed = (
+        set(_dedupe_tool_ids(inherited_tool_ids or []))
+        & _system_managed_inherited_tool_ids()
+    )
     unknown = sorted({
         tool_id
         for tool_id in normalized

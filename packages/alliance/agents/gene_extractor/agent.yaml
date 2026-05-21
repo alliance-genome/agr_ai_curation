@@ -45,6 +45,8 @@ tools:
   - record_evidence
   - get_agent_contract
   - agr_species_context_lookup
+  - stage_gene_mention_evidence
+  - finalize_gene_extraction
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA

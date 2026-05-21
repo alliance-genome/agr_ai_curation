@@ -1095,7 +1095,7 @@ describe('getEventSeverity (T016)', () => {
 })
 
 describe('validator audit event formatting', () => {
-  it('formats validator request lifecycle rows with compact tool args', () => {
+  it('formats validator request lifecycle rows with compact parameters', () => {
     const event: AuditEvent = {
       id: 'validator-request-start',
       type: 'TOOL_START',
@@ -1103,21 +1103,28 @@ describe('validator audit event formatting', () => {
       sessionId: 'session123',
       details: {
         toolName: 'dispatch_active_validator_request',
-        friendlyName: 'Gene Extraction: Validator Request start (gene.lookup, 1 request)',
+        friendlyName: 'Gene Extraction: Validating Alliance gene lookup',
         isSpecialistInternal: true,
         isValidatorInternal: true,
         validatorBindingId: 'gene.lookup',
+        validatorDisplayName: 'Alliance gene lookup',
         validatorRequestId: 'request-1',
         toolArgs: {
           validator_binding_id: 'gene.lookup',
+          validator_display_name: 'Alliance gene lookup',
           request_id: 'request-1',
           selected_inputs: { mention: 'crumbs' },
         },
       } as ToolStartDetails,
     }
 
-    expect(formatAuditEvent(event)).toContain('[TOOL] Gene Extraction: Validator Request start')
-    expect(formatAuditEvent(event)).toContain('mention: crumbs')
+    const formatted = formatAuditEvent(event)
+    expect(formatted).toContain('[TOOL] Gene Extraction: Validating Alliance gene lookup')
+    expect(formatted).toContain('mention: crumbs')
+    expect(formatted).not.toContain('gene.lookup')
+    expect(formatted).not.toContain('request-1')
+    expect(formatted).not.toContain('Validator:')
+    expect(formatted).not.toContain('Request:')
   })
 
   it('marks failed validator request completions as warnings', () => {

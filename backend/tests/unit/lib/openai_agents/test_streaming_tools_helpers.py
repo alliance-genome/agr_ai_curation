@@ -1051,6 +1051,7 @@ async def test_chat_domain_envelope_dispatch_maps_validator_request_lifecycle(
                 "event": "validator_request_start",
                 "timestamp": "2026-05-21T00:00:00+00:00",
                 "validator_binding_id": "gene.lookup",
+                "validator_display_name": "Alliance gene lookup",
                 "validator_agent": {"package_id": "fixture", "agent_id": "gene"},
                 "request_id": "request-1",
                 "representative_request_id": "request-1",
@@ -1070,6 +1071,7 @@ async def test_chat_domain_envelope_dispatch_maps_validator_request_lifecycle(
                 "event": "validator_request_complete",
                 "timestamp": "2026-05-21T00:00:01+00:00",
                 "validator_binding_id": "gene.lookup",
+                "validator_display_name": "Alliance gene lookup",
                 "validator_agent": {"package_id": "fixture", "agent_id": "gene"},
                 "request_id": "request-1",
                 "representative_request_id": "request-1",
@@ -1110,10 +1112,18 @@ async def test_chat_domain_envelope_dispatch_maps_validator_request_lifecycle(
         "dispatch_active_validator_bindings",
     ]
     assert emitted[1]["timestamp"] == "2026-05-21T00:00:00+00:00"
+    assert emitted[1]["details"]["friendlyName"] == (
+        "Gene Extraction: Validating Alliance gene lookup"
+    )
+    assert emitted[1]["details"]["validatorDisplayName"] == "Alliance gene lookup"
     assert emitted[1]["details"]["toolArgs"]["selected_inputs"] == {
         "mention": "crumbs"
     }
+    assert "request_id" not in emitted[1]["details"]["toolArgs"]
     assert emitted[2]["details"]["validatorResultStatus"] == "resolved"
+    assert emitted[2]["details"]["friendlyName"] == (
+        "Gene Extraction: Alliance gene lookup resolved"
+    )
 
 
 @pytest.mark.asyncio
@@ -1260,6 +1270,12 @@ async def test_chat_domain_envelope_dispatch_uses_real_gene_binding(monkeypatch)
         "TOOL_START",
         "TOOL_COMPLETE",
     ]
+    assert lookup_events[0]["details"]["friendlyName"] == (
+        "Gene Extraction: Alliance gene lookup"
+    )
+    assert lookup_events[0]["details"]["validatorDisplayName"] == (
+        "Alliance gene lookup"
+    )
     assert lookup_events[0]["details"]["toolArgs"] == {
         "gene_symbol": "crumbs",
         "method": "search_genes",

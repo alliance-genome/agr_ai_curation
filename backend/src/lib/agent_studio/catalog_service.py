@@ -86,6 +86,26 @@ _INLINE_PACKAGE_TOOL_IDS = frozenset({
 })
 
 
+@lru_cache(maxsize=1)
+def _configured_builder_tool_ids() -> frozenset[str]:
+    from src.lib.domain_packs.extraction_builder import extraction_builder_from_metadata
+    from src.lib.flows.validation_attachments import domain_pack_validation_registries
+
+    tool_ids: set[str] = set()
+    for registry in domain_pack_validation_registries().values():
+        builder = extraction_builder_from_metadata(
+            registry.domain_pack.metadata.metadata
+        )
+        if builder is None:
+            continue
+        tool_ids.update({builder.stage_tool, builder.finalize_tool})
+    return frozenset(tool_ids)
+
+
+def _inline_package_tool_ids() -> frozenset[str]:
+    return _INLINE_PACKAGE_TOOL_IDS | _configured_builder_tool_ids()
+
+
 def layer_projection(bundle: Optional[PromptLayerBundle]) -> tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
     """Project an assembled bundle into Agent Studio catalog fields."""
 
@@ -890,7 +910,7 @@ def _instantiate_package_tool(
 
 def _should_execute_package_tool_inline(binding: Any) -> bool:
     """Return whether one package-backed tool should execute in the host runtime."""
-    return getattr(binding, "tool_id", None) in _INLINE_PACKAGE_TOOL_IDS
+    return getattr(binding, "tool_id", None) in _inline_package_tool_ids()
 
 
 def _decode_tool_input(tool_id: str, input_str: str) -> Dict[str, Any]:
@@ -2011,16 +2031,21 @@ def _create_db_agent(db_agent: Any, **kwargs: Any) -> Optional[Agent]:
     builder_runtime_enabled = False
     if builder_config is not None:
         builder_tool_ids = {builder_config.stage_tool, builder_config.finalize_tool}
-        if builder_tool_ids <= set(canonical_tool_ids):
-            builder_runtime_enabled = True
-            ack_schema = _resolve_output_schema(builder_config.model_final_ack_schema)
-            if ack_schema is None:
-                raise ValueError(
-                    "Unknown builder final acknowledgment schema "
-                    f"'{builder_config.model_final_ack_schema}' for agent "
-                    f"'{db_agent.agent_key}'"
-                )
-            output_schema = ack_schema
+        missing_builder_tool_ids = sorted(builder_tool_ids - set(canonical_tool_ids))
+        if missing_builder_tool_ids:
+            raise ValueError(
+                "Builder-enabled agent is missing required builder tool(s) from "
+                f"its canonical tool list: {', '.join(missing_builder_tool_ids)}"
+            )
+        builder_runtime_enabled = True
+        ack_schema = _resolve_output_schema(builder_config.model_final_ack_schema)
+        if ack_schema is None:
+            raise ValueError(
+                "Unknown builder final acknowledgment schema "
+                f"'{builder_config.model_final_ack_schema}' for agent "
+                f"'{db_agent.agent_key}'"
+            )
+        output_schema = ack_schema
 
     prompt_bundle = _build_runtime_instructions(
         db_agent=db_agent,

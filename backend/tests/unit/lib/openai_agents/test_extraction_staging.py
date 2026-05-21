@@ -7,6 +7,7 @@ import asyncio
 from pathlib import Path
 
 import pytest
+import yaml
 
 from src.lib.openai_agents.extraction_staging import (
     activate_extraction_staging,
@@ -15,9 +16,11 @@ from src.lib.openai_agents.extraction_staging import (
     finalize_allele_extraction_payload,
     finalized_ack_from_state,
     finalized_envelope_from_state,
+    finalize_extraction_builder_payload,
     record_document_retrieval_call,
     register_verified_evidence_record,
     stage_allele_paper_evidence_payload,
+    stage_extraction_builder_payload,
 )
 from src.schemas.domain_pack_metadata import DomainPackExtractionBuilder
 
@@ -39,6 +42,25 @@ def _load_allele_output_type():
 
 
 AlleleExtractionResultEnvelope = _load_allele_output_type()
+
+
+def _load_gene_output_type():
+    schema_path = REPO_ROOT / "packages/alliance/agents/gene_extractor/schema.py"
+    spec = importlib.util.spec_from_file_location(
+        "gene_builder_test_schema",
+        schema_path,
+    )
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    module.GeneExtractionResultEnvelope.model_rebuild(
+        _types_namespace=module.__dict__,
+    )
+    return module.GeneExtractionResultEnvelope
+
+
+GeneExtractionResultEnvelope = _load_gene_output_type()
 
 
 def _builder() -> DomainPackExtractionBuilder:
@@ -71,6 +93,20 @@ def _builder() -> DomainPackExtractionBuilder:
                     "json_type": "string",
                     "maps_to": "AlleleMention.taxon.curie",
                 },
+                "verified_quotes": {
+                    "json_type": "array",
+                    "collection": True,
+                },
+                "page": {"json_type": "integer"},
+                "section": {"json_type": "string"},
+                "chunk_id": {"json_type": "string"},
+                "normalized_hint": {"json_type": "string"},
+                "reference": {"json_type": "object"},
+                "finding_notes": {"json_type": "string"},
+                "raw_mentions": {
+                    "json_type": "array",
+                    "collection": True,
+                },
             },
             "finalize_fields": {
                 "summary": {"json_type": "string", "required": True},
@@ -96,24 +132,69 @@ def _builder() -> DomainPackExtractionBuilder:
                         "model_ref": "AllelePaperEvidenceAssociationPayload",
                         "object_role": "curatable_unit",
                         "pending_ref_template": "association_{staged_id}",
+                        "payload_fields": {
+                            "association_kind": "literal:allele_paper_evidence",
+                            "evidence_record_ids": "evidence_record_ids",
+                        },
+                        "metadata": {
+                            "write_behavior": {"status": "blocked"},
+                        },
+                        "object_refs": [
+                            {
+                                "field_path": "reference",
+                                "object_type": "Reference",
+                            },
+                            {
+                                "field_path": "mention",
+                                "object_type": "AlleleMention",
+                            },
+                            {
+                                "field_path": "evidence_quote",
+                                "object_type": "EvidenceQuote",
+                                "collection": True,
+                            },
+                        ],
                     },
                     {
                         "object_type": "Reference",
                         "model_ref": "ReferencePayload",
                         "object_role": "validated_reference",
                         "pending_ref_template": "reference_{staged_id}",
+                        "payload_fields": {
+                            "reference_id": "reference.reference_id",
+                            "curie": "reference.curie",
+                            "pmid": "reference.pmid",
+                            "doi": "reference.doi",
+                            "title": "reference.title",
+                        },
                     },
                     {
                         "object_type": "AlleleMention",
                         "model_ref": "AlleleMentionPayload",
                         "object_role": "metadata_only",
                         "pending_ref_template": "mention_{staged_id}",
+                        "payload_fields": {
+                            "mention.text": "mention_text",
+                            "mention.normalized_hint": "normalized_hint",
+                            "associated_gene.symbol": "associated_gene_symbol",
+                            "taxon.curie": "taxon_curie",
+                            "source_mentions": "raw_mentions",
+                        },
                     },
                     {
                         "object_type": "EvidenceQuote",
                         "model_ref": "EvidenceQuotePayload",
                         "object_role": "metadata_only",
                         "pending_ref_template": "evidence_quote_{evidence_record_id}",
+                        "payload_fields": {
+                            "evidence_record_id": "evidence_record_id",
+                            "verified_quote": "verified_quote",
+                            "page": "page",
+                            "section": "section",
+                            "subsection": "subsection",
+                            "chunk_id": "chunk_id",
+                            "figure_reference": "figure_reference",
+                        },
                     },
                 ],
             },
@@ -122,6 +203,14 @@ def _builder() -> DomainPackExtractionBuilder:
                 "strain_not_allele",
             ],
         }
+    )
+
+
+def _gene_builder() -> DomainPackExtractionBuilder:
+    pack_path = REPO_ROOT / "packages/alliance/domain_packs/gene/domain_pack.yaml"
+    pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
+    return DomainPackExtractionBuilder.model_validate(
+        pack["metadata"]["extraction_builder"]
     )
 
 
@@ -369,3 +458,119 @@ def test_empty_finalization_succeeds_after_document_coverage(staging_state):
     assert envelope is not None
     assert envelope["curatable_objects"] == []
     assert staging_state.zero_validator_jobs_status == "empty_finalized_output"
+
+
+def test_builder_metadata_supports_non_allele_fields_and_multiple_targets():
+    builder = DomainPackExtractionBuilder.model_validate(
+        {
+            "enabled": True,
+            "stage_tool": "stage_gene_mention_evidence",
+            "finalize_tool": "finalize_gene_extraction",
+            "retained_unit": "GeneMention",
+            "primary_stage_field": "gene_symbol",
+            "dedupe_fields": ["gene_symbol", "evidence_record_ids"],
+            "fields": {
+                "gene_symbol": {"json_type": "string", "required": True},
+                "taxon_curie": {"json_type": "string"},
+                "evidence_record_ids": {
+                    "json_type": "array",
+                    "required": True,
+                    "collection": True,
+                    "min_items": 1,
+                },
+            },
+            "object_graph": {
+                "required_objects": ["GeneMention"],
+                "validator_targets": [
+                    {
+                        "target_id": "gene_identity",
+                        "binding_id": "alliance_gene_reference_lookup",
+                        "object_type": "GeneMention",
+                        "field_path": "symbol",
+                    },
+                    {
+                        "target_id": "gene_taxon",
+                        "object_type": "GeneMention",
+                        "field_path": "taxon.curie",
+                    },
+                ],
+                "objects": [
+                    {
+                        "object_type": "GeneMention",
+                        "model_ref": "GeneMentionPayload",
+                        "object_role": "curatable_unit",
+                        "pending_ref_template": "gene_{staged_id}",
+                    }
+                ],
+            },
+        }
+    )
+
+    assert "mention_text" not in builder.fields
+    assert [target.target_id for target in builder.object_graph.validator_targets] == [
+        "gene_identity",
+        "gene_taxon",
+    ]
+
+
+def test_gene_builder_materializes_valid_gene_envelope():
+    token = activate_extraction_staging(
+        agent_id="gene_extractor",
+        specialist_name="Gene Extraction",
+        domain_pack_id="gene",
+        domain_pack_version="0.1.0",
+        builder=_gene_builder(),
+        curation_output_type=GeneExtractionResultEnvelope,
+    )
+    try:
+        state = current_extraction_staging_state(required=True)
+        record_document_retrieval_call("search_document", {"query": "daf-2"})
+        register_verified_evidence_record(
+            {
+                "evidence_record_id": "ev-gene-daf2",
+                "entity": "daf-2",
+                "verified_quote": "daf-2 mutants showed altered insulin signaling.",
+                "page": 3,
+                "section": "Results",
+                "chunk_id": "chunk-gene-1",
+            }
+        )
+
+        staged = stage_extraction_builder_payload(
+            {
+                "mention": "daf-2",
+                "evidence_record_ids": ["ev-gene-daf2"],
+                "identity_resolution_notes": [
+                    "C. elegans insulin-like signaling gene mentioned in mutant phenotype context."
+                ],
+                "confidence": "high",
+                "taxon_hint": "NCBITaxon:6239",
+                "raw_mentions": ["daf-2"],
+            }
+        )
+        assert staged["status"] == "staged"
+
+        finalized = finalize_extraction_builder_payload(
+            {
+                "summary": "Retained one gene mention.",
+                "candidate_count": 1,
+                "kept_count": 1,
+                "excluded_count": 0,
+                "ambiguous_count": 0,
+            }
+        )
+        assert finalized["status"] == "finalized"
+        assert state.validator_target_count == 1
+
+        envelope = finalized_envelope_from_state()
+        assert envelope is not None
+        [gene_object] = envelope["curatable_objects"]
+        assert gene_object["object_type"] == "gene_mention_evidence"
+        assert gene_object["object_role"] == "validated_reference"
+        assert gene_object["payload"]["mention"] == "daf-2"
+        assert gene_object["payload"]["verified_quote"] == (
+            "daf-2 mutants showed altered insulin signaling."
+        )
+        assert gene_object["evidence_record_ids"] == ["ev-gene-daf2"]
+    finally:
+        clear_extraction_staging(token)

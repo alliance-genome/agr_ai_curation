@@ -357,6 +357,8 @@ def _build_compact_runtime_contract(agent: AgentDefinition) -> str:
         )
 
     builder = _agent_extraction_builder(agent)
+    if builder is not None:
+        _assert_builder_tools_available(agent, builder)
     if agent.output_schema:
         if builder is not None:
             lines.append(
@@ -461,6 +463,17 @@ def _build_domain_pack_contract_lines(agent: AgentDefinition) -> list[str]:
         )
 
     return lines
+
+
+def _assert_builder_tools_available(agent: AgentDefinition, builder: Any) -> None:
+    required_tool_names = {builder.stage_tool, builder.finalize_tool}
+    missing_tool_names = sorted(required_tool_names - set(agent.tools or []))
+    if missing_tool_names:
+        raise ValueError(
+            f"Builder-enabled agent '{agent.agent_id}' is missing required "
+            "builder tool(s) from agent.yaml: "
+            + ", ".join(missing_tool_names)
+        )
 
 
 def _format_schema_refs(schema_refs: Sequence[Any]) -> str:

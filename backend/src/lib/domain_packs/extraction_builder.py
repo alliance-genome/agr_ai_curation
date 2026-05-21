@@ -67,6 +67,11 @@ def builder_tool_names(builder: DomainPackExtractionBuilder | None) -> set[str]:
 def render_builder_prompt_snippet(builder: DomainPackExtractionBuilder) -> str:
     """Render compact locked prompt instructions from typed builder metadata."""
 
+    validator_targets = list(builder.object_graph.validator_targets)
+    target_summary = "; ".join(
+        f"{target.object_type}.{target.field_path}"
+        for target in validator_targets
+    )
     stage_required = [
         name
         for name, field in builder.fields.items()
@@ -111,8 +116,7 @@ def render_builder_prompt_snippet(builder: DomainPackExtractionBuilder) -> str:
         ),
         (
             f"- Finalized object graph: {', '.join(builder.object_graph.required_objects)}; "
-            f"validator target {builder.object_graph.validator_target.object_type}."
-            f"{builder.object_graph.validator_target.field_path}."
+            f"validator targets {target_summary}."
         ),
     ]
     if hints:
@@ -158,13 +162,26 @@ def builder_contract_payload(
         "allowed_ambiguity_reason_codes": list(builder.allowed_ambiguity_reason_codes),
         "object_graph": {
             "required_objects": list(builder.object_graph.required_objects),
-            "validator_target": builder.object_graph.validator_target.model_dump(
-                mode="json"
-            ),
+            "validator_targets": [
+                target.model_dump(
+                    mode="json",
+                    exclude_none=True,
+                    exclude_defaults=True,
+                )
+                for target in builder.object_graph.validator_targets
+            ],
         },
         "examples": dict(builder.examples),
         "repair_messages": dict(builder.repair_messages),
     }
+    if builder.object_graph.validator_target is not None:
+        payload["object_graph"]["validator_target"] = (
+            builder.object_graph.validator_target.model_dump(
+                mode="json",
+                exclude_none=True,
+                exclude_defaults=True,
+            )
+        )
     if detail_level == "detail":
         payload["object_graph"]["objects"] = [
             item.model_dump(mode="json", exclude_none=True)

@@ -617,7 +617,11 @@ function formatToolQuery(toolArgs: Record<string, any>): string {
     return details
   }
 
-  if (toolArgs.validator_binding_id && toolArgs.request_id) {
+  if (
+    toolArgs.validator_display_name ||
+    toolArgs.validator_binding_id ||
+    toolArgs.selected_inputs
+  ) {
     return formatValidatorRequestToolArgs(toolArgs)
   }
 
@@ -625,10 +629,7 @@ function formatToolQuery(toolArgs: Record<string, any>): string {
 }
 
 function formatValidatorRequestToolArgs(toolArgs: Record<string, any>): string {
-  const lines = [
-    `Validator: ${toolArgs.validator_binding_id}`,
-    `Request: ${toolArgs.request_id}`,
-  ]
+  const lines: string[] = []
   if (toolArgs.selected_inputs && typeof toolArgs.selected_inputs === 'object') {
     const selectedInputs = formatParameters(
       toolArgs.selected_inputs,
@@ -638,6 +639,13 @@ function formatValidatorRequestToolArgs(toolArgs: Record<string, any>): string {
     if (selectedInputs) {
       lines.push(selectedInputs)
     }
+  }
+  if (
+    lines.length === 0 &&
+    typeof toolArgs.request_count === 'number' &&
+    toolArgs.request_count > 1
+  ) {
+    lines.push(`Requests: ${toolArgs.request_count}`)
   }
   return lines.join('\n')
 }

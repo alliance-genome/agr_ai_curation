@@ -482,7 +482,7 @@ def test_create_db_agent_output_schema_and_reasoning_paths(monkeypatch):
     assert captured["settings"]["parallel_tool_calls"] is False
 
 
-def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
+def test_create_db_agent_uses_gene_builder_ack_schema(monkeypatch):
     from src.lib.config import schema_discovery
 
     fake_row = SimpleNamespace(
@@ -497,7 +497,11 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
         model_temperature=0.1,
         model_reasoning="medium",
         output_schema_key="GeneExtractionResultEnvelope",
-        tool_ids=[],
+        tool_ids=[
+            "record_evidence",
+            "stage_gene_mention_evidence",
+            "finalize_gene_extraction",
+        ],
         name="Gene Extractor",
     )
 
@@ -506,6 +510,7 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
     monkeypatch.setattr(agent_config, "resolve_model_provider", lambda _model_id: "openai")
     monkeypatch.setattr(agent_config, "get_model_for_agent", lambda _model_id, **_kwargs: "model")
     monkeypatch.setattr(agent_config, "build_model_settings", lambda **kwargs: kwargs)
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
     monkeypatch.setattr(
         catalog_service,
         "_build_runtime_instructions",
@@ -519,10 +524,14 @@ def test_create_db_agent_uses_domain_extraction_schema_directly(monkeypatch):
     monkeypatch.setattr(catalog_service, "Agent", lambda **kwargs: SimpleNamespace(**kwargs))
 
     built = catalog_service._create_db_agent(fake_row)
-    canonical_schema = schema_discovery.get_agent_schema("GeneExtractionResultEnvelope")
 
     assert built.instructions == "INSTR"
-    assert built.output_type is canonical_schema
+    assert built.output_type is schema_discovery.get_agent_schema(
+        "ExtractionToolFinalizationAck"
+    )
+    assert built._curation_output_type is schema_discovery.get_agent_schema(
+        "GeneExtractionResultEnvelope"
+    )
 
 
 def test_create_db_agent_uses_builder_ack_schema_and_keeps_curation_schema(monkeypatch):
@@ -620,6 +629,72 @@ def test_create_db_agent_uses_builder_ack_schema_and_keeps_curation_schema(monke
     )
     assert built._extraction_builder_config is builder
     assert built._extraction_builder_domain_pack_id == "agr.alliance.allele"
+
+
+def test_create_db_agent_fails_when_builder_tools_missing(monkeypatch):
+    from src.schemas.domain_pack_metadata import DomainPackExtractionBuilder
+
+    fake_row = SimpleNamespace(
+        id="agent-id",
+        agent_key="allele_extractor",
+        visibility="system",
+        instructions="BASE",
+        mod_prompt_overrides={},
+        group_rules_enabled=False,
+        template_source=None,
+        model_id="gpt-4o",
+        model_temperature=0.1,
+        model_reasoning="medium",
+        output_schema_key="AlleleExtractionResultEnvelope",
+        tool_ids=["record_evidence"],
+        name="Allele Extractor",
+    )
+    builder = DomainPackExtractionBuilder.model_validate(
+        {
+            "enabled": True,
+            "stage_tool": "stage_allele_paper_evidence",
+            "finalize_tool": "finalize_allele_extraction",
+            "retained_unit": "AllelePaperEvidenceAssociation",
+            "fields": {
+                "mention_text": {"json_type": "string", "required": True},
+                "evidence_record_ids": {
+                    "json_type": "array",
+                    "required": True,
+                    "collection": True,
+                    "min_items": 1,
+                },
+            },
+            "object_graph": {
+                "required_objects": ["AlleleMention"],
+                "validator_target": {
+                    "object_type": "AlleleMention",
+                    "field_path": "mention.text",
+                },
+                "objects": [
+                    {
+                        "object_type": "AlleleMention",
+                        "model_ref": "AlleleMentionPayload",
+                        "object_role": "metadata_only",
+                        "pending_ref_template": "mention_{staged_id}",
+                    }
+                ],
+            },
+        }
+    )
+
+    monkeypatch.setattr(catalog_service, "resolve_tools", lambda _tool_ids, _ctx: [])
+    monkeypatch.setattr(
+        catalog_service,
+        "_builder_runtime_config_for_agent",
+        lambda _agent_key: {
+            "builder": builder,
+            "domain_pack_id": "agr.alliance.allele",
+            "domain_pack_version": "0.1.0",
+        },
+    )
+
+    with pytest.raises(ValueError, match="missing required builder tool"):
+        catalog_service._create_db_agent(fake_row)
 
 
 def test_create_db_agent_applies_model_overrides(monkeypatch):

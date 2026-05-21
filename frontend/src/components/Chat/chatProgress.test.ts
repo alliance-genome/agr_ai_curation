@@ -41,22 +41,22 @@ describe('chatProgress', () => {
       type: 'TOOL_START',
       details: {
         toolName: 'dispatch_active_validator_request',
-        friendlyName: 'Gene Extraction: Validator Request start (gene.lookup, 1 request)',
+        friendlyName: 'Gene Extraction: Validating Alliance gene lookup',
       },
     }
     const validatorComplete: SSEEvent = {
       type: 'TOOL_COMPLETE',
       details: {
         toolName: 'dispatch_active_validator_request',
-        friendlyName: 'Gene Extraction: Validator Request complete (resolved)',
+        friendlyName: 'Gene Extraction: Alliance gene lookup resolved',
       },
     }
 
     expect(getFriendlyProgressMessage(validatorStart)).toBe(
-      'Gene Extraction: Validator Request start (gene.lookup, 1 request)',
+      'Gene Extraction: Validating Alliance gene lookup',
     )
     expect(getFriendlyProgressMessage(validatorComplete)).toBe(
-      'Gene Extraction: Validator Request complete (resolved)',
+      'Gene Extraction: Alliance gene lookup resolved',
     )
   })
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from agents import function_tool
 
@@ -11,7 +11,9 @@ from src.lib.openai_agents.extraction_staging import (
     BuilderExclusionInput,
     BuilderReferenceInput,
     finalize_allele_extraction_payload,
+    finalize_extraction_builder_payload,
     stage_allele_paper_evidence_payload,
+    stage_extraction_builder_payload,
 )
 
 
@@ -97,7 +99,89 @@ def finalize_allele_extraction(
     )
 
 
+@function_tool(
+    name_override="stage_gene_mention_evidence",
+    description_override=(
+        "Stage one retained gene mention after verifying supporting quotes with "
+        "record_evidence. Submit one paper mention and one or more verified "
+        "evidence_record_ids with paper-supported species, taxon, provider, and "
+        "identity-resolution context when available. The backend builds the "
+        "GeneExtractionResultEnvelope."
+    ),
+)
+def stage_gene_mention_evidence(
+    mention: str,
+    evidence_record_ids: list[str],
+    identity_resolution_notes: list[str],
+    confidence: Literal["high", "medium", "low"],
+    species: str | None = None,
+    taxon_hint: str | None = None,
+    data_provider_hint: str | None = None,
+    proposed_primary_external_id: str | None = None,
+    proposed_gene_symbol: str | None = None,
+    proposed_taxon: str | None = None,
+    raw_mentions: list[str] | None = None,
+) -> dict[str, Any]:
+    """Stage one retained gene mention in current extraction builder state."""
+
+    return stage_extraction_builder_payload(
+        {
+            "mention": mention,
+            "evidence_record_ids": evidence_record_ids,
+            "identity_resolution_notes": identity_resolution_notes,
+            "confidence": confidence,
+            "species": species,
+            "taxon_hint": taxon_hint,
+            "data_provider_hint": data_provider_hint,
+            "proposed_primary_external_id": proposed_primary_external_id,
+            "proposed_gene_symbol": proposed_gene_symbol,
+            "proposed_taxon": proposed_taxon,
+            "raw_mentions": raw_mentions or [],
+        }
+    )
+
+
+@function_tool(
+    name_override="finalize_gene_extraction",
+    description_override=(
+        "Finalize gene extraction exactly once after all retained gene mentions "
+        "have been staged. The backend builds the final GeneExtractionResultEnvelope "
+        "from staged state; the model should only return a small acknowledgment."
+    ),
+)
+def finalize_gene_extraction(
+    summary: str,
+    candidate_count: int,
+    kept_count: int,
+    excluded_count: int,
+    ambiguous_count: int,
+    exclusions: list[BuilderExclusionInput] | None = None,
+    ambiguities: list[BuilderAmbiguityInput] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Finalize staged gene findings into backend curation output."""
+
+    return finalize_extraction_builder_payload(
+        {
+            "summary": summary,
+            "candidate_count": candidate_count,
+            "kept_count": kept_count,
+            "excluded_count": excluded_count,
+            "ambiguous_count": ambiguous_count,
+            "exclusions": [
+                exclusion.model_dump(mode="json") for exclusion in (exclusions or [])
+            ],
+            "ambiguities": [
+                ambiguity.model_dump(mode="json") for ambiguity in (ambiguities or [])
+            ],
+            "notes": notes or [],
+        }
+    )
+
+
 __all__ = [
     "finalize_allele_extraction",
+    "finalize_gene_extraction",
     "stage_allele_paper_evidence",
+    "stage_gene_mention_evidence",
 ]

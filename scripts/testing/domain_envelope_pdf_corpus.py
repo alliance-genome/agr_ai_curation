@@ -22,6 +22,7 @@ import dev_release_smoke as smoke
 DEFAULT_BASE_URL = "http://192.168.86.44:8900"
 DEFAULT_OUTPUT_DIR = Path("docs/design/pdf-corpus-trials")
 DEFAULT_DOWNLOAD_DIR = Path("/tmp/agr_domain_envelope_pdf_corpus")
+BUILDER_REQUIRED_DOMAINS = frozenset({"allele", "gene"})
 
 
 @dataclass(frozen=True)
@@ -826,34 +827,38 @@ def _builder_observation_summary(events: list[dict[str, Any]]) -> dict[str, Any]
             == "no_active_validator_jobs"
         )
     ]
+    stage_tool_names = sorted(
+        {
+            str(details.get("builderStageTool"))
+            for details in builder_summaries
+            if details.get("builderStageTool")
+        }
+    )
+    finalize_tool_names = sorted(
+        {
+            str(details.get("builderFinalizeTool"))
+            for details in builder_summaries
+            if details.get("builderFinalizeTool")
+        }
+    )
     return {
-        "stage_tool_start_count": len(
-            _tool_events(
-                events,
-                tool_name="stage_allele_paper_evidence",
-                event_type="TOOL_START",
-            )
+        "stage_tool_names": stage_tool_names,
+        "finalize_tool_names": finalize_tool_names,
+        "stage_tool_start_count": sum(
+            len(_tool_events(events, tool_name=tool_name, event_type="TOOL_START"))
+            for tool_name in stage_tool_names
         ),
-        "stage_tool_complete_count": len(
-            _tool_events(
-                events,
-                tool_name="stage_allele_paper_evidence",
-                event_type="TOOL_COMPLETE",
-            )
+        "stage_tool_complete_count": sum(
+            len(_tool_events(events, tool_name=tool_name, event_type="TOOL_COMPLETE"))
+            for tool_name in stage_tool_names
         ),
-        "finalize_tool_start_count": len(
-            _tool_events(
-                events,
-                tool_name="finalize_allele_extraction",
-                event_type="TOOL_START",
-            )
+        "finalize_tool_start_count": sum(
+            len(_tool_events(events, tool_name=tool_name, event_type="TOOL_START"))
+            for tool_name in finalize_tool_names
         ),
-        "finalize_tool_complete_count": len(
-            _tool_events(
-                events,
-                tool_name="finalize_allele_extraction",
-                event_type="TOOL_COMPLETE",
-            )
+        "finalize_tool_complete_count": sum(
+            len(_tool_events(events, tool_name=tool_name, event_type="TOOL_COMPLETE"))
+            for tool_name in finalize_tool_names
         ),
         "builder_summary_count": len(builder_summaries),
         "builder_staged_counts": [
@@ -1297,7 +1302,7 @@ def validate_tightened_trial_gate(
     no_problem_events = not problem_events
     builder_observations = _builder_observation_summary(events)
     builder_ok = True
-    if trial.domain == "allele":
+    if trial.domain in BUILDER_REQUIRED_DOMAINS:
         finalized_object_counts = [
             int(value)
             for value in builder_observations["builder_finalized_object_counts"]
@@ -1376,7 +1381,7 @@ def validate_tightened_trial_gate(
             )
         if not builder_ok:
             reasons.append(
-                "allele builder gate failed: "
+                f"{trial.domain} builder gate failed: "
                 + json.dumps(builder_observations, sort_keys=True)
             )
         raise smoke.SmokeFailure(

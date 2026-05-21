@@ -183,14 +183,22 @@ class FinalizeAlleleExtractionInput(BaseModel):
 
 
 @dataclass(frozen=True)
-class StagedAlleleFinding:
-    """One retained allele finding staged by the model."""
+class StagedBuilderFinding:
+    """One retained finding staged by the model through a builder tool."""
 
     staged_id: str
     deterministic_key: str
-    payload: StageAllelePaperEvidenceInput
+    payload: dict[str, Any]
+    evidence_record_ids: tuple[str, ...]
+    primary_field: str | None = None
+    primary_value: str | None = None
     warnings: tuple[str, ...] = ()
     staged_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+# Backward-compatible name for older imports/tests while the builder engine moves
+# from allele-specific staging to shared YAML-driven staging.
+StagedAlleleFinding = StagedBuilderFinding
 
 
 @dataclass
@@ -206,7 +214,7 @@ class ExtractionStagingState:
     run_id: str = field(default_factory=lambda: f"builder-run-{uuid.uuid4()}")
     document_retrieval_calls: list[dict[str, Any]] = field(default_factory=list)
     verified_evidence_records: dict[str, dict[str, Any]] = field(default_factory=dict)
-    staged_findings: dict[str, StagedAlleleFinding] = field(default_factory=dict)
+    staged_findings: dict[str, StagedBuilderFinding] = field(default_factory=dict)
     staged_keys: dict[str, str] = field(default_factory=dict)
     finalization_called: bool = False
     finalized_counts: dict[str, int] = field(default_factory=dict)
@@ -225,7 +233,7 @@ class ExtractionStagingState:
     def staged_evidence_ids(self) -> list[str]:
         evidence_ids: list[str] = []
         for finding in self.staged_findings.values():
-            evidence_ids.extend(finding.payload.evidence_record_ids)
+            evidence_ids.extend(finding.evidence_record_ids)
         return sorted(set(evidence_ids))
 
     def summary_metrics(self) -> dict[str, Any]:
@@ -241,6 +249,7 @@ class ExtractionStagingState:
             "builderFinalizedObjectCount": self.finalized_object_count,
             "builderValidatorTargetCount": self.validator_target_count,
             "builderZeroValidatorJobsStatus": self.zero_validator_jobs_status,
+            "builderWarnings": list(dict.fromkeys(self.warnings)),
         }
 
 
@@ -323,7 +332,12 @@ def register_verified_evidence_record(record: Mapping[str, Any]) -> None:
 
 
 def stage_allele_paper_evidence_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Validate and stage one retained allele finding."""
+    """Validate and stage one retained allele finding.
+
+    This remains the model-facing allele compatibility adapter. Shared staging,
+    evidence checks, idempotency, and warning handling live in
+    :func:`stage_extraction_builder_payload`.
+    """
 
     state = current_extraction_staging_state(required=True)
     assert state is not None
@@ -343,54 +357,80 @@ def stage_allele_paper_evidence_payload(payload: Mapping[str, Any]) -> dict[str,
             ),
         )
 
-    missing_fields: list[str] = []
-    invalid_fields: list[str] = []
-    if not stage_input.mention_text.strip():
-        missing_fields.append("mention_text")
-    if not stage_input.evidence_record_ids:
-        missing_fields.append("evidence_record_ids")
+    return stage_extraction_builder_payload(
+        stage_input.model_dump(mode="json", exclude_none=True)
+    )
 
+
+def stage_extraction_builder_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate and stage one retained finding using YAML builder metadata."""
+
+    state = current_extraction_staging_state(required=True)
+    assert state is not None
+
+    stage_payload, missing_stage_fields, invalid_stage_fields = _validate_stage_payload(
+        state,
+        payload,
+    )
+    missing_fields: list[str] = list(missing_stage_fields)
+    invalid_fields: list[str] = list(invalid_stage_fields)
+    evidence_field = state.builder.evidence_record_id_field
+    evidence_record_ids = _payload_string_list(stage_payload.get(evidence_field))
+    if not evidence_record_ids:
+        missing_fields.append(evidence_field)
     evidence_records: list[dict[str, Any]] = []
     unknown_evidence_ids: list[str] = []
-    for evidence_id in stage_input.evidence_record_ids:
+    for evidence_id in evidence_record_ids:
         record = state.verified_evidence_records.get(evidence_id)
         if record is None:
             unknown_evidence_ids.append(evidence_id)
         else:
             evidence_records.append(record)
     if unknown_evidence_ids:
-        invalid_fields.append("evidence_record_ids")
+        invalid_fields.append(evidence_field)
 
-    quote_mismatch = _quote_mismatch(stage_input, evidence_records)
+    quote_mismatch = _quote_mismatch(stage_payload, evidence_records)
     if quote_mismatch:
         invalid_fields.append("verified_quotes")
 
-    location_mismatch = _location_mismatch(stage_input, evidence_records)
+    location_mismatch = _location_mismatch(stage_payload, evidence_records)
     if location_mismatch:
         invalid_fields.append(location_mismatch)
 
-    deterministic_key = _stage_key(stage_input.mention_text, stage_input.evidence_record_ids)
+    primary_field, primary_value = _primary_stage_value(state, stage_payload)
+    deterministic_key = _stage_key_for_payload(
+        state,
+        stage_payload,
+        evidence_record_ids,
+    )
     existing_id = state.staged_keys.get(deterministic_key)
     if existing_id is not None:
         existing = state.staged_findings[existing_id]
-        return {
+        response = {
             "status": "staged",
             "staged_id": existing.staged_id,
             "idempotent": True,
-            "mention_text": existing.payload.mention_text,
-            "evidence_record_ids": list(existing.payload.evidence_record_ids),
+            evidence_field: list(existing.evidence_record_ids),
             "warnings": list(existing.warnings),
         }
+        if existing.primary_field and existing.primary_value:
+            response[existing.primary_field] = existing.primary_value
+        return response
 
-    conflicting = _conflicting_stage_id(state, stage_input)
+    conflicting = _conflicting_stage_id(
+        state,
+        primary_field=primary_field,
+        primary_value=primary_value,
+        evidence_record_ids=evidence_record_ids,
+    )
     if conflicting:
-        invalid_fields.append("mention_text")
+        invalid_fields.append(primary_field or "stage_payload")
 
     if missing_fields or invalid_fields:
         details: list[str] = []
         if unknown_evidence_ids:
             details.append(
-                "Unknown evidence_record_ids: " + ", ".join(sorted(unknown_evidence_ids))
+                f"Unknown {evidence_field}: " + ", ".join(sorted(unknown_evidence_ids))
             )
         if quote_mismatch:
             details.append(quote_mismatch)
@@ -398,12 +438,13 @@ def stage_allele_paper_evidence_payload(payload: Mapping[str, Any]) -> dict[str,
             details.append(f"{location_mismatch} does not match verified evidence")
         if conflicting:
             details.append(
-                f"mention_text is already staged with a different evidence set as {conflicting}"
+                f"{primary_field or 'stage payload'} is already staged with a "
+                f"different evidence set as {conflicting}"
             )
         instructions = _repair_message(
             state,
             "invalid_stage_input",
-            "Repair the staged allele finding input and resubmit one allele finding.",
+            "Repair the staged finding input and resubmit one retained finding.",
         )
         if details:
             instructions = f"{instructions} {' '.join(details)}"
@@ -415,33 +456,48 @@ def stage_allele_paper_evidence_payload(payload: Mapping[str, Any]) -> dict[str,
             repair_instructions=instructions,
         )
 
-    warnings = _stage_warnings(stage_input)
-    staged_id = _staged_id(stage_input.mention_text, stage_input.evidence_record_ids)
-    finding = StagedAlleleFinding(
+    warnings = _stage_warnings(state, stage_payload)
+    staged_id = _staged_id(
+        state,
+        primary_value or state.builder.retained_unit,
+        deterministic_key,
+    )
+    finding = StagedBuilderFinding(
         staged_id=staged_id,
         deterministic_key=deterministic_key,
-        payload=stage_input,
+        payload=dict(stage_payload),
+        evidence_record_ids=tuple(evidence_record_ids),
+        primary_field=primary_field,
+        primary_value=primary_value,
         warnings=tuple(warnings),
     )
     state.staged_findings[staged_id] = finding
     state.staged_keys[deterministic_key] = staged_id
     state.warnings.extend(warnings)
 
-    return {
+    response = {
         "status": "staged",
         "staged_id": staged_id,
         "idempotent": False,
-        "mention_text": stage_input.mention_text,
-        "evidence_record_ids": list(stage_input.evidence_record_ids),
+        evidence_field: list(evidence_record_ids),
         "verified_quotes": [
             record.get("verified_quote") for record in evidence_records
         ],
         "warnings": warnings,
     }
+    if primary_field and primary_value:
+        response[primary_field] = primary_value
+    return response
 
 
 def finalize_allele_extraction_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Finalize staged allele findings into a backend-built curation envelope."""
+
+    return finalize_extraction_builder_payload(payload)
+
+
+def finalize_extraction_builder_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Finalize staged builder findings into a backend-built curation envelope."""
 
     state = current_extraction_staging_state(required=True)
     assert state is not None
@@ -450,12 +506,12 @@ def finalize_allele_extraction_payload(payload: Mapping[str, Any]) -> dict[str, 
         return _repair_response(
             state,
             missing_fields=[],
-            invalid_fields=["finalize_allele_extraction"],
+            invalid_fields=[state.builder.finalize_tool],
             repair_code="duplicate_finalization",
             repair_instructions=_repair_message(
                 state,
                 "duplicate_finalization",
-                "finalize_allele_extraction must be called exactly once at the end.",
+                f"{state.builder.finalize_tool} must be called exactly once at the end.",
             ),
         )
 
@@ -492,7 +548,7 @@ def finalize_allele_extraction_payload(payload: Mapping[str, Any]) -> dict[str, 
             ),
         )
 
-    envelope_payload = _build_allele_extraction_envelope(state, finalize_input)
+    envelope_payload = _build_extraction_envelope(state, finalize_input)
     output_type = state.curation_output_type or DomainEnvelopeExtractionResult
     validated = output_type.model_validate(envelope_payload)
     finalized_envelope = validated.model_dump(mode="json")
@@ -625,18 +681,146 @@ def _invalid_fields(exc: ValidationError) -> list[str]:
     return invalid
 
 
-def _stage_key(mention_text: str, evidence_record_ids: list[str]) -> str:
-    payload = {
-        "mention_text": mention_text.strip().casefold(),
-        "evidence_record_ids": sorted(evidence_record_ids),
-    }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+def _validate_stage_payload(
+    state: ExtractionStagingState,
+    payload: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str], list[str]]:
+    raw = dict(payload)
+    valid_fields = set(state.builder.fields)
+    missing_fields: list[str] = []
+    invalid_fields: list[str] = [
+        field_name for field_name in raw if field_name not in valid_fields
+    ]
+    normalized: dict[str, Any] = {}
+
+    for field_name, field in state.builder.fields.items():
+        if field_name in raw:
+            value = raw[field_name]
+        elif field.default is not None:
+            value = field.default
+        else:
+            value = None
+        value, valid = _normalize_builder_field_value(value, field.json_type)
+        if not valid:
+            invalid_fields.append(field_name)
+            continue
+        if _builder_field_missing(value, min_items=field.min_items):
+            if field.required:
+                missing_fields.append(field_name)
+            continue
+        normalized[field_name] = value
+
+    return normalized, missing_fields, invalid_fields
 
 
-def _staged_id(mention_text: str, evidence_record_ids: list[str]) -> str:
-    slug = re.sub(r"[^A-Za-z0-9]+", "_", mention_text.strip()).strip("_").lower()
-    digest = _stage_key(mention_text, evidence_record_ids)[:12]
-    return f"allele_stage_{slug[:32] or 'finding'}_{digest}"
+def _normalize_builder_field_value(value: Any, json_type: str) -> tuple[Any, bool]:
+    if value is None:
+        return None, True
+    if json_type == "string":
+        if not isinstance(value, str):
+            return value, False
+        stripped = value.strip()
+        return (stripped or None), True
+    if json_type == "integer":
+        if isinstance(value, bool) or not isinstance(value, int):
+            return value, False
+        return value, True
+    if json_type == "number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return value, False
+        return value, True
+    if json_type == "boolean":
+        return value, isinstance(value, bool)
+    if json_type == "object":
+        return value, isinstance(value, Mapping)
+    if json_type == "array":
+        if not isinstance(value, list):
+            return value, False
+        return _strip_builder_array(value), True
+    return value, False
+
+
+def _strip_builder_array(value: list[Any]) -> list[Any]:
+    normalized: list[Any] = []
+    for item in value:
+        if isinstance(item, str):
+            stripped = item.strip()
+            if stripped:
+                normalized.append(stripped)
+            continue
+        if item not in (None, ""):
+            normalized.append(item)
+    return normalized
+
+
+def _builder_field_missing(value: Any, *, min_items: int | None = None) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return not value.strip()
+    if isinstance(value, list):
+        if min_items is not None and len(value) < min_items:
+            return True
+        return len(value) == 0
+    if isinstance(value, Mapping):
+        return not any(item not in (None, "", [], {}) for item in value.values())
+    return False
+
+
+def _payload_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _stage_key_for_payload(
+    state: ExtractionStagingState,
+    stage_payload: Mapping[str, Any],
+    evidence_record_ids: list[str],
+) -> str:
+    evidence_field = state.builder.evidence_record_id_field
+    dedupe_fields = _stage_dedupe_fields(state)
+    key_payload: dict[str, Any] = {}
+    for field_name in dedupe_fields:
+        value = stage_payload.get(field_name)
+        if field_name == evidence_field:
+            value = sorted(evidence_record_ids)
+        elif isinstance(value, str):
+            value = value.strip().casefold()
+        elif isinstance(value, list):
+            value = sorted(value) if all(isinstance(item, str) for item in value) else value
+        key_payload[field_name] = value
+    return hashlib.sha256(
+        json.dumps(key_payload, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+
+def _stage_dedupe_fields(state: ExtractionStagingState) -> list[str]:
+    if state.builder.dedupe_fields:
+        return list(state.builder.dedupe_fields)
+    evidence_field = state.builder.evidence_record_id_field
+    if "mention_text" in state.builder.fields:
+        return ["mention_text", evidence_field]
+    required_fields = [
+        name
+        for name, field in state.builder.fields.items()
+        if field.required and name != evidence_field
+    ]
+    if required_fields:
+        return [*required_fields, evidence_field]
+    primary_field, _ = _primary_stage_value(state, {})
+    return [field for field in (primary_field, evidence_field) if field]
+
+
+def _staged_id(
+    state: ExtractionStagingState,
+    primary_value: str,
+    deterministic_key: str,
+) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", primary_value.strip()).strip("_").lower()
+    digest = deterministic_key[:12]
+    prefix = "allele_stage" if state.builder.stage_tool == "stage_allele_paper_evidence" else "builder_stage"
+    return f"{prefix}_{slug[:32] or 'finding'}_{digest}"
 
 
 def _looks_like_comma_joined_allele_list(value: str) -> bool:
@@ -648,22 +832,30 @@ def _looks_like_comma_joined_allele_list(value: str) -> bool:
 
 def _conflicting_stage_id(
     state: ExtractionStagingState,
-    stage_input: StageAllelePaperEvidenceInput,
+    *,
+    primary_field: str | None,
+    primary_value: str | None,
+    evidence_record_ids: list[str],
 ) -> str | None:
-    mention_key = stage_input.mention_text.casefold()
+    if not primary_field or not primary_value:
+        return None
+    primary_key = primary_value.casefold()
     for staged_id, finding in state.staged_findings.items():
-        if finding.payload.mention_text.casefold() != mention_key:
+        if finding.primary_field != primary_field:
             continue
-        if set(finding.payload.evidence_record_ids) != set(stage_input.evidence_record_ids):
+        if not finding.primary_value or finding.primary_value.casefold() != primary_key:
+            continue
+        if set(finding.evidence_record_ids) != set(evidence_record_ids):
             return staged_id
     return None
 
 
 def _quote_mismatch(
-    stage_input: StageAllelePaperEvidenceInput,
+    stage_payload: Mapping[str, Any],
     evidence_records: list[dict[str, Any]],
 ) -> str:
-    if not stage_input.verified_quotes:
+    verified_quotes = _payload_string_list(stage_payload.get("verified_quotes"))
+    if not verified_quotes:
         return ""
     actual_quotes = {
         str(record.get("verified_quote") or "").strip()
@@ -671,7 +863,7 @@ def _quote_mismatch(
         if str(record.get("verified_quote") or "").strip()
     }
     missing = [
-        quote for quote in stage_input.verified_quotes if quote not in actual_quotes
+        quote for quote in verified_quotes if quote not in actual_quotes
     ]
     if not missing:
         return ""
@@ -679,11 +871,11 @@ def _quote_mismatch(
 
 
 def _location_mismatch(
-    stage_input: StageAllelePaperEvidenceInput,
+    stage_payload: Mapping[str, Any],
     evidence_records: list[dict[str, Any]],
 ) -> str:
     for field_name in ("page", "section", "chunk_id"):
-        expected = getattr(stage_input, field_name)
+        expected = stage_payload.get(field_name)
         if expected in (None, ""):
             continue
         if any(record.get(field_name) == expected for record in evidence_records):
@@ -692,11 +884,43 @@ def _location_mismatch(
     return ""
 
 
-def _stage_warnings(stage_input: StageAllelePaperEvidenceInput) -> list[str]:
+def _primary_stage_value(
+    state: ExtractionStagingState,
+    stage_payload: Mapping[str, Any],
+) -> tuple[str | None, str | None]:
+    candidate_fields = [
+        state.builder.primary_stage_field,
+        "mention_text" if "mention_text" in state.builder.fields else None,
+    ]
+    candidate_fields.extend(
+        name
+        for name, field in state.builder.fields.items()
+        if field.required
+        and name != state.builder.evidence_record_id_field
+        and field.json_type == "string"
+    )
+    candidate_fields.extend(
+        name for name, field in state.builder.fields.items() if field.json_type == "string"
+    )
+    for field_name in candidate_fields:
+        if not field_name:
+            continue
+        value = stage_payload.get(field_name)
+        if isinstance(value, str) and value.strip():
+            return field_name, value.strip()
+    return None, None
+
+
+def _stage_warnings(
+    state: ExtractionStagingState,
+    stage_payload: Mapping[str, Any],
+) -> list[str]:
     warnings: list[str] = []
-    if not stage_input.associated_gene_symbol:
+    if "associated_gene_symbol" in state.builder.fields and not stage_payload.get(
+        "associated_gene_symbol"
+    ):
         warnings.append("Missing paper-supported associated_gene_symbol selector context.")
-    if not stage_input.taxon_curie:
+    if "taxon_curie" in state.builder.fields and not stage_payload.get("taxon_curie"):
         warnings.append("Missing paper-supported taxon_curie selector context.")
     return warnings
 
@@ -730,7 +954,7 @@ def _finalization_repair_errors(
     return errors
 
 
-def _build_allele_extraction_envelope(
+def _build_extraction_envelope(
     state: ExtractionStagingState,
     finalize_input: FinalizeAlleleExtractionInput,
 ) -> dict[str, Any]:
@@ -740,97 +964,63 @@ def _build_allele_extraction_envelope(
         for index, record in enumerate(evidence_records)
     }
     curatable_objects: list[dict[str, Any]] = []
-    evidence_quote_ref_by_id: dict[str, str] = {}
+    global_object_refs: dict[tuple[str, str], ObjectRef] = {}
 
     for finding in state.staged_findings.values():
-        stage_input = finding.payload
-        reference_ref = f"reference_{finding.staged_id}"
-        mention_ref = f"mention_{finding.staged_id}"
-        association_ref = f"association_{finding.staged_id}"
-
-        curatable_objects.append(
-            _curatable_object(
-                object_type="Reference",
-                object_role="validated_reference",
-                model_ref="ReferencePayload",
-                pending_ref_id=reference_ref,
-                payload=_reference_payload(stage_input.reference),
-            )
+        stage_refs: dict[str, list[ObjectRef]] = {}
+        object_rules = sorted(
+            state.builder.object_graph.objects,
+            key=lambda item: item.object_role == "curatable_unit",
         )
-        curatable_objects.append(
-            _curatable_object(
-                object_type="AlleleMention",
-                object_role="metadata_only",
-                model_ref="AlleleMentionPayload",
-                pending_ref_id=mention_ref,
-                payload=_mention_payload(stage_input),
+        for rule in object_rules:
+            repeated_contexts = _object_rule_contexts(
+                rule,
+                finding=finding,
+                state=state,
             )
-        )
-
-        evidence_refs: list[ObjectRef] = []
-        metadata_refs: list[EnvelopeMetadataRef] = []
-        for evidence_id in stage_input.evidence_record_ids:
-            evidence_ref = evidence_quote_ref_by_id.get(evidence_id)
-            if evidence_ref is None:
-                evidence_ref = f"evidence_quote_{_safe_ref_suffix(evidence_id)}"
-                evidence_quote_ref_by_id[evidence_id] = evidence_ref
-                record = state.verified_evidence_records[evidence_id]
-                curatable_objects.append(
-                    _curatable_object(
-                        object_type="EvidenceQuote",
-                        object_role="metadata_only",
-                        model_ref="EvidenceQuotePayload",
-                        pending_ref_id=evidence_ref,
-                        payload=_evidence_quote_payload(record),
-                    )
+            for context in repeated_contexts:
+                object_key = _object_dedup_key(rule, context)
+                if object_key in global_object_refs:
+                    ref = global_object_refs[object_key]
+                    stage_refs.setdefault(rule.object_type, []).append(ref)
+                    continue
+                pending_ref_id = _format_pending_ref(rule.pending_ref_template, context)
+                payload = _payload_from_rule(rule.payload_fields, finding, context)
+                metadata = _metadata_from_rule(rule, state=state, finding=finding)
+                object_refs = _object_refs_from_rule(rule, stage_refs)
+                metadata_refs = _metadata_refs_from_rule(
+                    rule,
+                    finding=finding,
+                    evidence_index_by_id=evidence_index_by_id,
+                    context=context,
                 )
-            evidence_refs.append(
-                ObjectRef(pending_ref_id=evidence_ref, object_type="EvidenceQuote")
-            )
-            evidence_index = evidence_index_by_id.get(evidence_id)
-            if evidence_index is not None:
-                metadata_refs.append(
-                    EnvelopeMetadataRef(
-                        metadata_path=f"evidence_records[{evidence_index}]",
-                        role="supporting_evidence",
-                    )
+                obj = _curatable_object(
+                    object_type=rule.object_type,
+                    object_role=rule.object_role,
+                    model_ref=rule.model_ref,
+                    schema_ref=rule.schema_ref.model_dump(mode="json")
+                    if rule.schema_ref
+                    else None,
+                    pending_ref_id=pending_ref_id,
+                    payload=payload,
+                    evidence_record_ids=_object_evidence_record_ids(
+                        rule,
+                        finding=finding,
+                        context=context,
+                    ),
+                    object_refs=object_refs,
+                    metadata_refs=metadata_refs,
+                    metadata=metadata,
+                    definition_state=rule.definition_state,
+                    definition_notes=list(rule.definition_notes),
                 )
-
-        curatable_objects.append(
-            _curatable_object(
-                object_type="AllelePaperEvidenceAssociation",
-                object_role="curatable_unit",
-                model_ref="AllelePaperEvidenceAssociationPayload",
-                pending_ref_id=association_ref,
-                payload={
-                    "association_kind": "allele_paper_evidence",
-                    "evidence_record_ids": list(stage_input.evidence_record_ids),
-                },
-                evidence_record_ids=list(stage_input.evidence_record_ids),
-                object_refs=[
-                    ObjectRef(pending_ref_id=reference_ref, object_type="Reference"),
-                    ObjectRef(pending_ref_id=mention_ref, object_type="AlleleMention"),
-                    *evidence_refs,
-                ],
-                metadata_refs=metadata_refs,
-                metadata={
-                    "object_role": "curatable_unit",
-                    "write_behavior": {
-                        "status": "blocked",
-                        "reason": (
-                            "Builder-generated allele paper/evidence associations "
-                            "remain pending until durable reference and allele "
-                            "materialization are verified."
-                        ),
-                    },
-                    "builder": {
-                        "run_id": state.run_id,
-                        "staged_id": finding.staged_id,
-                        "source_tool": state.builder.stage_tool,
-                    },
-                },
-            )
-        )
+                curatable_objects.append(obj)
+                ref = ObjectRef(
+                    pending_ref_id=pending_ref_id,
+                    object_type=rule.object_type,
+                )
+                global_object_refs[object_key] = ref
+                stage_refs.setdefault(rule.object_type, []).append(ref)
 
     metadata = ExtractionEnvelopeMetadata(
         raw_mentions=_raw_mentions(state),
@@ -867,24 +1057,249 @@ def _build_allele_extraction_envelope(
     }
 
 
+def _build_allele_extraction_envelope(
+    state: ExtractionStagingState,
+    finalize_input: FinalizeAlleleExtractionInput,
+) -> dict[str, Any]:
+    """Compatibility alias for callers/tests that still name the allele builder."""
+
+    return _build_extraction_envelope(state, finalize_input)
+
+
+def _object_rule_contexts(
+    rule: Any,
+    *,
+    finding: StagedBuilderFinding,
+    state: ExtractionStagingState,
+) -> list[dict[str, Any]]:
+    base_context = _base_object_context(finding, state)
+    repeat_for = rule.repeat_for
+    if repeat_for is None and "{evidence_record_id}" in rule.pending_ref_template:
+        repeat_for = state.builder.evidence_record_id_field
+    if repeat_for is None:
+        return [base_context]
+
+    repeat_values = _value_at_path(finding.payload, repeat_for)
+    if repeat_for == state.builder.evidence_record_id_field:
+        repeat_values = list(finding.evidence_record_ids)
+    if not isinstance(repeat_values, list):
+        repeat_values = [repeat_values] if repeat_values not in (None, "") else []
+
+    contexts: list[dict[str, Any]] = []
+    for value in repeat_values:
+        if value in (None, ""):
+            continue
+        context = dict(base_context)
+        if repeat_for == state.builder.evidence_record_id_field:
+            evidence_id = str(value)
+            evidence_record = state.verified_evidence_records.get(evidence_id, {})
+            context["evidence_record"] = dict(evidence_record)
+            context["evidence_record_id_raw"] = evidence_id
+            context["evidence_record_id"] = _safe_ref_suffix(evidence_id)
+            for key, item in evidence_record.items():
+                context.setdefault(str(key), item)
+        else:
+            context[repeat_for.split(".")[-1]] = value
+            context["repeat_value"] = value
+        contexts.append(context)
+    return contexts
+
+
+def _base_object_context(
+    finding: StagedBuilderFinding,
+    state: ExtractionStagingState,
+) -> dict[str, Any]:
+    primary_slug = _safe_ref_suffix(finding.primary_value or finding.staged_id)
+    context: dict[str, Any] = {
+        "staged_id": finding.staged_id,
+        "primary_slug": primary_slug,
+        "builder_run_id": state.run_id,
+    }
+    for key, value in finding.payload.items():
+        context[key] = value
+    return context
+
+
+def _object_dedup_key(rule: Any, context: Mapping[str, Any]) -> tuple[str, str]:
+    object_type = str(rule.object_type)
+    if rule.object_role == "curatable_unit":
+        return (
+            object_type,
+            f"{context.get('staged_id') or ''}:{context.get('evidence_record_id_raw') or ''}",
+        )
+    if context.get("evidence_record_id_raw"):
+        return object_type, str(context["evidence_record_id_raw"])
+    return object_type, str(context.get("staged_id") or "")
+
+
+def _format_pending_ref(template: str, context: Mapping[str, Any]) -> str:
+    try:
+        return template.format(**context)
+    except KeyError as exc:
+        missing = exc.args[0]
+        raise BuilderRuntimeError(
+            f"Builder pending_ref_template references unknown value '{missing}'"
+        ) from exc
+
+
+def _payload_from_rule(
+    payload_fields: Mapping[str, str],
+    finding: StagedBuilderFinding,
+    context: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for field_path, source in payload_fields.items():
+        value = _resolve_builder_source(source, finding, context)
+        if _builder_field_missing(value):
+            continue
+        _set_field_path(payload, field_path, value)
+    return payload
+
+
+def _resolve_builder_source(
+    source: str,
+    finding: StagedBuilderFinding,
+    context: Mapping[str, Any],
+) -> Any:
+    if source.startswith("literal:"):
+        return source.removeprefix("literal:")
+    if source == "evidence_record_id":
+        return context.get("evidence_record_id_raw") or context.get("evidence_record_id")
+    if source in context:
+        value = context[source]
+        if source == "raw_mentions" and _builder_field_missing(value):
+            return [finding.primary_value] if finding.primary_value else []
+        return value
+    evidence_record = context.get("evidence_record")
+    if isinstance(evidence_record, Mapping):
+        value = _value_at_path(evidence_record, source)
+        if value is not None:
+            return value
+    value = _value_at_path(finding.payload, source)
+    if source == "raw_mentions" and _builder_field_missing(value):
+        return [finding.primary_value] if finding.primary_value else []
+    return value
+
+
+def _value_at_path(payload: Mapping[str, Any], field_path: str) -> Any:
+    current: Any = payload
+    for segment in field_path.split("."):
+        if not isinstance(current, Mapping) or segment not in current:
+            return None
+        current = current[segment]
+    return current
+
+
+def _set_field_path(payload: dict[str, Any], field_path: str, value: Any) -> None:
+    current = payload
+    segments = field_path.split(".")
+    for segment in segments[:-1]:
+        next_value = current.get(segment)
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[segment] = next_value
+        current = next_value
+    current[segments[-1]] = value
+
+
+def _metadata_from_rule(
+    rule: Any,
+    *,
+    state: ExtractionStagingState,
+    finding: StagedBuilderFinding,
+) -> dict[str, Any]:
+    metadata = dict(rule.metadata or {})
+    metadata.setdefault("object_role", rule.object_role)
+    if rule.object_role == "curatable_unit":
+        metadata["builder"] = {
+            "run_id": state.run_id,
+            "staged_id": finding.staged_id,
+            "source_tool": state.builder.stage_tool,
+        }
+    return metadata
+
+
+def _object_refs_from_rule(
+    rule: Any,
+    stage_refs: Mapping[str, list[ObjectRef]],
+) -> list[ObjectRef]:
+    refs: list[ObjectRef] = []
+    for ref_rule in rule.object_refs:
+        candidates = list(stage_refs.get(ref_rule.object_type, []))
+        if not ref_rule.collection:
+            candidates = candidates[:1]
+        refs.extend(candidates)
+    return refs
+
+
+def _metadata_refs_from_rule(
+    rule: Any,
+    *,
+    finding: StagedBuilderFinding,
+    evidence_index_by_id: Mapping[str, int],
+    context: Mapping[str, Any],
+) -> list[EnvelopeMetadataRef]:
+    refs: list[EnvelopeMetadataRef] = []
+    for evidence_id in _object_evidence_record_ids(
+        rule,
+        finding=finding,
+        context=context,
+    ):
+        evidence_index = evidence_index_by_id.get(evidence_id)
+        if evidence_index is not None:
+            refs.append(
+                EnvelopeMetadataRef(
+                    metadata_path=f"evidence_records[{evidence_index}]",
+                    role="supporting_evidence",
+                )
+            )
+    for template in rule.metadata_refs:
+        refs.append(
+            EnvelopeMetadataRef(
+                metadata_path=_format_pending_ref(template, context),
+                role="builder_metadata",
+            )
+        )
+    return refs
+
+
+def _object_evidence_record_ids(
+    rule: Any,
+    *,
+    finding: StagedBuilderFinding,
+    context: Mapping[str, Any],
+) -> list[str]:
+    current_evidence_id = context.get("evidence_record_id_raw")
+    if isinstance(current_evidence_id, str) and current_evidence_id.strip():
+        return [current_evidence_id.strip()]
+    if rule.object_role != "curatable_unit":
+        return []
+    return list(finding.evidence_record_ids)
+
+
 def _curatable_object(
     *,
     object_type: str,
     object_role: str,
-    model_ref: str,
+    model_ref: str | None,
+    schema_ref: dict[str, Any] | None = None,
     pending_ref_id: str,
     payload: dict[str, Any],
     evidence_record_ids: list[str] | None = None,
     object_refs: list[ObjectRef] | None = None,
     metadata_refs: list[EnvelopeMetadataRef] | None = None,
     metadata: dict[str, Any] | None = None,
+    definition_state: DefinitionState = DefinitionState.IN_DEVELOPMENT,
+    definition_notes: list[str] | None = None,
 ) -> dict[str, Any]:
     obj = CuratableObjectEnvelope(
         object_type=object_type,
         object_role=object_role,
+        schema_ref=schema_ref,
         model_ref=model_ref,
         pending_ref_id=pending_ref_id,
-        definition_state=DefinitionState.IN_DEVELOPMENT,
+        definition_state=definition_state,
+        definition_notes=definition_notes or [],
         payload=payload,
         evidence_record_ids=evidence_record_ids or [],
         object_refs=object_refs or [],
@@ -935,14 +1350,19 @@ def _evidence_quote_payload(record: Mapping[str, Any]) -> dict[str, Any]:
 
 def _raw_mentions(state: ExtractionStagingState) -> list[MentionCandidate]:
     mentions: list[MentionCandidate] = []
+    entity_type = state.domain_pack_id.rsplit(".", 1)[-1]
     for finding in state.staged_findings.values():
-        source_mentions = finding.payload.raw_mentions or [finding.payload.mention_text]
+        source_mentions = finding.payload.get("raw_mentions")
+        if not isinstance(source_mentions, list) or not source_mentions:
+            source_mentions = [finding.primary_value] if finding.primary_value else []
         for mention in source_mentions:
+            if not isinstance(mention, str) or not mention.strip():
+                continue
             mentions.append(
                 MentionCandidate(
-                    mention=mention,
-                    entity_type="allele",
-                    evidence_record_ids=list(finding.payload.evidence_record_ids),
+                    mention=mention.strip(),
+                    entity_type=entity_type,
+                    evidence_record_ids=list(finding.evidence_record_ids),
                 )
             )
     return mentions
@@ -951,10 +1371,11 @@ def _raw_mentions(state: ExtractionStagingState) -> list[MentionCandidate]:
 def _normalization_notes(state: ExtractionStagingState) -> list[str]:
     notes: list[str] = []
     for finding in state.staged_findings.values():
-        hint = finding.payload.normalized_hint
+        hint = finding.payload.get("normalized_hint")
         if hint:
             notes.append(
-                f"{finding.payload.mention_text}: paper-supplied normalized hint {hint}"
+                f"{finding.primary_value or finding.staged_id}: "
+                f"paper-supplied normalized hint {hint}"
             )
     return notes
 
@@ -963,14 +1384,17 @@ def _validator_target_count(
     state: ExtractionStagingState,
     objects: list[Mapping[str, Any]],
 ) -> int:
-    target = state.builder.object_graph.validator_target
     count = 0
-    for obj in objects:
-        if obj.get("object_type") != target.object_type:
-            continue
-        payload = obj.get("payload")
-        if isinstance(payload, Mapping) and _field_path_exists(payload, target.field_path):
-            count += 1
+    for target in state.builder.object_graph.validator_targets:
+        for obj in objects:
+            if obj.get("object_type") != target.object_type:
+                continue
+            payload = obj.get("payload")
+            if isinstance(payload, Mapping) and _field_path_exists(
+                payload,
+                target.field_path,
+            ):
+                count += 1
     return count
 
 
@@ -1002,14 +1426,17 @@ __all__ = [
     "ExtractionStagingState",
     "FinalizeAlleleExtractionInput",
     "StageAllelePaperEvidenceInput",
+    "StagedBuilderFinding",
     "activate_extraction_staging",
     "clear_extraction_staging",
     "current_extraction_staging_state",
     "enforce_builder_finalized_or_raise",
     "finalize_allele_extraction_payload",
+    "finalize_extraction_builder_payload",
     "finalized_ack_from_state",
     "finalized_envelope_from_state",
     "record_document_retrieval_call",
     "register_verified_evidence_record",
     "stage_allele_paper_evidence_payload",
+    "stage_extraction_builder_payload",
 ]
