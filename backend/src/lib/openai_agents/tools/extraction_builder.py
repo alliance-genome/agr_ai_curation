@@ -473,15 +473,127 @@ def finalize_phenotype_extraction(
     )
 
 
+@function_tool(
+    name_override="stage_gene_expression_evidence",
+    description_override=(
+        "Stage one retained gene-expression observation after verifying "
+        "supporting quotes with record_evidence. Submit one expression "
+        "annotation with gene symbol, provider selector, relation, assay, "
+        "stage/anatomy context, unresolved identifier placeholders when needed, "
+        "and one or more verified evidence_record_ids. The backend builds the "
+        "GeneExpressionEnvelope."
+    ),
+)
+def stage_gene_expression_evidence(
+    gene_symbol: str,
+    data_provider_abbreviation: str,
+    evidence_record_ids: list[str],
+    where_expressed_statement: str,
+    anatomical_structure_name: str,
+    expression_statement: str,
+    subject_primary_external_id: str = "pending_gene_resolution",
+    relation_name: str = "is_expressed_in",
+    reference_id: str = "pending_reference_resolution",
+    expression_experiment_unique_id: str = "pending_expression_experiment",
+    assay_name: str = "expression assay",
+    assay_curie: str = "pending_assay_resolution",
+    when_expressed_stage_name: str = "unspecified developmental stage",
+    anatomical_structure_curie: str | None = None,
+    cellular_component_name: str | None = None,
+    cellular_component_curie: str | None = None,
+    date_created: str = "pending_curation_date",
+    internal: bool = False,
+    obsolete: bool = False,
+    uncertain: bool = False,
+    reference: BuilderReferenceInput | None = None,
+    normalization_notes: list[str] | None = None,
+    raw_mentions: list[str] | None = None,
+) -> dict[str, Any]:
+    """Stage one retained gene-expression observation in builder state."""
+
+    resolved_reference_id: str | int | None = reference_id
+    if reference and reference.reference_id is not None:
+        resolved_reference_id = str(reference.reference_id)
+
+    return stage_extraction_builder_payload(
+        {
+            "gene_symbol": gene_symbol,
+            "data_provider_abbreviation": data_provider_abbreviation,
+            "evidence_record_ids": evidence_record_ids,
+            "where_expressed_statement": where_expressed_statement,
+            "anatomical_structure_name": anatomical_structure_name,
+            "expression_statement": expression_statement,
+            "subject_primary_external_id": subject_primary_external_id,
+            "relation_name": relation_name,
+            "reference_id": resolved_reference_id,
+            "reference": reference.model_dump(mode="json") if reference else None,
+            "expression_experiment_unique_id": expression_experiment_unique_id,
+            "assay_name": assay_name,
+            "assay_curie": assay_curie,
+            "when_expressed_stage_name": when_expressed_stage_name,
+            "anatomical_structure_curie": anatomical_structure_curie,
+            "cellular_component_name": cellular_component_name,
+            "cellular_component_curie": cellular_component_curie,
+            "date_created": date_created,
+            "internal": internal,
+            "obsolete": obsolete,
+            "uncertain": uncertain,
+            "normalization_notes": normalization_notes or [],
+            "raw_mentions": raw_mentions or [],
+        }
+    )
+
+
+@function_tool(
+    name_override="finalize_gene_expression_extraction",
+    description_override=(
+        "Finalize gene-expression extraction exactly once after all retained "
+        "observations have been staged. The backend builds the final "
+        "GeneExpressionEnvelope from staged state; the model should only return "
+        "a small acknowledgment."
+    ),
+)
+def finalize_gene_expression_extraction(
+    summary: str,
+    candidate_count: int,
+    kept_count: int,
+    excluded_count: int,
+    ambiguous_count: int,
+    exclusions: list[BuilderExclusionInput] | None = None,
+    ambiguities: list[BuilderAmbiguityInput] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Finalize staged gene-expression observations into curation output."""
+
+    return finalize_extraction_builder_payload(
+        {
+            "summary": summary,
+            "candidate_count": candidate_count,
+            "kept_count": kept_count,
+            "excluded_count": excluded_count,
+            "ambiguous_count": ambiguous_count,
+            "exclusions": [
+                exclusion.model_dump(mode="json") for exclusion in (exclusions or [])
+            ],
+            "ambiguities": [
+                ambiguity.model_dump(mode="json") for ambiguity in (ambiguities or [])
+            ],
+            "notes": notes or [],
+        }
+    )
+
+
 __all__ = [
     "finalize_allele_extraction",
     "finalize_chemical_extraction",
     "finalize_disease_extraction",
+    "finalize_gene_expression_extraction",
     "finalize_gene_extraction",
     "finalize_phenotype_extraction",
     "stage_allele_paper_evidence",
     "stage_chemical_condition_evidence",
     "stage_disease_assertion_evidence",
+    "stage_gene_expression_evidence",
     "stage_gene_mention_evidence",
     "stage_phenotype_assertion_evidence",
 ]

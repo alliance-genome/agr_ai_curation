@@ -302,6 +302,55 @@ def test_phenotype_pack_declares_builder_tool_contract():
     assert builder["finalize_tool"] in agent["tools"]
 
 
+def test_gene_expression_pack_declares_builder_tool_contract():
+    alliance_registry = load_alliance_domain_pack_registry()
+    metadata = alliance_registry.get_pack("agr.alliance.gene_expression").metadata
+    builder = metadata.metadata["extraction_builder"]
+
+    assert builder["enabled"] is True
+    assert builder["stage_tool"] == "stage_gene_expression_evidence"
+    assert builder["finalize_tool"] == "finalize_gene_expression_extraction"
+    assert builder["model_final_ack_schema"] == "ExtractionToolFinalizationAck"
+    assert builder["curation_output_schema"] == "GeneExpressionEnvelope"
+    assert builder["fields"]["expression_statement"]["required"] is True
+    assert builder["fields"]["gene_symbol"]["required"] is True
+    assert builder["fields"]["data_provider_abbreviation"]["required"] is True
+    assert builder["fields"]["evidence_record_ids"]["min_items"] == 1
+    assert builder["fields"]["where_expressed_statement"]["required"] is True
+    assert builder["fields"]["anatomical_structure_name"]["required"] is True
+    assert builder["fields"]["relation_name"]["default"] == "is_expressed_in"
+    assert builder["fields"]["subject_primary_external_id"]["default"] == (
+        "pending_gene_resolution"
+    )
+    assert {
+        target["binding_id"]
+        for target in builder["object_graph"]["validator_targets"]
+    } >= {
+        "relation_vocabulary_validation",
+        "data_provider_validation",
+    }
+    assert builder["object_graph"]["required_objects"] == [
+        "GeneExpressionAnnotation",
+    ]
+
+    bindings = yaml.safe_load(
+        (REPO_ROOT / "packages/alliance/tools/bindings.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    tool_ids = {tool["tool_id"] for tool in bindings["tools"]}
+    assert builder["stage_tool"] in tool_ids
+    assert builder["finalize_tool"] in tool_ids
+
+    agent = yaml.safe_load(
+        (REPO_ROOT / "packages/alliance/agents/gene_expression/agent.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert builder["stage_tool"] in agent["tools"]
+    assert builder["finalize_tool"] in agent["tools"]
+
+
 def test_active_bindings_have_active_capability_metadata():
     alliance_registry = load_alliance_domain_pack_registry()
     pack_ids = {

@@ -306,6 +306,41 @@ def test_builder_tools_topic_uses_real_phenotype_domain_pack():
     }
 
 
+def test_builder_tools_topic_uses_real_gene_expression_domain_pack():
+    tools = get_agent_contract("gene_expression_extraction", "tools")
+    tool_ids = {tool["tool_id"] for tool in tools["tools"]}
+    assert "stage_gene_expression_evidence" in tool_ids
+    assert "finalize_gene_expression_extraction" in tool_ids
+
+    result = get_agent_contract(
+        "gene_expression_extraction",
+        "builder_tools",
+        detail_level="detail",
+    )
+
+    assert result["success"] is True
+    pack = result["domain_packs"][0]
+    assert pack["domain_pack_id"] == "agr.alliance.gene_expression"
+    assert pack["stage_tool"] == "stage_gene_expression_evidence"
+    assert pack["finalize_tool"] == "finalize_gene_expression_extraction"
+    assert pack["curation_output_schema"] == "GeneExpressionEnvelope"
+    assert {
+        "expression_statement",
+        "gene_symbol",
+        "data_provider_abbreviation",
+        "evidence_record_ids",
+        "where_expressed_statement",
+        "anatomical_structure_name",
+    }.issubset(set(pack["stage_required_fields"]))
+    assert {
+        target["binding_id"]
+        for target in pack["object_graph"]["validator_targets"]
+    } >= {
+        "relation_vocabulary_validation",
+        "data_provider_validation",
+    }
+
+
 def test_field_specific_detail_response_uses_domain_pack_metadata(tmp_path):
     registry = _fixture_registry(tmp_path)
 

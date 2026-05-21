@@ -120,6 +120,25 @@ def _load_phenotype_output_type():
 PhenotypeResultEnvelope = _load_phenotype_output_type()
 
 
+def _load_gene_expression_output_type():
+    schema_path = REPO_ROOT / "packages/alliance/agents/gene_expression/schema.py"
+    spec = importlib.util.spec_from_file_location(
+        "gene_expression_builder_test_schema",
+        schema_path,
+    )
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    module.GeneExpressionEnvelope.model_rebuild(
+        _types_namespace=module.__dict__,
+    )
+    return module.GeneExpressionEnvelope
+
+
+GeneExpressionEnvelope = _load_gene_expression_output_type()
+
+
 def _builder() -> DomainPackExtractionBuilder:
     return DomainPackExtractionBuilder.model_validate(
         {
@@ -292,6 +311,16 @@ def _chemical_builder() -> DomainPackExtractionBuilder:
 
 def _phenotype_builder() -> DomainPackExtractionBuilder:
     pack_path = REPO_ROOT / "packages/alliance/domain_packs/phenotype/domain_pack.yaml"
+    pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
+    return DomainPackExtractionBuilder.model_validate(
+        pack["metadata"]["extraction_builder"]
+    )
+
+
+def _gene_expression_builder() -> DomainPackExtractionBuilder:
+    pack_path = (
+        REPO_ROOT / "packages/alliance/domain_packs/gene_expression/domain_pack.yaml"
+    )
     pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
     return DomainPackExtractionBuilder.model_validate(
         pack["metadata"]["extraction_builder"]
@@ -966,6 +995,119 @@ def test_phenotype_builder_materializes_full_assertion_graph():
         assert annotation["metadata"]["export_behavior"]["status"] == "blocked"
         assert envelope["metadata"]["normalization_notes"] == [
             "C. elegans context supports WB phenotype ontology lookup."
+        ]
+    finally:
+        clear_extraction_staging(token)
+
+
+def test_gene_expression_builder_materializes_annotation_envelope():
+    token = activate_extraction_staging(
+        agent_id="gene_expression_extraction",
+        specialist_name="Gene Expression Extraction",
+        domain_pack_id="agr.alliance.gene_expression",
+        domain_pack_version="0.1.0",
+        builder=_gene_expression_builder(),
+        curation_output_type=GeneExpressionEnvelope,
+    )
+    try:
+        state = current_extraction_staging_state(required=True)
+        record_document_retrieval_call(
+            "search_document",
+            {"query": "flcn expression embryonic brain"},
+        )
+        register_verified_evidence_record(
+            {
+                "evidence_record_id": "ev-expression-flcn-brain",
+                "entity": "flcn expression",
+                "verified_quote": (
+                    "flcn expression was detected in the embryonic brain and retina "
+                    "during zebrafish development."
+                ),
+                "page": 3,
+                "section": "Results",
+                "subsection": "Expression analysis",
+                "chunk_id": "chunk-expression-1",
+                "figure_reference": "Figure 1B",
+            }
+        )
+
+        staged = stage_extraction_builder_payload(
+            {
+                "expression_statement": "flcn expression in embryonic brain",
+                "gene_symbol": "flcn",
+                "data_provider_abbreviation": "ZFIN",
+                "evidence_record_ids": ["ev-expression-flcn-brain"],
+                "where_expressed_statement": "embryonic brain",
+                "anatomical_structure_name": "brain",
+                "when_expressed_stage_name": "embryonic development",
+                "assay_name": "whole-mount in situ hybridization",
+                "normalization_notes": [
+                    "Retain paper-backed zebrafish brain expression context."
+                ],
+                "raw_mentions": ["flcn expression in embryonic brain"],
+            }
+        )
+        assert staged["status"] == "staged"
+
+        finalized = finalize_extraction_builder_payload(
+            {
+                "summary": "Retained one gene-expression observation.",
+                "candidate_count": 1,
+                "kept_count": 1,
+                "excluded_count": 0,
+                "ambiguous_count": 0,
+            }
+        )
+        assert finalized["status"] == "finalized"
+        assert state.validator_target_count == 2
+
+        envelope = finalized_envelope_from_state()
+        assert envelope is not None
+        object_types = [item["object_type"] for item in envelope["curatable_objects"]]
+        assert object_types == ["GeneExpressionAnnotation"]
+
+        annotation = envelope["curatable_objects"][0]
+        assert annotation["object_role"] == "curatable_unit"
+        assert annotation["model_ref"] == "GeneExpressionAnnotationPayload"
+        assert annotation["evidence_record_ids"] == ["ev-expression-flcn-brain"]
+        assert [
+            {
+                "metadata_path": ref["metadata_path"],
+                "role": ref["role"],
+            }
+            for ref in annotation["metadata_refs"]
+        ] == [
+            {"metadata_path": "evidence_records[0]", "role": "supporting_evidence"},
+            {"metadata_path": "raw_mentions[0]", "role": "builder_metadata"},
+        ]
+
+        payload = annotation["payload"]
+        assert payload["data_provider"]["abbreviation"] == "ZFIN"
+        assert payload["expression_annotation_subject"] == {
+            "primary_external_id": "pending_gene_resolution",
+            "gene_symbol": "flcn",
+        }
+        assert payload["relation"]["name"] == "is_expressed_in"
+        assert payload["single_reference"]["reference_id"] == (
+            "pending_reference_resolution"
+        )
+        assert payload["expression_experiment"]["unique_id"] == (
+            "pending_expression_experiment"
+        )
+        assert payload["expression_experiment"]["expression_assay_used"] == {
+            "curie": "pending_assay_resolution",
+            "name": "whole-mount in situ hybridization",
+        }
+        assert payload["when_expressed_stage_name"] == "embryonic development"
+        assert payload["where_expressed_statement"] == "embryonic brain"
+        assert payload["expression_pattern"]["where_expressed"][
+            "anatomical_structure"
+        ] == {
+            "name": "brain",
+        }
+        assert annotation["metadata"]["export_behavior"]["status"] == "blocked"
+        assert envelope["metadata"]["normalization_notes"] == [
+            "Retain paper-backed zebrafish brain expression context."
         ]
     finally:
         clear_extraction_staging(token)

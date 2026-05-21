@@ -976,6 +976,86 @@ tools:
             type: integer
             required: true
             description: Number of ambiguous candidates reported.
+  - tool_id: stage_gene_expression_evidence
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.extraction_builder:stage_gene_expression_evidence
+    required_context: []
+    description: Stage one verified retained gene-expression observation in run-scoped builder state
+    source_file: backend/src/lib/openai_agents/tools/extraction_builder.py
+    metadata:
+      name: Stage Gene Expression Evidence
+      category: Extraction Builder
+      audit:
+        display_name: Stage Gene Expression Evidence
+      documentation:
+        summary: Inline builder tool for submitting one retained gene-expression observation after record_evidence verification. The backend validates evidence IDs and builds the final GeneExpressionEnvelope during finalization.
+        parameters:
+          - name: gene_symbol
+            type: string
+            required: true
+            description: Paper-supported gene symbol for the expression annotation subject.
+          - name: data_provider_abbreviation
+            type: string
+            required: true
+            description: Alliance data-provider selector such as ZFIN, MGI, FB, or WB.
+          - name: evidence_record_ids
+            type: array[string]
+            required: true
+            description: One or more verified record_evidence IDs supporting this retained expression observation.
+          - name: where_expressed_statement
+            type: string
+            required: true
+            description: Paper-backed spatial expression statement.
+          - name: anatomical_structure_name
+            type: string
+            required: true
+            description: Searchable anatomical structure label from the paper.
+          - name: expression_statement
+            type: string
+            required: true
+            description: Concise expression observation as supported by the paper.
+          - name: relation_name
+            type: string
+            required: false
+            description: Expression relation selector; defaults to is_expressed_in.
+          - name: subject_primary_external_id
+            type: string
+            required: false
+            description: Optional durable gene identifier; defaults to a pending-resolution placeholder.
+  - tool_id: finalize_gene_expression_extraction
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.extraction_builder:finalize_gene_expression_extraction
+    required_context: []
+    description: Finalize staged gene-expression extraction exactly once and build backend curation output
+    source_file: backend/src/lib/openai_agents/tools/extraction_builder.py
+    metadata:
+      name: Finalize Gene Expression Extraction
+      category: Extraction Builder
+      audit:
+        display_name: Finalize Gene Expression Extraction
+      documentation:
+        summary: Inline builder tool called exactly once when no retained gene-expression observations remain to stage. The backend builds the final GeneExpressionEnvelope from staged state.
+        parameters:
+          - name: summary
+            type: string
+            required: true
+            description: Concise run summary.
+          - name: candidate_count
+            type: integer
+            required: true
+            description: Number of harvested gene-expression candidates considered.
+          - name: kept_count
+            type: integer
+            required: true
+            description: Number of retained expression observations staged.
+          - name: excluded_count
+            type: integer
+            required: true
+            description: Number of excluded candidates reported.
+          - name: ambiguous_count
+            type: integer
+            required: true
+            description: Number of ambiguous candidates reported.
   - tool_id: curation_db_sql
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.sql:create_curation_db_sql_tool

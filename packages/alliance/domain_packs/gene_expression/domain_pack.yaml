@@ -805,6 +805,269 @@ metadata:
   curatable_unit_object_type: GeneExpressionAnnotation
   semantic_source: domain_envelope.objects
   legacy_semantic_lists: []
+  extraction_builder:
+    enabled: true
+    stage_tool: stage_gene_expression_evidence
+    finalize_tool: finalize_gene_expression_extraction
+    retained_unit: gene_expression_observation
+    per_retained_finding: true
+    model_final_ack_schema: ExtractionToolFinalizationAck
+    curation_output_schema: GeneExpressionEnvelope
+    primary_stage_field: expression_statement
+    dedupe_fields:
+      - gene_symbol
+      - where_expressed_statement
+      - evidence_record_ids
+    stage_description: Submit one retained gene-expression observation after verifying supporting quote text with record_evidence.
+    finalize_description: Call exactly once after all retained expression observations have been staged; the backend builds the final gene-expression envelope.
+    fields:
+      expression_statement:
+        json_type: string
+        required: true
+        maps_to: GeneExpressionAnnotation.payload.where_expressed_statement
+        hint: Concise paper-backed expression observation; preserve the gene, stage, anatomy, and assay context.
+      gene_symbol:
+        json_type: string
+        required: true
+        maps_to: GeneExpressionAnnotation.payload.expression_annotation_subject.gene_symbol
+        hint: Paper-supported gene symbol for the expression annotation subject.
+      subject_primary_external_id:
+        json_type: string
+        default: pending_gene_resolution
+        maps_to: GeneExpressionAnnotation.payload.expression_annotation_subject.primary_external_id
+        hint: Durable gene identifier only when directly supplied by the paper or workflow; otherwise leave the pending-resolution placeholder.
+      data_provider_abbreviation:
+        json_type: string
+        required: true
+        maps_to: GeneExpressionAnnotation.payload.data_provider.abbreviation
+        hint: Paper-supported Alliance data-provider selector such as ZFIN, MGI, FB, or WB.
+      relation_name:
+        json_type: string
+        default: is_expressed_in
+        maps_to: GeneExpressionAnnotation.payload.relation.name
+        hint: Gene-expression relation selector; use is_expressed_in for retained expression observations.
+      evidence_record_ids:
+        json_type: array
+        required: true
+        collection: true
+        min_items: 1
+        maps_to: GeneExpressionAnnotation.evidence_record_ids
+        hint: Each value must be returned by a verified record_evidence call from the current run.
+      where_expressed_statement:
+        json_type: string
+        required: true
+        maps_to: GeneExpressionAnnotation.payload.where_expressed_statement
+        hint: Paper-backed spatial expression statement such as brain, retina, hatching gland, or fin bud.
+      anatomical_structure_name:
+        json_type: string
+        required: true
+        maps_to: GeneExpressionAnnotation.payload.expression_pattern.where_expressed.anatomical_structure.name
+        hint: Searchable anatomical structure label from the paper; do not invent ontology CURIEs.
+      anatomical_structure_curie:
+        json_type: string
+        maps_to: GeneExpressionAnnotation.payload.expression_pattern.where_expressed.anatomical_structure.curie
+        hint: Optional exact anatomy ontology CURIE only when supplied by the paper or workflow.
+      cellular_component_name:
+        json_type: string
+        maps_to: GeneExpressionAnnotation.payload.expression_pattern.where_expressed.cellular_component.name
+        hint: Optional cellular component label when the expression finding is subcellular.
+      cellular_component_curie:
+        json_type: string
+        maps_to: GeneExpressionAnnotation.payload.expression_pattern.where_expressed.cellular_component.curie
+        hint: Optional cellular component CURIE only when supplied by the paper or workflow.
+      when_expressed_stage_name:
+        json_type: string
+        default: unspecified developmental stage
+        maps_to: GeneExpressionAnnotation.payload.when_expressed_stage_name
+        hint: Paper-backed developmental or life-stage phrase; use the default only when stage is not specified.
+      assay_name:
+        json_type: string
+        default: expression assay
+        maps_to: GeneExpressionAnnotation.payload.expression_experiment.expression_assay_used.name
+        hint: Paper-backed assay label, reporter, in situ, immunostaining, RT-PCR, or expression assay phrase.
+      assay_curie:
+        json_type: string
+        default: pending_assay_resolution
+        maps_to: GeneExpressionAnnotation.payload.expression_experiment.expression_assay_used.curie
+        hint: Optional exact MMO assay CURIE when directly available; otherwise keep the pending-resolution placeholder.
+      expression_experiment_unique_id:
+        json_type: string
+        default: pending_expression_experiment
+        maps_to: GeneExpressionAnnotation.payload.expression_experiment.unique_id
+        hint: Durable experiment unique ID only when already known; otherwise keep the pending placeholder.
+      reference_id:
+        json_type: string
+        default: pending_reference_resolution
+        maps_to: GeneExpressionAnnotation.payload.single_reference.reference_id
+        hint: Durable reference ID only when already known; otherwise keep the pending placeholder.
+      reference:
+        json_type: object
+        maps_to: GeneExpressionAnnotation.payload.single_reference
+        hint: Optional source-reference metadata such as title, PMID, DOI, or source filename.
+      date_created:
+        json_type: string
+        default: pending_curation_date
+        maps_to: GeneExpressionAnnotation.payload.date_created
+        hint: Curation date when known; otherwise keep the pending placeholder.
+      internal:
+        json_type: boolean
+        default: false
+        maps_to: GeneExpressionAnnotation.payload.internal
+      obsolete:
+        json_type: boolean
+        default: false
+        maps_to: GeneExpressionAnnotation.payload.obsolete
+      uncertain:
+        json_type: boolean
+        default: false
+        maps_to: GeneExpressionAnnotation.payload.uncertain
+      normalization_notes:
+        json_type: array
+        collection: true
+        maps_to: metadata.normalization_notes
+        hint: Optional curator-facing expression identity, anatomy, stage, assay, provider, or gene-resolution notes.
+      raw_mentions:
+        json_type: array
+        collection: true
+        maps_to: metadata.raw_mentions
+        hint: Optional supporting harvested expression mentions for audit metadata.
+    finalize_fields:
+      summary:
+        json_type: string
+        required: true
+        hint: Concise run summary.
+      candidate_count:
+        json_type: integer
+        required: true
+        hint: Number of harvested gene-expression candidates considered.
+      kept_count:
+        json_type: integer
+        required: true
+        hint: Must equal the number of successfully staged retained observations.
+      excluded_count:
+        json_type: integer
+        required: true
+        hint: Must equal exclusions.length.
+      ambiguous_count:
+        json_type: integer
+        required: true
+        hint: Must equal ambiguities.length.
+      exclusions:
+        json_type: array
+        collection: true
+        hint: Excluded expression candidates with allowed reason codes.
+      ambiguities:
+        json_type: array
+        collection: true
+        hint: Unresolved candidates requiring curator review.
+      notes:
+        json_type: array
+        collection: true
+        hint: Optional run-level audit notes.
+    object_graph:
+      required_objects:
+        - GeneExpressionAnnotation
+      validator_targets:
+        - target_id: relation
+          binding_id: relation_vocabulary_validation
+          object_type: GeneExpressionAnnotation
+          field_path: relation.name
+        - target_id: data_provider
+          binding_id: data_provider_validation
+          object_type: GeneExpressionAnnotation
+          field_path: data_provider.abbreviation
+      objects:
+        - object_type: GeneExpressionAnnotation
+          model_ref: GeneExpressionAnnotationPayload
+          schema_ref:
+            schema_id: alliance.linkml.GeneExpressionAnnotation
+            provider: alliance_linkml
+            name: GeneExpressionAnnotation
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/expression.yaml
+          object_role: curatable_unit
+          definition_state: in_development
+          definition_notes:
+            - The builder emits one pending GeneExpressionAnnotation object per retained expression observation.
+            - Evidence and raw extraction details are preserved as envelope metadata.
+          pending_ref_template: gene_expression_annotation_{staged_id}
+          payload_fields:
+            unique_id: expression_experiment_unique_id
+            date_created: date_created
+            internal: internal
+            obsolete: obsolete
+            data_provider.abbreviation: data_provider_abbreviation
+            expression_annotation_subject.primary_external_id: subject_primary_external_id
+            expression_annotation_subject.gene_symbol: gene_symbol
+            relation.name: relation_name
+            single_reference.reference_id: reference_id
+            single_reference.title: reference.title
+            single_reference.pmid: reference.pmid
+            single_reference.doi: reference.doi
+            expression_experiment.unique_id: expression_experiment_unique_id
+            expression_experiment.expression_assay_used.curie: assay_curie
+            expression_experiment.expression_assay_used.name: assay_name
+            when_expressed_stage_name: when_expressed_stage_name
+            where_expressed_statement: where_expressed_statement
+            expression_pattern.when_expressed.developmental_stage_start.name: when_expressed_stage_name
+            expression_pattern.where_expressed.anatomical_structure.curie: anatomical_structure_curie
+            expression_pattern.where_expressed.anatomical_structure.name: anatomical_structure_name
+            expression_pattern.where_expressed.cellular_component.curie: cellular_component_curie
+            expression_pattern.where_expressed.cellular_component.name: cellular_component_name
+            uncertain: uncertain
+          metadata_refs:
+            - raw_mentions[0]
+          metadata:
+            semantic_source: domain_envelope.objects
+            export_behavior:
+              status: blocked
+              exportable: false
+              submit: false
+              reason: Gene-expression export remains blocked until pending gene, reference, assay, anatomy, and experiment identifiers are resolved.
+            write_behavior:
+              status: blocked
+              reason: The curation DB target shape is verified, but this builder emits pending envelopes only.
+    allowed_exclusion_reason_codes:
+      - previously_reported
+      - non_experimental_claim
+      - marker_only_visualization
+      - promoter_driven_marker_localization
+      - mutant_background_only
+      - structural_label_or_fusion_only
+      - rescue_experiment_not_expression
+      - insufficient_experimental_evidence
+      - out_of_scope
+      - ambiguous_entity
+      - duplicate_mention
+      - unsupported_entity_type
+    allowed_ambiguity_reason_codes:
+      - ambiguous_entity
+      - insufficient_selector_context
+      - unresolved_gene
+      - unresolved_anatomy
+      - unresolved_stage
+      - unresolved_assay
+    examples:
+      stage:
+        expression_statement: flcn expression in embryonic brain
+        gene_symbol: flcn
+        data_provider_abbreviation: ZFIN
+        evidence_record_ids:
+          - ev_verified_expression_quote_1
+        where_expressed_statement: embryonic brain
+        anatomical_structure_name: brain
+        when_expressed_stage_name: embryonic development
+      finalize:
+        summary: Staged one retained gene-expression observation and excluded one rescue-only mention.
+        candidate_count: 2
+        kept_count: 1
+        excluded_count: 1
+        ambiguous_count: 0
+    repair_messages:
+      invalid_stage_input: Submit one gene-expression observation with gene symbol, provider, anatomy/stage context, and verified evidence_record_ids from this run.
+      invalid_finalize_input: Finalization requires internally consistent counts and allowed reason codes.
+      invalid_finalization: Resolve builder finalization issues before ending the run.
+      duplicate_finalization: finalize_gene_expression_extraction must be called exactly once, after all retained observations are staged.
   validators:
     active:
       - validator_id: gene_expression.domain_envelope_shape
