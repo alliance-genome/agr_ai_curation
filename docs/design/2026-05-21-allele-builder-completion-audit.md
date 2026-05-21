@@ -13,6 +13,7 @@ Implementation commits:
 - `2165fda3` - allele builder extraction path implementation
 - `e3a6185c` - focused allele corpus validation evidence
 - `25de0864` - corpus runner validation evidence
+- `d6028646` - completion audit before full-corpus regression evidence
 
 Focused validation note:
 
@@ -22,6 +23,12 @@ Focused corpus artifacts:
 
 - `docs/design/pdf-corpus-trials/allele-builder-20260521-1402/summary.json`
 - `docs/design/pdf-corpus-trials/allele-builder-20260521-1402/allele_drosophila_notch_facet_glossy.json`
+
+Full-corpus regression artifacts:
+
+- `docs/design/pdf-corpus-trials/allele-builder-full-20260521-1418/summary.json`
+- `docs/design/pdf-corpus-trials/allele-builder-full-20260521-1418/disease_mouse_pkd1_adpkd.json`
+- `docs/design/pdf-corpus-trials/allele-builder-full-20260521-1418/allele_drosophila_notch_facet_glossy.json`
 
 ## Done-Criteria Checklist
 
@@ -37,12 +44,12 @@ Focused corpus artifacts:
 | Logs/events expose builder success/failure clearly enough for trace review | `SPECIALIST_SUMMARY` includes builder metrics; focused corpus captured builder observations with stage/finalize counts, object count, validator target count, and zero-validator status. | Done |
 | Focused backend unit and contract tests pass | Targeted backend unit suite: `121 passed`; contract suite: `25 passed, 1 deselected`; corpus runner unit suite: `6 passed`. | Done |
 | Focused allele real-PDF corpus passes with tightened gate and no specialist text fallback | `docs/design/pdf-corpus-trials/allele-builder-20260521-1402/summary.json` has `overall_status=pass`; specialist text fallback count `0`. | Done |
-| Full real-PDF corpus passes or unrelated failures are documented | Not run for the allele-first acceptance slice after scope clarification. Full corpus remains a separate regression/release gate. | Deferred |
-| Changes are committed, pushed, synced to Incus main sandbox, and tested there | Branch pushed to `origin/live-multi-gene-validator-batching`; VM source checkout synced to `25de0864`; main sandbox backend healthy and focused allele corpus ran against `http://192.168.86.44:8900`. | Done |
+| Full real-PDF corpus passes or unrelated failures are documented | Full corpus `allele-builder-full-20260521-1418` ran. Seven of eight trials passed, including allele. The only failure was `disease_mouse_pkd1_adpkd`, where `Disease Extraction Agent` emitted JSON missing `payload.evidence_records` for `DiseaseExtractionResultEnvelope`; disease builder stage/finalize counts were `0`, so this is outside the allele builder migration. | Done |
+| Changes are committed, pushed, synced to Incus main sandbox, and tested there | Branch pushed to `origin/live-multi-gene-validator-batching`; VM source checkout synced from Git; main sandbox backend healthy and focused/full corpus runs used `http://192.168.86.44:8900`. | Done |
 
 ## Audit Conclusion
 
-The allele-first implementation is complete and validated. The literal
-`goal.md` done criteria are not fully complete because the broad full-corpus
-regression sweep is intentionally deferred outside the allele-first acceptance
-slice.
+The allele-first implementation is complete and validated. The full corpus did
+not pass cleanly, but the only failure was documented as a disease extractor
+schema issue outside the allele builder migration, satisfying the
+`goal.md` allowance for unrelated full-corpus failures with evidence.

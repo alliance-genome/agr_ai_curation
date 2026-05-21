@@ -46,4 +46,24 @@ Additional validation:
 - Corpus runner syntax check: passed
 - `git diff --check`: clean
 
-The broader full real-PDF corpus was not used as allele-first acceptance evidence. A full corpus sweep remains a separate regression/release gate.
+Full corpus regression:
+
+```bash
+python3 scripts/testing/domain_envelope_pdf_corpus.py \
+  --base-url http://192.168.86.44:8900 \
+  --allow-dev-mode-fallback \
+  --allow-duplicate-reuse \
+  --flow-timeout-seconds 900 \
+  --processing-timeout-seconds 1200 \
+  --output-dir docs/design/pdf-corpus-trials/allele-builder-full-20260521-1418
+```
+
+- Artifact directory: `docs/design/pdf-corpus-trials/allele-builder-full-20260521-1418/`
+- Overall status: `fail`
+- Passed trials: `7` of `8`, including `allele_drosophila_notch_facet_glossy`
+- Allele full-corpus builder gate: one stage call, one finalize call, finalized object count `4`, validator target count `1`, zero fallback events, and observed `allele_mention_reference_validation` count `2`
+- Unrelated failure: `disease_mouse_pkd1_adpkd`
+- Disease failure reason: `Disease Extraction Agent` emitted JSON that failed `DiseaseExtractionResultEnvelope` validation because `curatable_objects[0].payload.evidence_records` was missing
+- Disease failure had no builder tool activity: builder stage/finalize counts were `0`
+
+The full corpus therefore did not pass, but the only failing trial is a disease extractor schema issue outside the allele builder migration.
