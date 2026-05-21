@@ -27,6 +27,8 @@ from src.schemas.domain_envelope import (
     DefinitionState,
     EnvelopeMetadataRef,
     ObjectRef,
+    field_path_exists as domain_field_path_exists,
+    parse_field_path,
 )
 from src.schemas.domain_pack_metadata import DomainPackExtractionBuilder
 from src.schemas.models.base import (
@@ -1110,10 +1112,16 @@ def _base_object_context(
     state: ExtractionStagingState,
 ) -> dict[str, Any]:
     primary_slug = _safe_ref_suffix(finding.primary_value or finding.staged_id)
+    evidence_records = [
+        dict(record)
+        for evidence_id in finding.evidence_record_ids
+        if (record := state.verified_evidence_records.get(evidence_id)) is not None
+    ]
     context: dict[str, Any] = {
         "staged_id": finding.staged_id,
         "primary_slug": primary_slug,
         "builder_run_id": state.run_id,
+        "evidence_records": evidence_records,
     }
     for key, value in finding.payload.items():
         context[key] = value
@@ -1183,23 +1191,62 @@ def _resolve_builder_source(
 
 def _value_at_path(payload: Mapping[str, Any], field_path: str) -> Any:
     current: Any = payload
-    for segment in field_path.split("."):
-        if not isinstance(current, Mapping) or segment not in current:
+    for part in parse_field_path(field_path):
+        if isinstance(part, str):
+            if not isinstance(current, Mapping) or part not in current:
+                return None
+            current = current[part]
+            continue
+        if (
+            not isinstance(current, list)
+            or part >= len(current)
+        ):
             return None
-        current = current[segment]
+        current = current[part]
     return current
 
 
 def _set_field_path(payload: dict[str, Any], field_path: str, value: Any) -> None:
-    current = payload
-    segments = field_path.split(".")
-    for segment in segments[:-1]:
-        next_value = current.get(segment)
-        if not isinstance(next_value, dict):
-            next_value = {}
-            current[segment] = next_value
+    current: Any = payload
+    parts = parse_field_path(field_path)
+    for index, part in enumerate(parts):
+        final_part = index == len(parts) - 1
+        next_part = None if final_part else parts[index + 1]
+        if isinstance(part, str):
+            if final_part:
+                if not isinstance(current, dict):
+                    raise BuilderRuntimeError(
+                        f"Cannot set builder payload field '{field_path}'"
+                    )
+                current[part] = value
+                return
+            if not isinstance(current, dict):
+                raise BuilderRuntimeError(
+                    f"Cannot set builder payload field '{field_path}'"
+                )
+            next_value = current.get(part)
+            expected_type = list if isinstance(next_part, int) else dict
+            if not isinstance(next_value, expected_type):
+                next_value = [] if isinstance(next_part, int) else {}
+                current[part] = next_value
+            current = next_value
+            continue
+
+        if not isinstance(current, list):
+            raise BuilderRuntimeError(
+                f"Cannot set builder payload field '{field_path}'"
+            )
+        while len(current) <= part:
+            current.append(None)
+        if final_part:
+            current[part] = value
+            return
+        next_value = current[part]
+        expected_type = list if isinstance(next_part, int) else dict
+        if not isinstance(next_value, expected_type):
+            next_value = [] if isinstance(next_part, int) else {}
+            current[part] = next_value
         current = next_value
-    current[segments[-1]] = value
 
 
 def _metadata_from_rule(
@@ -1371,6 +1418,13 @@ def _raw_mentions(state: ExtractionStagingState) -> list[MentionCandidate]:
 def _normalization_notes(state: ExtractionStagingState) -> list[str]:
     notes: list[str] = []
     for finding in state.staged_findings.values():
+        raw_notes = finding.payload.get("normalization_notes")
+        if isinstance(raw_notes, list):
+            notes.extend(
+                item.strip()
+                for item in raw_notes
+                if isinstance(item, str) and item.strip()
+            )
         hint = finding.payload.get("normalized_hint")
         if hint:
             notes.append(
@@ -1399,15 +1453,15 @@ def _validator_target_count(
 
 
 def _field_path_exists(payload: Mapping[str, Any], field_path: str) -> bool:
-    current: Any = payload
-    for segment in field_path.split("."):
-        if not isinstance(current, Mapping) or segment not in current:
-            return False
-        current = current[segment]
-    if current is None:
+    if not domain_field_path_exists(payload, field_path):
         return False
-    if isinstance(current, str):
-        return bool(current.strip())
+    value = _value_at_path(payload, field_path)
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return bool(value)
     return True
 
 

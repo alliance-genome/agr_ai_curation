@@ -804,6 +804,241 @@ metadata:
   legacy_semantic_lists: []
   supported_object_roles:
     - curatable_unit
+  extraction_builder:
+    enabled: true
+    stage_tool: stage_disease_assertion_evidence
+    finalize_tool: finalize_disease_extraction
+    retained_unit: disease_assertion
+    per_retained_finding: true
+    model_final_ack_schema: ExtractionToolFinalizationAck
+    curation_output_schema: DiseaseExtractionResultEnvelope
+    primary_stage_field: mention
+    dedupe_fields:
+      - mention
+      - disease_name
+      - evidence_record_ids
+    stage_description: Submit one retained disease assertion after verifying supporting quote text with record_evidence.
+    finalize_description: Call exactly once after all retained disease assertions have been staged; the backend builds the final disease envelope.
+    fields:
+      mention:
+        json_type: string
+        required: true
+        maps_to: DiseaseAnnotation.payload.mention
+        hint: Exact disease mention as written in the paper; do not combine multiple disease concepts.
+      disease_name:
+        json_type: string
+        required: true
+        maps_to: DiseaseAnnotation.payload.disease_annotation_object.name
+        hint: Paper-backed Disease Ontology label or most searchable disease name for validator lookup.
+      disease_curie:
+        json_type: string
+        maps_to: DiseaseAnnotation.payload.disease_annotation_object.curie
+        hint: Optional exact DOID CURIE only when the paper itself supplies it or context makes it explicit; do not invent ontology IDs.
+      disease_relation_name:
+        json_type: string
+        required: true
+        maps_to: DiseaseAnnotation.payload.disease_relation_name
+        hint: Paper-backed Disease Relation selector such as is_implicated_in, contributes_to, is_marker_for, or is_model_of.
+      data_provider_abbreviation:
+        json_type: string
+        required: true
+        maps_to: DiseaseAnnotation.payload.data_provider.abbreviation
+        hint: Paper-supported Alliance provider abbreviation such as MGI, ZFIN, FB, WB, RGD, SGD, or HGNC.
+      evidence_record_ids:
+        json_type: array
+        required: true
+        collection: true
+        min_items: 1
+        maps_to: DiseaseAnnotation.payload.evidence_record_ids
+        hint: Each value must be returned by a verified record_evidence call from the current run.
+      role:
+        json_type: string
+        required: true
+        maps_to: DiseaseAnnotation.payload.role
+        hint: One of primary, background, comparative, model_context, or unspecified.
+      confidence:
+        json_type: string
+        required: true
+        maps_to: DiseaseAnnotation.payload.confidence
+        hint: Extractor confidence; use high, medium, or low.
+      subject_type:
+        json_type: string
+        maps_to: DiseaseAnnotation.payload.disease_annotation_subject.subject_type
+        hint: Optional subject type only when paper-supported; use gene, allele, agm, or unknown.
+      subject_label:
+        json_type: string
+        maps_to: DiseaseAnnotation.payload.disease_annotation_subject.subject_label
+        hint: Optional paper-backed subject label for curator context; do not invent durable subject identity.
+      subject_identifier:
+        json_type: string
+        maps_to: DiseaseAnnotation.payload.disease_annotation_subject.subject_identifier
+        hint: Optional subject identifier only when directly supplied by the paper.
+      condition_relation_type_name:
+        json_type: string
+        maps_to: DiseaseAnnotation.payload.condition_relations[0].condition_relation_type.name
+        hint: Optional condition relation type, such as has_condition, only when experimental condition context is directly supported.
+      condition_summary:
+        json_type: string
+        maps_to: DiseaseAnnotation.payload.condition_relations[0].conditions[0].condition_summary
+        hint: Optional concise experimental-condition summary from the paper.
+      condition_free_text:
+        json_type: string
+        maps_to: DiseaseAnnotation.payload.condition_relations[0].conditions[0].condition_free_text
+        hint: Optional exact or lightly trimmed free-text condition context from the paper.
+      normalization_notes:
+        json_type: array
+        collection: true
+        maps_to: metadata.normalization_notes
+        hint: Optional curator-facing disease identity, synonym, model-organism, relation, or provider notes.
+      raw_mentions:
+        json_type: array
+        collection: true
+        maps_to: metadata.raw_mentions
+        hint: Optional supporting harvested disease mentions for audit metadata.
+    finalize_fields:
+      summary:
+        json_type: string
+        required: true
+        hint: Concise run summary.
+      candidate_count:
+        json_type: integer
+        required: true
+        hint: Number of harvested disease candidates considered.
+      kept_count:
+        json_type: integer
+        required: true
+        hint: Must equal the number of successfully staged retained disease assertions.
+      excluded_count:
+        json_type: integer
+        required: true
+        hint: Must equal exclusions.length.
+      ambiguous_count:
+        json_type: integer
+        required: true
+        hint: Must equal ambiguities.length.
+      exclusions:
+        json_type: array
+        collection: true
+        hint: Excluded disease candidates with allowed reason codes.
+      ambiguities:
+        json_type: array
+        collection: true
+        hint: Unresolved candidates requiring curator review.
+      notes:
+        json_type: array
+        collection: true
+        hint: Optional run-level audit notes.
+    object_graph:
+      required_objects:
+        - DiseaseAnnotation
+      validator_targets:
+        - target_id: disease_ontology
+          binding_id: disease_ontology_term_lookup
+          object_type: DiseaseAnnotation
+          field_path: disease_annotation_object.name
+        - target_id: disease_relation
+          binding_id: disease_relation_cv_lookup
+          object_type: DiseaseAnnotation
+          field_path: disease_relation_name
+        - target_id: disease_data_provider
+          binding_id: disease_data_provider_lookup
+          object_type: DiseaseAnnotation
+          field_path: data_provider.abbreviation
+        - target_id: disease_condition_relation
+          binding_id: disease_condition_relation_lookup
+          object_type: DiseaseAnnotation
+          field_path: condition_relations[0].condition_relation_type.name
+          required: false
+      objects:
+        - object_type: DiseaseAnnotation
+          model_ref: PendingDiseaseAssertionPayload
+          schema_ref:
+            schema_id: alliance.linkml.DiseaseAnnotation
+            provider: alliance_linkml
+            name: DiseaseAnnotation
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+            definition_state: in_development
+            definition_notes:
+              - DiseaseAnnotation is abstract in LinkML; pending envelopes distinguish complete extraction fields from blocked write-target fields.
+          object_role: curatable_unit
+          definition_state: in_development
+          definition_notes:
+            - Pending DiseaseAnnotation assertion; concrete write materialization is blocked until subject, reference, evidence-code, and export targets are verified.
+          pending_ref_template: disease_assertion_{staged_id}
+          payload_fields:
+            mention: mention
+            disease_annotation_object.curie: disease_curie
+            disease_annotation_object.name: disease_name
+            role: role
+            confidence: confidence
+            disease_relation_name: disease_relation_name
+            data_provider.abbreviation: data_provider_abbreviation
+            disease_annotation_subject.subject_type: subject_type
+            disease_annotation_subject.subject_label: subject_label
+            disease_annotation_subject.subject_identifier: subject_identifier
+            condition_relations[0].condition_relation_type.name: condition_relation_type_name
+            condition_relations[0].conditions[0].condition_summary: condition_summary
+            condition_relations[0].conditions[0].condition_free_text: condition_free_text
+            evidence_record_ids: evidence_record_ids
+            evidence_records: evidence_records
+          metadata:
+            assertion_kind: pending_disease_assertion
+            write_behavior:
+              status: blocked
+              reason: Subject identifier, durable reference, evidence-code, and concrete disease annotation write targets are not fully materialized from extractor output.
+            export_behavior:
+              status: blocked
+              reason: Disease export/submission adapters require a later verified projection.
+            definition_state_summary:
+              complete:
+                - mention
+                - disease_annotation_object
+                - role
+                - confidence
+                - evidence_record_ids
+                - evidence_records
+                - data_provider
+              under_development:
+                - disease_relation_name
+                - condition_relations
+              blocked:
+                - disease_annotation_subject
+                - single_reference
+                - evidence_code_curies
+    allowed_exclusion_reason_codes:
+      - previously_reported
+      - non_experimental_claim
+      - insufficient_experimental_evidence
+      - out_of_scope
+      - ambiguous_entity
+      - duplicate_mention
+      - unsupported_entity_type
+    allowed_ambiguity_reason_codes:
+      - ambiguous_entity
+      - insufficient_selector_context
+      - unresolved_identity
+    examples:
+      stage:
+        mention: autosomal dominant polycystic kidney disease
+        disease_name: autosomal dominant polycystic kidney disease
+        disease_relation_name: is_model_of
+        data_provider_abbreviation: MGI
+        evidence_record_ids:
+          - ev_verified_disease_quote_1
+        role: model_context
+        confidence: high
+        subject_type: gene
+        subject_label: Pkd1
+      finalize:
+        summary: Staged one retained disease assertion and excluded two background disease mentions.
+        candidate_count: 3
+        kept_count: 1
+        excluded_count: 2
+        ambiguous_count: 0
+    repair_messages:
+      invalid_stage_input: Submit one disease assertion with a paper-backed disease name, relation, provider context, and verified evidence_record_ids from this run.
+      invalid_finalize_input: Finalization requires internally consistent counts and allowed reason codes.
   validators:
     active:
       - validator_id: disease.domain_envelope_shape

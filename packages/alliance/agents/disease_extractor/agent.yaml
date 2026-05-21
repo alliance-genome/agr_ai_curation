@@ -42,6 +42,8 @@ tools:
   - read_section
   - read_subsection
   - record_evidence
+  - stage_disease_assertion_evidence
+  - finalize_disease_extraction
   - get_agent_contract
   - agr_species_context_lookup
 

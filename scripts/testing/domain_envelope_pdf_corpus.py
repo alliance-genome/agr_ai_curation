@@ -22,7 +22,7 @@ import dev_release_smoke as smoke
 DEFAULT_BASE_URL = "http://192.168.86.44:8900"
 DEFAULT_OUTPUT_DIR = Path("docs/design/pdf-corpus-trials")
 DEFAULT_DOWNLOAD_DIR = Path("/tmp/agr_domain_envelope_pdf_corpus")
-BUILDER_REQUIRED_DOMAINS = frozenset({"allele", "gene"})
+BUILDER_REQUIRED_DOMAINS = frozenset({"allele", "gene", "disease"})
 
 
 @dataclass(frozen=True)

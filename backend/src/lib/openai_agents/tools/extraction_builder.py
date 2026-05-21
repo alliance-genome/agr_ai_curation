@@ -179,9 +179,108 @@ def finalize_gene_extraction(
     )
 
 
+@function_tool(
+    name_override="stage_disease_assertion_evidence",
+    description_override=(
+        "Stage one retained disease assertion after verifying supporting quotes "
+        "with record_evidence. Submit one disease mention with Disease Ontology "
+        "label/optional CURIE hints, relation and data-provider selector context, "
+        "and one or more verified evidence_record_ids. The backend builds the "
+        "DiseaseExtractionResultEnvelope."
+    ),
+)
+def stage_disease_assertion_evidence(
+    mention: str,
+    disease_name: str,
+    disease_relation_name: str,
+    data_provider_abbreviation: str,
+    evidence_record_ids: list[str],
+    role: Literal[
+        "primary",
+        "background",
+        "comparative",
+        "model_context",
+        "unspecified",
+    ],
+    confidence: Literal["high", "medium", "low"],
+    disease_curie: str | None = None,
+    subject_type: Literal["gene", "allele", "agm", "unknown"] | None = None,
+    subject_label: str | None = None,
+    subject_identifier: str | None = None,
+    condition_relation_type_name: str | None = None,
+    condition_summary: str | None = None,
+    condition_free_text: str | None = None,
+    normalization_notes: list[str] | None = None,
+    raw_mentions: list[str] | None = None,
+) -> dict[str, Any]:
+    """Stage one retained disease assertion in current extraction builder state."""
+
+    return stage_extraction_builder_payload(
+        {
+            "mention": mention,
+            "disease_name": disease_name,
+            "disease_curie": disease_curie,
+            "disease_relation_name": disease_relation_name,
+            "data_provider_abbreviation": data_provider_abbreviation,
+            "evidence_record_ids": evidence_record_ids,
+            "role": role,
+            "confidence": confidence,
+            "subject_type": subject_type,
+            "subject_label": subject_label,
+            "subject_identifier": subject_identifier,
+            "condition_relation_type_name": condition_relation_type_name,
+            "condition_summary": condition_summary,
+            "condition_free_text": condition_free_text,
+            "normalization_notes": normalization_notes or [],
+            "raw_mentions": raw_mentions or [],
+        }
+    )
+
+
+@function_tool(
+    name_override="finalize_disease_extraction",
+    description_override=(
+        "Finalize disease extraction exactly once after all retained disease "
+        "assertions have been staged. The backend builds the final "
+        "DiseaseExtractionResultEnvelope from staged state; the model should only "
+        "return a small acknowledgment."
+    ),
+)
+def finalize_disease_extraction(
+    summary: str,
+    candidate_count: int,
+    kept_count: int,
+    excluded_count: int,
+    ambiguous_count: int,
+    exclusions: list[BuilderExclusionInput] | None = None,
+    ambiguities: list[BuilderAmbiguityInput] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Finalize staged disease findings into backend curation output."""
+
+    return finalize_extraction_builder_payload(
+        {
+            "summary": summary,
+            "candidate_count": candidate_count,
+            "kept_count": kept_count,
+            "excluded_count": excluded_count,
+            "ambiguous_count": ambiguous_count,
+            "exclusions": [
+                exclusion.model_dump(mode="json") for exclusion in (exclusions or [])
+            ],
+            "ambiguities": [
+                ambiguity.model_dump(mode="json") for ambiguity in (ambiguities or [])
+            ],
+            "notes": notes or [],
+        }
+    )
+
+
 __all__ = [
     "finalize_allele_extraction",
+    "finalize_disease_extraction",
     "finalize_gene_extraction",
     "stage_allele_paper_evidence",
+    "stage_disease_assertion_evidence",
     "stage_gene_mention_evidence",
 ]

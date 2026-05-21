@@ -752,6 +752,82 @@ tools:
             type: integer
             required: true
             description: Number of ambiguous candidates reported.
+  - tool_id: stage_disease_assertion_evidence
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.extraction_builder:stage_disease_assertion_evidence
+    required_context: []
+    description: Stage one verified retained disease assertion in run-scoped builder state
+    source_file: backend/src/lib/openai_agents/tools/extraction_builder.py
+    metadata:
+      name: Stage Disease Assertion Evidence
+      category: Extraction Builder
+      audit:
+        display_name: Stage Disease Assertion Evidence
+      documentation:
+        summary: Inline builder tool for submitting one retained disease assertion after record_evidence verification. The backend validates evidence IDs and builds the final disease envelope during finalization.
+        parameters:
+          - name: mention
+            type: string
+            required: true
+            description: Exact disease mention as written in the paper.
+          - name: disease_name
+            type: string
+            required: true
+            description: Paper-backed Disease Ontology label or searchable disease name for validator lookup.
+          - name: disease_relation_name
+            type: string
+            required: true
+            description: Paper-backed Disease Relation selector such as is_implicated_in or is_model_of.
+          - name: data_provider_abbreviation
+            type: string
+            required: true
+            description: Paper-supported Alliance data provider abbreviation such as MGI, ZFIN, FB, WB, RGD, SGD, or HGNC.
+          - name: evidence_record_ids
+            type: array[string]
+            required: true
+            description: One or more verified record_evidence IDs supporting this retained disease assertion.
+          - name: role
+            type: enum
+            required: true
+            description: Disease role; one of primary, background, comparative, model_context, or unspecified.
+          - name: confidence
+            type: enum
+            required: true
+            description: Extractor confidence; one of high, medium, or low.
+  - tool_id: finalize_disease_extraction
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.extraction_builder:finalize_disease_extraction
+    required_context: []
+    description: Finalize staged disease extraction exactly once and build backend curation output
+    source_file: backend/src/lib/openai_agents/tools/extraction_builder.py
+    metadata:
+      name: Finalize Disease Extraction
+      category: Extraction Builder
+      audit:
+        display_name: Finalize Disease Extraction
+      documentation:
+        summary: Inline builder tool called exactly once when no retained disease assertions remain to stage. The backend builds the final DiseaseExtractionResultEnvelope from staged state.
+        parameters:
+          - name: summary
+            type: string
+            required: true
+            description: Concise run summary.
+          - name: candidate_count
+            type: integer
+            required: true
+            description: Number of harvested disease candidates considered.
+          - name: kept_count
+            type: integer
+            required: true
+            description: Number of retained disease assertions staged.
+          - name: excluded_count
+            type: integer
+            required: true
+            description: Number of excluded candidates reported.
+          - name: ambiguous_count
+            type: integer
+            required: true
+            description: Number of ambiguous candidates reported.
   - tool_id: curation_db_sql
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.sql:create_curation_db_sql_tool

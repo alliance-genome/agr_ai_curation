@@ -201,6 +201,41 @@ def test_builder_tools_topic_uses_real_allele_domain_pack():
     }
 
 
+def test_builder_tools_topic_uses_real_disease_domain_pack():
+    tools = get_agent_contract("disease_extractor", "tools")
+    tool_ids = {tool["tool_id"] for tool in tools["tools"]}
+    assert "stage_disease_assertion_evidence" in tool_ids
+    assert "finalize_disease_extraction" in tool_ids
+
+    result = get_agent_contract(
+        "disease_extractor",
+        "builder_tools",
+        detail_level="detail",
+    )
+
+    assert result["success"] is True
+    pack = result["domain_packs"][0]
+    assert pack["domain_pack_id"] == "agr.alliance.disease"
+    assert pack["stage_tool"] == "stage_disease_assertion_evidence"
+    assert pack["finalize_tool"] == "finalize_disease_extraction"
+    assert pack["curation_output_schema"] == "DiseaseExtractionResultEnvelope"
+    assert {
+        "mention",
+        "disease_name",
+        "disease_relation_name",
+        "data_provider_abbreviation",
+        "evidence_record_ids",
+    }.issubset(set(pack["stage_required_fields"]))
+    assert {
+        target["binding_id"]
+        for target in pack["object_graph"]["validator_targets"]
+    } >= {
+        "disease_ontology_term_lookup",
+        "disease_relation_cv_lookup",
+        "disease_data_provider_lookup",
+    }
+
+
 def test_field_specific_detail_response_uses_domain_pack_metadata(tmp_path):
     registry = _fixture_registry(tmp_path)
 

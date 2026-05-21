@@ -63,6 +63,25 @@ def _load_gene_output_type():
 GeneExtractionResultEnvelope = _load_gene_output_type()
 
 
+def _load_disease_output_type():
+    schema_path = REPO_ROOT / "packages/alliance/agents/disease_extractor/schema.py"
+    spec = importlib.util.spec_from_file_location(
+        "disease_builder_test_schema",
+        schema_path,
+    )
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    module.DiseaseExtractionResultEnvelope.model_rebuild(
+        _types_namespace=module.__dict__,
+    )
+    return module.DiseaseExtractionResultEnvelope
+
+
+DiseaseExtractionResultEnvelope = _load_disease_output_type()
+
+
 def _builder() -> DomainPackExtractionBuilder:
     return DomainPackExtractionBuilder.model_validate(
         {
@@ -208,6 +227,14 @@ def _builder() -> DomainPackExtractionBuilder:
 
 def _gene_builder() -> DomainPackExtractionBuilder:
     pack_path = REPO_ROOT / "packages/alliance/domain_packs/gene/domain_pack.yaml"
+    pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
+    return DomainPackExtractionBuilder.model_validate(
+        pack["metadata"]["extraction_builder"]
+    )
+
+
+def _disease_builder() -> DomainPackExtractionBuilder:
+    pack_path = REPO_ROOT / "packages/alliance/domain_packs/disease/domain_pack.yaml"
     pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
     return DomainPackExtractionBuilder.model_validate(
         pack["metadata"]["extraction_builder"]
@@ -572,5 +599,100 @@ def test_gene_builder_materializes_valid_gene_envelope():
             "daf-2 mutants showed altered insulin signaling."
         )
         assert gene_object["evidence_record_ids"] == ["ev-gene-daf2"]
+    finally:
+        clear_extraction_staging(token)
+
+
+def test_disease_builder_materializes_multi_target_disease_envelope():
+    token = activate_extraction_staging(
+        agent_id="disease_extractor",
+        specialist_name="Disease Extraction",
+        domain_pack_id="agr.alliance.disease",
+        domain_pack_version="0.1.0",
+        builder=_disease_builder(),
+        curation_output_type=DiseaseExtractionResultEnvelope,
+    )
+    try:
+        state = current_extraction_staging_state(required=True)
+        record_document_retrieval_call("search_document", {"query": "polycystic kidney disease"})
+        register_verified_evidence_record(
+            {
+                "evidence_record_id": "ev-disease-pkd1",
+                "entity": "autosomal dominant polycystic kidney disease",
+                "verified_quote": (
+                    "Pkd1 mutant mice developed renal cysts that model "
+                    "autosomal dominant polycystic kidney disease."
+                ),
+                "page": 4,
+                "section": "Results",
+                "chunk_id": "chunk-disease-1",
+            }
+        )
+
+        staged = stage_extraction_builder_payload(
+            {
+                "mention": "autosomal dominant polycystic kidney disease",
+                "disease_name": "autosomal dominant polycystic kidney disease",
+                "disease_relation_name": "is_model_of",
+                "data_provider_abbreviation": "MGI",
+                "evidence_record_ids": ["ev-disease-pkd1"],
+                "role": "model_context",
+                "confidence": "high",
+                "subject_type": "gene",
+                "subject_label": "Pkd1",
+                "condition_relation_type_name": "has_condition",
+                "condition_summary": "Pkd1 mutant mouse model context",
+                "normalization_notes": [
+                    "Mouse Pkd1 model context supports MGI provider selector."
+                ],
+                "raw_mentions": ["autosomal dominant polycystic kidney disease"],
+            }
+        )
+        assert staged["status"] == "staged"
+
+        finalized = finalize_extraction_builder_payload(
+            {
+                "summary": "Retained one disease assertion.",
+                "candidate_count": 1,
+                "kept_count": 1,
+                "excluded_count": 0,
+                "ambiguous_count": 0,
+            }
+        )
+        assert finalized["status"] == "finalized"
+        assert state.validator_target_count == 4
+
+        envelope = finalized_envelope_from_state()
+        assert envelope is not None
+        [disease_object] = envelope["curatable_objects"]
+        assert disease_object["object_type"] == "DiseaseAnnotation"
+        assert disease_object["object_role"] == "curatable_unit"
+        assert disease_object["model_ref"] == "PendingDiseaseAssertionPayload"
+        assert disease_object["payload"]["disease_annotation_object"]["name"] == (
+            "autosomal dominant polycystic kidney disease"
+        )
+        assert disease_object["payload"]["disease_relation_name"] == "is_model_of"
+        assert disease_object["payload"]["data_provider"]["abbreviation"] == "MGI"
+        assert disease_object["payload"]["condition_relations"][0][
+            "condition_relation_type"
+        ]["name"] == "has_condition"
+        assert disease_object["payload"]["evidence_records"] == [
+            {
+                "evidence_record_id": "ev-disease-pkd1",
+                "entity": "autosomal dominant polycystic kidney disease",
+                "verified_quote": (
+                    "Pkd1 mutant mice developed renal cysts that model "
+                    "autosomal dominant polycystic kidney disease."
+                ),
+                "page": 4,
+                "section": "Results",
+                "chunk_id": "chunk-disease-1",
+            }
+        ]
+        assert disease_object["evidence_record_ids"] == ["ev-disease-pkd1"]
+        assert disease_object["metadata"]["write_behavior"]["status"] == "blocked"
+        assert envelope["metadata"]["normalization_notes"] == [
+            "Mouse Pkd1 model context supports MGI provider selector."
+        ]
     finally:
         clear_extraction_staging(token)

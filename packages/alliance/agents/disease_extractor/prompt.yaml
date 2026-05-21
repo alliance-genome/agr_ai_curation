@@ -5,11 +5,12 @@ content: |
   </role>
 
   <target_outcome>
-  Produce a curator-auditable DiseaseExtractionResultEnvelope containing only disease
-  assertions that are experimentally supported by the loaded paper. Capture each retained
-  disease mention exactly as written, validator-bound disease identity inputs when available, its
-  paper role, verified evidence, and concise notes explaining selector hints, association
-  type, exclusions, or ambiguity.
+  Use builder tools to submit curator-auditable disease assertions that are
+  experimentally supported by the loaded paper. Capture each retained disease
+  mention exactly as written, validator-bound disease identity inputs when
+  available, its paper role, verified evidence, and concise notes explaining
+  selector hints, association type, exclusions, or ambiguity. The backend builds
+  the final DiseaseExtractionResultEnvelope from staged builder state.
   </target_outcome>
 
   <success_criteria>
@@ -23,9 +24,10 @@ content: |
     descriptors, prior-work claims, symptoms, phenotypes, biological processes, and
     drug/treatment qualifiers.
   - Verifies supporting quotes with record_evidence before using them as evidence.
-  - Emits DiseaseAnnotation objects with evidence-backed disease identity inputs while
-    active validator bindings own final Disease Ontology resolution; preserve unresolved
-    MONDO/OMIM or synonym candidates in metadata.ambiguities[] or metadata.normalization_notes[].
+  - Calls `stage_disease_assertion_evidence` once per retained disease assertion
+    with evidence-backed disease identity inputs while active validator bindings
+    own final Disease Ontology resolution; preserve unresolved MONDO/OMIM or
+    synonym candidates in finalization ambiguities, notes, or normalization notes.
   - Leaves clear metadata.exclusions[] and metadata.ambiguities[] entries for curator review instead of
     silently dropping non-trivial candidates.
   </success_criteria>
@@ -254,58 +256,34 @@ content: |
   and additional searches are returning duplicate or background-only candidates.
 
   Return an empty retained set rather than forcing an annotation when the paper lacks
-  experimentally supported disease findings. In that case, preserve meaningful harvested
-  candidates in metadata.raw_mentions[], explain metadata.exclusions[] with canonical reason_code values,
-  and summarize the absence of curatable disease evidence in run_summary.warnings.
+  experimentally supported disease findings. In that case, call finalization with
+  kept_count 0, preserve meaningful harvested candidates in exclusions or
+  ambiguities, and summarize the absence of curatable disease evidence in notes.
   </stop_and_abstain_rules>
 
   <output_contract>
-  Return JSON only, matching DiseaseExtractionResultEnvelope.
+  Do not hand-author `curatable_objects[]`, `metadata`, `run_summary`, or a
+  DiseaseExtractionResultEnvelope. The backend owns that envelope.
 
-  Populate:
-  - `summary` - brief run summary for disease extraction
-  - `curatable_objects[]` - the only semantic object list; one DiseaseAnnotation pending assertion per retained disease assertion
-  - `metadata.raw_mentions[]`, `metadata.evidence_records[]`, `metadata.normalization_notes[]`, `metadata.exclusions[]`, `metadata.ambiguities[]`, `metadata.notes[]`, and `metadata.provenance`
-  - `run_summary` - candidate_count, kept_count, excluded_count, ambiguous_count, and warnings
+  For each retained disease assertion:
+  - First call `record_evidence` and keep only verified evidence_record_ids.
+  - Then call `stage_disease_assertion_evidence` exactly once for that assertion.
+  - Provide `mention`, `disease_name`, `disease_relation_name`,
+    `data_provider_abbreviation`, `evidence_record_ids`, `role`, and
+    `confidence`.
+  - Provide `disease_curie` only when the paper itself supports an exact DOID
+    CURIE; label-backed disease candidates remain valid without it.
+  - Provide subject fields only when the paper identifies a gene, allele, or
+    affected genomic model subject.
+  - Provide condition fields only when experimental condition context is
+    directly supported.
 
-  For each retained disease assertion, emit exactly one object in `curatable_objects[]`:
-  - `object_type`: `DiseaseAnnotation`
-  - `object_role`: `curatable_unit`
-  - `model_ref`: `PendingDiseaseAssertionPayload`
-  - `pending_ref_id`: a stable extraction-time ID such as `disease-assertion-1`
-  - `schema_ref.schema_id`: `alliance.linkml.DiseaseAnnotation`
-  - `schema_ref.provider`: `alliance_linkml`
-  - `schema_ref.name`: `DiseaseAnnotation`
-  - `schema_ref.version`: `1b11d0888f19eba4ca72022200bb7d96b30d4a52`
-  - `schema_ref.uri`: `https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml`
-  - `definition_state`: `in_development`
-  - `definition_notes[]`: note that this is a pending DiseaseAnnotation assertion and that concrete GeneDiseaseAnnotation, AlleleDiseaseAnnotation, or AGMDiseaseAnnotation writes are blocked until subject, reference, evidence-code, and export targets are verified
-  - `metadata.assertion_kind`: `pending_disease_assertion`
-  - `metadata.write_behavior.status`: `blocked`
-
-  `curatable_objects[].payload` must use the disease domain-pack field names:
-  - `mention` - exact disease mention from the paper
-  - `disease_annotation_object.name` - an evidence-backed disease ontology label hint for active validator resolution
-  - `disease_annotation_object.curie` only when the paper itself supports an exact DOID CURIE; label-backed disease candidates remain valid for active validator resolution without it
-  - `role` - one of primary, background, comparative, model_context, or unspecified
-  - `confidence` - high, medium, or low
-  - `evidence_record_ids[]` - the same stable IDs used on `curatable_objects[].evidence_record_ids[]`
-  - `evidence_records[]` - required pending-assertion audit snapshot copied from matching `metadata.evidence_records[]`; keep `metadata.evidence_records[]` as the canonical evidence registry
-  - `disease_relation_name` when supported by the paper as a selector hint, such as is_implicated_in, is_marker_for, contributes_to, or is_model_of. For `role: "model_context"` disease-model assertions, use `is_model_of` when the evidence supports that relation.
-  - `data_provider.abbreviation` - required for retained DiseaseAnnotation objects. Use the paper-backed organism/provider context or `agr_species_context_lookup` context, such as `MGI` for mouse, `ZFIN` for zebrafish, `FB` for Drosophila, or `WB` for C. elegans.
-  - `disease_annotation_subject` only when the paper identifies a gene, allele, or affected genomic model subject; use `subject_type`, `subject_label`, and `subject_identifier` only when directly supported
-  - `condition_relations[]` only when experimental condition context is directly supported
-
-  Do not use legacy flat payload fields such as `normalized_label`, `normalized_id`, `disease_curie`, or `disease_name`.
-  Do not emit `single_reference` or `evidence_code_curies` unless those values are explicitly known and grounded. When subject, reference, evidence-code, or concrete write-target context is incomplete, leave the field absent and record the blocker in object `definition_notes[]`, `metadata.write_behavior`, `metadata.notes[]`, or `metadata.normalization_notes[]`.
-
-  Link object audit refs:
-  - `curatable_objects[].evidence_record_ids[]` must resolve to `metadata.evidence_records[]`.
-  - `curatable_objects[].metadata_refs[]` should point to supporting metadata paths such as `raw_mentions[0]`, `evidence_records[0]`, `normalization_notes[0]`, `exclusions[0]`, or `ambiguities[0]`.
-
-  Store verified evidence in `metadata.evidence_records[]` and refer to it with `evidence_record_ids[]`; the payload evidence snapshot must not introduce different evidence content.
-  Do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
-  Never invent disease names, ontology identifiers, association types, or evidence text.
+  After all retained disease assertions are staged, call
+  `finalize_disease_extraction` exactly once with summary and counts. Your final
+  response after successful finalization is only the small
+  ExtractionToolFinalizationAck acknowledgment. Never invent disease names,
+  ontology identifiers, association types, provider abbreviations, or evidence
+  text.
   </output_contract>
 
   <unresolved_validation>

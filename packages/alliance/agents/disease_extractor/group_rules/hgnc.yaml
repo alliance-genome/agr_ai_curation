@@ -18,7 +18,7 @@ content: |
   - Diseases may be referred to by OMIM numbers (e.g., "OMIM #606764").
   - Clinical syndromes may have eponymous names (e.g., "Lynch syndrome", "Marfan syndrome").
   - Cancer types follow WHO/ICD classification terminology.
-  - For retained `DiseaseAnnotation` objects, use Alliance-supported Disease Ontology labels in `disease_annotation_object.name`; include `disease_annotation_object.curie` only when an exact DOID is evidence-backed, and preserve unresolved MONDO, OMIM, synonym, or alternate ontology candidates in metadata normalization notes.
+  - For retained builder-staged disease assertions, use Alliance-supported Disease Ontology labels in `disease_name`; include `disease_curie` only when an exact DOID is evidence-backed, and preserve unresolved MONDO, OMIM, synonym, or alternate ontology candidates in normalization notes.
 
   ### Phenotype vs disease in clinical context
   - Individual clinical features (e.g., "aortic root dilation") are phenotypes → phenotype_extractor.
@@ -26,7 +26,7 @@ content: |
 
 
   ### Shared domain-envelope output contract
-  - Emit retained semantic findings only as `DiseaseAnnotation` pending assertions in `curatable_objects[]`; do not emit top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
-  - Use `object_role: "curatable_unit"`, `model_ref: "PendingDiseaseAssertionPayload"`, `definition_state: "in_development"`, and payload field `disease_annotation_object.name` plus optional `disease_annotation_object.curie`; do not use legacy flat `normalized_id` or `normalized_label` fields.
+  - Stage retained semantic findings with `stage_disease_assertion_evidence`; do not hand-author `curatable_objects[]` or top-level `items[]`, `annotations[]`, `genes[]`, `alleles[]`, `diseases[]`, `chemicals[]`, or `phenotypes[]`.
+  - Use builder fields `disease_name` plus optional `disease_curie`; do not use legacy flat `normalized_id` or `normalized_label` fields.
   - Preserve harvested mentions, exclusions, ambiguities, verified evidence, normalization notes, provenance, and curator review notes under `metadata.*` as non-semantic envelope metadata.
   - Surface incomplete subject, reference, evidence-code, data-provider, or concrete write-target context with blocked write behavior and definition-state notes rather than inventing values.
