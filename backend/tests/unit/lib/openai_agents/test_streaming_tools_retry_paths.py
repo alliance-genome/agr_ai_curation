@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from src.lib.openai_agents import streaming_tools
 from src.schemas.models.domain_envelope_extraction import DomainEnvelopeExtractionResult
@@ -16,6 +16,17 @@ class _Envelope(BaseModel):
 
 class _DomainEnvelope(DomainEnvelopeExtractionResult):
     pass
+
+
+class _StrictDomainEnvelope(DomainEnvelopeExtractionResult):
+    @model_validator(mode="after")
+    def _require_support_object(self):
+        if not any(
+            getattr(obj, "object_type", None) == "required_support"
+            for obj in self.curatable_objects
+        ):
+            raise ValueError("Strict envelope requires a required_support object")
+        return self
 
 
 class _FakeRunResult:
@@ -197,6 +208,161 @@ async def test_run_specialist_recovers_domain_envelope_text_after_stream_validat
         and e.get("details", {}).get("extraction_method") == "stream_validation_recovery"
         for e in captured_events
     )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_rejects_recovered_domain_envelope_that_fails_domain_schema(
+    monkeypatch,
+):
+    class ResponseTextDoneEvent:
+        def __init__(self, text):
+            self.text = text
+
+    generated_payload = {
+        "summary": "Generic envelope only",
+        "curatable_objects": [
+            {
+                "object_type": "generic_association",
+                "payload": {"name": "missing required support object"},
+                "evidence_record_ids": ["evidence-record-1"],
+            }
+        ],
+        "metadata": {
+            "evidence_records": [
+                {
+                    "evidence_record_id": "evidence-record-1",
+                    "entity": "generic_association",
+                    "verified_quote": "A generic quote.",
+                    "page": 1,
+                    "section": "Results",
+                    "chunk_id": "chunk-1",
+                }
+            ]
+        },
+        "run_summary": {"candidate_count": 1, "kept_count": 1},
+    }
+    raw_event = SimpleNamespace(
+        type="raw_response_event",
+        data=ResponseTextDoneEvent(json.dumps(generated_payload)),
+    )
+    stream_error = RuntimeError("Invalid JSON when parsing text for TypeAdapter")
+
+    async def _dispatch_should_not_run(final_output, **_kwargs):
+        pytest.fail("Domain-specific schema failures must not reach validator dispatch")
+
+    captured_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _dispatch_should_not_run,
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FailingStreamRunResult(
+            events=[raw_event],
+            final_output=None,
+            new_items=[],
+            error=stream_error,
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Strict Domain Extractor",
+        tools=[],
+        output_type=_StrictDomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract strict domain evidence",
+            specialist_name="Strict Domain Extractor",
+            max_turns=3,
+            tool_name="ask_strict_domain_specialist",
+        )
+
+    error_event = next(
+        e for e in captured_events if e.get("type") == "SPECIALIST_ERROR"
+    )
+    details = error_event["details"]
+    assert details["reason"] == "stream_recovery_schema_validation_failed"
+    assert details["original_error_type"] == "RuntimeError"
+    assert "required_support object" in details["schema_error"]
+    assert not any(
+        e.get("type") == "SPECIALIST_TEXT_FALLBACK_SUCCESS"
+        and e.get("details", {}).get("extraction_method") == "stream_validation_recovery"
+        for e in captured_events
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_specialist_rejects_final_domain_envelope_that_fails_domain_schema(
+    monkeypatch,
+):
+    final_payload = {
+        "summary": "Generic envelope only",
+        "curatable_objects": [
+            {
+                "object_type": "generic_association",
+                "pending_ref_id": "generic-association-1",
+                "payload": {"name": "missing required support object"},
+            }
+        ],
+        "metadata": {},
+        "run_summary": {"candidate_count": 1, "kept_count": 1},
+    }
+
+    async def _dispatch_should_not_run(final_output, **_kwargs):
+        pytest.fail("Domain-specific schema failures must not reach validator dispatch")
+
+    captured_events = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", captured_events.append)
+    monkeypatch.setattr(streaming_tools, "commit_pending_prompts", lambda _agent_name: None)
+    monkeypatch.setattr(streaming_tools, "RunConfig", lambda *args, **kwargs: SimpleNamespace(**kwargs))
+    monkeypatch.setattr(
+        streaming_tools,
+        "_dispatch_domain_envelope_validators_for_chat",
+        _dispatch_should_not_run,
+    )
+    monkeypatch.setattr(
+        streaming_tools.Runner,
+        "run_streamed",
+        lambda *args, **kwargs: _FakeRunResult(
+            events=[],
+            final_output=json.dumps(final_payload),
+            new_items=[],
+        ),
+    )
+
+    agent = SimpleNamespace(
+        name="Strict Domain Extractor",
+        tools=[],
+        output_type=_StrictDomainEnvelope,
+        instructions="",
+        model="gpt-4o",
+    )
+
+    with pytest.raises(streaming_tools.SpecialistOutputError):
+        await streaming_tools.run_specialist_with_events(
+            agent=agent,
+            input_text="extract strict domain evidence",
+            specialist_name="Strict Domain Extractor",
+            max_turns=3,
+            tool_name="ask_strict_domain_specialist",
+        )
+
+    error_event = next(
+        e for e in captured_events if e.get("type") == "SPECIALIST_ERROR"
+    )
+    details = error_event["details"]
+    assert details["reason"] == "domain_output_schema_validation_failed"
+    assert "required_support object" in details["schema_error"]
 
 
 @pytest.mark.asyncio

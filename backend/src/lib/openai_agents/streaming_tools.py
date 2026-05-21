@@ -844,6 +844,133 @@ def _canonicalize_structured_output_text(
         return json.dumps(canonical_payload)
 
 
+def _output_type_name(expected_output_type: Any) -> str:
+    return getattr(expected_output_type, "__name__", "response")
+
+
+def _schema_error_text(exc: Exception, *, limit: int = 2000) -> str:
+    text = str(exc).strip()
+    if len(text) > limit:
+        return f"{text[:limit]}..."
+    return text
+
+
+def _emit_domain_envelope_schema_error(
+    *,
+    specialist_name: str,
+    expected_output_type: Any,
+    reason: str,
+    error_message: str,
+    schema_error: str,
+    original_error_type: Optional[str] = None,
+    exc: Optional[Exception] = None,
+) -> None:
+    output_type_name = _output_type_name(expected_output_type)
+    logger.error(
+        "%s domain-envelope schema validation failed (%s) for %s: %s",
+        specialist_name,
+        reason,
+        output_type_name,
+        schema_error,
+        extra={
+            "specialist_name": specialist_name,
+            "output_type": output_type_name,
+            "operation": "domain_envelope_schema_validation",
+            "reason": reason,
+            "original_error_type": original_error_type,
+        },
+        exc_info=(type(exc), exc, exc.__traceback__) if exc is not None else None,
+    )
+    add_specialist_event({
+        "type": "SPECIALIST_ERROR",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "details": {
+            "specialist": specialist_name,
+            "output_type": output_type_name,
+            "error": error_message,
+            "reason": reason,
+            "schema_error": schema_error,
+            "original_error_type": original_error_type,
+            "severity": "error",
+        },
+    })
+
+
+def _validate_domain_envelope_output_text_or_raise(
+    final_output: str,
+    *,
+    expected_output_type: Any,
+    specialist_name: str,
+    live_evidence_records: Optional[List[Dict[str, Any]]] = None,
+    reason: str = "domain_output_schema_validation_failed",
+) -> str:
+    """Validate domain-envelope JSON against its domain-specific output schema."""
+
+    if not _is_domain_envelope_extraction_output_type(expected_output_type):
+        return final_output
+
+    output_type_name = _output_type_name(expected_output_type)
+    error_message = (
+        f"{specialist_name} completed extraction output that does not match "
+        f"{output_type_name}."
+    )
+
+    try:
+        parsed_payload = json.loads(final_output)
+    except Exception as exc:
+        _emit_domain_envelope_schema_error(
+            specialist_name=specialist_name,
+            expected_output_type=expected_output_type,
+            reason=reason,
+            error_message=error_message,
+            schema_error=_schema_error_text(exc),
+            exc=exc,
+        )
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=output_type_name,
+            message=error_message,
+        ) from exc
+
+    if not isinstance(parsed_payload, dict):
+        schema_error = "Domain-envelope output must be a JSON object."
+        _emit_domain_envelope_schema_error(
+            specialist_name=specialist_name,
+            expected_output_type=expected_output_type,
+            reason=reason,
+            error_message=error_message,
+            schema_error=schema_error,
+        )
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=output_type_name,
+            message=error_message,
+        )
+
+    canonical_payload = canonicalize_structured_result_payload(
+        parsed_payload,
+        preferred_evidence_records=live_evidence_records,
+    )
+    try:
+        validated_output = expected_output_type.model_validate(canonical_payload)
+    except Exception as exc:
+        _emit_domain_envelope_schema_error(
+            specialist_name=specialist_name,
+            expected_output_type=expected_output_type,
+            reason=reason,
+            error_message=error_message,
+            schema_error=_schema_error_text(exc),
+            exc=exc,
+        )
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=output_type_name,
+            message=error_message,
+        ) from exc
+
+    return json.dumps(validated_output.model_dump())
+
+
 def _json_object_text_from_text(text: str) -> Optional[str]:
     """Extract the outermost JSON object text from a model text response."""
 
@@ -940,16 +1067,27 @@ def _recover_domain_envelope_output_from_stream_text(
     repaired_payload = _repair_salvaged_domain_envelope_payload(parsed_payload)
     canonical_payload = canonicalize_structured_result_payload(repaired_payload)
     try:
-        recovered = DomainEnvelopeExtractionResult.model_validate(canonical_payload)
+        recovered = expected_output_type.model_validate(canonical_payload)
     except Exception as exc:
-        logger.warning(
-            "%s stream recovery skipped: text JSON did not satisfy generic "
-            "DomainEnvelopeExtractionResult after %s: %s",
-            specialist_name,
-            type(error).__name__,
-            exc,
+        output_type_name = _output_type_name(expected_output_type)
+        error_message = (
+            f"{specialist_name} emitted streamed JSON that does not match "
+            f"{output_type_name}."
         )
-        return None
+        _emit_domain_envelope_schema_error(
+            specialist_name=specialist_name,
+            expected_output_type=expected_output_type,
+            reason="stream_recovery_schema_validation_failed",
+            error_message=error_message,
+            schema_error=_schema_error_text(exc),
+            original_error_type=type(error).__name__,
+            exc=exc,
+        )
+        raise SpecialistOutputError(
+            specialist_name=specialist_name,
+            output_type_name=output_type_name,
+            message=error_message,
+        ) from exc
 
     final_output = json.dumps(recovered.model_dump())
     logger.warning(
@@ -1283,7 +1421,15 @@ def _validator_dispatch_status_counts(dispatch_result: Any) -> dict[str, int]:
 def _validator_dispatch_completion_label(
     specialist_name: str,
     dispatch_result: Any,
+    *,
+    no_active_validator_jobs: bool = False,
 ) -> str:
+    if no_active_validator_jobs:
+        return (
+            f"{specialist_name}: Active Validator Dispatch complete "
+            "(no validator jobs)"
+        )
+
     counts = _validator_dispatch_status_counts(dispatch_result)
     if not counts:
         return f"{specialist_name}: Active Validator Dispatch complete"
@@ -1862,6 +2008,46 @@ async def _dispatch_domain_envelope_validators_for_chat(
             core_dispatch_started_at
         )
 
+        matched_binding_count = len(dispatch_result.matched_bindings)
+        validator_result_count = len(dispatch_result.validator_results)
+        validator_agent_run_count = getattr(
+            dispatch_result,
+            "validator_agent_run_count",
+            validator_result_count,
+        )
+        object_count = len(envelope.objects)
+        no_active_validator_jobs = (
+            object_count > 0
+            and matched_binding_count == 0
+            and validator_result_count == 0
+            and validator_agent_run_count == 0
+        )
+        no_active_validator_warning = (
+            "No active validator jobs were executed for a non-empty domain envelope."
+            if no_active_validator_jobs
+            else None
+        )
+        if no_active_validator_jobs:
+            logger.warning(
+                "%s active validator dispatch completed with zero validator jobs "
+                "for domain_pack=%s object_count=%s matched_bindings=%s",
+                specialist_name,
+                envelope.domain_pack_id,
+                object_count,
+                matched_binding_count,
+                extra={
+                    "specialist_name": specialist_name,
+                    "tool_name": tool_name,
+                    "domain_pack_id": envelope.domain_pack_id,
+                    "operation": "chat_domain_envelope_validation",
+                    "reason": "no_active_validator_jobs",
+                    "object_count": object_count,
+                    "matched_binding_count": matched_binding_count,
+                    "validator_result_count": validator_result_count,
+                    "validator_agent_run_count": validator_agent_run_count,
+                },
+            )
+
         has_validator_error = _validator_dispatch_has_error_result(dispatch_result)
         _emit_live_specialist_event({
             "type": "TOOL_COMPLETE",
@@ -1871,16 +2057,19 @@ async def _dispatch_domain_envelope_validators_for_chat(
                 "friendlyName": _validator_dispatch_completion_label(
                     specialist_name,
                     dispatch_result,
+                    no_active_validator_jobs=no_active_validator_jobs,
                 ),
-                "success": not has_validator_error,
+                "success": not has_validator_error and not no_active_validator_jobs,
+                "warning": no_active_validator_warning,
+                "validatorDispatchStatus": (
+                    "no_active_validator_jobs"
+                    if no_active_validator_jobs
+                    else "complete"
+                ),
                 "isSpecialistInternal": True,
-                "matchedBindingCount": len(dispatch_result.matched_bindings),
-                "validatorResultCount": len(dispatch_result.validator_results),
-                "validatorAgentRunCount": getattr(
-                    dispatch_result,
-                    "validator_agent_run_count",
-                    len(dispatch_result.validator_results),
-                ),
+                "matchedBindingCount": matched_binding_count,
+                "validatorResultCount": validator_result_count,
+                "validatorAgentRunCount": validator_agent_run_count,
                 "batchValidatorRunCount": getattr(
                     dispatch_result,
                     "batch_validator_run_count",
@@ -3368,22 +3557,30 @@ async def run_specialist_with_events(
                         message=f"{specialist_name} retry failed with error: {str(e)}"
                     )
 
-    final_output = _canonicalize_structured_output_text(
-        final_output,
-        expected_output_type=expected_output_type,
-    )
-    if expected_output_type is not None and final_output:
-        try:
-            payload = json.loads(final_output)
-        except Exception:
-            payload = None
-        if isinstance(payload, dict):
-            final_output = json.dumps(
-                canonicalize_structured_result_payload(
-                    payload,
-                    preferred_evidence_records=live_evidence_records,
+    if _is_domain_envelope_extraction_output_type(expected_output_type):
+        final_output = _validate_domain_envelope_output_text_or_raise(
+            final_output,
+            expected_output_type=expected_output_type,
+            specialist_name=specialist_name,
+            live_evidence_records=live_evidence_records,
+        )
+    else:
+        final_output = _canonicalize_structured_output_text(
+            final_output,
+            expected_output_type=expected_output_type,
+        )
+        if expected_output_type is not None and final_output:
+            try:
+                payload = json.loads(final_output)
+            except Exception:
+                payload = None
+            if isinstance(payload, dict):
+                final_output = json.dumps(
+                    canonicalize_structured_result_payload(
+                        payload,
+                        preferred_evidence_records=live_evidence_records,
+                    )
                 )
-            )
 
     phase_timings_ms["post_stream_output_ms"] = _elapsed_ms(post_stream_started_at)
 

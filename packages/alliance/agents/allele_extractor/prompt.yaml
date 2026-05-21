@@ -165,6 +165,13 @@ content: |
   `AllelePaperEvidenceAssociation` must also appear as its own object in
   `curatable_objects[]` with the matching `pending_ref_id`.
 
+  For each retained allele, the minimum valid object graph is one
+  `AllelePaperEvidenceAssociation`, one `Reference`, one `AlleleMention`, and
+  at least one `EvidenceQuote`. It is invalid to store mention/reference/evidence
+  details only inside the association payload or metadata; those supporting
+  objects must exist as sibling `curatable_objects[]` entries so validator
+  bindings have target rows.
+
   Do not emit an `Allele` validated-reference object during first-pass extraction. Active `agr.alliance:allele_validation` bindings materialize final allele identity fields such as `primary_external_id`, `allele_symbol`, and `taxon`.
 
   The `AllelePaperEvidenceAssociation` object must:

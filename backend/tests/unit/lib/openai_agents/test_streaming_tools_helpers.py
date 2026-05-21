@@ -1,6 +1,7 @@
 """Focused helper tests for streaming_tools core runtime behavior."""
 
 import json
+import logging
 import threading
 import uuid
 from pathlib import Path
@@ -876,6 +877,91 @@ async def test_chat_domain_envelope_dispatch_runs_before_supervisor_reduction(mo
     assert dispatched["kwargs"]["source_envelope_revision"] == 1
     assert [event["type"] for event in emitted] == ["TOOL_START", "TOOL_COMPLETE"]
     assert emitted[0]["details"]["toolName"] == "dispatch_active_validator_bindings"
+
+
+@pytest.mark.asyncio
+async def test_chat_domain_envelope_dispatch_warns_when_no_validator_jobs_run(
+    monkeypatch,
+    caplog,
+):
+    emitted = []
+    monkeypatch.setattr(streaming_tools, "add_specialist_event", emitted.append)
+
+    from src.lib.curation_workspace import adapter_registry
+    from src.lib.curation_workspace import curation_prep_service, extraction_results
+    from src.lib.domain_packs import validator_dispatch
+
+    monkeypatch.setattr(
+        extraction_results,
+        "_get_agent_curation_metadata",
+        lambda agent_key: {"adapter_key": "gene", "launchable": True},
+    )
+
+    source_envelope = SimpleNamespace(
+        domain_pack_id="gene",
+        objects=[SimpleNamespace(object_type="unsupported_association")],
+    )
+    monkeypatch.setattr(
+        curation_prep_service,
+        "_domain_envelope_from_extraction_result",
+        lambda _record: source_envelope,
+    )
+    monkeypatch.setattr(
+        adapter_registry,
+        "resolve_curation_domain_pack_by_id",
+        lambda domain_pack_id: SimpleNamespace(pack_id=domain_pack_id),
+    )
+
+    validated_envelope = SimpleNamespace(
+        model_dump=lambda mode="json": {
+            "envelope_id": "chat-runtime",
+            "domain_pack_id": "gene",
+            "objects": [{"object_type": "unsupported_association"}],
+            "validation_findings": [],
+        }
+    )
+
+    def _fake_dispatch(envelope, domain_pack, **kwargs):
+        return SimpleNamespace(
+            envelope=validated_envelope,
+            matched_bindings=(),
+            validator_results=(),
+            appended_findings=(),
+            validator_agent_run_count=0,
+            batch_validator_run_count=0,
+            validator_batch_groups=(),
+        )
+
+    monkeypatch.setattr(
+        validator_dispatch,
+        "dispatch_active_validator_bindings",
+        _fake_dispatch,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = await streaming_tools._dispatch_domain_envelope_validators_for_chat(
+            _gene_extractor_domain_output(),
+            expected_output_type=GeneExtractionResultEnvelope,
+            specialist_name="Gene Extraction",
+            tool_name="ask_gene_extractor_specialist",
+        )
+
+    assert json.loads(result)["objects"][0]["object_type"] == "unsupported_association"
+    dispatch_complete = [
+        event
+        for event in emitted
+        if event["details"]["toolName"] == "dispatch_active_validator_bindings"
+        and event["type"] == "TOOL_COMPLETE"
+    ][0]
+    assert dispatch_complete["details"]["success"] is False
+    assert dispatch_complete["details"]["validatorDispatchStatus"] == (
+        "no_active_validator_jobs"
+    )
+    assert dispatch_complete["details"]["warning"].startswith("No active validator jobs")
+    assert dispatch_complete["details"]["matchedBindingCount"] == 0
+    assert dispatch_complete["details"]["validatorAgentRunCount"] == 0
+    assert "(no validator jobs)" in dispatch_complete["details"]["friendlyName"]
+    assert "zero validator jobs" in caplog.text
 
 
 @pytest.mark.asyncio
