@@ -904,6 +904,78 @@ tools:
             type: integer
             required: true
             description: Number of ambiguous candidates reported.
+  - tool_id: stage_phenotype_assertion_evidence
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.extraction_builder:stage_phenotype_assertion_evidence
+    required_context: []
+    description: Stage one verified retained phenotype assertion in run-scoped builder state
+    source_file: backend/src/lib/openai_agents/tools/extraction_builder.py
+    metadata:
+      name: Stage Phenotype Assertion Evidence
+      category: Extraction Builder
+      audit:
+        display_name: Stage Phenotype Assertion Evidence
+      documentation:
+        summary: Inline builder tool for submitting one retained phenotype assertion after record_evidence verification. The backend validates evidence IDs and builds the final phenotype envelope during finalization.
+        parameters:
+          - name: phenotype_statement
+            type: string
+            required: true
+            description: Free-text phenotype assertion as supported by the paper.
+          - name: phenotype_term_label
+            type: string
+            required: true
+            description: Paper-backed phenotype ontology label or searchable phenotype term.
+          - name: subject_label
+            type: string
+            required: true
+            description: Paper-facing subject, genotype, allele, gene, or AGM label.
+          - name: data_provider_hint
+            type: string
+            required: true
+            description: Paper-supported Alliance provider hint such as WB or MGI for phenotype ontology lookup.
+          - name: taxon_hint
+            type: string
+            required: true
+            description: Paper-supported NCBI Taxon CURIE hint for phenotype ontology lookup.
+          - name: evidence_record_ids
+            type: array[string]
+            required: true
+            description: One or more verified record_evidence IDs supporting this retained phenotype assertion.
+  - tool_id: finalize_phenotype_extraction
+    binding_kind: static
+    callable: src.lib.openai_agents.tools.extraction_builder:finalize_phenotype_extraction
+    required_context: []
+    description: Finalize staged phenotype extraction exactly once and build backend curation output
+    source_file: backend/src/lib/openai_agents/tools/extraction_builder.py
+    metadata:
+      name: Finalize Phenotype Extraction
+      category: Extraction Builder
+      audit:
+        display_name: Finalize Phenotype Extraction
+      documentation:
+        summary: Inline builder tool called exactly once when no retained phenotype assertions remain to stage. The backend builds the final PhenotypeResultEnvelope from staged state.
+        parameters:
+          - name: summary
+            type: string
+            required: true
+            description: Concise run summary.
+          - name: candidate_count
+            type: integer
+            required: true
+            description: Number of harvested phenotype candidates considered.
+          - name: kept_count
+            type: integer
+            required: true
+            description: Number of retained phenotype assertions staged.
+          - name: excluded_count
+            type: integer
+            required: true
+            description: Number of excluded candidates reported.
+          - name: ambiguous_count
+            type: integer
+            required: true
+            description: Number of ambiguous candidates reported.
   - tool_id: curation_db_sql
     binding_kind: context_factory
     callable_factory: agr_ai_curation_alliance.tools.sql:create_curation_db_sql_tool

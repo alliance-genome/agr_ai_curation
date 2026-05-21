@@ -614,6 +614,327 @@ metadata:
     - curatable_unit
     - validated_reference
     - metadata_only
+  extraction_builder:
+    enabled: true
+    stage_tool: stage_phenotype_assertion_evidence
+    finalize_tool: finalize_phenotype_extraction
+    retained_unit: phenotype_assertion
+    per_retained_finding: true
+    model_final_ack_schema: ExtractionToolFinalizationAck
+    curation_output_schema: PhenotypeResultEnvelope
+    primary_stage_field: phenotype_statement
+    dedupe_fields:
+      - phenotype_statement
+      - subject_label
+      - evidence_record_ids
+    stage_description: Submit one retained phenotype assertion after verifying supporting quote text with record_evidence.
+    finalize_description: Call exactly once after all retained phenotype assertions have been staged; the backend builds the final phenotype envelope.
+    fields:
+      phenotype_statement:
+        json_type: string
+        required: true
+        maps_to: PhenotypeAnnotation.payload.phenotype_annotation_object
+        hint: Free-text phenotype assertion as supported by the paper; preserve polarity and severity.
+      phenotype_term_label:
+        json_type: string
+        required: true
+        maps_to: PhenotypeTerm.payload.label
+        hint: Paper-backed phenotype ontology label or most searchable phenotype phrase for validator lookup.
+      phenotype_term_curie:
+        json_type: string
+        maps_to: PhenotypeTerm.payload.curie
+        hint: Optional exact phenotype ontology CURIE only when supplied by the paper; do not invent IDs.
+      subject_label:
+        json_type: string
+        required: true
+        maps_to: PhenotypeSubject.payload.subject_label
+        hint: Paper-facing subject, genotype, allele, gene, or affected genomic model label.
+      subject_type:
+        json_type: string
+        maps_to: PhenotypeSubject.payload.subject_type
+        hint: Optional subject type such as gene, allele, or affected_genomic_model when paper-supported.
+      subject_identifier:
+        json_type: string
+        maps_to: PhenotypeSubject.payload.subject_identifier
+        hint: Optional durable subject identifier only when directly supplied by the paper or workflow.
+      subject_resolution_state:
+        json_type: string
+        default: pending_entity_resolution
+        maps_to: PhenotypeSubject.payload.resolution_state
+        hint: Use pending_entity_resolution for unresolved paper subjects; use blocked_missing_subject only when no usable subject is present.
+      subject_resolution_note:
+        json_type: string
+        maps_to: PhenotypeSubject.payload.resolution_note
+        hint: Curator-facing subject blocker note when the subject is incomplete or ambiguous.
+      data_provider_hint:
+        json_type: string
+        required: true
+        maps_to: PhenotypeTerm.payload.ontology_lookup_hint.data_provider
+        hint: Paper-supported Alliance provider hint such as WB or MGI for phenotype ontology lookup.
+      taxon_hint:
+        json_type: string
+        required: true
+        maps_to: PhenotypeTerm.payload.ontology_lookup_hint.taxon_id
+        hint: Paper-supported NCBI Taxon CURIE for phenotype ontology lookup.
+      evidence_record_ids:
+        json_type: array
+        required: true
+        collection: true
+        min_items: 1
+        maps_to: PhenotypeAnnotation.payload.evidence_record_ids
+        hint: Each value must be returned by a verified record_evidence call from the current run.
+      negated:
+        json_type: boolean
+        default: false
+        maps_to: PhenotypeAnnotation.payload.negated
+        hint: True only when the paper explicitly reports that the phenotype was not observed.
+      related_note_text:
+        json_type: string
+        maps_to: PhenotypeAnnotation.payload.related_notes[0].free_text
+        hint: Optional curator-facing phenotype context such as severity, penetrance, stage, comparison, or condition.
+      reference:
+        json_type: object
+        maps_to: Reference.payload
+        hint: Optional source-reference metadata such as title or source_filename.
+      normalization_notes:
+        json_type: array
+        collection: true
+        maps_to: metadata.normalization_notes
+        hint: Optional curator-facing phenotype identity, subject, polarity, provider, or taxon notes.
+      raw_mentions:
+        json_type: array
+        collection: true
+        maps_to: metadata.raw_mentions
+        hint: Optional supporting harvested phenotype mentions for audit metadata.
+    finalize_fields:
+      summary:
+        json_type: string
+        required: true
+        hint: Concise run summary.
+      candidate_count:
+        json_type: integer
+        required: true
+        hint: Number of harvested phenotype candidates considered.
+      kept_count:
+        json_type: integer
+        required: true
+        hint: Must equal the number of successfully staged retained phenotype assertions.
+      excluded_count:
+        json_type: integer
+        required: true
+        hint: Must equal exclusions.length.
+      ambiguous_count:
+        json_type: integer
+        required: true
+        hint: Must equal ambiguities.length.
+      exclusions:
+        json_type: array
+        collection: true
+        hint: Excluded phenotype candidates with allowed reason codes.
+      ambiguities:
+        json_type: array
+        collection: true
+        hint: Unresolved candidates requiring curator review.
+      notes:
+        json_type: array
+        collection: true
+        hint: Optional run-level audit notes.
+    object_graph:
+      required_objects:
+        - PhenotypeAnnotation
+        - PhenotypeSubject
+        - PhenotypeTerm
+        - Reference
+        - EvidenceQuote
+      validator_targets:
+        - target_id: phenotype_term
+          binding_id: phenotype_term_ontology_validator
+          object_type: PhenotypeTerm
+          field_path: label
+      objects:
+        - object_type: Reference
+          model_ref: ReferencePayload
+          schema_ref:
+            schema_id: alliance.linkml.Reference
+            provider: alliance_linkml
+            name: Reference
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/reference.yaml
+          object_role: validated_reference
+          definition_state: in_development
+          pending_ref_template: phenotype_reference_{staged_id}
+          payload_fields:
+            title: reference.title
+            filename: reference.source_filename
+          metadata:
+            validation_state: pending_reference_resolution
+            validator_binding_id: phenotype_reference_validator
+        - object_type: PhenotypeSubject
+          model_ref: PhenotypeSubjectPayload
+          schema_ref:
+            schema_id: alliance.linkml.BiologicalEntity
+            provider: alliance_linkml
+            name: BiologicalEntity
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/core.yaml
+            definition_state: in_development
+          object_role: validated_reference
+          definition_state: in_development
+          definition_notes:
+            - Pending subject reference; concrete Gene, Allele, or AGM subtype must be resolved before export.
+          pending_ref_template: phenotype_subject_{staged_id}
+          payload_fields:
+            resolution_state: subject_resolution_state
+            subject_identifier: subject_identifier
+            subject_label: subject_label
+            subject_type: subject_type
+            taxon: taxon_hint
+            resolution_note: subject_resolution_note
+          metadata:
+            validator_binding_id: phenotype_subject_entity_validator
+        - object_type: PhenotypeTerm
+          model_ref: PhenotypeTermPayload
+          schema_ref:
+            schema_id: alliance.linkml.PhenotypeTerm
+            provider: alliance_linkml
+            name: PhenotypeTerm
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/ontologyTerm.yaml
+          object_role: validated_reference
+          definition_state: in_development
+          pending_ref_template: phenotype_term_{staged_id}_{evidence_record_id}
+          repeat_for: evidence_record_ids
+          payload_fields:
+            resolution_state: literal:pending_ontology_resolution
+            curie: phenotype_term_curie
+            label: phenotype_term_label
+            source_mentions: raw_mentions
+            ontology_lookup_hint.data_provider: data_provider_hint
+            ontology_lookup_hint.taxon_id: taxon_hint
+            ontology_lookup_hint.evidence_record_id: evidence_record_id
+            export_state: literal:blocked_pending_ontology_resolution
+            write_blocked_reason: literal:phenotype term CURIE unresolved
+          metadata:
+            validation_state: pending_ontology_resolution
+            validator_binding_id: phenotype_term_ontology_validator
+            export_state: blocked_pending_ontology_resolution
+            write_blocked_reason: phenotype term CURIE unresolved
+        - object_type: EvidenceQuote
+          model_ref: EvidenceQuotePayload
+          object_role: metadata_only
+          definition_state: in_development
+          pending_ref_template: phenotype_evidence_quote_{evidence_record_id}
+          repeat_for: evidence_record_ids
+          payload_fields:
+            evidence_record_id: evidence_record_id
+            entity: entity
+            verified_quote: verified_quote
+            page: page
+            section: section
+            subsection: subsection
+            chunk_id: chunk_id
+            figure_reference: figure_reference
+        - object_type: PhenotypeAnnotation
+          model_ref: PhenotypeAnnotationPayload
+          schema_ref:
+            schema_id: alliance.linkml.PhenotypeAnnotation
+            provider: alliance_linkml
+            name: PhenotypeAnnotation
+            version: 1b11d0888f19eba4ca72022200bb7d96b30d4a52
+            uri: https://github.com/alliance-genome/agr_curation_schema/blob/1b11d0888f19eba4ca72022200bb7d96b30d4a52/model/schema/phenotypeAndDiseaseAnnotation.yaml
+            definition_state: in_development
+          object_role: curatable_unit
+          definition_state: in_development
+          definition_notes:
+            - Pending only; export is blocked until subject, reference, ontology, and write targets are resolved.
+          pending_ref_template: phenotype_annotation_{staged_id}
+          payload_fields:
+            annotation_kind: literal:phenotype_assertion
+            phenotype_annotation_object: phenotype_statement
+            phenotype_annotation_subject.resolution_state: subject_resolution_state
+            phenotype_annotation_subject.subject_identifier: subject_identifier
+            phenotype_annotation_subject.subject_label: subject_label
+            phenotype_annotation_subject.subject_type: subject_type
+            phenotype_annotation_subject.taxon: taxon_hint
+            phenotype_annotation_subject.resolution_note: subject_resolution_note
+            phenotype_terms[0].resolution_state: literal:pending_ontology_resolution
+            phenotype_terms[0].curie: phenotype_term_curie
+            phenotype_terms[0].label: phenotype_term_label
+            phenotype_terms[0].source_mentions: raw_mentions
+            phenotype_terms[0].ontology_lookup_hint.data_provider: data_provider_hint
+            phenotype_terms[0].ontology_lookup_hint.taxon_id: taxon_hint
+            phenotype_terms[0].ontology_lookup_hint.evidence_record_id: evidence_record_ids[0]
+            phenotype_terms[0].export_state: literal:blocked_pending_ontology_resolution
+            phenotype_terms[0].write_blocked_reason: literal:phenotype term CURIE unresolved
+            single_reference.title: reference.title
+            single_reference.filename: reference.source_filename
+            evidence_quote.evidence_record_id: evidence_record_ids[0]
+            evidence_record_ids: evidence_record_ids
+            source_mentions: raw_mentions
+            negated: negated
+            related_notes[0].note_type: literal:phenotype_context
+            related_notes[0].free_text: related_note_text
+          object_refs:
+            - field_path: phenotype_annotation_subject
+              object_type: PhenotypeSubject
+            - field_path: phenotype_terms
+              object_type: PhenotypeTerm
+            - field_path: single_reference
+              object_type: Reference
+            - field_path: evidence_quote
+              object_type: EvidenceQuote
+              collection: true
+          metadata:
+            association_kind: phenotype_assertion
+            semantic_source: domain_envelope.objects
+            export_behavior:
+              status: blocked
+              exportable: false
+              submit: false
+              reason: Phenotype export is blocked until subject subtype, reference materialization, ontology term resolution, and write targets are verified.
+            write_behavior:
+              status: blocked
+              reason: The curation DB phenotype target shape is verified, but this pack emits pending envelopes only.
+              blocked_targets:
+                - public.phenotypeannotation
+                - public.genephenotypeannotation
+                - public.allelephenotypeannotation
+                - public.agmphenotypeannotation
+                - public.phenotypeannotation_ontologyterm
+    allowed_exclusion_reason_codes:
+      - previously_reported
+      - non_experimental_claim
+      - insufficient_experimental_evidence
+      - out_of_scope
+      - ambiguous_entity
+      - duplicate_mention
+      - unsupported_entity_type
+      - mutant_background_only
+    allowed_ambiguity_reason_codes:
+      - ambiguous_entity
+      - insufficient_selector_context
+      - unresolved_identity
+      - unresolved_subject
+    examples:
+      stage:
+        phenotype_statement: reduced brood size
+        phenotype_term_label: reduced brood size
+        subject_label: mus-81(tm1937)
+        data_provider_hint: WB
+        taxon_hint: NCBITaxon:6239
+        evidence_record_ids:
+          - ev_verified_phenotype_quote_1
+      finalize:
+        summary: Staged one retained phenotype assertion and excluded one prior-work mention.
+        candidate_count: 2
+        kept_count: 1
+        excluded_count: 1
+        ambiguous_count: 0
+    repair_messages:
+      invalid_stage_input: Submit one phenotype assertion with paper-backed phenotype term label, subject label, provider/taxon hints, and verified evidence_record_ids from this run.
+      invalid_finalize_input: Finalization requires internally consistent counts and allowed reason codes.
+      invalid_finalization: Resolve builder finalization issues before ending the run.
+      duplicate_finalization: finalize_phenotype_extraction must be called exactly once, after all retained phenotype assertions are staged.
   provider_refs:
     alliance_linkml:
       schema_ref: alliance.linkml

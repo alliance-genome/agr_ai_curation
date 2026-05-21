@@ -766,6 +766,8 @@ class PhenotypeResultEnvelope(RuntimePhenotypeResultEnvelope):
 
             obj.setdefault("model_ref", PHENOTYPE_MODEL_REF)
             obj.setdefault("definition_state", DefinitionState.IN_DEVELOPMENT.value)
+            if not isinstance(payload.get("single_reference"), Mapping):
+                payload["single_reference"] = {}
             if not obj.get("definition_notes"):
                 obj["definition_notes"] = [
                     "Pending only; export is blocked until subject, reference, "

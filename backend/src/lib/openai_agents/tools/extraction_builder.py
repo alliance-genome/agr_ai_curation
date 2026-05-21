@@ -379,13 +379,109 @@ def finalize_chemical_extraction(
     )
 
 
+@function_tool(
+    name_override="stage_phenotype_assertion_evidence",
+    description_override=(
+        "Stage one retained phenotype assertion after verifying supporting "
+        "quotes with record_evidence. Submit one phenotype statement with "
+        "label-backed ontology selector context, subject/genotype context, "
+        "provider/taxon hints, and one or more verified evidence_record_ids. "
+        "The backend builds the PhenotypeResultEnvelope."
+    ),
+)
+def stage_phenotype_assertion_evidence(
+    phenotype_statement: str,
+    phenotype_term_label: str,
+    subject_label: str,
+    data_provider_hint: str,
+    taxon_hint: str,
+    evidence_record_ids: list[str],
+    phenotype_term_curie: str | None = None,
+    subject_type: str | None = None,
+    subject_identifier: str | None = None,
+    subject_resolution_state: Literal[
+        "pending_entity_resolution",
+        "blocked_missing_subject",
+    ] = "pending_entity_resolution",
+    subject_resolution_note: str | None = None,
+    negated: bool = False,
+    related_note_text: str | None = None,
+    reference: BuilderReferenceInput | None = None,
+    normalization_notes: list[str] | None = None,
+    raw_mentions: list[str] | None = None,
+) -> dict[str, Any]:
+    """Stage one retained phenotype assertion in builder state."""
+
+    return stage_extraction_builder_payload(
+        {
+            "phenotype_statement": phenotype_statement,
+            "phenotype_term_label": phenotype_term_label,
+            "phenotype_term_curie": phenotype_term_curie,
+            "subject_label": subject_label,
+            "subject_type": subject_type,
+            "subject_identifier": subject_identifier,
+            "subject_resolution_state": subject_resolution_state,
+            "subject_resolution_note": subject_resolution_note,
+            "data_provider_hint": data_provider_hint,
+            "taxon_hint": taxon_hint,
+            "evidence_record_ids": evidence_record_ids,
+            "negated": negated,
+            "related_note_text": related_note_text,
+            "reference": reference.model_dump(mode="json") if reference else None,
+            "normalization_notes": normalization_notes or [],
+            "raw_mentions": raw_mentions or [],
+        }
+    )
+
+
+@function_tool(
+    name_override="finalize_phenotype_extraction",
+    description_override=(
+        "Finalize phenotype extraction exactly once after all retained "
+        "phenotype assertions have been staged. The backend builds the final "
+        "PhenotypeResultEnvelope from staged state; the model should only "
+        "return a small acknowledgment."
+    ),
+)
+def finalize_phenotype_extraction(
+    summary: str,
+    candidate_count: int,
+    kept_count: int,
+    excluded_count: int,
+    ambiguous_count: int,
+    exclusions: list[BuilderExclusionInput] | None = None,
+    ambiguities: list[BuilderAmbiguityInput] | None = None,
+    notes: list[str] | None = None,
+) -> dict[str, Any]:
+    """Finalize staged phenotype findings into backend curation output."""
+
+    return finalize_extraction_builder_payload(
+        {
+            "summary": summary,
+            "candidate_count": candidate_count,
+            "kept_count": kept_count,
+            "excluded_count": excluded_count,
+            "ambiguous_count": ambiguous_count,
+            "exclusions": [
+                exclusion.model_dump(mode="json") for exclusion in (exclusions or [])
+            ],
+            "ambiguities": [
+                ambiguity.model_dump(mode="json") for ambiguity in (ambiguities or [])
+            ],
+            "notes": notes or [],
+        }
+    )
+
+
 __all__ = [
     "finalize_allele_extraction",
     "finalize_chemical_extraction",
     "finalize_disease_extraction",
     "finalize_gene_extraction",
+    "finalize_phenotype_extraction",
     "stage_allele_paper_evidence",
     "stage_chemical_condition_evidence",
     "stage_disease_assertion_evidence",
     "stage_gene_mention_evidence",
+    "stage_phenotype_assertion_evidence",
 ]

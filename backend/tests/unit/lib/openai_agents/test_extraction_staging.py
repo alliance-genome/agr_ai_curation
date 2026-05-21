@@ -101,6 +101,25 @@ def _load_chemical_output_type():
 ChemicalExtractionResultEnvelope = _load_chemical_output_type()
 
 
+def _load_phenotype_output_type():
+    schema_path = REPO_ROOT / "packages/alliance/agents/phenotype_extractor/schema.py"
+    spec = importlib.util.spec_from_file_location(
+        "phenotype_builder_test_schema",
+        schema_path,
+    )
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    module.PhenotypeResultEnvelope.model_rebuild(
+        _types_namespace=module.__dict__,
+    )
+    return module.PhenotypeResultEnvelope
+
+
+PhenotypeResultEnvelope = _load_phenotype_output_type()
+
+
 def _builder() -> DomainPackExtractionBuilder:
     return DomainPackExtractionBuilder.model_validate(
         {
@@ -265,6 +284,14 @@ def _chemical_builder() -> DomainPackExtractionBuilder:
         REPO_ROOT
         / "packages/alliance/domain_packs/chemical_condition/domain_pack.yaml"
     )
+    pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
+    return DomainPackExtractionBuilder.model_validate(
+        pack["metadata"]["extraction_builder"]
+    )
+
+
+def _phenotype_builder() -> DomainPackExtractionBuilder:
+    pack_path = REPO_ROOT / "packages/alliance/domain_packs/phenotype/domain_pack.yaml"
     pack = yaml.safe_load(pack_path.read_text(encoding="utf-8"))
     return DomainPackExtractionBuilder.model_validate(
         pack["metadata"]["extraction_builder"]
@@ -819,6 +846,126 @@ def test_chemical_builder_materializes_full_condition_graph():
         assert condition["metadata"]["export_behavior"]["status"] == "blocked"
         assert envelope["metadata"]["normalization_notes"] == [
             "Retain estradiol as a name-backed ChEBI selector."
+        ]
+    finally:
+        clear_extraction_staging(token)
+
+
+def test_phenotype_builder_materializes_full_assertion_graph():
+    token = activate_extraction_staging(
+        agent_id="phenotype_extractor",
+        specialist_name="Phenotype Extraction",
+        domain_pack_id="agr.alliance.phenotype",
+        domain_pack_version="0.1.0",
+        builder=_phenotype_builder(),
+        curation_output_type=PhenotypeResultEnvelope,
+    )
+    try:
+        state = current_extraction_staging_state(required=True)
+        record_document_retrieval_call(
+            "search_document",
+            {"query": "reduced brood size"},
+        )
+        register_verified_evidence_record(
+            {
+                "evidence_record_id": "ev-phenotype-brood",
+                "entity": "reduced brood size",
+                "verified_quote": (
+                    "mus-81(tm1937) mutants showed a reduced brood size compared "
+                    "with wild type."
+                ),
+                "page": 6,
+                "section": "Results",
+                "subsection": "Brood size",
+                "chunk_id": "chunk-phenotype-1",
+                "figure_reference": "Figure 2A",
+            }
+        )
+
+        staged = stage_extraction_builder_payload(
+            {
+                "phenotype_statement": "reduced brood size",
+                "phenotype_term_label": "reduced brood size",
+                "subject_label": "mus-81(tm1937)",
+                "subject_type": "allele",
+                "data_provider_hint": "WB",
+                "taxon_hint": "NCBITaxon:6239",
+                "evidence_record_ids": ["ev-phenotype-brood"],
+                "related_note_text": (
+                    "Brood size phenotype compared with wild type."
+                ),
+                "normalization_notes": [
+                    "C. elegans context supports WB phenotype ontology lookup."
+                ],
+                "raw_mentions": ["reduced brood size"],
+            }
+        )
+        assert staged["status"] == "staged"
+
+        finalized = finalize_extraction_builder_payload(
+            {
+                "summary": "Retained one phenotype assertion.",
+                "candidate_count": 1,
+                "kept_count": 1,
+                "excluded_count": 0,
+                "ambiguous_count": 0,
+            }
+        )
+        assert finalized["status"] == "finalized"
+        assert state.validator_target_count == 1
+
+        envelope = finalized_envelope_from_state()
+        assert envelope is not None
+        object_types = [item["object_type"] for item in envelope["curatable_objects"]]
+        assert object_types == [
+            "Reference",
+            "PhenotypeSubject",
+            "PhenotypeTerm",
+            "EvidenceQuote",
+            "PhenotypeAnnotation",
+        ]
+
+        term = envelope["curatable_objects"][2]
+        assert term["payload"]["label"] == "reduced brood size"
+        assert term["payload"]["ontology_lookup_hint"] == {
+            "data_provider": "WB",
+            "taxon_id": "NCBITaxon:6239",
+            "evidence_record_id": "ev-phenotype-brood",
+        }
+        assert term["evidence_record_ids"] == ["ev-phenotype-brood"]
+
+        annotation = envelope["curatable_objects"][4]
+        assert annotation["object_role"] == "curatable_unit"
+        assert annotation["model_ref"] == "PhenotypeAnnotationPayload"
+        assert annotation["payload"]["phenotype_annotation_object"] == (
+            "reduced brood size"
+        )
+        subject = annotation["payload"]["phenotype_annotation_subject"]
+        assert subject["resolution_state"] == "pending_entity_resolution"
+        assert subject["subject_label"] == "mus-81(tm1937)"
+        assert subject["subject_type"] == "allele"
+        assert subject["taxon"] == "NCBITaxon:6239"
+        assert annotation["payload"]["phenotype_terms"][0]["label"] == (
+            "reduced brood size"
+        )
+        assert annotation["payload"]["evidence_quote"]["evidence_record_id"] == (
+            "ev-phenotype-brood"
+        )
+        assert annotation["payload"]["related_notes"][0]["free_text"] == (
+            "Brood size phenotype compared with wild type."
+        )
+        assert {ref["object_type"] for ref in annotation["object_refs"]} == {
+            "PhenotypeSubject",
+            "PhenotypeTerm",
+            "Reference",
+            "EvidenceQuote",
+        }
+        assert annotation["metadata"]["validation_state"] == (
+            "pending_entity_resolution"
+        )
+        assert annotation["metadata"]["export_behavior"]["status"] == "blocked"
+        assert envelope["metadata"]["normalization_notes"] == [
+            "C. elegans context supports WB phenotype ontology lookup."
         ]
     finally:
         clear_extraction_staging(token)

@@ -250,6 +250,58 @@ def test_chemical_pack_declares_builder_tool_contract():
     assert builder["finalize_tool"] in agent["tools"]
 
 
+def test_phenotype_pack_declares_builder_tool_contract():
+    alliance_registry = load_alliance_domain_pack_registry()
+    metadata = alliance_registry.get_pack("agr.alliance.phenotype").metadata
+    builder = metadata.metadata["extraction_builder"]
+
+    assert builder["enabled"] is True
+    assert builder["stage_tool"] == "stage_phenotype_assertion_evidence"
+    assert builder["finalize_tool"] == "finalize_phenotype_extraction"
+    assert builder["model_final_ack_schema"] == "ExtractionToolFinalizationAck"
+    assert builder["curation_output_schema"] == "PhenotypeResultEnvelope"
+    assert builder["fields"]["phenotype_statement"]["required"] is True
+    assert builder["fields"]["phenotype_term_label"]["required"] is True
+    assert builder["fields"]["subject_label"]["required"] is True
+    assert builder["fields"]["data_provider_hint"]["required"] is True
+    assert builder["fields"]["taxon_hint"]["required"] is True
+    assert builder["fields"]["evidence_record_ids"]["min_items"] == 1
+    assert builder["fields"]["subject_resolution_state"]["default"] == (
+        "pending_entity_resolution"
+    )
+    assert builder["fields"]["negated"]["default"] is False
+    assert {
+        target["binding_id"]
+        for target in builder["object_graph"]["validator_targets"]
+    } >= {
+        "phenotype_term_ontology_validator",
+    }
+    assert builder["object_graph"]["required_objects"] == [
+        "PhenotypeAnnotation",
+        "PhenotypeSubject",
+        "PhenotypeTerm",
+        "Reference",
+        "EvidenceQuote",
+    ]
+
+    bindings = yaml.safe_load(
+        (REPO_ROOT / "packages/alliance/tools/bindings.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    tool_ids = {tool["tool_id"] for tool in bindings["tools"]}
+    assert builder["stage_tool"] in tool_ids
+    assert builder["finalize_tool"] in tool_ids
+
+    agent = yaml.safe_load(
+        (
+            REPO_ROOT / "packages/alliance/agents/phenotype_extractor/agent.yaml"
+        ).read_text(encoding="utf-8")
+    )
+    assert builder["stage_tool"] in agent["tools"]
+    assert builder["finalize_tool"] in agent["tools"]
+
+
 def test_active_bindings_have_active_capability_metadata():
     alliance_registry = load_alliance_domain_pack_registry()
     pack_ids = {

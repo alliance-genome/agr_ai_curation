@@ -23,7 +23,7 @@ DEFAULT_BASE_URL = "http://192.168.86.44:8900"
 DEFAULT_OUTPUT_DIR = Path("docs/design/pdf-corpus-trials")
 DEFAULT_DOWNLOAD_DIR = Path("/tmp/agr_domain_envelope_pdf_corpus")
 BUILDER_REQUIRED_DOMAINS = frozenset(
-    {"allele", "gene", "disease", "chemical_condition"}
+    {"allele", "gene", "disease", "chemical_condition", "phenotype"}
 )
 
 
@@ -727,6 +727,8 @@ def _summarize_flow_events(flow_result: dict[str, Any]) -> dict[str, Any]:
             or _event_tool_name(event) == "finalize_disease_extraction"
             or _event_tool_name(event) == "stage_chemical_condition_evidence"
             or _event_tool_name(event) == "finalize_chemical_extraction"
+            or _event_tool_name(event) == "stage_phenotype_assertion_evidence"
+            or _event_tool_name(event) == "finalize_phenotype_extraction"
             or _event_tool_name(event) == "agr_species_context_lookup"
         ],
     }

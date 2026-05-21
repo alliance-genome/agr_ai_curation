@@ -42,6 +42,8 @@ tools:
   - record_evidence
   - get_agent_contract
   - agr_species_context_lookup
+  - stage_phenotype_assertion_evidence
+  - finalize_phenotype_extraction
 
 # -----------------------------------------------------------------------------
 # OUTPUT SCHEMA
