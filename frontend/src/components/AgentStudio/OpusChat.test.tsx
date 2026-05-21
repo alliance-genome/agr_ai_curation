@@ -269,6 +269,54 @@ describe('OpusChat', () => {
     expect(serviceMocks.createAgentStudioSession).not.toHaveBeenCalled()
   })
 
+  it('keeps AI-assisted feedback modeless so the conversation can still be inspected while comments are drafted', async () => {
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+      writable: true,
+    })
+
+    render(
+      <OpusChat
+        context={{ active_tab: 'agents', trace_id: 'trace-789' }}
+        initialConversation={[
+          {
+            role: 'user',
+            content: 'The prompt missed an allele edge case.',
+            timestamp: '2026-04-22T00:00:01Z',
+          },
+          {
+            role: 'assistant',
+            content: 'We should send that to the developers.',
+            timestamp: '2026-04-22T00:00:02Z',
+          },
+        ]}
+      />
+    )
+
+    fireEvent.click(screen.getByRole('button', {
+      name: /Have Claude analyze your conversation and submit feedback to developers/i,
+    }))
+
+    const dialog = screen.getByRole('dialog', { name: 'Submit Feedback to Developers?' })
+    expect(dialog).toHaveAttribute('aria-modal', 'false')
+    expect(document.querySelector('.MuiBackdrop-root')).not.toBeInTheDocument()
+
+    fireEvent.change(screen.getByPlaceholderText(/add any additional comments/i), {
+      target: { value: 'Please include the prior trace context.' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('Ask about prompts...'), {
+      target: { value: 'I can still use the chat behind the popup.' },
+    })
+
+    expect(screen.getByPlaceholderText(/add any additional comments/i)).toHaveValue(
+      'Please include the prior trace context.'
+    )
+    expect(screen.getByPlaceholderText('Ask about prompts...')).toHaveValue(
+      'I can still use the chat behind the popup.'
+    )
+  })
+
   it('renders agr_curation_query method arguments readably in tool calls', async () => {
     Object.defineProperty(Element.prototype, 'scrollIntoView', {
       configurable: true,

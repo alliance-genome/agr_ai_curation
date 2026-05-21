@@ -405,6 +405,7 @@ const BatchPage: React.FC = () => {
                     result_file_path: data.result_file_path ?? data.data?.result_file_path,
                     error_message: data.error_message ?? data.data?.error_message,
                     processing_time_ms: data.processing_time_ms ?? data.data?.processing_time_ms,
+                    trace_id: data.trace_id ?? data.data?.trace_id ?? d.trace_id,
                   };
                 }
                 return d;
@@ -550,6 +551,7 @@ const BatchPage: React.FC = () => {
               result_file_path: doc.result_file_path,
               error_message: doc.error_message,
               processing_time_ms: doc.processing_time_ms,
+              trace_id: doc.trace_id,
             })),
             selectedFlowId: batch.flow_id,
             flowValidation: null,
@@ -805,6 +807,7 @@ const BatchPage: React.FC = () => {
           result_file_path: doc.result_file_path,
           error_message: doc.error_message,
           processing_time_ms: doc.processing_time_ms,
+          trace_id: doc.trace_id,
         })),
         selectedFlowId: batch.flow_id,
         flowValidation: null,
