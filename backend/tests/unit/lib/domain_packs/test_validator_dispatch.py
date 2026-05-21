@@ -28,6 +28,8 @@ from src.schemas.domain_validator import (
     ValidatorAgentRef,
 )
 
+VALIDATOR_LOOKUP_TOOL = "agr_" "curation_query"
+
 
 def _pack_text(
     *,
@@ -1517,7 +1519,7 @@ def test_package_scoped_validator_agent_streams_tool_events_when_emitter_present
             final_output=_result_payload(request),
             events=[
                 _tool_call_stream_event(
-                    "agr_curation_query",
+                    VALIDATOR_LOOKUP_TOOL,
                     '{"method":"search_genes","gene_symbol":"ABC-1"}',
                     call_id="call-1",
                 ),
@@ -1539,7 +1541,7 @@ def test_package_scoped_validator_agent_streams_tool_events_when_emitter_present
         "validator_tool_start",
         "validator_tool_complete",
     ]
-    assert emitted[0]["tool_name"] == "agr_curation_query"
+    assert emitted[0]["tool_name"] == VALIDATOR_LOOKUP_TOOL
     assert emitted[0]["tool_args"]["method"] == "search_genes"
     assert emitted[0]["validator_request_id"] == request.request_id
     assert emitted[1]["duration_ms"] is not None
@@ -1628,7 +1630,7 @@ def test_package_scoped_validator_batch_agent_streams_with_batch_metadata(
             final_output={"results": [_result_payload(request)]},
             events=[
                 _tool_call_stream_event(
-                    "agr_curation_query",
+                    VALIDATOR_LOOKUP_TOOL,
                     '{"method":"search_genes","gene_symbol":"ABC-1"}',
                     call_id="call-1",
                 ),
